@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #0f1117;
+  color: #e2e8f0;
+  font-family: var(--font-body);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #161b22; }
+::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+
+/* Numeric values */
+.num { font-family: var(--font-mono); }
+.positive { color: #00d17a; }
+.negative { color: #ff4f5a; }
+.neutral  { color: #94a3b8; }
+
+/* Card utility */
+.card {
+  @apply bg-surface-1 border border-surface-3 rounded-xl p-4;
+}
+
+/* Signal badge colors */
+.badge-buy       { @apply bg-accent-green/20 text-accent-green border border-accent-green/30; }
+.badge-sell      { @apply bg-accent-red/20 text-accent-red border border-accent-red/30; }
+.badge-hold      { @apply bg-slate-700/50 text-slate-300 border border-slate-600; }
+.badge-strong-buy  { @apply bg-accent-green/30 text-accent-green border border-accent-green/50 font-semibold; }
+.badge-strong-sell { @apply bg-accent-red/30 text-accent-red border border-accent-red/50 font-semibold; }

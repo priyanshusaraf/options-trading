@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { margin: 0; }
+
+@layer base {
+  body { @apply bg-bg text-zinc-200 font-mono text-sm; }
+}
+
+@layer components {
+  .card { @apply bg-panel border border-edge rounded-lg; }
+  .tile { @apply bg-panel border border-edge rounded-lg p-3 flex flex-col gap-2; }
+  .badge { @apply text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold; }
+  .btn { @apply px-2.5 py-1 rounded border border-edge bg-panel2 hover:border-zinc-500 text-xs transition-colors; }
+  .stat-label { @apply text-[11px] uppercase tracking-wide text-muted; }
+  .stat-value { @apply text-lg font-semibold tabular-nums; }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #232733; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+table { border-collapse: collapse; }

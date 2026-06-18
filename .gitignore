@@ -1,0 +1,58 @@
+# ───────────────────────── Secrets / credentials ─────────────────────────
+.env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+access_token.json
+**/access_token.json
+*.pem
+*.key
+
+# ───────────────────────── Python ─────────────────────────
+.venv/
+venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ───────────────────────── Node / frontend build ─────────────────────────
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# ───────────────────────── Data / generated artifacts ─────────────────────────
+data/cache/
+data/logs/
+data/parquet/
+data/sqlite/
+data/reports/
+**/data/cache/
+**/data/logs/
+**/data/parquet/
+**/data/sqlite/
+**/data/reports/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.parquet
+*.log
+
+# ───────────────────────── Tooling / OS ─────────────────────────
+.playwright-mcp/
+.DS_Store
+.idea/
+.vscode/
+*.swp
