@@ -63,6 +63,7 @@ class PaperBroker:
             stop_price=premium * (1 - self.settings.stop_loss_pct),
             target_price=premium * (1 + self.settings.target_pct),
             last_premium=premium, last_spot=spot,
+            last_mark_time=now, high_water_premium=premium,
         )
         self.s.add(pos)
         self.s.commit()
@@ -74,9 +75,36 @@ class PaperBroker:
             premium=premium, cost=round(cost, 2))
         return pos
 
-    def mark(self, pos: Position, premium: float | None, spot: float | None) -> None:
+    def manual_open(self, inst: Instrument, direction: str, chain, settings,
+                    now: dt.datetime) -> tuple[Position | None, str]:
+        """Owner-initiated paper entry. Same safety as the engine: 1 lot, one
+        position per instrument, capital-checked, paper-only. Returns (pos, reason)."""
+        from app.options.picker import pick_option
+        if self.position_for(inst.key) is not None:
+            return None, "already holding a position for this instrument"
+        if chain is None:
+            return None, "no option chain available to price a contract"
+        pick = pick_option(chain, direction, settings, now)
+        if not pick.chosen:
+            return None, f"no priceable contract: {pick.reason}"
+        qty = pick.chosen.lot_size
+        charges = compute_charges(inst.segment, "BUY", pick.chosen.ltp, qty)["total"]
+        cost = pick.chosen.ltp * qty + charges
+        if cost > self.cash():
+            return None, f"insufficient cash: need ₹{cost:,.0f}, have ₹{self.cash():,.0f}"
+        pos = self.open_position(inst, direction, pick.chosen,
+                                 f"MANUAL {direction}", now, chain.spot)
+        log.info(f"MANUAL OPEN {direction} {pos.tradingsymbol} @ {pick.chosen.ltp:.2f}",
+                 instrument=inst.key, event="MANUAL_OPEN", manual=True)
+        return pos, "ok"
+
+    def mark(self, pos: Position, premium: float | None, spot: float | None,
+             now: dt.datetime | None = None) -> None:
         if premium:
             pos.last_premium = premium
+            pos.last_mark_time = now or dt.datetime.now()
+            if premium > (pos.high_water_premium or 0.0):
+                pos.high_water_premium = premium
         if spot:
             pos.last_spot = spot
 
