@@ -39,28 +39,27 @@ async def lifespan(app: FastAPI):
     async def on_update(state: dict) -> None:
         await manager.broadcast({"type": "state", "data": state})
 
+    async def on_position_ticks(ticks: dict) -> None:
+        await manager.broadcast({"type": "position_ticks", "data": ticks})
+
     runner.on_update = on_update
+    runner.on_position_ticks = on_position_ticks
     log.subscribe(lambda entry: manager.push({"type": "log", "data": entry}))
 
-    task = asyncio.create_task(runner.run())
-    async def live_quotes() -> None:
-        while True:
-            try:
-                instruments = [get_instrument(k) for k in sorted(runner.enabled)]
-                ticks = runner.provider.live_snapshot(instruments, runner.broker.open_positions())
-                await manager.broadcast({"type": "live_ticks", "data": ticks})
-            except Exception as e:
-                log.error(f"live quote broadcast failed: {e}")
-            await asyncio.sleep(3)
-
-    live_task = asyncio.create_task(live_quotes())
+    # Two cooperative lanes: the fast risk loop marks open positions + ratchets
+    # the trailing stop (and feeds position_ticks); the signal loop scans for
+    # entries on completed candles. The old single-cadence live_quotes task is
+    # gone — the risk loop now produces the live UI position feed.
+    runner.running = True
+    signal_task = asyncio.create_task(runner.run_signal_loop())
+    risk_task = asyncio.create_task(runner.run_risk_loop())
     log.info("backend ready — open the dashboard")
     try:
         yield
     finally:
         runner.stop()
-        task.cancel()
-        live_task.cancel()
+        signal_task.cancel()
+        risk_task.cancel()
 
 
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)

@@ -28,10 +28,12 @@ from app.core.instruments import all_instruments, get_instrument
 from app.core.logging import log
 from app.db.models import InstrumentState, SignalEvent
 from app.db.session import SessionLocal
+from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
 from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges
-from app.engine.exit_monitor import evaluate_exit
+from app.engine.exit_monitor import evaluate_exit, trailing_stop
+from app.engine.health import HealthTracker, is_stale
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
 from app.strategy.signals import compute_signals, to_payload
@@ -50,10 +52,17 @@ class EngineRunner:
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
+        self.intervals: dict[str, str] = self._load_intervals()   # per-instrument live TF
+        self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
+        self.health = HealthTracker()
+        self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
+        self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
         self.running = False
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
-        self.on_update = None  # optional async callback(state) for WS broadcast
+        self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
+        self.on_update = None                 # async callback(state) — signal-lane snapshot
+        self.on_position_ticks = None         # async callback(ticks) — fast-lane marks
 
     # ── instrument enable/disable ─────────────────────────────────────────
     def _load_enabled(self) -> set[str]:
@@ -71,21 +80,56 @@ class EngineRunner:
         self.enabled.add(key) if enabled else self.enabled.discard(key)
         log.info(f"{'ENABLED' if enabled else 'DISABLED'} {key} for trading")
 
-    # ── one engine step ───────────────────────────────────────────────────
-    def tick(self) -> None:
-        s, prov = self.settings, self.provider
-        now = prov.now()
-        opens = {p.instrument_key: p for p in self.broker.open_positions()}
+    # ── per-instrument live interval + entry blocks ───────────────────────
+    def _load_intervals(self) -> dict[str, str]:
+        with SessionLocal() as s:
+            return {r.instrument_key: normalize_live_interval(r.live_interval or "")
+                    for r in s.scalars(select(InstrumentState))}
 
-        # 1) strategy on every enabled instrument
+    def _load_entry_blocks(self) -> set[str]:
+        with SessionLocal() as s:
+            return {r.instrument_key for r in s.scalars(select(InstrumentState))
+                    if r.entries_blocked}
+
+    def _interval_for(self, key: str) -> str:
+        return normalize_live_interval(self.intervals.get(key, DEFAULT_LIVE_INTERVAL))
+
+    def set_interval(self, key: str, interval: str) -> str:
+        iv = normalize_live_interval(interval)
+        with SessionLocal() as s:
+            r = s.get(InstrumentState, key)
+            if r:
+                r.live_interval = iv
+                s.commit()
+        self.intervals[key] = iv
+        self._next_scan.pop(key, None)   # force a re-scan at the new interval
+        log.info(f"live interval set to {iv}", instrument=key)
+        return iv
+
+    def set_entries_blocked(self, key: str, blocked: bool) -> None:
+        with SessionLocal() as s:
+            r = s.get(InstrumentState, key)
+            if r:
+                r.entries_blocked = blocked
+                s.commit()
+        self.entry_blocks.add(key) if blocked else self.entry_blocks.discard(key)
+        log.info(f"{'BLOCKED' if blocked else 'UNBLOCKED'} new entries", instrument=key)
+
+    # ── lane 1: strategy recompute (per-instrument interval) ──────────────
+    def scan_signals(self) -> None:
+        s, prov = self.settings, self.provider
+        opens = {p.instrument_key: p for p in self.broker.open_positions()}
         for key in list(self.enabled):
             inst = get_instrument(key)
             if not prov.is_tradable_now(inst):
                 continue  # market closed — no new candle can print; don't poll
             try:
-                candles = prov.get_candles(inst, s.interval, s.history_days)
+                candles = prov.get_candles(inst, self._interval_for(key), s.history_days)
+                self.health.record_ok("candle", prov.now())
             except Exception as e:
-                log.error(f"candles failed: {e}", instrument=key)
+                self.health.record_fail("candle", str(e), prov.now())
+                if self.health.should_log_failure("candle"):
+                    log.error(f"candles failed: {e}", instrument=key)
                 continue
             if len(candles) < s.ema_length + 5:
                 continue
@@ -98,39 +142,95 @@ class EngineRunner:
             held = opens.get(key)
             self.state[key] = {
                 "instrument": key, "name": inst.name, "segment": inst.segment,
+                "interval": self._interval_for(key),
                 "time": latest["time"], "close": latest["close"], "ema": latest["ema"],
                 "z": latest["z"], "z_prev": latest["z_prev"], "slope": latest["slope"],
                 "std": latest["std"], "trend": latest["trend"], "signal": latest["signal"],
                 "long_exit": latest["long_exit"], "short_exit": latest["short_exit"],
                 "position": held.to_dict() if held else None,
+                "has_options": inst.has_options,
+                "entries_blocked": key in self.entry_blocks,
             }
 
-        # 2) EXIT pass (frees capital before entries this tick)
+    # ── lane 2 (fast): mark open positions, trail stop, staleness guard, exit ─
+    def mark_and_exit_positions(self) -> None:
+        prov = self.provider
+        now = prov.now()
+        opens = {p.instrument_key: p for p in self.broker.open_positions()}
+        if not opens:
+            self.position_ticks = {}
+            return
+        insts = [get_instrument(k) for k in opens]
+        try:
+            snap = prov.live_snapshot(insts, list(opens.values()))
+            self.health.record_ok("quote", now)
+        except Exception as e:
+            self.health.record_fail("quote", str(e), now)
+            if self.health.should_log_failure("quote"):
+                log.error(f"position snapshot failed: {e}")
+            snap = {}
+        ticks: dict[str, dict] = {}
         for key, pos in list(opens.items()):
-            inst = get_instrument(key)
-            premium = prov.option_ltp(inst, pos.tradingsymbol, pos.strike,
-                                      pos.expiry, pos.option_type)
-            spot = prov.get_ltp(inst)
-            if premium is None:
-                continue
-            self.broker.mark(pos, premium, spot)
+            data = snap.get(key) or {}
+            premium = data.get("option_premium")
+            spot = data.get("spot")
+            if premium is not None:
+                self.broker.mark(pos, premium, spot, now=now)
+                self._apply_trailing(pos)
+            pos_stale = premium is None or is_stale(
+                pos.last_mark_time, now, self.settings.max_stale_seconds)
             st = self.state.get(key, {})
-            should, reason = evaluate_exit(
-                pos.direction, pos.stop_price, pos.target_price, premium,
-                st.get("long_exit", False), st.get("short_exit", False))
-            if should:
-                self.broker.close_position(pos, premium, reason, now, spot)
-                opens.pop(key, None)
-                if key in self.state:
-                    self.state[key]["position"] = None
-        self.broker.commit()  # persist marks
+            if not pos_stale:
+                should, reason = evaluate_exit(
+                    pos.direction, pos.stop_price, pos.target_price, premium,
+                    st.get("long_exit", False), st.get("short_exit", False))
+                if should:
+                    self.broker.close_position(pos, premium, reason, now, spot)
+                    opens.pop(key, None)
+                    if key in self.state:
+                        self.state[key]["position"] = None
+                    continue
+            d = pos.to_dict()
+            ticks[key] = {
+                "instrument": key, "tradingsymbol": pos.tradingsymbol,
+                "option_premium": round(premium, 2) if premium is not None else None,
+                "spot": round(spot, 2) if spot else None,
+                "unrealized_pnl": d["unrealized_pnl"],
+                "stop_price": d["stop_price"], "target_price": d["target_price"],
+                "high_water_premium": d["high_water_premium"],
+                "stale": pos_stale,
+                "stale_age": None if pos.last_mark_time is None
+                             else round((now - pos.last_mark_time).total_seconds(), 1),
+                "last_mark_time": pos.last_mark_time.isoformat() if pos.last_mark_time else None,
+            }
+        self.broker.commit()  # persist marks + ratcheted stops
+        self.position_ticks = ticks
 
-        # 3) ENTRY pass — fresh crossovers on instruments not already held
+    def _apply_trailing(self, pos) -> None:
+        """Ratchet the premium stop upward as profit thresholds are crossed."""
+        if not self.settings.trail_enabled:
+            return
+        new_stop = trailing_stop(
+            pos.entry_premium, pos.high_water_premium or pos.entry_premium, pos.stop_price,
+            trigger_pct=self.settings.trail_trigger_pct,
+            lock_pct=self.settings.trail_lock_pct,
+            target_pct=self.settings.trail_target_pct)
+        if new_stop > pos.stop_price:
+            log.info(f"TRAIL SL {pos.tradingsymbol} {pos.stop_price:.2f} -> {new_stop:.2f} "
+                     f"(high {pos.high_water_premium:.2f})", instrument=pos.instrument_key,
+                     event="TRAIL")
+            pos.stop_price = new_stop
+
+    # ── lane 3: entries (fresh crossovers, not blocked, not held) ─────────
+    def process_entries(self) -> None:
+        s, prov = self.settings, self.provider
+        now = prov.now()
+        opens = {p.instrument_key for p in self.broker.open_positions()}
         cands: list[Candidate] = []
         meta: dict[str, tuple] = {}
         for key in list(self.enabled):
-            if key in opens:
-                continue  # one position per instrument; ignore new signals while held
+            if key in opens or key in self.entry_blocks:
+                continue  # one position per instrument; entries may be disabled
             st = self.state.get(key)
             if not st or st["signal"] not in ("LONG_ENTRY", "SHORT_ENTRY"):
                 continue
@@ -138,9 +238,7 @@ class EngineRunner:
             inst = get_instrument(key)
             self._record_signal(now, key, st)
             if not inst.has_options:
-                # tracking-only instrument (no listed options): show the signal,
-                # but never options-trade it.
-                continue
+                continue  # tracking-only: show the signal, never options-trade it
             chain = prov.get_option_chain(inst)
             if not chain:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
@@ -176,8 +274,12 @@ class EngineRunner:
             for c, reason in alloc.skipped:
                 log.warn(f"signal dropped — {reason}", instrument=c.instrument_key)
 
-        # 4) portfolio equity snapshot
-        self.broker.snapshot(now)
+    # ── combined step — mock dry-run + tests (semantics unchanged) ────────
+    def tick(self) -> None:
+        self.scan_signals()
+        self.mark_and_exit_positions()
+        self.process_entries()
+        self.broker.snapshot(self.provider.now())
         self.tick_count += 1
 
     def _record_signal(self, now, key, st) -> None:
@@ -187,41 +289,86 @@ class EngineRunner:
                               acted=True))
             s.commit()
 
-    # ── async run loop ────────────────────────────────────────────────────
-    async def run(self) -> None:
+    # ── next-candle gating ────────────────────────────────────────────────
+    def _due_for_scan(self, key: str, now) -> bool:
+        """Refetch candles only when a new completed candle could exist — gates
+        Kite historical calls so the signal lane stays cheap."""
+        import datetime as _dt
+        epoch = now.timestamp() if isinstance(now, _dt.datetime) else float(now)
+        nxt = self._next_scan.get(key)
+        if nxt is None or epoch >= nxt:
+            minutes = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}.get(
+                self._interval_for(key), 15)
+            self._next_scan[key] = epoch + minutes * 60
+            return True
+        return False
+
+    # ── per-lane single iterations (lock-serialised DB mutation) ──────────
+    async def _risk_iteration(self) -> None:
+        async with self._lock:
+            self.mark_and_exit_positions()
+        if self.on_position_ticks:
+            try:
+                await self.on_position_ticks(self.position_ticks)
+            except Exception:
+                pass
+
+    async def _signal_iteration(self) -> None:
+        async with self._lock:
+            self.scan_signals()
+            self.process_entries()
+            self.broker.snapshot(self.provider.now())
+            self.tick_count += 1
+        if self.on_update:
+            try:
+                await self.on_update(self.snapshot_state())
+            except Exception:
+                pass
+
+    # ── async loops ───────────────────────────────────────────────────────
+    async def run_risk_loop(self) -> None:
+        """Fast lane: mark open positions, ratchet the trailing stop, fire SL/TP.
+        Independent of the slower signal scan so positions are managed promptly."""
+        while self.running:
+            try:
+                await self._risk_iteration()
+            except Exception as e:
+                log.error(f"risk loop error: {e}")
+            await asyncio.sleep(self.settings.position_loop_seconds)
+
+    async def run_signal_loop(self) -> None:
+        """Slow lane: recompute strategy on completed candles, open new entries."""
         self.running = True
         log.info(f"engine started — provider={self.provider.name}, "
-                 f"interval={self.settings.interval}, "
                  f"enabled={sorted(self.enabled)}")
         while self.running:
             try:
-                self.tick()
-            except Exception as e:
-                log.error(f"tick error: {e}")
-            if self.on_update:
-                try:
-                    await self.on_update(self.snapshot_state())
-                except Exception:
-                    pass
-            if self.provider.name == "mock":
-                if not self.provider.advance():
-                    log.info("mock history exhausted — engine idling")
-                    await asyncio.sleep(5)
-                    continue
-                await asyncio.sleep(self.settings.mock_tick_seconds)
-            else:
-                # live: poll completed candles; idle longer when every enabled
-                # market is closed so we don't churn / burn rate-limit quota.
-                any_open = any(self.provider.is_tradable_now(get_instrument(k))
-                               for k in self.enabled)
-                if not any_open:
-                    if not self._idle_logged:
-                        log.info("all enabled markets closed — engine idling until next session")
-                        self._idle_logged = True
-                    await asyncio.sleep(60)
+                if self.provider.name == "mock":
+                    await self._signal_iteration()
+                    if not self.provider.advance():
+                        log.info("mock history exhausted — engine idling")
+                        await asyncio.sleep(5)
+                        continue
+                    await asyncio.sleep(self.settings.mock_tick_seconds)
                 else:
-                    self._idle_logged = False
-                    await asyncio.sleep(30)
+                    any_open = any(self.provider.is_tradable_now(get_instrument(k))
+                                   for k in self.enabled)
+                    if not any_open:
+                        if not self._idle_logged:
+                            log.info("all enabled markets closed — engine idling until next session")
+                            self._idle_logged = True
+                        await asyncio.sleep(60)
+                    else:
+                        self._idle_logged = False
+                        await self._signal_iteration()
+                        await asyncio.sleep(self.settings.signal_loop_seconds)
+            except Exception as e:
+                log.error(f"signal loop error: {e}")
+                await asyncio.sleep(self.settings.signal_loop_seconds)
+
+    async def run(self) -> None:   # back-compat alias (signal lane)
+        self.running = True
+        await self.run_signal_loop()
 
     def stop(self) -> None:
         self.running = False
@@ -243,4 +390,7 @@ class EngineRunner:
         return {"tick": self.tick_count, "provider": self.provider.name,
                 "time": self.provider.now().isoformat(),
                 "enabled": sorted(self.enabled), "states": self.state,
+                "intervals": {k: self._interval_for(k) for k in self.enabled},
+                "health": self.health.as_dict(),
+                "position_ticks": self.position_ticks,
                 "capital": self.capital_dict()}
