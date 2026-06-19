@@ -51,10 +51,18 @@ def resolve_spec(key: str, provider) -> Instrument | None:
         return None
 
 
-def add_instrument(key: str, provider, on_home: bool = True) -> dict:
+def add_instrument(key: str, provider, on_home: bool = True,
+                   interval: str | None = None) -> dict:
     spec = resolve_spec(key, provider)
     if spec is None:
         return {"error": f"could not resolve instrument '{key}'"}
+    # promotion carry-over: keep a supported live interval; else fall back + warn
+    from app.core.config import LIVE_INTERVALS, normalize_live_interval
+    iv = warning = None
+    if interval:
+        iv = normalize_live_interval(interval)
+        if interval not in LIVE_INTERVALS:
+            warning = f"{interval} is not a live timeframe; using {iv}"
     with SessionLocal() as s:
         row = s.get(UniverseInstrument, key)
         if row is None:
@@ -70,14 +78,23 @@ def add_instrument(key: str, provider, on_home: bool = True) -> dict:
             row.on_home = on_home
         st = s.get(InstrumentState, key)
         if st is None:
-            s.add(InstrumentState(instrument_key=key, enabled=True))
+            st = InstrumentState(instrument_key=key, enabled=True)
+            s.add(st)
         else:
             st.enabled = True
+        if iv:
+            st.live_interval = iv
         s.commit()
     reg.load_universe()
-    log.info(f"added {key} to portfolio universe (has_options={spec.has_options})")
-    return {"key": key, "added": True, "has_options": spec.has_options,
-            "name": spec.name, "segment": spec.segment}
+    log.info(f"added {key} to portfolio universe (has_options={spec.has_options}"
+             f"{', interval=' + iv if iv else ''})")
+    out = {"key": key, "added": True, "has_options": spec.has_options,
+           "name": spec.name, "segment": spec.segment}
+    if iv:
+        out["interval"] = iv
+    if warning:
+        out["interval_warning"] = warning
+    return out
 
 
 def remove_instrument(key: str) -> dict:

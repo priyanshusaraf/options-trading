@@ -111,15 +111,19 @@ def toggle(key: str, body: Toggle, request: Request):
 class AddInstrument(BaseModel):
     key: str
     on_home: bool = True
+    interval: str | None = None   # carry a backtest winner's timeframe into live
 
 
 @router.post("/api/portfolio/add")
 def portfolio_add(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
-    res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home)
+    res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home,
+                                           interval=body.interval)
     if "error" not in res:
         r.enabled.add(body.key)   # the live engine picks it up next tick
+        if res.get("interval"):
+            r.intervals[body.key] = res["interval"]
     return res
 
 
@@ -151,11 +155,12 @@ def portfolio_home(request: Request):
 
 # ── charts ──────────────────────────────────────────────────────────────────
 @router.get("/api/candles/{key}")
-def candles(key: str, request: Request):
+def candles(key: str, request: Request, interval: str | None = None):
     r = _runner(request)
     inst = get_instrument(key)
+    iv = interval or r._interval_for(key)   # detail chart defaults to the live interval
     try:
-        cs = r.provider.get_candles(inst, settings.interval, settings.history_days)
+        cs = r.provider.get_candles(inst, iv, settings.history_days)
     except Exception:
         cs = []  # provider not ready (e.g. Kite not authenticated) — degrade gracefully
     if not cs:
@@ -181,7 +186,7 @@ def option_candles(key: str, request: Request):
         tsym, strike, expiry, otype = pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type
         entry_premium, stop_price, target_price = pos.entry_premium, pos.stop_price, pos.target_price
     inst = get_instrument(key)
-    cs = r.provider.get_candles(inst, settings.interval, settings.history_days)
+    cs = r.provider.get_candles(inst, r._interval_for(key), settings.history_days)
     if not cs:
         return {"candles": [], "tradingsymbol": tsym}
     flag = "c" if otype == "CE" else "p"
@@ -230,6 +235,122 @@ def trades(request: Request, limit: int = 100):
 def logs(limit: int = 300):
     from app.core.logging import log
     return {"logs": log.recent(limit)}
+
+
+# ── signal-first list / positions cockpit / health (F1, F3, F5) ──────────────
+@router.get("/api/signals")
+def signals(request: Request):
+    """Lightweight signal-first list. Pure read of in-memory engine state +
+    health — it NEVER fetches candles, so rows stay cheap."""
+    r = _runner(request)
+    h = r.health.as_dict()
+    candle_fails = h.get("candle", {}).get("consecutive_failures", 0)
+    out = []
+    for inst in all_instruments():
+        st = r.state.get(inst.key, {})
+        pos = st.get("position")
+        out.append({
+            "key": inst.key, "name": inst.name, "segment": inst.segment,
+            "enabled": inst.key in r.enabled,
+            "interval": r._interval_for(inst.key),
+            "signal": st.get("signal", "NONE"), "trend": st.get("trend"),
+            "z": st.get("z"), "close": st.get("close"),
+            "last_candle_time": st.get("time"),
+            "has_position": pos is not None,
+            "has_options": inst.has_options,
+            "entries_blocked": inst.key in r.entry_blocks,
+            "stale": (not st) or candle_fails > 0,
+        })
+    return {"instruments": out, "health": h}
+
+
+@router.get("/api/positions")
+def positions(request: Request):
+    """Active-positions cockpit rows: marks, trailing stop, stale/health."""
+    r = _runner(request)
+    ticks = r.position_ticks
+    out = []
+    for p in r.broker.open_positions():
+        d = p.to_dict()
+        t = ticks.get(p.instrument_key, {})
+        d["live_premium"] = t.get("option_premium")
+        d["live_spot"] = t.get("spot")
+        d["stale"] = t.get("stale", True)
+        d["stale_age"] = t.get("stale_age")
+        d["dist_to_stop"] = round(d["last_premium"] - d["stop_price"], 2)
+        d["dist_to_target"] = round(d["target_price"] - d["last_premium"], 2)
+        out.append(d)
+    return {"positions": out, "capital": r.capital_dict()}
+
+
+@router.get("/api/provider-health")
+def provider_health(request: Request):
+    return _runner(request).health.as_dict()
+
+
+# ── per-instrument interval + entry block (F6, F8) ───────────────────────────
+class IntervalBody(BaseModel):
+    interval: str
+
+
+@router.post("/api/instruments/{key}/interval")
+def set_interval(key: str, body: IntervalBody, request: Request):
+    iv = _runner(request).set_interval(key, body.interval)
+    return {"key": key, "interval": iv}
+
+
+class BlockBody(BaseModel):
+    blocked: bool
+
+
+@router.post("/api/instruments/{key}/block-entries")
+def block_entries(key: str, body: BlockBody, request: Request):
+    _runner(request).set_entries_blocked(key, body.blocked)
+    return {"key": key, "entries_blocked": body.blocked}
+
+
+# ── manual paper overrides (F8) — never touch real Kite orders ───────────────
+@router.post("/api/positions/{key}/close")
+def close_position(key: str, request: Request):
+    r = _runner(request)
+    pos = r.broker.position_for(key)
+    if not pos:
+        return {"error": "no open position for this instrument"}
+    inst = get_instrument(key)
+    premium = r.provider.option_ltp(inst, pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type)
+    if premium is None:
+        premium = pos.last_premium or pos.entry_premium
+    now = r.provider.now()
+    r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
+                            r.provider.get_ltp(inst) or pos.last_spot)
+    from app.core.logging import log
+    log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
+             event="MANUAL_CLOSE", manual=True)
+    if key in r.state:
+        r.state[key]["position"] = None
+    return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
+
+
+class ManualOpenBody(BaseModel):
+    key: str
+    direction: str   # "LONG" | "SHORT"
+
+
+@router.post("/api/positions/manual-open")
+def manual_open(body: ManualOpenBody, request: Request):
+    r = _runner(request)
+    if body.direction not in ("LONG", "SHORT"):
+        return {"error": "direction must be LONG or SHORT"}
+    inst = get_instrument(body.key)
+    if not inst.has_options:
+        return {"error": "instrument has no listed options (tracking only)"}
+    chain = r.provider.get_option_chain(inst)
+    pos, reason = r.broker.manual_open(inst, body.direction, chain, settings, r.provider.now())
+    if pos is None:
+        return {"error": reason}
+    if body.key in r.state:
+        r.state[body.key]["position"] = pos.to_dict()
+    return {"opened": True, "key": body.key, "tradingsymbol": pos.tradingsymbol}
 
 
 # ── websockets ──────────────────────────────────────────────────────────────
