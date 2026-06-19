@@ -16,7 +16,10 @@ import sys
 # make `app` importable when this file is run directly as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# isolate the dry-run in its own DB, configured before app import
+# isolate the dry-run in its own DB, configured before app import. Force the
+# mock provider regardless of .env (the live .env now sets provider=kite, but
+# the dry-run is always the synthetic-market ledger proof — no Kite, no network).
+os.environ.setdefault("PT_PROVIDER", "mock")
 os.environ.setdefault("PT_DB_PATH", "dryrun.db")
 os.environ.setdefault("PT_MOCK_TICK_SECONDS", "0")
 

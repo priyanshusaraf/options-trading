@@ -5,9 +5,10 @@ import { PriceChart, LineChart } from '../components/Charts'
 import InstrumentTile from '../components/InstrumentTile'
 import type { InstrumentMeta, InstrState } from '../lib/types'
 import { inr, num, signedInr, pnlColor } from '../lib/format'
+import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
 
 export default function Monitor() {
-  const { state } = useLive()
+  const { state, liveTicks } = useLive()
   const [meta, setMeta] = useState<InstrumentMeta[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
 
@@ -53,7 +54,7 @@ export default function Monitor() {
               ema: 0, z: m.z || 0, z_prev: null, slope: 0, std: 0, trend: m.trend || 'flat',
               signal: m.signal || 'NONE', long_exit: false, short_exit: false, position: m.position,
             }
-            return <InstrumentTile key={m.key} st={st} onExpand={setExpanded} />
+            return <InstrumentTile key={m.key} st={st} onExpand={setExpanded} liveTick={liveTicks[m.key]} />
           })}
         </div>
       )}
@@ -63,7 +64,7 @@ export default function Monitor() {
   )
 }
 
-function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClose: () => void }) {
+export function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClose: () => void }) {
   const [mode, setMode] = useState<'spot' | 'opt'>('spot')
   const [under, setUnder] = useState<any>({ candles: [], ema: [], markers: [] })
   const [opt, setOpt] = useState<any>(null)
@@ -81,6 +82,23 @@ function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClose: () 
     ws.onmessage = (e) => setTick(JSON.parse(e.data))
     return () => ws.close()
   }, [k])
+
+  useEffect(() => {
+    if (!tick?.time) return
+    const time = epochSeconds(tick.time)
+    if (tick.spot != null) {
+      setUnder((prev: any) => ({
+        ...prev,
+        candles: mergeLiveCandle(prev.candles || [], time, tick.spot),
+      }))
+    }
+    if (tick.option_premium != null) {
+      setOpt((prev: any) => ({
+        ...(prev || {}),
+        candles: mergeLivePoint(prev?.candles || [], time, tick.option_premium),
+      }))
+    }
+  }, [tick?.time, tick?.spot, tick?.option_premium])
 
   const priceLines = pos ? [
     { price: pos.entry_premium, color: '#8b93a7', title: 'entry' },

@@ -112,6 +112,11 @@ class MarketDataProvider(ABC):
         Returns False when a mock has run out of history."""
         return True
 
+    def is_tradable_now(self, inst: Instrument) -> bool:
+        """Is this instrument's market in session right now? Always True for the
+        mock (its synthetic clock is always 'open'); segment-hours-gated for Kite."""
+        return True
+
     # ── market data ───────────────────────────────────────────────────────
     @abstractmethod
     def get_candles(self, inst: Instrument, interval: str, days: int) -> list[Candle]:
@@ -120,6 +125,35 @@ class MarketDataProvider(ABC):
     @abstractmethod
     def get_ltp(self, inst: Instrument) -> float | None:
         """Latest traded price of the underlying (index spot / near future)."""
+
+    def get_live_price(self, inst: Instrument) -> float | None:
+        """Underlying price for the expanded per-instrument live view. Defaults to
+        the LTP; the mock overrides it with display-only jitter. (Live providers
+        get this for free — the per-instrument WebSocket relies on it.)"""
+        return self.get_ltp(inst)
+
+    def live_snapshot(self, instruments: list[Instrument], positions: list) -> dict:
+        """Batch-ish latest spot/option ticks for UI chart updates.
+
+        Providers with batch APIs should override this. The default keeps mock
+        and tests simple.
+        """
+        by_key = {p.instrument_key: p for p in positions}
+        out = {}
+        for inst in instruments:
+            pos = by_key.get(inst.key)
+            spot = self.get_live_price(inst)
+            premium = None
+            if pos:
+                premium = self.option_ltp(
+                    inst, pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type)
+            out[inst.key] = {
+                "time": self.now().isoformat(),
+                "spot": spot,
+                "option_premium": premium,
+                "tradingsymbol": pos.tradingsymbol if pos else None,
+            }
+        return out
 
     @abstractmethod
     def get_option_chain(self, inst: Instrument) -> OptionChain | None:

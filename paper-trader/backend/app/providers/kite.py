@@ -21,7 +21,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
+import time as _time
 
+from app.core import market_hours
 from app.core.config import get_settings
 from app.core.instruments import Instrument
 from app.core.logging import log
@@ -29,21 +32,68 @@ from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQu
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
 
+# Kite documented rate limits: quote/ltp/ohlc = 1 req/s, historical = 3 req/s.
+# We keep a small safety margin under each.
+_MIN_INTERVAL = {"quote": 1.05, "historical": 0.40}
+
+
+class _Throttle:
+    """Serialises calls per category so we never breach Kite's per-endpoint
+    rate limits (which would return HTTP 429). Thread-safe: the engine loop and
+    the per-instrument WebSocket can both call through it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last: dict[str, float] = {}
+
+    def wait(self, category: str) -> None:
+        interval = _MIN_INTERVAL.get(category, 1.05)
+        with self._lock:
+            now = _time.monotonic()
+            last = self._last.get(category, 0.0)
+            delay = interval - (now - last)
+            if delay > 0:
+                _time.sleep(delay)
+            self._last[category] = _time.monotonic()
+
 
 class KiteProvider(MarketDataProvider):
     name = "kite"
 
     def __init__(self) -> None:
-        from kiteconnect import KiteConnect
+        from app.providers.safe_kite import SafePaperKite
 
         self.s = get_settings()
-        self.api_key = os.environ.get("KITE_API_KEY", "")
-        self.api_secret = os.environ.get("KITE_API_SECRET", "")
-        self.kite = KiteConnect(api_key=self.api_key)
+        # Prefer the loaded Settings (reads .env via pydantic); fall back to a
+        # real OS env var if one is exported.
+        self.api_key = self.s.kite_api_key or os.environ.get("KITE_API_KEY", "")
+        self.api_secret = self.s.kite_api_secret or os.environ.get("KITE_API_SECRET", "")
+        # SafePaperKite hard-disables every order-placement endpoint — this
+        # platform is paper-only and uses Kite for market data exclusively.
+        self.kite = SafePaperKite(api_key=self.api_key)
         self.access_token: str | None = None
         self._dumps: dict[str, tuple[str, list]] = {}   # exchange -> (date, instruments)
         self._fut_cache: dict[str, dict] = {}            # inst.key -> near future row
+        self._throttle = _Throttle()
         self._load_saved_token()
+
+    # ── throttled Kite calls (respect documented rate limits) ─────────────
+    def _ltp(self, keys: list[str]) -> dict:
+        self._throttle.wait("quote")
+        return self.kite.ltp(keys)
+
+    def _quote(self, keys: list[str]) -> dict:
+        self._throttle.wait("quote")
+        return self.kite.quote(keys)
+
+    def _historical(self, token: int, frm, to, interval: str) -> list:
+        self._throttle.wait("historical")
+        return self.kite.historical_data(token, from_date=frm, to_date=to, interval=interval)
+
+    def is_tradable_now(self, inst: Instrument) -> bool:
+        # Gate on the venue that prints the candles we trade on (spot_exchange),
+        # which is also where the option chain's underlying trades.
+        return market_hours.is_open(inst.spot_exchange) or market_hours.is_open(inst.segment)
 
     # ── auth (ported) ─────────────────────────────────────────────────────
     def _load_saved_token(self) -> None:
@@ -81,7 +131,13 @@ class KiteProvider(MarketDataProvider):
         cached = self._dumps.get(exchange)
         if cached and cached[0] == today:
             return cached[1]
-        rows = self.kite.instruments(exchange)
+        try:
+            rows = self.kite.instruments(exchange)
+        except Exception as e:
+            # not authenticated yet / transient API error — degrade gracefully so
+            # callers (candles, option chain, ltp) return empty instead of 500.
+            log.warn(f"instruments({exchange}) failed: {e}")
+            return []
         self._dumps[exchange] = (today, rows)
         return rows
 
@@ -91,10 +147,41 @@ class KiteProvider(MarketDataProvider):
                 return row["instrument_token"]
         return None
 
+    def _name_candidates(self, inst: Instrument) -> list[str]:
+        """Names as Kite may publish them.
+
+        MCX mini commodity contracts are sometimes configured internally with an
+        `M` suffix (e.g. COPPERM) while Kite publishes the live derivatives under
+        the base commodity name (COPPER). Keep exact names first, then fall back
+        to the stripped form.
+        """
+        names: list[str] = []
+        for value in (inst.option_name, inst.spot_symbol, inst.key):
+            if value and value not in names:
+                names.append(value)
+            if inst.segment in ("MCX", "NCDEX") and value.endswith("M"):
+                base = value[:-1]
+                if base and base not in names:
+                    names.append(base)
+        return names
+
+    def _contract_lot_size(self, inst: Instrument, row: dict) -> int:
+        """Effective unit count for one paper lot.
+
+        Kite's MCX instrument dump reports `lot_size=1` for commodity option
+        rows. The quoted premium is still per commodity unit for our risk/cash
+        accounting, so use the universe contract unit as the floor for MCX/NCDEX.
+        """
+        row_lot = int(row.get("lot_size") or 0)
+        if inst.segment in ("MCX", "NCDEX") and row_lot <= 1:
+            return inst.lot_size
+        return row_lot or inst.lot_size
+
     def _near_future(self, inst: Instrument) -> dict | None:
         today = dt.date.today()
+        names = set(self._name_candidates(inst))
         futs = [r for r in self._instruments(inst.spot_exchange)
-                if r.get("name") == inst.option_name
+                if r.get("name") in names
                 and r.get("instrument_type") == "FUT"
                 and _as_date(r.get("expiry")) and _as_date(r["expiry"]) >= today]
         if not futs:
@@ -122,8 +209,11 @@ class KiteProvider(MarketDataProvider):
             log.warn(f"no underlying token resolved", instrument=inst.key)
             return []
         now = dt.datetime.now()
-        raw = self.kite.historical_data(
-            token, from_date=now - dt.timedelta(days=days), to_date=now, interval=interval)
+        try:
+            raw = self._historical(token, now - dt.timedelta(days=days), now, interval)
+        except Exception as e:
+            log.error(f"historical_data failed: {e}", instrument=inst.key)
+            return []
         if not raw:
             return []
         raw = raw[:-1]  # drop the still-forming bar
@@ -136,15 +226,52 @@ class KiteProvider(MarketDataProvider):
         if not key:
             return None
         try:
-            return self.kite.ltp([key]).get(key, {}).get("last_price")
+            return self._ltp([key]).get(key, {}).get("last_price")
         except Exception as e:
             log.error(f"ltp failed: {e}", instrument=inst.key)
             return None
 
+    def live_snapshot(self, instruments: list[Instrument], positions: list) -> dict:
+        now = self.now().isoformat()
+        out = {inst.key: {"time": now, "spot": None, "option_premium": None,
+                          "tradingsymbol": None}
+               for inst in instruments}
+
+        underlying_keys: dict[str, str] = {}
+        for inst in instruments:
+            key = self._underlying_quote_key(inst)
+            if key:
+                underlying_keys[inst.key] = key
+        if underlying_keys:
+            try:
+                raw = self._ltp(list(underlying_keys.values()))
+                for inst_key, quote_key in underlying_keys.items():
+                    out[inst_key]["spot"] = raw.get(quote_key, {}).get("last_price")
+            except Exception as e:
+                log.error(f"live underlying snapshot failed: {e}")
+
+        by_inst = {p.instrument_key: p for p in positions}
+        option_keys: dict[str, str] = {}
+        for inst in instruments:
+            pos = by_inst.get(inst.key)
+            if pos:
+                option_keys[inst.key] = f"{inst.segment}:{pos.tradingsymbol}"
+                out[inst.key]["tradingsymbol"] = pos.tradingsymbol
+        if option_keys:
+            try:
+                raw = self._ltp(list(option_keys.values()))
+                for inst_key, quote_key in option_keys.items():
+                    out[inst_key]["option_premium"] = raw.get(quote_key, {}).get("last_price")
+            except Exception as e:
+                log.error(f"live option snapshot failed: {e}")
+
+        return out
+
     def get_option_chain(self, inst: Instrument) -> OptionChain | None:
         today = dt.date.today()
+        names = set(self._name_candidates(inst))
         opts = [r for r in self._instruments(inst.segment)
-                if r.get("name") == inst.option_name
+                if r.get("name") in names
                 and r.get("instrument_type") in ("CE", "PE")
                 and _as_date(r.get("expiry")) and _as_date(r["expiry"]) >= today]
         if not opts:
@@ -164,7 +291,7 @@ class KiteProvider(MarketDataProvider):
 
         keys = [f"{inst.segment}:{r['tradingsymbol']}" for r in near]
         try:
-            quotes_raw = self.kite.quote(keys)
+            quotes_raw = self._quote(keys)
         except Exception as e:
             log.error(f"quote failed: {e}", instrument=inst.key)
             return None
@@ -186,7 +313,7 @@ class KiteProvider(MarketDataProvider):
                 strike=float(r["strike"]),
                 expiry=expiry,
                 option_type=r["instrument_type"],
-                lot_size=int(r.get("lot_size") or inst.lot_size),
+                lot_size=self._contract_lot_size(inst, r),
                 ltp=ltp, bid=bid or ltp, ask=ask or ltp,
                 volume=int(q.get("volume", 0)),
                 oi=int(q.get("oi", 0)),
@@ -199,7 +326,7 @@ class KiteProvider(MarketDataProvider):
                    expiry: dt.date, option_type: str) -> float | None:
         key = f"{inst.segment}:{tradingsymbol}"
         try:
-            return self.kite.ltp([key]).get(key, {}).get("last_price")
+            return self._ltp([key]).get(key, {}).get("last_price")
         except Exception as e:
             log.error(f"option ltp failed: {e}", instrument=inst.key)
             return None

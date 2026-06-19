@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react'
 import { getCandles, getOptionCandles } from '../lib/api'
 import { PriceChart } from './Charts'
-import type { InstrState } from '../lib/types'
+import type { InstrState, LiveTick } from '../lib/types'
 import { inr, num, signalStyle, signedInr, pnlColor } from '../lib/format'
+import { epochSeconds, mergeLiveCandle, type LiveCandle } from '../lib/liveSeries'
 
 function Field({ label, v, cls = '' }: { label: string; v: string; cls?: string }) {
   return <div className="min-w-0"><div className="stat-label">{label}</div>
     <div className={`font-semibold truncate ${cls}`}>{v}</div></div>
 }
 
-export default function InstrumentTile({ st, onExpand }: { st: InstrState; onExpand: (k: string) => void }) {
+export default function InstrumentTile({ st, onExpand, liveTick }:
+  { st: InstrState; onExpand: (k: string) => void; liveTick?: LiveTick }) {
   const key = st.instrument
   const pos = st.position
   const [mode, setMode] = useState<'spot' | 'opt'>('spot')
-  const [data, setData] = useState<{ candles: any[]; ema: any[]; markers: any[] }>({ candles: [], ema: [], markers: [] })
+  const [data, setData] = useState<{ candles: LiveCandle[]; ema: any[]; markers: any[] }>({ candles: [], ema: [], markers: [] })
 
   useEffect(() => {
     let alive = true
@@ -32,6 +34,14 @@ export default function InstrumentTile({ st, onExpand }: { st: InstrState; onExp
     const t = setInterval(load, 12000)  // tiles are static-ish; expand for live ticks
     return () => { alive = false; clearInterval(t) }
   }, [key, mode, !!pos])
+
+  useEffect(() => {
+    if (!liveTick) return
+    const price = mode === 'opt' ? liveTick.option_premium : liveTick.spot
+    if (price == null) return
+    const time = epochSeconds(liveTick.time)
+    setData((prev) => ({ ...prev, candles: mergeLiveCandle(prev.candles, time, price) }))
+  }, [liveTick?.time, liveTick?.spot, liveTick?.option_premium, mode])
 
   return (
     <div className="tile">

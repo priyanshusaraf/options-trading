@@ -71,3 +71,58 @@ def test_known_nfo_buy_total():
     # total = 29.36
     c = compute_charges("NFO", "BUY", premium=172.8, qty=75)
     assert c["total"] == pytest.approx(29.36, abs=0.10)
+
+
+# ── UNDERLYING schedules (used by the backtest) ──────────────────────────────
+
+def test_equity_delivery_taxes_both_legs():
+    # equity DELIVERY STT is 0.1% on BOTH buy and sell (unlike F&O, sell-only)
+    buy = compute_charges("NSE_EQ", "BUY", premium=2500.0, qty=20)
+    sell = compute_charges("NSE_EQ", "SELL", premium=2500.0, qty=20)
+    assert buy["stt_ctt"] == pytest.approx(0.001 * 2500 * 20, rel=1e-6)
+    assert sell["stt_ctt"] == pytest.approx(0.001 * 2500 * 20, rel=1e-6)
+
+
+def test_equity_delivery_zero_brokerage():
+    c = compute_charges("NSE_EQ", "BUY", premium=2500.0, qty=20)
+    assert c["brokerage"] == 0.0
+
+
+def test_equity_delivery_dp_on_sell_only():
+    buy = compute_charges("NSE_EQ", "BUY", premium=2500.0, qty=20)
+    sell = compute_charges("NSE_EQ", "SELL", premium=2500.0, qty=20)
+    assert buy["dp"] == 0.0
+    assert sell["dp"] == 13.5
+    # DP must be inside the total
+    assert sell["total"] >= sell["dp"]
+
+
+def test_futures_brokerage_capped_at_20():
+    # large turnover -> brokerage caps at ₹20 (min(20, 0.03%·turnover))
+    c = compute_charges("NFO_FUT", "BUY", premium=24000.0, qty=75)  # ₹18L turnover
+    assert c["brokerage"] == 20.0
+
+
+def test_futures_brokerage_pct_when_small():
+    # tiny turnover -> brokerage is 0.03% of turnover, below the ₹20 cap
+    c = compute_charges("NFO_FUT", "BUY", premium=100.0, qty=10)  # ₹1000 turnover
+    assert c["brokerage"] == pytest.approx(0.0003 * 1000, rel=1e-6)
+
+
+def test_futures_stt_sell_only():
+    buy = compute_charges("NFO_FUT", "BUY", premium=24000.0, qty=75)
+    sell = compute_charges("NFO_FUT", "SELL", premium=24000.0, qty=75)
+    assert buy["stt_ctt"] == 0.0
+    assert sell["stt_ctt"] == pytest.approx(0.0002 * 24000 * 75, rel=1e-6)
+
+
+def test_ncdex_futures_ctt_exempt():
+    c = compute_charges("NCDEX_FUT", "SELL", premium=7500.0, qty=100)
+    assert c["stt_ctt"] == 0.0
+
+
+def test_underlying_total_includes_all_components():
+    c = compute_charges("NSE_EQ", "SELL", premium=2500.0, qty=20)
+    parts = (c["brokerage"] + c["stt_ctt"] + c["exchange_txn"] + c["sebi"]
+             + c["stamp"] + c["dp"] + c["gst"])
+    assert c["total"] == pytest.approx(parts, abs=0.02)

@@ -1,13 +1,17 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { LiveState, LogEntry } from '../lib/types'
+import type { LiveState, LiveTick, LogEntry } from '../lib/types'
 
-interface Ctx { state: LiveState | null; logs: LogEntry[]; connected: boolean }
-const LiveCtx = createContext<Ctx>({ state: null, logs: [], connected: false })
+interface Ctx {
+  state: LiveState | null; logs: LogEntry[]; connected: boolean
+  liveTicks: Record<string, LiveTick>
+}
+const LiveCtx = createContext<Ctx>({ state: null, logs: [], connected: false, liveTicks: {} })
 export const useLive = () => useContext(LiveCtx)
 
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LiveState | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
+  const [liveTicks, setLiveTicks] = useState<Record<string, LiveTick>>({})
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -23,11 +27,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         if (m.type === 'state') setState(m.data)
         else if (m.type === 'log') setLogs((p) => [...p.slice(-500), m.data])
         else if (m.type === 'logs') setLogs(m.data)
+        else if (m.type === 'live_ticks') setLiveTicks(m.data || {})
       }
     }
     connect()
     return () => { stop = true; wsRef.current?.close() }
   }, [])
 
-  return <LiveCtx.Provider value={{ state, logs, connected }}>{children}</LiveCtx.Provider>
+  return <LiveCtx.Provider value={{ state, logs, connected, liveTicks }}>{children}</LiveCtx.Provider>
 }

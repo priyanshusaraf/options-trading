@@ -52,6 +52,7 @@ class EngineRunner:
         self.enabled: set[str] = self._load_enabled()
         self.running = False
         self.tick_count = 0
+        self._idle_logged = False  # de-dupe the "markets closed" log line
         self.on_update = None  # optional async callback(state) for WS broadcast
 
     # ── instrument enable/disable ─────────────────────────────────────────
@@ -79,6 +80,8 @@ class EngineRunner:
         # 1) strategy on every enabled instrument
         for key in list(self.enabled):
             inst = get_instrument(key)
+            if not prov.is_tradable_now(inst):
+                continue  # market closed — no new candle can print; don't poll
             try:
                 candles = prov.get_candles(inst, s.interval, s.history_days)
             except Exception as e:
@@ -134,6 +137,10 @@ class EngineRunner:
             direction = "LONG" if st["signal"] == "LONG_ENTRY" else "SHORT"
             inst = get_instrument(key)
             self._record_signal(now, key, st)
+            if not inst.has_options:
+                # tracking-only instrument (no listed options): show the signal,
+                # but never options-trade it.
+                continue
             chain = prov.get_option_chain(inst)
             if not chain:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
@@ -203,7 +210,18 @@ class EngineRunner:
                     continue
                 await asyncio.sleep(self.settings.mock_tick_seconds)
             else:
-                await asyncio.sleep(30)  # live: poll cadence; acts on completed candles
+                # live: poll completed candles; idle longer when every enabled
+                # market is closed so we don't churn / burn rate-limit quota.
+                any_open = any(self.provider.is_tradable_now(get_instrument(k))
+                               for k in self.enabled)
+                if not any_open:
+                    if not self._idle_logged:
+                        log.info("all enabled markets closed — engine idling until next session")
+                        self._idle_logged = True
+                    await asyncio.sleep(60)
+                else:
+                    self._idle_logged = False
+                    await asyncio.sleep(30)
 
     def stop(self) -> None:
         self.running = False

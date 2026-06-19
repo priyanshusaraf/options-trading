@@ -16,7 +16,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.core.instruments import INSTRUMENTS
+from app.core.instruments import get_instrument
+
+
+def _priority(key: str) -> int:
+    try:
+        return get_instrument(key).priority
+    except KeyError:
+        return 999
 
 
 @dataclass
@@ -34,7 +41,7 @@ class Allocation:
 
 def allocate(candidates: list[Candidate], available_cash: float) -> Allocation:
     res = Allocation()
-    ordered = sorted(candidates, key=lambda c: INSTRUMENTS[c.instrument_key].priority)
+    ordered = sorted(candidates, key=lambda c: _priority(c.instrument_key))
     cash = available_cash
     for cand in ordered:
         if cand.cost <= cash:

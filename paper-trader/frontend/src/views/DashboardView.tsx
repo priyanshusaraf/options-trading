@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLive } from '../state/LiveContext'
 import { getDashboard } from '../lib/api'
 import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
@@ -16,6 +17,7 @@ function Card({ label, v, cls = '', sub }: { label: string; v: string; cls?: str
 }
 
 export default function DashboardView() {
+  const { state } = useLive()
   const [d, setD] = useState<any>(null)
   useEffect(() => {
     const load = () => getDashboard().then(setD)
@@ -26,6 +28,11 @@ export default function DashboardView() {
 
   if (!d) return <div className="card p-8 text-center text-muted">loading analytics…</div>
   const s = d.summary, cap = d.capital
+  const isLive = (state?.provider || 'mock') === 'kite'
+  // charge drag: how much of the gross edge is eaten by commissions
+  const grossMag = Math.abs(s.gross_pnl) || 1
+  const chargeDrag = (s.charges / grossMag) * 100
+  const avgCharge = s.trades ? s.charges / s.trades : 0
   const equity = (d.equity_curve || []).map((x: any) => ({ time: x.time, value: x.equity }))
   const curves = Object.entries(d.instrument_curves || {})
     .map(([k, v]) => ({ name: k, data: v as any[], color: colorFor(k) }))
@@ -44,6 +51,20 @@ export default function DashboardView() {
         <Card label="Expectancy" v={s.trades ? signedInr(s.expectancy) : '—'} cls={pnlColor(s.expectancy)} sub="per trade" />
         <Card label="Trades" v={String(s.trades)} sub={`${cap.open_count} open`} />
         <Card label="Charges paid" v={inr(s.charges)} cls="text-down" />
+      </div>
+
+      {/* commissions / cost-honesty strip — net is always after the full charge stack */}
+      <div className="card p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="stat-label">Commissions &amp; cost — all figures are NET of brokerage, STT/CTT, exchange, SEBI, GST &amp; stamp</div>
+          <span className="text-[11px] text-muted">no smooth-curve self-deception</span>
+        </div>
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px,1fr))' }}>
+          <Card label="Gross P&L" v={signedInr(s.gross_pnl)} cls={pnlColor(s.gross_pnl)} sub="before charges" />
+          <Card label="Charges paid" v={inr(s.charges)} cls="text-down" sub={`avg ${inr(avgCharge)}/trade`} />
+          <Card label="Net P&L" v={signedInr(s.net_pnl)} cls={pnlColor(s.net_pnl)} sub="after charges" />
+          <Card label="Charge drag" v={s.trades ? num(chargeDrag, 1) + '%' : '—'} cls="text-down" sub="of gross edge" />
+        </div>
       </div>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)' }}>
@@ -65,8 +86,10 @@ export default function DashboardView() {
             <Card label="Worst instrument" v={s.worst || '—'} cls="text-down" />
           </div>
           <div className="text-[11px] text-muted">
-            Initial capital {inr(cap.initial)} · invested {inr(cap.invested)} · provider mock = synthetic
-            data (dev stand-in, not indicative of real performance).
+            Initial capital {inr(cap.initial)} · invested {inr(cap.invested)} ·{' '}
+            {isLive
+              ? 'live Kite market data — paper fills only, net of the full Zerodha charge stack.'
+              : 'provider mock = synthetic data (dev stand-in, not indicative of real performance).'}
           </div>
         </div>
       </div>

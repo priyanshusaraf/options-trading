@@ -107,14 +107,60 @@ def toggle(key: str, body: Toggle, request: Request):
     return {"key": key, "enabled": body.enabled}
 
 
+# ── portfolio universe (customizable homepage) ───────────────────────────────
+class AddInstrument(BaseModel):
+    key: str
+    on_home: bool = True
+
+
+@router.post("/api/portfolio/add")
+def portfolio_add(body: AddInstrument, request: Request):
+    from app.core import universe_resolver
+    r = _runner(request)
+    res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home)
+    if "error" not in res:
+        r.enabled.add(body.key)   # the live engine picks it up next tick
+    return res
+
+
+@router.post("/api/portfolio/remove")
+def portfolio_remove(body: AddInstrument, request: Request):
+    from app.core import universe_resolver
+    r = _runner(request)
+    res = universe_resolver.remove_instrument(body.key)
+    r.enabled.discard(body.key)
+    return res
+
+
+@router.get("/api/portfolio/home")
+def portfolio_home(request: Request):
+    """Instruments pinned to the customizable homepage, with live state."""
+    from app.core.instruments import home_instruments
+    r = _runner(request)
+    out = []
+    for inst in home_instruments():
+        st = r.state.get(inst.key, {})
+        out.append({
+            "key": inst.key, "name": inst.name, "segment": inst.segment,
+            "has_options": inst.has_options, "enabled": inst.key in r.enabled,
+            "signal": st.get("signal", "NONE"), "trend": st.get("trend"),
+            "z": st.get("z"), "close": st.get("close"), "position": st.get("position"),
+        })
+    return {"instruments": out}
+
+
 # ── charts ──────────────────────────────────────────────────────────────────
 @router.get("/api/candles/{key}")
 def candles(key: str, request: Request):
     r = _runner(request)
     inst = get_instrument(key)
-    cs = r.provider.get_candles(inst, settings.interval, settings.history_days)
+    try:
+        cs = r.provider.get_candles(inst, settings.interval, settings.history_days)
+    except Exception:
+        cs = []  # provider not ready (e.g. Kite not authenticated) — degrade gracefully
     if not cs:
-        return {"candles": [], "ema": [], "zscore": [], "markers": [], "latest": None}
+        return {"candles": [], "ema": [], "zscore": [], "markers": [], "latest": None,
+                "name": inst.name}
     sig = compute_signals(_df(cs), ema_length=settings.ema_length,
                           z_length=settings.z_length, entry_z=settings.entry_z,
                           slope_lookback=settings.slope_lookback)

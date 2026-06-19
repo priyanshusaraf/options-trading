@@ -23,6 +23,11 @@ export interface LiveState {
   states: Record<string, InstrState>; capital: Capital
 }
 
+export interface LiveTick {
+  time: string; spot: number | null; option_premium: number | null
+  tradingsymbol: string | null
+}
+
 export interface LogEntry {
   seq: number; ts: string; level: string; instrument: string | null; msg: string
   event?: string
@@ -51,4 +56,31 @@ export interface TradeDTO {
   exit_premium: number; entry_time: string; exit_time: string; exit_reason: string
   gross_pnl: number; charges_total: number; net_pnl: number; return_pct: number
   holding_minutes: number; win: boolean
+}
+
+// ── backtest ────────────────────────────────────────────────────────────────
+export interface BacktestRun {
+  id: number; created_at: string; status: string; scope: string
+  intervals: string[]; capital: number; total: number; done: number
+  progress: number; note: string
+}
+
+export interface BTResult {
+  id: number; run_id: number; instrument_key: string; name: string
+  segment: string; interval: string; trades: number; wins: number
+  win_rate: number; profit_factor: number | null; max_drawdown_pct: number
+  return_pct: number; net_pnl: number; gross_pnl: number; charges: number
+  expectancy: number; cagr: number | null; bars: number; error: string
+}
+
+export interface BTTradeDTO {
+  direction: string; entry_time: number; entry_price: number; exit_time: number
+  exit_price: number; qty: number; gross_pnl: number; charges: number
+  net_pnl: number; return_pct: number; reason: string; bars_held: number; win: boolean
+}
+
+export interface HomeInstrument {
+  key: string; name: string; segment: string; has_options: boolean
+  enabled: boolean; signal: string; trend: string | null
+  z: number | null; close: number | null; position: PositionDTO | null
 }

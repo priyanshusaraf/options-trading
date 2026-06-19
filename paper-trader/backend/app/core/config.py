@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ALLOWED_INTERVALS = ("15minute", "30minute")
@@ -25,6 +26,12 @@ class Settings(BaseSettings):
 
     # provider selection
     provider: str = "mock"  # "mock" | "kite"
+
+    # Kite credentials — note the explicit aliases: these env vars are NOT
+    # PT_-prefixed (they're the names Kite/most examples use), so we bypass the
+    # env_prefix with validation_alias. Used only when provider == "kite".
+    kite_api_key: str = Field(default="", validation_alias="KITE_API_KEY")
+    kite_api_secret: str = Field(default="", validation_alias="KITE_API_SECRET")
 
     # capital & risk
     initial_capital: float = 50_000.0

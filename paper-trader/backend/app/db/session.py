@@ -1,12 +1,13 @@
 """Engine + session factory + one-time schema/seed init."""
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
-from app.core.instruments import all_instruments
-from app.db.models import Base, CapitalState, InstrumentState
+from app.core import instruments as inst_registry
+from app.db.models import Base, CapitalState, InstrumentState, Position, UniverseInstrument
+from app.engine.charges import compute_charges
 
 _settings = get_settings()
 engine = create_engine(
@@ -27,6 +28,65 @@ def _set_sqlite_pragma(dbapi_conn, _rec):
 SessionLocal = sessionmaker(bind=engine, future=True, expire_on_commit=False)
 
 
+def _sync_seed_universe(sess) -> None:
+    """Keep persisted seed rows aligned with curated contract metadata.
+
+    User-added rows are left alone. Seed rows may need updates when exchange
+    symbol names or fallback lot sizes are corrected in code.
+    """
+    for inst in inst_registry.seed_instruments():
+        row = sess.get(UniverseInstrument, inst.key)
+        if row is None:
+            sess.add(UniverseInstrument(
+                key=inst.key, name=inst.name, segment=inst.segment,
+                spot_exchange=inst.spot_exchange, spot_symbol=inst.spot_symbol,
+                option_name=inst.option_name, lot_size=inst.lot_size,
+                strike_step=inst.strike_step, priority=inst.priority,
+                has_options=inst.has_options, source="seed",
+                on_home=inst.on_home, active=True,
+                mock_spot=inst.mock_spot, mock_vol=inst.mock_vol))
+            continue
+        if row.source != "seed":
+            continue
+        row.name = inst.name
+        row.segment = inst.segment
+        row.spot_exchange = inst.spot_exchange
+        row.spot_symbol = inst.spot_symbol
+        row.option_name = inst.option_name
+        row.lot_size = inst.lot_size
+        row.strike_step = inst.strike_step
+        row.priority = inst.priority
+        row.has_options = inst.has_options
+        row.mock_spot = inst.mock_spot
+        row.mock_vol = inst.mock_vol
+
+
+def _repair_open_position_lot_sizes(sess) -> int:
+    """Repair old open fills that were recorded as one unit instead of one lot."""
+    cap = sess.get(CapitalState, 1)
+    if cap is None:
+        return 0
+    fixed = 0
+    rows = {r.key: r for r in sess.scalars(select(UniverseInstrument))}
+    for pos in sess.scalars(select(Position)):
+        inst = rows.get(pos.instrument_key)
+        if not inst or not inst.active or inst.lot_size <= 0:
+            continue
+        if pos.qty == inst.lot_size and pos.lot_size == inst.lot_size:
+            continue
+        if pos.qty > inst.lot_size:
+            continue
+        old_cost = pos.entry_cost
+        pos.qty = inst.lot_size
+        pos.lot_size = inst.lot_size
+        pos.entry_charges = compute_charges(
+            pos.exchange, "BUY", pos.entry_premium, pos.qty)["total"]
+        pos.entry_cost = pos.entry_premium * pos.qty + pos.entry_charges
+        cap.cash -= pos.entry_cost - old_cost
+        fixed += 1
+    return fixed
+
+
 def init_db(reset: bool = False) -> None:
     if reset:
         Base.metadata.drop_all(engine)
@@ -36,7 +96,12 @@ def init_db(reset: bool = False) -> None:
         if sess.get(CapitalState, 1) is None:
             sess.add(CapitalState(id=1, initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))
-        for inst in all_instruments():
-            if sess.get(InstrumentState, inst.key) is None:
-                sess.add(InstrumentState(instrument_key=inst.key, enabled=True))
+        _sync_seed_universe(sess)
         sess.commit()
+        # enable each active universe instrument for trading by default
+        for row in sess.scalars(select(UniverseInstrument)):
+            if row.active and sess.get(InstrumentState, row.key) is None:
+                sess.add(InstrumentState(instrument_key=row.key, enabled=True))
+        _repair_open_position_lot_sizes(sess)
+        sess.commit()
+    inst_registry.load_universe()  # populate the in-memory registry from the DB

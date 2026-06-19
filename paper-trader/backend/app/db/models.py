@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -158,6 +158,98 @@ class EquitySnapshot(Base):
             "invested": round(self.invested, 2),
             "realized_pnl": round(self.realized_pnl, 2),
             "open_count": self.open_count,
+        }
+
+
+class UniverseInstrument(Base):
+    """The dynamic, DB-backed tradable universe. Seeded from the curated list and
+    extended at runtime when the owner adds instruments from the homepage /
+    backtest winners. `has_options` decides whether the live engine options-trades
+    it or just tracks + backtests it."""
+    __tablename__ = "universe_instruments"
+    key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    segment: Mapped[str] = mapped_column(String(12))       # NFO/BFO/MCX/NCDEX/NSE/BSE
+    spot_exchange: Mapped[str] = mapped_column(String(12))
+    spot_symbol: Mapped[str] = mapped_column(String(64))
+    option_name: Mapped[str] = mapped_column(String(64), default="")
+    lot_size: Mapped[int] = mapped_column(Integer, default=1)
+    strike_step: Mapped[float] = mapped_column(Float, default=1.0)
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    has_options: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(8), default="seed")   # seed | user
+    on_home: Mapped[bool] = mapped_column(Boolean, default=False)    # shown on homepage
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # mock seeds (only used by the synthetic market in tests/dryrun)
+    mock_spot: Mapped[float] = mapped_column(Float, default=1000.0)
+    mock_vol: Mapped[float] = mapped_column(Float, default=0.2)
+
+
+class BacktestRun(Base):
+    __tablename__ = "backtest_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running|done|error
+    scope: Mapped[str] = mapped_column(String(16), default="liquid")    # liquid|full
+    intervals: Mapped[str] = mapped_column(String(128), default="")     # csv
+    capital: Mapped[float] = mapped_column(Float, default=50_000.0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    done: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(400), default="")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "created_at": self.created_at.isoformat(),
+            "status": self.status, "scope": self.scope,
+            "intervals": [i for i in self.intervals.split(",") if i],
+            "capital": self.capital, "total": self.total, "done": self.done,
+            "progress": round(100 * self.done / self.total, 1) if self.total else 0.0,
+            "note": self.note,
+        }
+
+
+class BacktestResult(Base):
+    """One (instrument × interval) backtest result. Cached so reruns are instant."""
+    __tablename__ = "backtest_results"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(Integer, index=True)
+    instrument_key: Mapped[str] = mapped_column(String(48), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    segment: Mapped[str] = mapped_column(String(12), default="")   # backtest charge segment
+    interval: Mapped[str] = mapped_column(String(12), index=True)
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    profit_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_drawdown_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    gross_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    charges: Mapped[float] = mapped_column(Float, default=0.0)
+    expectancy: Mapped[float] = mapped_column(Float, default=0.0)
+    cagr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bars: Mapped[int] = mapped_column(Integer, default=0)
+    curve_json: Mapped[str] = mapped_column(Text, default="[]")     # equity curve
+    trades_json: Mapped[str] = mapped_column(Text, default="[]")    # trade list (drill-down)
+    error: Mapped[str] = mapped_column(String(400), default="")
+
+    def summary(self) -> dict:
+        return {
+            "id": self.id, "run_id": self.run_id,
+            "instrument_key": self.instrument_key, "name": self.name,
+            "segment": self.segment, "interval": self.interval,
+            "trades": self.trades, "wins": self.wins,
+            "win_rate": round(self.win_rate, 1),
+            "profit_factor": round(self.profit_factor, 3) if self.profit_factor is not None else None,
+            "max_drawdown_pct": round(self.max_drawdown_pct, 1),
+            "return_pct": round(self.return_pct, 1),
+            "net_pnl": round(self.net_pnl, 0),
+            "gross_pnl": round(self.gross_pnl, 0),
+            "charges": round(self.charges, 0),
+            "expectancy": round(self.expectancy, 0),
+            "cagr": round(self.cagr, 1) if self.cagr is not None else None,
+            "bars": self.bars,
+            "error": self.error,
         }
 
 
