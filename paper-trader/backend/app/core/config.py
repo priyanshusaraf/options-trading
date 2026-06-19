@@ -77,6 +77,32 @@ class Settings(BaseSettings):
     trail_lock_pct: float = 0.025        # SL raised by this fraction of entry per step crossed
     trail_target_pct: float = 0.60       # stop ratcheting once profit reaches the final target
 
+    # ── reinforcement (a same-direction crossover while holding a winner) ───
+    # Does NOT add quantity (no pyramiding). It strengthens management: ratchet
+    # the stop to lock profit, optionally extend the target, count the confirm.
+    reinforce_enabled: bool = True
+    reinforce_min_profit_pct: float = 0.10   # position must be >= +10% before a reinforcement counts
+    reinforce_lock_pct: float = 0.05         # SL floor = entry*(1 + count*lock); never loosens
+    reinforce_extend_tp: bool = True
+    reinforce_tp_extend_pct: float = 0.20    # +20% of entry added to target per reinforcement
+    reinforce_tp_max_pct: float = 1.50       # target never extends beyond +150%
+    reinforce_cooldown_minutes: float = 15.0 # min gap between counted reinforcements
+    max_reinforcements: int = 3              # cap (theta makes endless management pointless)
+
+    # ── overnight holding (option buying: theta/expiry are the real risks) ──
+    overnight_enabled: bool = True
+    overnight_auto_pct: float = 0.10         # positions <=10% of capital auto-hold overnight
+    overnight_max_pct: float = 0.25          # >25% of capital never held overnight, even reinforced
+    overnight_min_reinforcements: int = 1    # 10%–25% positions need >=1 reinforcement to hold
+    overnight_min_days_to_expiry: int = 2    # force square-off if expiry within N days (theta cliff)
+    block_overnight_into_weekend: bool = False
+    max_holding_days: int = 5                # hard cap on holding period (trading days)
+    square_off_buffer_minutes: float = 15.0  # decide / square-off this long before session close
+
+    # ── option-data research cache (persistent, growing dataset) ────────────
+    option_cache_enabled: bool = True
+    option_cache_snapshot_minutes: float = 15.0  # persist a chain snapshot at most this often
+
     # misc
     risk_free_rate: float = 0.065
     db_path: str = "paper_trader.db"

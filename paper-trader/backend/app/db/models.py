@@ -66,6 +66,12 @@ class Position(Base):
     last_mark_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     # highest premium seen since entry — drives the trailing-stop ratchet
     high_water_premium: Mapped[float] = mapped_column(Float, default=0.0)
+    # reinforcement + overnight management
+    reinforcement_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_reinforce_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    held_overnight: Mapped[bool] = mapped_column(Boolean, default=False)
+    overnight_pnl: Mapped[float] = mapped_column(Float, default=0.0)   # Σ premium delta across session gaps
+    session_close_premium: Mapped[float] = mapped_column(Float, default=0.0)  # mark at last session close
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty
@@ -90,6 +96,8 @@ class Position(Base):
             "last_spot": round(self.last_spot, 2),
             "last_mark_time": self.last_mark_time.isoformat() if self.last_mark_time else None,
             "high_water_premium": round(self.high_water_premium or self.entry_premium, 2),
+            "reinforcement_count": self.reinforcement_count,
+            "held_overnight": self.held_overnight,
             "unrealized_pnl": round(unrealized, 2),
         }
 
@@ -123,6 +131,11 @@ class Trade(Base):
     return_pct: Mapped[float] = mapped_column(Float)
     holding_minutes: Mapped[float] = mapped_column(Float)
     win: Mapped[bool] = mapped_column(Boolean)
+    # intraday vs overnight attribution
+    held_overnight: Mapped[bool] = mapped_column(Boolean, default=False)
+    overnight_pnl: Mapped[float] = mapped_column(Float, default=0.0)   # part of net from session gaps
+    intraday_pnl: Mapped[float] = mapped_column(Float, default=0.0)    # net - overnight
+    reinforcements: Mapped[int] = mapped_column(Integer, default=0)
 
     def to_dict(self) -> dict:
         return {
@@ -144,6 +157,10 @@ class Trade(Base):
             "return_pct": round(self.return_pct, 2),
             "holding_minutes": round(self.holding_minutes, 1),
             "win": self.win,
+            "held_overnight": self.held_overnight,
+            "overnight_pnl": round(self.overnight_pnl, 2),
+            "intraday_pnl": round(self.intraday_pnl, 2),
+            "reinforcements": self.reinforcements,
         }
 
 
@@ -290,3 +307,35 @@ class SignalEvent(Base):
             "acted": self.acted,
             "note": self.note,
         }
+
+
+class RuntimeConfig(Base):
+    """Runtime parameter overrides (manual-override mode). Each row overrides one
+    Settings field by name; absent keys fall back to the code default. Lets the
+    owner retune reinforcement / overnight / trailing knobs without code edits."""
+    __tablename__ = "runtime_config"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(64))   # stringified; coerced to the field's type
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class OptionData(Base):
+    """Persistent option-chain research dataset. Every distinct contract quote we
+    fetch is appended (deduped at snapshot cadence) to build a growing local
+    options history that survives restarts and is reusable for research."""
+    __tablename__ = "option_data"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instrument_key: Mapped[str] = mapped_column(String(32), index=True)
+    ts: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+    expiry: Mapped[dt.date] = mapped_column(Date)
+    strike: Mapped[float] = mapped_column(Float)
+    option_type: Mapped[str] = mapped_column(String(4))   # CE | PE
+    tradingsymbol: Mapped[str] = mapped_column(String(64))
+    spot: Mapped[float] = mapped_column(Float, default=0.0)
+    ltp: Mapped[float] = mapped_column(Float, default=0.0)
+    bid: Mapped[float] = mapped_column(Float, default=0.0)
+    ask: Mapped[float] = mapped_column(Float, default=0.0)
+    oi: Mapped[int] = mapped_column(Integer, default=0)
+    volume: Mapped[int] = mapped_column(Integer, default=0)
+    iv: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)

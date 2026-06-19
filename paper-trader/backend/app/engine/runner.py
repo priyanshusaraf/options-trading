@@ -55,6 +55,7 @@ class EngineRunner:
         self.intervals: dict[str, str] = self._load_intervals()   # per-instrument live TF
         self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
         self.health = HealthTracker()
+        self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
         self.running = False
@@ -105,6 +106,14 @@ class EngineRunner:
         self._next_scan.pop(key, None)   # force a re-scan at the new interval
         log.info(f"live interval set to {iv}", instrument=key)
         return iv
+
+    def _effective_params(self) -> dict:
+        from app.core.runtime_config import effective
+        return effective(self.settings)
+
+    def refresh_params(self) -> None:
+        """Re-read runtime overrides so live Settings edits take effect."""
+        self.params = self._effective_params()
 
     def set_entries_blocked(self, key: str, blocked: bool) -> None:
         with SessionLocal() as s:
@@ -208,33 +217,45 @@ class EngineRunner:
 
     def _apply_trailing(self, pos) -> None:
         """Ratchet the premium stop upward as profit thresholds are crossed."""
-        if not self.settings.trail_enabled:
+        p = self.params
+        if not p.get("trail_enabled", True):
             return
         new_stop = trailing_stop(
             pos.entry_premium, pos.high_water_premium or pos.entry_premium, pos.stop_price,
-            trigger_pct=self.settings.trail_trigger_pct,
-            lock_pct=self.settings.trail_lock_pct,
-            target_pct=self.settings.trail_target_pct)
+            trigger_pct=p["trail_trigger_pct"],
+            lock_pct=p["trail_lock_pct"],
+            target_pct=p["trail_target_pct"])
         if new_stop > pos.stop_price:
             log.info(f"TRAIL SL {pos.tradingsymbol} {pos.stop_price:.2f} -> {new_stop:.2f} "
                      f"(high {pos.high_water_premium:.2f})", instrument=pos.instrument_key,
                      event="TRAIL")
             pos.stop_price = new_stop
 
-    # ── lane 3: entries (fresh crossovers, not blocked, not held) ─────────
+    # ── lane 3: entries + reinforcement (fresh crossovers) ────────────────
     def process_entries(self) -> None:
         s, prov = self.settings, self.provider
         now = prov.now()
-        opens = {p.instrument_key for p in self.broker.open_positions()}
+        held = {p.instrument_key: p for p in self.broker.open_positions()}
         cands: list[Candidate] = []
         meta: dict[str, tuple] = {}
         for key in list(self.enabled):
-            if key in opens or key in self.entry_blocks:
-                continue  # one position per instrument; entries may be disabled
             st = self.state.get(key)
-            if not st or st["signal"] not in ("LONG_ENTRY", "SHORT_ENTRY"):
+            sig = st["signal"] if st else "NONE"
+            # A fresh SAME-DIRECTION crossover on a held position is a reinforcement,
+            # never added quantity (no pyramiding).
+            if key in held:
+                if sig in ("LONG_ENTRY", "SHORT_ENTRY"):
+                    pos = held[key]
+                    sig_dir = "LONG" if sig == "LONG_ENTRY" else "SHORT"
+                    if sig_dir == pos.direction:
+                        self._record_signal(now, key, st, note="reinforcement")
+                        self.broker.reinforce_position(pos, self.params, now)
                 continue
-            direction = "LONG" if st["signal"] == "LONG_ENTRY" else "SHORT"
+            if key in self.entry_blocks:
+                continue  # entries manually disabled for this instrument
+            if not st or sig not in ("LONG_ENTRY", "SHORT_ENTRY"):
+                continue
+            direction = "LONG" if sig == "LONG_ENTRY" else "SHORT"
             inst = get_instrument(key)
             self._record_signal(now, key, st)
             if not inst.has_options:
@@ -244,6 +265,12 @@ class EngineRunner:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
                 continue
             pick = pick_option(chain, direction, s, now)
+            if self.params.get("option_cache_enabled", True):
+                try:
+                    from app.options.cache import persist_chain
+                    persist_chain(chain, inst, now, self.params["option_cache_snapshot_minutes"])
+                except Exception as e:
+                    log.error(f"option cache persist failed: {e}")
             self.last_pick[key] = {
                 "time": now.isoformat(), "direction": direction, "reason": pick.reason,
                 "spot": round(chain.spot, 2), "expiry": chain.expiry.isoformat(),
@@ -274,6 +301,63 @@ class EngineRunner:
             for c, reason in alloc.skipped:
                 log.warn(f"signal dropped — {reason}", instrument=c.instrument_key)
 
+    # ── overnight holding (option buying) ─────────────────────────────────
+    def square_off_for_overnight(self, now) -> list[dict]:
+        """At session close: keep eligible positions overnight (tag + snapshot the
+        close mark), paper-close the rest. Returns the per-position decisions."""
+        from app.engine.overnight import overnight_decision
+        equity = self.capital_dict()["equity"]
+        out = []
+        for pos in list(self.broker.open_positions()):
+            dte = (pos.expiry - now.date()).days if pos.expiry else None
+            holding_days = max(0, (now.date() - pos.entry_time.date()).days)
+            into_weekend = now.weekday() == 4   # Friday close
+            keep, reason = overnight_decision(
+                pos.entry_cost, equity, pos.reinforcement_count,
+                dte, holding_days, into_weekend, self.params)
+            if keep:
+                pos.held_overnight = True
+                pos.session_close_premium = pos.last_premium or pos.entry_premium
+                self.broker.commit()
+                log.info(f"OVERNIGHT HOLD {pos.tradingsymbol} — {reason}",
+                         instrument=pos.instrument_key, event="OVERNIGHT_HOLD")
+            else:
+                prem = pos.last_premium or pos.entry_premium
+                self.broker.close_position(pos, prem, "OVERNIGHT_SQUAREOFF", now, pos.last_spot)
+                if pos.instrument_key in self.state:
+                    self.state[pos.instrument_key]["position"] = None
+                log.info(f"OVERNIGHT SQUAREOFF {pos.tradingsymbol} — {reason}",
+                         instrument=pos.instrument_key, event="OVERNIGHT_SQUAREOFF")
+            out.append({"key": pos.instrument_key, "keep": keep, "reason": reason})
+        return out
+
+    def book_overnight_gap(self, now) -> None:
+        """At session open: attribute the close→open premium gap to overnight P&L."""
+        for pos in list(self.broker.open_positions()):
+            if pos.held_overnight and pos.session_close_premium > 0:
+                prem = pos.last_premium or pos.entry_premium
+                pos.overnight_pnl += (prem - pos.session_close_premium) * pos.qty
+                pos.session_close_premium = 0.0
+                self.broker.commit()
+
+    def handle_overnight(self, now) -> None:
+        """Live-mode orchestration: square off near each segment's close, book the
+        gap just after open. No-op for the always-open mock clock."""
+        if self.provider.name == "mock":
+            return
+        try:
+            from app.core import market_hours
+            buf = self.params["square_off_buffer_minutes"]
+            for pos in list(self.broker.open_positions()):
+                seg = get_instrument(pos.instrument_key).spot_exchange
+                mtc = market_hours.minutes_to_close(seg, now)
+                if mtc is not None and 0 <= mtc <= buf and not pos.held_overnight:
+                    self.square_off_for_overnight(now)
+                    break
+            self.book_overnight_gap(now)
+        except Exception as e:
+            log.error(f"overnight handler error: {e}")
+
     # ── combined step — mock dry-run + tests (semantics unchanged) ────────
     def tick(self) -> None:
         self.scan_signals()
@@ -282,11 +366,11 @@ class EngineRunner:
         self.broker.snapshot(self.provider.now())
         self.tick_count += 1
 
-    def _record_signal(self, now, key, st) -> None:
+    def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:
             s.add(SignalEvent(time=now, instrument_key=key, signal=st["signal"],
                               z=st["z"], slope=st["slope"], close=st["close"],
-                              acted=True))
+                              acted=True, note=note))
             s.commit()
 
     # ── next-candle gating ────────────────────────────────────────────────
@@ -315,8 +399,10 @@ class EngineRunner:
 
     async def _signal_iteration(self) -> None:
         async with self._lock:
+            self.refresh_params()          # pick up live Settings overrides
             self.scan_signals()
             self.process_entries()
+            self.handle_overnight(self.provider.now())   # no-op for mock
             self.broker.snapshot(self.provider.now())
             self.tick_count += 1
         if self.on_update:

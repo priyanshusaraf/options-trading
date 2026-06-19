@@ -102,6 +102,17 @@ def _migrate_schema() -> None:
         "positions": [
             ("last_mark_time", "DATETIME"),
             ("high_water_premium", "FLOAT DEFAULT 0.0"),
+            ("reinforcement_count", "INTEGER DEFAULT 0"),
+            ("last_reinforce_time", "DATETIME"),
+            ("held_overnight", "BOOLEAN DEFAULT 0"),
+            ("overnight_pnl", "FLOAT DEFAULT 0.0"),
+            ("session_close_premium", "FLOAT DEFAULT 0.0"),
+        ],
+        "trades": [
+            ("held_overnight", "BOOLEAN DEFAULT 0"),
+            ("overnight_pnl", "FLOAT DEFAULT 0.0"),
+            ("intraday_pnl", "FLOAT DEFAULT 0.0"),
+            ("reinforcements", "INTEGER DEFAULT 0"),
         ],
         "backtest_results": [
             ("params_hash", "VARCHAR(64) DEFAULT ''"),

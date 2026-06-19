@@ -52,3 +52,16 @@ def is_open(segment: str, when: dt.datetime | None = None) -> bool:
 def any_open(segments) -> bool:
     """True if at least one of the given segments is currently in session."""
     return any(is_open(seg) for seg in segments)
+
+
+def minutes_to_close(segment: str, when: dt.datetime | None = None) -> float | None:
+    """Minutes until `segment`'s session closes, or None if it's already closed."""
+    t = when or now_ist()
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=IST)
+    t = t.astimezone(IST)
+    if not is_open(segment, t):
+        return None
+    _, c = SESSIONS.get(segment, _DEFAULT)
+    close_dt = t.replace(hour=c.hour, minute=c.minute, second=0, microsecond=0)
+    return max(0.0, (close_dt - t).total_seconds() / 60.0)

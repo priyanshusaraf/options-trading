@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
-from app.db.models import Position
+from app.db.models import Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
@@ -351,6 +351,63 @@ def manual_open(body: ManualOpenBody, request: Request):
     if body.key in r.state:
         r.state[body.key]["position"] = pos.to_dict()
     return {"opened": True, "key": body.key, "tradingsymbol": pos.tradingsymbol}
+
+
+# ── runtime settings (manual-override mode) ──────────────────────────────────
+@router.get("/api/settings")
+def get_settings_route():
+    from app.core import runtime_config
+    return {"params": runtime_config.schema()}
+
+
+class SettingBody(BaseModel):
+    key: str
+    value: str | float | int | bool
+
+
+@router.post("/api/settings")
+def set_setting(body: SettingBody, request: Request):
+    from app.core import runtime_config
+    res = runtime_config.set_override(body.key, body.value)
+    _runner(request).refresh_params()
+    return res
+
+
+class SettingKey(BaseModel):
+    key: str
+
+
+@router.post("/api/settings/reset")
+def reset_setting(body: SettingKey, request: Request):
+    from app.core import runtime_config
+    runtime_config.clear_override(body.key)
+    _runner(request).refresh_params()
+    return {"key": body.key, "reset": True}
+
+
+# ── intraday vs overnight analytics + option dataset ─────────────────────────
+@router.get("/api/analytics")
+def analytics_split(request: Request):
+    from app.options.cache import stats as option_stats
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+
+    def agg(ts):
+        n = len(ts)
+        wins = sum(1 for t in ts if t.win)
+        return {"trades": n, "wins": wins,
+                "win_rate": round(100 * wins / n, 1) if n else 0.0,
+                "net_pnl": round(sum(t.net_pnl for t in ts), 2)}
+
+    overnight = [t for t in trades if t.held_overnight]
+    intraday = [t for t in trades if not t.held_overnight]
+    return {
+        "intraday": agg(intraday),
+        "overnight": agg(overnight),
+        "overnight_gap_pnl": round(sum(t.overnight_pnl for t in trades), 2),
+        "reinforced_trades": sum(1 for t in trades if t.reinforcements > 0),
+        "option_dataset": option_stats(),
+    }
 
 
 # ── websockets ──────────────────────────────────────────────────────────────

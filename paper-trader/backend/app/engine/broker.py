@@ -98,6 +98,25 @@ class PaperBroker:
                  instrument=inst.key, event="MANUAL_OPEN", manual=True)
         return pos, "ok"
 
+    def reinforce_position(self, pos: Position, params: dict, now: dt.datetime) -> dict:
+        """Apply a same-direction reinforcement to a held position: ratchet the
+        stop, optionally extend the target, bump the count. No quantity change."""
+        from app.engine.exit_monitor import apply_reinforcement
+        prem = pos.last_premium or pos.entry_premium
+        r = apply_reinforcement(pos.entry_premium, pos.stop_price, pos.target_price,
+                                prem, pos.reinforcement_count, pos.last_reinforce_time,
+                                now, params)
+        if r["applied"]:
+            pos.stop_price = r["stop_price"]
+            pos.target_price = r["target_price"]
+            pos.reinforcement_count = r["count"]
+            pos.last_reinforce_time = now
+            self.s.commit()
+            log.info(f"REINFORCE {pos.tradingsymbol} — {r['reason']}",
+                     instrument=pos.instrument_key, event="REINFORCE",
+                     count=r["count"])
+        return r
+
     def mark(self, pos: Position, premium: float | None, spot: float | None,
              now: dt.datetime | None = None) -> None:
         if premium:
@@ -134,6 +153,10 @@ class PaperBroker:
             return_pct=(net / pos.entry_cost * 100) if pos.entry_cost else 0.0,
             holding_minutes=(now - pos.entry_time).total_seconds() / 60,
             win=net > 0,
+            held_overnight=pos.held_overnight,
+            overnight_pnl=round(pos.overnight_pnl, 2),
+            intraday_pnl=round(net - pos.overnight_pnl, 2),
+            reinforcements=pos.reinforcement_count,
         )
         self.s.delete(pos)
         self.s.add(tr)
