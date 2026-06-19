@@ -1,8 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getPositions, getSignals, closePosition, blockEntries, manualOpen } from '../lib/api'
+import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen } from '../lib/api'
 import { inr, num, signedInr, pnlColor } from '../lib/format'
-import type { PositionRow, SignalRow } from '../lib/types'
+import type { PositionRow, SignalRow, AnalyticsSplit } from '../lib/types'
+
+function AnalyticsStrip() {
+  const [a, setA] = useState<AnalyticsSplit | null>(null)
+  useEffect(() => { const f = () => getAnalytics().then(setA).catch(() => {}); f(); const t = setInterval(f, 5000); return () => clearInterval(t) }, [])
+  if (!a) return null
+  const cell = (label: string, v: string, cls = '') =>
+    <div><div className="stat-label">{label}</div><div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
+  return (
+    <div className="card p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px,1fr))' }}>
+      <div className="stat-label col-span-full">Where the P&amp;L comes from — intraday vs overnight</div>
+      {cell('Intraday net', signedInr(a.intraday.net_pnl), pnlColor(a.intraday.net_pnl))}
+      {cell('Intraday trades', `${a.intraday.trades} · ${a.intraday.win_rate}%`)}
+      {cell('Overnight net', signedInr(a.overnight.net_pnl), pnlColor(a.overnight.net_pnl))}
+      {cell('Overnight trades', `${a.overnight.trades} · ${a.overnight.win_rate}%`)}
+      {cell('Overnight gap P&L', signedInr(a.overnight_gap_pnl), pnlColor(a.overnight_gap_pnl))}
+      {cell('Reinforced trades', String(a.reinforced_trades))}
+      {cell('Option dataset', `${a.option_dataset.rows.toLocaleString()} rows`)}
+    </div>
+  )
+}
 
 function holdingTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -26,6 +46,8 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
           <span className="font-semibold text-zinc-100">{p.instrument_key}</span>
           <span className={`badge ${p.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>{p.direction} {p.option_type}</span>
           <span className="text-[11px] text-muted">{p.tradingsymbol} · {p.qty}u</span>
+          {!!p.reinforcement_count && <span className="badge bg-blue-500/15 text-blue-300" title="reinforcements">⊕ ×{p.reinforcement_count}</span>}
+          {p.held_overnight && <span className="badge bg-indigo-400/15 text-indigo-300" title="held overnight">🌙 overnight</span>}
           {p.stale && <span className="badge bg-amber-400/15 text-amber-400">stale{p.stale_age != null ? ` ${p.stale_age}s` : ''}</span>}
         </div>
         <span className={`text-sm font-semibold ${pnlColor(p.unrealized_pnl)}`}>{signedInr(p.unrealized_pnl)}</span>
@@ -110,6 +132,7 @@ export default function ActivePositionsView() {
 
   return (
     <div className="flex flex-col gap-3">
+      <AnalyticsStrip />
       <ManualEntry tradable={tradable} onDone={load} />
       {merged.length === 0 ? (
         <div className="card p-8 text-center text-muted">No open positions. The engine opens one on the next fresh signal, or open one manually above.</div>

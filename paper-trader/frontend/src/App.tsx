@@ -8,6 +8,7 @@ import EngineView from './views/EngineView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
 import DashboardView from './views/DashboardView'
+import SettingsView from './views/SettingsView'
 
 const TABS: [string, string][] = [
   ['home', 'Home'],
@@ -17,6 +18,7 @@ const TABS: [string, string][] = [
   ['options', 'Options Calc'],
   ['backtests', 'Backtests'],
   ['dashboard', 'Dashboard'],
+  ['settings', 'Settings'],
 ]
 
 function Shell() {
@@ -32,6 +34,7 @@ function Shell() {
         {tab === 'options' && <OptionsCalcView />}
         {tab === 'backtests' && <BacktestsView />}
         {tab === 'dashboard' && <DashboardView />}
+        {tab === 'settings' && <SettingsView />}
       </main>
     </div>
   )

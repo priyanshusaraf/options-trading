@@ -9,6 +9,7 @@ export interface PositionDTO {
   entry_premium: number; entry_cost: number; entry_time: string; entry_reason: string
   stop_price: number; target_price: number; last_premium: number; last_spot: number
   last_mark_time?: string | null; high_water_premium?: number
+  reinforcement_count?: number; held_overnight?: boolean
   unrealized_pnl: number
 }
 
@@ -103,6 +104,15 @@ export interface BTTradeDTO {
   direction: string; entry_time: number; entry_price: number; exit_time: number
   exit_price: number; qty: number; gross_pnl: number; charges: number
   net_pnl: number; return_pct: number; reason: string; bars_held: number; win: boolean
+}
+
+export interface SettingRow { key: string; type: 'bool' | 'int' | 'float' | 'str'; default: any; value: any }
+
+export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number }
+export interface AnalyticsSplit {
+  intraday: AnalyticsAgg; overnight: AnalyticsAgg; overnight_gap_pnl: number
+  reinforced_trades: number
+  option_dataset: { rows: number; instruments: number; first_ts: string | null; last_ts: string | null }
 }
 
 export interface HomeInstrument {

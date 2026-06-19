@@ -15,6 +15,10 @@ export const blockEntries = (key: string, blocked: boolean) =>
 export const closePosition = (key: string) => post(`/api/positions/${key}/close`, {})
 export const manualOpen = (key: string, direction: string) =>
   post('/api/positions/manual-open', { key, direction })
+export const getSettings = () => j('/api/settings')
+export const setSetting = (key: string, value: any) => post('/api/settings', { key, value })
+export const resetSetting = (key: string) => post('/api/settings/reset', { key })
+export const getAnalytics = () => j('/api/analytics')
 export const getCandles = (key: string) => j(`/api/candles/${key}`)
 export const getOptionCandles = (key: string) => j(`/api/option-candles/${key}`)
 export const getOptionsCalc = (key: string) => j(`/api/options-calc/${key}`)
