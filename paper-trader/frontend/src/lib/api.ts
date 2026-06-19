@@ -5,6 +5,16 @@ const post = (u: string, body: any) =>
 
 export const getStatus = () => j('/api/status')
 export const getInstruments = () => j('/api/instruments')
+export const getSignals = () => j('/api/signals')
+export const getPositions = () => j('/api/positions')
+export const getProviderHealth = () => j('/api/provider-health')
+export const setLiveInterval = (key: string, interval: string) =>
+  post(`/api/instruments/${key}/interval`, { interval })
+export const blockEntries = (key: string, blocked: boolean) =>
+  post(`/api/instruments/${key}/block-entries`, { blocked })
+export const closePosition = (key: string) => post(`/api/positions/${key}/close`, {})
+export const manualOpen = (key: string, direction: string) =>
+  post('/api/positions/manual-open', { key, direction })
 export const getCandles = (key: string) => j(`/api/candles/${key}`)
 export const getOptionCandles = (key: string) => j(`/api/option-candles/${key}`)
 export const getOptionsCalc = (key: string) => j(`/api/options-calc/${key}`)
@@ -16,8 +26,8 @@ export const toggleInstrument = (key: string, enabled: boolean) =>
 
 // ── customizable homepage / portfolio universe ──────────────────────────────
 export const getHome = () => j('/api/portfolio/home')
-export const addToPortfolio = (key: string, on_home = true) =>
-  post('/api/portfolio/add', { key, on_home })
+export const addToPortfolio = (key: string, on_home = true, interval?: string) =>
+  post('/api/portfolio/add', { key, on_home, interval })
 export const removeFromPortfolio = (key: string) =>
   post('/api/portfolio/remove', { key, on_home: false })
 

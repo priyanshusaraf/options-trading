@@ -3,6 +3,7 @@ import { LiveProvider } from './state/LiveContext'
 import TopBar from './components/TopBar'
 import HomeView from './views/HomeView'
 import Monitor from './views/Monitor'
+import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
@@ -10,6 +11,7 @@ import DashboardView from './views/DashboardView'
 
 const TABS: [string, string][] = [
   ['home', 'Home'],
+  ['positions', 'Active Positions'],
   ['monitor', 'Monitor'],
   ['engine', 'Engine / Logs'],
   ['options', 'Options Calc'],
@@ -24,6 +26,7 @@ function Shell() {
       <TopBar tab={tab} setTab={setTab} tabs={TABS} />
       <main className="flex-1 p-3">
         {tab === 'home' && <HomeView />}
+        {tab === 'positions' && <ActivePositionsView />}
         {tab === 'monitor' && <Monitor />}
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}

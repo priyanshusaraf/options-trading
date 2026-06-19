@@ -8,6 +8,7 @@ export interface PositionDTO {
   tradingsymbol: string; strike: number; expiry: string; lot_size: number; qty: number
   entry_premium: number; entry_cost: number; entry_time: string; entry_reason: string
   stop_price: number; target_price: number; last_premium: number; last_spot: number
+  last_mark_time?: string | null; high_water_premium?: number
   unrealized_pnl: number
 }
 
@@ -16,16 +17,41 @@ export interface InstrState {
   close: number; ema: number; z: number; z_prev: number | null; slope: number; std: number
   trend: string; signal: string; long_exit: boolean; short_exit: boolean
   position: PositionDTO | null
+  interval?: string; has_options?: boolean; entries_blocked?: boolean
+}
+
+export interface CatHealth { last_ok: string | null; consecutive_failures: number; last_error: string }
+export interface ProviderHealth { quote: CatHealth; candle: CatHealth }
+
+export interface PositionTick {
+  instrument: string; tradingsymbol: string; option_premium: number | null; spot: number | null
+  unrealized_pnl: number; stop_price: number; target_price: number; high_water_premium: number
+  stale: boolean; stale_age: number | null; last_mark_time: string | null
 }
 
 export interface LiveState {
   tick: number; provider: string; time: string; enabled: string[]
   states: Record<string, InstrState>; capital: Capital
+  intervals?: Record<string, string>; health?: ProviderHealth
+  position_ticks?: Record<string, PositionTick>
 }
 
 export interface LiveTick {
   time: string; spot: number | null; option_premium: number | null
   tradingsymbol: string | null
+}
+
+export interface SignalRow {
+  key: string; name: string; segment: string; enabled: boolean
+  interval: string; signal: string; trend: string | null; z: number | null
+  close: number | null; last_candle_time: number | null
+  has_position: boolean; has_options: boolean; entries_blocked: boolean; stale: boolean
+}
+
+export interface PositionRow extends PositionDTO {
+  high_water_premium: number; last_mark_time: string | null
+  live_premium: number | null; live_spot: number | null
+  stale: boolean; stale_age: number | null; dist_to_stop: number; dist_to_target: number
 }
 
 export interface LogEntry {
@@ -70,7 +96,7 @@ export interface BTResult {
   segment: string; interval: string; trades: number; wins: number
   win_rate: number; profit_factor: number | null; max_drawdown_pct: number
   return_pct: number; net_pnl: number; gross_pnl: number; charges: number
-  expectancy: number; cagr: number | null; bars: number; error: string
+  expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string
 }
 
 export interface BTTradeDTO {

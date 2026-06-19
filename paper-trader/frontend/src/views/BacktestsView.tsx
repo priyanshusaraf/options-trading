@@ -76,8 +76,10 @@ export default function BacktestsView() {
   }
 
   const add = async (r: BTResult) => {
-    const res = await addToPortfolio(r.instrument_key, true)
+    // carry the winning timeframe into the live instrument when supported
+    const res = await addToPortfolio(r.instrument_key, true, r.interval)
     if (res.error) { alert(res.error); return }
+    if (res.interval_warning) alert(res.interval_warning)
     setAdded((s) => new Set(s).add(r.instrument_key))
   }
 
@@ -188,7 +190,8 @@ export default function BacktestsView() {
             {view.map((r) => (
               <tr key={r.id} onClick={() => setDrill(r)}
                 className="border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3">
-                <td className="font-semibold text-zinc-100">{r.instrument_key}</td>
+                <td className="font-semibold text-zinc-100">{r.instrument_key}
+                  {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}</td>
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
                 <td className="text-right">{r.trades}</td>
                 <td className="text-right">{num(r.win_rate, 0)}</td>
