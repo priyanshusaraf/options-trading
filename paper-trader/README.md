@@ -53,16 +53,18 @@ and the headless dry-run — it is no longer a running mode.
 
 ---
 
-## The six views
+## The eight views
 
 | View | What it shows |
 |------|---------------|
-| **Home** | Your customizable portfolio universe — a grid of pinned instruments with live signal, position, and a SPOT⇄OPT mini-chart. Add any instrument (by symbol or from a backtest winner); it joins the live universe and is options-traded if it has listed F&O, or tracked-only if not. Remove with ✕. |
-| **Monitor** | Enable/disable any universe instrument, then a live tile grid. Click a tile to expand it — that opens a per-instrument WebSocket streaming that one instrument's live ticks. |
+| **Home** | Your customizable portfolio universe — a grid of pinned instruments with live signal and position (chartless; click any tile to open the detail chart). Add any instrument (by symbol or from a backtest winner); it joins the live universe and is options-traded if it has listed F&O, or tracked-only if not. Remove with ✕. |
+| **Active Positions** | The trading cockpit. Every open position with entry/live LTP, spot, unrealized P&L, the **trailing/ratcheted stop**, target, distance-to-stop/target, holding time, freshness/stale age, reinforcement count and overnight badge — plus manual **Close now**, **Disable entries**, and **Manual paper entry**. Tops out with an intraday-vs-overnight analytics strip. |
+| **Monitor** | A lightweight **signal-first list** of the whole universe (signal, z/trend, per-instrument live timeframe, position?, options?, data-health) with filters (active positions / signals now / stale / options-tradable / enabled). Rows never fetch charts — click a row to open the detail modal, which lazy-loads the underlying + option charts and a per-instrument live WebSocket. |
 | **Engine / Logs** | Per-instrument strategy state every tick beside a live log of every OPEN/CLOSE/skip/drop. |
 | **Options Calc** | The full candidate-contract table the picker evaluated — strike, LTP, OI, spread%, IV, delta, liquidity/delta pass — with the chosen (≈ATM, delta-0.50) contract highlighted and the reason. |
 | **Backtests** | Sweep the EMA50+z-score strategy (on the **underlying**) across the liquid universe × all timeframes (1m/5m/15m/30m/1h/day), net of charges. Filter by win rate / profit factor / max drawdown / return %, drill into any equity curve + trade list, and **add a winner to your live portfolio**. |
 | **Dashboard** | Portfolio equity curve, per-instrument curves, win rate, expectancy, and a prominent **commissions & cost** strip (gross vs net, charges paid, charge drag) — every figure is net of the full charge stack. |
+| **Settings** | Manual-override mode: every reinforcement / overnight / trailing-stop / risk / cadence / option-cache parameter, grouped and documented, **editable live with no code change or restart** (each shows the recommended default and a one-click reset). The engine picks up changes on the next loop. |
 
 ---
 
@@ -82,9 +84,43 @@ and the headless dry-run — it is no longer a running mode.
    realistic charges, and deducts from the capital ledger. Always **1 lot**.
 5. **Exit** — `engine/exit_monitor.py`: close on premium **−35% stop** or **+60%
    target**, OR the strategy's own exit on the underlying — whichever comes first.
+   The stop is **trailed upward** as profit thresholds are crossed (ratchets only,
+   never loosens), so a runner locks in gains.
 
 The book persists across restarts (realized P&L compounds). Tracking-only
 instruments (no listed options) show signals + charts but are never options-traded.
+
+## Live trade management
+
+A fast **risk loop** (≈1 s, throttled to Kite limits) marks every open position,
+ratchets the trailing stop, and fires SL/TP — **separately** from the slower
+**signal loop** that scans completed candles for entries. Positions are therefore
+managed far quicker than the old single 30-second tick. The engine never fires a
+stop on a **stale or missing** price, and surfaces provider health to the UI.
+
+- **Trailing stop** — each profit step locks the stop higher (defaults reproduce
+  entry 400 → SL 410/420/…/460). Never loosens.
+- **Reinforcement** — a fresh *same-direction* crossover on an open winner does
+  **not** add quantity (no pyramiding). It strengthens management: ratchets the
+  stop further into profit (e.g. entry 300 → SL 315), optionally extends the
+  target, and increments a reinforcement count — gated by a min-profit floor, a
+  cooldown, and a max-count cap.
+- **Overnight holding** — positions ≤10 % of capital auto-hold overnight; 10–25 %
+  require ≥1 reinforcement; >25 % never carry. Near-expiry (<2 days) or
+  long-held (≥5 days) positions are force-squared-off (theta/expiry are the real
+  risks for option buyers). Ineligible positions are paper-closed just before
+  session close.
+- **Intraday vs overnight analytics** — every trade is tagged and its overnight
+  gap contribution recorded, so you can see where the edge actually comes from.
+- **Option-data research cache** — every downloaded chain is appended to a
+  growing local `option_data` history (throttled to a snapshot cadence) for
+  reuse and research.
+- **Per-instrument live timeframes** — each instrument scans on its own interval
+  (5/15/30/60 min), carried over when a backtest winner is promoted.
+
+**Every** parameter above lives in `core/config.py` with documented recommended
+defaults and is overridable **live** from the **Settings** view (persisted in the
+`runtime_config` table) — no code edits or restart.
 
 ---
 
