@@ -34,6 +34,8 @@ class InstrumentState(Base):
     __tablename__ = "instrument_state"
     instrument_key: Mapped[str] = mapped_column(String(32), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    live_interval: Mapped[str] = mapped_column(String(12), default="15minute")
+    entries_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Position(Base):
@@ -61,6 +63,9 @@ class Position(Base):
 
     last_premium: Mapped[float] = mapped_column(Float, default=0.0)  # live mark
     last_spot: Mapped[float] = mapped_column(Float, default=0.0)
+    last_mark_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # highest premium seen since entry — drives the trailing-stop ratchet
+    high_water_premium: Mapped[float] = mapped_column(Float, default=0.0)
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty
@@ -83,6 +88,8 @@ class Position(Base):
             "target_price": round(self.target_price, 2),
             "last_premium": round(self.last_premium or self.entry_premium, 2),
             "last_spot": round(self.last_spot, 2),
+            "last_mark_time": self.last_mark_time.isoformat() if self.last_mark_time else None,
+            "high_water_premium": round(self.high_water_premium or self.entry_premium, 2),
             "unrealized_pnl": round(unrealized, 2),
         }
 
@@ -232,6 +239,12 @@ class BacktestResult(Base):
     curve_json: Mapped[str] = mapped_column(Text, default="[]")     # equity curve
     trades_json: Mapped[str] = mapped_column(Text, default="[]")    # trade list (drill-down)
     error: Mapped[str] = mapped_column(String(400), default="")
+    # reusable-cache metadata (content-addressed reuse across runs)
+    params_hash: Mapped[str] = mapped_column(String(64), default="")
+    last_candle_ts: Mapped[int] = mapped_column(Integer, default=0)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    from_cache: Mapped[bool] = mapped_column(Boolean, default=False)
+    computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     def summary(self) -> dict:
         return {
@@ -249,6 +262,7 @@ class BacktestResult(Base):
             "expectancy": round(self.expectancy, 0),
             "cagr": round(self.cagr, 1) if self.cagr is not None else None,
             "bars": self.bars,
+            "from_cache": self.from_cache,
             "error": self.error,
         }
 

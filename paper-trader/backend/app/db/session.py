@@ -87,10 +87,45 @@ def _repair_open_position_lot_sizes(sess) -> int:
     return fixed
 
 
+def _migrate_schema() -> None:
+    """Additive, idempotent SQLite migrations (no Alembic in this project).
+
+    For a fresh DB, create_all already made these columns, so every ALTER is
+    skipped; for an existing live DB, the new columns are appended in place
+    (non-destructive — the owner's paper_trader.db keeps all its data)."""
+    from sqlalchemy import text
+    additions = {
+        "instrument_state": [
+            ("live_interval", "VARCHAR(12) DEFAULT '15minute'"),
+            ("entries_blocked", "BOOLEAN DEFAULT 0"),
+        ],
+        "positions": [
+            ("last_mark_time", "DATETIME"),
+            ("high_water_premium", "FLOAT DEFAULT 0.0"),
+        ],
+        "backtest_results": [
+            ("params_hash", "VARCHAR(64) DEFAULT ''"),
+            ("last_candle_ts", "INTEGER DEFAULT 0"),
+            ("schema_version", "INTEGER DEFAULT 1"),
+            ("from_cache", "BOOLEAN DEFAULT 0"),
+            ("computed_at", "DATETIME"),
+        ],
+    }
+    with engine.begin() as conn:
+        for table, cols in additions.items():
+            existing = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
+            if not existing:
+                continue  # table not created yet; create_all handles fresh schema
+            for name, ddl in cols:
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
 def init_db(reset: bool = False) -> None:
     if reset:
         Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+    _migrate_schema()
     s = get_settings()
     with SessionLocal() as sess:
         if sess.get(CapitalState, 1) is None:

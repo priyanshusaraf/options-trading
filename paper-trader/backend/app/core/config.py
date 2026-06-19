@@ -17,6 +17,13 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ALLOWED_INTERVALS = ("15minute", "30minute")
+LIVE_INTERVALS = ("5minute", "15minute", "30minute", "60minute")
+DEFAULT_LIVE_INTERVAL = "15minute"
+
+
+def normalize_live_interval(iv: str) -> str:
+    """Clamp an arbitrary interval string to a supported live timeframe (15m default)."""
+    return iv if iv in LIVE_INTERVALS else DEFAULT_LIVE_INTERVAL
 
 
 class Settings(BaseSettings):
@@ -56,6 +63,19 @@ class Settings(BaseSettings):
     mock_tick_seconds: float = 3.0
     mock_seed: int = 7
     mock_history_days: int = 90
+
+    # split-loop cadences (live mode)
+    position_loop_seconds: float = 1.0   # fast risk lane target (Kite quote throttle bounds it ~2s)
+    signal_loop_seconds: float = 2.5     # signal-scan scheduler tick
+    max_stale_seconds: float = 30.0      # a mark older than this is stale -> no SL/TP fires on it
+
+    # trailing stop-loss (ratchets the premium stop UP as profit thresholds are crossed)
+    #   defaults reproduce the owner's example: entry 400, +10% step, lock 2.5%/step
+    #   -> SL 410 at +10%, 420 at +20%, … up to the +60% target. Never loosens.
+    trail_enabled: bool = True
+    trail_trigger_pct: float = 0.10      # profit (fraction of entry) per ratchet step
+    trail_lock_pct: float = 0.025        # SL raised by this fraction of entry per step crossed
+    trail_target_pct: float = 0.60       # stop ratcheting once profit reaches the final target
 
     # misc
     risk_free_rate: float = 0.065
