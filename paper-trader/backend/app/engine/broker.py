@@ -47,7 +47,9 @@ class PaperBroker:
     # ── fills ─────────────────────────────────────────────────────────────
     def open_position(self, inst: Instrument, direction: str, q: OptionQuote,
                       reason: str, now: dt.datetime, spot: float,
-                      params: dict | None = None) -> Position:
+                      params: dict | None = None, plan=None) -> Position:
+        # `plan` (routing decision) is used by LiveBroker to choose market/limit;
+        # the paper broker ignores it and fills at the quote.
         qty, premium = q.lot_size, q.ltp
         charges = compute_charges(inst.segment, "BUY", premium, qty)["total"]
         cost = premium * qty + charges

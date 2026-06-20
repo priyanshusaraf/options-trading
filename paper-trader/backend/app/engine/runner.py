@@ -31,6 +31,8 @@ from app.db.session import SessionLocal
 from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
 from app.engine.broker import PaperBroker
+from app.engine.broker_factory import make_broker
+from app.engine.capital import deployable_capital
 from app.engine.charges import compute_charges
 from app.engine.execution_policy import plan_order
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
@@ -50,14 +52,15 @@ class EngineRunner:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.provider = get_provider()
-        self.broker = PaperBroker(self.provider)
+        self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
+        # PaperBroker unless the live-execution flags are set (then LiveBroker).
+        self.broker = make_broker(self.provider, self.notifier)
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
         self.intervals: dict[str, str] = self._load_intervals()   # per-instrument live TF
         self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
         self.health = HealthTracker()
-        self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
@@ -204,12 +207,15 @@ class EngineRunner:
                     st.get("long_exit", False), st.get("short_exit", False))
                 if should:
                     trade = self.broker.close_position(pos, premium, reason, now, spot)
-                    if self.params.get("notify_enabled", True):
-                        self.notifier.closed(trade)
-                    opens.pop(key, None)
-                    if key in self.state:
-                        self.state[key]["position"] = None
-                    continue
+                    if trade is not None:
+                        if self.params.get("notify_enabled", True):
+                            self.notifier.closed(trade)
+                        opens.pop(key, None)
+                        if key in self.state:
+                            self.state[key]["position"] = None
+                        continue
+                    # live close didn't go through (unfilled / ownership block) —
+                    # keep managing the position; LiveBroker has already alerted.
                 # not exiting — warn (once) if the premium is nearing the SL or TP
                 if self.params.get("notify_enabled", True):
                     self.notifier.check_proximity(
@@ -325,17 +331,20 @@ class EngineRunner:
             meta[key] = (inst, direction, pick, chain, plan)
 
         if cands:
-            alloc = allocate(cands, self.broker.cash())
+            # bound auto-entries by DEPLOYABLE capital — your own trades take priority
+            alloc = allocate(cands, self.deployable_cash())
             if len(alloc.funded) < len(cands):
                 log.info(f"capital shortfall — {len(alloc.funded)}/{len(cands)} "
                          f"signals funded by priority")
             for c in alloc.funded:
                 inst, direction, pick, chain, plan = meta[c.instrument_key]
-                pos = self.broker.open_position(inst, direction, pick.chosen,
-                                                pick.reason, now, chain.spot, self.params)
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
                          + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
+                pos = self.broker.open_position(inst, direction, pick.chosen,
+                                                pick.reason, now, chain.spot, self.params, plan=plan)
+                if pos is None:
+                    continue  # live order not filled — nothing recorded (already alerted)
                 if self.params.get("notify_enabled", True):
                     self.notifier.opened(pos)
                 if c.instrument_key in self.state:
@@ -417,6 +426,20 @@ class EngineRunner:
         self.process_entries()
         self.broker.snapshot(self.provider.now())
         self.tick_count += 1
+
+    # ── capital available to the bot (owner's trades take priority) ────────
+    def deployable_cash(self) -> float:
+        cap_state = self.broker.capital()
+        bot_deployed = sum(p.entry_cost for p in self.broker.open_positions())
+        is_live = self.provider.name == "kite"
+        funds = self.provider.account_funds() if is_live else None
+        return deployable_capital(
+            ledger_base=cap_state.cash + bot_deployed,
+            bot_deployed=bot_deployed,
+            account_available=(funds["available"] if funds else None),
+            reserve=self.params.get("capital_reserve", 0.0),
+            cap=self.params.get("bot_capital_cap", 0.0),
+            is_live=is_live)
 
     # ── daily-loss circuit breaker ────────────────────────────────────────
     def _today_net_realized(self, today) -> float:
@@ -558,7 +581,11 @@ class EngineRunner:
         if square_off:
             for pos in list(self.broker.open_positions()):
                 prem = pos.last_premium or pos.entry_premium
-                self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
+                tr = self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
+                if tr is None:
+                    log.error(f"KILL could not square off {pos.tradingsymbol} — left open",
+                              instrument=pos.instrument_key, event="KILL_FAIL")
+                    continue
                 self.notifier.clear(pos.instrument_key)
                 if pos.instrument_key in self.state:
                     self.state[pos.instrument_key]["position"] = None

@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     stop_loss_pct: float = 0.35
     target_pct: float = 0.60
 
+    # capital sharing on the owner's real account — the owner's own trades take
+    # priority. In live mode the bot is bounded by the real available margin minus
+    # the reserve; the cap is an absolute ceiling on what the bot may ever deploy.
+    bot_capital_cap: float = 0.0     # 0 = no extra cap beyond the ledger base
+    capital_reserve: float = 0.0     # live: keep this much margin free for you
+
     # option picker
     target_delta: float = 0.50
     delta_band: float = 0.15

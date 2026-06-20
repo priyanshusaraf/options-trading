@@ -103,6 +103,17 @@ class MarketDataProvider(ABC):
     def complete_session(self, request_token: str) -> None:
         return None
 
+    # ── live account (real broker only) ───────────────────────────────────
+    def account_funds(self) -> dict | None:
+        """Live account funds/margins: {available, net}. None if unavailable
+        (mock, not authenticated, or a transient error)."""
+        return None
+
+    def account_positions(self) -> list[dict]:
+        """Live net positions in the account: [{tradingsymbol, quantity, ...}].
+        Empty list if unavailable. Used to keep the bot off the owner's positions."""
+        return []
+
     # ── clock (real for Kite, simulated for Mock) ─────────────────────────
     def now(self) -> datetime:
         return datetime.now()

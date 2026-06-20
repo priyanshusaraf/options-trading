@@ -116,6 +116,33 @@ class KiteProvider(MarketDataProvider):
         json.dump({"date": str(dt.date.today()), "access_token": self.access_token},
                   open(TOKEN_FILE, "w"))
 
+    # ── live account reads (margins + positions are read-only, allowlisted) ─
+    def account_funds(self) -> dict | None:
+        try:
+            m = self.kite.margins()
+        except Exception as e:
+            log.warn(f"margins() failed: {e}")
+            return None
+        eq = (m or {}).get("equity", {}) or {}
+        avail = eq.get("available", {}) or {}
+        live = avail.get("live_balance")
+        if live is None:
+            live = avail.get("cash", 0.0)
+        return {"available": float(live or 0.0), "net": float(eq.get("net", 0.0) or 0.0)}
+
+    def account_positions(self) -> list[dict]:
+        try:
+            pos = self.kite.positions()
+        except Exception as e:
+            log.warn(f"positions() failed: {e}")
+            return []
+        net = (pos or {}).get("net", []) or []
+        return [{"tradingsymbol": r.get("tradingsymbol"),
+                 "quantity": int(r.get("quantity", 0) or 0),
+                 "exchange": r.get("exchange"),
+                 "product": r.get("product")}
+                for r in net]
+
     def is_authenticated(self) -> bool:
         if not self.access_token:
             return False
