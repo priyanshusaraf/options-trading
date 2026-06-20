@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getDashboard } from '../lib/api'
+import { getDashboard, getAccountPnl } from '../lib/api'
 import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
@@ -12,6 +12,24 @@ function Card({ label, v, cls = '', sub }: { label: string; v: string; cls?: str
       <div className="stat-label">{label}</div>
       <div className={`stat-value ${cls}`}>{v}</div>
       {sub && <div className="text-[11px] text-muted mt-0.5">{sub}</div>}
+    </div>
+  )
+}
+
+function BotVsYou() {
+  const [a, setA] = useState<any>(null)
+  useEffect(() => {
+    const f = () => getAccountPnl().then(setA).catch(() => {})
+    f(); const t = setInterval(f, 5000); return () => clearInterval(t)
+  }, [])
+  if (!a || !a.available) return null   // live account only
+  return (
+    <div className="card p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))' }}>
+      <div className="stat-label col-span-full">Bot vs You — your real Kite account, since the bot's baseline</div>
+      <Card label="Account equity" v={inr(a.account_equity)} />
+      <Card label="Account change" v={signedInr(a.account_change)} cls={pnlColor(a.account_change)} />
+      <Card label="Bot P&L (tracked)" v={signedInr(a.bot_pnl)} cls={pnlColor(a.bot_pnl)} sub="what the bot did" />
+      <Card label="Your P&L (unrecorded)" v={signedInr(a.your_pnl_unrecorded)} cls={pnlColor(a.your_pnl_unrecorded)} sub="your own trades" />
     </div>
   )
 }
@@ -41,6 +59,7 @@ export default function DashboardView() {
 
   return (
     <div className="flex flex-col gap-3">
+      <BotVsYou />
       {/* capital + headline stats */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px,1fr))' }}>
         <Card label="Equity (MTM)" v={inr(cap.equity)} />

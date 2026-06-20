@@ -30,6 +30,7 @@ export const getCandles = (key: string) => j(`/api/candles/${key}`)
 export const getOptionCandles = (key: string) => j(`/api/option-candles/${key}`)
 export const getOptionsCalc = (key: string) => j(`/api/options-calc/${key}`)
 export const getDashboard = () => j('/api/dashboard')
+export const getAccountPnl = () => j('/api/account-pnl')
 export const getLogs = (n = 300) => j(`/api/logs?limit=${n}`)
 
 export const toggleInstrument = (key: string, enabled: boolean) =>

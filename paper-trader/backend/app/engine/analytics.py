@@ -13,6 +13,39 @@ from sqlalchemy.orm import Session
 from app.db.models import CapitalState, EquitySnapshot, Position, Trade
 
 
+def bot_vs_you(account_equity_now: float | None, account_baseline: float | None,
+               bot_realized: float, bot_unrealized: float) -> dict:
+    """Split the live account's change since baseline into the bot's tracked P&L
+    and the 'unrecorded' remainder — assumed to be the owner's own trades (plus any
+    deposits/withdrawals). Lets the dashboard show how the bot is doing vs the owner
+    on the same account. Unavailable until a live account baseline exists."""
+    if account_equity_now is None or account_baseline is None:
+        return {"available": False}
+    account_change = account_equity_now - account_baseline
+    bot_pnl = bot_realized + bot_unrealized
+    return {
+        "available": True,
+        "account_equity": round(account_equity_now, 2),
+        "account_change": round(account_change, 2),
+        "bot_pnl": round(bot_pnl, 2),
+        "your_pnl_unrecorded": round(account_change - bot_pnl, 2),
+    }
+
+
+def account_pnl(s: Session, provider) -> dict:
+    """Bot-vs-you split from a caller-owned session + the live provider. Records the
+    account baseline once, on the first successful live equity read."""
+    cap = s.get(CapitalState, 1)
+    eq = provider.account_equity() if getattr(provider, "name", "") == "kite" else None
+    if eq is not None and not cap.account_baseline:
+        cap.account_baseline = eq
+        s.commit()
+    opens = list(s.scalars(select(Position)))
+    bot_unrealized = sum(((p.last_premium or p.entry_premium) - p.entry_premium) * p.qty
+                         for p in opens)
+    return bot_vs_you(eq, cap.account_baseline, cap.realized_pnl, bot_unrealized)
+
+
 def capital_dict(s: Session) -> dict:
     """Capital snapshot from a caller-owned session (thread-safe for API use)."""
     cap = s.get(CapitalState, 1)

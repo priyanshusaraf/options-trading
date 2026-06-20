@@ -130,6 +130,10 @@ class KiteProvider(MarketDataProvider):
             live = avail.get("cash", 0.0)
         return {"available": float(live or 0.0), "net": float(eq.get("net", 0.0) or 0.0)}
 
+    def account_equity(self) -> float | None:
+        funds = self.account_funds()
+        return funds["net"] if funds else None
+
     def account_positions(self) -> list[dict]:
         try:
             pos = self.kite.positions()

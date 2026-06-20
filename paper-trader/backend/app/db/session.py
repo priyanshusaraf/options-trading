@@ -95,6 +95,9 @@ def _migrate_schema() -> None:
     (non-destructive — the owner's paper_trader.db keeps all its data)."""
     from sqlalchemy import text
     additions = {
+        "capital_state": [
+            ("account_baseline", "FLOAT"),
+        ],
         "instrument_state": [
             ("live_interval", "VARCHAR(12) DEFAULT '15minute'"),
             ("entries_blocked", "BOOLEAN DEFAULT 0"),

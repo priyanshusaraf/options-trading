@@ -213,6 +213,14 @@ def options_calc(key: str, request: Request):
     return _runner(request).last_pick.get(key) or {"candidates": [], "reason": "no signal evaluated yet"}
 
 
+@router.get("/api/account-pnl")
+def account_pnl_route(request: Request):
+    """Bot-vs-you split on the shared real account (live only)."""
+    r = _runner(request)
+    with SessionLocal() as s:
+        return analytics.account_pnl(s, r.provider)
+
+
 @router.get("/api/dashboard")
 def dashboard(request: Request):
     with SessionLocal() as s:

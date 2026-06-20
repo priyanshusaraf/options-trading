@@ -114,6 +114,11 @@ class MarketDataProvider(ABC):
         Empty list if unavailable. Used to keep the bot off the owner's positions."""
         return []
 
+    def account_equity(self) -> float | None:
+        """Best-effort live account net equity, for the bot-vs-you P&L split. None
+        if unavailable (mock / not authenticated)."""
+        return None
+
     # ── clock (real for Kite, simulated for Mock) ─────────────────────────
     def now(self) -> datetime:
         return datetime.now()
