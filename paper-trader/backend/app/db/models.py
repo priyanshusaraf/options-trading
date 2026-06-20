@@ -72,6 +72,7 @@ class Position(Base):
     held_overnight: Mapped[bool] = mapped_column(Boolean, default=False)
     overnight_pnl: Mapped[float] = mapped_column(Float, default=0.0)   # Σ premium delta across session gaps
     session_close_premium: Mapped[float] = mapped_column(Float, default=0.0)  # mark at last session close
+    last_squareoff_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # date the daily hold/square-off decision was last made (re-arm each session)
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty

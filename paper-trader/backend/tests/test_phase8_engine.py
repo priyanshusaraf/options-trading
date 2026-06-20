@@ -32,16 +32,20 @@ def test_reinforcement_applied_via_engine():
 
 
 def test_overnight_keep_then_book_gap():
+    import datetime as dt
     r, nifty, chain, q, pos = _runner_with_long()
     r.params["overnight_auto_pct"] = 5.0       # force auto-hold regardless of size
     r.params["overnight_max_pct"] = 5.0
     r.params["overnight_min_days_to_expiry"] = 0   # disable the expiry gate for this test
-    now = r.provider.now()
-    r.square_off_for_overnight(now)
+    close = r.provider.now()
+    r.square_off_for_overnight(close)
     p = r.broker.position_for("NIFTY")
     assert p.held_overnight is True and p.session_close_premium > 0
-    r.broker.mark(p, premium=q.ltp * 1.3, spot=chain.spot, now=now); r.broker.commit()
-    r.book_overnight_gap(now)
+    # The gap is booked at the NEXT session's open (a later calendar day) — not in
+    # the same pass as the close, which would erase the snapshot before any gap.
+    nxt = close + dt.timedelta(days=1)
+    r.broker.mark(p, premium=q.ltp * 1.3, spot=chain.spot, now=nxt); r.broker.commit()
+    r.book_overnight_gap(nxt)
     assert r.broker.position_for("NIFTY").overnight_pnl > 0
 
 

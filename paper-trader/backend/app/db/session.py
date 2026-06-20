@@ -107,6 +107,7 @@ def _migrate_schema() -> None:
             ("held_overnight", "BOOLEAN DEFAULT 0"),
             ("overnight_pnl", "FLOAT DEFAULT 0.0"),
             ("session_close_premium", "FLOAT DEFAULT 0.0"),
+            ("last_squareoff_date", "DATE"),
         ],
         "trades": [
             ("held_overnight", "BOOLEAN DEFAULT 0"),

@@ -17,6 +17,7 @@ from app.core.instruments import Instrument
 from app.core.logging import log
 from app.db.models import CapitalState, EquitySnapshot, Position, Trade
 from app.db.session import SessionLocal
+from app.core.runtime_config import effective
 from app.engine.charges import compute_charges
 from app.providers.base import MarketDataProvider, OptionQuote
 
@@ -45,10 +46,17 @@ class PaperBroker:
 
     # ── fills ─────────────────────────────────────────────────────────────
     def open_position(self, inst: Instrument, direction: str, q: OptionQuote,
-                      reason: str, now: dt.datetime, spot: float) -> Position:
+                      reason: str, now: dt.datetime, spot: float,
+                      params: dict | None = None) -> Position:
         qty, premium = q.lot_size, q.ltp
         charges = compute_charges(inst.segment, "BUY", premium, qty)["total"]
         cost = premium * qty + charges
+        # Initial SL/TP honor live Settings overrides (runtime_config). The runner
+        # passes its already-resolved snapshot; other callers (manual_open, tests)
+        # fall back to the effective merge so an override is never silently ignored.
+        p = params if params is not None else effective(self.settings)
+        stop_loss_pct = p.get("stop_loss_pct", self.settings.stop_loss_pct)
+        target_pct = p.get("target_pct", self.settings.target_pct)
 
         cap = self.capital()
         cap.cash -= cost
@@ -60,8 +68,8 @@ class PaperBroker:
             expiry=q.expiry, lot_size=qty, qty=qty, entry_premium=premium,
             entry_charges=charges, entry_cost=cost, entry_spot=spot, entry_time=now,
             entry_reason=reason,
-            stop_price=premium * (1 - self.settings.stop_loss_pct),
-            target_price=premium * (1 + self.settings.target_pct),
+            stop_price=premium * (1 - stop_loss_pct),
+            target_price=premium * (1 + target_pct),
             last_premium=premium, last_spot=spot,
             last_mark_time=now, high_water_premium=premium,
         )
@@ -119,12 +127,15 @@ class PaperBroker:
 
     def mark(self, pos: Position, premium: float | None, spot: float | None,
              now: dt.datetime | None = None) -> None:
-        if premium:
+        # Use explicit None checks: a real 0.0 premium (option decayed to zero —
+        # the buyer's maximum loss) is a VALID mark and must advance freshness, or
+        # the staleness guard would suppress the stop at the worst possible time.
+        if premium is not None:
             pos.last_premium = premium
             pos.last_mark_time = now or dt.datetime.now()
             if premium > (pos.high_water_premium or 0.0):
                 pos.high_water_premium = premium
-        if spot:
+        if spot is not None:
             pos.last_spot = spot
 
     def close_position(self, pos: Position, exit_premium: float, reason: str,

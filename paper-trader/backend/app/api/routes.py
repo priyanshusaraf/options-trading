@@ -265,22 +265,28 @@ def signals(request: Request):
 
 
 @router.get("/api/positions")
-def positions(request: Request):
-    """Active-positions cockpit rows: marks, trailing stop, stale/health."""
+async def positions(request: Request):
+    """Active-positions cockpit rows: marks, trailing stop, stale/health.
+
+    Async + engine-lock: this reads the broker's long-lived Session, which the
+    engine loops also use. Running on the event loop under r._lock keeps all
+    Session access single-threaded (SQLAlchemy Sessions are not thread-safe)."""
     r = _runner(request)
     ticks = r.position_ticks
     out = []
-    for p in r.broker.open_positions():
-        d = p.to_dict()
-        t = ticks.get(p.instrument_key, {})
-        d["live_premium"] = t.get("option_premium")
-        d["live_spot"] = t.get("spot")
-        d["stale"] = t.get("stale", True)
-        d["stale_age"] = t.get("stale_age")
-        d["dist_to_stop"] = round(d["last_premium"] - d["stop_price"], 2)
-        d["dist_to_target"] = round(d["target_price"] - d["last_premium"], 2)
-        out.append(d)
-    return {"positions": out, "capital": r.capital_dict()}
+    async with r._lock:
+        for p in r.broker.open_positions():
+            d = p.to_dict()
+            t = ticks.get(p.instrument_key, {})
+            d["live_premium"] = t.get("option_premium")
+            d["live_spot"] = t.get("spot")
+            d["stale"] = t.get("stale", True)
+            d["stale_age"] = t.get("stale_age")
+            d["dist_to_stop"] = round(d["last_premium"] - d["stop_price"], 2)
+            d["dist_to_target"] = round(d["target_price"] - d["last_premium"], 2)
+            out.append(d)
+        cap = r.capital_dict()
+    return {"positions": out, "capital": cap}
 
 
 @router.get("/api/provider-health")
@@ -311,24 +317,28 @@ def block_entries(key: str, body: BlockBody, request: Request):
 
 # ── manual paper overrides (F8) — never touch real Kite orders ───────────────
 @router.post("/api/positions/{key}/close")
-def close_position(key: str, request: Request):
+async def close_position(key: str, request: Request):
+    # Async + engine-lock: serialize this manual close against the engine's
+    # risk/signal loops so a manual close can never race an auto-exit on the
+    # shared broker Session (which would double-close / corrupt the ledger).
     r = _runner(request)
-    pos = r.broker.position_for(key)
-    if not pos:
-        return {"error": "no open position for this instrument"}
-    inst = get_instrument(key)
-    premium = r.provider.option_ltp(inst, pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type)
-    if premium is None:
-        premium = pos.last_premium or pos.entry_premium
-    now = r.provider.now()
-    r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
-                            r.provider.get_ltp(inst) or pos.last_spot)
-    from app.core.logging import log
-    log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
-             event="MANUAL_CLOSE", manual=True)
-    if key in r.state:
-        r.state[key]["position"] = None
-    return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
+    async with r._lock:
+        pos = r.broker.position_for(key)
+        if not pos:
+            return {"error": "no open position for this instrument"}
+        inst = get_instrument(key)
+        premium = r.provider.option_ltp(inst, pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type)
+        if premium is None:
+            premium = pos.last_premium or pos.entry_premium
+        now = r.provider.now()
+        r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
+                                r.provider.get_ltp(inst) or pos.last_spot)
+        from app.core.logging import log
+        log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
+                 event="MANUAL_CLOSE", manual=True)
+        if key in r.state:
+            r.state[key]["position"] = None
+        return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
 
 
 class ManualOpenBody(BaseModel):
@@ -337,20 +347,23 @@ class ManualOpenBody(BaseModel):
 
 
 @router.post("/api/positions/manual-open")
-def manual_open(body: ManualOpenBody, request: Request):
+async def manual_open(body: ManualOpenBody, request: Request):
+    # Async + engine-lock: same single-threaded-Session guarantee as the close
+    # path, so a manual entry can't race the engine's entry/exit on broker.s.
     r = _runner(request)
     if body.direction not in ("LONG", "SHORT"):
         return {"error": "direction must be LONG or SHORT"}
     inst = get_instrument(body.key)
     if not inst.has_options:
         return {"error": "instrument has no listed options (tracking only)"}
-    chain = r.provider.get_option_chain(inst)
-    pos, reason = r.broker.manual_open(inst, body.direction, chain, settings, r.provider.now())
-    if pos is None:
-        return {"error": reason}
-    if body.key in r.state:
-        r.state[body.key]["position"] = pos.to_dict()
-    return {"opened": True, "key": body.key, "tradingsymbol": pos.tradingsymbol}
+    async with r._lock:
+        chain = r.provider.get_option_chain(inst)
+        pos, reason = r.broker.manual_open(inst, body.direction, chain, settings, r.provider.now())
+        if pos is None:
+            return {"error": reason}
+        if body.key in r.state:
+            r.state[body.key]["position"] = pos.to_dict()
+        return {"opened": True, "key": body.key, "tradingsymbol": pos.tradingsymbol}
 
 
 # ── runtime settings (manual-override mode) ──────────────────────────────────

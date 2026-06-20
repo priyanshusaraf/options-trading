@@ -47,7 +47,15 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
   useEffect(() => setV(r.value), [r.value])
   const m = META[r.key] || { label: r.key, help: '' }
   const changed = String(v) !== String(r.default)
-  const save = (val: any) => setSetting(r.key, val).then(onSaved)
+  const save = (val: any) =>
+    setSetting(r.key, val).then((res: any) => {
+      if (res && res.error) {
+        setV(r.value) // reject out-of-bounds: revert to last good value
+        window.alert(res.error)
+      } else {
+        onSaved()
+      }
+    })
 
   return (
     <div className="flex items-start gap-3 py-2 border-t border-edge/50">

@@ -1,8 +1,11 @@
 """REST surface for the cockpit: signals list, positions, health, interval/block,
 manual open/close. Uses FastAPI TestClient with a directly-attached runner (no
 background loops)."""
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from app.api import routes
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.main import app
@@ -49,6 +52,29 @@ def test_manual_open_then_close_and_positions():
     cl = c.post("/api/positions/NIFTY/close").json()
     assert cl.get("closed") is True, cl
     assert r.broker.position_for("NIFTY") is None
+
+
+def test_manual_mutation_routes_run_on_event_loop():
+    """C3: manual open/close/positions must NOT run in a threadpool worker thread
+    sharing the engine's long-lived SQLAlchemy Session (not thread-safe). Making
+    them `async def` pins them to the event loop, serialized with the engine via
+    the runner lock — so all broker-session access is single-threaded."""
+    assert asyncio.iscoroutinefunction(routes.close_position)
+    assert asyncio.iscoroutinefunction(routes.manual_open)
+    assert asyncio.iscoroutinefunction(routes.positions)
+
+
+def test_double_close_is_idempotent_on_ledger():
+    """C3 consequence: a second close of an already-closed position must be a
+    no-op and must NOT double-count realized P&L."""
+    c, r = _client()
+    c.post("/api/positions/manual-open", json={"key": "NIFTY", "direction": "LONG"})
+    first = c.post("/api/positions/NIFTY/close").json()
+    assert first.get("closed") is True
+    realized_after = r.broker.capital().realized_pnl
+    second = c.post("/api/positions/NIFTY/close").json()
+    assert "error" in second  # nothing left to close
+    assert r.broker.capital().realized_pnl == realized_after
 
 
 def test_provider_health_route():

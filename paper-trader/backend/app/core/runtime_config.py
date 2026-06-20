@@ -32,6 +32,34 @@ OVERRIDABLE = (
 )
 
 
+# Inclusive [min, max] bounds per numeric key. Anything outside is rejected so a
+# typo or fat-finger can't produce a negative/inverted stop or a busy-spin loop
+# that breaches Kite's rate limits. Booleans need no bounds.
+BOUNDS: dict[str, tuple[float, float]] = {
+    "stop_loss_pct": (0.001, 0.99),          # a positive fraction strictly below full premium
+    "target_pct": (0.001, 10.0),
+    "trail_trigger_pct": (0.001, 1.0),
+    "trail_lock_pct": (0.0, 1.0),
+    "trail_target_pct": (0.001, 10.0),
+    "reinforce_min_profit_pct": (0.0, 5.0),
+    "reinforce_lock_pct": (0.0, 1.0),
+    "reinforce_tp_extend_pct": (0.0, 5.0),
+    "reinforce_tp_max_pct": (0.0, 10.0),
+    "reinforce_cooldown_minutes": (0.0, 1440.0),
+    "max_reinforcements": (0, 100),
+    "overnight_auto_pct": (0.0, 1.0),
+    "overnight_max_pct": (0.0, 1.0),
+    "overnight_min_reinforcements": (0, 100),
+    "overnight_min_days_to_expiry": (0, 365),
+    "max_holding_days": (0, 365),
+    "square_off_buffer_minutes": (0.0, 360.0),
+    "option_cache_snapshot_minutes": (0.0, 1440.0),
+    "max_stale_seconds": (1.0, 3600.0),
+    "position_loop_seconds": (0.5, 600.0),   # floor keeps the risk loop under Kite's quote limit
+    "signal_loop_seconds": (0.5, 600.0),
+}
+
+
 def _coerce(default, raw: str):
     if isinstance(default, bool):
         return str(raw).strip().lower() in ("1", "true", "yes", "on")
@@ -42,6 +70,22 @@ def _coerce(default, raw: str):
     return str(raw)
 
 
+def validate(key: str, value) -> str | None:
+    """Return an error string if `value` is out of bounds for `key`, else None."""
+    bounds = BOUNDS.get(key)
+    if bounds is None:
+        return None
+    default = getattr(get_settings(), key)
+    try:
+        coerced = _coerce(default, value)
+    except (TypeError, ValueError):
+        return f"'{value}' is not a valid value for {key}"
+    lo, hi = bounds
+    if not (lo <= coerced <= hi):
+        return f"{key} must be between {lo} and {hi} (got {coerced})"
+    return None
+
+
 def get_overrides() -> dict[str, str]:
     with SessionLocal() as s:
         return {r.key: r.value for r in s.scalars(select(RuntimeConfig))}
@@ -50,6 +94,9 @@ def get_overrides() -> dict[str, str]:
 def set_override(key: str, value) -> dict:
     if key not in OVERRIDABLE:
         return {"error": f"'{key}' is not an overridable parameter"}
+    err = validate(key, value)
+    if err:
+        return {"error": err}
     with SessionLocal() as s:
         row = s.get(RuntimeConfig, key)
         if row is None:

@@ -294,7 +294,7 @@ class EngineRunner:
             for c in alloc.funded:
                 inst, direction, pick, chain = meta[c.instrument_key]
                 self.broker.open_position(inst, direction, pick.chosen,
-                                          pick.reason, now, chain.spot)
+                                          pick.reason, now, chain.spot, self.params)
                 if c.instrument_key in self.state:
                     p = self.broker.position_for(c.instrument_key)
                     self.state[c.instrument_key]["position"] = p.to_dict() if p else None
@@ -309,6 +309,8 @@ class EngineRunner:
         equity = self.capital_dict()["equity"]
         out = []
         for pos in list(self.broker.open_positions()):
+            if pos.last_squareoff_date == now.date():
+                continue  # already decided this session — don't re-snapshot/re-close
             dte = (pos.expiry - now.date()).days if pos.expiry else None
             holding_days = max(0, (now.date() - pos.entry_time.date()).days)
             into_weekend = now.weekday() == 4   # Friday close
@@ -318,6 +320,7 @@ class EngineRunner:
             if keep:
                 pos.held_overnight = True
                 pos.session_close_premium = pos.last_premium or pos.entry_premium
+                pos.last_squareoff_date = now.date()   # re-arm: re-evaluated next session
                 self.broker.commit()
                 log.info(f"OVERNIGHT HOLD {pos.tradingsymbol} — {reason}",
                          instrument=pos.instrument_key, event="OVERNIGHT_HOLD")
@@ -332,9 +335,15 @@ class EngineRunner:
         return out
 
     def book_overnight_gap(self, now) -> None:
-        """At session open: attribute the close→open premium gap to overnight P&L."""
+        """At session open: attribute the close→open premium gap to overnight P&L.
+
+        Gated on a LATER calendar day than the close that took the snapshot, so it
+        fires once per session boundary and never zeroes the snapshot in the same
+        pass it was taken (which would erase the gap before it could be booked)."""
         for pos in list(self.broker.open_positions()):
-            if pos.held_overnight and pos.session_close_premium > 0:
+            if (pos.held_overnight and pos.session_close_premium > 0
+                    and pos.last_squareoff_date is not None
+                    and now.date() > pos.last_squareoff_date):
                 prem = pos.last_premium or pos.entry_premium
                 pos.overnight_pnl += (prem - pos.session_close_premium) * pos.qty
                 pos.session_close_premium = 0.0
@@ -351,7 +360,7 @@ class EngineRunner:
             for pos in list(self.broker.open_positions()):
                 seg = get_instrument(pos.instrument_key).spot_exchange
                 mtc = market_hours.minutes_to_close(seg, now)
-                if mtc is not None and 0 <= mtc <= buf and not pos.held_overnight:
+                if mtc is not None and 0 <= mtc <= buf and pos.last_squareoff_date != now.date():
                     self.square_off_for_overnight(now)
                     break
             self.book_overnight_gap(now)
