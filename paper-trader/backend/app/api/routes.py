@@ -51,6 +51,7 @@ def status(request: Request):
         "authenticated": p.is_authenticated(),
         "login_url": p.login_url(),
         "running": r.running,
+        "armed": r.armed,
         "tick": r.tick_count,
         "time": p.now().isoformat(),
         "interval": settings.interval,
@@ -380,6 +381,34 @@ async def set_position_sltp(key: str, body: SLTPBody, request: Request):
                  instrument=key, event="MANUAL_SLTP", manual=True)
         return {"ok": True, "key": key,
                 "stop_price": round(stop, 2), "target_price": round(target, 2)}
+
+
+# ── execution control: arm-to-trade + kill switch ───────────────────────────
+class ArmBody(BaseModel):
+    armed: bool
+
+
+@router.get("/api/execution/state")
+def execution_state(request: Request):
+    r = _runner(request)
+    return {"armed": r.armed, "provider": r.provider.name, "running": r.running}
+
+
+@router.post("/api/execution/arm")
+def execution_arm(body: ArmBody, request: Request):
+    # arm/disarm only flips a flag + sends a notification — no broker-session access,
+    # so a plain (threadpool) handler is safe here.
+    return {"armed": _runner(request).arm(body.armed)}
+
+
+@router.post("/api/execution/kill")
+async def execution_kill(request: Request):
+    # squares off open positions -> mutates the broker session, so run on the event
+    # loop under the engine lock (same guarantee as the manual close route).
+    r = _runner(request)
+    async with r._lock:
+        closed = r.kill()
+    return {"killed": True, "armed": r.armed, "squared_off": closed}
 
 
 class ManualOpenBody(BaseModel):

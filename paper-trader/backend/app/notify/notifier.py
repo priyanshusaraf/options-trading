@@ -36,6 +36,14 @@ class Notifier:
     def signal(self, key: str, sig: str) -> None:
         self._emit(f"📡 SIGNAL {sig} on {key}")
 
+    def armed(self, on: bool) -> None:
+        self._emit("🟢 Bot ARMED — auto-executing trades" if on else
+                   "⏸️ Bot DISARMED — no new entries (open positions still managed)")
+
+    def killed(self, closed: list[str]) -> None:
+        tail = f": {', '.join(closed)}" if closed else ""
+        self._emit(f"🛑 KILL SWITCH — disarmed and squared off {len(closed)} position(s){tail}")
+
     # ── approaching SL/TP (throttled) ─────────────────────────────────────
     def check_proximity(self, key: str, tradingsymbol: str, premium: float,
                         stop: float, target: float, proximity_pct: float) -> None:

@@ -34,6 +34,7 @@ def main() -> int:
     ticks = int(sys.argv[1]) if len(sys.argv) > 1 else 600
     init_db(reset=True)
     eng = EngineRunner()
+    eng.armed = True   # headless dry-run: arm so the engine actually trades
 
     for _ in range(ticks):
         eng.tick()

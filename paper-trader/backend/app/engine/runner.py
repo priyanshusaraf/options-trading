@@ -61,6 +61,11 @@ class EngineRunner:
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
         self.running = False
+        # ARM-TO-TRADE gate: the engine always scans, marks open positions, fires
+        # SL/TP and sends alerts — but it NEVER opens a new position until the owner
+        # explicitly arms it. Defaults disarmed on every process start (you must arm
+        # each session), and the kill switch disarms it again.
+        self.armed = False
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -296,6 +301,13 @@ class EngineRunner:
             meta[key] = (inst, direction, pick, chain)
 
         if cands:
+            if not self.armed:
+                # disarmed: surface what it WOULD have taken, but never auto-execute
+                for c in cands:
+                    log.info(f"DISARMED — signal ready, not taking {c.instrument_key} "
+                             f"(arm the bot to trade)", instrument=c.instrument_key,
+                             event="DISARMED_SKIP")
+                return
             alloc = allocate(cands, self.broker.cash())
             if len(alloc.funded) < len(cands):
                 log.info(f"capital shortfall — {len(alloc.funded)}/{len(cands)} "
@@ -478,6 +490,38 @@ class EngineRunner:
 
     def stop(self) -> None:
         self.running = False
+
+    # ── arm-to-trade + kill switch ────────────────────────────────────────
+    def arm(self, value: bool) -> bool:
+        """Owner control: arm (start auto-executing) or disarm (pause new entries —
+        open positions are still managed and protected)."""
+        self.armed = bool(value)
+        log.info("engine ARMED — will auto-execute trades" if self.armed
+                 else "engine DISARMED — no new entries (open positions still managed)",
+                 event="ARM" if self.armed else "DISARM")
+        if self.params.get("notify_enabled", True):
+            self.notifier.armed(self.armed)
+        return self.armed
+
+    def kill(self, now=None, square_off: bool = True) -> list[str]:
+        """Emergency stop: disarm immediately and (by default) square off every
+        open position at its last mark. Used when things go south."""
+        now = now or self.provider.now()
+        self.armed = False
+        closed: list[str] = []
+        if square_off:
+            for pos in list(self.broker.open_positions()):
+                prem = pos.last_premium or pos.entry_premium
+                self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
+                self.notifier.clear(pos.instrument_key)
+                if pos.instrument_key in self.state:
+                    self.state[pos.instrument_key]["position"] = None
+                closed.append(pos.instrument_key)
+        log.info(f"KILL SWITCH — disarmed; squared off {len(closed)} position(s)",
+                 event="KILL")
+        if self.params.get("notify_enabled", True):
+            self.notifier.killed(closed)
+        return closed
 
     # ── snapshots for API/WS ──────────────────────────────────────────────
     def capital_dict(self) -> dict:

@@ -4,6 +4,9 @@ const post = (u: string, body: any) =>
     .then((r) => r.json())
 
 export const getStatus = () => j('/api/status')
+export const getExecState = () => j('/api/execution/state')
+export const armBot = (armed: boolean) => post('/api/execution/arm', { armed })
+export const killBot = () => post('/api/execution/kill', {})
 export const getInstruments = () => j('/api/instruments')
 export const getSignals = () => j('/api/signals')
 export const getPositions = () => j('/api/positions')

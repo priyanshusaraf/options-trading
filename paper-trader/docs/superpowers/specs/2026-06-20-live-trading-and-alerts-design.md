@@ -107,19 +107,31 @@ exit, so the owner doesn't have to watch the screen.
 > stages with a kill switch and tiny size. Nothing here weakens the paper default.
 
 ### 3.0 Safety model (non-negotiable invariants)
+- **Arm-to-trade gate — BUILT (commit pending).** The engine always scans, marks
+  open positions, fires SL/TP and sends alerts, but **never opens a new position
+  until the owner explicitly arms it** (`POST /api/execution/arm`, the "ARM TO
+  TRADE" button). It defaults **disarmed on every process start** — you arm each
+  session. Disarming pauses *new entries* only; open positions are still managed
+  and protected.
+- **Kill switch — BUILT.** `POST /api/execution/kill` (the ⛔ KILL button)
+  instantly disarms and squares off **all** open positions at market, and alerts.
+  (When live execution exists, kill will also flip execution back to paper.)
 - `SafePaperKite` remains the **default** client. A real-order client is only
   constructed when BOTH `PT_EXECUTION=live` and an explicit acknowledgement flag
   (e.g. `PT_LIVE_ACK=I_UNDERSTAND_REAL_MONEY`) are set. Absent either → paper.
+  **Arming is necessary but not sufficient to place a REAL order** — the live flags
+  are a second, independent gate.
 - The live client has its **own narrow allowlist** that adds exactly
   `order.place`, `order.modify`, `order.cancel` (and `gtt.place`/`gtt.modify`/
   `gtt.delete` if the GTT option is chosen) on top of the read-only routes —
   nothing else.
-- A **kill switch** (UI button + `POST /api/execution/kill` + a sentinel file
-  the engine checks each loop) that: blocks new entries, optionally squares off
-  all open positions at market, and flips execution back to paper.
 - **Guardrails enforced in code, not discipline:** 1 lot only (initially), a
   configurable max open positions, a **max daily realized loss** that halts new
   entries for the day, and a per-order margin pre-check.
+
+> **Build order:** the control plane above (arm + kill, paper-tested) is the first
+> Phase 3 slice and is **done**. Real order placement (LiveBroker / LiveKite,
+> §3.1) sits *behind* both the arm gate and the live flags, and is built next.
 
 ### 3.1 Components
 - **`LiveKite`** (new): KiteConnect subclass with the narrow order allowlist; used

@@ -1,11 +1,35 @@
 import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getStatus } from '../lib/api'
+import { getStatus, getExecState, armBot, killBot } from '../lib/api'
 import { inr, signedInr, pnlColor } from '../lib/format'
 
 function Stat({ label, v, cls = '' }: { label: string; v: string; cls?: string }) {
   return <div className="text-right"><div className="stat-label">{label}</div>
     <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
+}
+
+function ExecutionControls() {
+  const [armed, setArmed] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const refresh = () => getExecState().then((s) => setArmed(s.armed)).catch(() => {})
+  useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t) }, [])
+  const toggle = async () => { setBusy(true); const s = await armBot(!armed); setArmed(s.armed); setBusy(false) }
+  const kill = async () => {
+    if (!window.confirm('KILL SWITCH — disarm the bot and square off ALL open positions at market right now?')) return
+    setBusy(true); await killBot(); setArmed(false); setBusy(false)
+  }
+  return (
+    <div className="flex items-center gap-1.5">
+      <button disabled={busy} onClick={toggle}
+        title="Armed = the bot may auto-execute trades. Disarmed = it watches & alerts but opens nothing."
+        className={`btn ${armed ? 'border-up/60 text-up bg-up/10' : 'border-amber-400/60 text-amber-400'}`}>
+        {armed === null ? '…' : armed ? '● ARMED' : '○ ARM TO TRADE'}
+      </button>
+      <button disabled={busy} onClick={kill}
+        title="Emergency stop: disarm and square off everything now"
+        className="btn border-down/60 text-down hover:bg-down/15">⛔ KILL</button>
+    </div>
+  )
 }
 
 export default function TopBar({ tab, setTab, tabs }:
@@ -31,6 +55,7 @@ export default function TopBar({ tab, setTab, tabs }:
           </span>
           {status && !status.authenticated && status.login_url &&
             <a className="btn" href="/api/login">Connect Kite</a>}
+          <ExecutionControls />
         </div>
         <div className="flex items-center gap-5">
           <Stat label="Equity" v={inr(cap?.equity)} />

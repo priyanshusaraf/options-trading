@@ -33,6 +33,7 @@ def _stub_snapshot(r, premium):
 
 def test_notifies_on_auto_open():
     r, sent = _runner_with_capture()
+    r.armed = True                       # must be armed to auto-execute
     r.state["NIFTY"] = {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
                         "close": 100.0, "long_exit": False, "short_exit": False}
     r.process_entries()
