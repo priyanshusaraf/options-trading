@@ -11,3 +11,7 @@ import tempfile
 
 os.environ["PT_DB_PATH"] = os.path.join(tempfile.gettempdir(), "paper_trader_pytest.db")
 os.environ["PT_PROVIDER"] = "mock"
+
+# Skip macOS/iCloud "… 2.py" Desktop-sync duplicate files (a space + digit before
+# .py) — they otherwise break collection with import-file-mismatch.
+collect_ignore_glob = ["* [0-9].py", "* [0-9][0-9].py"]
