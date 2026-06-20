@@ -75,6 +75,7 @@ class Position(Base):
     session_close_premium: Mapped[float] = mapped_column(Float, default=0.0)  # mark at last session close
     last_squareoff_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # date the daily hold/square-off decision was last made (re-arm each session)
     manual_target: Mapped[bool] = mapped_column(Boolean, default=False)  # owner set the target by hand — reinforcement won't auto-extend it
+    no_take_profit: Mapped[bool] = mapped_column(Boolean, default=False)  # owner "let it run": suppress the TP cap (trailing stop still protects)
     gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
 
     def to_dict(self) -> dict:
@@ -103,6 +104,7 @@ class Position(Base):
             "reinforcement_count": self.reinforcement_count,
             "held_overnight": self.held_overnight,
             "manual_target": self.manual_target,
+            "no_take_profit": self.no_take_profit,
             "unrealized_pnl": round(unrealized, 2),
         }
 

@@ -20,6 +20,7 @@ from app.db.session import SessionLocal
 # Fields the Settings UI may override at runtime. Each maps 1:1 to a Settings field.
 OVERRIDABLE = (
     "stop_loss_pct", "target_pct",
+    "max_open_positions", "reentry_cooldown_minutes", "max_capital_per_trade",
     "trail_enabled", "trail_trigger_pct", "trail_lock_pct", "trail_target_pct",
     "reinforce_enabled", "reinforce_min_profit_pct", "reinforce_lock_pct",
     "reinforce_extend_tp", "reinforce_tp_extend_pct", "reinforce_tp_max_pct",
@@ -42,6 +43,9 @@ OVERRIDABLE = (
 BOUNDS: dict[str, tuple[float, float]] = {
     "stop_loss_pct": (0.001, 0.99),          # a positive fraction strictly below full premium
     "target_pct": (0.001, 10.0),
+    "max_open_positions": (0, 100),          # 0 = unlimited
+    "reentry_cooldown_minutes": (0.0, 1440.0),  # 0 = off
+    "max_capital_per_trade": (0.0, 100000000.0),  # 0 = no cap
     "trail_trigger_pct": (0.001, 1.0),
     "trail_lock_pct": (0.0, 1.0),
     "trail_target_pct": (0.001, 10.0),

@@ -112,6 +112,7 @@ def _migrate_schema() -> None:
             ("session_close_premium", "FLOAT DEFAULT 0.0"),
             ("last_squareoff_date", "DATE"),
             ("manual_target", "BOOLEAN DEFAULT 0"),
+            ("no_take_profit", "BOOLEAN DEFAULT 0"),
             ("gtt_trigger_id", "VARCHAR(32)"),
         ],
         "trades": [

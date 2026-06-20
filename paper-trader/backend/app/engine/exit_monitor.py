@@ -7,12 +7,17 @@ from __future__ import annotations
 
 
 def evaluate_exit(direction: str, stop_price: float, target_price: float,
-                  current_premium: float, long_exit: bool, short_exit: bool
+                  current_premium: float, long_exit: bool, short_exit: bool,
+                  target_disabled: bool = False
                   ) -> tuple[bool, str | None]:
     # protective premium guards first
     if current_premium <= stop_price:
         return True, "STOP_LOSS"
-    if current_premium >= target_price:
+    # `target_disabled` = owner's per-position "let it run / no take-profit": the
+    # profit cap is removed (for an overnight winner running on news) but the stop
+    # below and the strategy exit are UNAFFECTED — there is always a protective
+    # floor (the trailing stop).
+    if not target_disabled and current_premium >= target_price:
         return True, "TARGET"
     # then the strategy's own exit on the underlying
     if direction == "LONG" and long_exit:

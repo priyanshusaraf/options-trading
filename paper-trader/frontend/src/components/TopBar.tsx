@@ -16,7 +16,11 @@ function ExecutionControls() {
   const toggle = async () => { setBusy(true); const s = await armBot(!armed); setArmed(s.armed); setBusy(false) }
   const kill = async () => {
     if (!window.confirm('KILL SWITCH — disarm the bot and square off ALL open positions at market right now?')) return
-    setBusy(true); await killBot(); setArmed(false); setBusy(false)
+    setBusy(true)
+    const res = await killBot()
+    setArmed(false); setBusy(false)
+    const done = (res?.squared_off || []) as string[]
+    window.alert(`Kill switch fired — bot disarmed.\nSquared off ${done.length} position(s)${done.length ? ': ' + done.join(', ') : ''}.\nVerify Active Positions shows none remaining.`)
   }
   return (
     <div className="flex items-center gap-1.5">
@@ -28,6 +32,26 @@ function ExecutionControls() {
       <button disabled={busy} onClick={kill}
         title="Emergency stop: disarm and square off everything now"
         className="btn border-down/60 text-down hover:bg-down/15">⛔ KILL</button>
+    </div>
+  )
+}
+
+function ArmBanner() {
+  const [armed, setArmed] = useState<boolean | null>(null)
+  useEffect(() => {
+    const f = () => getExecState().then((s) => {
+      setArmed(s.armed)
+      document.title = `${s.armed ? '● ARMED' : '○ disarmed'} · Options Paper Trader`
+    }).catch(() => {})
+    f(); const t = setInterval(f, 5000); return () => clearInterval(t)
+  }, [])
+  if (armed === null) return null
+  return (
+    <div className={`text-center text-[11px] font-semibold py-1 tracking-wide ${armed
+      ? 'bg-up/15 text-up' : 'bg-amber-400/15 text-amber-400'}`}>
+      {armed
+        ? '● ARMED — the bot may auto-execute trades on fresh signals'
+        : '○ DISARMED — watching & alerting only · no new entries (open positions are still managed & protected)'}
     </div>
   )
 }
@@ -75,6 +99,7 @@ export default function TopBar({ tab, setTab, tabs }:
           </button>
         ))}
       </nav>
+      <ArmBanner />
     </header>
   )
 }

@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     stop_loss_pct: float = 0.35
     target_pct: float = 0.60
 
+    # ── trader risk controls (additive entry guards; 0 = off, back-compat) ──
+    max_open_positions: int = 0          # cap concurrent open positions (0 = unlimited)
+    reentry_cooldown_minutes: float = 0.0  # block re-entry on an instrument this long after a stop-out
+    max_capital_per_trade: float = 0.0   # skip a signal whose 1-lot cost exceeds this (0 = no cap)
+
     # capital sharing on the owner's real account — the owner's own trades take
     # priority. In live mode the bot is bounded by the real available margin minus
     # the reserve; the cap is an absolute ceiling on what the bot may ever deploy.

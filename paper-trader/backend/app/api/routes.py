@@ -391,6 +391,35 @@ async def set_position_sltp(key: str, body: SLTPBody, request: Request):
                 "stop_price": round(stop, 2), "target_price": round(target, 2)}
 
 
+class NoTPBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/api/positions/{key}/no-take-profit")
+async def set_no_take_profit(key: str, body: NoTPBody, request: Request):
+    """Owner's per-position "let it run": remove (or restore) the take-profit cap
+    on one open position — for an overnight winner that can run on news. The
+    trailing stop, the strategy exit, and the theta/expiry/max-hold square-offs
+    all still apply, so the position is never left unprotected. Enabling is
+    refused while the global trailing stop is OFF (that would leave no profit
+    floor at all)."""
+    from app.core.runtime_config import effective
+    r = _runner(request)
+    async with r._lock:
+        pos = r.broker.position_for(key)
+        if not pos:
+            return {"error": "no open position for this instrument"}
+        if body.enabled and not effective(r.settings).get("trail_enabled", True):
+            return {"error": "enable the trailing stop first — 'let it run' needs a "
+                             "protective floor (otherwise there's no stop on the upside giveback)"}
+        pos.no_take_profit = bool(body.enabled)
+        r.broker.commit()
+        from app.core.logging import log
+        log.info(f"{'NO-TAKE-PROFIT (let it run)' if body.enabled else 'TAKE-PROFIT RESTORED'} "
+                 f"{pos.tradingsymbol}", instrument=key, event="NO_TP", manual=True)
+        return {"ok": True, "key": key, "no_take_profit": pos.no_take_profit}
+
+
 # ── execution control: arm-to-trade + kill switch ───────────────────────────
 class ArmBody(BaseModel):
     armed: bool

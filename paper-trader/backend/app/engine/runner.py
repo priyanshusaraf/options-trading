@@ -37,6 +37,8 @@ from app.engine.charges import compute_charges
 from app.engine.execution_policy import plan_order
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
+from app.engine.risk_controls import (
+    in_reentry_cooldown, over_per_trade_cap, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
@@ -63,6 +65,7 @@ class EngineRunner:
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
+        self._stopped_at: dict[str, object] = {}    # instrument -> last stop-out time (re-entry cooldown)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
         self.running = False
         # ARM-TO-TRADE gate: the engine always scans, marks open positions, fires
@@ -205,10 +208,13 @@ class EngineRunner:
             if not pos_stale:
                 should, reason = evaluate_exit(
                     pos.direction, pos.stop_price, pos.target_price, premium,
-                    st.get("long_exit", False), st.get("short_exit", False))
+                    st.get("long_exit", False), st.get("short_exit", False),
+                    target_disabled=pos.no_take_profit)
                 if should:
                     trade = self.broker.close_position(pos, premium, reason, now, spot)
                     if trade is not None:
+                        if reason == "STOP_LOSS":
+                            self._stopped_at[key] = now   # start the re-entry cooldown
                         if self.params.get("notify_enabled", True):
                             self.notifier.closed(trade)
                         opens.pop(key, None)
@@ -287,6 +293,12 @@ class EngineRunner:
                 self.notifier.signal(key, sig)
             if not inst.has_options:
                 continue  # tracking-only: show the signal, never options-trade it
+            # re-entry cooldown after a recent stop-out on this instrument
+            if in_reentry_cooldown(self._stopped_at.get(key), now,
+                                   self.params.get("reentry_cooldown_minutes", 0.0)):
+                log.info(f"RE-ENTRY COOLDOWN — skipping {key}", instrument=key,
+                         event="COOLDOWN_SKIP")
+                continue
             if not self.armed:
                 log.info(f"DISARMED — signal ready, not taking {key} (arm to trade)",
                          instrument=key, event="DISARMED_SKIP")
@@ -329,6 +341,11 @@ class EngineRunner:
             qty = pick.chosen.lot_size
             charges = compute_charges(inst.segment, "BUY", pick.chosen.ltp, qty)["total"]
             cost = pick.chosen.ltp * qty + charges
+            if over_per_trade_cap(cost, self.params.get("max_capital_per_trade", 0.0)):
+                log.warn(f"signal skipped — 1-lot cost ₹{cost:,.0f} exceeds per-trade cap "
+                         f"₹{self.params['max_capital_per_trade']:,.0f}",
+                         instrument=key, event="PER_TRADE_CAP_SKIP")
+                continue
             cands.append(Candidate(key, direction, cost))
             meta[key] = (inst, direction, pick, chain, plan)
 
@@ -338,7 +355,15 @@ class EngineRunner:
             if len(alloc.funded) < len(cands):
                 log.info(f"capital shortfall — {len(alloc.funded)}/{len(cands)} "
                          f"signals funded by priority")
+            # cap concurrent open positions (counts positions already held this call)
+            slots = slots_available(len(held), self.params.get("max_open_positions", 0))
+            opened = 0
             for c in alloc.funded:
+                if slots is not None and opened >= slots:
+                    log.info(f"MAX POSITIONS reached ({len(held)} open, cap "
+                             f"{self.params['max_open_positions']}) — skipping {c.instrument_key}",
+                             instrument=c.instrument_key, event="MAX_POS_SKIP")
+                    continue
                 inst, direction, pick, chain, plan = meta[c.instrument_key]
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
@@ -347,6 +372,7 @@ class EngineRunner:
                                                 pick.reason, now, chain.spot, self.params, plan=plan)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
+                opened += 1
                 if self.params.get("notify_enabled", True):
                     self.notifier.opened(pos)
                 if c.instrument_key in self.state:

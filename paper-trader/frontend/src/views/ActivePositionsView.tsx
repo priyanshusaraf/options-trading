@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen, setPositionSLTP } from '../lib/api'
+import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen, setPositionSLTP, setNoTakeProfit } from '../lib/api'
 import { inr, num, signedInr, pnlColor } from '../lib/format'
 import type { PositionRow, SignalRow, AnalyticsSplit } from '../lib/types'
 
@@ -70,8 +70,16 @@ function SLTPEditor({ p, onChanged }: { p: PositionRow; onChanged: () => void })
 
 function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [tpMsg, setTpMsg] = useState<string | null>(null)
   const prem = p.live_premium ?? p.last_premium
   const act = async (fn: () => Promise<any>) => { setBusy(true); await fn(); setBusy(false); onChanged() }
+  const toggleNoTP = async () => {
+    setBusy(true); setTpMsg(null)
+    const res = await setNoTakeProfit(p.instrument_key, !p.no_take_profit)
+    setBusy(false)
+    if (res?.error) setTpMsg(res.error)
+    else onChanged()
+  }
   return (
     <div className="card p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -81,6 +89,7 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
           <span className="text-[11px] text-muted">{p.tradingsymbol} · {p.qty}u</span>
           {!!p.reinforcement_count && <span className="badge bg-blue-500/15 text-blue-300" title="reinforcements">⊕ ×{p.reinforcement_count}</span>}
           {p.held_overnight && <span className="badge bg-indigo-400/15 text-indigo-300" title="held overnight">🌙 overnight</span>}
+          {p.no_take_profit && <span className="badge bg-fuchsia-400/15 text-fuchsia-300" title="take-profit removed — runs on the trailing stop only">🚀 no TP</span>}
           {p.stale && <span className="badge bg-amber-400/15 text-amber-400">stale{p.stale_age != null ? ` ${p.stale_age}s` : ''}</span>}
         </div>
         <span className={`text-sm font-semibold ${pnlColor(p.unrealized_pnl)}`}>{signedInr(p.unrealized_pnl)}</span>
@@ -101,12 +110,18 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
 
       <SLTPEditor p={p} onChanged={onChanged} />
 
-      <div className="flex items-center gap-2 pt-1 border-t border-edge/50">
+      <div className="flex items-center gap-2 pt-1 border-t border-edge/50 flex-wrap">
         <button disabled={busy} onClick={() => act(() => closePosition(p.instrument_key))}
           className="btn border-down/50 text-down">{busy ? '…' : '✕ Close now'}</button>
         <button disabled={busy} onClick={() => act(() => blockEntries(p.instrument_key, true))}
           className="btn">⊘ Disable new entries</button>
-        <span className="ml-auto text-[11px] text-muted">last update {p.last_mark_time ? new Date(p.last_mark_time).toLocaleTimeString() : '—'}</span>
+        <button disabled={busy} onClick={toggleNoTP}
+          title="Remove the take-profit cap so an overnight winner can run on news. The trailing stop, strategy exit, and theta/expiry square-offs still protect it. You control this — the bot never sets it."
+          className={`btn ${p.no_take_profit ? 'border-fuchsia-400/60 text-fuchsia-300 bg-fuchsia-400/10' : ''}`}>
+          {p.no_take_profit ? '🚀 TP off — restore' : '🚀 Let it run (no TP)'}
+        </button>
+        {tpMsg && <span className="text-[11px] text-down">✕ {tpMsg}</span>}
+        <span className="ml-auto text-[11px] text-muted">last update {p.last_mark_time ? new Date(p.last_mark_time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : '—'}</span>
       </div>
     </div>
   )
