@@ -35,6 +35,11 @@ const META: Record<string, { label: string; help: string }> = {
   notify_enabled: { label: 'Notifications enabled', help: 'Master switch for Telegram alerts. No-op unless TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set in .env.' },
   notify_on_signal: { label: 'Alert on every signal', help: 'Also ping on each fresh entry signal — can be noisy. Default off.' },
   alert_proximity_pct: { label: 'Near-SL/TP alert threshold', help: 'Warn when the premium comes within this fraction of the stop or target level. Recommended 0.10 (10%).' },
+  exec_market_max_spread_pct: { label: 'Market-order max spread', help: 'Send a MARKET order only when the bid-ask spread is at/under this fraction; wider routes a capped limit instead. Recommended 0.01 (1%).' },
+  exec_limit_max_spread_pct: { label: 'Skip-entry spread', help: 'Above this spread an entry is SKIPPED — too illiquid to enter safely (e.g. some commodity options). Recommended 0.05 (5%).' },
+  exec_max_slippage_pct: { label: 'Limit slippage cap', help: 'A marketable-limit order is capped this far off the mid price. Recommended 0.01 (1%).' },
+  exec_min_top_qty_lots: { label: 'Min top-of-book (lots)', help: 'Require this many lots on the touch to send a MARKET order; a thinner book routes a capped limit. Recommended 1.' },
+  max_daily_loss: { label: 'Daily loss halt (₹)', help: 'Stop opening new trades for the rest of the day once realized net loss reaches this. 0 = off. Recommended 5000.' },
 }
 
 const GROUPS: [string, (k: string) => boolean][] = [
@@ -44,6 +49,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Option-data cache', (k) => k.startsWith('option_cache_')],
   ['Risk & cadence', (k) => ['stop_loss_pct', 'target_pct', 'max_stale_seconds', 'position_loop_seconds', 'signal_loop_seconds'].includes(k)],
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
+  ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss'],
 ]
 
 function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {

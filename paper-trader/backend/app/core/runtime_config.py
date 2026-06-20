@@ -30,6 +30,8 @@ OVERRIDABLE = (
     "option_cache_enabled", "option_cache_snapshot_minutes",
     "max_stale_seconds", "position_loop_seconds", "signal_loop_seconds",
     "notify_enabled", "notify_on_signal", "alert_proximity_pct",
+    "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
+    "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
 )
 
 
@@ -59,6 +61,11 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "position_loop_seconds": (0.5, 600.0),   # floor keeps the risk loop under Kite's quote limit
     "signal_loop_seconds": (0.5, 600.0),
     "alert_proximity_pct": (0.01, 0.90),
+    "exec_market_max_spread_pct": (0.0, 0.50),
+    "exec_limit_max_spread_pct": (0.0, 0.90),
+    "exec_max_slippage_pct": (0.0, 0.50),
+    "exec_min_top_qty_lots": (0.0, 10000.0),
+    "max_daily_loss": (0.0, 100000000.0),   # 0 disables the halt
 }
 
 

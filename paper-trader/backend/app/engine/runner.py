@@ -32,6 +32,7 @@ from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
 from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges
+from app.engine.execution_policy import plan_order
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
 from app.notify.notifier import Notifier
@@ -66,6 +67,7 @@ class EngineRunner:
         # explicitly arms it. Defaults disarmed on every process start (you must arm
         # each session), and the kill switch disarms it again.
         self.armed = False
+        self._halt_notified_date = None        # de-dupe the daily-loss-halt alert
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -250,6 +252,7 @@ class EngineRunner:
         s, prov = self.settings, self.provider
         now = prov.now()
         held = {p.instrument_key: p for p in self.broker.open_positions()}
+        halted = self._entries_halted(now)   # daily-loss circuit breaker (new entries only)
         cands: list[Candidate] = []
         meta: dict[str, tuple] = {}
         for key in list(self.enabled):
@@ -272,8 +275,17 @@ class EngineRunner:
             direction = "LONG" if sig == "LONG_ENTRY" else "SHORT"
             inst = get_instrument(key)
             self._record_signal(now, key, st)
+            if self.params.get("notify_on_signal", False):
+                self.notifier.signal(key, sig)
             if not inst.has_options:
                 continue  # tracking-only: show the signal, never options-trade it
+            if not self.armed:
+                log.info(f"DISARMED — signal ready, not taking {key} (arm to trade)",
+                         instrument=key, event="DISARMED_SKIP")
+                continue
+            if halted:
+                log.warn(f"DAILY LOSS HALT — not taking {key}", instrument=key, event="HALT_SKIP")
+                continue
             chain = prov.get_option_chain(inst)
             if not chain:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
@@ -294,28 +306,36 @@ class EngineRunner:
             if not pick.chosen:
                 log.warn(f"signal fired but {pick.reason}", instrument=key)
                 continue
+            # adaptive routing: never market into an ugly book (the COPPER case).
+            plan = plan_order("BUY", pick.chosen.bid, pick.chosen.ask, pick.chosen.ltp,
+                              None, pick.chosen.lot_size, self.params)
+            if plan.action == "SKIP":
+                log.warn(f"signal fired but routing SKIP — {plan.reason}",
+                         instrument=key, event="ROUTE_SKIP")
+                if self.params.get("notify_enabled", True):
+                    self.notifier.route_skip(key, plan.reason)
+                continue
+            self.last_pick[key]["route"] = {"action": plan.action,
+                                            "limit_price": plan.limit_price,
+                                            "reason": plan.reason}
             qty = pick.chosen.lot_size
             charges = compute_charges(inst.segment, "BUY", pick.chosen.ltp, qty)["total"]
             cost = pick.chosen.ltp * qty + charges
             cands.append(Candidate(key, direction, cost))
-            meta[key] = (inst, direction, pick, chain)
+            meta[key] = (inst, direction, pick, chain, plan)
 
         if cands:
-            if not self.armed:
-                # disarmed: surface what it WOULD have taken, but never auto-execute
-                for c in cands:
-                    log.info(f"DISARMED — signal ready, not taking {c.instrument_key} "
-                             f"(arm the bot to trade)", instrument=c.instrument_key,
-                             event="DISARMED_SKIP")
-                return
             alloc = allocate(cands, self.broker.cash())
             if len(alloc.funded) < len(cands):
                 log.info(f"capital shortfall — {len(alloc.funded)}/{len(cands)} "
                          f"signals funded by priority")
             for c in alloc.funded:
-                inst, direction, pick, chain = meta[c.instrument_key]
+                inst, direction, pick, chain, plan = meta[c.instrument_key]
                 pos = self.broker.open_position(inst, direction, pick.chosen,
                                                 pick.reason, now, chain.spot, self.params)
+                log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
+                         + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
+                         + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
                 if self.params.get("notify_enabled", True):
                     self.notifier.opened(pos)
                 if c.instrument_key in self.state:
@@ -397,6 +417,32 @@ class EngineRunner:
         self.process_entries()
         self.broker.snapshot(self.provider.now())
         self.tick_count += 1
+
+    # ── daily-loss circuit breaker ────────────────────────────────────────
+    def _today_net_realized(self, today) -> float:
+        from app.db.models import Trade
+        with SessionLocal() as s:
+            return sum(t.net_pnl for t in s.scalars(select(Trade))
+                       if t.exit_time and t.exit_time.date() == today)
+
+    def _entries_halted(self, now) -> bool:
+        """True once today's realized NET loss breaches max_daily_loss — halts NEW
+        entries for the rest of the day (open positions are still managed). Alerts
+        once per day."""
+        cap = self.params.get("max_daily_loss", 0.0)
+        if not cap or cap <= 0:
+            return False
+        today = now.date()
+        net = self._today_net_realized(today)
+        if net <= -cap:
+            if self._halt_notified_date != today:
+                self._halt_notified_date = today
+                log.warn(f"DAILY LOSS HALT — today net ₹{net:,.0f} <= -₹{cap:,.0f}; "
+                         f"no new entries today")
+                if self.params.get("notify_enabled", True):
+                    self.notifier.daily_halt(net, cap)
+            return True
+        return False
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:

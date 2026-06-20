@@ -104,6 +104,16 @@ class Settings(BaseSettings):
     max_holding_days: int = 5                # hard cap on holding period (trading days)
     square_off_buffer_minutes: float = 15.0  # decide / square-off this long before session close
 
+    # ── adaptive order routing (live execution safety) ─────────────────────
+    # Don't market into a wide book (illiquid commodity options): route MARKET only
+    # when tight + deep, a capped marketable-limit when moderate, and skip entries
+    # uglier than this. SELL exits always go market (getting out beats slippage).
+    exec_market_max_spread_pct: float = 0.01   # spread <= this -> MARKET order ok
+    exec_limit_max_spread_pct: float = 0.05    # above market_max..this -> capped LIMIT; beyond -> SKIP
+    exec_max_slippage_pct: float = 0.01        # cap a marketable-limit this far off the mid
+    exec_min_top_qty_lots: float = 1.0         # require this many lots of top-of-book depth for MARKET
+    max_daily_loss: float = 5000.0             # halt NEW entries for the day past this realized loss (0 = off)
+
     # ── notifications (Telegram) ───────────────────────────────────────────
     notify_enabled: bool = True              # master switch (no-op anyway if creds unset)
     notify_on_signal: bool = False           # also ping on every fresh entry signal (noisy)

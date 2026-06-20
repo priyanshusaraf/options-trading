@@ -44,6 +44,13 @@ class Notifier:
         tail = f": {', '.join(closed)}" if closed else ""
         self._emit(f"🛑 KILL SWITCH — disarmed and squared off {len(closed)} position(s){tail}")
 
+    def route_skip(self, key: str, reason: str) -> None:
+        self._emit(f"⏭️ SKIPPED {key} — {reason}")
+
+    def daily_halt(self, net: float, cap: float) -> None:
+        self._emit(f"🛑 DAILY LOSS LIMIT — today net ₹{net:,.0f} (cap ₹{cap:,.0f}). "
+                   f"No new entries for the rest of the day.")
+
     # ── approaching SL/TP (throttled) ─────────────────────────────────────
     def check_proximity(self, key: str, tradingsymbol: str, premium: float,
                         stop: float, target: float, proximity_pct: float) -> None:
