@@ -51,6 +51,9 @@ export const startSweep = (scope: string, intervals: string[], capital = 50000) 
   post('/api/backtest/sweep', { scope, intervals, capital })
 export const getSweepStatus = (runId?: number) =>
   j(`/api/backtest/status${runId ? `?run_id=${runId}` : ''}`)
+export const getSweepRuns = () => j('/api/backtest/runs')
+export const sweepExportUrl = (runId?: number) =>
+  `/api/backtest/export${runId ? `?run_id=${runId}` : ''}`
 
 export interface ResultFilters {
   run_id?: number; interval?: string; min_win_rate?: number; min_profit_factor?: number

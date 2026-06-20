@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { LineChart } from '../components/Charts'
 import {
   startSweep, getSweepStatus, getSweepResults, getSweepResult,
-  addToPortfolio,
+  addToPortfolio, getSweepRuns, sweepExportUrl,
 } from '../lib/api'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
@@ -35,6 +35,9 @@ export default function BacktestsView() {
   const [rows, setRows] = useState<BTResult[]>([])
   const [drill, setDrill] = useState<BTResult | null>(null)
   const [added, setAdded] = useState<Set<string>>(new Set())
+  // browse history: null = latest run
+  const [runsList, setRunsList] = useState<any[]>([])
+  const [viewRunId, setViewRunId] = useState<number | undefined>(undefined)
 
   // filters (client-side for snappy UX)
   const [minWin, setMinWin] = useState(0)
@@ -44,12 +47,17 @@ export default function BacktestsView() {
   const [fInterval, setFInterval] = useState('')
   const [sort, setSort] = useState<keyof BTResult>('return_pct')
 
-  const loadResults = () => getSweepResults({ min_trades: 1 }).then((d) => setRows(d.results || []))
+  const loadResults = () => getSweepResults({ min_trades: 1, run_id: viewRunId })
+    .then((d) => setRows(d.results || []))
+  const loadRuns = () => getSweepRuns().then((d) => setRunsList(d.runs || []))
 
   useEffect(() => {
     getSweepStatus().then((d) => { setRun(d.run); setRunning(d.running) })
-    loadResults()
+    loadRuns()
   }, [])
+
+  // reload results whenever the browsed run changes (undefined = latest)
+  useEffect(() => { loadResults() }, [viewRunId])
 
   // poll while a sweep runs
   useEffect(() => {
@@ -57,7 +65,7 @@ export default function BacktestsView() {
     const t = setInterval(() => {
       getSweepStatus().then((d) => {
         setRun(d.run); setRunning(d.running)
-        if (!d.running) { clearInterval(t); loadResults() }
+        if (!d.running) { clearInterval(t); loadResults(); loadRuns() }
       })
     }, 1500)
     return () => clearInterval(t)
@@ -71,6 +79,7 @@ export default function BacktestsView() {
     if (!intervals.length) return
     const r = await startSweep(scope, intervals, 50000)
     if (r.error) { alert(r.error); return }
+    setViewRunId(undefined)   // show the new (latest) run as it streams in
     setRunning(true)
     getSweepStatus(r.run_id).then((d) => setRun(d.run))
   }
@@ -146,6 +155,23 @@ export default function BacktestsView() {
             </span>
           </div>
         )}
+        <div className="flex items-center gap-2 flex-wrap border-t border-edge/50 pt-2">
+          <span className="stat-label">History</span>
+          <select value={viewRunId ?? ''}
+            onChange={(e) => setViewRunId(e.target.value ? Number(e.target.value) : undefined)}
+            title="Browse a past sweep — stored results are never lost or overwritten"
+            className="bg-panel2 border border-edge rounded px-2 py-1 text-xs max-w-[420px]">
+            <option value="">latest run</option>
+            {runsList.map((r) => (
+              <option key={r.id} value={r.id}>
+                #{r.id} · {r.scope} · {r.result_count} results · {r.status} · {dt(r.created_at)}
+              </option>
+            ))}
+          </select>
+          <a href={sweepExportUrl(viewRunId)} download className="btn">⬇ Export CSV</a>
+          {viewRunId != null && <span className="text-[11px] text-amber-400/80">viewing a past run (read-only)</span>}
+          <span className="ml-auto text-[11px] text-muted">stored sweeps are cached — reruns are instant & nothing is lost</span>
+        </div>
       </div>
 
       {/* filters */}
