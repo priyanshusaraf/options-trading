@@ -17,6 +17,7 @@ from __future__ import annotations
 import pandas as pd
 
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
+from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
 from app.strategy.signals import compute_signals
 
@@ -66,7 +67,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
 
     rows = sig.to_dict("records")
     for i, r in enumerate(rows):
-        t = int(pd.Timestamp(r["date"]).timestamp())
+        t = ist_epoch(r["date"])   # IST wall-clock -> true instant (no +5:30 shift)
         close = float(r["close"])
         if pos is None:
             direction = None
@@ -88,12 +89,13 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
                 trades.append(_close(pos, close, t, i, seg, "STRATEGY_EXIT"))
                 pos = None
 
-    # close any still-open position at the last bar
+    # close any still-open position at the LAST AVAILABLE CANDLE (end of data, not
+    # end of day) — it never hit a strategy reversal within the loaded history.
     if pos is not None:
         last = rows[-1]
         trades.append(_close(pos, float(last["close"]),
-                             int(pd.Timestamp(last["date"]).timestamp()),
-                             len(rows) - 1, seg, "EOD"))
+                             ist_epoch(last["date"]),
+                             len(rows) - 1, seg, "OPEN_AT_END"))
 
     return trades, compute_metrics(trades, capital)
 

@@ -39,7 +39,11 @@ def compute_signals(df: pd.DataFrame, ema_length=50, z_length=50,
 
 
 def _epoch(t) -> int:
-    return int(pd.Timestamp(t).timestamp())
+    # IST wall-clock candle -> true instant (see market_hours.ist_epoch). Using
+    # pd.Timestamp(...).timestamp() here would treat IST as UTC and shift every
+    # chart bar +5:30.
+    from app.core.market_hours import ist_epoch
+    return ist_epoch(t)
 
 
 def to_payload(sig: pd.DataFrame, entry_z=1.0) -> dict:

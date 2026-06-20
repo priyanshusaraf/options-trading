@@ -37,6 +37,26 @@ def now_ist() -> dt.datetime:
     return dt.datetime.now(IST)
 
 
+def ist_epoch(t) -> int:
+    """UNIX epoch (seconds) for a candle/trade timestamp that is in IST.
+
+    Candle timestamps in this app are IST wall-clock: the mock builds them naive,
+    and KiteProvider strips the tz keeping the IST wall-clock. The naive value
+    must therefore be interpreted as IST — NOT as UTC. The old code did
+    `pd.Timestamp(naive).timestamp()`, which pandas treats as UTC, shifting every
+    chart bar and backtest trade +5:30 (a 09:15 candle rendered as "2:45pm", a
+    15:00 candle as "8:30pm"). Localizing to IST yields the true instant, so any
+    viewer renders the real session time.
+    """
+    if hasattr(t, "to_pydatetime"):        # pandas Timestamp
+        t = t.to_pydatetime()
+    elif isinstance(t, str):
+        t = dt.datetime.fromisoformat(t)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=IST)
+    return int(t.timestamp())
+
+
 def is_open(segment: str, when: dt.datetime | None = None) -> bool:
     """True if `segment`'s exchange is in session at `when` (default: now, IST)."""
     t = when or now_ist()

@@ -23,7 +23,7 @@ class BTTrade:
     gross_pnl: float
     charges: float
     net_pnl: float
-    reason: str             # "STRATEGY_EXIT" | "EOD"
+    reason: str             # "STRATEGY_EXIT" | "OPEN_AT_END" (still open at last candle)
     bars_held: int
 
     @property

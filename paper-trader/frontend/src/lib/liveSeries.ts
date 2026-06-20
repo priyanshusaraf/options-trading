@@ -11,7 +11,15 @@ export interface LivePoint {
   value: number
 }
 
-export const epochSeconds = (iso: string) => Math.floor(new Date(iso).getTime() / 1000)
+// Backend timestamps are IST. A naive ISO string (no offset/"Z") would be parsed
+// by the browser as LOCAL time, which diverges from the backend's true-instant
+// epochs for any non-IST viewer (and broke live-candle merge: live ticks looked
+// 5:30 "earlier" than history, so new bars never formed). Pin naive strings to
+// IST (+05:30) so live ticks and historical bars share one timeline.
+export const epochSeconds = (iso: string) => {
+  const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso)
+  return Math.floor(new Date(hasTz ? iso : iso + '+05:30').getTime() / 1000)
+}
 
 export function mergeLiveCandle(candles: LiveCandle[], time: number, price: number, limit = 300): LiveCandle[] {
   if (!Number.isFinite(price) || !Number.isFinite(time)) return candles

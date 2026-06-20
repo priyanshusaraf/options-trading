@@ -1,11 +1,24 @@
 import { useEffect, useRef } from 'react'
-import { createChart, ColorType, type IChartApi, type ISeriesApi } from 'lightweight-charts'
+import { createChart, ColorType, type IChartApi, type ISeriesApi, type IPriceLine } from 'lightweight-charts'
+
+// lightweight-charts renders timestamps in UTC by default. Our data epochs are
+// true instants, so format the axis + crosshair explicitly in IST — an Indian
+// market app must always show the real session clock regardless of viewer tz.
+const IST = 'Asia/Kolkata'
+const istTime = (t: number) =>
+  new Date((t as number) * 1000).toLocaleTimeString('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', hour12: false })
+const istDate = (t: number) =>
+  new Date((t as number) * 1000).toLocaleDateString('en-IN', { timeZone: IST, day: '2-digit', month: 'short' })
+// tickMarkType: 0 Year, 1 Month, 2 DayOfMonth, 3 Time, 4 TimeWithSeconds
+const tickMarkFormatter = (t: any, tickMarkType: number) =>
+  tickMarkType <= 2 ? istDate(t) : istTime(t)
 
 const BASE = {
   layout: { background: { type: ColorType.Solid, color: 'transparent' }, textColor: '#8b93a7', fontFamily: 'ui-monospace, monospace', fontSize: 10 },
   grid: { vertLines: { color: '#161a22' }, horzLines: { color: '#161a22' } },
   rightPriceScale: { borderColor: '#232733' },
-  timeScale: { borderColor: '#232733', timeVisible: true, secondsVisible: false },
+  timeScale: { borderColor: '#232733', timeVisible: true, secondsVisible: false, tickMarkFormatter },
+  localization: { timeFormatter: (t: any) => `${istDate(t)} ${istTime(t)}` },
   crosshair: { mode: 0 as const },
 }
 
@@ -28,6 +41,10 @@ export function PriceChart({ candles, ema = [], markers = [], height = 280, area
   const chartRef = useRef<IChartApi | null>(null)
   const priceRef = useRef<ISeriesApi<any> | null>(null)
   const emaRef = useRef<ISeriesApi<any> | null>(null)
+  // Track the first bar's time so we only auto-fit when the DATASET changes
+  // (new instrument / interval) — never on a live tick append, which would
+  // otherwise snap the view back and fight the user's zoom/pan.
+  const firstTimeRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = ref.current!
@@ -37,6 +54,7 @@ export function PriceChart({ candles, ema = [], markers = [], height = 280, area
       ? chart.addAreaSeries({ lineColor: '#3b82f6', topColor: 'rgba(59,130,246,0.22)', bottomColor: 'rgba(59,130,246,0.02)', lineWidth: 2, priceLineVisible: false })
       : chart.addCandlestickSeries({ upColor: '#2ebd85', downColor: '#f6465d', wickUpColor: '#2ebd85', wickDownColor: '#f6465d', borderVisible: false })
     emaRef.current = chart.addLineSeries({ color: '#e0b341', lineWidth: 1, priceLineVisible: false, lastValueVisible: false })
+    firstTimeRef.current = null
     const teardown = observe(el, chart, height)
     return () => { teardown(); chartRef.current = null; priceRef.current = null; emaRef.current = null }
   }, [area, height])
@@ -48,7 +66,11 @@ export function PriceChart({ candles, ema = [], markers = [], height = 280, area
     else ps.setData(candles as any)
     emaRef.current?.setData(ema as any)
     if (!area && markers.length) ps.setMarkers(markers as any)
-    chartRef.current?.timeScale().fitContent()
+    const first = candles.length ? candles[0].time : null
+    if (first !== null && first !== firstTimeRef.current) {
+      firstTimeRef.current = first
+      chartRef.current?.timeScale().fitContent()   // new dataset only
+    }
   }, [candles, ema, markers, area])
 
   return <div ref={ref} style={{ width: '100%' }} />
@@ -59,6 +81,8 @@ export function LineChart({ data, height = 220, color = '#3b82f6', area = true, 
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const sRef = useRef<ISeriesApi<any> | null>(null)
+  const lineRefs = useRef<IPriceLine[]>([])
+  const firstTimeRef = useRef<number | null>(null)
 
   useEffect(() => {
     const el = ref.current!
@@ -67,16 +91,27 @@ export function LineChart({ data, height = 220, color = '#3b82f6', area = true, 
     sRef.current = area
       ? chart.addAreaSeries({ lineColor: color, topColor: color + '33', bottomColor: color + '05', lineWidth: 2, priceLineVisible: false })
       : chart.addLineSeries({ color, lineWidth: 2, priceLineVisible: false })
+    lineRefs.current = []
+    firstTimeRef.current = null
     const teardown = observe(el, chart, height)
-    return () => { teardown(); chartRef.current = null; sRef.current = null }
+    return () => { teardown(); chartRef.current = null; sRef.current = null; lineRefs.current = [] }
   }, [color, area, height])
 
   useEffect(() => {
-    if (!sRef.current) return
-    sRef.current.setData(data as any)
-    priceLines.forEach((pl) => sRef.current!.createPriceLine({ price: pl.price, color: pl.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: pl.title } as any))
-    chartRef.current?.timeScale().fitContent()
-  }, [data])
+    const s = sRef.current
+    if (!s) return
+    s.setData(data as any)
+    // remove stale price lines before re-adding (otherwise they accumulate on
+    // every data update / tick)
+    lineRefs.current.forEach((pl) => { try { s.removePriceLine(pl) } catch { /* disposed */ } })
+    lineRefs.current = priceLines.map((pl) =>
+      s.createPriceLine({ price: pl.price, color: pl.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: pl.title } as any))
+    const first = data.length ? data[0].time : null
+    if (first !== null && first !== firstTimeRef.current) {
+      firstTimeRef.current = first
+      chartRef.current?.timeScale().fitContent()
+    }
+  }, [data, priceLines])
 
   return <div ref={ref} style={{ width: '100%' }} />
 }

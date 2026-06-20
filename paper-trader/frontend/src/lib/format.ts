@@ -19,12 +19,21 @@ export const signalStyle = (sig: string | undefined): string => {
   return 'bg-zinc-700/30 text-muted'
 }
 
+// Always render in IST — this is an Indian-market app; a viewer in another
+// timezone must still see the real session time, not their local clock. Backend
+// timestamps that arrive WITHOUT an offset are IST wall-clock, so anchor them to
+// +05:30 before formatting (a naive string would otherwise be parsed as the
+// viewer's local time).
+const IST = 'Asia/Kolkata'
+const anchorIst = (iso: string): string =>
+  /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : iso + '+05:30'
+
 export const time = (iso: string): string => {
-  try { return new Date(iso).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
+  try { return new Date(anchorIst(iso)).toLocaleTimeString('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
   catch { return iso }
 }
 
 export const dt = (iso: string): string => {
-  try { return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
+  try { return new Date(anchorIst(iso)).toLocaleString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
