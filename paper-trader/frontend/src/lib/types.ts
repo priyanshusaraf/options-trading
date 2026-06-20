@@ -53,6 +53,7 @@ export interface PositionRow extends PositionDTO {
   high_water_premium: number; last_mark_time: string | null
   live_premium: number | null; live_spot: number | null
   stale: boolean; stale_age: number | null; dist_to_stop: number; dist_to_target: number
+  manual_target?: boolean
 }
 
 export interface LogEntry {

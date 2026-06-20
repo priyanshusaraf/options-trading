@@ -116,7 +116,8 @@ class PaperBroker:
                                 now, params)
         if r["applied"]:
             pos.stop_price = r["stop_price"]
-            pos.target_price = r["target_price"]
+            if not pos.manual_target:
+                pos.target_price = r["target_price"]   # owner-set target is not auto-extended
             pos.reinforcement_count = r["count"]
             pos.last_reinforce_time = now
             self.s.commit()

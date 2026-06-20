@@ -73,6 +73,7 @@ class Position(Base):
     overnight_pnl: Mapped[float] = mapped_column(Float, default=0.0)   # Σ premium delta across session gaps
     session_close_premium: Mapped[float] = mapped_column(Float, default=0.0)  # mark at last session close
     last_squareoff_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # date the daily hold/square-off decision was last made (re-arm each session)
+    manual_target: Mapped[bool] = mapped_column(Boolean, default=False)  # owner set the target by hand — reinforcement won't auto-extend it
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty
@@ -99,6 +100,7 @@ class Position(Base):
             "high_water_premium": round(self.high_water_premium or self.entry_premium, 2),
             "reinforcement_count": self.reinforcement_count,
             "held_overnight": self.held_overnight,
+            "manual_target": self.manual_target,
             "unrealized_pnl": round(unrealized, 2),
         }
 

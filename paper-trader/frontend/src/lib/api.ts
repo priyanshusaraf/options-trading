@@ -13,6 +13,10 @@ export const setLiveInterval = (key: string, interval: string) =>
 export const blockEntries = (key: string, blocked: boolean) =>
   post(`/api/instruments/${key}/block-entries`, { blocked })
 export const closePosition = (key: string) => post(`/api/positions/${key}/close`, {})
+export const setPositionSLTP = (
+  key: string,
+  body: { stop_price?: number; target_price?: number; stop_pct?: number; target_pct?: number },
+) => post(`/api/positions/${key}/sltp`, body)
 export const manualOpen = (key: string, direction: string) =>
   post('/api/positions/manual-open', { key, direction })
 export const getSettings = () => j('/api/settings')

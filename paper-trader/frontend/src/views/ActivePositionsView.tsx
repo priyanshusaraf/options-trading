@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen } from '../lib/api'
+import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen, setPositionSLTP } from '../lib/api'
 import { inr, num, signedInr, pnlColor } from '../lib/format'
 import type { PositionRow, SignalRow, AnalyticsSplit } from '../lib/types'
 
@@ -35,6 +35,39 @@ function Cell({ label, v, cls = '' }: { label: string; v: string; cls?: string }
     <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
 }
 
+function SLTPEditor({ p, onChanged }: { p: PositionRow; onChanged: () => void }) {
+  const [stop, setStop] = useState(String(p.stop_price))
+  const [target, setTarget] = useState(String(p.target_price))
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  // re-sync when the engine ratchets the stop, unless the field is mid-edit
+  useEffect(() => { setStop(String(p.stop_price)) }, [p.stop_price])
+  useEffect(() => { setTarget(String(p.target_price)) }, [p.target_price])
+  const save = async () => {
+    setBusy(true); setMsg(null)
+    const res = await setPositionSLTP(p.instrument_key, {
+      stop_price: parseFloat(stop), target_price: parseFloat(target),
+    })
+    setBusy(false)
+    if (res?.error) setMsg(res.error)
+    else onChanged()
+  }
+  return (
+    <div className="flex items-center gap-2 pt-1 border-t border-edge/50 flex-wrap">
+      <span className="stat-label">Set SL / TP</span>
+      <input type="number" step="any" value={stop} onChange={(e) => setStop(e.target.value)}
+        title="stop-loss premium"
+        className="w-24 bg-panel2 border border-down/40 rounded px-2 py-1 text-xs tabular-nums" />
+      <input type="number" step="any" value={target} onChange={(e) => setTarget(e.target.value)}
+        title="take-profit premium"
+        className="w-24 bg-panel2 border border-up/40 rounded px-2 py-1 text-xs tabular-nums" />
+      <button disabled={busy} onClick={save} className="btn">{busy ? '…' : 'Set'}</button>
+      {p.manual_target && <span className="badge bg-blue-500/15 text-blue-300" title="target pinned by you — reinforcement won't move it">TP pinned</span>}
+      {msg && <span className="text-xs text-down">✕ {msg}</span>}
+    </div>
+  )
+}
+
 function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void }) {
   const [busy, setBusy] = useState(false)
   const prem = p.live_premium ?? p.last_premium
@@ -65,6 +98,8 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
         <Cell label="Entry cost" v={inr(p.entry_cost)} />
         <Cell label="Held" v={holdingTime(p.entry_time)} />
       </div>
+
+      <SLTPEditor p={p} onChanged={onChanged} />
 
       <div className="flex items-center gap-2 pt-1 border-t border-edge/50">
         <button disabled={busy} onClick={() => act(() => closePosition(p.instrument_key))}

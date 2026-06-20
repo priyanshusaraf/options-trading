@@ -341,6 +341,47 @@ async def close_position(key: str, request: Request):
         return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
 
 
+class SLTPBody(BaseModel):
+    stop_price: float | None = None
+    target_price: float | None = None
+    stop_pct: float | None = None      # fraction below entry premium (e.g. 0.35)
+    target_pct: float | None = None    # fraction above entry premium (e.g. 0.60)
+
+
+@router.post("/api/positions/{key}/sltp")
+async def set_position_sltp(key: str, body: SLTPBody, request: Request):
+    """Owner override of the stop/target on one open position. Absolute prices or
+    percentages of entry. Setting a target by hand pins it (reinforcement won't
+    auto-extend it); the trailing stop still ratchets up from a manual stop."""
+    r = _runner(request)
+    async with r._lock:
+        pos = r.broker.position_for(key)
+        if not pos:
+            return {"error": "no open position for this instrument"}
+        new_stop = body.stop_price
+        if new_stop is None and body.stop_pct is not None:
+            new_stop = pos.entry_premium * (1 - body.stop_pct)
+        new_target = body.target_price
+        if new_target is None and body.target_pct is not None:
+            new_target = pos.entry_premium * (1 + body.target_pct)
+        stop = new_stop if new_stop is not None else pos.stop_price
+        target = new_target if new_target is not None else pos.target_price
+        if stop <= 0 or target <= 0:
+            return {"error": "stop and target must be positive"}
+        if stop >= target:
+            return {"error": "stop must be below target"}
+        pos.stop_price = stop
+        pos.target_price = target
+        if new_target is not None:
+            pos.manual_target = True
+        r.broker.commit()
+        from app.core.logging import log
+        log.info(f"MANUAL SL/TP {pos.tradingsymbol} -> SL {stop:.2f} / TP {target:.2f}",
+                 instrument=key, event="MANUAL_SLTP", manual=True)
+        return {"ok": True, "key": key,
+                "stop_price": round(stop, 2), "target_price": round(target, 2)}
+
+
 class ManualOpenBody(BaseModel):
     key: str
     direction: str   # "LONG" | "SHORT"
