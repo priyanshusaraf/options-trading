@@ -75,6 +75,7 @@ class Position(Base):
     session_close_premium: Mapped[float] = mapped_column(Float, default=0.0)  # mark at last session close
     last_squareoff_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # date the daily hold/square-off decision was last made (re-arm each session)
     manual_target: Mapped[bool] = mapped_column(Boolean, default=False)  # owner set the target by hand — reinforcement won't auto-extend it
+    gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty

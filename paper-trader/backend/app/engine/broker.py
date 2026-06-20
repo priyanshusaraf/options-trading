@@ -182,6 +182,15 @@ class PaperBroker:
             net_pnl=round(net, 2))
         return tr
 
+    # ── exchange-side stop protection (no-op for paper; LiveBroker overrides) ──
+    def update_stop_protection(self, pos, last_price) -> None:
+        """Sync an exchange-side GTT stop to the (possibly ratcheted) stop price."""
+
+    def reconcile_orphans(self, now: dt.datetime) -> list:
+        """Book any bot position the live account no longer backs (e.g. a GTT fired
+        while the bot was down). No-op on paper."""
+        return []
+
     # ── analytics support ─────────────────────────────────────────────────
     def snapshot(self, now: dt.datetime) -> EquitySnapshot:
         opens = self.open_positions()

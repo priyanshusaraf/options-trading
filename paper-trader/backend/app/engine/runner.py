@@ -71,6 +71,7 @@ class EngineRunner:
         # each session), and the kill switch disarms it again.
         self.armed = False
         self._halt_notified_date = None        # de-dupe the daily-loss-halt alert
+        self._next_reconcile_epoch = 0.0       # throttle live orphan reconciliation
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -252,6 +253,7 @@ class EngineRunner:
                      f"(high {pos.high_water_premium:.2f})", instrument=pos.instrument_key,
                      event="TRAIL")
             pos.stop_price = new_stop
+            self.broker.update_stop_protection(pos, pos.last_premium)  # ratchet the GTT too (live)
 
     # ── lane 3: entries + reinforcement (fresh crossovers) ────────────────
     def process_entries(self) -> None:
@@ -498,9 +500,22 @@ class EngineRunner:
             except Exception:
                 pass
 
+    def _maybe_reconcile_orphans(self) -> None:
+        """Throttled (~30s): book any bot position the live account no longer backs
+        (e.g. its GTT fired while the bot was down). No-op on the paper broker."""
+        now = self.provider.now()
+        epoch = now.timestamp()
+        if epoch >= self._next_reconcile_epoch:
+            self._next_reconcile_epoch = epoch + 30.0
+            try:
+                self.broker.reconcile_orphans(now)
+            except Exception as e:
+                log.error(f"orphan reconcile error: {e}")
+
     async def _signal_iteration(self) -> None:
         async with self._lock:
             self.refresh_params()          # pick up live Settings overrides
+            self._maybe_reconcile_orphans()
             self.scan_signals()
             self.process_entries()
             self.handle_overnight(self.provider.now())   # no-op for mock

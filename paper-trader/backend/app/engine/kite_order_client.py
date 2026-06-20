@@ -11,6 +11,7 @@ by this client — it only ever places the specific orders the LiveBroker hands 
 """
 from __future__ import annotations
 
+from app.engine.gtt import stop_gtt_params
 from app.engine.order_executor import OrderRequest
 
 
@@ -19,6 +20,22 @@ class KiteOrderClient:
         self.kite = kite
         self.product = product
         self.variety = variety
+
+    # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
+    def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,
+                       trigger_price: float, last_price: float) -> str:
+        res = self.kite.place_gtt(**stop_gtt_params(
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
+        tid = res.get("trigger_id") if isinstance(res, dict) else res
+        return str(tid)
+
+    def modify_stop_gtt(self, trigger_id: str, tradingsymbol: str, exchange: str,
+                        qty: int, trigger_price: float, last_price: float):
+        return self.kite.modify_gtt(trigger_id=trigger_id, **stop_gtt_params(
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
+
+    def delete_gtt(self, trigger_id: str):
+        return self.kite.delete_gtt(trigger_id=trigger_id)
 
     def place(self, req: OrderRequest) -> str:
         kw = dict(variety=self.variety, exchange=req.exchange,

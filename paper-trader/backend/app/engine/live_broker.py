@@ -56,6 +56,7 @@ class LiveBroker(PaperBroker):
                                     reason, now, spot, params)
         log.info(f"LIVE FILLED BUY {q.tradingsymbol} @ {res.avg_price:.2f} "
                  f"(order {res.order_id})", instrument=inst.key, event="LIVE_OPEN")
+        self._place_gtt(pos, res.avg_price)   # exchange-side backstop stop
         return pos
 
     def close_position(self, pos, exit_premium, reason, now, spot):
@@ -66,6 +67,7 @@ class LiveBroker(PaperBroker):
                       instrument=pos.instrument_key, event="LIVE_CLOSE_BLOCKED")
             self._notify(f"🚫 CLOSE blocked {pos.tradingsymbol}: {chk.reason}")
             return None
+        gid = pos.gtt_trigger_id   # capture before super() deletes the row
         res = self._execute(OrderRequest(pos.tradingsymbol, pos.exchange, "SELL",
                                          pos.qty, "MARKET", None, tag=TAG))
         if res.status != "FILLED":
@@ -75,4 +77,76 @@ class LiveBroker(PaperBroker):
             return None
         log.info(f"LIVE FILLED SELL {pos.tradingsymbol} @ {res.avg_price:.2f} "
                  f"(order {res.order_id})", instrument=pos.instrument_key, event="LIVE_CLOSE")
-        return super().close_position(pos, res.avg_price, reason, now, spot)
+        sym = pos.tradingsymbol
+        trade = super().close_position(pos, res.avg_price, reason, now, spot)
+        # the bot exited itself — cancel the backstop so it can NEVER fire on a
+        # position we no longer hold (which would sell into your account).
+        self._cancel_gtt(gid, sym)
+        return trade
+
+    # ── GTT safety-net stop ───────────────────────────────────────────────
+    def _gtt_enabled(self) -> bool:
+        from app.core.runtime_config import effective
+        return bool(effective(self.settings).get("gtt_stop_enabled", True))
+
+    def _place_gtt(self, pos, last_price) -> None:
+        if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:
+            return
+        try:
+            tid = self.client.place_stop_gtt(pos.tradingsymbol, pos.exchange, pos.qty,
+                                             pos.stop_price, last_price)
+            pos.gtt_trigger_id = tid
+            self.s.commit()
+            log.info(f"GTT stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (gtt {tid})",
+                     instrument=pos.instrument_key, event="GTT_PLACE")
+        except Exception as e:
+            log.error(f"GTT place failed {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="GTT_FAIL")
+            self._notify(f"⚠️ GTT backstop NOT placed for {pos.tradingsymbol} — "
+                         f"bot-managed stop only ({e})")
+
+    def _cancel_gtt(self, gid, sym: str = "") -> None:
+        if not gid:
+            return
+        try:
+            self.client.delete_gtt(gid)
+            log.info(f"GTT {gid} cancelled ({sym})", event="GTT_DELETE")
+        except Exception as e:
+            log.error(f"GTT {gid} cancel failed: {e}", event="GTT_FAIL")
+            self._notify(f"⚠️ could not cancel GTT {gid} for {sym} — check/cancel it on Zerodha")
+
+    def update_stop_protection(self, pos, last_price) -> None:
+        gid = getattr(pos, "gtt_trigger_id", None)
+        if not gid or not self._gtt_enabled():
+            return
+        lp = last_price or pos.last_premium or pos.entry_premium
+        try:
+            self.client.modify_stop_gtt(gid, pos.tradingsymbol, pos.exchange, pos.qty,
+                                        pos.stop_price, lp)
+            log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
+                     instrument=pos.instrument_key, event="GTT_MODIFY")
+        except Exception as e:
+            log.error(f"GTT modify failed {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="GTT_FAIL")
+
+    def reconcile_orphans(self, now) -> list:
+        """If the live account no longer backs a bot position (a GTT fired, you
+        exited it, or it expired — typically while the bot was down), book it closed
+        in the ledger WITHOUT sending any order, and cancel its GTT."""
+        from app.engine.broker import PaperBroker
+        from app.engine.reconcile import find_orphans
+        acct = self.provider.account_positions()
+        booked = []
+        for pos in find_orphans(self.open_positions(), acct):
+            if (now - pos.entry_time).total_seconds() < 60:
+                continue  # just opened — the account feed may simply be lagging
+            gid, sym = pos.gtt_trigger_id, pos.tradingsymbol
+            prem = pos.last_premium or pos.entry_premium
+            PaperBroker.close_position(self, pos, prem, "RECONCILED_EXTERNAL_EXIT",
+                                       now, pos.last_spot)   # ledger-only, no order
+            self._cancel_gtt(gid, sym)
+            self._notify(f"ℹ️ {sym} is no longer in your account (GTT fired, manual "
+                         f"exit, or expiry) — booked closed at ~{prem:.2f}; verify the "
+                         f"fill on Zerodha")
+            booked.append(pos.instrument_key)
+        return booked

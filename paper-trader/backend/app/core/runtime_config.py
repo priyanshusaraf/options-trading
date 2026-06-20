@@ -32,7 +32,7 @@ OVERRIDABLE = (
     "notify_enabled", "notify_on_signal", "alert_proximity_pct",
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
-    "bot_capital_cap", "capital_reserve",
+    "bot_capital_cap", "capital_reserve", "gtt_stop_enabled",
 )
 
 

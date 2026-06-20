@@ -17,6 +17,9 @@ class FakeClient:
         self._status = status
         self.placed = []
         self._req = None
+        self.gtt_placed = []
+        self.gtt_modified = []
+        self.gtt_deleted = []
 
     def place(self, req):
         self.placed.append(req)
@@ -26,6 +29,16 @@ class FakeClient:
     def status(self, order_id):
         return {"status": self._status, "filled_qty": self._req.qty,
                 "avg_price": self.fill_price, "reason": "x"}
+
+    def place_stop_gtt(self, tradingsymbol, exchange, qty, trigger_price, last_price):
+        self.gtt_placed.append((tradingsymbol, trigger_price))
+        return "GTT-1"
+
+    def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price):
+        self.gtt_modified.append((trigger_id, trigger_price))
+
+    def delete_gtt(self, trigger_id):
+        self.gtt_deleted.append(trigger_id)
 
 
 def _broker(client, account=None):
@@ -82,3 +95,47 @@ def test_close_sells_when_account_backs_the_position():
     assert tr is not None
     assert b.position_for("NIFTY") is None
     assert c.placed[-1].side == "SELL" and tr.exit_premium == 140.0
+
+
+# ── GTT safety-net stop ──────────────────────────────────────────────────────
+def test_open_places_a_gtt_backstop():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, _ = _open(b, c)
+    assert pos.gtt_trigger_id == "GTT-1"
+    assert c.gtt_placed and c.gtt_placed[0][0] == pos.tradingsymbol
+
+
+def test_trail_modifies_the_gtt():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, _ = _open(b, c)
+    pos.stop_price = 95.0
+    b.update_stop_protection(pos, 130.0)
+    assert c.gtt_modified and c.gtt_modified[0] == ("GTT-1", 95.0)
+
+
+def test_self_close_cancels_the_gtt():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol,
+                                             "quantity": pos.qty}]
+    b.close_position(pos, 140.0, "TARGET", b.provider.now(), chain.spot)
+    assert c.gtt_deleted == ["GTT-1"]      # backstop removed when the bot exits itself
+
+
+def test_reconcile_orphan_books_closed_without_an_order():
+    import datetime as dt
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # older than the 60s grace
+    b.commit()
+    b.provider.account_positions = lambda: []                    # vanished from the account
+    placed_before = len(c.placed)
+    booked = b.reconcile_orphans(b.provider.now())
+    assert "NIFTY" in booked
+    assert b.position_for("NIFTY") is None                       # booked closed in the ledger
+    assert len(c.placed) == placed_before                        # but NO sell order sent
+    assert c.gtt_deleted == ["GTT-1"]                            # and its GTT cancelled

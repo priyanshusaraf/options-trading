@@ -42,6 +42,7 @@ const META: Record<string, { label: string; help: string }> = {
   max_daily_loss: { label: 'Daily loss halt (₹)', help: 'Stop opening new trades for the rest of the day once realized net loss reaches this. 0 = off. Recommended 5000.' },
   bot_capital_cap: { label: 'Bot capital cap (₹)', help: 'Hard ceiling on what the bot may ever deploy. 0 = no extra cap. Protects your capital even if Kite briefly mis-reports margin.' },
   capital_reserve: { label: 'Capital reserve (₹)', help: 'Live: account margin kept free for your own trades — the bot never dips into it.' },
+  gtt_stop_enabled: { label: 'Exchange-side GTT stop', help: 'Live only: also place a Good-Till-Triggered stop on Zerodha so the position is protected even if the bot/laptop/internet goes down. Trails with the bot stop; cancelled when the bot exits.' },
 }
 
 const GROUPS: [string, (k: string) => boolean][] = [
@@ -51,7 +52,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Option-data cache', (k) => k.startsWith('option_cache_')],
   ['Risk & cadence', (k) => ['stop_loss_pct', 'target_pct', 'max_stale_seconds', 'position_loop_seconds', 'signal_loop_seconds'].includes(k)],
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
-  ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'bot_capital_cap' || k === 'capital_reserve'],
+  ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'bot_capital_cap' || k === 'capital_reserve' || k === 'gtt_stop_enabled'],
 ]
 
 function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
