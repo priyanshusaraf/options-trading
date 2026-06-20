@@ -32,6 +32,9 @@ const META: Record<string, { label: string; help: string }> = {
   max_stale_seconds: { label: 'Max stale (sec)', help: 'A mark older than this is stale — no SL/TP fires on it.' },
   position_loop_seconds: { label: 'Risk loop cadence (sec)', help: 'Fast lane: mark + trail + SL/TP.' },
   signal_loop_seconds: { label: 'Signal loop cadence (sec)', help: 'Slow lane: scan candles + entries.' },
+  notify_enabled: { label: 'Notifications enabled', help: 'Master switch for Telegram alerts. No-op unless TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set in .env.' },
+  notify_on_signal: { label: 'Alert on every signal', help: 'Also ping on each fresh entry signal — can be noisy. Default off.' },
+  alert_proximity_pct: { label: 'Near-SL/TP alert threshold', help: 'Warn when the premium comes within this fraction of the stop or target level. Recommended 0.10 (10%).' },
 }
 
 const GROUPS: [string, (k: string) => boolean][] = [
@@ -40,6 +43,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Trailing stop', (k) => k.startsWith('trail_')],
   ['Option-data cache', (k) => k.startsWith('option_cache_')],
   ['Risk & cadence', (k) => ['stop_loss_pct', 'target_pct', 'max_stale_seconds', 'position_loop_seconds', 'signal_loop_seconds'].includes(k)],
+  ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
 ]
 
 function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {

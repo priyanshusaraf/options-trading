@@ -169,6 +169,35 @@ DB-backed (`universe_instruments`) and grows as you add instruments.
 
 ---
 
+## Stop-loss / take-profit control
+
+Two levels, both live-editable:
+
+- **Global default** — `stop_loss_pct` / `target_pct` in the **Settings** view set
+  the −%/+% applied to **every new entry** (bounds-validated). Defaults −35% / +60%.
+- **Per-position** — on the **Active Positions** cockpit each open position has an
+  editable **Set SL / TP** row: type a new stop and target premium and hit *Set*.
+  A hand-set **target is pinned** (a reinforcement won't push it out); the trailing
+  stop still ratchets upward from wherever you put it.
+
+## Notifications (Telegram, free)
+
+Get a phone ping when a position **nears its SL/TP**, plus on every fill and exit —
+so you don't have to watch the screen.
+
+1. Message **@BotFather** → `/newbot` → copy the **bot token**.
+2. Message your new bot once, then open
+   `https://api.telegram.org/bot<token>/getUpdates` and copy the `chat.id`.
+3. Put both in `backend/.env` as `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` and
+   restart the backend. (Blank = notifications off; the engine is unaffected.)
+
+Tune in **Settings → Notifications**: `alert_proximity_pct` (how close to the
+SL/TP level triggers the "approaching" warning — default 10%) and `notify_on_signal`
+(also ping on each fresh entry signal; off by default). The "approaching" alert
+fires **once** on entering the zone and re-arms when the premium leaves it.
+
+---
+
 ## Verify it yourself
 
 ```bash

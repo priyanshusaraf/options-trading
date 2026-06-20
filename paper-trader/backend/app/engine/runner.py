@@ -34,6 +34,7 @@ from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
+from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
 from app.strategy.signals import compute_signals, to_payload
@@ -55,6 +56,7 @@ class EngineRunner:
         self.intervals: dict[str, str] = self._load_intervals()   # per-instrument live TF
         self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
         self.health = HealthTracker()
+        self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
@@ -194,11 +196,18 @@ class EngineRunner:
                     pos.direction, pos.stop_price, pos.target_price, premium,
                     st.get("long_exit", False), st.get("short_exit", False))
                 if should:
-                    self.broker.close_position(pos, premium, reason, now, spot)
+                    trade = self.broker.close_position(pos, premium, reason, now, spot)
+                    if self.params.get("notify_enabled", True):
+                        self.notifier.closed(trade)
                     opens.pop(key, None)
                     if key in self.state:
                         self.state[key]["position"] = None
                     continue
+                # not exiting — warn (once) if the premium is nearing the SL or TP
+                if self.params.get("notify_enabled", True):
+                    self.notifier.check_proximity(
+                        key, pos.tradingsymbol, premium, pos.stop_price, pos.target_price,
+                        self.params.get("alert_proximity_pct", 0.10))
             d = pos.to_dict()
             ticks[key] = {
                 "instrument": key, "tradingsymbol": pos.tradingsymbol,
@@ -293,8 +302,10 @@ class EngineRunner:
                          f"signals funded by priority")
             for c in alloc.funded:
                 inst, direction, pick, chain = meta[c.instrument_key]
-                self.broker.open_position(inst, direction, pick.chosen,
-                                          pick.reason, now, chain.spot, self.params)
+                pos = self.broker.open_position(inst, direction, pick.chosen,
+                                                pick.reason, now, chain.spot, self.params)
+                if self.params.get("notify_enabled", True):
+                    self.notifier.opened(pos)
                 if c.instrument_key in self.state:
                     p = self.broker.position_for(c.instrument_key)
                     self.state[c.instrument_key]["position"] = p.to_dict() if p else None

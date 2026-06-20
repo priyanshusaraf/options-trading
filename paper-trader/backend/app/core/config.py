@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     kite_api_key: str = Field(default="", validation_alias="KITE_API_KEY")
     kite_api_secret: str = Field(default="", validation_alias="KITE_API_SECRET")
 
+    # Telegram notifications (optional). Like the Kite creds these are NOT
+    # PT_-prefixed. If either is empty, notifications are simply off.
+    telegram_bot_token: str = Field(default="", validation_alias="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: str = Field(default="", validation_alias="TELEGRAM_CHAT_ID")
+
     # capital & risk
     initial_capital: float = 50_000.0
     stop_loss_pct: float = 0.35
@@ -98,6 +103,11 @@ class Settings(BaseSettings):
     block_overnight_into_weekend: bool = False
     max_holding_days: int = 5                # hard cap on holding period (trading days)
     square_off_buffer_minutes: float = 15.0  # decide / square-off this long before session close
+
+    # ── notifications (Telegram) ───────────────────────────────────────────
+    notify_enabled: bool = True              # master switch (no-op anyway if creds unset)
+    notify_on_signal: bool = False           # also ping on every fresh entry signal (noisy)
+    alert_proximity_pct: float = 0.10        # warn when premium is within this fraction of the SL/TP level
 
     # ── option-data research cache (persistent, growing dataset) ────────────
     option_cache_enabled: bool = True

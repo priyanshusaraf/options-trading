@@ -29,6 +29,7 @@ OVERRIDABLE = (
     "block_overnight_into_weekend", "max_holding_days", "square_off_buffer_minutes",
     "option_cache_enabled", "option_cache_snapshot_minutes",
     "max_stale_seconds", "position_loop_seconds", "signal_loop_seconds",
+    "notify_enabled", "notify_on_signal", "alert_proximity_pct",
 )
 
 
@@ -57,6 +58,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "max_stale_seconds": (1.0, 3600.0),
     "position_loop_seconds": (0.5, 600.0),   # floor keeps the risk loop under Kite's quote limit
     "signal_loop_seconds": (0.5, 600.0),
+    "alert_proximity_pct": (0.01, 0.90),
 }
 
 
