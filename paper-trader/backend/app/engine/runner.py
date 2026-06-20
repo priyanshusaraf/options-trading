@@ -75,6 +75,7 @@ class EngineRunner:
         self.armed = False
         self._halt_notified_date = None        # de-dupe the daily-loss-halt alert
         self._next_reconcile_epoch = 0.0       # throttle live orphan reconciliation
+        self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -538,12 +539,58 @@ class EngineRunner:
             except Exception as e:
                 log.error(f"orphan reconcile error: {e}")
 
+    # ── option-chain research cache (whole watchlist, not just traded names) ─
+    def cache_option_chains(self, now) -> int:
+        """Snapshot the option chain of EVERY enabled, in-session, option-bearing
+        instrument into the OptionData research dataset — not only the ones a
+        signal happened to fire on. Kite sells no historical option chains / IV /
+        OI / greeks, so anything not snapshotted live today is unrecoverable. Each
+        write is deduped to `option_cache_snapshot_minutes` per instrument by
+        `persist_chain`, so calling this often is cheap."""
+        if not self.params.get("option_cache_enabled", True):
+            return 0
+        from app.options.cache import persist_chain
+        snap_min = self.params.get("option_cache_snapshot_minutes", 15.0)
+        written = 0
+        for key in list(self.enabled):
+            inst = get_instrument(key)
+            if not inst.has_options or not self.provider.is_tradable_now(inst):
+                continue
+            try:
+                chain = self.provider.get_option_chain(inst)
+                if chain:
+                    written += persist_chain(chain, inst, now, snap_min)
+            except Exception as e:
+                if self.health.should_log_failure("quote"):
+                    log.error(f"option cache sweep failed: {e}", instrument=key)
+        if written:
+            log.info(f"option research cache +{written} rows across the watchlist",
+                     event="OPTION_CACHE")
+        return written
+
+    def _maybe_cache_chains(self) -> None:
+        """Throttled watchlist option-chain snapshot (cadence = snapshot minutes,
+        floored at 60s). Off when option_cache_enabled is false."""
+        if not self.params.get("option_cache_enabled", True):
+            return
+        now = self.provider.now()
+        epoch = now.timestamp()
+        if epoch < self._next_cache_sweep_epoch:
+            return
+        snap_min = self.params.get("option_cache_snapshot_minutes", 15.0)
+        self._next_cache_sweep_epoch = epoch + max(60.0, snap_min * 60.0)
+        try:
+            self.cache_option_chains(now)
+        except Exception as e:
+            log.error(f"option cache sweep error: {e}")
+
     async def _signal_iteration(self) -> None:
         async with self._lock:
             self.refresh_params()          # pick up live Settings overrides
             self._maybe_reconcile_orphans()
             self.scan_signals()
             self.process_entries()
+            self._maybe_cache_chains()     # grow the watchlist-wide options dataset
             self.handle_overnight(self.provider.now())   # no-op for mock
             self.broker.snapshot(self.provider.now())
             self.tick_count += 1
