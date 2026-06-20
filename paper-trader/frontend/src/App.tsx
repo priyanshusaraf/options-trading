@@ -8,6 +8,7 @@ import EngineView from './views/EngineView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
 import DashboardView from './views/DashboardView'
+import TradesView from './views/TradesView'
 import SettingsView from './views/SettingsView'
 
 const TABS: [string, string][] = [
@@ -17,6 +18,7 @@ const TABS: [string, string][] = [
   ['engine', 'Engine / Logs'],
   ['options', 'Options Calc'],
   ['backtests', 'Backtests'],
+  ['trades', 'Trade Log'],
   ['dashboard', 'Dashboard'],
   ['settings', 'Settings'],
 ]
@@ -33,6 +35,7 @@ function Shell() {
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}
         {tab === 'backtests' && <BacktestsView />}
+        {tab === 'trades' && <TradesView />}
         {tab === 'dashboard' && <DashboardView />}
         {tab === 'settings' && <SettingsView />}
       </main>

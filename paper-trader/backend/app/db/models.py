@@ -152,6 +152,12 @@ class Trade(Base):
             "qty": self.qty,
             "entry_premium": round(self.entry_premium, 2),
             "exit_premium": round(self.exit_premium, 2),
+            "entry_spot": round(self.entry_spot, 2) if self.entry_spot else None,
+            "exit_spot": round(self.exit_spot, 2) if self.exit_spot else None,
+            "spot_move_pct": (round((self.exit_spot - self.entry_spot) / self.entry_spot * 100, 2)
+                              if self.entry_spot and self.exit_spot else None),
+            "premium_move_pct": (round((self.exit_premium - self.entry_premium) / self.entry_premium * 100, 2)
+                                 if self.entry_premium else None),
             "entry_time": self.entry_time.isoformat(),
             "exit_time": self.exit_time.isoformat(),
             "exit_reason": self.exit_reason,

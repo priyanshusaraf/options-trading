@@ -84,6 +84,9 @@ export interface TradeDTO {
   exit_premium: number; entry_time: string; exit_time: string; exit_reason: string
   gross_pnl: number; charges_total: number; net_pnl: number; return_pct: number
   holding_minutes: number; win: boolean
+  entry_spot: number | null; exit_spot: number | null
+  spot_move_pct: number | null; premium_move_pct: number | null
+  held_overnight?: boolean
 }
 
 // ── backtest ────────────────────────────────────────────────────────────────
