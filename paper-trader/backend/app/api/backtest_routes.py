@@ -99,9 +99,13 @@ def export(run_id: int | None = None):
     """Download a run's results as CSV (so a sweep's output survives outside the
     app). Defaults to the latest run."""
     cols = ["instrument_key", "name", "segment", "interval", "trades", "wins",
-            "win_rate", "profit_factor", "max_drawdown_pct", "return_pct",
-            "net_pnl", "gross_pnl", "charges", "expectancy", "cagr",
-            "calmar", "consistency", "max_consec_losses", "time_underwater_pct",
+            "win_rate", "win_rate_realised", "open_at_end", "profit_factor",
+            "max_drawdown_pct", "worst_mae_pct", "return_pct", "return_pct_realised",
+            "bh_return_pct", "net_pnl", "worst_trade_pnl", "gross_pnl", "charges",
+            "expectancy", "cagr", "calmar", "consistency", "sharpe",
+            "max_consec_losses", "time_underwater_pct",
+            "notional", "lots", "affordable",
+            "first_ts", "last_ts", "effective_days", "clamped",
             "bars", "from_cache"]
     with SessionLocal() as s:
         if run_id is None:
@@ -133,22 +137,48 @@ def results(run_id: int | None = None, interval: str | None = None,
         rows = list(s.scalars(q))
 
     out = []
+    # survivorship disclosure (DV-1): cells excluded from the visible set, by reason,
+    # so the visible list is never mistaken for the whole universe.
+    skipped = 0
+    skipped_errored = 0          # candle/window/out-of-range errors (silently dropped before)
+    skipped_low_trades = 0       # too few trades to be meaningful
+    skipped_filtered = 0         # failed the user's win%/PF/DD/return filters
+    unaffordable = 0             # one lot > capital — surfaced (badged), NOT hidden
     for r in rows:
-        if r.error or r.trades < min_trades:
-            continue
         if interval and r.interval != interval:
+            continue
+        if r.error:
+            skipped += 1
+            skipped_errored += 1
+            continue
+        # Unaffordable cells are a DISTINCT, non-error status: keep them visible
+        # (badged) and exempt from the trade-count filter so the universe shows the
+        # instrument can't be traded at this capital, rather than vanishing.
+        if not r.affordable:
+            unaffordable += 1
+            out.append(r.summary())
+            continue
+        if r.trades < min_trades:
+            skipped += 1
+            skipped_low_trades += 1
             continue
         pf = r.profit_factor if r.profit_factor is not None else 1e9
         if (r.win_rate < min_win_rate or pf < min_profit_factor
                 or r.max_drawdown_pct > max_drawdown or r.return_pct < min_return):
+            skipped += 1
+            skipped_filtered += 1
             continue
         out.append(r.summary())
 
     # lower-is-better metrics sort ascending; everything else descending
     reverse = sort not in ("max_drawdown_pct", "charges", "max_consec_losses",
-                           "time_underwater_pct")
+                           "time_underwater_pct", "worst_mae_pct")
     out.sort(key=lambda d: (d.get(sort) if d.get(sort) is not None else -1e18), reverse=reverse)
-    return {"run_id": run_id, "count": len(out), "results": out[:limit]}
+    return {"run_id": run_id, "count": len(out), "results": out[:limit],
+            "skipped": skipped, "unaffordable": unaffordable,
+            "skipped_breakdown": {
+                "errored": skipped_errored, "low_trades": skipped_low_trades,
+                "filtered": skipped_filtered}}
 
 
 @router.get("/result/{key}/{interval}")
@@ -165,5 +195,6 @@ def result_detail(key: str, interval: str, run_id: int | None = None):
             return {"error": "no such result"}
         d = r.summary()
         d["equity_curve"] = json.loads(r.curve_json or "[]")
+        d["bh_curve"] = json.loads(r.bh_curve_json or "[]")
         d["trades"] = json.loads(r.trades_json or "[]")
         return d

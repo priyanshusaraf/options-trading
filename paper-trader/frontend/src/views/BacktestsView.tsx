@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LineChart } from '../components/Charts'
+import { LineChart, MultiLineChart } from '../components/Charts'
 import {
   startSweep, getSweepStatus, getSweepResults, getSweepResult,
   addToPortfolio, getSweepRuns, sweepExportUrl, getSweepInstruments, type SweepOpts,
@@ -16,8 +16,16 @@ const INTERVALS: [string, string][] = [
 // preset lookback windows (label -> days; null = entire available history)
 const PRESETS: [string, number | null][] = [
   ['1w', 7], ['2w', 14], ['1m', 30], ['3m', 90], ['6m', 180],
-  ['1y', 365], ['3y', 1095], ['7y', 2555], ['10y', 3650], ['Max', null],
+  ['1y', 365], ['3y', 1095], ['7y', 2555], ['10y', 3650], ['Entire history', null],
 ]
+
+// per-row span label "DD Mon → DD Mon" from the true first/last candle epochs.
+function spanLabel(r: BTResult): string {
+  if (!r.first_ts || !r.last_ts) return '—'
+  const f = dt(new Date(r.first_ts * 1000).toISOString())
+  const t = dt(new Date(r.last_ts * 1000).toISOString())
+  return `${f} → ${t}`
+}
 
 function Num({ label, value, set, step = 1 }:
   { label: string; value: number; set: (n: number) => void; step?: number }) {
@@ -37,6 +45,9 @@ export default function BacktestsView() {
   const [run, setRun] = useState<BacktestRun | null>(null)
   const [running, setRunning] = useState(false)
   const [rows, setRows] = useState<BTResult[]>([])
+  // survivorship disclosure: cells excluded from / flagged in the visible set
+  const [skipped, setSkipped] = useState(0)
+  const [unaffordable, setUnaffordable] = useState(0)
   const [drill, setDrill] = useState<BTResult | null>(null)
   const [added, setAdded] = useState<Set<string>>(new Set())
   // browse history: null = latest run
@@ -63,7 +74,11 @@ export default function BacktestsView() {
   const [sort, setSort] = useState<keyof BTResult>('return_pct')
 
   const loadResults = () => getSweepResults({ min_trades: 1, run_id: viewRunId })
-    .then((d) => setRows(d.results || []))
+    .then((d) => {
+      setRows(d.results || [])
+      setSkipped(d.skipped ?? 0)
+      setUnaffordable(d.unaffordable ?? 0)
+    })
   const loadRuns = () => getSweepRuns().then((d) => setRunsList(d.runs || []))
 
   useEffect(() => {
@@ -141,6 +156,14 @@ export default function BacktestsView() {
       return ASC.has(sort) ? av - bv : bv - av
     })
 
+  // scan-level win/loss tally + total Net P&L over the VISIBLE set — so a
+  // winners-on-top sort (or survivorship) can't be misread as "the strategy
+  // never loses". Counts on Net P&L; unaffordable rows (no trades) are excluded.
+  const tradable = view.filter((r) => r.affordable !== false)
+  const winCount = tradable.filter((r) => r.net_pnl > 0).length
+  const lossCount = tradable.filter((r) => r.net_pnl < 0).length
+  const totalNet = tradable.reduce((s, r) => s + (r.net_pnl || 0), 0)
+
   const Th = ({ k, children, right, title }: { k?: keyof BTResult; children: any; right?: boolean; title?: string }) => (
     <th title={title} onClick={() => k && setSort(k)}
       className={`py-1 pr-3 ${right ? 'text-right' : 'text-left'} ${k ? 'cursor-pointer hover:text-zinc-200' : ''} ${sort === k ? 'text-zinc-100' : ''}`}>
@@ -153,21 +176,26 @@ export default function BacktestsView() {
       {/* what this backtest actually is — so the numbers are read correctly */}
       <div className="card p-3 border-amber-400/40 bg-amber-400/5 text-[11px] leading-relaxed text-amber-200/90">
         <span className="font-semibold text-amber-300">How to read this:</span> this is a
-        <b> signal-quality screen on the underlying</b> (futures/cash, <b>1 lot, bought outright — no leverage</b>),
+        <b> signal-quality screen on the underlying</b> (futures/cash, bought outright — <b>no leverage</b>),
         net of the full charge stack, with pure strategy-reversal exits. It does <b>NOT</b> model the
         option premium, theta decay, or the live SL/TP — so it is <b>not a live options-P&amp;L forecast</b>.
-        Return% / equity / drawdown are <b>compounding % on the capital actually deployed</b> (the position's
-        own notional), so they're comparable across instruments and never imply a &gt;100% account swing.
-        Prefer <b>smooth, consistent curves</b> — high <b>Calmar</b>, high <b>Consistency</b>, low <b>Underwater%</b>
-        and short loss streaks — over raw return; a choppy underlying curve usually loses in options even when
-        it's green here (theta punishes the small losses).
+        <b> Sizing:</b> each position is the <b>largest whole number of lots that fits the capital, no leverage</b>;
+        an instrument whose single lot already costs more than the capital is shown as
+        <b> &lsquo;lot &gt; capital&rsquo;</b> (not tradable at this size), never silently sized to 1 lot.
+        Return% / equity / drawdown are <b>compounding % on the position&rsquo;s own notional</b>, so they&rsquo;re
+        comparable across instruments and never imply a &gt;100% account swing; <b>Net P&amp;L is on that notional,
+        not a 50k account</b>. Drawdown / Underwater% are <b>close-to-close</b> (intra-trade excursion not modelled —
+        see <b>worst-trade</b> for tail risk). <b>Consistency</b> is a <b>per-trade hit ratio (not annualised — not a
+        Sharpe)</b>; <b>Sharpe</b> is the annualised, cross-timeframe-comparable ratio. Every row also shows
+        <b> buy-and-hold</b> over the same span so a real edge is distinguishable from beta. Prefer
+        <b> smooth, consistent curves</b> that beat hold — over raw return.
       </div>
 
       {/* sweep controls */}
       <div className="card p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="stat-label">Strategy sweep — EMA50 + z-score on the underlying, net of all charges</div>
-          <span className="text-[11px] text-muted">1 lot · ₹50,000 base · pure-strategy exits</span>
+          <span className="text-[11px] text-muted">sized to capital, no leverage · pure-strategy exits</span>
         </div>
         <div className="flex items-end gap-4 flex-wrap">
           <div className="flex flex-col gap-1">
@@ -305,7 +333,17 @@ export default function BacktestsView() {
             {INTERVALS.map(([label, v]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </label>
-        <span className="ml-auto text-[11px] text-muted self-center">{view.length} of {rows.length} results</span>
+        <span className="ml-auto text-[11px] text-muted self-center flex items-center gap-2 flex-wrap justify-end">
+          <span>{view.length} of {rows.length} shown</span>
+          <span className="text-zinc-400">·</span>
+          <span><b className="text-up">{winCount} win</b> / <b className="text-down">{lossCount} loss</b></span>
+          <span className="text-zinc-400">·</span>
+          <span>net <b className={pnlColor(totalNet)}>{signedInr(totalNet)}</b></span>
+          {unaffordable > 0 && (<><span className="text-zinc-400">·</span>
+            <span className="text-amber-400/80" title="one lot's notional exceeds the capital — not tradable at this size">{unaffordable} unaffordable</span></>)}
+          {skipped > 0 && (<><span className="text-zinc-400">·</span>
+            <span className="text-amber-400/80" title="cells excluded: insufficient history / out-of-range / errored / below filters">{skipped} skipped</span></>)}
+        </span>
       </div>
 
       {/* results table */}
@@ -315,38 +353,54 @@ export default function BacktestsView() {
             <tr>
               <Th k="instrument_key">Instrument</Th>
               <Th k="interval">TF</Th>
+              <Th k="effective_days" right title="actual first→last candle span for THIS interval (clamped per Kite's per-timeframe ceiling) — never compare timeframes on different spans">Span</Th>
               <Th k="trades" right>Trades</Th>
               <Th k="win_rate" right>Win%</Th>
               <Th k="profit_factor" right>PF</Th>
-              <Th k="max_drawdown_pct" right>Max DD%</Th>
+              <Th k="max_drawdown_pct" right title="close-to-close drawdown (intra-trade excursion not modelled)">Max DD%</Th>
               <Th k="calmar" right title="CAGR ÷ max drawdown — return per unit of pain (higher = smoother)">Calmar</Th>
+              <Th k="sharpe" right title="annualised Sharpe = (mean/std)×√(trades/year) — cross-timeframe comparable">Sharpe</Th>
               <Th k="time_underwater_pct" right title="% of the curve spent below its prior peak (lower = smoother)">U/W%</Th>
               <Th k="max_consec_losses" right title="longest losing streak (lower = smoother)">Streak</Th>
               <Th k="return_pct" right>Return%</Th>
-              <Th k="net_pnl" right>Net P&L</Th>
+              <Th k="bh_return_pct" right title="buy-and-hold return of the underlying over the same span — beat this to show real edge over beta">vs hold</Th>
+              <Th k="net_pnl" right title="Net P&L is on this position's notional, not a 50k account">Net P&L</Th>
+              <Th k="notional" right title="the position's deployed notional — the denominator Net P&L is measured against">Notional</Th>
+              <Th k="worst_trade_pnl" right title="single most-negative trade (tail risk at a glance)">Worst</Th>
               <th className="py-1 text-right">Add</th>
             </tr>
           </thead>
           <tbody>
             {view.length === 0 && (
-              <tr><td colSpan={12} className="py-8 text-center text-muted">
+              <tr><td colSpan={17} className="py-8 text-center text-muted">
                 {running ? 'sweep running — results stream in…' : 'no results — run a sweep above'}</td></tr>
             )}
-            {view.map((r) => (
+            {view.map((r) => {
+              const unaff = r.affordable === false
+              return (
               <tr key={r.id} onClick={() => setDrill(r)}
-                className="border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3">
+                className={`border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3 ${unaff ? 'opacity-50' : ''}`}>
                 <td className="font-semibold text-zinc-100">{r.instrument_key}
-                  {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}</td>
+                  {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}
+                  {unaff && <span className="badge bg-amber-500/20 text-amber-300 ml-1" title="one lot's notional exceeds the capital — not tradable at this size">lot &gt; capital</span>}</td>
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
-                <td className="text-right">{r.trades}</td>
-                <td className="text-right">{num(r.win_rate, 0)}</td>
-                <td className="text-right">{r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)}</td>
-                <td className="text-right text-down">{num(r.max_drawdown_pct, 1)}</td>
-                <td className={`text-right ${(r.calmar ?? 0) >= 1 ? 'text-up' : 'text-zinc-300'}`}>{r.calmar == null ? '—' : num(r.calmar, 2)}</td>
-                <td className="text-right text-muted">{r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0)}</td>
-                <td className="text-right text-muted">{r.max_consec_losses ?? '—'}</td>
-                <td className={`text-right ${pnlColor(r.return_pct)}`}>{num(r.return_pct, 1)}</td>
-                <td className={`text-right ${pnlColor(r.net_pnl)}`}>{signedInr(r.net_pnl)}</td>
+                <td className="text-right text-muted whitespace-nowrap" title={r.first_ts ? `${dt(new Date(r.first_ts * 1000).toISOString())} → ${dt(new Date(r.last_ts * 1000).toISOString())}` : ''}>
+                  {spanLabel(r)}
+                  {r.clamped && <span className="badge bg-amber-500/15 text-amber-300 ml-1" title="requested span exceeded Kite's per-timeframe ceiling — coverage was clamped">clamped</span>}
+                </td>
+                <td className="text-right">{unaff ? '—' : r.trades}</td>
+                <td className="text-right">{unaff ? '—' : num(r.win_rate, 0)}</td>
+                <td className="text-right">{unaff ? '—' : (r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2))}</td>
+                <td className="text-right text-down">{unaff ? '—' : num(r.max_drawdown_pct, 1)}</td>
+                <td className={`text-right ${(r.calmar ?? 0) >= 1 ? 'text-up' : 'text-zinc-300'}`}>{unaff || r.calmar == null ? '—' : num(r.calmar, 2)}</td>
+                <td className="text-right text-muted">{unaff || r.sharpe == null ? '—' : num(r.sharpe, 2)}</td>
+                <td className="text-right text-muted">{unaff || r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0)}</td>
+                <td className="text-right text-muted">{unaff ? '—' : (r.max_consec_losses ?? '—')}</td>
+                <td className={`text-right ${pnlColor(r.return_pct)}`}>{unaff ? '—' : num(r.return_pct, 1)}</td>
+                <td className={`text-right ${r.bh_return_pct == null ? 'text-muted' : pnlColor(r.bh_return_pct)}`}>{r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1)}</td>
+                <td className={`text-right ${pnlColor(r.net_pnl)}`}>{unaff ? '—' : signedInr(r.net_pnl)}</td>
+                <td className="text-right text-muted">{r.notional ? inr(r.notional) : '—'}</td>
+                <td className={`text-right ${r.worst_trade_pnl < 0 ? 'text-down' : 'text-muted'}`}>{unaff || !r.worst_trade_pnl ? '—' : signedInr(r.worst_trade_pnl)}</td>
                 <td className="text-right">
                   <button onClick={(e) => { e.stopPropagation(); add(r) }}
                     className={`badge ${added.has(r.instrument_key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
@@ -354,7 +408,8 @@ export default function BacktestsView() {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -370,14 +425,24 @@ function Drill({ r, onClose, onAdd, added }:
   const [detail, setDetail] = useState<any>(null)
   useEffect(() => { getSweepResult(r.instrument_key, r.interval, r.run_id).then(setDetail) }, [r])
   const curve = (detail?.equity_curve || []).map((p: any) => ({ time: p.time, value: p.value }))
+  // buy-and-hold overlay, re-based to the equity curve's start so both lines
+  // share an index origin and the strategy's edge-vs-beta is visible.
+  const bhRaw = (detail?.bh_curve || []) as { time: number; value: number }[]
+  const startVal = curve[0]?.value ?? 0
+  const bhBase = bhRaw[0]?.value ?? 0
+  const bhCurve = (bhBase && startVal)
+    ? bhRaw.map((p) => ({ time: p.time, value: (p.value / bhBase) * startVal }))
+    : []
   const trades: BTTradeDTO[] = detail?.trades || []
   // the live engine runs 5m/15m/30m/60m candles (per-instrument); 1m & 1D are not live-tradable
   const liveTradable = ['5minute', '15minute', '30minute', '60minute'].includes(r.interval)
 
-  // biggest winners / losers (by net P&L) — surfaced from the trade list
+  // biggest winners / losers (by net P&L) — the worst N ACTUAL losers and best N
+  // actual winners (BT-8 fix: a global bottom-3 slice could drop the 4th-worst
+  // still-negative trade or include non-losers).
   const byPnl = [...trades].sort((a, b) => b.net_pnl - a.net_pnl)
-  const winners = byPnl.slice(0, 3).filter((t) => t.net_pnl > 0)
-  const losers = byPnl.slice(-3).filter((t) => t.net_pnl < 0).reverse()
+  const winners = byPnl.filter((t) => t.net_pnl > 0).slice(0, 3)
+  const losers = byPnl.filter((t) => t.net_pnl < 0).slice(-3).reverse()
   // actual history span the curve covers (lookback disclosure)
   const span = curve.length
     ? `${dt(new Date(curve[0].time * 1000).toISOString())} → ${dt(new Date(curve[curve.length - 1].time * 1000).toISOString())}`
@@ -452,16 +517,26 @@ function Drill({ r, onClose, onAdd, added }:
         )}
 
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
-          <Mini label="Trades" v={String(r.trades)} />
+          <Mini label="Trades" v={r.open_at_end ? `${r.trades} (incl. 1 open)` : String(r.trades)} />
           <Mini label="Win rate" v={num(r.win_rate, 0) + '%'} />
+          <Mini label="Win rate (realised)" v={r.open_at_end ? num(r.win_rate_realised, 0) + '%' : num(r.win_rate, 0) + '%'}
+            cls={r.open_at_end ? 'text-amber-300' : ''} />
           <Mini label="Profit factor" v={r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)} />
           <Mini label="Return" v={num(r.return_pct, 1) + '%'} cls={pnlColor(r.return_pct)} />
-          <Mini label="Max DD" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
+          <Mini label="Return (realised)" v={r.open_at_end ? num(r.return_pct_realised, 1) + '%' : num(r.return_pct, 1) + '%'}
+            cls={r.open_at_end ? 'text-amber-300' : pnlColor(r.return_pct_realised)} />
+          <Mini label="vs buy & hold" v={r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1) + '%'}
+            cls={r.bh_return_pct == null ? '' : pnlColor(r.bh_return_pct)} />
+          <Mini label="Max DD (close-to-close)" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
+          <Mini label="Worst MAE (intra-trade)" v={r.worst_mae_pct == null ? '—' : num(r.worst_mae_pct, 1) + '%'} cls="text-down" />
           <Mini label="Calmar" v={r.calmar == null ? '—' : num(r.calmar, 2)} cls={(r.calmar ?? 0) >= 1 ? 'text-up' : ''} />
-          <Mini label="Consistency" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
+          <Mini label="Consistency (per-trade)" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
+          <Mini label="Sharpe (annualised)" v={r.sharpe == null ? '—' : num(r.sharpe, 2)} />
           <Mini label="Underwater" v={r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0) + '%'} />
           <Mini label="Loss streak" v={r.max_consec_losses == null ? '—' : String(r.max_consec_losses)} />
           <Mini label="Net P&L" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
+          <Mini label="Notional" v={r.notional ? inr(r.notional) : '—'} />
+          <Mini label="Worst trade" v={r.worst_trade_pnl ? signedInr(r.worst_trade_pnl) : '—'} cls={r.worst_trade_pnl < 0 ? 'text-down' : ''} />
           <Mini label="Charges" v={inr(r.charges)} cls="text-down" />
           <Mini label="CAGR" v={r.cagr == null ? '—' : num(r.cagr, 1) + '%'} />
         </div>
@@ -489,9 +564,23 @@ function Drill({ r, onClose, onAdd, added }:
         <TradesTable />
 
         <div className="card p-3">
-          <div className="stat-label mb-1">Equity curve — compounding % return on capital deployed (no leverage), indexed; net of charges</div>
-          {curve.length ? <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
-            priceLines={[{ price: curve[0]?.value ?? 50000, color: '#8b93a7', title: 'start' }]} />
+          <div className="stat-label mb-1 flex items-center gap-3 flex-wrap">
+            <span>Equity curve — compounding % return on capital deployed (no leverage), indexed; net of charges</span>
+            {bhCurve.length > 1 && (
+              <span className="flex items-center gap-3 normal-case text-[10px]">
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: colorFor(r.instrument_key) }} /> strategy</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#8b93a7]" /> buy &amp; hold</span>
+              </span>
+            )}
+          </div>
+          {curve.length
+            ? (bhCurve.length > 1
+                ? <MultiLineChart height={240} series={[
+                    { name: 'strategy', data: curve, color: colorFor(r.instrument_key) },
+                    { name: 'buy & hold', data: bhCurve, color: '#8b93a7' },
+                  ]} />
+                : <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
+                    priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
             : <div className="text-muted text-xs py-10 text-center">loading…</div>}
         </div>
       </div>

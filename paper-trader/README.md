@@ -130,8 +130,14 @@ The Backtests view runs the strategy on the **underlying** (options history is
 mostly unavailable) across the **liquid universe** (indices + NSE F&O stock
 underlyings + liquid MCX/NCDEX commodities) × six timeframes. Each cell:
 
-- **1 lot** (F&O lot size; cash equities: shares worth ≤ ₹50k); ₹50,000 is the
-  P&L accounting base.
+- **Sized to capital, no leverage** — each position is the largest whole number
+  of F&O lots that fits inside the backtest's `capital` (cash equities: whole
+  shares ≤ capital). An instrument whose single lot already costs more than the
+  capital is reported as `lot > capital — not tradable at this size`
+  (`affordable = False`), never silently sized to one lot. `capital` is the
+  capital available to the backtest, **not** an account base; Return % / equity /
+  CAGR compound on each position's own notional, so Net P&L is shown beside that
+  notional, not against any fixed account figure.
 - **Pure-strategy exits** — enter on the crossover, exit on the z/EMA reversal.
   No option-premium stop/target (those don't map to the underlying).
 - **Net of charges** via the underlying charge schedules (equity delivery with

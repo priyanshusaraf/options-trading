@@ -275,11 +275,30 @@ class BacktestResult(Base):
     cagr: Mapped[float | None] = mapped_column(Float, nullable=True)
     # smoothness / quality
     calmar: Mapped[float | None] = mapped_column(Float, nullable=True)
-    consistency: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consistency: Mapped[float | None] = mapped_column(Float, nullable=True)  # PER-TRADE hit consistency (not annualised)
+    sharpe: Mapped[float | None] = mapped_column(Float, nullable=True)       # annualised Sharpe (cross-frequency comparable)
     max_consec_losses: Mapped[int] = mapped_column(Integer, default=0)
     time_underwater_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    worst_trade_pnl: Mapped[float] = mapped_column(Float, default=0.0)  # single worst net P&L (tail risk)
+    worst_mae_pct: Mapped[float] = mapped_column(Float, default=0.0)    # worst intra-trade adverse excursion, %
+    # honest sizing / affordability
+    notional: Mapped[float] = mapped_column(Float, default=0.0)   # position notional (entry_price × qty)
+    lots: Mapped[int] = mapped_column(Integer, default=0)         # whole lots (cash: shares); 0 = unaffordable
+    affordable: Mapped[bool] = mapped_column(Boolean, default=True)  # False = one lot > capital
+    # realised vs OPEN_AT_END
+    open_at_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    win_rate_realised: Mapped[float] = mapped_column(Float, default=0.0)
+    return_pct_realised: Mapped[float] = mapped_column(Float, default=0.0)
+    # benchmark
+    bh_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # buy-and-hold over the same span, %
+    # true per-(instrument,interval) coverage (honest span disclosure)
+    first_ts: Mapped[int] = mapped_column(Integer, default=0)        # epoch of first candle in this cell
+    last_ts: Mapped[int] = mapped_column(Integer, default=0)         # epoch of last candle in this cell
+    effective_days: Mapped[int] = mapped_column(Integer, default=0)  # actual days covered (first→last)
+    clamped: Mapped[bool] = mapped_column(Boolean, default=False)    # requested span exceeded Kite's ceiling
     bars: Mapped[int] = mapped_column(Integer, default=0)
     curve_json: Mapped[str] = mapped_column(Text, default="[]")     # equity curve
+    bh_curve_json: Mapped[str] = mapped_column(Text, default="[]")  # buy-and-hold overlay
     trades_json: Mapped[str] = mapped_column(Text, default="[]")    # trade list (drill-down)
     error: Mapped[str] = mapped_column(String(400), default="")
     # reusable-cache metadata (content-addressed reuse across runs)
@@ -306,8 +325,22 @@ class BacktestResult(Base):
             "cagr": round(self.cagr, 1) if self.cagr is not None else None,
             "calmar": round(self.calmar, 2) if self.calmar is not None else None,
             "consistency": round(self.consistency, 2) if self.consistency is not None else None,
+            "sharpe": round(self.sharpe, 2) if self.sharpe is not None else None,
             "max_consec_losses": self.max_consec_losses,
             "time_underwater_pct": round(self.time_underwater_pct, 1),
+            "worst_trade_pnl": round(self.worst_trade_pnl, 0),
+            "worst_mae_pct": round(self.worst_mae_pct, 1),
+            "notional": round(self.notional, 0),
+            "lots": self.lots,
+            "affordable": bool(self.affordable),
+            "open_at_end": bool(self.open_at_end),
+            "win_rate_realised": round(self.win_rate_realised, 1),
+            "return_pct_realised": round(self.return_pct_realised, 1),
+            "bh_return_pct": round(self.bh_return_pct, 1) if self.bh_return_pct is not None else None,
+            "first_ts": self.first_ts,
+            "last_ts": self.last_ts,
+            "effective_days": self.effective_days,
+            "clamped": bool(self.clamped),
             "bars": self.bars,
             "from_cache": self.from_cache,
             "error": self.error,

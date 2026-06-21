@@ -15,6 +15,7 @@ import threading
 from app.backtest.engine import backtest_charge_segment, simulate
 from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
+from app.core.market_hours import ist_epoch
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
@@ -45,8 +46,16 @@ def window_label(lookback_days: int | None, start_date: str | None,
     return "max"
 
 
-def _fetch_days(interval: str, lookback_days: int | None, start_date: str | None) -> int:
-    """How many days to pull for this interval, clamped to Kite's per-interval max."""
+def _fetch_days(interval: str, lookback_days: int | None, start_date: str | None,
+                end_date: str | None = None) -> int:
+    """How many days to pull for this interval, clamped to Kite's per-interval max.
+
+    For a custom [start,end] window we must fetch enough days to cover the whole
+    span back from TODAY (the provider only sells trailing history): the deepest
+    candle we need is `start_date`, so we ask for (today - start) days + buffer,
+    still clamped to the per-interval ceiling. `_clip_to_window` then trims to the
+    requested [start,end]; a window older than the ceiling clips to nothing (see
+    `_window_out_of_range`)."""
     cap = MAX_DAYS.get(interval, 200)
     if start_date:
         sd = dt.date.fromisoformat(start_date)
@@ -54,6 +63,31 @@ def _fetch_days(interval: str, lookback_days: int | None, start_date: str | None
     if lookback_days and lookback_days > 0:
         return min(cap, lookback_days)
     return cap
+
+
+def _is_clamped(interval: str, lookback_days: int | None, start_date: str | None) -> bool:
+    """True when the requested span exceeds Kite's per-interval ceiling and was
+    therefore silently capped (so the UI can badge the row)."""
+    cap = MAX_DAYS.get(interval, 200)
+    if start_date:
+        sd = dt.date.fromisoformat(start_date)
+        return (dt.date.today() - sd).days + 2 > cap
+    if lookback_days and lookback_days > 0:
+        return lookback_days > cap
+    return False   # "max" history asks for the cap itself — not a user clamp
+
+
+def _window_out_of_range(interval: str, start_date: str | None,
+                         end_date: str | None) -> bool:
+    """True when a custom window ends BEFORE the earliest candle Kite can serve
+    for this interval — i.e. the whole [start,end] is older than the per-interval
+    ceiling, so no candle inside it is ever fetchable (a 2018 window on any TF)."""
+    if not (start_date or end_date):
+        return False
+    cap = MAX_DAYS.get(interval, 200)
+    earliest_available = dt.date.today() - dt.timedelta(days=cap)
+    ed = dt.date.fromisoformat(end_date) if end_date else dt.date.today()
+    return ed < earliest_available
 
 
 def _clip_to_window(candles, start_date: str | None, end_date: str | None):
@@ -149,16 +183,34 @@ def _run(run_id, provider, specs, intervals, capital, win=None) -> None:
 
 def _one(run_id, provider, inst, interval, capital, win) -> None:
     from app.backtest import cache
-    days = _fetch_days(interval, win.get("lookback_days"), win.get("start"))
+    start, end = win.get("start"), win.get("end")
+    clamped = _is_clamped(interval, win.get("lookback_days"), start)
+    # A custom window entirely older than Kite's per-interval ceiling can never be
+    # fetched — surface a DISTINCT, explanatory status rather than the generic,
+    # silently-dropped 'insufficient history' (DV-3).
+    if _window_out_of_range(interval, start, end):
+        cap = MAX_DAYS.get(interval, 200)
+        return _store(run_id, inst, interval, None, [], 0, clamped=clamped,
+                      error=f"window older than Kite max for this interval "
+                            f"(≈{cap}d on {interval})")
+    days = _fetch_days(interval, win.get("lookback_days"), start, end)
     try:
-        candles = provider.get_candles(inst, interval, days)
+        candles = provider.get_candles(inst, interval, days, end=end) \
+            if _supports_end(provider) else provider.get_candles(inst, interval, days)
     except Exception as e:
         return _store(run_id, inst, interval, None, [], 0, error=f"candles: {e}")
-    candles = _clip_to_window(candles, win.get("start"), win.get("end"))
+    candles = _clip_to_window(candles, start, end)
     if len(candles) < MIN_BARS:
-        return _store(run_id, inst, interval, None, [], len(candles),
+        # distinguish "the window is reachable but thin" from "older than ceiling"
+        if (start or end):
+            return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
+                          error="window older than Kite max for this interval"
+                          if len(candles) == 0 else "insufficient history in window")
+        return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
                       error="insufficient history")
-    last_ts = int(candles[-1].ts.timestamp())
+    first_ts = ist_epoch(candles[0].ts)
+    last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
+    effective_days = max(0, round((last_ts - first_ts) / 86400))
     phash = cache.params_signature(capital, window=win.get("label", ""))
     with SessionLocal() as s:
         hit = cache.find_reusable(s, inst.key, interval, phash, last_ts)
@@ -167,7 +219,20 @@ def _one(run_id, provider, inst, interval, capital, win) -> None:
             return
     trades, m = simulate(candles, inst, interval, capital=capital)
     _store(run_id, inst, interval, m, trades, len(candles),
-           params_hash=phash, last_candle_ts=last_ts)
+           params_hash=phash, last_candle_ts=last_ts,
+           first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
+           clamped=clamped)
+
+
+def _supports_end(provider) -> bool:
+    """True if this provider's get_candles accepts an `end` kwarg (backtest-only
+    date-range anchoring). The live engine never passes `end`, so its frozen call
+    path is untouched."""
+    import inspect
+    try:
+        return "end" in inspect.signature(provider.get_candles).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _copy_from_cache(session, run_id, src) -> None:
@@ -179,8 +244,15 @@ def _copy_from_cache(session, run_id, src) -> None:
         max_drawdown_pct=src.max_drawdown_pct, return_pct=src.return_pct,
         net_pnl=src.net_pnl, gross_pnl=src.gross_pnl, charges=src.charges,
         expectancy=src.expectancy, cagr=src.cagr,
-        calmar=src.calmar, consistency=src.consistency,
+        calmar=src.calmar, consistency=src.consistency, sharpe=src.sharpe,
         max_consec_losses=src.max_consec_losses, time_underwater_pct=src.time_underwater_pct,
+        notional=src.notional, lots=src.lots, affordable=src.affordable,
+        open_at_end=src.open_at_end, win_rate_realised=src.win_rate_realised,
+        return_pct_realised=src.return_pct_realised,
+        bh_return_pct=src.bh_return_pct, worst_trade_pnl=src.worst_trade_pnl,
+        worst_mae_pct=src.worst_mae_pct,
+        first_ts=src.first_ts, last_ts=src.last_ts,
+        effective_days=src.effective_days, clamped=src.clamped,
         bars=src.bars, curve_json=src.curve_json, trades_json=src.trades_json,
         params_hash=src.params_hash, last_candle_ts=src.last_candle_ts,
         schema_version=src.schema_version, from_cache=True, computed_at=dt.datetime.now()))
@@ -188,13 +260,16 @@ def _copy_from_cache(session, run_id, src) -> None:
 
 
 def _store(run_id, inst, interval, m, trades, bars, error="",
-           params_hash="", last_candle_ts=0) -> None:
+           params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
+           effective_days=0, clamped=False) -> None:
     import datetime as dt
     from app.backtest import cache
     seg = backtest_charge_segment(inst)
     common = dict(run_id=run_id, instrument_key=inst.key, name=inst.name,
                   segment=seg, interval=interval, bars=bars,
                   params_hash=params_hash, last_candle_ts=last_candle_ts,
+                  first_ts=first_ts, last_ts=last_ts_span,
+                  effective_days=effective_days, clamped=clamped,
                   schema_version=cache.SCHEMA_VERSION, from_cache=False,
                   computed_at=dt.datetime.now())
     with SessionLocal() as s:
@@ -206,10 +281,16 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
                 profit_factor=m.profit_factor, max_drawdown_pct=m.max_drawdown_pct,
                 return_pct=m.return_pct, net_pnl=m.net_pnl, gross_pnl=m.gross_pnl,
                 charges=m.charges, expectancy=m.expectancy, cagr=m.cagr,
-                calmar=m.calmar, consistency=m.consistency,
+                calmar=m.calmar, consistency=m.consistency, sharpe=m.sharpe,
                 max_consec_losses=m.max_consec_losses, time_underwater_pct=m.time_underwater_pct,
+                notional=m.notional, lots=m.lots, affordable=m.affordable,
+                open_at_end=m.open_at_end, win_rate_realised=m.win_rate_realised,
+                return_pct_realised=m.return_pct_realised,
+                bh_return_pct=m.bh_return_pct, worst_trade_pnl=m.worst_trade_pnl,
+                worst_mae_pct=m.worst_mae_pct,
                 curve_json=json.dumps(m.equity_curve),
-                trades_json=json.dumps([t.to_dict() for t in trades]), **common))
+                trades_json=json.dumps([t.to_dict() for t in trades]),
+                bh_curve_json=json.dumps(m.bh_curve), **common))
         s.commit()
 
 

@@ -85,10 +85,18 @@ class MockProvider(MarketDataProvider):
     def _spot(self, inst: Instrument) -> float:
         return self._candles[inst.key][self._cursor].close
 
-    def get_candles(self, inst: Instrument, interval: str, days: int) -> list[Candle]:
+    def get_candles(self, inst: Instrument, interval: str, days: int,
+                    end: str | None = None) -> list[Candle]:
         window = max(days * self.per_day, self.s.z_length + self.s.ema_length + 10)
         lo = max(0, self._cursor - window + 1)
-        return self._candles[inst.key][lo: self._cursor + 1]
+        out = self._candles[inst.key][lo: self._cursor + 1]
+        # backtest-only date anchoring: when an explicit end date is given, drop
+        # any candle dated after it so a custom [start,end] window ends at `end`,
+        # not at the simulated "now" (mirrors the live KiteProvider date range).
+        if end:
+            ed = date.fromisoformat(end)
+            out = [c for c in out if c.ts.date() <= ed]
+        return out
 
     def get_ltp(self, inst: Instrument) -> float | None:
         return self._spot(inst)

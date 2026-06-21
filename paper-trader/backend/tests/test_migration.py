@@ -24,6 +24,11 @@ def test_migration_adds_missing_columns(tmp_path, monkeypatch):
     assert {"live_interval", "entries_blocked"} <= istate
     assert {"last_mark_time", "high_water_premium"} <= pos
     assert {"params_hash", "last_candle_ts", "schema_version", "from_cache", "computed_at"} <= bt
+    # round-1 honesty columns must be added in place too (additive, non-destructive)
+    assert {"notional", "lots", "affordable", "first_ts", "last_ts", "effective_days",
+            "clamped", "open_at_end", "win_rate_realised", "return_pct_realised",
+            "bh_return_pct", "worst_trade_pnl", "sharpe", "worst_mae_pct",
+            "bh_curve_json"} <= bt
 
     # existing data preserved + idempotent (second run must not raise)
     with eng.begin() as c:

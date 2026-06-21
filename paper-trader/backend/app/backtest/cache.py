@@ -17,7 +17,11 @@ from app.db.models import BacktestResult
 #     the position's own notional (leverage-free, comparable across instruments).
 # v3: added smoothness metrics (calmar/consistency/streak/underwater) + a candle
 #     window to the signature so different lookback ranges don't collide in cache.
-SCHEMA_VERSION = 3
+# v4: honest sizing (affordable-lots, notional, affordable flag) + realised-vs-open
+#     split + buy-and-hold benchmark + annualised Sharpe + worst-trade/MAE + true
+#     per-cell span (first/last/effective_days/clamped). The stored metric shape
+#     changed, so bump to force a clean recompute (no stale-row mixing).
+SCHEMA_VERSION = 4
 
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,

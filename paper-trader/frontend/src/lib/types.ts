@@ -105,8 +105,18 @@ export interface BTResult {
   win_rate: number; profit_factor: number | null; max_drawdown_pct: number
   return_pct: number; net_pnl: number; gross_pnl: number; charges: number
   expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string
-  calmar: number | null; consistency: number | null
+  calmar: number | null; consistency: number | null; sharpe: number | null
   max_consec_losses: number; time_underwater_pct: number
+  // honest sizing / denominator (BT-1, BT-2)
+  notional: number; lots: number; affordable: boolean
+  // tail risk (BT-8) + intra-trade pain (BT-4)
+  worst_trade_pnl: number; worst_mae_pct: number
+  // realised vs marked-to-last open (BT-5)
+  open_at_end: boolean; win_rate_realised: number; return_pct_realised: number
+  // benchmark (BT-6)
+  bh_return_pct: number | null
+  // true per-cell coverage (BT-3, DV-2)
+  first_ts: number; last_ts: number; effective_days: number; clamped: boolean
 }
 
 export interface BTInstrument { key: string; name: string; segment: string; has_options: boolean }
@@ -115,6 +125,7 @@ export interface BTTradeDTO {
   direction: string; entry_time: number; entry_price: number; exit_time: number
   exit_price: number; qty: number; gross_pnl: number; charges: number
   net_pnl: number; return_pct: number; reason: string; bars_held: number; win: boolean
+  mae_pct?: number; notional?: number; lots?: number
 }
 
 export interface SettingRow { key: string; type: 'bool' | 'int' | 'float' | 'str'; default: any; value: any }
