@@ -9,19 +9,36 @@ from app.core.instruments import get_instrument
 from app.providers.mock import MockProvider
 
 
-def _mk(net, t0, t1, direction="LONG"):
-    return BTTrade(direction, t0, 100.0, t1, 100.0 + net, 1,
+def _mk(net, t0, t1, direction="LONG", entry=1000.0):
+    # entry×qty is the notional the return% is measured against
+    return BTTrade(direction, t0, entry, t1, entry + net, 1,
                    gross_pnl=net, charges=0.0, net_pnl=net, reason="X", bars_held=1)
 
 
-def test_metrics_on_known_trades():
-    trades = [_mk(100, 0, 86400), _mk(-50, 86400, 172800), _mk(200, 172800, 259200)]
-    m = compute_metrics(trades, 50_000)
+def test_metrics_compound_return_on_notional():
+    # notional 1000 each; nets +50 (+5%), -20 (-2%), +100 (+10%)
+    trades = [_mk(50, 0, 86400), _mk(-20, 86400, 172800), _mk(100, 172800, 259200)]
+    m = compute_metrics(trades, 100_000)
     assert (m.trades, m.wins, m.losses) == (3, 2, 1)
-    assert m.net_pnl == 250
-    assert m.profit_factor == pytest.approx((100 + 200) / 50)  # 6.0
-    assert m.max_drawdown_abs == 50  # 50100 -> 50050
+    assert m.net_pnl == 130                                   # raw rupees unchanged
+    assert m.profit_factor == pytest.approx(150 / 20)         # 7.5
+    # compounding 1.05 × 0.98 × 1.10 − 1 = 13.19%
+    assert m.return_pct == pytest.approx((1.05 * 0.98 * 1.10 - 1) * 100, abs=0.01)
+    # drawdown: peak after +5%, dips to +2.9% -> 2% peak-to-trough on the % curve
+    assert m.max_drawdown_pct == pytest.approx(2.0, abs=0.01)
     assert m.win_rate == pytest.approx(100 * 2 / 3)
+
+
+def test_return_pct_is_honest_and_anchor_independent():
+    # one NIFTY-sized lot: notional ≈ ₹18L, net +₹54k = a +3% underlying move —
+    # must read ~+3%, NOT the old +108% (54k/50k), and must not depend on the anchor.
+    t = BTTrade("LONG", 0, 24000.0, 86400, 24720.0, 75,
+                gross_pnl=54_000, charges=0.0, net_pnl=54_000, reason="X", bars_held=1)
+    m1 = compute_metrics([t], 50_000)
+    m2 = compute_metrics([t], 100_000)
+    assert m1.return_pct == pytest.approx(m2.return_pct, abs=0.001)        # anchor-independent
+    assert m1.return_pct == pytest.approx(54_000 / (24000 * 75) * 100, abs=0.01)  # ≈ +3%
+    assert m1.return_pct < 5                                               # not the ₹50k-base fiction
 
 
 def test_metrics_empty():

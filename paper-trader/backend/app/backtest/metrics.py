@@ -62,7 +62,7 @@ class BTMetrics:
     net_pnl: float = 0.0
     gross_pnl: float = 0.0
     charges: float = 0.0
-    return_pct: float = 0.0        # net / initial_capital, %
+    return_pct: float = 0.0        # compounding return on capital DEPLOYED (no leverage), %
     profit_factor: float | None = None   # Σwin / Σ|loss|; None if undefined
     expectancy: float = 0.0        # net per trade
     avg_win: float = 0.0
@@ -110,10 +110,9 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
     losses = [t for t in trades if not t.win]
     m.wins, m.losses = len(wins), len(losses)
     m.win_rate = 100.0 * m.wins / m.trades
-    m.net_pnl = sum(t.net_pnl for t in trades)
+    m.net_pnl = sum(t.net_pnl for t in trades)        # absolute rupees (raw P&L still matters)
     m.gross_pnl = sum(t.gross_pnl for t in trades)
     m.charges = sum(t.charges for t in trades)
-    m.return_pct = 100.0 * m.net_pnl / initial_capital if initial_capital else 0.0
     m.expectancy = m.net_pnl / m.trades
     m.avg_win = sum(t.net_pnl for t in wins) / len(wins) if wins else 0.0
     m.avg_loss = sum(t.net_pnl for t in losses) / len(losses) if losses else 0.0
@@ -122,20 +121,29 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
     gross_loss = -sum(t.net_pnl for t in losses)
     m.profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
 
-    # realized equity curve: capital + cumulative net P&L at each trade's exit
-    equity = initial_capital
-    curve_vals = [initial_capital]
-    m.equity_curve = [{"time": trades[0].entry_time, "value": round(initial_capital, 2)}]
+    # Equity curve — leverage-free, COMPOUNDING the per-trade return on the
+    # position's own NOTIONAL (net P&L / (entry_price × qty)), NOT a flat ₹50k base.
+    # This is the honest curve: capital deployed == the position you actually take
+    # (the owner buys the underlying outright, no futures leverage), so one F&O lot
+    # can never imply a >100% account swing and curves are directly comparable
+    # across instruments regardless of price/lot size. return_pct/maxDD%/CAGR are
+    # therefore anchor-independent; `initial_capital` is only the curve's index base.
+    base = initial_capital if initial_capital else 100_000.0
+    equity = base
+    curve_vals = [equity]
+    m.equity_curve = [{"time": trades[0].entry_time, "value": round(equity, 2)}]
     for t in trades:
-        equity += t.net_pnl
+        r = max(t.return_pct, -1.0)   # a fully-funded (un-leveraged) position can't lose >100%
+        equity = max(0.0, equity * (1.0 + r))
         curve_vals.append(equity)
         m.equity_curve.append({"time": t.exit_time, "value": round(equity, 2)})
+    m.return_pct = (curve_vals[-1] / base - 1.0) * 100.0
     m.max_drawdown_abs, m.max_drawdown_pct = _max_drawdown(curve_vals)
 
-    # CAGR over the spanned period
+    # CAGR over the spanned period (on the same compounding basis)
     span_secs = trades[-1].exit_time - trades[0].entry_time
     years = span_secs / (365.25 * 86400)
-    final = initial_capital + m.net_pnl
-    if years >= 0.05 and final > 0:
-        m.cagr = ((final / initial_capital) ** (1 / years) - 1) * 100.0
+    final = curve_vals[-1]
+    if years >= 0.05 and final > 0 and base > 0:
+        m.cagr = ((final / base) ** (1 / years) - 1) * 100.0
     return m

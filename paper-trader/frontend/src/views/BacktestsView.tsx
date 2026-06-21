@@ -112,6 +112,18 @@ export default function BacktestsView() {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* what this backtest actually is — so the numbers are read correctly */}
+      <div className="card p-3 border-amber-400/40 bg-amber-400/5 text-[11px] leading-relaxed text-amber-200/90">
+        <span className="font-semibold text-amber-300">How to read this:</span> this is a
+        <b> signal-quality screen on the underlying</b> (futures/cash, <b>1 lot, bought outright — no leverage</b>),
+        net of the full charge stack, with pure strategy-reversal exits. It does <b>NOT</b> model the
+        option premium, theta decay, or the live SL/TP — so it is <b>not a live options-P&amp;L forecast</b>.
+        Return% / equity / drawdown are <b>compounding % on the capital actually deployed</b> (the position's
+        own notional), so they're comparable across instruments and never imply a &gt;100% account swing.
+        Prefer <b>smooth, consistent equity curves with low drawdown</b> over raw return — a choppy underlying
+        curve usually loses in options even when it's green here (theta punishes the small losses).
+      </div>
+
       {/* sweep controls */}
       <div className="card p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -221,7 +233,7 @@ export default function BacktestsView() {
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
                 <td className="text-right">{r.trades}</td>
                 <td className="text-right">{num(r.win_rate, 0)}</td>
-                <td className="text-right">{r.profit_factor == null ? '∞' : num(r.profit_factor, 2)}</td>
+                <td className="text-right">{r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)}</td>
                 <td className="text-right text-down">{num(r.max_drawdown_pct, 1)}</td>
                 <td className={`text-right ${pnlColor(r.return_pct)}`}>{num(r.return_pct, 1)}</td>
                 <td className={`text-right ${pnlColor(r.net_pnl)}`}>{signedInr(r.net_pnl)}</td>
@@ -278,7 +290,7 @@ function Drill({ r, onClose, onAdd, added }:
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
           <Mini label="Trades" v={String(r.trades)} />
           <Mini label="Win rate" v={num(r.win_rate, 0) + '%'} />
-          <Mini label="Profit factor" v={r.profit_factor == null ? '∞' : num(r.profit_factor, 2)} />
+          <Mini label="Profit factor" v={r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)} />
           <Mini label="Return" v={num(r.return_pct, 1) + '%'} cls={pnlColor(r.return_pct)} />
           <Mini label="Max DD" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
           <Mini label="Net P&L" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
@@ -288,9 +300,9 @@ function Drill({ r, onClose, onAdd, added }:
         </div>
 
         <div className="card p-3">
-          <div className="stat-label mb-1">Equity curve (₹50,000 base · net of charges)</div>
+          <div className="stat-label mb-1">Equity curve — compounding % return on capital deployed (no leverage), indexed; net of charges</div>
           {curve.length ? <LineChart data={curve} height={260} color={colorFor(r.instrument_key)}
-            priceLines={[{ price: 50000, color: '#8b93a7', title: 'start' }]} />
+            priceLines={[{ price: curve[0]?.value ?? 50000, color: '#8b93a7', title: 'start' }]} />
             : <div className="text-muted text-xs py-10 text-center">loading…</div>}
         </div>
 

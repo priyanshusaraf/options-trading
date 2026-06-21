@@ -13,7 +13,10 @@ from sqlalchemy import select
 
 from app.db.models import BacktestResult
 
-SCHEMA_VERSION = 1
+# v2: return%/equity/CAGR switched from a flat ₹50k base to compounding return on
+# the position's own notional (leverage-free, comparable across instruments). Old
+# cached results used the misleading flat-base math, so bumping invalidates them.
+SCHEMA_VERSION = 2
 
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,
