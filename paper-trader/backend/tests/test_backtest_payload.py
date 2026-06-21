@@ -45,13 +45,15 @@ def test_results_payload_carries_notional_and_lots():
             1.0, 0.01 * t0["entry_price"] * t0["qty"])
 
 
-def test_metrics_to_dict_includes_notional_and_affordable():
+def test_metrics_to_dict_includes_notional_and_option_cost():
     t = BTTrade("LONG", 0, 1000.0, 86400, 1050.0, 5, gross_pnl=250, charges=0.0,
                 net_pnl=250, reason="STRATEGY_EXIT", bars_held=1,
-                notional=5000.0, lots=1, affordable=True)
-    d = compute_metrics([t], 50_000).to_dict()
-    assert "notional" in d and "affordable" in d and "lots" in d
-    assert d["notional"] == 5000.0 and d["affordable"] is True and d["lots"] == 1
+                notional=5000.0, lots=1)
+    m = compute_metrics([t], 50_000)
+    m.option_cost = 1234.0
+    d = m.to_dict()
+    assert "notional" in d and "option_cost" in d and "lots" in d
+    assert d["notional"] == 5000.0 and d["lots"] == 1 and d["option_cost"] == 1234.0
 
 
 def test_results_reports_skipped_count():
@@ -84,9 +86,11 @@ def test_results_reports_skipped_count():
     assert d["skipped_breakdown"]["errored"] == 2
 
 
-def test_unaffordable_rows_are_visible_and_badged_not_skipped():
-    """An unaffordable cell (one lot > capital) is a DISTINCT status: it stays in
-    the visible results (so the UI can badge it), not counted under `skipped`."""
+def test_option_unaffordable_rows_are_visible_and_badged_not_skipped():
+    """A name whose ATM OPTION costs more than the budget stays in the visible
+    results (badged affordable_options=False) so a promising edge stays on the
+    radar — it is NOT hidden, and the payload counts it under `unaffordable`. Both
+    rows trade (1-lot model); only the budget-relative option flag differs."""
     init_db(reset=True)
     with SessionLocal() as s:
         run = BacktestRun(status="done", scope="liquid", intervals="day",
@@ -94,18 +98,22 @@ def test_unaffordable_rows_are_visible_and_badged_not_skipped():
         s.add(run)
         s.commit()
         rid = run.id
-        s.add(BacktestResult(run_id=rid, instrument_key="GOOD", interval="day",
+        # CHEAP option cost (far below any budget) vs HUGE (above any budget)
+        s.add(BacktestResult(run_id=rid, instrument_key="CHEAP", interval="day",
                              trades=5, wins=3, win_rate=60.0, return_pct=10.0,
-                             affordable=True, error=""))
-        s.add(BacktestResult(run_id=rid, instrument_key="TOOBIG", interval="day",
-                             trades=0, affordable=False, lots=0, notional=1_820_000.0,
-                             error=""))
+                             lots=1, notional=300_000.0, option_cost=1_000.0, error=""))
+        s.add(BacktestResult(run_id=rid, instrument_key="PRICEY", interval="day",
+                             trades=6, wins=4, win_rate=66.0, return_pct=40.0,
+                             lots=1, notional=5_000_000.0, option_cost=10_000_000.0, error=""))
         s.commit()
     c = TestClient(app)
     d = c.get(f"/api/backtest/results?run_id={rid}&min_trades=1").json()
     keys = {r["instrument_key"] for r in d["results"]}
-    assert "TOOBIG" in keys                       # surfaced, not hidden
-    assert d["unaffordable"] == 1
-    assert d["skipped"] == 0                       # not counted as a silent drop
-    too = next(r for r in d["results"] if r["instrument_key"] == "TOOBIG")
-    assert too["affordable"] is False and too["lots"] == 0
+    assert {"CHEAP", "PRICEY"} <= keys              # both surfaced, neither hidden
+    assert d["skipped"] == 0
+    assert d["unaffordable"] == 1                   # only PRICEY is unaffordable as options
+    cheap = next(r for r in d["results"] if r["instrument_key"] == "CHEAP")
+    pricey = next(r for r in d["results"] if r["instrument_key"] == "PRICEY")
+    assert cheap["affordable_options"] is True
+    assert pricey["affordable_options"] is False
+    assert pricey["affordable_futures"] is False    # ₹50L future never fits the budget

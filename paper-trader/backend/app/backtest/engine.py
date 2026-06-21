@@ -8,25 +8,33 @@ longEntry/shortEntry crossovers; exits fire on its own longExit/shortExit (z
 reversal / trend flip) — **pure strategy signal**, no option-premium stop/target
 (those don't map to the underlying).
 
-POSITION SIZING (honest, no leverage):
-  Each position is sized to the LARGEST WHOLE NUMBER OF F&O LOTS that fits inside
-  the user-supplied `capital` with NO leverage — i.e. floor(capital / lot_notional)
-  lots, capped at whatever `capital` actually affords. Cash equities buy
-  floor(capital / price) shares. An instrument whose SINGLE lot notional already
-  exceeds `capital` is NOT silently sized to 1 lot: it is reported as a distinct,
-  non-error 'unaffordable' result (lots=0, affordable=False, "lot > capital — not
-  tradable at this size") so the cell still appears but is clearly marked rather
-  than pretending a ₹50k account took an ₹18L position.
+POSITION SIZING (fixed ONE lot — the owner's chosen model):
+  Every position is exactly ONE F&O lot (cash equities: floor(capital/price)
+  shares). We NEVER skip an instrument for being "unaffordable" and never stuff a
+  ₹50k account with many lots — the point is to see the STRATEGY's edge on a single
+  realistic position, then flag separately whether you can afford to play it today.
 
-  Because Return%/equity/CAGR compound the per-trade return on the position's own
-  notional (anchor-independent), sizing affects absolute Net P&L and the
-  affordability flag — not the % math. `capital` is the "capital available to the
-  backtest", NOT an account base.
+RETURN MODEL (additive, no compounding, no leverage):
+  base capital = the cost to enter the FIRST 1-lot position (entry_price × lot).
+  Equity = base + cumulative 1-lot net P&L; Return% = total net P&L / base. This
+  is the owner's "₹2.5L in → ₹5L out = +100%" framing — NOT the compounding-%
+  curve that balloons to +1000% over many years. `capital` only sizes cash equities
+  and seeds the fallback base; F&O sizing ignores it (always 1 lot).
+
+AFFORDABILITY (two flags, against your real budget — computed at the payload layer):
+  - futures: the 1-lot UNDERLYING notional (entry_price × lot) — usually far above a
+    small account, so most names read "unaffordable at futures price".
+  - options: an ATM option premium ESTIMATE (Black-Scholes on the last close at the
+    instrument's own realised vol) × lot — because we BUY options, which are far
+    cheaper. If the option cost fits your budget the name is tradable NOW; if not it
+    is flagged unaffordable but kept visible so a promising edge stays on the radar.
 
 Every trade is charged the full, direction-correct Zerodha stack via
 engine/charges.py.
 """
 from __future__ import annotations
+
+import math
 
 import pandas as pd
 
@@ -50,23 +58,17 @@ def backtest_charge_segment(inst) -> str:
 
 
 def backtest_qty(inst, price: float, capital: float) -> int:
-    """Affordable, leverage-free position size at `price`:
+    """Fixed ONE-lot, leverage-free position size at `price`:
 
-    - Cash equities: floor(capital / price) shares.
-    - F&O: the largest WHOLE number of lots that fits inside `capital`, i.e.
-      floor(capital / (price × lot_size)) × lot_size. Returns 0 when even one
-      lot's notional exceeds `capital` (caller treats 0 as 'unaffordable', NOT
-      a silent 1-lot fallback)."""
+    - F&O: exactly one lot (= lot_size), ALWAYS — never scaled to `capital` and
+      never skipped as unaffordable (affordability is a separate, payload-layer
+      flag). `capital` is ignored for F&O.
+    - Cash equities: floor(capital / price) shares (there is no lot)."""
     if price <= 0:
         return 0
     if inst.segment in _CASH_SEGMENTS:
         return int(capital // price)
-    lot = int(inst.lot_size)
-    lot_notional = price * lot
-    if lot_notional <= 0:
-        return 0
-    affordable_lots = int(capital // lot_notional)
-    return max(0, affordable_lots) * lot
+    return max(1, int(inst.lot_size))
 
 
 def _candles_to_df(candles) -> pd.DataFrame:
@@ -74,32 +76,53 @@ def _candles_to_df(candles) -> pd.DataFrame:
                           "low": c.low, "close": c.close} for c in candles])
 
 
-def _affordability(inst, price: float, capital: float) -> tuple[int, float, bool, int]:
-    """Return (qty, notional, affordable, lots) for one position at `price`.
-
-    `affordable` is False when even a single lot's notional exceeds `capital`
-    (qty==0); the caller then records a distinct 'unaffordable' result instead of
-    silently sizing to 1 lot. `lots` is whole F&O lots (cash: share count)."""
+def _position(inst, price: float, capital: float) -> tuple[int, float, int]:
+    """Return (qty, notional, lots) for one 1-lot position at `price`. `lots` is 1
+    for F&O (cash: the share count)."""
     qty = backtest_qty(inst, price, capital)
     notional = price * qty
     if inst.segment in _CASH_SEGMENTS:
-        lot = 1
+        lots = qty
     else:
-        lot = max(1, int(inst.lot_size))
-    affordable = qty > 0
-    lots = qty // lot if lot else 0
-    return qty, notional, affordable, lots
+        lots = 1 if qty > 0 else 0
+    return qty, notional, lots
 
 
-def _unaffordable_metrics(inst, ref_price: float, capital: float) -> BTMetrics:
-    """A distinct, non-error result for an instrument whose one lot already costs
-    more than `capital`: lots=0, affordable=False, notional = one lot's cost."""
-    lot = max(1, int(inst.lot_size))
-    m = BTMetrics()
-    m.affordable = False
-    m.lots = 0
-    m.notional = ref_price * lot
-    return m
+def _annualised_vol(candles) -> float:
+    """Annualised realised volatility from daily closes (last close per calendar
+    day), σ_daily × √252. Used only to ESTIMATE an ATM option premium for the
+    affordability flag — a rough gate, not a pricing engine."""
+    by_day: dict = {}
+    for c in candles:
+        by_day[c.ts.date()] = float(c.close)   # last close wins per day
+    closes = [by_day[d] for d in sorted(by_day)]
+    if len(closes) < 3:
+        return 0.0
+    rets = [math.log(closes[i] / closes[i - 1])
+            for i in range(1, len(closes)) if closes[i - 1] > 0 and closes[i] > 0]
+    if len(rets) < 2:
+        return 0.0
+    mean = sum(rets) / len(rets)
+    sd = (sum((x - mean) ** 2 for x in rets) / (len(rets) - 1)) ** 0.5
+    return sd * (252 ** 0.5)
+
+
+def estimate_option_cost(inst, candles, r: float = 0.065) -> float:
+    """Estimate the cost to BUY one lot of an ATM option as of the LAST candle:
+    Black-Scholes ATM premium (K = S = last close) at the instrument's own realised
+    vol, ~14-day expiry, × lot_size. Budget-independent; the affordability flag is
+    computed against the live budget at the payload layer. Returns 0 if it can't be
+    estimated (caller treats 0 as 'unknown', not free)."""
+    from app.options.pricing import bs_price
+    if not candles:
+        return 0.0
+    spot = float(candles[-1].close)
+    sigma = _annualised_vol(candles)
+    if spot <= 0 or sigma <= 0:
+        return 0.0
+    lot = max(1, int(inst.lot_size)) if inst.segment not in _CASH_SEGMENTS else 1
+    premium = bs_price(spot, spot, 14.0 / 365.0, r, sigma, "CE")   # ATM call ≈ ATM put
+    return round(premium * lot, 2)
 
 
 def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
@@ -119,16 +142,10 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
                  {"time": ist_epoch(candles[-1].ts), "value": round(last_close, 2)}]
                 if first_close else [])
 
-    # Affordability gate: if even one lot's notional at a representative price
-    # exceeds `capital`, this instrument is not tradable at this size — record a
-    # distinct unaffordable result rather than silently sizing to 1 lot.
-    ref_price = first_close
-    if inst.segment not in _CASH_SEGMENTS and ref_price > 0:
-        if backtest_qty(inst, ref_price, capital) <= 0:
-            m = _unaffordable_metrics(inst, ref_price, capital)
-            m.bh_return_pct = bh_return_pct
-            m.bh_curve = bh_curve
-            return [], m
+    # Estimate the cost to BUY one lot of an ATM option as of the last candle — a
+    # budget-independent number; the affordability FLAG is computed against the live
+    # budget at the payload layer (so it never goes stale when funds change).
+    option_cost = estimate_option_cost(inst, candles)
 
     sig = compute_signals(_candles_to_df(candles), ema_length=ema_length,
                           z_length=z_length, entry_z=entry_z,
@@ -138,6 +155,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
         m = BTMetrics()
         m.bh_return_pct = bh_return_pct
         m.bh_curve = bh_curve
+        m.option_cost = option_cost
         return [], m
 
     trades: list[BTTrade] = []
@@ -154,12 +172,12 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
             elif r["shortEntry"]:
                 direction = "SHORT"
             if direction:
-                qty, notional, affordable, lots = _affordability(inst, close, capital)
+                qty, notional, lots = _position(inst, close, capital)
                 if qty <= 0:
                     continue
                 pos = {"direction": direction, "entry_price": close,
                        "entry_time": t, "entry_idx": i, "qty": qty,
-                       "notional": notional, "lots": lots, "affordable": affordable,
+                       "notional": notional, "lots": lots,
                        "mae_pct": 0.0}
         else:
             # track Maximum Adverse Excursion from this bar's high/low while open
@@ -182,6 +200,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     m = compute_metrics(trades, capital)
     m.bh_return_pct = bh_return_pct
     m.bh_curve = bh_curve
+    m.option_cost = option_cost
     return trades, m
 
 
@@ -216,5 +235,5 @@ def _close(pos, exit_price, exit_time, exit_idx, seg, reason) -> BTTrade:
         gross_pnl=gross, charges=charges, net_pnl=gross - charges,
         reason=reason, bars_held=exit_idx - pos["entry_idx"],
         mae_pct=pos.get("mae_pct", 0.0), notional=pos.get("notional", entry_price * qty),
-        lots=pos.get("lots", 0), affordable=pos.get("affordable", True),
+        lots=pos.get("lots", 0),
     )

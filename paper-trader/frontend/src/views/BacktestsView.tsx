@@ -158,8 +158,8 @@ export default function BacktestsView() {
 
   // scan-level win/loss tally + total Net P&L over the VISIBLE set — so a
   // winners-on-top sort (or survivorship) can't be misread as "the strategy
-  // never loses". Counts on Net P&L; unaffordable rows (no trades) are excluded.
-  const tradable = view.filter((r) => r.affordable !== false)
+  // never loses". Counts on Net P&L over every traded (1-lot) row.
+  const tradable = view.filter((r) => r.trades > 0)
   const winCount = tradable.filter((r) => r.net_pnl > 0).length
   const lossCount = tradable.filter((r) => r.net_pnl < 0).length
   const totalNet = tradable.reduce((s, r) => s + (r.net_pnl || 0), 0)
@@ -179,16 +179,15 @@ export default function BacktestsView() {
         <b> signal-quality screen on the underlying</b> (futures/cash, bought outright — <b>no leverage</b>),
         net of the full charge stack, with pure strategy-reversal exits. It does <b>NOT</b> model the
         option premium, theta decay, or the live SL/TP — so it is <b>not a live options-P&amp;L forecast</b>.
-        <b> Sizing:</b> each position is the <b>largest whole number of lots that fits the capital, no leverage</b>;
-        an instrument whose single lot already costs more than the capital is shown as
-        <b> &lsquo;lot &gt; capital&rsquo;</b> (not tradable at this size), never silently sized to 1 lot.
-        Return% / equity / drawdown are <b>compounding % on the position&rsquo;s own notional</b>, so they&rsquo;re
-        comparable across instruments and never imply a &gt;100% account swing; <b>Net P&amp;L is on that notional,
-        not a 50k account</b>. Drawdown / Underwater% are <b>close-to-close</b> (intra-trade excursion not modelled —
-        see <b>worst-trade</b> for tail risk). <b>Consistency</b> is a <b>per-trade hit ratio (not annualised — not a
-        Sharpe)</b>; <b>Sharpe</b> is the annualised, cross-timeframe-comparable ratio. Every row also shows
-        <b> buy-and-hold</b> over the same span so a real edge is distinguishable from beta. Prefer
-        <b> smooth, consistent curves</b> that beat hold — over raw return.
+        <b> Sizing:</b> every position is a <b>fixed 1 lot</b>; the base capital is the cost to enter that one
+        lot (e.g. ₹2.5L), and <b>Return% = total net P&amp;L ÷ that base</b> (additive, <b>no compounding</b>) — so
+        ₹2.5L→₹5L reads <b>+100%</b>, never the +1000% a tiny 50k base would fake. Names are never skipped for
+        cost: each shows whether you can afford it as a <b>future</b> vs as an <b>ATM option</b> (far cheaper)
+        at your real budget, so a promising-but-pricey edge stays on the radar. Drawdown / Underwater% are
+        <b> close-to-close</b> (intra-trade excursion not modelled — see <b>worst-trade</b> for tail risk).
+        <b> Consistency</b> is a <b>per-trade hit ratio (not annualised — not a Sharpe)</b>; <b>Sharpe</b> is the
+        annualised, cross-timeframe-comparable ratio. Every row also shows <b>buy-and-hold</b> over the same span
+        so a real edge is distinguishable from beta. Prefer <b>smooth, consistent curves</b> that beat hold.
       </div>
 
       {/* sweep controls */}
@@ -340,7 +339,7 @@ export default function BacktestsView() {
           <span className="text-zinc-400">·</span>
           <span>net <b className={pnlColor(totalNet)}>{signedInr(totalNet)}</b></span>
           {unaffordable > 0 && (<><span className="text-zinc-400">·</span>
-            <span className="text-amber-400/80" title="one lot's notional exceeds the capital — not tradable at this size">{unaffordable} unaffordable</span></>)}
+            <span className="text-amber-400/80" title="can't afford 1 lot of the ATM option at your current budget — still shown, on your radar for later">{unaffordable} over budget</span></>)}
           {skipped > 0 && (<><span className="text-zinc-400">·</span>
             <span className="text-amber-400/80" title="cells excluded: insufficient history / out-of-range / errored / below filters">{skipped} skipped</span></>)}
         </span>
@@ -364,43 +363,45 @@ export default function BacktestsView() {
               <Th k="max_consec_losses" right title="longest losing streak (lower = smoother)">Streak</Th>
               <Th k="return_pct" right>Return%</Th>
               <Th k="bh_return_pct" right title="buy-and-hold return of the underlying over the same span — beat this to show real edge over beta">vs hold</Th>
-              <Th k="net_pnl" right title="Net P&L is on this position's notional, not a 50k account">Net P&L</Th>
-              <Th k="notional" right title="the position's deployed notional — the denominator Net P&L is measured against">Notional</Th>
+              <Th k="net_pnl" right title="net P&L of a fixed 1-lot position over the whole span (real rupees)">Net P&L</Th>
+              <Th k="notional" right title="capital to enter 1 lot of the underlying — the base the return is measured against">1-lot ₹</Th>
+              <Th k="option_cost" right title="estimated cost to buy 1 lot of an ATM option (how you'd actually trade it) — green if it fits your budget">Option ₹</Th>
               <Th k="worst_trade_pnl" right title="single most-negative trade (tail risk at a glance)">Worst</Th>
               <th className="py-1 text-right">Add</th>
             </tr>
           </thead>
           <tbody>
             {view.length === 0 && (
-              <tr><td colSpan={17} className="py-8 text-center text-muted">
+              <tr><td colSpan={18} className="py-8 text-center text-muted">
                 {running ? 'sweep running — results stream in…' : 'no results — run a sweep above'}</td></tr>
             )}
             {view.map((r) => {
-              const unaff = r.affordable === false
+              const optUnaff = r.affordable_options === false   // can't afford the OPTION at the current budget
               return (
               <tr key={r.id} onClick={() => setDrill(r)}
-                className={`border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3 ${unaff ? 'opacity-50' : ''}`}>
+                className="border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3">
                 <td className="font-semibold text-zinc-100">{r.instrument_key}
                   {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}
-                  {unaff && <span className="badge bg-amber-500/20 text-amber-300 ml-1" title="one lot's notional exceeds the capital — not tradable at this size">lot &gt; capital</span>}</td>
+                  {optUnaff && <span className="badge bg-amber-500/20 text-amber-300 ml-1" title="can't afford 1 lot of the ATM option at your current budget — kept visible, on your radar for later">over budget</span>}</td>
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
                 <td className="text-right text-muted whitespace-nowrap" title={r.first_ts ? `${dt(new Date(r.first_ts * 1000).toISOString())} → ${dt(new Date(r.last_ts * 1000).toISOString())}` : ''}>
                   {spanLabel(r)}
                   {r.clamped && <span className="badge bg-amber-500/15 text-amber-300 ml-1" title="requested span exceeded Kite's per-timeframe ceiling — coverage was clamped">clamped</span>}
                 </td>
-                <td className="text-right">{unaff ? '—' : r.trades}</td>
-                <td className="text-right">{unaff ? '—' : num(r.win_rate, 0)}</td>
-                <td className="text-right">{unaff ? '—' : (r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2))}</td>
-                <td className="text-right text-down">{unaff ? '—' : num(r.max_drawdown_pct, 1)}</td>
-                <td className={`text-right ${(r.calmar ?? 0) >= 1 ? 'text-up' : 'text-zinc-300'}`}>{unaff || r.calmar == null ? '—' : num(r.calmar, 2)}</td>
-                <td className="text-right text-muted">{unaff || r.sharpe == null ? '—' : num(r.sharpe, 2)}</td>
-                <td className="text-right text-muted">{unaff || r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0)}</td>
-                <td className="text-right text-muted">{unaff ? '—' : (r.max_consec_losses ?? '—')}</td>
-                <td className={`text-right ${pnlColor(r.return_pct)}`}>{unaff ? '—' : num(r.return_pct, 1)}</td>
+                <td className="text-right">{r.trades}</td>
+                <td className="text-right">{num(r.win_rate, 0)}</td>
+                <td className="text-right">{r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)}</td>
+                <td className="text-right text-down">{num(r.max_drawdown_pct, 1)}</td>
+                <td className={`text-right ${(r.calmar ?? 0) >= 1 ? 'text-up' : 'text-zinc-300'}`}>{r.calmar == null ? '—' : num(r.calmar, 2)}</td>
+                <td className="text-right text-muted">{r.sharpe == null ? '—' : num(r.sharpe, 2)}</td>
+                <td className="text-right text-muted">{r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0)}</td>
+                <td className="text-right text-muted">{r.max_consec_losses ?? '—'}</td>
+                <td className={`text-right ${pnlColor(r.return_pct)}`}>{num(r.return_pct, 1)}</td>
                 <td className={`text-right ${r.bh_return_pct == null ? 'text-muted' : pnlColor(r.bh_return_pct)}`}>{r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1)}</td>
-                <td className={`text-right ${pnlColor(r.net_pnl)}`}>{unaff ? '—' : signedInr(r.net_pnl)}</td>
+                <td className={`text-right ${pnlColor(r.net_pnl)}`}>{signedInr(r.net_pnl)}</td>
                 <td className="text-right text-muted">{r.notional ? inr(r.notional) : '—'}</td>
-                <td className={`text-right ${r.worst_trade_pnl < 0 ? 'text-down' : 'text-muted'}`}>{unaff || !r.worst_trade_pnl ? '—' : signedInr(r.worst_trade_pnl)}</td>
+                <td className={`text-right ${optUnaff ? 'text-amber-300' : 'text-up/80'}`} title={optUnaff ? 'over your budget' : 'fits your budget'}>{r.option_cost ? inr(r.option_cost) : '—'}</td>
+                <td className={`text-right ${r.worst_trade_pnl < 0 ? 'text-down' : 'text-muted'}`}>{!r.worst_trade_pnl ? '—' : signedInr(r.worst_trade_pnl)}</td>
                 <td className="text-right">
                   <button onClick={(e) => { e.stopPropagation(); add(r) }}
                     className={`badge ${added.has(r.instrument_key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
@@ -458,39 +459,39 @@ function Drill({ r, onClose, onAdd, added }:
     </div>
   )
 
-  const TradesTable = () => (
-    <div className="card p-3 overflow-auto">
-      <div className="stat-label mb-2">Trades ({trades.length}) — every position the strategy opened & closed</div>
-      <table className="w-full text-xs">
-        <thead className="text-muted text-left border-b border-edge">
-          <tr className="[&>th]:py-1 [&>th]:pr-3">
-            <th>Entry</th><th>Exit</th><th>Dir</th><th>Entry₹</th><th>Exit₹</th>
-            <th>Qty</th><th>Net</th><th>Charges</th><th>Reason</th></tr>
-        </thead>
-        <tbody>
-          {!trades.length && <tr><td colSpan={9} className="py-4 text-center text-muted">loading trades…</td></tr>}
-          {trades.slice().reverse().map((t, i) => (
-            <tr key={i} className="border-t border-edge tabular-nums [&>td]:py-1 [&>td]:pr-3">
-              <td className="text-muted whitespace-nowrap">{dt(new Date(t.entry_time * 1000).toISOString())}</td>
-              <td className="text-muted whitespace-nowrap">{dt(new Date(t.exit_time * 1000).toISOString())}</td>
-              <td className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.direction}</td>
-              <td>{num(t.entry_price, 2)}</td>
-              <td>{num(t.exit_price, 2)}</td>
-              <td>{t.qty}</td>
-              <td className={pnlColor(t.net_pnl)}>{signedInr(t.net_pnl)}</td>
-              <td className="text-down">{inr(t.charges)}</td>
-              <td className="text-muted">{t.reason}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+  // Compact trades list for the LEFT column — each trade stacked so it fits a
+  // narrow rail beside the rest of the analysis (newest first).
+  const TradesList = () => (
+    <div className="card p-3 flex flex-col min-h-0">
+      <div className="stat-label mb-2 shrink-0">Trades ({trades.length}) — 1 lot each, net of charges</div>
+      <div className="flex flex-col gap-1 overflow-auto pr-1">
+        {!trades.length && <div className="py-4 text-center text-muted text-xs">loading trades…</div>}
+        {trades.slice().reverse().map((t, i) => (
+          <div key={i} className="border-b border-edge/60 pb-1 text-[11px] tabular-nums">
+            <div className="flex items-center justify-between">
+              <span className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.direction}</span>
+              <span className={`font-semibold ${pnlColor(t.net_pnl)}`}>{signedInr(t.net_pnl)}</span>
+            </div>
+            <div className="flex items-center justify-between text-muted">
+              <span className="whitespace-nowrap">{dt(new Date(t.entry_time * 1000).toISOString())} <span className="opacity-50">→</span> {dt(new Date(t.exit_time * 1000).toISOString())}</span>
+            </div>
+            <div className="flex items-center justify-between text-muted">
+              <span>{num(t.entry_price, 1)} → {num(t.exit_price, 1)} · {t.qty}</span>
+              <span className="opacity-70">{t.reason === 'OPEN_AT_END' ? 'open' : 'exit'}</span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 
+  const optCost = r.option_cost ?? 0
+  const budget = r.budget ?? 0
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="card w-full max-w-5xl p-4 flex flex-col gap-3 max-h-[92vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
+      <div className="card w-full max-w-6xl p-4 flex flex-col gap-3 max-h-[92vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <span className="text-lg font-semibold text-zinc-100">{r.name || r.instrument_key}</span>
             <span className="badge bg-zinc-700/40 text-muted">{r.interval}</span>
@@ -504,84 +505,104 @@ function Drill({ r, onClose, onAdd, added }:
           </div>
         </div>
         {span && (
-          <div className="text-[11px] text-muted">
-            History tested: <b className="text-zinc-300">{span}</b> · {r.bars} bars
+          <div className="text-[11px] text-muted shrink-0">
+            History tested: <b className="text-zinc-300">{span}</b> · {r.bars} bars · fixed <b className="text-zinc-300">1 lot</b>, additive (no compounding)
           </div>
         )}
+
+        {/* Affordability — futures vs options, against your real budget */}
+        <div className="flex items-center gap-2 flex-wrap text-[11px] shrink-0">
+          <span className="badge bg-zinc-700/40 text-muted" title="capital to hold 1 lot of the underlying (the return base)">
+            1-lot capital {r.notional ? inr(r.notional) : '—'}
+          </span>
+          <span className={`badge ${r.affordable_futures ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}
+            title="can you afford one lot of the FUTURE at your current budget?">
+            futures {r.affordable_futures ? 'affordable' : 'over budget'}
+          </span>
+          <span className={`badge ${r.affordable_options ? 'bg-up/15 text-up' : 'bg-amber-500/20 text-amber-300'}`}
+            title="estimated cost to buy 1 lot of an ATM option (BS at realised vol) vs your budget — this is how you'd actually trade it">
+            options ≈ {optCost ? inr(optCost) : '—'} {r.affordable_options ? '· affordable now' : '· over budget'}
+          </span>
+          {budget > 0 && <span className="text-muted">budget {inr(budget)}</span>}
+        </div>
+
         {!liveTradable && (
-          <div className="text-[11px] text-amber-400/90 bg-amber-400/10 rounded px-2 py-1">
-            Note: the live engine runs 5m / 15m / 30m / 60m candles (set per instrument on the Monitor page).
-            This {r.interval} edge is informational — adding pins it to the homepage and trades it on the
+          <div className="text-[11px] text-amber-400/90 bg-amber-400/10 rounded px-2 py-1 shrink-0">
+            Note: the live engine runs 5m / 15m / 30m / 60m candles (set per instrument on the Watchlist page).
+            This {r.interval} edge is informational — adding pins it to the watchlist and trades it on the
             configured live interval.
           </div>
         )}
 
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
-          <Mini label="Trades" v={r.open_at_end ? `${r.trades} (incl. 1 open)` : String(r.trades)} />
-          <Mini label="Win rate" v={num(r.win_rate, 0) + '%'} />
-          <Mini label="Win rate (realised)" v={r.open_at_end ? num(r.win_rate_realised, 0) + '%' : num(r.win_rate, 0) + '%'}
-            cls={r.open_at_end ? 'text-amber-300' : ''} />
-          <Mini label="Profit factor" v={r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)} />
-          <Mini label="Return" v={num(r.return_pct, 1) + '%'} cls={pnlColor(r.return_pct)} />
-          <Mini label="Return (realised)" v={r.open_at_end ? num(r.return_pct_realised, 1) + '%' : num(r.return_pct, 1) + '%'}
-            cls={r.open_at_end ? 'text-amber-300' : pnlColor(r.return_pct_realised)} />
-          <Mini label="vs buy & hold" v={r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1) + '%'}
-            cls={r.bh_return_pct == null ? '' : pnlColor(r.bh_return_pct)} />
-          <Mini label="Max DD (close-to-close)" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
-          <Mini label="Worst MAE (intra-trade)" v={r.worst_mae_pct == null ? '—' : num(r.worst_mae_pct, 1) + '%'} cls="text-down" />
-          <Mini label="Calmar" v={r.calmar == null ? '—' : num(r.calmar, 2)} cls={(r.calmar ?? 0) >= 1 ? 'text-up' : ''} />
-          <Mini label="Consistency (per-trade)" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
-          <Mini label="Sharpe (annualised)" v={r.sharpe == null ? '—' : num(r.sharpe, 2)} />
-          <Mini label="Underwater" v={r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0) + '%'} />
-          <Mini label="Loss streak" v={r.max_consec_losses == null ? '—' : String(r.max_consec_losses)} />
-          <Mini label="Net P&L" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
-          <Mini label="Notional" v={r.notional ? inr(r.notional) : '—'} />
-          <Mini label="Worst trade" v={r.worst_trade_pnl ? signedInr(r.worst_trade_pnl) : '—'} cls={r.worst_trade_pnl < 0 ? 'text-down' : ''} />
-          <Mini label="Charges" v={inr(r.charges)} cls="text-down" />
-          <Mini label="CAGR" v={r.cagr == null ? '—' : num(r.cagr, 1) + '%'} />
-        </div>
+        {/* LEFT: the trades list as its own column · RIGHT: metrics + winners/losers + curve */}
+        <div className="grid gap-3 min-h-0 flex-1" style={{ gridTemplateColumns: 'minmax(230px, 280px) minmax(0,1fr)' }}>
+          <TradesList />
 
-        {(winners.length > 0 || losers.length > 0) && (
-          <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <div className="card p-3">
-              <div className="stat-label mb-1 text-up">Biggest winners</div>
-              <div className="flex flex-col gap-1 text-xs">
-                {winners.length ? winners.map((t, i) => <TradeRow key={i} t={t} />)
-                  : <span className="text-muted">none</span>}
-              </div>
+          <div className="flex flex-col gap-3 min-h-0 overflow-auto pr-1">
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
+              <Mini label="Trades" v={r.open_at_end ? `${r.trades} (incl. 1 open)` : String(r.trades)} />
+              <Mini label="Win rate" v={num(r.win_rate, 0) + '%'} />
+              <Mini label="Win rate (realised)" v={r.open_at_end ? num(r.win_rate_realised, 0) + '%' : num(r.win_rate, 0) + '%'}
+                cls={r.open_at_end ? 'text-amber-300' : ''} />
+              <Mini label="Profit factor" v={r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)} />
+              <Mini label="Return (on 1-lot capital)" v={num(r.return_pct, 1) + '%'} cls={pnlColor(r.return_pct)} />
+              <Mini label="Return (realised)" v={r.open_at_end ? num(r.return_pct_realised, 1) + '%' : num(r.return_pct, 1) + '%'}
+                cls={r.open_at_end ? 'text-amber-300' : pnlColor(r.return_pct_realised)} />
+              <Mini label="vs buy & hold" v={r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1) + '%'}
+                cls={r.bh_return_pct == null ? '' : pnlColor(r.bh_return_pct)} />
+              <Mini label="Max DD (close-to-close)" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
+              <Mini label="Worst MAE (intra-trade)" v={r.worst_mae_pct == null ? '—' : num(r.worst_mae_pct, 1) + '%'} cls="text-down" />
+              <Mini label="Calmar" v={r.calmar == null ? '—' : num(r.calmar, 2)} cls={(r.calmar ?? 0) >= 1 ? 'text-up' : ''} />
+              <Mini label="Consistency (per-trade)" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
+              <Mini label="Sharpe (annualised)" v={r.sharpe == null ? '—' : num(r.sharpe, 2)} />
+              <Mini label="Underwater" v={r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0) + '%'} />
+              <Mini label="Loss streak" v={r.max_consec_losses == null ? '—' : String(r.max_consec_losses)} />
+              <Mini label="Net P&L (1 lot)" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
+              <Mini label="Worst trade" v={r.worst_trade_pnl ? signedInr(r.worst_trade_pnl) : '—'} cls={r.worst_trade_pnl < 0 ? 'text-down' : ''} />
+              <Mini label="Charges" v={inr(r.charges)} cls="text-down" />
+              <Mini label="CAGR" v={r.cagr == null ? '—' : num(r.cagr, 1) + '%'} />
             </div>
-            <div className="card p-3">
-              <div className="stat-label mb-1 text-down">Biggest losers</div>
-              <div className="flex flex-col gap-1 text-xs">
-                {losers.length ? losers.map((t, i) => <TradeRow key={i} t={t} />)
-                  : <span className="text-muted">none</span>}
+
+            {(winners.length > 0 || losers.length > 0) && (
+              <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                <div className="card p-3">
+                  <div className="stat-label mb-1 text-up">Biggest winners (1 lot)</div>
+                  <div className="flex flex-col gap-1 text-xs">
+                    {winners.length ? winners.map((t, i) => <TradeRow key={i} t={t} />)
+                      : <span className="text-muted">none</span>}
+                  </div>
+                </div>
+                <div className="card p-3">
+                  <div className="stat-label mb-1 text-down">Biggest losers (1 lot)</div>
+                  <div className="flex flex-col gap-1 text-xs">
+                    {losers.length ? losers.map((t, i) => <TradeRow key={i} t={t} />)
+                      : <span className="text-muted">none</span>}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* the executed trades, kept right under the summary so they're never buried */}
-        <TradesTable />
-
-        <div className="card p-3">
-          <div className="stat-label mb-1 flex items-center gap-3 flex-wrap">
-            <span>Equity curve — compounding % return on capital deployed (no leverage), indexed; net of charges</span>
-            {bhCurve.length > 1 && (
-              <span className="flex items-center gap-3 normal-case text-[10px]">
-                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: colorFor(r.instrument_key) }} /> strategy</span>
-                <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#8b93a7]" /> buy &amp; hold</span>
-              </span>
             )}
+
+            <div className="card p-3">
+              <div className="stat-label mb-1 flex items-center gap-3 flex-wrap">
+                <span>Equity curve — ₹ from a fixed 1-lot position (base + cumulative net P&amp;L), net of charges</span>
+                {bhCurve.length > 1 && (
+                  <span className="flex items-center gap-3 normal-case text-[10px]">
+                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: colorFor(r.instrument_key) }} /> strategy</span>
+                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#8b93a7]" /> buy &amp; hold</span>
+                  </span>
+                )}
+              </div>
+              {curve.length
+                ? (bhCurve.length > 1
+                    ? <MultiLineChart height={240} series={[
+                        { name: 'strategy', data: curve, color: colorFor(r.instrument_key) },
+                        { name: 'buy & hold', data: bhCurve, color: '#8b93a7' },
+                      ]} />
+                    : <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
+                        priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
+                : <div className="text-muted text-xs py-10 text-center">loading…</div>}
+            </div>
           </div>
-          {curve.length
-            ? (bhCurve.length > 1
-                ? <MultiLineChart height={240} series={[
-                    { name: 'strategy', data: curve, color: colorFor(r.instrument_key) },
-                    { name: 'buy & hold', data: bhCurve, color: '#8b93a7' },
-                  ]} />
-                : <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
-                    priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
-            : <div className="text-muted text-xs py-10 text-center">loading…</div>}
         </div>
       </div>
     </div>

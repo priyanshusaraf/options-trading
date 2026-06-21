@@ -282,9 +282,10 @@ class BacktestResult(Base):
     worst_trade_pnl: Mapped[float] = mapped_column(Float, default=0.0)  # single worst net P&L (tail risk)
     worst_mae_pct: Mapped[float] = mapped_column(Float, default=0.0)    # worst intra-trade adverse excursion, %
     # honest sizing / affordability
-    notional: Mapped[float] = mapped_column(Float, default=0.0)   # position notional (entry_price × qty)
-    lots: Mapped[int] = mapped_column(Integer, default=0)         # whole lots (cash: shares); 0 = unaffordable
-    affordable: Mapped[bool] = mapped_column(Boolean, default=True)  # False = one lot > capital
+    notional: Mapped[float] = mapped_column(Float, default=0.0)   # 1-lot underlying notional = base capital (entry × lot)
+    lots: Mapped[int] = mapped_column(Integer, default=0)         # 1 for F&O (cash: shares); 0 = no trades
+    affordable: Mapped[bool] = mapped_column(Boolean, default=True)  # back-compat; real flags computed at payload layer
+    option_cost: Mapped[float] = mapped_column(Float, default=0.0)   # est. cost to buy 1 lot of an ATM option (BS), budget-independent
     # realised vs OPEN_AT_END
     open_at_end: Mapped[bool] = mapped_column(Boolean, default=False)
     win_rate_realised: Mapped[float] = mapped_column(Float, default=0.0)
@@ -331,6 +332,7 @@ class BacktestResult(Base):
             "worst_trade_pnl": round(self.worst_trade_pnl, 0),
             "worst_mae_pct": round(self.worst_mae_pct, 1),
             "notional": round(self.notional, 0),
+            "option_cost": round(self.option_cost or 0.0, 0),
             "lots": self.lots,
             "affordable": bool(self.affordable),
             "open_at_end": bool(self.open_at_end),

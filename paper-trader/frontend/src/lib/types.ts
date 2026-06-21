@@ -128,8 +128,11 @@ export interface BTResult {
   expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string
   calmar: number | null; consistency: number | null; sharpe: number | null
   max_consec_losses: number; time_underwater_pct: number
-  // honest sizing / denominator (BT-1, BT-2)
+  // fixed 1-lot sizing: notional = base capital (1-lot underlying); option_cost =
+  // est. ATM option entry cost. affordable_* are budget-relative (payload layer).
   notional: number; lots: number; affordable: boolean
+  option_cost?: number; budget?: number
+  affordable_futures?: boolean; affordable_options?: boolean
   // tail risk (BT-8) + intra-trade pain (BT-4)
   worst_trade_pnl: number; worst_mae_pct: number
   // realised vs marked-to-last open (BT-5)

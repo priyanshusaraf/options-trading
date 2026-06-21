@@ -94,10 +94,11 @@ class BTMetrics:
     time_underwater_pct: float = 0.0    # % of the curve spent below its prior peak (close-to-close)
     worst_trade_pnl: float = 0.0        # single most-negative net P&L across all trades (scan-level tail risk)
     worst_mae_pct: float = 0.0          # worst per-trade Maximum Adverse Excursion (intra-trade pain), %
-    # ── sizing / affordability (honest position sizing — see engine docstring) ──
-    notional: float = 0.0               # representative position notional (entry_price × qty of the sized position)
-    lots: int = 0                       # whole F&O lots taken (cash equities: share count); 0 = unaffordable
-    affordable: bool = True             # False == one lot's notional already exceeds the backtest capital
+    # ── sizing / affordability (fixed 1-lot model — see engine docstring) ──
+    notional: float = 0.0               # 1-lot UNDERLYING notional = base capital (entry_price × lot); the return denominator
+    lots: int = 0                       # 1 for F&O (cash equities: share count); 0 = no trades
+    affordable: bool = True             # kept for back-compat; real affordability flags are computed at the payload layer
+    option_cost: float = 0.0            # est. cost to BUY one lot of an ATM option (BS at realised vol); 0 = unknown
     # ── realised vs marked-to-last (the OPEN_AT_END trade is unrealised) ──
     open_at_end: bool = False           # the final trade was still open at the last candle (marked, not realised)
     win_rate_realised: float = 0.0      # win rate EXCLUDING the open-at-end trade
@@ -111,7 +112,8 @@ class BTMetrics:
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
         for k in ("net_pnl", "gross_pnl", "charges", "expectancy", "avg_win",
-                  "avg_loss", "max_drawdown_abs", "worst_trade_pnl", "notional"):
+                  "avg_loss", "max_drawdown_abs", "worst_trade_pnl", "notional",
+                  "option_cost"):
             d[k] = round(d[k], 2)
         for k in ("win_rate", "return_pct", "max_drawdown_pct",
                   "win_rate_realised", "return_pct_realised", "worst_mae_pct"):
@@ -167,26 +169,25 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
     gross_loss = -sum(t.net_pnl for t in losses)
     m.profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
 
-    # Equity curve — leverage-free, COMPOUNDING the per-trade return on the
-    # position's own NOTIONAL (net P&L / (entry_price × qty)), NOT a flat ₹50k base.
-    # This is the honest curve: capital deployed == the position you actually take
-    # (the owner buys the underlying outright, no futures leverage), so one F&O lot
-    # can never imply a >100% account swing and curves are directly comparable
-    # across instruments regardless of price/lot size. return_pct/maxDD%/CAGR are
-    # therefore anchor-independent; `initial_capital` is only the curve's index base.
-    base = initial_capital if initial_capital else 100_000.0
+    # Equity curve — FIXED 1-lot, ADDITIVE, no leverage, no compounding. The base
+    # is the real capital to enter the FIRST 1-lot position (entry_price × lot); each
+    # trade adds/subtracts its actual 1-lot net P&L in rupees. This is the owner's
+    # "₹2.5L in → ₹5L out = +100%" framing — it does NOT compound per-trade % (which
+    # balloons to +1000% over years and destroys confidence). Return% = total net
+    # P&L / base. The curve is in REAL RUPEES, not an indexed %.
+    base = (trades[0].notional or trades[0].entry_price * trades[0].qty
+            or initial_capital or 100_000.0)
     equity = base
     curve_vals = [equity]
     m.equity_curve = [{"time": trades[0].entry_time, "value": round(equity, 2)}]
     for t in trades:
-        r = max(t.return_pct, -1.0)   # a fully-funded (un-leveraged) position can't lose >100%
-        equity = max(0.0, equity * (1.0 + r))
+        equity += t.net_pnl
         curve_vals.append(equity)
         m.equity_curve.append({"time": t.exit_time, "value": round(equity, 2)})
-    m.return_pct = (curve_vals[-1] / base - 1.0) * 100.0
+    m.return_pct = (m.net_pnl / base * 100.0) if base > 0 else 0.0
     m.max_drawdown_abs, m.max_drawdown_pct = _max_drawdown(curve_vals)
 
-    # CAGR over the spanned period (on the same compounding basis)
+    # CAGR over the spanned period (on the same additive base)
     span_secs = trades[-1].exit_time - trades[0].entry_time
     years = span_secs / (365.25 * 86400)
     final = curve_vals[-1]
@@ -239,22 +240,19 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
     m.worst_mae_pct = max((getattr(t, "mae_pct", 0.0) or 0.0 for t in trades),
                           default=0.0)
 
-    # ── sizing / affordability (populated from the trades the engine sized) ──
+    # ── sizing (1-lot model): notional = the base capital (first 1-lot entry) ──
     first = trades[0]
     m.lots = int(getattr(first, "lots", 0) or 0)
-    m.notional = float(getattr(first, "notional", first.entry_price * first.qty))
-    m.affordable = bool(getattr(first, "affordable", True))
+    m.notional = float(getattr(first, "notional", first.entry_price * first.qty)) or base
 
     # ── realised vs OPEN_AT_END (BT-5): the marked-to-last trade is unrealised ──
+    # Additive, on the same base: return% excluding the still-open final trade.
     realised = [t for t in trades if t.reason != "OPEN_AT_END"]
     m.open_at_end = len(realised) != len(trades)
     m.trades_realised = len(realised)
-    if realised:
+    if realised and base > 0:
         m.win_rate_realised = 100.0 * sum(1 for t in realised if t.win) / len(realised)
-        eq = base
-        for t in realised:
-            eq = max(0.0, eq * (1.0 + max(t.return_pct, -1.0)))
-        m.return_pct_realised = (eq / base - 1.0) * 100.0
+        m.return_pct_realised = sum(t.net_pnl for t in realised) / base * 100.0
     else:
         # the only trade was open-at-end: realised figures collapse to flat/zero
         m.win_rate_realised = 0.0

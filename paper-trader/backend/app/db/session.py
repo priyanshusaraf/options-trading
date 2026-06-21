@@ -140,6 +140,7 @@ def _migrate_schema() -> None:
             ("notional", "FLOAT DEFAULT 0.0"),
             ("lots", "INTEGER DEFAULT 0"),
             ("affordable", "BOOLEAN DEFAULT 1"),
+            ("option_cost", "FLOAT DEFAULT 0.0"),
             ("open_at_end", "BOOLEAN DEFAULT 0"),
             ("win_rate_realised", "FLOAT DEFAULT 0.0"),
             ("return_pct_realised", "FLOAT DEFAULT 0.0"),

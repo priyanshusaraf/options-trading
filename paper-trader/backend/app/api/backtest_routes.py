@@ -14,14 +14,40 @@ import csv
 import io
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.backtest import sweep
+from app.core.config import get_settings
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
+
+
+def _budget(request: Request) -> float:
+    """The owner's real tradeable budget for affordability flags: the live Kite
+    account's free funds when known (cached by the engine), else the configured
+    initial_capital. Budget-relative flags are computed at THIS layer so they track
+    the account without re-running the (budget-independent) backtest."""
+    runner = getattr(request.app.state, "runner", None)
+    funds = getattr(runner, "_account_funds", None) if runner else None
+    if funds and funds.get("available"):
+        return float(funds["available"])
+    return float(get_settings().initial_capital or 50_000.0)
+
+
+def _with_affordability(d: dict, budget: float) -> dict:
+    """Attach budget-relative affordability to a result row. We trade OPTIONS (1
+    lot of an ATM option) which are far cheaper than the futures notional, so a name
+    can be unaffordable as futures yet tradable as options. option_cost==0 means we
+    couldn't estimate it (treat as unknown, not affordable)."""
+    notional = d.get("notional") or 0.0
+    opt = d.get("option_cost") or 0.0
+    d["budget"] = round(budget, 0)
+    d["affordable_futures"] = bool(notional and notional <= budget)
+    d["affordable_options"] = bool(opt and opt <= budget)
+    return d
 
 router = APIRouter(prefix="/api/backtest")
 
@@ -104,7 +130,7 @@ def export(run_id: int | None = None):
             "bh_return_pct", "net_pnl", "worst_trade_pnl", "gross_pnl", "charges",
             "expectancy", "cagr", "calmar", "consistency", "sharpe",
             "max_consec_losses", "time_underwater_pct",
-            "notional", "lots", "affordable",
+            "notional", "option_cost", "lots", "affordable",
             "first_ts", "last_ts", "effective_days", "clamped",
             "bars", "from_cache"]
     with SessionLocal() as s:
@@ -125,10 +151,11 @@ def export(run_id: int | None = None):
 
 
 @router.get("/results")
-def results(run_id: int | None = None, interval: str | None = None,
+def results(request: Request, run_id: int | None = None, interval: str | None = None,
             min_win_rate: float = 0.0, min_profit_factor: float = 0.0,
             max_drawdown: float = 100.0, min_return: float = -1e9,
             min_trades: int = 1, sort: str = "return_pct", limit: int = 500):
+    budget = _budget(request)
     with SessionLocal() as s:
         if run_id is None:
             run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
@@ -143,20 +170,13 @@ def results(run_id: int | None = None, interval: str | None = None,
     skipped_errored = 0          # candle/window/out-of-range errors (silently dropped before)
     skipped_low_trades = 0       # too few trades to be meaningful
     skipped_filtered = 0         # failed the user's win%/PF/DD/return filters
-    unaffordable = 0             # one lot > capital — surfaced (badged), NOT hidden
+    unaffordable = 0             # can't afford 1 lot of the ATM OPTION at the current budget — badged, NOT hidden
     for r in rows:
         if interval and r.interval != interval:
             continue
         if r.error:
             skipped += 1
             skipped_errored += 1
-            continue
-        # Unaffordable cells are a DISTINCT, non-error status: keep them visible
-        # (badged) and exempt from the trade-count filter so the universe shows the
-        # instrument can't be traded at this capital, rather than vanishing.
-        if not r.affordable:
-            unaffordable += 1
-            out.append(r.summary())
             continue
         if r.trades < min_trades:
             skipped += 1
@@ -168,21 +188,24 @@ def results(run_id: int | None = None, interval: str | None = None,
             skipped += 1
             skipped_filtered += 1
             continue
-        out.append(r.summary())
+        d = _with_affordability(r.summary(), budget)
+        if not d["affordable_options"]:
+            unaffordable += 1
+        out.append(d)
 
     # lower-is-better metrics sort ascending; everything else descending
     reverse = sort not in ("max_drawdown_pct", "charges", "max_consec_losses",
                            "time_underwater_pct", "worst_mae_pct")
     out.sort(key=lambda d: (d.get(sort) if d.get(sort) is not None else -1e18), reverse=reverse)
     return {"run_id": run_id, "count": len(out), "results": out[:limit],
-            "skipped": skipped, "unaffordable": unaffordable,
+            "budget": round(budget, 0), "skipped": skipped, "unaffordable": unaffordable,
             "skipped_breakdown": {
                 "errored": skipped_errored, "low_trades": skipped_low_trades,
                 "filtered": skipped_filtered}}
 
 
 @router.get("/result/{key}/{interval}")
-def result_detail(key: str, interval: str, run_id: int | None = None):
+def result_detail(key: str, interval: str, request: Request, run_id: int | None = None):
     with SessionLocal() as s:
         if run_id is None:
             run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
@@ -193,7 +216,7 @@ def result_detail(key: str, interval: str, run_id: int | None = None):
             BacktestResult.interval == interval))
         if not r:
             return {"error": "no such result"}
-        d = r.summary()
+        d = _with_affordability(r.summary(), _budget(request))
         d["equity_curve"] = json.loads(r.curve_json or "[]")
         d["bh_curve"] = json.loads(r.bh_curve_json or "[]")
         d["trades"] = json.loads(r.trades_json or "[]")

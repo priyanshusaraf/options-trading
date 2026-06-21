@@ -15,23 +15,27 @@ def _mk(net, t0, t1, direction="LONG", entry=1000.0):
                    gross_pnl=net, charges=0.0, net_pnl=net, reason="X", bars_held=1)
 
 
-def test_metrics_compound_return_on_notional():
-    # notional 1000 each; nets +50 (+5%), -20 (-2%), +100 (+10%)
+def test_metrics_additive_return_on_one_lot_base():
+    # FIXED 1-lot ADDITIVE model: base = first trade notional (entry×qty = 1000),
+    # equity = base + Σ net P&L (real rupees), return% = total P&L / base.
     trades = [_mk(50, 0, 86400), _mk(-20, 86400, 172800), _mk(100, 172800, 259200)]
     m = compute_metrics(trades, 100_000)
     assert (m.trades, m.wins, m.losses) == (3, 2, 1)
     assert m.net_pnl == 130                                   # raw rupees unchanged
     assert m.profit_factor == pytest.approx(150 / 20)         # 7.5
-    # compounding 1.05 × 0.98 × 1.10 − 1 = 13.19%
-    assert m.return_pct == pytest.approx((1.05 * 0.98 * 1.10 - 1) * 100, abs=0.01)
-    # drawdown: peak after +5%, dips to +2.9% -> 2% peak-to-trough on the % curve
-    assert m.max_drawdown_pct == pytest.approx(2.0, abs=0.01)
+    # additive: 130 / 1000 base = +13.0% (NOT the compounding 13.19%)
+    assert m.return_pct == pytest.approx(13.0, abs=0.01)
+    # equity curve is in REAL RUPEES off the base, not an indexed %
+    assert m.equity_curve[0]["value"] == pytest.approx(1000.0)
+    assert m.equity_curve[-1]["value"] == pytest.approx(1130.0)
+    # drawdown on the rupee curve: peak 1050 -> trough 1030 = 20/1050
+    assert m.max_drawdown_pct == pytest.approx(20 / 1050 * 100, abs=0.01)
     assert m.win_rate == pytest.approx(100 * 2 / 3)
 
 
-def test_return_pct_is_honest_and_anchor_independent():
-    # one NIFTY-sized lot: notional ≈ ₹18L, net +₹54k = a +3% underlying move —
-    # must read ~+3%, NOT the old +108% (54k/50k), and must not depend on the anchor.
+def test_return_base_is_one_lot_capital_not_50k_and_anchor_independent():
+    # one NIFTY-sized lot: base = entry×lot = 24000×75 = ₹18L; net +₹54k must read
+    # +3% (54k / 18L), NOT +108% (54k/50k) and NOT depend on initial_capital.
     t = BTTrade("LONG", 0, 24000.0, 86400, 24720.0, 75,
                 gross_pnl=54_000, charges=0.0, net_pnl=54_000, reason="X", bars_held=1)
     m1 = compute_metrics([t], 50_000)
@@ -39,6 +43,7 @@ def test_return_pct_is_honest_and_anchor_independent():
     assert m1.return_pct == pytest.approx(m2.return_pct, abs=0.001)        # anchor-independent
     assert m1.return_pct == pytest.approx(54_000 / (24000 * 75) * 100, abs=0.01)  # ≈ +3%
     assert m1.return_pct < 5                                               # not the ₹50k-base fiction
+    assert m1.notional == pytest.approx(24000 * 75)                        # base = 1-lot notional
 
 
 def test_smoothness_metrics_basic():
@@ -79,38 +84,31 @@ def test_cash_equity_sizing_uses_capital():
     assert backtest_qty(Cash(), price=2500.0, capital=49_999) == 19
 
 
-def test_backtest_qty_affordable_lots():
-    # BANKNIFTY: lot 35. At 52,000 one lot's notional is 52000×35 = 1.82M.
+def test_backtest_qty_is_fixed_one_lot_regardless_of_capital():
+    # F&O is ALWAYS exactly one lot — never scaled to capital, never zero. Affordability
+    # is a separate, payload-layer flag; the backtest always shows the 1-lot edge.
     class BN:
         segment = "NFO"
         lot_size = 35
-    # ₹50k cannot afford even one lot of a ₹1.82M position -> 0 (unaffordable)
-    assert backtest_qty(BN(), price=52_000.0, capital=50_000) == 0
-    # exactly one lot fits inside ₹2.5M (1.82M), but two (3.64M) do not -> 35
-    assert backtest_qty(BN(), price=52_000.0, capital=2_500_000) == 35
-    # 4M affords two whole lots (3.64M) but not three (5.46M) -> 70, whole-lot multiple
-    q = backtest_qty(BN(), price=52_000.0, capital=4_000_000)
-    assert q == 70 and q % 35 == 0
-    # never exceeds capital (no leverage): notional of the sized position fits
-    assert 52_000.0 * q <= 4_000_000
+    assert backtest_qty(BN(), price=52_000.0, capital=50_000) == 35      # tiny budget -> still 1 lot
+    assert backtest_qty(BN(), price=52_000.0, capital=4_000_000) == 35   # huge budget -> still 1 lot
 
 
-def test_unaffordable_instrument_is_flagged_not_silently_one_lot():
-    # an F&O instrument whose single lot already costs more than the capital must
-    # be reported as a DISTINCT unaffordable result (lots=0, affordable=False),
-    # NOT silently sized to one lot.
+def test_one_lot_traded_even_when_futures_unaffordable_with_option_cost():
+    # An F&O name whose 1-lot underlying notional dwarfs a small account is NOT
+    # skipped: it trades one lot so the strategy edge is visible, carries the 1-lot
+    # base as `notional`, and gets an estimated ATM option_cost for the affordability
+    # flag (which is far cheaper than the futures notional).
     prov = MockProvider()
-    inst = get_instrument("BANKNIFTY")          # mock_spot 52000, lot 35 -> ~1.82M/lot
+    inst = get_instrument("BANKNIFTY")          # mock_spot ~52000, lot 35 -> ~1.82M/lot
     candles = prov.get_candles(inst, "15minute", 90)
     trades, m = simulate(candles, inst, "15minute", capital=50_000)
-    assert trades == []                          # nothing was traded at this size
-    assert m.affordable is False and m.lots == 0
-    assert m.notional > 50_000                    # one lot's notional, the thing that didn't fit
-    d = m.to_dict()
-    assert d["affordable"] is False and d["lots"] == 0
-    # with enough capital the SAME instrument becomes tradable (affordable=True)
-    trades2, m2 = simulate(candles, inst, "15minute", capital=3_000_000)
-    assert m2.affordable is True and m2.lots >= 1
+    assert m.trades == len(trades) and m.trades > 0   # traded one lot regardless of budget
+    assert m.lots == 1
+    assert m.notional > 1_000_000                      # the 1-lot underlying notional (base capital)
+    assert m.option_cost > 0                            # ATM option premium × lot estimated
+    assert m.option_cost < m.notional                  # options are far cheaper than the future
+    assert m.to_dict()["option_cost"] == pytest.approx(m.option_cost, abs=0.5)
 
 
 def test_simulate_charges_every_trade_and_nets():

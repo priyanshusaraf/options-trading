@@ -21,7 +21,11 @@ from app.db.models import BacktestResult
 #     split + buy-and-hold benchmark + annualised Sharpe + worst-trade/MAE + true
 #     per-cell span (first/last/effective_days/clamped). The stored metric shape
 #     changed, so bump to force a clean recompute (no stale-row mixing).
-SCHEMA_VERSION = 4
+# v5: fixed 1-lot ADDITIVE return model (equity = base + Σ 1-lot net P&L, real
+#     rupees; return% = total P&L / base) replacing compounding-%-on-notional, and
+#     an estimated ATM option_cost for the options-affordability flag. Return/curve
+#     semantics changed -> force a clean recompute.
+SCHEMA_VERSION = 5
 
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,
