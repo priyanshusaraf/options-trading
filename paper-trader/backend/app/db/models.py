@@ -404,3 +404,20 @@ class OptionData(Base):
     volume: Mapped[int] = mapped_column(Integer, default=0)
     iv: Mapped[float | None] = mapped_column(Float, nullable=True)
     delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class DailyAccountSnapshot(Base):
+    """One row per IST calendar day: the real Kite account equity at last capture.
+    The Calendar view derives YOUR discretionary daily P&L from the day-over-day
+    change in account_net minus the bot's booked P&L that day (the bot's side comes
+    straight from the Trade ledger). Recorded forward from go-live, so history
+    builds from the first live day."""
+    __tablename__ = "daily_account_snapshot"
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)   # "YYYY-MM-DD" IST
+    account_net: Mapped[float] = mapped_column(Float, default=0.0)        # total account equity (margins.net)
+    account_available: Mapped[float] = mapped_column(Float, default=0.0)  # free funds (live_balance)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {"day": self.day, "account_net": round(self.account_net, 2),
+                "account_available": round(self.account_available, 2)}

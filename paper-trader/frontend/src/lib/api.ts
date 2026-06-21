@@ -34,6 +34,7 @@ export const getOptionsCalc = (key: string) => j(`/api/options-calc/${key}`)
 export const getDashboard = () => j('/api/dashboard')
 export const getAccountPnl = () => j('/api/account-pnl')
 export const getTrades = (n = 1000) => j(`/api/trades?limit=${n}`)
+export const getCalendar = (days = 120) => j(`/api/calendar?days=${days}`)
 export const getLogs = (n = 300) => j(`/api/logs?limit=${n}`)
 
 export const toggleInstrument = (key: string, enabled: boolean) =>

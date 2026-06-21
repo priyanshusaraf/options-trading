@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
-from app.db.models import Position, Trade
+from app.db.models import DailyAccountSnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
@@ -57,6 +57,62 @@ def status(request: Request):
         "interval": settings.interval,
         "capital": cap,
     }
+
+
+@router.get("/api/calendar")
+def calendar(request: Request, days: int = 120):
+    """Per-day P&L for the Calendar view: the BOT's booked live P&L (from the trade
+    ledger) and YOUR discretionary P&L (day-over-day account-equity change minus the
+    bot's that day, from the daily snapshots). Values are None where there's no
+    activity / no snapshot yet (rendered neutral grey). Builds forward from go-live."""
+    import datetime as _dt
+    from collections import defaultdict
+    r = _runner(request)
+    today = r.provider.now().date()
+
+    bot_by_day: dict[str, float] = defaultdict(float)
+    bot_n_by_day: dict[str, int] = defaultdict(int)
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade).where(Trade.mode == "live")))
+        snaps = {row.day: row.account_net for row in s.scalars(select(DailyAccountSnapshot))}
+    for t in trades:
+        if not t.exit_time:
+            continue
+        d = t.exit_time.date().isoformat()
+        bot_by_day[d] += t.net_pnl
+        bot_n_by_day[d] += 1
+
+    # Anchor the calendar to the FIRST month we have any data for (go-live), not a
+    # rolling lookback — so it starts at the go-live month and grows forward instead
+    # of showing empty pre-go-live months. Before any data, show the current month.
+    data_days = sorted(set(list(snaps.keys()) + list(bot_by_day.keys())))
+    anchor = data_days[0] if data_days else today.isoformat()
+    ay, am, _ = anchor.split("-")
+    start = _dt.date(int(ay), int(am), 1)
+    cap = today - _dt.timedelta(days=max(31, min(days, 1460)))   # safety bound on very old data
+    if start < cap:
+        start = _dt.date(cap.year, cap.month, 1)
+
+    # prior-snapshot net for each snapshot day, to diff day-over-day account change
+    snap_days = sorted(snaps)
+    prev_net: dict[str, float | None] = {}
+    last = None
+    for d in snap_days:
+        prev_net[d] = snaps[last] if last is not None else None
+        last = d
+
+    out = []
+    cur = start
+    while cur <= today:
+        ds = cur.isoformat()
+        bot = round(bot_by_day[ds], 2) if ds in bot_by_day else None
+        my = None
+        if ds in snaps and prev_net.get(ds) is not None:
+            my = round((snaps[ds] - prev_net[ds]) - bot_by_day.get(ds, 0.0), 2)
+        out.append({"day": ds, "bot_pnl": bot, "my_pnl": my,
+                    "bot_trades": bot_n_by_day.get(ds, 0)})
+        cur += _dt.timedelta(days=1)
+    return {"from": start.isoformat(), "to": today.isoformat(), "days": out}
 
 
 @router.get("/api/login")

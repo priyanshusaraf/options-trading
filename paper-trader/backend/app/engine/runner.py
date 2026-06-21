@@ -585,8 +585,26 @@ class EngineRunner:
             funds = self.provider.account_funds()
             if funds:
                 self._account_funds = funds
+                self._persist_daily_snapshot(funds)
         except Exception as e:
             log.warn(f"account funds refresh failed: {e}")
+
+    def _persist_daily_snapshot(self, funds: dict) -> None:
+        """Upsert today's (IST) account equity row for the Calendar view. Called from
+        the throttled funds refresh, so it captures the latest balance of the day."""
+        from app.db.models import DailyAccountSnapshot
+        day = self.provider.now().date().isoformat()
+        try:
+            with SessionLocal() as s:
+                row = s.get(DailyAccountSnapshot, day)
+                if row is None:
+                    row = DailyAccountSnapshot(day=day)
+                    s.add(row)
+                row.account_net = float(funds.get("net", 0.0) or 0.0)
+                row.account_available = float(funds.get("available", 0.0) or 0.0)
+                s.commit()
+        except Exception as e:
+            log.warn(f"daily snapshot persist failed: {e}")
 
     def _maybe_reconcile_orphans(self) -> None:
         """Throttled (~30s): book any bot position the live account no longer backs

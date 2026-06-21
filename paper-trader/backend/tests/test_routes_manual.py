@@ -6,7 +6,7 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app.api import routes
-from app.db.session import init_db
+from app.db.session import init_db, SessionLocal
 from app.engine.runner import EngineRunner
 from app.main import app
 
@@ -123,6 +123,45 @@ def test_session_redirects_to_frontend_after_login(monkeypatch):
     res = c.get("/api/session?request_token=abc", follow_redirects=False)
     assert res.status_code in (302, 307)
     assert res.headers["location"] == get_settings().frontend_url
+
+
+def _seed_trade(s, *, exit_dt, net, mode):
+    import datetime as dt
+    from app.db.models import Trade
+    s.add(Trade(
+        instrument_key="NIFTY", direction="LONG", option_type="CE",
+        tradingsymbol="NIFTY24CE", exchange="NFO", strike=24000.0,
+        expiry=dt.date(2026, 7, 31), qty=75,
+        entry_premium=100.0, entry_cost=7500.0, entry_spot=24000.0,
+        entry_time=exit_dt - dt.timedelta(hours=2),
+        exit_premium=100.0 + net / 75, exit_charges=0.0, exit_spot=24010.0,
+        exit_time=exit_dt, exit_reason="STRATEGY_EXIT",
+        gross_pnl=net, charges_total=0.0, net_pnl=net, return_pct=0.0,
+        holding_minutes=120.0, win=net > 0, mode=mode))
+
+
+def test_calendar_combines_bot_ledger_and_account_snapshots():
+    """Calendar: bot side = LIVE trade ledger by exit day (paper trades excluded);
+    your side = day-over-day account-net change minus the bot's that day."""
+    import datetime as dt
+    from app.db.models import DailyAccountSnapshot
+    c, r = _client()
+    today = r.provider.now().date()
+    yday = today - dt.timedelta(days=1)
+    with SessionLocal() as s:
+        s.add(DailyAccountSnapshot(day=yday.isoformat(), account_net=100_000.0, account_available=100_000.0))
+        s.add(DailyAccountSnapshot(day=today.isoformat(), account_net=112_400.0, account_available=112_400.0))
+        _seed_trade(s, exit_dt=dt.datetime.combine(today, dt.time(10, 0)), net=3_100.0, mode="live")
+        _seed_trade(s, exit_dt=dt.datetime.combine(today, dt.time(11, 0)), net=9_999.0, mode="paper")  # ignored
+        s.commit()
+    rec = {x["day"]: x for x in c.get("/api/calendar").json()["days"]}
+    assert rec[today.isoformat()]["bot_pnl"] == 3_100.0          # live only, paper excluded
+    assert rec[today.isoformat()]["bot_trades"] == 1
+    # my P&L = account change (12,400) − bot booked (3,100) = 9,300
+    assert rec[today.isoformat()]["my_pnl"] == 9_300.0
+    # a day with no snapshot/trades is neutral (None), not 0
+    assert rec[yday.isoformat()]["my_pnl"] is None               # no prior snapshot to diff
+    assert rec[yday.isoformat()]["bot_pnl"] is None
 
 
 def test_set_interval_route():
