@@ -150,15 +150,19 @@ export default function DashboardView() {
 
         {/* recent trades */}
         <div className="card p-3 overflow-auto">
-          <div className="stat-label mb-2">Recent trades</div>
+          <div className="stat-label mb-2">Recent trades — 📝 paper vs 🔴 real are tagged per row</div>
           <table className="w-full text-xs">
             <thead className="text-muted text-left"><tr className="[&>th]:py-1 [&>th]:pr-3">
-              <th>Exit</th><th>Instrument</th><th>Contract</th><th>Dir</th><th>Reason</th><th>Ret%</th><th>Net</th></tr></thead>
+              <th>Exit</th><th>Ledger</th><th>Instrument</th><th>Contract</th><th>Dir</th><th>Reason</th><th>Ret%</th><th>Net</th></tr></thead>
             <tbody>
-              {(d.recent_trades || []).length === 0 && <tr><td colSpan={7} className="py-4 text-center text-muted">no trades yet</td></tr>}
+              {(d.recent_trades || []).length === 0 && <tr><td colSpan={8} className="py-4 text-center text-muted">no trades yet</td></tr>}
               {(d.recent_trades || []).map((t: TradeDTO) => (
                 <tr key={t.id} className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums">
                   <td className="text-muted">{dt(t.exit_time)}</td>
+                  <td>
+                    <span className={`badge ${t.mode === 'live' ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                      {t.mode === 'live' ? 'REAL' : 'PAPER'}</span>
+                  </td>
                   <td className="font-semibold">{t.instrument_key}</td>
                   <td className="font-mono text-[10px]">{t.tradingsymbol}</td>
                   <td className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.option_type}</td>

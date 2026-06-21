@@ -86,6 +86,9 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
         <div className="flex items-center gap-2">
           <span className="font-semibold text-zinc-100">{p.instrument_key}</span>
           <span className={`badge ${p.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>{p.direction} {p.option_type}</span>
+          {p.mode === 'live'
+            ? <span className="badge bg-down/20 text-down" title="REAL Kite position — actual money">🔴 REAL</span>
+            : <span className="badge bg-emerald-500/15 text-emerald-300" title="paper position — simulated fill, no real order">📝 PAPER</span>}
           <span className="text-[11px] text-muted">{p.tradingsymbol} · {p.qty}u</span>
           {!!p.reinforcement_count && <span className="badge bg-blue-500/15 text-blue-300" title="reinforcements">⊕ ×{p.reinforcement_count}</span>}
           {p.held_overnight && <span className="badge bg-indigo-400/15 text-indigo-300" title="held overnight">🌙 overnight</span>}
@@ -127,11 +130,13 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
   )
 }
 
-function ManualEntry({ tradable, onDone }: { tradable: SignalRow[]; onDone: () => void }) {
+function ManualEntry({ tradable, onDone, mode }:
+  { tradable: SignalRow[]; onDone: () => void; mode: 'paper' | 'live' }) {
   const [key, setKey] = useState('')
   const [dir, setDir] = useState<'LONG' | 'SHORT'>('LONG')
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const live = mode === 'live'
   const submit = async () => {
     if (!key) return
     setBusy(true); setMsg(null)
@@ -141,9 +146,13 @@ function ManualEntry({ tradable, onDone }: { tradable: SignalRow[]; onDone: () =
     else { setMsg(`✓ opened ${res.tradingsymbol}`); onDone() }
   }
   return (
-    <div className="card p-3 flex items-end gap-3 flex-wrap">
+    <div className={`card p-3 flex items-end gap-3 flex-wrap ${live ? 'border-down/40' : ''}`}>
       <div className="flex flex-col gap-1">
-        <span className="stat-label">Manual paper entry (1 lot, capital-checked)</span>
+        <span className="stat-label">Manual entry — 1 lot, capital-checked
+          {live
+            ? <span className="badge ml-1 bg-down/20 text-down">🔴 REAL order</span>
+            : <span className="badge ml-1 bg-emerald-500/15 text-emerald-300">📝 paper</span>}
+        </span>
         <div className="flex items-center gap-2">
           <select value={key} onChange={(e) => setKey(e.target.value)}
             className="bg-panel2 border border-edge rounded px-2 py-1 text-xs">
@@ -152,17 +161,23 @@ function ManualEntry({ tradable, onDone }: { tradable: SignalRow[]; onDone: () =
           </select>
           <button onClick={() => setDir('LONG')} className={`badge ${dir === 'LONG' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>LONG</button>
           <button onClick={() => setDir('SHORT')} className={`badge ${dir === 'SHORT' ? 'bg-down/20 text-down' : 'bg-zinc-700/40 text-muted'}`}>SHORT</button>
-          <button disabled={busy || !key} onClick={submit} className="btn border-up/50 text-up">{busy ? 'opening…' : '+ open paper position'}</button>
+          <button disabled={busy || !key} onClick={submit}
+            className={`btn ${live ? 'border-down/60 text-down' : 'border-up/50 text-up'}`}>
+            {busy ? 'opening…' : live ? '+ open REAL position' : '+ open paper position'}</button>
         </div>
       </div>
       {msg && <span className={`text-xs ${msg.startsWith('✓') ? 'text-up' : 'text-down'}`}>{msg}</span>}
-      <span className="ml-auto text-[11px] text-amber-400/70">paper only — never places a real Kite order</span>
+      <span className={`ml-auto text-[11px] ${live ? 'text-down' : 'text-emerald-300/70'}`}>
+        {live ? '🔴 LIVE execution armed — this places a REAL Kite order on your account'
+              : '📝 paper mode — simulated fill, never places a real Kite order'}
+      </span>
     </div>
   )
 }
 
 export default function ActivePositionsView() {
-  const { positionTicks } = useLive()
+  const { positionTicks, state } = useLive()
+  const mode = state?.broker_mode ?? 'paper'   // which ledger the engine is executing into right now
   const [rows, setRows] = useState<PositionRow[]>([])
   const [tradable, setTradable] = useState<SignalRow[]>([])
 
@@ -183,7 +198,7 @@ export default function ActivePositionsView() {
   return (
     <div className="flex flex-col gap-3">
       <AnalyticsStrip />
-      <ManualEntry tradable={tradable} onDone={load} />
+      <ManualEntry tradable={tradable} onDone={load} mode={mode} />
       {merged.length === 0 ? (
         <div className="card p-8 text-center text-muted">No open positions. The engine opens one on the next fresh signal, or open one manually above.</div>
       ) : (

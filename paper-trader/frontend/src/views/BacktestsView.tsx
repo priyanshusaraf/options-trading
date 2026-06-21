@@ -343,8 +343,8 @@ export default function BacktestsView() {
                 <td className="text-right">{r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)}</td>
                 <td className="text-right text-down">{num(r.max_drawdown_pct, 1)}</td>
                 <td className={`text-right ${(r.calmar ?? 0) >= 1 ? 'text-up' : 'text-zinc-300'}`}>{r.calmar == null ? '—' : num(r.calmar, 2)}</td>
-                <td className="text-right text-muted">{num(r.time_underwater_pct, 0)}</td>
-                <td className="text-right text-muted">{r.max_consec_losses}</td>
+                <td className="text-right text-muted">{r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0)}</td>
+                <td className="text-right text-muted">{r.max_consec_losses ?? '—'}</td>
                 <td className={`text-right ${pnlColor(r.return_pct)}`}>{num(r.return_pct, 1)}</td>
                 <td className={`text-right ${pnlColor(r.net_pnl)}`}>{signedInr(r.net_pnl)}</td>
                 <td className="text-right">
@@ -371,7 +371,8 @@ function Drill({ r, onClose, onAdd, added }:
   useEffect(() => { getSweepResult(r.instrument_key, r.interval, r.run_id).then(setDetail) }, [r])
   const curve = (detail?.equity_curve || []).map((p: any) => ({ time: p.time, value: p.value }))
   const trades: BTTradeDTO[] = detail?.trades || []
-  const liveTradable = r.interval === '15minute' || r.interval === '30minute'
+  // the live engine runs 5m/15m/30m/60m candles (per-instrument); 1m & 1D are not live-tradable
+  const liveTradable = ['5minute', '15minute', '30minute', '60minute'].includes(r.interval)
 
   // biggest winners / losers (by net P&L) — surfaced from the trade list
   const byPnl = [...trades].sort((a, b) => b.net_pnl - a.net_pnl)
@@ -383,10 +384,41 @@ function Drill({ r, onClose, onAdd, added }:
     : ''
 
   const TradeRow = ({ t }: { t: BTTradeDTO }) => (
-    <div className="flex items-center justify-between tabular-nums">
-      <span className="text-muted">{dt(new Date(t.entry_time * 1000).toISOString())}</span>
+    <div className="flex items-center justify-between gap-2 tabular-nums">
+      <span className="text-muted whitespace-nowrap">
+        {dt(new Date(t.entry_time * 1000).toISOString())} <span className="opacity-50">→</span> {dt(new Date(t.exit_time * 1000).toISOString())}
+      </span>
       <span className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.direction}</span>
       <span className={`font-semibold ${pnlColor(t.net_pnl)}`}>{signedInr(t.net_pnl)}</span>
+    </div>
+  )
+
+  const TradesTable = () => (
+    <div className="card p-3 overflow-auto">
+      <div className="stat-label mb-2">Trades ({trades.length}) — every position the strategy opened & closed</div>
+      <table className="w-full text-xs">
+        <thead className="text-muted text-left border-b border-edge">
+          <tr className="[&>th]:py-1 [&>th]:pr-3">
+            <th>Entry</th><th>Exit</th><th>Dir</th><th>Entry₹</th><th>Exit₹</th>
+            <th>Qty</th><th>Net</th><th>Charges</th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+          {!trades.length && <tr><td colSpan={9} className="py-4 text-center text-muted">loading trades…</td></tr>}
+          {trades.slice().reverse().map((t, i) => (
+            <tr key={i} className="border-t border-edge tabular-nums [&>td]:py-1 [&>td]:pr-3">
+              <td className="text-muted whitespace-nowrap">{dt(new Date(t.entry_time * 1000).toISOString())}</td>
+              <td className="text-muted whitespace-nowrap">{dt(new Date(t.exit_time * 1000).toISOString())}</td>
+              <td className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.direction}</td>
+              <td>{num(t.entry_price, 2)}</td>
+              <td>{num(t.exit_price, 2)}</td>
+              <td>{t.qty}</td>
+              <td className={pnlColor(t.net_pnl)}>{signedInr(t.net_pnl)}</td>
+              <td className="text-down">{inr(t.charges)}</td>
+              <td className="text-muted">{t.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 
@@ -413,8 +445,9 @@ function Drill({ r, onClose, onAdd, added }:
         )}
         {!liveTradable && (
           <div className="text-[11px] text-amber-400/90 bg-amber-400/10 rounded px-2 py-1">
-            Note: the live engine trades only 15m/30m. This {r.interval} edge is informational —
-            adding pins it to the homepage and trades it on the configured live interval.
+            Note: the live engine runs 5m / 15m / 30m / 60m candles (set per instrument on the Monitor page).
+            This {r.interval} edge is informational — adding pins it to the homepage and trades it on the
+            configured live interval.
           </div>
         )}
 
@@ -426,8 +459,8 @@ function Drill({ r, onClose, onAdd, added }:
           <Mini label="Max DD" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
           <Mini label="Calmar" v={r.calmar == null ? '—' : num(r.calmar, 2)} cls={(r.calmar ?? 0) >= 1 ? 'text-up' : ''} />
           <Mini label="Consistency" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
-          <Mini label="Underwater" v={num(r.time_underwater_pct, 0) + '%'} />
-          <Mini label="Loss streak" v={String(r.max_consec_losses)} />
+          <Mini label="Underwater" v={r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0) + '%'} />
+          <Mini label="Loss streak" v={r.max_consec_losses == null ? '—' : String(r.max_consec_losses)} />
           <Mini label="Net P&L" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
           <Mini label="Charges" v={inr(r.charges)} cls="text-down" />
           <Mini label="CAGR" v={r.cagr == null ? '—' : num(r.cagr, 1) + '%'} />
@@ -452,37 +485,14 @@ function Drill({ r, onClose, onAdd, added }:
           </div>
         )}
 
+        {/* the executed trades, kept right under the summary so they're never buried */}
+        <TradesTable />
+
         <div className="card p-3">
           <div className="stat-label mb-1">Equity curve — compounding % return on capital deployed (no leverage), indexed; net of charges</div>
-          {curve.length ? <LineChart data={curve} height={260} color={colorFor(r.instrument_key)}
+          {curve.length ? <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
             priceLines={[{ price: curve[0]?.value ?? 50000, color: '#8b93a7', title: 'start' }]} />
             : <div className="text-muted text-xs py-10 text-center">loading…</div>}
-        </div>
-
-        <div className="card p-3 overflow-auto">
-          <div className="stat-label mb-2">Trades ({trades.length})</div>
-          <table className="w-full text-xs">
-            <thead className="text-muted text-left border-b border-edge">
-              <tr className="[&>th]:py-1 [&>th]:pr-3">
-                <th>Entry</th><th>Exit</th><th>Dir</th><th>Entry₹</th><th>Exit₹</th>
-                <th>Qty</th><th>Net</th><th>Charges</th><th>Reason</th></tr>
-            </thead>
-            <tbody>
-              {trades.slice().reverse().map((t, i) => (
-                <tr key={i} className="border-t border-edge tabular-nums [&>td]:py-1 [&>td]:pr-3">
-                  <td className="text-muted">{dt(new Date(t.entry_time * 1000).toISOString())}</td>
-                  <td className="text-muted">{dt(new Date(t.exit_time * 1000).toISOString())}</td>
-                  <td className={t.direction === 'LONG' ? 'text-up' : 'text-down'}>{t.direction}</td>
-                  <td>{num(t.entry_price, 2)}</td>
-                  <td>{num(t.exit_price, 2)}</td>
-                  <td>{t.qty}</td>
-                  <td className={pnlColor(t.net_pnl)}>{signedInr(t.net_pnl)}</td>
-                  <td className="text-down">{inr(t.charges)}</td>
-                  <td className="text-muted">{t.reason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
     </div>
