@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLive } from '../state/LiveContext'
 import {
   getSignals, toggleInstrument, getCandles, getOptionCandles, setLiveInterval, blockEntries,
+  addToPortfolio, removeFromPortfolio, getStatus,
 } from '../lib/api'
 import { PriceChart, LineChart } from '../components/Charts'
 import SessionBanner from '../components/SessionBanner'
@@ -9,6 +10,13 @@ import ModeChip from '../components/ModeChip'
 import type { InstrState, SignalRow, ProviderHealth } from '../lib/types'
 import { inr, num, signedInr, pnlColor, signalStyle } from '../lib/format'
 import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
+
+// Unified Watchlist — the merge of the old Home + Monitor screens. They showed the
+// SAME state.states data and opened the SAME chart modal; the only real difference
+// was Home = pinned subset + add/pin controls, Monitor = all instruments + ops
+// toggles. So this is one screen: every instrument is a row you can pin inline, a
+// "pinned only" toggle gives the old Home glance, and the add box brings in new
+// names (e.g. a backtest winner). Default landing tab.
 
 const LIVE_INTERVALS = ['5minute', '15minute', '30minute', '60minute']
 
@@ -65,17 +73,28 @@ function HealthPill({ health }: { health: ProviderHealth | null }) {
   )
 }
 
-export default function Monitor() {
+export default function Watchlist() {
   const { state, liveTicks, health } = useLive()
   const [rows, setRows] = useState<SignalRow[]>([])
   const [expanded, setExpanded] = useState<string | null>(null)
   const [active, setActive] = useState<Set<FilterKey>>(new Set())
+  const [pinnedOnly, setPinnedOnly] = useState(false)
+  const [adding, setAdding] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [authed, setAuthed] = useState<boolean | null>(null)
 
+  const load = () => getSignals().then((d) => setRows(d.instruments || [])).catch(() => {})
   useEffect(() => {
-    const load = () => getSignals().then((d) => setRows(d.instruments || [])).catch(() => {})
     load()
     const t = setInterval(load, 2500)   // lightweight: server never fetches candles for this
     return () => clearInterval(t)
+  }, [])
+
+  // Poll auth so the session-expired banner shows on the DEFAULT landing page even
+  // pre-market, when no candle scan has failed yet to set health.auth_error (KITE-1).
+  useEffect(() => {
+    const f = () => getStatus().then((s) => setAuthed(!!s.authenticated)).catch(() => {})
+    f(); const t = setInterval(f, 5000); return () => clearInterval(t)
   }, [])
 
   // Optimistic row toggle: flip locally now, let the 2.5s poll reconcile — no
@@ -91,11 +110,34 @@ export default function Monitor() {
     patchRow(r.key, { entries_blocked: !r.entries_blocked })
     blockEntries(r.key, !r.entries_blocked).catch(() => patchRow(r.key, { entries_blocked: r.entries_blocked }))
   }
+  // Pin = add to the curated portfolio (also enables trading, matching the old
+  // Home behavior). Unpin = remove (also disables); a user-added name then drops
+  // from the universe on the next poll. Reconcile from the server either way.
+  const togglePin = (r: SignalRow) => {
+    if (r.pinned) {
+      patchRow(r.key, { pinned: false, enabled: false })
+      removeFromPortfolio(r.key).then(load).catch(load)
+    } else {
+      patchRow(r.key, { pinned: true, enabled: true })
+      addToPortfolio(r.key, true).then(load).catch(load)
+    }
+  }
+
+  const add = async () => {
+    const key = adding.trim().toUpperCase()
+    if (!key) return
+    setBusy(true)
+    const res = await addToPortfolio(key, true).catch(() => ({ error: 'request failed' }))
+    setBusy(false)
+    if (res?.error) { alert(res.error); return }
+    setAdding(''); load()
+  }
 
   const toggleFilter = (f: FilterKey) =>
     setActive((s) => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n })
 
   const view = useMemo(() => rows.filter((r) => {
+    if (pinnedOnly && !r.pinned) return false
     if (active.has('positions') && !r.has_position) return false
     if (active.has('signals') && r.signal === 'NONE') return false
     if (active.has('nosignal') && r.signal !== 'NONE') return false
@@ -105,15 +147,34 @@ export default function Monitor() {
     if (active.has('options') && !r.has_options) return false
     if (active.has('enabled') && !r.enabled) return false
     return true
-  }), [rows, active])
+  }), [rows, active, pinnedOnly])
 
+  const pinnedCount = useMemo(() => rows.filter((r) => r.pinned).length, [rows])
   const states = state?.states || {}
 
   return (
     <div className="flex flex-col gap-3">
-      <SessionBanner />
+      <SessionBanner authenticated={authed} />
+
+      {/* add a name (e.g. a backtest winner) to the curated portfolio */}
       <div className="card p-3 flex items-center gap-2 flex-wrap">
-        <span className="stat-label mr-1">Filters</span>
+        <span className="stat-label mr-1">Add instrument</span>
+        <input value={adding} onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+          placeholder="symbol or key (e.g. RELIANCE, NIFTY)"
+          className="bg-panel2 border border-edge rounded px-2 py-1 text-xs w-64" />
+        <button onClick={add} disabled={busy || !adding.trim()}
+          className="btn border-up/50 text-up">{busy ? 'adding…' : '+ add & pin'}</button>
+        <span className="text-[11px] text-muted ml-1">pinned names are tracked &amp; tradable; ★ any row to pin it</span>
+      </div>
+
+      <div className="card p-3 flex items-center gap-2 flex-wrap">
+        <button onClick={() => setPinnedOnly((v) => !v)}
+          className={`badge ${pinnedOnly ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}
+          title="Show only your pinned portfolio (the old Home glance).">
+          {pinnedOnly ? '★ pinned only' : '☆ pinned only'} ({pinnedCount})
+        </button>
+        <span className="stat-label mx-1">Filters</span>
         {FILTERS.map(([f, label]) => (
           <button key={f} onClick={() => toggleFilter(f)}
             className={`badge ${active.has(f) ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
@@ -137,17 +198,25 @@ export default function Monitor() {
         <table className="w-full text-xs">
           <thead className="text-muted border-b border-edge text-left">
             <tr className="[&>th]:py-1 [&>th]:pr-3">
-              <th>Instrument</th><th>Live TF</th><th>Signal</th><th className="text-right">z</th>
+              <th></th><th>Instrument</th><th>Live TF</th><th>Signal</th><th className="text-right">z</th>
               <th>Trend</th><th>Position</th><th>Options</th><th>Data</th><th>Entries</th><th></th>
             </tr>
           </thead>
           <tbody>
             {view.length === 0 && (
-              <tr><td colSpan={10} className="py-8 text-center text-muted">no instruments match the filters</td></tr>
+              <tr><td colSpan={11} className="py-8 text-center text-muted">
+                {pinnedOnly ? 'no pinned instruments — ★ a row or add one above' : 'no instruments match the filters'}
+              </td></tr>
             )}
             {view.map((r) => (
               <tr key={r.key} onClick={() => setExpanded(r.key)}
                 className={`border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3 ${r.enabled ? '' : 'opacity-50'}`}>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => togglePin(r)} title={r.pinned ? 'unpin from portfolio (also disables trading)' : 'pin to portfolio'}
+                    className={r.pinned ? 'text-amber-300 hover:text-amber-200' : 'text-muted hover:text-zinc-300'}>
+                    {r.pinned ? '★' : '☆'}
+                  </button>
+                </td>
                 <td className="font-semibold text-zinc-100">{r.name}
                   <span className="badge bg-zinc-700/40 text-muted ml-1">{r.segment}</span></td>
                 <td><IntervalSelect k={r.key} value={r.interval} /></td>

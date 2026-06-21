@@ -66,6 +66,7 @@ export interface SignalRow {
   close: number | null; last_candle_time: number | null
   has_position: boolean; has_options: boolean; entries_blocked: boolean; stale: boolean
   market_open?: boolean   // OPS-R2-1: closed market -> stale is benign idle, not broken
+  pinned?: boolean        // in the curated portfolio (Watchlist "pinned only" filter)
 }
 
 export interface PositionRow extends PositionDTO {

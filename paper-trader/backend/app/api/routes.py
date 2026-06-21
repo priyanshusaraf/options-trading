@@ -286,6 +286,7 @@ def signals(request: Request):
         out.append({
             "key": inst.key, "name": inst.name, "segment": inst.segment,
             "enabled": inst.key in r.enabled,
+            "pinned": inst.on_home,   # in the curated portfolio (Watchlist "pinned" filter)
             "interval": r._interval_for(inst.key),
             "signal": st.get("signal", "NONE"), "trend": st.get("trend"),
             "z": st.get("z"), "close": st.get("close"),

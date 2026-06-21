@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { LiveProvider } from './state/LiveContext'
 import TopBar from './components/TopBar'
-import HomeView from './views/HomeView'
-import Monitor from './views/Monitor'
+import Watchlist from './views/WatchlistView'
 import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
 import OptionsCalcView from './views/OptionsCalcView'
@@ -12,9 +11,8 @@ import TradesView from './views/TradesView'
 import SettingsView from './views/SettingsView'
 
 const TABS: [string, string][] = [
-  ['home', 'Home'],
+  ['watchlist', 'Watchlist'],
   ['positions', 'Active Positions'],
-  ['monitor', 'Monitor'],
   ['engine', 'Engine / Logs'],
   ['options', 'Options Calc'],
   ['backtests', 'Backtests'],
@@ -24,14 +22,13 @@ const TABS: [string, string][] = [
 ]
 
 function Shell() {
-  const [tab, setTab] = useState('home')
+  const [tab, setTab] = useState('watchlist')
   return (
     <div className="min-h-full flex flex-col">
       <TopBar tab={tab} setTab={setTab} tabs={TABS} />
       <main className="flex-1 p-3">
-        {tab === 'home' && <HomeView />}
+        {tab === 'watchlist' && <Watchlist />}
         {tab === 'positions' && <ActivePositionsView />}
-        {tab === 'monitor' && <Monitor />}
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}
         {tab === 'backtests' && <BacktestsView />}

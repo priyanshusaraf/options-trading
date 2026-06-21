@@ -26,8 +26,28 @@ def test_signals_list_is_lightweight():
     assert "instruments" in res and isinstance(res["instruments"], list)
     assert res["instruments"]
     row = res["instruments"][0]
-    for k in ("key", "signal", "interval", "has_position", "has_options", "stale"):
+    for k in ("key", "signal", "interval", "has_position", "has_options", "stale", "pinned"):
         assert k in row
+
+
+def test_signals_carry_pinned_flag_and_pin_unpin_roundtrips():
+    """MERGE-1: the unified Watchlist filters/marks rows by `pinned` (on_home). The
+    portfolio add/remove routes must flip it so the 'pinned only' view and the per-row
+    star reflect the curated portfolio. NIFTY is a seed instrument (on_home in SEED)."""
+    c, _ = _client()
+    rows = {x["key"]: x for x in c.get("/api/signals").json()["instruments"]}
+    assert isinstance(rows["NIFTY"]["pinned"], bool)
+
+    c.post("/api/portfolio/remove", json={"key": "NIFTY", "on_home": False})
+    rows = {x["key"]: x for x in c.get("/api/signals").json()["instruments"]}
+    # seed instrument stays in the universe but un-pinned (and trading disabled)
+    assert rows["NIFTY"]["pinned"] is False
+    assert rows["NIFTY"]["enabled"] is False
+
+    c.post("/api/portfolio/add", json={"key": "NIFTY", "on_home": True})
+    rows = {x["key"]: x for x in c.get("/api/signals").json()["instruments"]}
+    assert rows["NIFTY"]["pinned"] is True
+    assert rows["NIFTY"]["enabled"] is True
 
 
 def test_signals_staleness_is_per_instrument():
