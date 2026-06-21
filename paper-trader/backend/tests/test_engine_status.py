@@ -102,3 +102,45 @@ def test_halt_status_off_when_caps_disabled():
     halt = r.halt_status(r.provider.now())
     assert halt["halted"] is False
     assert halt["reason"] == ""
+
+
+def test_capital_dict_omits_account_funds_in_paper_mode():
+    """Paper/mock mode shows the ledger equity/cash and NEVER the real-account keys."""
+    r = _runner()
+    cap = r.capital_dict()
+    assert "account_available" not in cap and "account_net" not in cap
+
+
+def test_capital_dict_surfaces_real_funds_in_live_mode(monkeypatch):
+    """LIVE: capital_dict must expose the cached real account balance so the cockpit
+    shows the actual free funds (~the bot's real capital), not the paper 50k seed."""
+    r = _runner()
+    monkeypatch.setattr(r.provider, "name", "kite")
+    r._account_funds = {"available": 30000.0, "net": 41250.0}
+    cap = r.capital_dict()
+    assert cap["account_available"] == 30000.0
+    assert cap["account_net"] == 41250.0
+
+
+def test_maybe_refresh_funds_caches_and_throttles(monkeypatch):
+    """Live funds are polled off margins() on a throttle (not per-tick) and cached;
+    paper mode clears the cache and never polls."""
+    r = _runner()
+    calls = {"n": 0}
+
+    def fake_funds():
+        calls["n"] += 1
+        return {"available": 30000.0, "net": 41250.0}
+
+    monkeypatch.setattr(r.provider, "name", "kite")
+    monkeypatch.setattr(r.provider, "account_funds", fake_funds)
+    r._next_funds_epoch = 0.0
+    r._maybe_refresh_funds()
+    assert r._account_funds == {"available": 30000.0, "net": 41250.0}
+    assert calls["n"] == 1
+    r._maybe_refresh_funds()                 # within the throttle window -> no new poll
+    assert calls["n"] == 1
+
+    monkeypatch.setattr(r.provider, "name", "mock")
+    r._maybe_refresh_funds()                 # paper mode clears the cache
+    assert r._account_funds is None

@@ -28,3 +28,18 @@ def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
     init_db(reset=True)
     # even with both flags, the mock provider can never place a real order
     assert isinstance(make_broker(MockProvider()), PaperBroker)
+
+
+def test_live_gate_reads_dotenv_via_settings(monkeypatch):
+    """The flags must work from .env (Settings), not only a shell export — so the
+    owner controls live mode from one file with no per-session exports. Simulate the
+    .env-backed Settings with NO matching OS env var present."""
+    from app.core.config import get_settings
+    monkeypatch.delenv("PT_EXECUTION", raising=False)
+    monkeypatch.delenv("PT_LIVE_ACK", raising=False)
+    s = get_settings()
+    monkeypatch.setattr(s, "execution", "live")
+    monkeypatch.setattr(s, "live_ack", "I_UNDERSTAND_REAL_MONEY")
+    assert live_execution_enabled() is True
+    monkeypatch.setattr(s, "live_ack", "wrong")     # ack must match exactly
+    assert live_execution_enabled() is False

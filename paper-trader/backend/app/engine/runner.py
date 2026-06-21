@@ -77,6 +77,8 @@ class EngineRunner:
         self._halt_notified_date = None        # de-dupe the daily-loss-halt alert
         self._next_reconcile_epoch = 0.0       # throttle live orphan reconciliation
         self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
+        self._account_funds: dict | None = None  # cached live Kite funds {available, net}
+        self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -567,6 +569,25 @@ class EngineRunner:
             except Exception:
                 pass
 
+    def _maybe_refresh_funds(self) -> None:
+        """Throttled (~20s) poll of the REAL Kite account funds in live mode, cached
+        for the snapshot so the cockpit shows the actual account balance instead of
+        the paper ledger. margins() is rate-limited, so never call it per-tick. No-op
+        (and clears the cache) on the mock/paper provider."""
+        if self.provider.name != "kite":
+            self._account_funds = None
+            return
+        epoch = self.provider.now().timestamp()
+        if epoch < self._next_funds_epoch:
+            return
+        self._next_funds_epoch = epoch + 20.0
+        try:
+            funds = self.provider.account_funds()
+            if funds:
+                self._account_funds = funds
+        except Exception as e:
+            log.warn(f"account funds refresh failed: {e}")
+
     def _maybe_reconcile_orphans(self) -> None:
         """Throttled (~30s): book any bot position the live account no longer backs
         (e.g. its GTT fired while the bot was down). No-op on the paper broker."""
@@ -627,6 +648,7 @@ class EngineRunner:
     async def _signal_iteration(self) -> None:
         async with self._lock:
             self.refresh_params()          # pick up live Settings overrides
+            self._maybe_refresh_funds()    # cache real account balance (live only)
             self._maybe_reconcile_orphans()
             self.scan_signals()
             self.process_entries()
@@ -672,6 +694,16 @@ class EngineRunner:
                         if not self._idle_logged:
                             log.info("all enabled markets closed — engine idling until next session")
                             self._idle_logged = True
+                        # Even while idle (overnight / pre-market) keep the real account
+                        # balance fresh and push a snapshot, so after the morning Kite
+                        # re-login the cockpit reflects funds + LIVE/armed state within a
+                        # minute — no restart, no waiting for the open.
+                        self._maybe_refresh_funds()
+                        if self.on_update:
+                            try:
+                                await self.on_update(self.snapshot_state())
+                            except Exception:
+                                pass
                         await asyncio.sleep(60)
                     else:
                         self._idle_logged = False
@@ -729,13 +761,22 @@ class EngineRunner:
         cap = self.broker.capital()
         opens = self.broker.open_positions()
         mtm = sum((p.last_premium or p.entry_premium) * p.qty for p in opens)
-        return {
+        d = {
             "initial": cap.initial_capital, "cash": round(cap.cash, 2),
             "invested": round(sum(p.entry_cost for p in opens), 2),
             "equity": round(cap.cash + mtm, 2),
             "realized_pnl": round(cap.realized_pnl, 2),
             "open_count": len(opens),
         }
+        # LIVE: surface the REAL account balance (cached margins) so the cockpit shows
+        # the actual ~free funds, not the 50k paper-ledger seed. available = free cash
+        # (not locked in your securities); net = total account equity. Paper mode omits
+        # these and the UI keeps showing the ledger equity/cash.
+        f = self._account_funds
+        if self.provider.name == "kite" and f:
+            d["account_available"] = round(f.get("available", 0.0), 2)
+            d["account_net"] = round(f.get("net", 0.0), 2)
+        return d
 
     def _market_open_by_segment(self) -> dict[str, bool]:
         """Per-segment open/closed for the operational screens. Mirrors the engine's

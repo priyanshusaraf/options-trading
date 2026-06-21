@@ -30,7 +30,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     init_db(reset=settings.provider == "mock")
     if settings.provider == "kite":
-        log.info("SAFETY: order placement DISABLED — paper trades only, no real capital")
+        from app.engine.broker_factory import live_execution_enabled
+        if live_execution_enabled():
+            log.warn("🔴 LIVE MODE — real Kite orders are ENABLED (still gated by ARM; "
+                     "disarmed on every start). Use the KILL switch to square off.")
+        else:
+            log.info("SAFETY: order placement DISABLED — paper trades only, no real capital")
     runner = EngineRunner()  # factory logs the chosen provider
     app.state.runner = runner
 

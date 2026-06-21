@@ -16,14 +16,30 @@ from app.engine.order_executor import OrderRequest
 
 
 class KiteOrderClient:
-    def __init__(self, kite, product: str = "NRML", variety: str = "regular") -> None:
+    def __init__(self, kite, *, token_source=None,
+                 product: str = "NRML", variety: str = "regular") -> None:
         self.kite = kite
         self.product = product
         self.variety = variety
+        # callable returning the data provider's CURRENT access token. Synced before
+        # every Kite call so a daily re-login (which refreshes the provider token)
+        # flows through to order placement without rebuilding the broker.
+        self._token_source = token_source
+        self._last_token: str | None = None
+
+    def _sync_token(self) -> None:
+        """Adopt the provider's current access token if it changed (post re-login)."""
+        if not self._token_source:
+            return
+        tok = self._token_source()
+        if tok and tok != self._last_token:
+            self.kite.set_access_token(tok)
+            self._last_token = tok
 
     # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
     def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,
                        trigger_price: float, last_price: float) -> str:
+        self._sync_token()
         res = self.kite.place_gtt(**stop_gtt_params(
             tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
         tid = res.get("trigger_id") if isinstance(res, dict) else res
@@ -31,13 +47,16 @@ class KiteOrderClient:
 
     def modify_stop_gtt(self, trigger_id: str, tradingsymbol: str, exchange: str,
                         qty: int, trigger_price: float, last_price: float):
+        self._sync_token()
         return self.kite.modify_gtt(trigger_id=trigger_id, **stop_gtt_params(
             tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
 
     def delete_gtt(self, trigger_id: str):
+        self._sync_token()
         return self.kite.delete_gtt(trigger_id=trigger_id)
 
     def place(self, req: OrderRequest) -> str:
+        self._sync_token()
         kw = dict(variety=self.variety, exchange=req.exchange,
                   tradingsymbol=req.tradingsymbol, transaction_type=req.side,
                   quantity=req.qty, product=self.product, order_type=req.order_type)
@@ -48,6 +67,7 @@ class KiteOrderClient:
         return self.kite.place_order(**kw)
 
     def status(self, order_id: str) -> dict:
+        self._sync_token()
         hist = self.kite.order_history(order_id) or []
         last = hist[-1] if hist else {}
         return {

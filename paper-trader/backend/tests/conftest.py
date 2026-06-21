@@ -11,6 +11,11 @@ import tempfile
 
 os.environ["PT_DB_PATH"] = os.path.join(tempfile.gettempdir(), "paper_trader_pytest.db")
 os.environ["PT_PROVIDER"] = "mock"
+# NEVER inherit the owner's live-execution flags from .env: a test must not be able
+# to flip into real-money mode. A real OS env var overrides the .env value, so this
+# forces the gate off; live-path tests opt in explicitly via monkeypatch.
+os.environ["PT_EXECUTION"] = ""
+os.environ["PT_LIVE_ACK"] = ""
 
 # Skip macOS/iCloud "… 2.py" Desktop-sync duplicate files (a space + digit before
 # .py) — they otherwise break collection with import-file-mismatch.

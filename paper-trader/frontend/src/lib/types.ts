@@ -1,6 +1,9 @@
 export interface Capital {
   initial: number; cash: number; invested: number;
   equity: number; realized_pnl: number; open_count: number
+  // live mode only: the REAL Kite account balance (cached margins). available =
+  // free cash not locked in your securities; net = total account equity.
+  account_available?: number; account_net?: number
 }
 
 export interface PositionDTO {

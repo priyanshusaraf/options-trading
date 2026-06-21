@@ -136,6 +136,18 @@ class Settings(BaseSettings):
     option_cache_enabled: bool = True
     option_cache_snapshot_minutes: float = 15.0  # persist a chain snapshot at most this often
 
+    # ── live execution gate (BOTH required, on top of kite-provider + ARM) ──
+    # Settings-backed so the SINGLE source of truth is .env (no shell exports
+    # needed each session). broker_factory still also honours a real exported
+    # PT_EXECUTION/PT_LIVE_ACK as a fallback. The ack string must match exactly.
+    execution: str = ""    # "live" to permit real orders   (env: PT_EXECUTION)
+    live_ack: str = ""     # must equal the ack phrase       (env: PT_LIVE_ACK)
+
+    # where to send the browser after a successful Kite OAuth login. The Kite app's
+    # registered redirect points at the BACKEND (/api/session); once the token is
+    # captured we bounce the browser back to the FRONTEND so the user lands on the UI.
+    frontend_url: str = "http://localhost:5173"   # env: PT_FRONTEND_URL
+
     # misc
     risk_free_rate: float = 0.065
     db_path: str = "paper_trader.db"

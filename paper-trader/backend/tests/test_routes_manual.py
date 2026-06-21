@@ -114,6 +114,17 @@ def test_signals_market_closed_is_distinct_from_broken_feed():
         r.provider.is_tradable_now = orig
 
 
+def test_session_redirects_to_frontend_after_login(monkeypatch):
+    """After Kite OAuth captures the token at the BACKEND, the browser must be bounced
+    to the FRONTEND (PT_FRONTEND_URL), not left on the bare backend origin."""
+    from app.core.config import get_settings
+    c, r = _client()
+    monkeypatch.setattr(r.provider, "complete_session", lambda rt: None, raising=False)
+    res = c.get("/api/session?request_token=abc", follow_redirects=False)
+    assert res.status_code in (302, 307)
+    assert res.headers["location"] == get_settings().frontend_url
+
+
 def test_set_interval_route():
     c, r = _client()
     res = c.post("/api/instruments/NIFTY/interval", json={"interval": "60minute"}).json()

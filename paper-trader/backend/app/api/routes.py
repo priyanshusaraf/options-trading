@@ -75,7 +75,10 @@ def session(request: Request):
         _runner(request).provider.complete_session(rt)
     except Exception as e:
         return {"error": f"login failed: {e}"}
-    return RedirectResponse("/")
+    # Kite redirects here (the backend) with the request_token; now that the token is
+    # captured, bounce the browser to the FRONTEND so the user lands back on the UI
+    # (not the bare backend origin). Configurable via PT_FRONTEND_URL.
+    return RedirectResponse(settings.frontend_url or "/")
 
 
 # ── instruments ─────────────────────────────────────────────────────────────

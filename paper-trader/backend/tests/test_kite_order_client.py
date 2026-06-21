@@ -76,3 +76,31 @@ def test_modify_and_delete_gtt():
     assert k.gtt_modified[0]["trigger_values"] == [120.0]
     c.delete_gtt("555")
     assert k.gtt_deleted == ["555"]
+
+
+class FakeKiteWithToken(FakeKite):
+    def __init__(self, history=None):
+        super().__init__(history)
+        self.tokens = []
+
+    def set_access_token(self, tok):
+        self.tokens.append(tok)
+
+
+def test_token_source_syncs_current_token_before_orders():
+    """The order client must adopt the data provider's CURRENT access token before
+    every Kite call, so a daily re-login flows through without rebuilding the broker —
+    and only re-applies it when it actually changes (no redundant set per call)."""
+    k = FakeKiteWithToken()
+    token = {"v": "tok-day1"}
+    c = KiteOrderClient(k, token_source=lambda: token["v"])
+
+    c.place(OrderRequest("SYM", "NFO", "BUY", 75, "MARKET"))
+    assert k.tokens == ["tok-day1"]            # applied on first use
+
+    c.place(OrderRequest("SYM", "NFO", "SELL", 75, "MARKET"))
+    assert k.tokens == ["tok-day1"]            # unchanged token -> not re-applied
+
+    token["v"] = "tok-day2"                     # simulate a morning re-login
+    c.place_stop_gtt("SYM", "NFO", 75, trigger_price=100.0, last_price=140.0)
+    assert k.tokens == ["tok-day1", "tok-day2"]  # picked up the fresh token, no restart

@@ -66,6 +66,9 @@ export default function TopBar({ tab, setTab, tabs }:
     return () => clearInterval(t)
   }, [])
   const cap = state?.capital
+  // LIVE: show the REAL Kite account balance (free funds ≈ what the bot may deploy),
+  // not the paper-ledger 50k. Falls back to the ledger until the first margins poll.
+  const live = state?.broker_mode === 'live' && cap?.account_available != null
 
   return (
     <header className="border-b border-edge bg-panel sticky top-0 z-40">
@@ -89,8 +92,17 @@ export default function TopBar({ tab, setTab, tabs }:
           <ExecutionControls />
         </div>
         <div className="flex items-center gap-5">
-          <Stat label="Equity" v={inr(cap?.equity)} />
-          <Stat label="Cash" v={inr(cap?.cash)} />
+          {live ? (
+            <>
+              <Stat label="Acct equity" v={inr(cap?.account_net)} />
+              <Stat label="Free funds" v={inr(cap?.account_available)} />
+            </>
+          ) : (
+            <>
+              <Stat label="Equity" v={inr(cap?.equity)} />
+              <Stat label="Cash" v={inr(cap?.cash)} />
+            </>
+          )}
           <Stat label="Invested" v={inr(cap?.invested)} />
           <Stat label="Realized P&L" v={signedInr(cap?.realized_pnl)} cls={pnlColor(cap?.realized_pnl)} />
           <Stat label="Open" v={String(cap?.open_count ?? '—')} />
