@@ -127,29 +127,32 @@ const [traderCrit, dataCrit] = await parallel([
   () => agent(`${CONTEXT}
 
 ROLE: a sharp, skeptical options TRADER reviewing "${AREA}". You do not trust the
-software yet. Read the actual code + UI and enumerate everything that would make a
-trader distrust or misread this tool. Be concrete and evidence-backed (file:line).
-Cover at least: capital sizing / position notional vs the stated ₹50,000 base;
-whether returns/metrics are honest given that sizing; the backtest lookback period
-(how far back, and is it consistent across timeframes?); whether results can show
-losers at all or only winners (and WHY); missing controls a trader needs (date
-ranges, instrument selection, biggest winners/losers); and any place a number could
-mislead. Read the repo; don't speculate. Return findings.`,
+software yet. Read the ACTUAL code + UI for this area and enumerate everything that
+would make a trader confused, mistrustful, or unable to get value from it. Be
+concrete and evidence-backed (file:line). For EACH screen/panel in scope, ask:
+- PURPOSE: what is the ONE job it does that nothing else does? State it plainly.
+- Does it do that job well, or is it cluttered / confusing / misleading?
+- REDUNDANCY: does it overlap another screen (same data the owner could see
+  elsewhere)? If two screens substantially overlap, say so and which should win.
+- MISSING: what essential thing does a trader operating this live actually need here?
+Treat the owner's stated concerns above as ground truth to INVESTIGATE (not assume).
+Read the repo; don't speculate. Return findings.`,
     { label: 'trader-critic', phase: 'Critique', schema: FINDINGS_SCHEMA }),
 
   () => agent(`${CONTEXT}
 
-ROLE: a DATA-VALIDITY engineer. Determine whether the data flowing through "${AREA}"
-can be trusted, especially data from Zerodha Kite. Investigate with evidence:
-(1) the "no losing instruments in the results" anomaly — is it a sizing artifact, a
-filter/sort default, cache reuse, silent skipping of errors, or real? Trace it.
-(2) candle handling: the drop of the last (still-forming) bar, timezone, gaps,
-holidays, and the per-interval lookback (MAX_DAYS) — does each timeframe silently
-use a different history length?
-(3) whether quantities/notional are computed correctly and consistently.
-(4) any silent failure path (instruments that error/insufficient-history get hidden).
-Read the code in app/backtest/ and providers/kite.py. Return findings with concrete
-evidence and the fix each needs.`,
+ROLE: a DATA-VALIDITY / correctness engineer. Determine whether what "${AREA}"
+shows can be TRUSTED, especially anything sourced from Zerodha Kite. Investigate
+with evidence:
+(1) Does the displayed data match reality, or can it silently go stale/wrong
+    (timezone, last-mark age, dropped/forming bars, websocket vs poll cadence)?
+(2) Silent failure paths: are errors (token/session expiry, missing instrument
+    tokens, empty responses) hidden from the user or surfaced clearly? Trace any
+    anomaly the owner reports to its root cause.
+(3) Is engine / health / log / status state reported ACCURATELY — does the screen
+    claim match what the engine is actually doing?
+Read the relevant code in app/api/, app/engine/, and providers/. Return findings
+with concrete evidence and the fix each needs.`,
     { label: 'data-validity', phase: 'Critique', schema: FINDINGS_SCHEMA }),
 ])
 
@@ -161,16 +164,15 @@ phase('Plan')
 const plan = await agent(`${CONTEXT}
 
 ROLE: a trader-minded tech lead. Turn the findings below into a CONCRETE, ordered
-implementation plan for "${AREA}". Decide the methodology questions explicitly
-(especially: how to size positions so results never imply deploying more than the
-stated capital, and how to compute honest returns; and how the backtest lookback /
-date range should work). Then list discrete code changes (file + what + why + the
-test that proves it). Also deliver the owner's requested features for this area:
-selectable preset ranges (1w/2w/1m/3m/6m/1y/3y/7y/10y/entire history) AND a custom
-date-range panel; the ability to pick specific instruments to backtest (e.g. only
-GOLD/SILVER/COPPER); a results view that shows biggest winning & losing trades; and
-ensure losers actually appear when real. Keep changes minimal, correct, and tested;
-nothing outside ${AREA}. Mark anything you deliberately defer as out_of_scope.
+implementation plan for "${AREA}", addressing EVERY owner concern explicitly.
+
+HIGH-IMPACT structural changes (merging, removing, or fundamentally redesigning a
+whole screen) must NOT be implemented blind — put each as a clear RECOMMENDATION in
+methodology_decisions or out_of_scope, stating the genuine distinct use-case (or
+lack of one) for each screen so the OWNER can decide. For the safe, clearly
+beneficial improvements, list discrete code changes (file + what + why + the test
+that proves it). Keep changes minimal, correct, and tested; nothing outside
+"${AREA}". Mark anything you deliberately defer as out_of_scope.
 
 FINDINGS:
 ${JSON.stringify(findings, null, 2)}`,
@@ -213,10 +215,11 @@ ${JSON.stringify(plan?.methodology_decisions || [], null, 2)}`,
 ROLE: a strict CODE REVIEWER. Review the uncommitted changes for "${AREA}"
 (\`cd ${REPO} && git diff\` and \`git status\`). Independently RUN the backend test
 command and (if the frontend changed) the typecheck, and report their real results.
-Verify: the implemented changes actually do what was planned; capital sizing /
-returns are now honest and never imply over-deploying capital; losers appear when
-real; no regression elsewhere; no forbidden files were touched; new behaviour is
-tested. Give a verdict (pass only if tests pass AND no critical/high issue remains).
+Verify: the implemented changes actually do what was planned; the data shown is
+honest and accurate; no regression elsewhere; no forbidden files were touched; NO
+high-impact structural change (merging/removing a whole screen) was made without it
+being an explicitly-deferred owner recommendation; new behaviour is tested. Give a
+verdict (pass only if tests pass AND no critical/high issue remains).
 
 What the executor reported:
 ${JSON.stringify(lastExec, null, 2)}`,
