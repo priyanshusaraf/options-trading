@@ -41,9 +41,27 @@ def test_return_pct_is_honest_and_anchor_independent():
     assert m1.return_pct < 5                                               # not the ₹50k-base fiction
 
 
+def test_smoothness_metrics_basic():
+    # +5%, -2%, +10% on notional 1000 each
+    trades = [_mk(50, 0, 86400), _mk(-20, 86400, 172800), _mk(100, 172800, 259200)]
+    m = compute_metrics(trades, 100_000)
+    assert m.max_consec_losses == 1                 # one isolated loser
+    assert 0 < m.time_underwater_pct < 100          # dips, then recovers to new highs
+    assert m.consistency is not None                # 3 trades -> defined
+    d = m.to_dict()
+    assert d["max_consec_losses"] == 1 and "time_underwater_pct" in d
+
+
+def test_max_consecutive_losses_streak():
+    trades = [_mk(50, 0, 1), _mk(-10, 1, 2), _mk(-10, 2, 3), _mk(-10, 3, 4), _mk(20, 4, 5)]
+    m = compute_metrics(trades, 100_000)
+    assert m.max_consec_losses == 3                 # the 3-in-a-row run, not the lone first win
+
+
 def test_metrics_empty():
     m = compute_metrics([], 50_000)
     assert m.trades == 0 and m.profit_factor is None
+    assert m.max_consec_losses == 0 and m.calmar is None and m.consistency is None
 
 
 def test_metrics_profit_factor_none_without_losses():

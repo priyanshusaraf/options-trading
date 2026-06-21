@@ -237,6 +237,8 @@ class BacktestRun(Base):
     total: Mapped[int] = mapped_column(Integer, default=0)
     done: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(String(400), default="")
+    window: Mapped[str] = mapped_column(String(64), default="")          # lookback label: "1y" | "max" | "2024-01-01→2024-06-01"
+    instruments: Mapped[str] = mapped_column(String(400), default="")    # csv of selected keys (empty = whole scope)
 
     def to_dict(self) -> dict:
         return {
@@ -246,6 +248,8 @@ class BacktestRun(Base):
             "capital": self.capital, "total": self.total, "done": self.done,
             "progress": round(100 * self.done / self.total, 1) if self.total else 0.0,
             "note": self.note,
+            "window": self.window or "max",
+            "instruments": [i for i in self.instruments.split(",") if i],
         }
 
 
@@ -269,6 +273,11 @@ class BacktestResult(Base):
     charges: Mapped[float] = mapped_column(Float, default=0.0)
     expectancy: Mapped[float] = mapped_column(Float, default=0.0)
     cagr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # smoothness / quality
+    calmar: Mapped[float | None] = mapped_column(Float, nullable=True)
+    consistency: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_consec_losses: Mapped[int] = mapped_column(Integer, default=0)
+    time_underwater_pct: Mapped[float] = mapped_column(Float, default=0.0)
     bars: Mapped[int] = mapped_column(Integer, default=0)
     curve_json: Mapped[str] = mapped_column(Text, default="[]")     # equity curve
     trades_json: Mapped[str] = mapped_column(Text, default="[]")    # trade list (drill-down)
@@ -295,6 +304,10 @@ class BacktestResult(Base):
             "charges": round(self.charges, 0),
             "expectancy": round(self.expectancy, 0),
             "cagr": round(self.cagr, 1) if self.cagr is not None else None,
+            "calmar": round(self.calmar, 2) if self.calmar is not None else None,
+            "consistency": round(self.consistency, 2) if self.consistency is not None else None,
+            "max_consec_losses": self.max_consec_losses,
+            "time_underwater_pct": round(self.time_underwater_pct, 1),
             "bars": self.bars,
             "from_cache": self.from_cache,
             "error": self.error,

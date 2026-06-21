@@ -96,7 +96,7 @@ export interface TradeDTO {
 export interface BacktestRun {
   id: number; created_at: string; status: string; scope: string
   intervals: string[]; capital: number; total: number; done: number
-  progress: number; note: string
+  progress: number; note: string; window?: string; instruments?: string[]
 }
 
 export interface BTResult {
@@ -105,7 +105,11 @@ export interface BTResult {
   win_rate: number; profit_factor: number | null; max_drawdown_pct: number
   return_pct: number; net_pnl: number; gross_pnl: number; charges: number
   expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string
+  calmar: number | null; consistency: number | null
+  max_consec_losses: number; time_underwater_pct: number
 }
+
+export interface BTInstrument { key: string; name: string; segment: string; has_options: boolean }
 
 export interface BTTradeDTO {
   direction: string; entry_time: number; entry_price: number; exit_time: number

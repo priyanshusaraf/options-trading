@@ -129,6 +129,14 @@ def _migrate_schema() -> None:
             ("schema_version", "INTEGER DEFAULT 1"),
             ("from_cache", "BOOLEAN DEFAULT 0"),
             ("computed_at", "DATETIME"),
+            ("calmar", "FLOAT"),
+            ("consistency", "FLOAT"),
+            ("max_consec_losses", "INTEGER DEFAULT 0"),
+            ("time_underwater_pct", "FLOAT DEFAULT 0.0"),
+        ],
+        "backtest_runs": [
+            ("window", "VARCHAR(64) DEFAULT ''"),
+            ("instruments", "VARCHAR(400) DEFAULT ''"),
         ],
     }
     with engine.begin() as conn:

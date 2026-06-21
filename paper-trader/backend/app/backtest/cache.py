@@ -14,17 +14,20 @@ from sqlalchemy import select
 from app.db.models import BacktestResult
 
 # v2: return%/equity/CAGR switched from a flat ₹50k base to compounding return on
-# the position's own notional (leverage-free, comparable across instruments). Old
-# cached results used the misleading flat-base math, so bumping invalidates them.
-SCHEMA_VERSION = 2
+#     the position's own notional (leverage-free, comparable across instruments).
+# v3: added smoothness metrics (calmar/consistency/streak/underwater) + a candle
+#     window to the signature so different lookback ranges don't collide in cache.
+SCHEMA_VERSION = 3
 
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,
-                     entry_z: float = 1.0, slope_lookback: int = 5) -> str:
+                     entry_z: float = 1.0, slope_lookback: int = 5,
+                     window: str = "") -> str:
     """Stable hash of everything that affects a backtest result other than the
-    candle data itself. Changing any knob invalidates the cache."""
+    candle data itself. Changing any knob — including the requested date window —
+    invalidates the cache so a 1-year run never reuses a 10-year run's metrics."""
     raw = (f"v{SCHEMA_VERSION}|cap={capital}|ema={ema_length}|z={z_length}"
-           f"|ez={entry_z}|sl={slope_lookback}")
+           f"|ez={entry_z}|sl={slope_lookback}|win={window}")
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 

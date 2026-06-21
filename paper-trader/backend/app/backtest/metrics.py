@@ -70,6 +70,11 @@ class BTMetrics:
     max_drawdown_pct: float = 0.0  # worst peak-to-trough on the equity curve, %
     max_drawdown_abs: float = 0.0
     cagr: float | None = None      # %, None if duration too short
+    # ── smoothness / quality (the owner ranks curves on these, not raw return) ──
+    calmar: float | None = None         # CAGR ÷ maxDD% — annualised return per unit of pain
+    consistency: float | None = None    # mean ÷ std of per-trade returns (Sharpe-like)
+    max_consec_losses: int = 0          # longest losing streak (tail-pain proxy)
+    time_underwater_pct: float = 0.0    # % of the curve spent below its prior peak
     equity_curve: list[dict] = field(default_factory=list)  # [{time, value}]
 
     def to_dict(self) -> dict:
@@ -79,10 +84,15 @@ class BTMetrics:
             d[k] = round(d[k], 2)
         for k in ("win_rate", "return_pct", "max_drawdown_pct"):
             d[k] = round(d[k], 2)
+        d["time_underwater_pct"] = round(self.time_underwater_pct, 1)
         if self.profit_factor is not None:
             d["profit_factor"] = round(self.profit_factor, 3)
         if self.cagr is not None:
             d["cagr"] = round(self.cagr, 2)
+        if self.calmar is not None:
+            d["calmar"] = round(self.calmar, 3)
+        if self.consistency is not None:
+            d["consistency"] = round(self.consistency, 3)
         return d
 
 
@@ -146,4 +156,32 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
     final = curve_vals[-1]
     if years >= 0.05 and final > 0 and base > 0:
         m.cagr = ((final / base) ** (1 / years) - 1) * 100.0
+
+    # ── smoothness / quality metrics ──
+    # Longest losing streak — a run of small losses is exactly what kills an
+    # option buyer (each is a near-total premium loss), so it's worth surfacing.
+    streak = m.max_consec_losses = 0
+    for t in trades:
+        streak = streak + 1 if not t.win else 0
+        m.max_consec_losses = max(m.max_consec_losses, streak)
+    # Time underwater: share of curve points sitting below the running peak —
+    # a low number means the curve spends little time in drawdown (smooth).
+    peak = curve_vals[0]
+    under = 0
+    for v in curve_vals[1:]:
+        peak = max(peak, v)
+        if v < peak:
+            under += 1
+    m.time_underwater_pct = (100.0 * under / (len(curve_vals) - 1)) if len(curve_vals) > 1 else 0.0
+    # Consistency: mean ÷ std of per-trade returns (Sharpe-like). Higher = more
+    # uniform trade outcomes = smoother curve, independent of raw magnitude.
+    rets = [t.return_pct for t in trades]
+    if len(rets) >= 2:
+        mean = sum(rets) / len(rets)
+        sd = (sum((r - mean) ** 2 for r in rets) / len(rets)) ** 0.5
+        m.consistency = (mean / sd) if sd > 0 else None
+    # Calmar: annualised return per unit of max drawdown — the single ratio that
+    # best captures "return earned per unit of pain", which is what to optimise.
+    if m.cagr is not None and m.max_drawdown_pct > 0:
+        m.calmar = m.cagr / m.max_drawdown_pct
     return m

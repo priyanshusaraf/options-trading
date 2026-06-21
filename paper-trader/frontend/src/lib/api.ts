@@ -47,8 +47,15 @@ export const removeFromPortfolio = (key: string) =>
   post('/api/portfolio/remove', { key, on_home: false })
 
 // ── backtest sweep ──────────────────────────────────────────────────────────
-export const startSweep = (scope: string, intervals: string[], capital = 50000) =>
-  post('/api/backtest/sweep', { scope, intervals, capital })
+export interface SweepOpts {
+  instruments?: string[]; lookback_days?: number | null
+  start_date?: string; end_date?: string
+}
+export const startSweep = (scope: string, intervals: string[], capital = 50000,
+  opts: SweepOpts = {}) =>
+  post('/api/backtest/sweep', { scope, intervals, capital, ...opts })
+export const getSweepInstruments = (scope = 'liquid') =>
+  j(`/api/backtest/instruments?scope=${scope}`)
 export const getSweepStatus = (runId?: number) =>
   j(`/api/backtest/status${runId ? `?run_id=${runId}` : ''}`)
 export const getSweepRuns = () => j('/api/backtest/runs')

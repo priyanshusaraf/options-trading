@@ -30,6 +30,10 @@ class SweepRequest(BaseModel):
     scope: str = "liquid"                 # "liquid" | "full"
     intervals: list[str] | None = None    # default: 1m/5m/15m/30m/1h/day
     capital: float = 50_000.0
+    instruments: list[str] | None = None  # restrict to these keys (e.g. GOLD/SILVER/COPPER)
+    lookback_days: int | None = None      # preset window in days (None = entire history)
+    start_date: str | None = None         # ISO custom window start (overrides lookback)
+    end_date: str | None = None           # ISO custom window end
 
 
 @router.post("/sweep")
@@ -37,11 +41,28 @@ def start(body: SweepRequest):
     if sweep.is_running():
         return {"error": "a sweep is already running"}
     try:
-        run_id = sweep.start_sweep(scope=body.scope, intervals=body.intervals,
-                                   capital=body.capital)
+        run_id = sweep.start_sweep(
+            scope=body.scope, intervals=body.intervals, capital=body.capital,
+            instruments=body.instruments, lookback_days=body.lookback_days,
+            start_date=body.start_date, end_date=body.end_date)
     except Exception as e:
         return {"error": str(e)}
     return {"run_id": run_id, "running": True}
+
+
+@router.get("/instruments")
+def instruments(scope: str = "liquid"):
+    """The resolvable backtest universe (for the instrument picker), plus the
+    preset lookback windows and per-interval max history the UI discloses."""
+    from app.backtest.universe import full_universe, liquid_universe
+    from app.providers.factory import get_provider
+    prov = get_provider()
+    specs = full_universe(prov) if scope == "full" else liquid_universe(prov)
+    out = sorted(({"key": i.key, "name": i.name, "segment": i.segment,
+                   "has_options": getattr(i, "has_options", True)} for i in specs),
+                 key=lambda d: (d["segment"], d["key"]))
+    return {"instruments": out, "presets": list(sweep.PRESET_DAYS.keys()),
+            "preset_days": sweep.PRESET_DAYS, "max_days": sweep.MAX_DAYS}
 
 
 @router.get("/status")
@@ -79,8 +100,9 @@ def export(run_id: int | None = None):
     app). Defaults to the latest run."""
     cols = ["instrument_key", "name", "segment", "interval", "trades", "wins",
             "win_rate", "profit_factor", "max_drawdown_pct", "return_pct",
-            "net_pnl", "gross_pnl", "charges", "expectancy", "cagr", "bars",
-            "from_cache"]
+            "net_pnl", "gross_pnl", "charges", "expectancy", "cagr",
+            "calmar", "consistency", "max_consec_losses", "time_underwater_pct",
+            "bars", "from_cache"]
     with SessionLocal() as s:
         if run_id is None:
             run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
@@ -122,7 +144,9 @@ def results(run_id: int | None = None, interval: str | None = None,
             continue
         out.append(r.summary())
 
-    reverse = sort not in ("max_drawdown_pct", "charges")
+    # lower-is-better metrics sort ascending; everything else descending
+    reverse = sort not in ("max_drawdown_pct", "charges", "max_consec_losses",
+                           "time_underwater_pct")
     out.sort(key=lambda d: (d.get(sort) if d.get(sort) is not None else -1e18), reverse=reverse)
     return {"run_id": run_id, "count": len(out), "results": out[:limit]}
 
