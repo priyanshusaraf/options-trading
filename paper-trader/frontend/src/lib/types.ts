@@ -22,8 +22,18 @@ export interface InstrState {
   interval?: string; has_options?: boolean; entries_blocked?: boolean
 }
 
-export interface CatHealth { last_ok: string | null; consecutive_failures: number; last_error: string }
+export interface CatHealth {
+  last_ok: string | null; consecutive_failures: number; last_error: string
+  auth_error?: boolean   // last failure was a Kite session/token expiry (C1)
+}
 export interface ProviderHealth { quote: CatHealth; candle: CatHealth }
+
+// Daily-loss / open-drawdown circuit-breaker status on the WS snapshot (C2).
+export interface HaltStatus {
+  halted: boolean; reason: '' | 'realized' | 'open_drawdown'
+  realized: number; open_unrealized: number
+  max_daily_loss: number; max_open_drawdown: number
+}
 
 export interface PositionTick {
   instrument: string; tradingsymbol: string; option_premium: number | null; spot: number | null
@@ -37,6 +47,12 @@ export interface LiveState {
   intervals?: Record<string, string>; health?: ProviderHealth
   position_ticks?: Record<string, PositionTick>
   broker_mode?: 'paper' | 'live'
+  // authoritative engine status (C2)
+  armed?: boolean; running?: boolean; halt?: HaltStatus
+  // market session, per segment + feed-wide (OPS-R2-1): lets the screens tell
+  // "market closed, all fine" apart from a broken feed, so staleness doesn't
+  // false-alarm 16+ hours a day.
+  market_open?: Record<string, boolean>; any_market_open?: boolean
 }
 
 export interface LiveTick {
@@ -49,6 +65,7 @@ export interface SignalRow {
   interval: string; signal: string; trend: string | null; z: number | null
   close: number | null; last_candle_time: number | null
   has_position: boolean; has_options: boolean; entries_blocked: boolean; stale: boolean
+  market_open?: boolean   // OPS-R2-1: closed market -> stale is benign idle, not broken
 }
 
 export interface PositionRow extends PositionDTO {

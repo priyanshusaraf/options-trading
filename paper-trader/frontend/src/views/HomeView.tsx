@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
 import { getHome, getInstruments, addToPortfolio, removeFromPortfolio } from '../lib/api'
 import InstrumentTile from '../components/InstrumentTile'
+import SessionBanner from '../components/SessionBanner'
+import ModeChip from '../components/ModeChip'
 import { Expanded } from './Monitor'
 import type { HomeInstrument, InstrState, InstrumentMeta } from '../lib/types'
 
@@ -35,10 +37,17 @@ export default function HomeView() {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* OPS-R2-2: a Kite session expiry must be loud on the DEFAULT landing page,
+          not just on Engine/Monitor. SessionBanner self-hides when healthy. */}
+      <SessionBanner />
+
       {/* add / pin controls */}
       <div className="card p-3 flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <div className="stat-label">Your portfolio universe — pinned instruments are traded live (F&amp;O) or tracked</div>
+          <div className="flex items-center gap-2">
+            <div className="stat-label">Your portfolio universe — pinned instruments are traded live (F&amp;O) or tracked</div>
+            <ModeChip mode={state?.broker_mode} />
+          </div>
           <span className="text-[11px] text-muted">add a name from a backtest winner or by symbol</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

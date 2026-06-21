@@ -36,7 +36,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           if (m.data?.position_ticks) setPositionTicks(m.data.position_ticks)
         }
         else if (m.type === 'position_ticks') setPositionTicks(m.data || {})
-        else if (m.type === 'log') setLogs((p) => [...p.slice(-500), m.data])
+        // keep a generous buffer (1000) so routine DISARMED_SKIP/COOLDOWN_SKIP
+        // chatter doesn't evict ERROR/TRADE lines during an outage (C9)
+        else if (m.type === 'log') setLogs((p) => [...p.slice(-1000), m.data])
         else if (m.type === 'logs') setLogs(m.data)
         else if (m.type === 'live_ticks') setLiveTicks(m.data || {})
       }

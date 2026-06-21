@@ -12,7 +12,7 @@ import datetime as dt
 
 import pandas as pd
 
-from app.core.market_hours import IST, ist_epoch
+from app.core.market_hours import IST, ist_epoch, now_ist
 from app.strategy.signals import to_payload, compute_signals
 
 
@@ -48,3 +48,19 @@ def test_to_payload_times_are_true_ist_instants():
     first = _reads_back_in_ist(payload["candles"][0]["time"])
     # first non-NaN bar is at/after 09:15 IST and within the session, NOT evening
     assert 9 <= first.hour <= 15, f"chart bar rendered at {first} — timezone shift bug"
+
+
+def test_kite_provider_now_is_ist_wall_clock_and_naive():
+    """C5/DV-3: KiteProvider.now() must return IST wall-clock, tz-naive, matching
+    the candle epoch convention. On a UTC host the inherited base.now() would emit
+    server-local time and shift live ticks 5.5h behind the IST historical bars."""
+    from app.providers.kite import KiteProvider
+
+    p = KiteProvider.__new__(KiteProvider)   # skip auth/network init
+    n = p.now()
+    assert n.tzinfo is None, "now() must be tz-naive (IST wall-clock convention)"
+    ref = now_ist().replace(tzinfo=None)
+    # equal to IST wall-clock within a generous minute (avoid clock-edge flakiness)
+    assert abs((n - ref).total_seconds()) < 60, f"now()={n} not IST wall-clock {ref}"
+    # and it reads back to the true instant in IST
+    assert _reads_back_in_ist(ist_epoch(n)).hour == n.hour

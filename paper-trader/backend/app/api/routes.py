@@ -249,17 +249,40 @@ def logs(limit: int = 300):
 
 
 # ── signal-first list / positions cockpit / health (F1, F3, F5) ──────────────
+_INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}
+_STALE_GRACE_SECONDS = 90.0   # slack on top of the interval budget before a row reads stale
+
+
 @router.get("/api/signals")
 def signals(request: Request):
     """Lightweight signal-first list. Pure read of in-memory engine state +
-    health — it NEVER fetches candles, so rows stay cheap."""
+    health — it NEVER fetches candles, so rows stay cheap.
+
+    Freshness is PER-INSTRUMENT: each row is stale only if ITS OWN last successful
+    candle scan is older than its interval budget (+grace). One failing instrument
+    no longer flips every other row to stale (the old global-flag bug). The
+    feed-wide health (candle failures / auth expiry) stays in the `health` block
+    for a feed-wide banner, and `feed_auth_error` surfaces a Kite session expiry."""
+    from app.engine.health import is_stale
     r = _runner(request)
     h = r.health.as_dict()
-    candle_fails = h.get("candle", {}).get("consecutive_failures", 0)
+    candle = h.get("candle", {})
+    feed_auth_error = bool(candle.get("auth_error")) or bool(h.get("quote", {}).get("auth_error"))
+    now = r.provider.now()
     out = []
+    any_market_open = False
     for inst in all_instruments():
         st = r.state.get(inst.key, {})
         pos = st.get("position")
+        budget = _INTERVAL_MINUTES.get(r._interval_for(inst.key), 15) * 60 + _STALE_GRACE_SECONDS
+        last_ok = r.last_scan_ok.get(inst.key)
+        # Market-open mirrors the engine's own scan gate (runner.scan_signals skips
+        # closed instruments). When closed, last_scan_ok can't advance, so a stale
+        # flag is EXPECTED and benign — the UI must show "market closed", not alarm.
+        market_open = r.provider.is_tradable_now(inst)
+        any_market_open = any_market_open or market_open
+        # No state yet OR this instrument's own last good scan is past its budget.
+        stale = (not st) or is_stale(last_ok, now, budget)
         out.append({
             "key": inst.key, "name": inst.name, "segment": inst.segment,
             "enabled": inst.key in r.enabled,
@@ -270,9 +293,11 @@ def signals(request: Request):
             "has_position": pos is not None,
             "has_options": inst.has_options,
             "entries_blocked": inst.key in r.entry_blocks,
-            "stale": (not st) or candle_fails > 0,
+            "stale": stale,
+            "market_open": market_open,
         })
-    return {"instruments": out, "health": h}
+    return {"instruments": out, "health": h, "feed_auth_error": feed_auth_error,
+            "any_market_open": any_market_open}
 
 
 @router.get("/api/positions")

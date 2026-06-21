@@ -4,6 +4,8 @@ import {
   getSignals, toggleInstrument, getCandles, getOptionCandles, setLiveInterval, blockEntries,
 } from '../lib/api'
 import { PriceChart, LineChart } from '../components/Charts'
+import SessionBanner from '../components/SessionBanner'
+import ModeChip from '../components/ModeChip'
 import type { InstrState, SignalRow, ProviderHealth } from '../lib/types'
 import { inr, num, signedInr, pnlColor, signalStyle } from '../lib/format'
 import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
@@ -30,14 +32,35 @@ const FILTERS: [FilterKey, string][] = [
   ['stale', 'Stale / error'], ['options', 'Options-tradable'], ['enabled', 'Enabled only'],
 ]
 
+// "degraded Ns ago" — derived client-side from health.*.last_ok (DV-6) so the
+// trader sees HOW LONG the feed has been down, and the pill reflects BOTH the
+// candle and quote feeds (the row column only knows candle freshness).
+function ago(lastOk: string | null | undefined): string {
+  if (!lastOk) return ''
+  const anchored = /([zZ]|[+-]\d{2}:?\d{2})$/.test(lastOk) ? lastOk : lastOk + '+05:30'
+  const secs = Math.max(0, Math.round((Date.now() - Date.parse(anchored)) / 1000))
+  if (Number.isNaN(secs)) return ''
+  if (secs < 90) return `${secs}s ago`
+  if (secs < 5400) return `${Math.round(secs / 60)}m ago`
+  return `${Math.round(secs / 3600)}h ago`
+}
+
 function HealthPill({ health }: { health: ProviderHealth | null }) {
   if (!health) return null
-  const bad = (health.quote?.consecutive_failures || 0) > 0 || (health.candle?.consecutive_failures || 0) > 0
+  const q = health.quote, c = health.candle
+  const authExpired = !!q?.auth_error || !!c?.auth_error
+  const bad = (q?.consecutive_failures || 0) > 0 || (c?.consecutive_failures || 0) > 0
+  // worst (oldest) last_ok across the two feeds, for the duration hint
+  const oldestOk = [q?.last_ok, c?.last_ok].filter(Boolean).sort()[0] as string | undefined
+  const dur = bad ? ago(oldestOk) : ''
+  const label = authExpired ? 'session expired' : bad ? `degraded${dur ? ` ${dur}` : ''}` : 'healthy'
   return (
-    <span className={`badge ${bad ? 'bg-down/15 text-down' : 'bg-up/15 text-up'}`} title={
-      `quote fails ${health.quote?.consecutive_failures ?? 0} · candle fails ${health.candle?.consecutive_failures ?? 0}` +
-      (health.quote?.last_error ? `\n${health.quote.last_error}` : '')}>
-      data {bad ? 'degraded' : 'healthy'}
+    <span className={`badge ${bad || authExpired ? 'bg-down/15 text-down' : 'bg-up/15 text-up'}`} title={
+      `candle fails ${c?.consecutive_failures ?? 0} · quote fails ${q?.consecutive_failures ?? 0}` +
+      (authExpired ? '\nKite session expired — re-authenticate' : '') +
+      (c?.last_error ? `\n${c.last_error}` : '') +
+      (q?.last_error ? `\n${q.last_error}` : '')}>
+      data {label}
     </span>
   )
 }
@@ -55,6 +78,20 @@ export default function Monitor() {
     return () => clearInterval(t)
   }, [])
 
+  // Optimistic row toggle: flip locally now, let the 2.5s poll reconcile — no
+  // racing getSignals() refetch that made the badge flicker (MON-2).
+  const patchRow = (key: string, patch: Partial<SignalRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+
+  const toggleEnabled = (r: SignalRow) => {
+    patchRow(r.key, { enabled: !r.enabled })
+    toggleInstrument(r.key, !r.enabled).catch(() => patchRow(r.key, { enabled: r.enabled }))
+  }
+  const toggleBlock = (r: SignalRow) => {
+    patchRow(r.key, { entries_blocked: !r.entries_blocked })
+    blockEntries(r.key, !r.entries_blocked).catch(() => patchRow(r.key, { entries_blocked: r.entries_blocked }))
+  }
+
   const toggleFilter = (f: FilterKey) =>
     setActive((s) => { const n = new Set(s); n.has(f) ? n.delete(f) : n.add(f); return n })
 
@@ -62,7 +99,9 @@ export default function Monitor() {
     if (active.has('positions') && !r.has_position) return false
     if (active.has('signals') && r.signal === 'NONE') return false
     if (active.has('nosignal') && r.signal !== 'NONE') return false
-    if (active.has('stale') && !r.stale) return false
+    // "Stale / error" means a genuine feed problem — exclude benign market-closed
+    // staleness so the filter doesn't match every row overnight (OPS-R2-1).
+    if (active.has('stale') && (!r.stale || r.market_open === false)) return false
     if (active.has('options') && !r.has_options) return false
     if (active.has('enabled') && !r.enabled) return false
     return true
@@ -72,6 +111,7 @@ export default function Monitor() {
 
   return (
     <div className="flex flex-col gap-3">
+      <SessionBanner />
       <div className="card p-3 flex items-center gap-2 flex-wrap">
         <span className="stat-label mr-1">Filters</span>
         {FILTERS.map(([f, label]) => (
@@ -81,6 +121,13 @@ export default function Monitor() {
           </button>
         ))}
         <span className="ml-auto flex items-center gap-2">
+          {state?.any_market_open === false && (
+            <span className="badge bg-zinc-700/40 text-muted"
+              title="All enabled markets are closed — no new candles print, so rows read 'closed' (idle, not broken).">
+              ● markets closed
+            </span>
+          )}
+          <ModeChip mode={state?.broker_mode} />
           <HealthPill health={health} />
           <span className="text-[11px] text-muted">{view.length} of {rows.length}</span>
         </span>
@@ -109,15 +156,19 @@ export default function Monitor() {
                 <td className="text-muted">{r.trend || '—'}</td>
                 <td>{r.has_position ? <span className="text-up">● held</span> : <span className="text-muted">flat</span>}</td>
                 <td className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</td>
-                <td>{r.stale ? <span className="text-amber-400">stale</span> : <span className="text-up/80">live</span>}</td>
+                <td>{r.market_open === false
+                  ? <span className="text-muted" title="market closed — no new candle prints; not a feed fault">closed</span>
+                  : r.stale
+                    ? <span className="text-amber-400">stale</span>
+                    : <span className="text-up/80">live</span>}</td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => blockEntries(r.key, !r.entries_blocked).then(() => getSignals().then((d) => setRows(d.instruments || [])))}
+                  <button onClick={() => toggleBlock(r)}
                     className={`badge ${r.entries_blocked ? 'bg-down/15 text-down' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
                     {r.entries_blocked ? 'blocked' : 'allow'}
                   </button>
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => toggleInstrument(r.key, !r.enabled).then(() => getSignals().then((d) => setRows(d.instruments || [])))}
+                  <button onClick={() => toggleEnabled(r)}
                     className={`badge ${r.enabled ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}>
                     {r.enabled ? 'on' : 'off'}
                   </button>

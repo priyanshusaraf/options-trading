@@ -21,13 +21,26 @@ class _Cat:
         self.last_ok: dt.datetime | None = None
         self.consecutive_failures: int = 0
         self.last_error: str = ""
+        self.auth_error: bool = False   # last failure was a Kite session/token expiry
 
     def to_dict(self) -> dict:
         return {
             "last_ok": self.last_ok.isoformat() if self.last_ok else None,
             "consecutive_failures": self.consecutive_failures,
             "last_error": self.last_error,
+            "auth_error": self.auth_error,
         }
+
+
+# Substrings (case-insensitive) that mark a Kite auth/session expiry rather than a
+# transient outage (429 / timeout). When get_candles/historical fail with one of
+# these, the access token has expired and the owner must re-authenticate.
+_AUTH_SIGNATURES = ("access_token", "api_key", "tokenexception")
+
+
+def _is_auth_error(msg: str) -> bool:
+    m = (msg or "").lower()
+    return any(sig in m for sig in _AUTH_SIGNATURES)
 
 
 class HealthTracker:
@@ -44,11 +57,13 @@ class HealthTracker:
         c = self._cat(category)
         c.last_ok = now
         c.consecutive_failures = 0
+        c.auth_error = False
 
     def record_fail(self, category: str, msg: str, now: dt.datetime) -> None:
         c = self._cat(category)
         c.consecutive_failures += 1
         c.last_error = (msg or "")[:200]
+        c.auth_error = _is_auth_error(msg)
 
     def should_log_failure(self, category: str) -> bool:
         """Throttle repeated identical outage logs: log the 1st failure, then

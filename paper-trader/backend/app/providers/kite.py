@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time as _time
+from datetime import datetime
 
 from app.core import market_hours
 from app.core.config import get_settings
@@ -94,6 +95,21 @@ class KiteProvider(MarketDataProvider):
         # Gate on the venue that prints the candles we trade on (spot_exchange),
         # which is also where the option chain's underlying trades.
         return market_hours.is_open(inst.spot_exchange) or market_hours.is_open(inst.segment)
+
+    # ── clock ─────────────────────────────────────────────────────────────
+    def now(self) -> datetime:
+        """IST wall-clock, tz-naive — matching the candle epoch convention.
+
+        Historical candles in this app carry IST wall-clock timestamps (the raw
+        Kite bar tz is stripped in get_candles, keeping the IST wall time), and
+        the frontend re-anchors any offset-less time to +05:30. The inherited
+        base.now() returns naive *server-local* time, so on a UTC host (the cloud
+        default) the live snapshot/ws timestamps would land 5.5h behind the IST
+        candles — live bars would never form (time <= prev.time) and 'last update'
+        would render at the wrong clock. Returning IST wall-clock keeps the live
+        feed consistent with the historical bars. Clock only — no auth/order/quote
+        path is touched."""
+        return market_hours.now_ist().replace(tzinfo=None)
 
     # ── auth (ported) ─────────────────────────────────────────────────────
     def _load_saved_token(self) -> None:

@@ -36,3 +36,29 @@ def test_as_dict_shape():
     d = h.as_dict()
     assert set(d) >= {"quote", "candle"}
     assert d["candle"]["last_ok"] == NOW.isoformat()
+
+
+def test_auth_error_classified_on_token_expiry():
+    h = HealthTracker()
+    # the exact Kite signature the owner sees when the access token expires
+    h.record_fail("candle", "Incorrect api_key or access_token", NOW)
+    assert h.candle_health()["auth_error"] is True
+    # TokenException is the kiteconnect exception class name
+    h.record_fail("quote", "TokenException: token expired", NOW)
+    assert h.quote_health()["auth_error"] is True
+
+
+def test_auth_error_false_for_transient_outages():
+    h = HealthTracker()
+    h.record_fail("candle", "429 too many requests", NOW)
+    assert h.candle_health()["auth_error"] is False
+    h.record_fail("candle", "ConnectionError: read timeout", NOW)
+    assert h.candle_health()["auth_error"] is False
+
+
+def test_auth_error_cleared_on_recovery():
+    h = HealthTracker()
+    h.record_fail("candle", "Incorrect api_key or access_token", NOW)
+    assert h.candle_health()["auth_error"] is True
+    h.record_ok("candle", NOW)
+    assert h.candle_health()["auth_error"] is False

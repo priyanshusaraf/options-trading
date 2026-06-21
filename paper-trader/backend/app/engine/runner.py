@@ -65,6 +65,7 @@ class EngineRunner:
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
+        self.last_scan_ok: dict[str, object] = {}   # key -> last successful candle scan time (per-instrument freshness)
         self._stopped_at: dict[str, object] = {}    # instrument -> last stop-out time (re-entry cooldown)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
         self.running = False
@@ -152,6 +153,7 @@ class EngineRunner:
             try:
                 candles = prov.get_candles(inst, self._interval_for(key), s.history_days)
                 self.health.record_ok("candle", prov.now())
+                self.last_scan_ok[key] = prov.now()   # per-instrument freshness
             except Exception as e:
                 self.health.record_fail("candle", str(e), prov.now())
                 if self.health.should_log_failure("candle"):
@@ -511,6 +513,29 @@ class EngineRunner:
                 self.notifier.daily_halt(amount, cap)
         return halted
 
+    def halt_status(self, now) -> dict:
+        """Pure, side-effect-free read of the daily-loss / open-drawdown circuit
+        breaker for the snapshot/UI. Mirrors _entries_halted's computation but does
+        NOT log, notify, or mutate _halt_notified_date — safe to call on every WS
+        push. _entries_halted stays the one place that fires the once-per-day alert.
+
+        Returns: {halted, reason ('', 'realized', 'open_drawdown'), realized,
+        open_unrealized, max_daily_loss, max_open_drawdown}."""
+        max_loss = self.params.get("max_daily_loss", 0.0) or 0.0
+        max_dd = self.params.get("max_open_drawdown", 0.0) or 0.0
+        if max_loss <= 0 and max_dd <= 0:
+            return {"halted": False, "reason": "", "realized": 0.0,
+                    "open_unrealized": 0.0, "max_daily_loss": max_loss,
+                    "max_open_drawdown": max_dd}
+        realized = self._today_net_realized(now.date())
+        unreal = self._open_unrealized() if max_dd > 0 else 0.0
+        halted, reason = daily_loss_halt(realized, unreal, max_loss, max_dd)
+        return {
+            "halted": halted, "reason": reason,
+            "realized": round(realized, 2), "open_unrealized": round(unreal, 2),
+            "max_daily_loss": max_loss, "max_open_drawdown": max_dd,
+        }
+
     def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:
             s.add(SignalEvent(time=now, instrument_key=key, signal=st["signal"],
@@ -712,12 +737,28 @@ class EngineRunner:
             "open_count": len(opens),
         }
 
+    def _market_open_by_segment(self) -> dict[str, bool]:
+        """Per-segment open/closed for the operational screens. Mirrors the engine's
+        own scan gate (scan_signals skips closed instruments via is_tradable_now), so
+        the UI can render a closed market as a neutral 'market closed' instead of an
+        amber 'stale' alarm when no candle can possibly print. Read-only / no network."""
+        out: dict[str, bool] = {}
+        for inst in (get_instrument(k) for k in self.enabled):
+            if inst.segment not in out:
+                out[inst.segment] = self.provider.is_tradable_now(inst)
+        return out
+
     def snapshot_state(self) -> dict:
+        market_open = self._market_open_by_segment()
         return {"tick": self.tick_count, "provider": self.provider.name,
                 "time": self.provider.now().isoformat(),
                 "broker_mode": getattr(self.broker, "MODE", "paper"),  # "paper" | "live"
+                "armed": self.armed, "running": self.running,
+                "halt": self.halt_status(self.provider.now()),
                 "enabled": sorted(self.enabled), "states": self.state,
                 "intervals": {k: self._interval_for(k) for k in self.enabled},
                 "health": self.health.as_dict(),
+                "market_open": market_open,                       # {segment: bool}
+                "any_market_open": any(market_open.values()),     # feed-wide idle flag
                 "position_ticks": self.position_ticks,
                 "capital": self.capital_dict()}

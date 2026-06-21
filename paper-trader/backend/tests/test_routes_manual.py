@@ -30,6 +30,70 @@ def test_signals_list_is_lightweight():
         assert k in row
 
 
+def test_signals_staleness_is_per_instrument():
+    """C3/MON-1: a failing instrument must NOT flip every other row to stale, and a
+    healthy instrument must NOT mask a dead one. Freshness is per-key off
+    last_scan_ok, not a shared global candle-failure counter."""
+    import datetime as dt
+    c, r = _client()
+    now = r.provider.now()
+    # seed two instruments with state so the 'no state -> stale' path is bypassed
+    for key in ("NIFTY", "BANKNIFTY"):
+        r.state[key] = {"instrument": key, "signal": "NONE", "time": 0,
+                        "close": 100.0, "z": 0.0, "trend": "flat", "position": None}
+    r.last_scan_ok["NIFTY"] = now                       # fresh
+    r.last_scan_ok["BANKNIFTY"] = now - dt.timedelta(hours=1)  # long stale
+
+    rows = {x["key"]: x for x in c.get("/api/signals").json()["instruments"]}
+    assert rows["NIFTY"]["stale"] is False, "fresh instrument wrongly marked stale"
+    assert rows["BANKNIFTY"]["stale"] is True, "stale instrument wrongly marked live"
+
+
+def test_signals_surface_feed_auth_error_flag():
+    """C3/KITE-1: a Kite session expiry classified on candle health is exposed as a
+    feed-wide flag for the re-auth banner (without folding it into per-row stale)."""
+    c, r = _client()
+    r.health.record_fail("candle", "Incorrect api_key or access_token", r.provider.now())
+    res = c.get("/api/signals").json()
+    assert res["feed_auth_error"] is True
+    assert res["health"]["candle"]["auth_error"] is True
+
+
+def test_signals_carry_market_open_flag():
+    """OPS-R2-1: the read layer must distinguish 'market closed, all fine' from
+    'feed broken'. Each row carries market_open and the payload carries a feed-wide
+    any_market_open so the UI can render a neutral 'market closed' instead of an
+    amber 'stale' alarm overnight/weekends."""
+    c, _ = _client()
+    res = c.get("/api/signals").json()
+    assert "any_market_open" in res
+    row = res["instruments"][0]
+    assert "market_open" in row
+    # mock provider is always tradable -> market reads open and any_market_open True
+    assert row["market_open"] is True
+    assert res["any_market_open"] is True
+
+
+def test_signals_market_closed_is_distinct_from_broken_feed():
+    """OPS-R2-1: when the market is closed, rows can read stale (last_scan_ok can't
+    advance) but market_open=False tells the UI it is benign idle, NOT a broken feed.
+    A broken feed during open hours keeps market_open=True so stale stays an alarm."""
+    c, r = _client()
+    # simulate all markets closed (overnight/weekend) at the read layer. The mock
+    # provider is a cached singleton, so restore the bound method to keep isolation.
+    orig = r.provider.is_tradable_now
+    r.provider.is_tradable_now = lambda inst: False
+    try:
+        res = c.get("/api/signals").json()
+        assert res["any_market_open"] is False
+        assert all(row["market_open"] is False for row in res["instruments"])
+        # the per-row stale flag itself is unchanged (no state seeded -> stale True);
+        # the discrimination lives in market_open, so the UI can recolor it closed.
+        assert all(row["stale"] is True for row in res["instruments"])
+    finally:
+        r.provider.is_tradable_now = orig
+
+
 def test_set_interval_route():
     c, r = _client()
     res = c.post("/api/instruments/NIFTY/interval", json={"interval": "60minute"}).json()

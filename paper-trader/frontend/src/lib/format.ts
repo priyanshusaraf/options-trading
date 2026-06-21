@@ -37,3 +37,11 @@ export const dt = (iso: string): string => {
   try { return new Date(anchorIst(iso)).toLocaleString('en-IN', { timeZone: IST, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
+
+// Candle/scan times on the snapshot are IST epoch SECONDS (market_hours.ist_epoch).
+// Render them as IST wall-clock — never the viewer's local clock.
+export const epochTime = (epoch: number | null | undefined): string => {
+  if (!epoch) return '—'
+  try { return new Date(epoch * 1000).toLocaleTimeString('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
+  catch { return '—' }
+}
