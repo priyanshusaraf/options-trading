@@ -114,12 +114,14 @@ def _migrate_schema() -> None:
             ("manual_target", "BOOLEAN DEFAULT 0"),
             ("no_take_profit", "BOOLEAN DEFAULT 0"),
             ("gtt_trigger_id", "VARCHAR(32)"),
+            ("mode", "VARCHAR(8) DEFAULT 'paper'"),
         ],
         "trades": [
             ("held_overnight", "BOOLEAN DEFAULT 0"),
             ("overnight_pnl", "FLOAT DEFAULT 0.0"),
             ("intraday_pnl", "FLOAT DEFAULT 0.0"),
             ("reinforcements", "INTEGER DEFAULT 0"),
+            ("mode", "VARCHAR(8) DEFAULT 'paper'"),
         ],
         "backtest_results": [
             ("params_hash", "VARCHAR(64) DEFAULT ''"),

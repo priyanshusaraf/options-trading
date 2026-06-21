@@ -21,6 +21,8 @@ TAG = "pt-bot"   # every order the bot places is tagged so it's identifiable
 
 
 class LiveBroker(PaperBroker):
+    MODE = "live"   # every fill this broker books is a REAL trade — tagged so the log never mixes it with paper
+
     def __init__(self, provider, order_client, *, poll_seconds: float = 0.5,
                  timeout_seconds: float = 30.0, notifier=None) -> None:
         super().__init__(provider)

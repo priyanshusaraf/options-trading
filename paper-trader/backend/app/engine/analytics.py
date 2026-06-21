@@ -121,6 +121,9 @@ def summary(s: Session) -> dict:
     }
 
 
-def recent_trades(s: Session, limit: int = 50) -> list[dict]:
-    trades = list(s.scalars(select(Trade).order_by(Trade.exit_time.desc()).limit(limit)))
+def recent_trades(s: Session, limit: int = 50, mode: str | None = None) -> list[dict]:
+    q = select(Trade).order_by(Trade.exit_time.desc())
+    if mode in ("paper", "live"):
+        q = q.where(Trade.mode == mode)   # keep paper and real trades cleanly separated
+    trades = list(s.scalars(q.limit(limit)))
     return [t.to_dict() for t in trades]

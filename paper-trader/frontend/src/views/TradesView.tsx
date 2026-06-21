@@ -4,13 +4,17 @@ import { num, signedInr, pnlColor } from '../lib/format'
 import type { TradeDTO } from '../lib/types'
 
 type Filter = 'all' | 'win' | 'loss'
+type Mode = 'paper' | 'live'
 
 const n = (v: number | null | undefined) => (v == null ? '—' : num(v))
 const pct = (v: number | null | undefined) =>
   v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
+// old rows predate the mode column → default them to paper (the only ledger that existed).
+const modeOf = (t: TradeDTO): Mode => (t.mode === 'live' ? 'live' : 'paper')
 
 export default function TradesView() {
   const [trades, setTrades] = useState<TradeDTO[]>([])
+  const [mode, setMode] = useState<Mode>('paper')   // the two windows: paper ledger vs real ledger
   const [filter, setFilter] = useState<Filter>('all')
   const [inst, setInst] = useState('all')
 
@@ -19,21 +23,57 @@ export default function TradesView() {
     load(); const t = setInterval(load, 5000); return () => clearInterval(t)
   }, [])
 
-  const instruments = useMemo(
-    () => Array.from(new Set(trades.map((t) => t.instrument_key))).sort(), [trades])
+  const paperCount = useMemo(() => trades.filter((t) => modeOf(t) === 'paper').length, [trades])
+  const liveCount = useMemo(() => trades.filter((t) => modeOf(t) === 'live').length, [trades])
 
-  const rows = useMemo(() => trades.filter((t) =>
+  // this window's ledger first, then the win/loss + instrument filters
+  const ledger = useMemo(() => trades.filter((t) => modeOf(t) === mode), [trades, mode])
+  const instruments = useMemo(
+    () => Array.from(new Set(ledger.map((t) => t.instrument_key))).sort(), [ledger])
+  const rows = useMemo(() => ledger.filter((t) =>
     (filter === 'all' || (filter === 'win' ? t.win : !t.win)) &&
-    (inst === 'all' || t.instrument_key === inst)), [trades, filter, inst])
+    (inst === 'all' || t.instrument_key === inst)), [ledger, filter, inst])
 
   const count = rows.length
   const wins = rows.filter((t) => t.win).length
   const net = rows.reduce((a, t) => a + t.net_pnl, 0)
+  const isLive = mode === 'live'
 
   return (
     <div className="flex flex-col gap-3">
+      {/* the two windows — paper ledger vs real ledger, always kept apart */}
+      <div className="flex items-center gap-2">
+        {(['paper', 'live'] as Mode[]).map((m) => {
+          const active = mode === m
+          const live = m === 'live'
+          return (
+            <button key={m} onClick={() => { setMode(m); setInst('all') }}
+              className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${active
+                ? (live ? 'bg-down/20 text-down border-down/50' : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40')
+                : 'bg-panel2 text-muted border-edge hover:text-zinc-300'}`}>
+              {live ? '🔴 Real trades' : '📝 Paper trades'}
+              <span className="ml-1.5 opacity-70">({live ? liveCount : paperCount})</span>
+            </button>
+          )
+        })}
+        <span className="ml-auto text-[11px] text-muted">
+          Two separate ledgers — every trade is permanently tagged by the broker that executed it.
+        </span>
+      </div>
+
+      {isLive && (
+        <div className="card p-2.5 border-down/40 bg-down/10 text-xs text-down">
+          🔴 <b>Real-money ledger.</b> These are actual Kite fills. {liveCount === 0
+            ? 'None yet — the bot has only ever paper-traded (live execution is gated off).'
+            : 'Verify each against your Zerodha order book.'}
+        </div>
+      )}
+
       <div className="card p-3 flex items-center gap-3 flex-wrap">
-        <div className="stat-label">Trade log — every trade the bot has executed</div>
+        <div className="stat-label">
+          {isLive ? 'Real trade log — actual orders filled on your account'
+                  : 'Paper trade log — simulated fills, no real money'}
+        </div>
         <div className="flex gap-1">
           {(['all', 'win', 'loss'] as Filter[]).map((f) => (
             <button key={f} onClick={() => setFilter(f)}
@@ -53,11 +93,12 @@ export default function TradesView() {
         </span>
       </div>
 
-      <div className="card p-0 overflow-x-auto">
+      <div className={`card p-0 overflow-x-auto ${isLive ? 'border-down/30' : ''}`}>
         <table className="w-full text-xs">
           <thead className="text-muted">
             <tr className="border-b border-edge">
               <th className="text-left p-2">Exit time</th>
+              <th className="text-left p-2">Ledger</th>
               <th className="text-left p-2">Underlying</th>
               <th className="text-left p-2">Contract</th>
               <th className="text-right p-2">Underlying entry → exit</th>
@@ -72,6 +113,11 @@ export default function TradesView() {
             {rows.map((t) => (
               <tr key={t.id} className="border-b border-edge/40 hover:bg-panel2/40">
                 <td className="p-2 whitespace-nowrap text-muted">{new Date(t.exit_time).toLocaleString()}</td>
+                <td className="p-2">
+                  <span className={`badge ${modeOf(t) === 'live'
+                    ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                    {modeOf(t) === 'live' ? 'REAL' : 'PAPER'}</span>
+                </td>
                 <td className="p-2 whitespace-nowrap">{t.instrument_key}
                   <span className={`badge ml-1 ${t.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>
                     {t.direction} {t.option_type}</span>
@@ -87,7 +133,8 @@ export default function TradesView() {
               </tr>
             ))}
             {!rows.length && (
-              <tr><td colSpan={9} className="p-6 text-center text-muted">No trades match these filters yet.</td></tr>
+              <tr><td colSpan={10} className="p-6 text-center text-muted">
+                No {isLive ? 'real' : 'paper'} trades match these filters yet.</td></tr>
             )}
           </tbody>
         </table>

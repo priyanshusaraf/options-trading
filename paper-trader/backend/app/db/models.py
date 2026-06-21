@@ -77,6 +77,7 @@ class Position(Base):
     manual_target: Mapped[bool] = mapped_column(Boolean, default=False)  # owner set the target by hand — reinforcement won't auto-extend it
     no_take_profit: Mapped[bool] = mapped_column(Boolean, default=False)  # owner "let it run": suppress the TP cap (trailing stop still protects)
     gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
+    mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
     def to_dict(self) -> dict:
         mtm = (self.last_premium or self.entry_premium) * self.qty
@@ -106,6 +107,7 @@ class Position(Base):
             "manual_target": self.manual_target,
             "no_take_profit": self.no_take_profit,
             "unrealized_pnl": round(unrealized, 2),
+            "mode": self.mode,
         }
 
 
@@ -143,6 +145,7 @@ class Trade(Base):
     overnight_pnl: Mapped[float] = mapped_column(Float, default=0.0)   # part of net from session gaps
     intraday_pnl: Mapped[float] = mapped_column(Float, default=0.0)    # net - overnight
     reinforcements: Mapped[int] = mapped_column(Integer, default=0)
+    mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — broker that executed it
 
     def to_dict(self) -> dict:
         return {
@@ -174,6 +177,7 @@ class Trade(Base):
             "overnight_pnl": round(self.overnight_pnl, 2),
             "intraday_pnl": round(self.intraday_pnl, 2),
             "reinforcements": self.reinforcements,
+            "mode": self.mode,
         }
 
 

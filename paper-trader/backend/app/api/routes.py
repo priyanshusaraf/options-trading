@@ -235,9 +235,11 @@ def dashboard(request: Request):
 
 
 @router.get("/api/trades")
-def trades(request: Request, limit: int = 100):
+def trades(request: Request, limit: int = 100, mode: str | None = None):
+    # mode="paper"|"live" filters the log to one ledger; omitted returns both
+    # (each row still carries its own `mode` so the UI can split them).
     with SessionLocal() as s:
-        return {"trades": analytics.recent_trades(s, limit)}
+        return {"trades": analytics.recent_trades(s, limit, mode)}
 
 
 @router.get("/api/logs")

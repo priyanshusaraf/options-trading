@@ -23,6 +23,8 @@ from app.providers.base import MarketDataProvider, OptionQuote
 
 
 class PaperBroker:
+    MODE = "paper"   # stamped on every Position/Trade this broker creates (LiveBroker overrides to "live")
+
     def __init__(self, provider: MarketDataProvider) -> None:
         self.provider = provider
         self.settings = get_settings()
@@ -74,6 +76,7 @@ class PaperBroker:
             target_price=premium * (1 + target_pct),
             last_premium=premium, last_spot=spot,
             last_mark_time=now, high_water_premium=premium,
+            mode=self.MODE,
         )
         self.s.add(pos)
         self.s.commit()
@@ -171,6 +174,7 @@ class PaperBroker:
             overnight_pnl=round(pos.overnight_pnl, 2),
             intraday_pnl=round(net - pos.overnight_pnl, 2),
             reinforcements=pos.reinforcement_count,
+            mode=self.MODE,
         )
         self.s.delete(pos)
         self.s.add(tr)

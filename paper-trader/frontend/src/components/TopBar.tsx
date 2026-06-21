@@ -73,6 +73,13 @@ export default function TopBar({ tab, setTab, tabs }:
         <div className="flex items-center gap-3">
           <span className="font-semibold text-zinc-100">⟁ Options Paper Trader</span>
           <span className="badge bg-zinc-700/40 text-muted">{state?.provider?.toUpperCase() || '—'}</span>
+          {state?.broker_mode === 'live'
+            ? <span className="badge bg-down/20 text-down border border-down/40 font-semibold"
+                title="REAL-MONEY execution: the bot can place live Kite orders. Trades are logged under the Live ledger.">
+                🔴 LIVE MONEY</span>
+            : <span className="badge bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                title="Paper mode: simulated fills only, no real orders. Trades are logged under the Paper ledger.">
+                📝 PAPER</span>}
           <span className={`flex items-center gap-1 text-xs ${connected ? 'text-up' : 'text-down'}`}>
             <span className={`w-2 h-2 rounded-full ${connected ? 'bg-up animate-pulse' : 'bg-down'}`} />
             {connected ? 'LIVE' : 'OFFLINE'}

@@ -33,6 +33,7 @@ OVERRIDABLE = (
     "notify_enabled", "notify_on_signal", "alert_proximity_pct",
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
+    "max_open_drawdown",
     "bot_capital_cap", "capital_reserve", "gtt_stop_enabled",
 )
 
@@ -71,6 +72,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "exec_max_slippage_pct": (0.0, 0.50),
     "exec_min_top_qty_lots": (0.0, 10000.0),
     "max_daily_loss": (0.0, 100000000.0),   # 0 disables the halt
+    "max_open_drawdown": (0.0, 100000000.0),  # 0 disables the realized+unrealized halt
     "bot_capital_cap": (0.0, 100000000.0),  # 0 = no extra cap
     "capital_reserve": (0.0, 100000000.0),
 }

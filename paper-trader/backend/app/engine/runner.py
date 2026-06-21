@@ -38,7 +38,7 @@ from app.engine.execution_policy import plan_order
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
 from app.engine.risk_controls import (
-    in_reentry_cooldown, over_per_trade_cap, slots_available)
+    daily_loss_halt, in_reentry_cooldown, over_per_trade_cap, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
@@ -477,24 +477,39 @@ class EngineRunner:
             return sum(t.net_pnl for t in s.scalars(select(Trade))
                        if t.exit_time and t.exit_time.date() == today)
 
+    def _open_unrealized(self) -> float:
+        """Mark-to-market P&L across all currently open positions (can be negative)."""
+        return sum(((p.last_premium or p.entry_premium) - p.entry_premium) * p.qty
+                   for p in self.broker.open_positions())
+
     def _entries_halted(self, now) -> bool:
-        """True once today's realized NET loss breaches max_daily_loss — halts NEW
-        entries for the rest of the day (open positions are still managed). Alerts
-        once per day."""
-        cap = self.params.get("max_daily_loss", 0.0)
-        if not cap or cap <= 0:
+        """Halt NEW entries for the day once a circuit breaker trips (open positions
+        are still managed throughout). Two breakers, either trips:
+          • max_daily_loss    — today's REALIZED net loss.
+          • max_open_drawdown — today's REALIZED + UNREALIZED (open MTM) loss.
+        Alerts at most once per day; the open-drawdown breaker un-trips on recovery."""
+        max_loss = self.params.get("max_daily_loss", 0.0)
+        max_dd = self.params.get("max_open_drawdown", 0.0)
+        if (not max_loss or max_loss <= 0) and (not max_dd or max_dd <= 0):
             return False
         today = now.date()
-        net = self._today_net_realized(today)
-        if net <= -cap:
-            if self._halt_notified_date != today:
-                self._halt_notified_date = today
-                log.warn(f"DAILY LOSS HALT — today net ₹{net:,.0f} <= -₹{cap:,.0f}; "
-                         f"no new entries today")
-                if self.params.get("notify_enabled", True):
-                    self.notifier.daily_halt(net, cap)
-            return True
-        return False
+        realized = self._today_net_realized(today)
+        unreal = self._open_unrealized() if (max_dd and max_dd > 0) else 0.0
+        halted, why = daily_loss_halt(realized, unreal, max_loss, max_dd)
+        if halted and self._halt_notified_date != today:
+            self._halt_notified_date = today
+            if why == "open_drawdown":
+                combined = realized + unreal
+                log.warn(f"DAILY DRAWDOWN HALT — today realized ₹{realized:,.0f} + open "
+                         f"₹{unreal:,.0f} = ₹{combined:,.0f} <= -₹{max_dd:,.0f}; no new entries today")
+                amount, cap = combined, max_dd
+            else:
+                log.warn(f"DAILY LOSS HALT — today realized net ₹{realized:,.0f} <= "
+                         f"-₹{max_loss:,.0f}; no new entries today")
+                amount, cap = realized, max_loss
+            if self.params.get("notify_enabled", True):
+                self.notifier.daily_halt(amount, cap)
+        return halted
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:
@@ -700,6 +715,7 @@ class EngineRunner:
     def snapshot_state(self) -> dict:
         return {"tick": self.tick_count, "provider": self.provider.name,
                 "time": self.provider.now().isoformat(),
+                "broker_mode": getattr(self.broker, "MODE", "paper"),  # "paper" | "live"
                 "enabled": sorted(self.enabled), "states": self.state,
                 "intervals": {k: self._interval_for(k) for k in self.enabled},
                 "health": self.health.as_dict(),

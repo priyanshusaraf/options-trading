@@ -123,7 +123,8 @@ class Settings(BaseSettings):
     exec_limit_max_spread_pct: float = 0.05    # above market_max..this -> capped LIMIT; beyond -> SKIP
     exec_max_slippage_pct: float = 0.01        # cap a marketable-limit this far off the mid
     exec_min_top_qty_lots: float = 1.0         # require this many lots of top-of-book depth for MARKET
-    max_daily_loss: float = 5000.0             # halt NEW entries for the day past this realized loss (0 = off)
+    max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
+    max_open_drawdown: float = 0.0             # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off)
     gtt_stop_enabled: bool = True              # live: also place an exchange-side GTT stop (survives bot/laptop downtime)
 
     # ── notifications (Telegram) ───────────────────────────────────────────

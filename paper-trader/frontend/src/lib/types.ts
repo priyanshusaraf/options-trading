@@ -11,6 +11,7 @@ export interface PositionDTO {
   last_mark_time?: string | null; high_water_premium?: number
   reinforcement_count?: number; held_overnight?: boolean
   unrealized_pnl: number
+  mode?: 'paper' | 'live'
 }
 
 export interface InstrState {
@@ -35,6 +36,7 @@ export interface LiveState {
   states: Record<string, InstrState>; capital: Capital
   intervals?: Record<string, string>; health?: ProviderHealth
   position_ticks?: Record<string, PositionTick>
+  broker_mode?: 'paper' | 'live'
 }
 
 export interface LiveTick {
@@ -87,6 +89,7 @@ export interface TradeDTO {
   entry_spot: number | null; exit_spot: number | null
   spot_move_pct: number | null; premium_move_pct: number | null
   held_overnight?: boolean
+  mode?: 'paper' | 'live'
 }
 
 // ── backtest ────────────────────────────────────────────────────────────────
