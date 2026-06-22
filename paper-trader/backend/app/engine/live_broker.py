@@ -42,49 +42,111 @@ class LiveBroker(PaperBroker):
         return execute_order(self.client, req, poll_seconds=self.poll_seconds,
                              timeout_seconds=self.timeout_seconds)
 
+    def _actual_fill(self, res) -> tuple[int, float]:
+        """How much actually filled, and at what average price. The poll's own count
+        is authoritative for FILLED/PARTIAL; on a TIMEOUT (poll gave up reporting
+        nothing) we re-query the order once to catch a fill that landed at the buzzer
+        — so a real position is never missed."""
+        if res.filled_qty and res.filled_qty > 0:
+            return int(res.filled_qty), float(res.avg_price)
+        if res.status == "TIMEOUT" and res.order_id:
+            try:
+                st = self.client.status(res.order_id)
+            except Exception:
+                return 0, 0.0
+            fq = int(st.get("filled_qty", 0) or 0)
+            if fq > 0:
+                return fq, float(st.get("avg_price", 0.0) or 0.0)
+        return 0, 0.0
+
     def open_position(self, inst, direction, q, reason, now, spot,
                       params=None, plan=None):
         order_type = plan.action if (plan and plan.action in ("MARKET", "LIMIT")) else "MARKET"
         limit = plan.limit_price if (plan and plan.action == "LIMIT") else None
         res = self._execute(OrderRequest(q.tradingsymbol, inst.segment, "BUY",
                                          q.lot_size, order_type, limit, tag=TAG))
-        if res.status != "FILLED":
+        # L1 — ADOPT whatever actually filled (partial fills and buzzer fills too),
+        # never silently drop a real position. Only a genuine zero-fill records nothing.
+        filled, avg = self._actual_fill(res)
+        if filled <= 0:
             log.error(f"LIVE OPEN not filled [{res.status}] {q.tradingsymbol} — {res.reason}",
                       instrument=inst.key, event="LIVE_OPEN_FAIL")
             self._notify(f"⚠️ LIVE OPEN {q.tradingsymbol} {res.status}: {res.reason}")
             return None
-        # book the ACTUAL fill price (not the snapshot ltp)
-        pos = super().open_position(inst, direction, replace(q, ltp=res.avg_price),
+        # book the ACTUAL filled qty at the ACTUAL fill price (not the snapshot ltp).
+        pos = super().open_position(inst, direction,
+                                    replace(q, ltp=avg, lot_size=filled),
                                     reason, now, spot, params)
-        log.info(f"LIVE FILLED BUY {q.tradingsymbol} @ {res.avg_price:.2f} "
-                 f"(order {res.order_id})", instrument=inst.key, event="LIVE_OPEN")
-        self._place_gtt(pos, res.avg_price)   # exchange-side backstop stop
+        pos.lot_size = q.lot_size   # qty reflects the real fill; lot_size stays the true lot
+        self.s.commit()
+        if filled < q.lot_size:
+            log.error(f"LIVE OPEN PARTIAL {q.tradingsymbol} {filled}/{q.lot_size} "
+                      f"@ {avg:.2f} (order {res.order_id})", instrument=inst.key,
+                      event="LIVE_OPEN_PARTIAL")
+            self._notify(f"⚠️ LIVE OPEN {q.tradingsymbol} only PARTIAL: {filled}/"
+                         f"{q.lot_size} @ {avg:.2f} — managing the partial; verify on Zerodha")
+        else:
+            log.info(f"LIVE FILLED BUY {q.tradingsymbol} @ {avg:.2f} "
+                     f"(order {res.order_id})", instrument=inst.key, event="LIVE_OPEN")
+        self._place_gtt(pos, avg)   # exchange-side backstop stop on the real qty
         return pos
 
     def close_position(self, pos, exit_premium, reason, now, spot):
+        sym = pos.tradingsymbol
         # OWNERSHIP GUARD — never act on a position the live account doesn't back.
         chk = can_bot_close(pos, self.provider.account_positions())
         if not chk.ok:
-            log.error(f"LIVE CLOSE BLOCKED {pos.tradingsymbol} — {chk.reason}",
+            log.error(f"LIVE CLOSE BLOCKED {sym} — {chk.reason}",
                       instrument=pos.instrument_key, event="LIVE_CLOSE_BLOCKED")
-            self._notify(f"🚫 CLOSE blocked {pos.tradingsymbol}: {chk.reason}")
+            self._notify(f"🚫 CLOSE blocked {sym}: {chk.reason}")
             return None
-        gid = pos.gtt_trigger_id   # capture before super() deletes the row
-        res = self._execute(OrderRequest(pos.tradingsymbol, pos.exchange, "SELL",
-                                         pos.qty, "MARKET", None, tag=TAG))
-        if res.status != "FILLED":
-            log.error(f"LIVE CLOSE not filled [{res.status}] {pos.tradingsymbol} — {res.reason}",
-                      instrument=pos.instrument_key, event="LIVE_CLOSE_FAIL")
-            self._notify(f"⚠️ LIVE CLOSE {pos.tradingsymbol} {res.status}: {res.reason}")
-            return None
-        log.info(f"LIVE FILLED SELL {pos.tradingsymbol} @ {res.avg_price:.2f} "
-                 f"(order {res.order_id})", instrument=pos.instrument_key, event="LIVE_CLOSE")
-        sym = pos.tradingsymbol
-        trade = super().close_position(pos, res.avg_price, reason, now, spot)
-        # the bot exited itself — cancel the backstop so it can NEVER fire on a
-        # position we no longer hold (which would sell into your account).
+        # L6 — cancel the exchange GTT BEFORE the closing SELL (cancel-then-sell), so
+        # a premium gap-down can't fire the server-side stop into the same window as
+        # our market SELL (both execute → oversell into the owner's account).
+        gid = pos.gtt_trigger_id
         self._cancel_gtt(gid, sym)
-        return trade
+        # Re-check the account immediately before sending. If the GTT already fired
+        # (or the owner exited) the account no longer backs us — send NO order and
+        # leave the now-orphaned position for reconcile_orphans to book.
+        chk2 = can_bot_close(pos, self.provider.account_positions())
+        if not chk2.ok:
+            log.error(f"LIVE CLOSE ABORTED {sym} — {chk2.reason}",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_ABORT")
+            self._notify(f"🚫 CLOSE aborted {sym} (backstop may have fired): {chk2.reason}")
+            # we already cancelled the GTT — if this was a transient glitch the
+            # position is still real, so restore its backstop rather than leave it
+            # unprotected (a stray GTT on a truly-closed position is cancelled by the
+            # orphan reconciler, and Kite rejects a SELL of a holding you don't have).
+            self._place_gtt(pos, pos.last_premium or pos.entry_premium)
+            return None
+        want = pos.qty
+        res = self._execute(OrderRequest(sym, pos.exchange, "SELL",
+                                         want, "MARKET", None, tag=TAG))
+        # L2 — book what ACTUALLY sold (re-querying a TIMEOUT to catch a buzzer fill),
+        # never assume the full size sold.
+        sold, avg = self._actual_fill(res)
+        if sold <= 0:
+            log.error(f"LIVE CLOSE not filled [{res.status}] {sym} — {res.reason}",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_FAIL")
+            self._notify(f"⚠️ LIVE CLOSE {sym} {res.status}: {res.reason}")
+            # the SELL didn't go through but the position is still open and REAL —
+            # restore the exchange backstop we cancelled so it's never unprotected.
+            self._place_gtt(pos, pos.last_premium or pos.entry_premium)
+            return None
+        if sold < want:
+            # only part sold — book that slice, keep (and re-protect) the remainder so
+            # the ledger never overstates the position and the next exit can't oversell.
+            log.error(f"LIVE CLOSE PARTIAL {sym} {sold}/{want} @ {avg:.2f} "
+                      f"(order {res.order_id})", instrument=pos.instrument_key,
+                      event="LIVE_CLOSE_PARTIAL")
+            self._notify(f"⚠️ LIVE CLOSE {sym} only PARTIAL: {sold}/{want} @ {avg:.2f} "
+                         f"— booked the sold lots; {want - sold} still open & protected")
+            self.book_partial_close(pos, sold, avg, reason, now, spot)
+            self._place_gtt(pos, pos.last_premium or pos.entry_premium)
+            return None
+        log.info(f"LIVE FILLED SELL {sym} @ {avg:.2f} "
+                 f"(order {res.order_id})", instrument=pos.instrument_key, event="LIVE_CLOSE")
+        return super().close_position(pos, avg, reason, now, spot)
 
     # ── GTT safety-net stop ───────────────────────────────────────────────
     def _gtt_enabled(self) -> bool:

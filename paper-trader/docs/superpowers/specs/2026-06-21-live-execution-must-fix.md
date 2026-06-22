@@ -1,7 +1,11 @@
 # Live-Execution — Must-Fix Before Real Money
 
-**Date:** 2026-06-21
-**Status:** OPEN — these are gating items for Phase 3 (real-money execution)
+**Date:** 2026-06-21 · **Updated:** 2026-06-22
+**Status:** L1, L2, L3/L4, L5, L6 **CLOSED** (2026-06-22, test-first — see
+"## RESOLVED" at the bottom). L8/L9/L11/L13 (MEDIUM/LOW) remain open. The original
+OPEN findings are preserved below for context.
+
+**Original status:** OPEN — these are gating items for Phase 3 (real-money execution)
 **Scope:** `LiveBroker` / `OrderClient` / GTT / reconcile. **None of these bite in
 paper mode today** (the default `PaperBroker` + `SafePaperKite` cannot place real
 orders). They MUST be closed before `PT_EXECUTION=live` + `PT_LIVE_ACK` are ever
@@ -72,3 +76,58 @@ here moves real capital.
 
 ## Rollout reminder (from the design spec)
 Even after these are fixed: shadow mode first (compute + margin-check the order, still paper-fill) → 1-lot single-instrument pilot with kill switch + daily-loss halt → expand only after N clean reconciliation sessions.
+
+---
+
+## RESOLVED — 2026-06-22 (test-first; all paper-tested, 313 tests green)
+
+All fixes are gated behind `PT_EXECUTION=live` (conftest forces it OFF in the suite),
+so none change paper behavior. Each was driven RED→GREEN.
+
+- **L1 — partial/late BUY adopted** (`live_broker.py` `open_position` + new `_actual_fill`).
+  A non-FILLED open now books the **actual filled qty at the real avg price** and places
+  its GTT instead of returning None; a TIMEOUT re-queries the order once to catch a
+  buzzer fill. Only a genuine zero-fill (REJECTED / nothing filled) records nothing.
+  `pos.qty` = real fill, `pos.lot_size` = the true lot.
+- **L2 — partial/late SELL never oversells** (`live_broker.py` `close_position` +
+  new `PaperBroker.book_partial_close`). A partial sell books only the sold slice,
+  shrinks the open position by that qty (entry cost split proportionally, cash
+  invariant kept exact), and re-places a GTT on the remainder. A TIMEOUT re-queries
+  to book a late fill so the ledger never overstates the position.
+- **L3/L4 — GTT re-synced on every stop change.** `broker.reinforce_position` and the
+  manual-SL route (`routes.py set_position_sltp`) now call `update_stop_protection`
+  after committing the new stop, so the exchange backstop tracks the tightened stop.
+- **L5 — order poll no longer freezes the loop / holds the lock long.**
+  `order_poll_seconds`/`order_timeout_seconds` are settings (live default **10s**, was a
+  hardcoded 30s), wired through `broker_factory`. `_risk_iteration` offloads the
+  blocking pass via `asyncio.to_thread`, keeping WS/heartbeats/signal-scheduler alive
+  (the lock is still held across the offload, so the single DB session stays
+  single-threaded-at-a-time).
+- **L6 — GTT-vs-bot double-sell race closed.** `close_position` now **cancels the GTT
+  before** sending the SELL (cancel-then-sell) and **re-checks account qty immediately
+  pre-send** — if the GTT already fired (account no longer backs us) it sends no order.
+  On a non-fill after cancelling, the GTT is **re-placed** so the position is never
+  left unprotected.
+
+### Honest residuals (narrowed, not eliminated — review before unsupervised live)
+- **L2/L1 TIMEOUT, order still working:** if a SELL times out while genuinely still
+  OPEN (not filled, not terminal), the next risk tick can re-send — the ownership
+  guard only blocks the re-send once a fill has actually dropped account qty. A truly
+  concurrent double-fill is now bounded by the 10s timeout + fast MARKET fills, but a
+  full fix needs tracking the outstanding order id and cancelling/awaiting it before
+  any re-send. Same shape on the BUY side: a fill landing after the single re-query
+  is still untracked until an adopt-open reconciler exists (today `reconcile_orphans`
+  books only closures).
+- **L5 intra-pass serialism:** within one risk pass, positions are still marked
+  serially, so a slow close on position A delays B *within that pass* (the event loop
+  and the next iteration are no longer blocked). Fine for the 1-lot single-instrument
+  pilot; revisit per-position close parallelism before running many concurrent names.
+
+## Test gaps — now closed
+`test_live_broker.py` covers PARTIAL and TIMEOUT through the broker (open + close),
+GTT-resync on reinforcement, the cancel-then-sell ordering, the pre-send abort when
+the GTT fired, and backstop restore on a failed close. `test_position_sltp.py` covers
+manual-SL GTT resync. `test_broker_factory.py` covers the bounded/configurable timeout.
+`test_engine_loops.py` covers the event-loop-stays-responsive property. The old
+`test_open_returns_none_and_records_nothing_when_not_filled` still holds (it asserts
+the REJECTED zero-fill case, which is still correct).

@@ -471,6 +471,10 @@ async def set_position_sltp(key: str, body: SLTPBody, request: Request):
         if new_target is not None:
             pos.manual_target = True
         r.broker.commit()
+        # push the owner's new stop to the exchange GTT backstop (no-op on paper;
+        # LiveBroker modifies the live GTT) so a bot-down exit protects at this stop,
+        # not the stale one it replaced.
+        r.broker.update_stop_protection(pos, pos.last_premium)
         from app.core.logging import log
         log.info(f"MANUAL SL/TP {pos.tradingsymbol} -> SL {stop:.2f} / TP {target:.2f}",
                  instrument=key, event="MANUAL_SLTP", manual=True)

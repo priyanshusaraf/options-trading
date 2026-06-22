@@ -30,6 +30,35 @@ def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
     assert isinstance(make_broker(MockProvider()), PaperBroker)
 
 
+def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
+    """L5: the live order poll timeout must be configurable AND bounded well under
+    the old 30s, so a stuck poll can't hold the engine lock for half a minute."""
+    import types
+    monkeypatch.setenv("PT_EXECUTION", "live")
+    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    init_db(reset=True)
+    prov = MockProvider()
+    prov.name = "kite"            # look like the live provider
+    prov.access_token = "tok"
+    monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
+                        lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
+    monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient",
+                        lambda *a, **k: object())
+    captured = {}
+
+    def fake_lb(provider, client, *, poll_seconds=0.5, timeout_seconds=30.0, notifier=None):
+        captured["poll"], captured["timeout"] = poll_seconds, timeout_seconds
+        return "LB"
+
+    monkeypatch.setattr("app.engine.live_broker.LiveBroker", fake_lb)
+    assert make_broker(prov) == "LB"
+    from app.core.config import get_settings
+    s = get_settings()
+    assert captured["timeout"] == s.order_timeout_seconds
+    assert captured["poll"] == s.order_poll_seconds
+    assert captured["timeout"] <= 15.0
+
+
 def test_live_gate_reads_dotenv_via_settings(monkeypatch):
     """The flags must work from .env (Settings), not only a shell export — so the
     owner controls live mode from one file with no per-session exports. Simulate the

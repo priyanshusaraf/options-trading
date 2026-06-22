@@ -84,3 +84,34 @@ def test_async_iterations_run():
 async def _drive(r):
     await r._risk_iteration()
     await r._signal_iteration()
+
+
+def test_risk_iteration_keeps_the_event_loop_responsive():
+    """L5: a slow live order poll inside the risk pass must NOT freeze the event
+    loop — other async work (WS heartbeats, the signal scheduler) has to keep running
+    while one order polls. The blocking pass is offloaded so the loop stays free."""
+    import time
+    r = _runner()
+
+    def slow_pass():                      # stand-in for a 30s-bounded order poll
+        time.sleep(0.3)
+
+    r.mark_and_exit_positions = slow_pass
+    asyncio.run(_probe_loop_free(r))
+
+
+async def _probe_loop_free(r):
+    ticks = {"n": 0}
+    stop = {"v": False}
+
+    async def ticker():
+        while not stop["v"]:
+            await asyncio.sleep(0.01)
+            ticks["n"] += 1
+
+    t = asyncio.create_task(ticker())
+    await r._risk_iteration()             # ~0.3s of blocking work inside
+    ticks_during = ticks["n"]             # accrued WHILE the risk pass ran
+    stop["v"] = True
+    await t
+    assert ticks_during >= 3              # the loop ran concurrently with the poll

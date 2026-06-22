@@ -126,6 +126,9 @@ class PaperBroker:
             pos.reinforcement_count = r["count"]
             pos.last_reinforce_time = now
             self.s.commit()
+            # the stop just ratcheted — push it to the exchange GTT backstop too
+            # (no-op on paper; LiveBroker modifies the live GTT).
+            self.update_stop_protection(pos, pos.last_premium)
             log.info(f"REINFORCE {pos.tradingsymbol} — {r['reason']}",
                      instrument=pos.instrument_key, event="REINFORCE",
                      count=r["count"])
@@ -183,6 +186,60 @@ class PaperBroker:
             f"CLOSE {pos.tradingsymbol} @ {exit_premium:.2f} [{reason}] "
             f"— net ₹{net:,.0f} ({tr.return_pct:+.1f}%)",
             instrument=pos.instrument_key, event="CLOSE", reason=reason,
+            net_pnl=round(net, 2))
+        return tr
+
+    def book_partial_close(self, pos: Position, qty: int, exit_premium: float,
+                           reason: str, now: dt.datetime, spot: float) -> Trade:
+        """Realize PART of an open position (a SELL that only partially filled): book
+        a Trade for `qty`, shrink the open position by `qty`, and split its entry cost
+        proportionally. The position stays open at the reduced qty so the remainder
+        can still be managed/exited. Keeps the cash reconciliation invariant exact:
+        the realized entry-cost slice and the remaining entry_cost sum to the original.
+        """
+        qty = min(int(qty), pos.qty)
+        charges = compute_charges(pos.exchange, "SELL", exit_premium, qty)["total"]
+        proceeds = exit_premium * qty - charges
+        gross = (exit_premium - pos.entry_premium) * qty
+        # split the entry cost/charges by the fraction sold; the remainder and the
+        # realized slice add back to the originals exactly (no rounding drift).
+        remaining_cost = pos.entry_cost * (pos.qty - qty) / pos.qty
+        cost_slice = pos.entry_cost - remaining_cost
+        remaining_entry_charges = pos.entry_charges * (pos.qty - qty) / pos.qty
+        charges_slice = pos.entry_charges - remaining_entry_charges
+        net = proceeds - cost_slice
+
+        cap = self.capital()
+        cap.cash += proceeds
+        cap.realized_pnl += net
+        cap.updated_at = now
+
+        tr = Trade(
+            instrument_key=pos.instrument_key, direction=pos.direction,
+            option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
+            exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
+            entry_premium=pos.entry_premium, entry_cost=cost_slice,
+            entry_spot=pos.entry_spot, entry_time=pos.entry_time,
+            exit_premium=exit_premium, exit_charges=charges, exit_spot=spot,
+            exit_time=now, exit_reason=reason, gross_pnl=gross,
+            charges_total=charges_slice + charges, net_pnl=net,
+            return_pct=(net / cost_slice * 100) if cost_slice else 0.0,
+            holding_minutes=(now - pos.entry_time).total_seconds() / 60,
+            win=net > 0,
+            held_overnight=pos.held_overnight,
+            overnight_pnl=0.0, intraday_pnl=round(net, 2),
+            reinforcements=pos.reinforcement_count,
+            mode=self.MODE,
+        )
+        pos.qty -= qty
+        pos.entry_cost = remaining_cost
+        pos.entry_charges = remaining_entry_charges
+        self.s.add(tr)
+        self.s.commit()
+        log.trade(
+            f"PARTIAL CLOSE {pos.tradingsymbol} {qty} @ {exit_premium:.2f} [{reason}] "
+            f"— net ₹{net:,.0f}; {pos.qty} still open",
+            instrument=pos.instrument_key, event="PARTIAL_CLOSE", reason=reason,
             net_pnl=round(net, 2))
         return tr
 

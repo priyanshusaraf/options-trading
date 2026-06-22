@@ -49,5 +49,7 @@ def make_broker(provider, notifier=None):
         # provider's: after a daily re-login the provider refreshes access_token, and
         # the order client picks it up on the next order — no backend restart needed.
         client = KiteOrderClient(kite, token_source=lambda: getattr(provider, "access_token", None))
-        return LiveBroker(provider, client, notifier=notifier)
+        return LiveBroker(provider, client, notifier=notifier,
+                          poll_seconds=s.order_poll_seconds,
+                          timeout_seconds=s.order_timeout_seconds)
     return PaperBroker(provider)

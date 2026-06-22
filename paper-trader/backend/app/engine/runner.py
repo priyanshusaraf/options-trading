@@ -561,8 +561,13 @@ class EngineRunner:
 
     # ── per-lane single iterations (lock-serialised DB mutation) ──────────
     async def _risk_iteration(self) -> None:
+        # L5 — mark_and_exit_positions can block for the live order-poll window
+        # (place + poll to a terminal state). Run it OFF the event loop so a slow
+        # poll never freezes WS heartbeats, the signal scheduler, or the cockpit.
+        # The lock is still held across the offload, so the single shared DB session
+        # is only ever touched by one lane at a time (risk vs signal stay serialised).
         async with self._lock:
-            self.mark_and_exit_positions()
+            await asyncio.to_thread(self.mark_and_exit_positions)
         if self.on_position_ticks:
             try:
                 await self.on_position_ticks(self.position_ticks)

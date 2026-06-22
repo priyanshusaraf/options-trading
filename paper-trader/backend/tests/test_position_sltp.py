@@ -59,6 +59,21 @@ def test_set_position_sltp_no_position():
     assert "error" in res
 
 
+def test_manual_sltp_resyncs_exchange_stop():
+    """L4: setting the stop by hand must push the new (tighter) stop to the exchange
+    GTT backstop — otherwise, if the bot is down, the server-side stop protects at
+    the stale, looser level the owner just overrode."""
+    c, r = _client()
+    assert _open(c).get("opened") is True
+    calls = []
+    r.broker.update_stop_protection = lambda pos, last: calls.append(
+        (pos.instrument_key, pos.stop_price))
+    res = c.post("/api/positions/NIFTY/sltp",
+                 json={"stop_price": 50.0, "target_price": 900.0}).json()
+    assert res.get("ok") is True
+    assert calls and calls[-1] == ("NIFTY", 50.0)
+
+
 def test_manual_target_survives_reinforcement():
     """An owner-set target is not auto-extended by a reinforcement; the stop still
     ratchets into profit."""
