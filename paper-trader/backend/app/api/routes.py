@@ -341,6 +341,13 @@ def signals(request: Request):
     candle = h.get("candle", {})
     feed_auth_error = bool(candle.get("auth_error")) or bool(h.get("quote", {}).get("auth_error"))
     now = r.provider.now()
+    from app.core import runtime_config
+    eff = runtime_config.effective()
+    today_thr = int(eff.get("overtrade_today_threshold", 5))
+    roll_thr = int(eff.get("overtrade_rolling_threshold", 15))
+    roll_days = int(eff.get("overtrade_rolling_days", 7))
+    with SessionLocal() as _s:
+        sig_counts = analytics.signal_counts(_s, now, rolling_days=roll_days)
     out = []
     any_market_open = False
     for inst in all_instruments():
@@ -372,6 +379,12 @@ def signals(request: Request):
             "product": r.products.get(inst.key, "options"),
             "priority_flag": r.priority_flags.get(inst.key, False),
             "strategy_key": r.strategy_keys.get(inst.key),
+            "signals_today": sig_counts.get(inst.key, {}).get("today", 0),
+            "signals_rolling": sig_counts.get(inst.key, {}).get("rolling", 0),
+            "overtrade_flag": r.overtrade_flags.get(inst.key, False),
+            "overtrade_suggested": (
+                (today_thr > 0 and sig_counts.get(inst.key, {}).get("today", 0) >= today_thr)
+                or (roll_thr > 0 and sig_counts.get(inst.key, {}).get("rolling", 0) >= roll_thr)),
         })
     return {"instruments": out, "health": h, "feed_auth_error": feed_auth_error,
             "any_market_open": any_market_open}
@@ -462,6 +475,18 @@ def set_priority(key: str, body: PriorityBody, request: Request):
         return {"error": "unknown instrument"}
     _runner(request).set_priority_flag(key, body.priority_flag)
     return {"key": key, "priority_flag": body.priority_flag}
+
+
+class OvertradeBody(BaseModel):
+    flag: bool
+
+
+@router.post("/api/instruments/{key}/overtrade")
+def set_overtrade(key: str, body: OvertradeBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    _runner(request).set_overtrade_flag(key, body.flag)
+    return {"key": key, "overtrade_flag": body.flag}
 
 
 class StrategyBody(BaseModel):
