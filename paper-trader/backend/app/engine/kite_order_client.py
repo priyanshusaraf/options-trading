@@ -14,6 +14,16 @@ from __future__ import annotations
 from app.engine.gtt import stop_gtt_params
 from app.engine.order_executor import OrderRequest
 
+# Charge-segments that trade as intraday equity (MIS): same-day, leveraged, the
+# broker auto-squares-off near close. Everything else (options/futures) is NRML.
+EQUITY_INTRADAY_SEGMENTS = frozenset({"NSE_INTRADAY", "BSE_INTRADAY"})
+
+
+def product_for_segment(segment: str, default: str = "NRML") -> str:
+    """Kite product code for a charge-segment: MIS for intraday equity, else the
+    client default (NRML for options/futures so they can carry overnight)."""
+    return "MIS" if segment in EQUITY_INTRADAY_SEGMENTS else default
+
 
 class KiteOrderClient:
     def __init__(self, kite, *, token_source=None,
@@ -64,9 +74,12 @@ class KiteOrderClient:
 
     def place(self, req: OrderRequest) -> str:
         self._sync_token()
+        # req.product overrides the client default (MIS for intraday equity); the
+        # options/futures path passes None and keeps the client's NRML.
+        product = req.product or self.product
         kw = dict(variety=self.variety, exchange=req.exchange,
                   tradingsymbol=req.tradingsymbol, transaction_type=req.side,
-                  quantity=req.qty, product=self.product, order_type=req.order_type)
+                  quantity=req.qty, product=product, order_type=req.order_type)
         if req.order_type == "LIMIT" and req.limit_price is not None:
             kw["price"] = req.limit_price
         if req.order_type == "MARKET":
