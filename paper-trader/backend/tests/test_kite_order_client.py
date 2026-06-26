@@ -11,6 +11,7 @@ class FakeKite:
         self.gtt_placed = []
         self.gtt_modified = []
         self.gtt_deleted = []
+        self.cancelled = []
 
     def place_order(self, **kw):
         self.placed.append(kw)
@@ -31,6 +32,10 @@ class FakeKite:
         self.gtt_deleted.append(trigger_id)
         return {"trigger_id": trigger_id}
 
+    def cancel_order(self, **kw):
+        self.cancelled.append(kw)
+        return kw.get("order_id")
+
 
 def test_place_maps_limit_order_fields():
     k = FakeKite()
@@ -48,6 +53,56 @@ def test_market_order_carries_no_price():
     k = FakeKite()
     KiteOrderClient(k).place(OrderRequest("SYM", "NFO", "SELL", 75, "MARKET"))
     assert k.placed[0]["order_type"] == "MARKET" and "price" not in k.placed[0]
+
+
+def test_market_order_carries_automatic_market_protection_by_default():
+    """Since SEBI's 1-Apr-2026 rule, a MARKET order via API WITHOUT non-zero market
+    protection is rejected (all segments, MCX included). The client must attach
+    market_protection=-1 (automatic exchange guideline) by default so the bot can
+    place a market order at all."""
+    k = FakeKite()
+    KiteOrderClient(k).place(OrderRequest("SYM", "NFO", "BUY", 75, "MARKET"))
+    assert k.placed[0]["market_protection"] == -1
+
+
+def test_market_order_passes_configured_protection_pct():
+    k = FakeKite()
+    KiteOrderClient(k, market_protection=3.0).place(
+        OrderRequest("SYM", "NFO", "BUY", 75, "MARKET"))
+    assert k.placed[0]["market_protection"] == 3.0
+
+
+def test_configured_zero_protection_is_coerced_to_automatic():
+    """A 0 (or unset) market protection is REJECTED by the exchange — we must never
+    send an unprotected market order, so a configured 0 falls back to -1 (auto)."""
+    k = FakeKite()
+    KiteOrderClient(k, market_protection=0).place(
+        OrderRequest("SYM", "NFO", "BUY", 75, "MARKET"))
+    assert k.placed[0]["market_protection"] == -1
+
+
+def test_market_sell_exit_on_commodity_also_carries_protection():
+    """The protective SELL exit is a MARKET order too — and on MCX an unprotected
+    market order bounces just like a buy. Both directions, all segments, get it."""
+    k = FakeKite()
+    KiteOrderClient(k).place(OrderRequest("GOLDM25JULFUT", "MCX", "SELL", 10, "MARKET"))
+    assert k.placed[0]["market_protection"] == -1
+
+
+def test_limit_order_carries_no_market_protection():
+    """market_protection only applies to MARKET/SL-M; a LIMIT order is already
+    price-bounded and must not carry it."""
+    k = FakeKite()
+    KiteOrderClient(k, market_protection=3.0).place(
+        OrderRequest("SYM", "NFO", "BUY", 75, "LIMIT", limit_price=101.0))
+    assert "market_protection" not in k.placed[0]
+
+
+def test_cancel_calls_kite_cancel_order_with_the_variety():
+    """Cancelling a stuck/in-flight order needs the same variety it was placed with."""
+    k = FakeKite()
+    KiteOrderClient(k).cancel("OID-9")
+    assert k.cancelled == [{"variety": "regular", "order_id": "OID-9"}]
 
 
 def test_status_reads_last_history_row():

@@ -17,10 +17,17 @@ from app.engine.order_executor import OrderRequest
 
 class KiteOrderClient:
     def __init__(self, kite, *, token_source=None,
-                 product: str = "NRML", variety: str = "regular") -> None:
+                 product: str = "NRML", variety: str = "regular",
+                 market_protection: float = -1.0) -> None:
         self.kite = kite
         self.product = product
         self.variety = variety
+        # Market protection for MARKET/SL-M orders. Mandatory since SEBI's 1-Apr-2026
+        # rule: a market order placed via API WITHOUT non-zero protection is REJECTED
+        # (all segments, MCX included). -1 = automatic exchange-guideline protection;
+        # >0..100 = an explicit cap %. A 0 means "unprotected" and would be rejected,
+        # so it is coerced to -1 at send time — we never send an unprotected market order.
+        self.market_protection = market_protection
         # callable returning the data provider's CURRENT access token. Synced before
         # every Kite call so a daily re-login (which refreshes the provider token)
         # flows through to order placement without rebuilding the broker.
@@ -62,9 +69,19 @@ class KiteOrderClient:
                   quantity=req.qty, product=self.product, order_type=req.order_type)
         if req.order_type == "LIMIT" and req.limit_price is not None:
             kw["price"] = req.limit_price
+        if req.order_type == "MARKET":
+            # never unprotected: a 0/falsy value would be rejected -> fall back to -1 (auto)
+            kw["market_protection"] = self.market_protection or -1.0
         if req.tag:
             kw["tag"] = req.tag
         return self.kite.place_order(**kw)
+
+    def cancel(self, order_id: str):
+        """Cancel a working order (same variety it was placed with). Used to kill a
+        timed-out-but-still-working order before placing another on the same contract,
+        so a contract never has two live bot orders at once."""
+        self._sync_token()
+        return self.kite.cancel_order(variety=self.variety, order_id=order_id)
 
     def status(self, order_id: str) -> dict:
         self._sync_token()

@@ -131,6 +131,16 @@ class Settings(BaseSettings):
     max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
     max_open_drawdown: float = 0.0             # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off)
     gtt_stop_enabled: bool = True              # live: also place an exchange-side GTT stop (survives bot/laptop downtime)
+    # market protection for every live MARKET order (entries + protective exits, all
+    # segments incl. MCX). Mandatory since SEBI's 1-Apr-2026 rule: an unprotected
+    # market order via API is REJECTED. -1 = automatic exchange-guideline protection
+    # (compliant, self-adjusts per segment); >0..100 = an explicit cap %. 0 is coerced
+    # to -1 at send time so we can never place an unprotected market order.
+    market_protection_pct: float = -1.0
+    # live: book a bot position closed only after the account feed shows it gone on
+    # this many CONSECUTIVE reconcile reads — one transient positions() glitch (>60s)
+    # must not phantom-close a still-open real position.
+    orphan_confirm_count: int = 2
 
     # ── notifications (Telegram) ───────────────────────────────────────────
     notify_enabled: bool = True              # master switch (no-op anyway if creds unset)

@@ -27,6 +27,7 @@ class FakeClient:
         self.gtt_placed = []
         self.gtt_modified = []
         self.gtt_deleted = []
+        self.cancelled = []                  # order ids passed to cancel()
         self.log = []                        # ordered call log across orders + GTTs
 
     def place(self, req):
@@ -34,6 +35,10 @@ class FakeClient:
         self._req = req
         self.log.append(("place", req.side))
         return "OID-1"
+
+    def cancel(self, order_id):
+        self.cancelled.append(order_id)
+        self.log.append(("cancel", order_id))
 
     def status(self, order_id):
         if self._seq is not None:
@@ -306,6 +311,106 @@ def test_failed_close_replaces_the_gtt_so_the_position_stays_protected():
     assert pos.gtt_trigger_id == "GTT-1"
 
 
+# ── L11: a failed alert must be logged, never silently swallowed ─────────────
+def test_notify_logs_when_the_notifier_raises():
+    from app.core.logging import log
+
+    class BoomNotifier:
+        def _emit(self, text):
+            raise RuntimeError("telegram down")
+
+    c = FakeClient()
+    b = _broker(c)
+    b.notifier = BoomNotifier()
+    b._notify("CRITICAL: GTT NOT placed")          # must not propagate
+    errs = [e for e in log.recent(50) if e.get("event") == "NOTIFY_FAIL"]
+    assert errs and "CRITICAL: GTT NOT placed" in errs[-1]["msg"]
+
+
+# ── outstanding-order tracking: never two working bot orders on one contract ──
+def test_ensure_no_inflight_proceeds_when_there_is_no_prior_order():
+    c = FakeClient()
+    b = _broker(c)
+    assert b._ensure_no_inflight("SYM") is True
+
+
+def test_ensure_no_inflight_cancels_a_still_working_prior_order():
+    # A prior order recorded as in-flight is still OPEN at the exchange -> cancel it
+    # and confirm before allowing a new order, so the contract never has two live orders.
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b._inflight["SYM"] = "OID-7"
+    assert b._ensure_no_inflight("SYM") is True
+    assert c.cancelled == ["OID-7"]
+    assert "SYM" not in b._inflight                 # cleared
+
+
+def test_ensure_no_inflight_aborts_if_the_prior_order_already_filled():
+    # The in-flight order actually FILLED since we recorded it. Placing another would
+    # double up (a second BUY, or an oversell on SELL) -> abort and surface instead.
+    c = FakeClient(status="COMPLETE", filled_qty=50)
+    b = _broker(c)
+    b._inflight["SYM"] = "OID-7"
+    assert b._ensure_no_inflight("SYM") is False
+    assert c.cancelled == []                        # nothing to cancel; it's done
+    assert "SYM" not in b._inflight
+
+
+def test_ensure_no_inflight_aborts_when_a_stuck_order_cannot_be_cancelled():
+    # If we can't kill the working order, do NOT place a new one (avoid a double fill).
+    class Stuck(FakeClient):
+        def cancel(self, order_id):
+            raise RuntimeError("cancel failed")
+    c = Stuck(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b._inflight["SYM"] = "OID-7"
+    assert b._ensure_no_inflight("SYM") is False
+
+
+def test_timed_out_open_records_the_order_inflight():
+    # A BUY that times out with no fill may still be working at the exchange — record
+    # it so the next attempt cancels it first (never a silent second BUY).
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, _ = _open(b, c)
+    assert pos is None
+    assert b._inflight.get(q.tradingsymbol) == "OID-1"
+
+
+def test_status_poll_error_during_close_also_records_inflight():
+    # A status poll that ERRORS mid-flight leaves an order that may still be working at
+    # the exchange — track it too, so the next tick cancels it before re-sending.
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    _back_full(b, pos)
+
+    def boom(order_id):
+        raise RuntimeError("network blip")
+
+    c.status = boom
+    res = b.close_position(pos, 90.0, "STOP_LOSS", b.provider.now(), chain.spot)
+    assert res is None
+    assert b._inflight.get(pos.tradingsymbol) == "OID-1"
+
+
+def test_timed_out_sell_is_cancelled_before_the_next_sell_is_sent():
+    c = FakeClient(fill_price=100.0)                 # clean COMPLETE open
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    _back_full(b, pos)
+    b.poll_seconds = 0.001
+    c._status, c._filled_qty = "OPEN", 0            # the SELL never fills -> TIMEOUT still-working
+    r1 = b.close_position(pos, 90.0, "STOP_LOSS", b.provider.now(), chain.spot)
+    assert r1 is None
+    assert b._inflight.get(pos.tradingsymbol) == "OID-1"
+    c.log.clear()
+    b.close_position(pos, 90.0, "STOP_LOSS", b.provider.now(), chain.spot)
+    assert ("cancel", "OID-1") in c.log
+    assert c.log.index(("cancel", "OID-1")) < c.log.index(("place", "SELL"))
+
+
 def _reinforce_params():
     return {
         "reinforce_enabled": True, "reinforce_min_profit_pct": 0.10,
@@ -338,17 +443,59 @@ def test_skipped_reinforcement_does_not_touch_the_gtt():
     assert c.gtt_modified == []
 
 
-def test_reconcile_orphan_books_closed_without_an_order():
+def _age_out(b, pos):
     import datetime as dt
+    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # older than the 60s grace
+    b.commit()
+
+
+def test_a_single_orphan_read_does_not_book_closed():
+    # L8: one positions() read showing the position gone could be a transient feed
+    # glitch — it must NOT book a phantom close on its own.
     c = FakeClient(fill_price=100.0)
     b = _broker(c)
     pos, q, chain = _open(b, c)
-    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # older than the 60s grace
-    b.commit()
+    _age_out(b, pos)
+    b.provider.account_positions = lambda: []                    # vanished — but only once seen
+    booked = b.reconcile_orphans(b.provider.now())
+    assert booked == []
+    assert b.position_for("NIFTY") is not None                   # still held — not booked yet
+    assert c.gtt_deleted == []                                   # GTT left intact
+
+
+def test_orphan_books_closed_only_after_consecutive_confirmations():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    need = b.settings.orphan_confirm_count
+    assert need >= 2
+    pos, q, chain = _open(b, c)
+    _age_out(b, pos)
     b.provider.account_positions = lambda: []                    # vanished from the account
     placed_before = len(c.placed)
-    booked = b.reconcile_orphans(b.provider.now())
+    for _ in range(need - 1):
+        assert b.reconcile_orphans(b.provider.now()) == []       # not yet confirmed
+        assert b.position_for("NIFTY") is not None
+    booked = b.reconcile_orphans(b.provider.now())               # Nth consecutive read
     assert "NIFTY" in booked
     assert b.position_for("NIFTY") is None                       # booked closed in the ledger
     assert len(c.placed) == placed_before                        # but NO sell order sent
     assert c.gtt_deleted == ["GTT-1"]                            # and its GTT cancelled
+
+
+def test_a_backed_read_resets_the_orphan_confirmation_counter():
+    # An intervening read where the account DOES back the position resets the streak,
+    # so a single later glitch still can't book it.
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    _age_out(b, pos)
+    backed = [{"tradingsymbol": pos.tradingsymbol, "quantity": pos.qty}]
+    feed = {"acct": []}
+    b.provider.account_positions = lambda: feed["acct"]
+    b.reconcile_orphans(b.provider.now())                        # streak = 1 (orphaned)
+    feed["acct"] = backed
+    b.reconcile_orphans(b.provider.now())                        # backed -> streak reset
+    feed["acct"] = []
+    booked = b.reconcile_orphans(b.provider.now())              # orphaned again, streak = 1
+    assert booked == []
+    assert b.position_for("NIFTY") is not None                  # not booked — streak was reset

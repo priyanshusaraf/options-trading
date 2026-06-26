@@ -78,3 +78,22 @@ def test_cancelled_after_partial_is_partial():
     c = FakeClient([{"status": "CANCELLED", "filled_qty": 50, "avg_price": 100.0}])
     r = execute_order(c, _buy(), sleep_fn=_noslp)
     assert r.status == "PARTIAL" and r.filled_qty == 50
+
+
+def test_rejected_variant_is_terminal_immediately_not_polled_to_timeout():
+    # L9: a REJECTED-family status (any spelling containing REJECT) is terminal — we
+    # must NOT keep polling a dead order until the timeout and misreport it as TIMEOUT.
+    c = FakeClient([{"status": "REJECTED BY EXCHANGE", "reason": "rms block"}])
+    r = execute_order(c, _buy(), poll_seconds=1.0, timeout_seconds=5.0, sleep_fn=_noslp)
+    assert r.status == "REJECTED"
+    assert c.status_calls == 1            # terminal on the first poll, not polled out
+
+
+def test_timeout_reason_carries_the_last_raw_status_for_reconciliation():
+    # L9: an unmapped status that never goes terminal still times out, but the raw
+    # last status must be surfaced (not silently dropped) so the broker/owner can
+    # reconcile what actually happened.
+    c = FakeClient([{"status": "SOME_NEW_STATUS", "filled_qty": 0}])
+    r = execute_order(c, _buy(), poll_seconds=1.0, timeout_seconds=2.0, sleep_fn=_noslp)
+    assert r.status == "TIMEOUT"
+    assert "SOME_NEW_STATUS" in r.reason

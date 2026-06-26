@@ -64,6 +64,7 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
 
     waited = 0.0
     last: dict = {}
+    st = ""
     while waited <= timeout_seconds:
         try:
             last = client.status(order_id)
@@ -74,16 +75,20 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
         if st == "COMPLETE":
             return OrderResult("FILLED", order_id, int(last.get("filled_qty", req.qty)),
                                float(last.get("avg_price", 0.0)), "complete")
-        if st == "REJECTED":
+        # L9 — any REJECTED-family spelling is terminal; don't poll a dead order to timeout.
+        if "REJECT" in st:
             return OrderResult("REJECTED", order_id, 0, 0.0,
-                               str(last.get("reason", "rejected")))
+                               str(last.get("reason", "rejected")) + f" [{st}]")
         if st == "CANCELLED":
             fq = int(last.get("filled_qty", 0))
             if fq > 0:
                 return OrderResult("PARTIAL", order_id, fq,
                                    float(last.get("avg_price", 0.0)), "cancelled after partial")
             return OrderResult("REJECTED", order_id, 0, 0.0, "cancelled before any fill")
-        # OPEN / PENDING / partially-filled-but-open -> keep polling
+        # OPEN / PENDING / partially-filled-but-open / unknown -> keep polling (treating
+        # an unknown status as still-working is the safe default — never assume terminal
+        # and risk a double-send). The raw status is carried into the TIMEOUT reason
+        # below so an unmapped terminal is reconciled, not silently dropped (L9).
         sleep(poll_seconds)
         waited += poll_seconds
 
@@ -95,4 +100,5 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
     if fq > 0:
         return OrderResult("PARTIAL", order_id, fq, avg, "partial fill at timeout")
     return OrderResult("TIMEOUT", order_id, 0, 0.0,
-                       "no fill before timeout — reconcile, do not assume filled")
+                       f"no fill before timeout (last status: {st or '?'}) — reconcile, "
+                       f"do not assume filled")

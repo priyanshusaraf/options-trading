@@ -46,6 +46,23 @@ def test_short_position_uses_short_exit_flag():
     assert reason == "STRATEGY_EXIT"
 
 
+def test_stop_does_not_fire_on_a_nonpositive_premium():
+    # L13: a 0.0 / negative premium is a missing or bad tick, not a tradeable price —
+    # it must NOT trigger a real market STOP_LOSS exit (an option can't trade at <= 0).
+    for bad in (0.0, -1.0):
+        should, reason = evaluate_exit("LONG", STOP, TARGET, current_premium=bad,
+                                       long_exit=False, short_exit=False)
+        assert should is False and reason is None
+
+
+def test_a_genuine_floor_premium_still_trips_the_stop():
+    # A real near-zero premium (option at its floor) is a small POSITIVE tick and must
+    # still trip the stop — the guard only filters the non-positive bad-tick case.
+    should, reason = evaluate_exit("LONG", STOP, TARGET, current_premium=0.05,
+                                   long_exit=False, short_exit=False)
+    assert should is True and reason == "STOP_LOSS"
+
+
 def test_stop_beats_strategy_flag_on_a_tie():
     # both a stop and a strategy exit are true -> protective stop reason wins
     should, reason = evaluate_exit("LONG", STOP, TARGET, current_premium=60.0,

@@ -10,8 +10,11 @@ def evaluate_exit(direction: str, stop_price: float, target_price: float,
                   current_premium: float, long_exit: bool, short_exit: bool,
                   target_disabled: bool = False
                   ) -> tuple[bool, str | None]:
-    # protective premium guards first
-    if current_premium <= stop_price:
+    # protective premium guards first.
+    # L13 — a non-positive premium is a missing / bad tick, not a tradeable price (an
+    # option can't trade at <= 0), so it must NOT fire a real market STOP exit. A
+    # genuine floor is a small POSITIVE tick and still trips the stop on the next mark.
+    if current_premium > 0 and current_premium <= stop_price:
         return True, "STOP_LOSS"
     # `target_disabled` = owner's per-position "let it run / no take-profit": the
     # profit cap is removed (for an overnight winner running on news) but the stop

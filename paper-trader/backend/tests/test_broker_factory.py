@@ -59,6 +59,33 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
     assert captured["timeout"] <= 15.0
 
 
+def test_make_broker_passes_configured_market_protection_to_order_client(monkeypatch):
+    """The order client must be built with the configured market_protection_pct so
+    every live MARKET order is compliant (unprotected market orders are rejected by
+    the exchange since 1-Apr-2026)."""
+    import types
+    monkeypatch.setenv("PT_EXECUTION", "live")
+    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    init_db(reset=True)
+    prov = MockProvider()
+    prov.name = "kite"
+    prov.access_token = "tok"
+    monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
+                        lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
+    captured = {}
+
+    def fake_client(kite, **kw):
+        captured.update(kw)
+        return object()
+
+    monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
+    monkeypatch.setattr("app.engine.live_broker.LiveBroker",
+                        lambda *a, **k: "LB")
+    assert make_broker(prov) == "LB"
+    from app.core.config import get_settings
+    assert captured["market_protection"] == get_settings().market_protection_pct
+
+
 def test_live_gate_reads_dotenv_via_settings(monkeypatch):
     """The flags must work from .env (Settings), not only a shell export — so the
     owner controls live mode from one file with no per-session exports. Simulate the

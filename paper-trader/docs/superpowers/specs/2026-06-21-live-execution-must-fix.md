@@ -1,9 +1,12 @@
 # Live-Execution — Must-Fix Before Real Money
 
-**Date:** 2026-06-21 · **Updated:** 2026-06-22
-**Status:** L1, L2, L3/L4, L5, L6 **CLOSED** (2026-06-22, test-first — see
-"## RESOLVED" at the bottom). L8/L9/L11/L13 (MEDIUM/LOW) remain open. The original
-OPEN findings are preserved below for context.
+**Date:** 2026-06-21 · **Updated:** 2026-06-26
+**Status:** L1, L2, L3/L4, L5, L6 **CLOSED** (2026-06-22) and L8, L9, L11, L13 +
+the timed-out-still-working **double-send** residual **CLOSED** (2026-06-26,
+test-first — see "## RESOLVED 2026-06-26"). Commodity/all-segment **market
+protection** (now mandatory, see `2026-06-26-market-protection-and-final-residuals-design.md`)
+also shipped. The only remaining items need the live account (shadow calibration +
+supervised pilot). The original OPEN findings are preserved below for context.
 
 **Original status:** OPEN — these are gating items for Phase 3 (real-money execution)
 **Scope:** `LiveBroker` / `OrderClient` / GTT / reconcile. **None of these bite in
@@ -110,14 +113,10 @@ so none change paper behavior. Each was driven RED→GREEN.
   left unprotected.
 
 ### Honest residuals (narrowed, not eliminated — review before unsupervised live)
-- **L2/L1 TIMEOUT, order still working:** if a SELL times out while genuinely still
-  OPEN (not filled, not terminal), the next risk tick can re-send — the ownership
-  guard only blocks the re-send once a fill has actually dropped account qty. A truly
-  concurrent double-fill is now bounded by the 10s timeout + fast MARKET fills, but a
-  full fix needs tracking the outstanding order id and cancelling/awaiting it before
-  any re-send. Same shape on the BUY side: a fill landing after the single re-query
-  is still untracked until an adopt-open reconciler exists (today `reconcile_orphans`
-  books only closures).
+- ~~**L2/L1 TIMEOUT, order still working**~~ **CLOSED 2026-06-26** — see "## RESOLVED
+  2026-06-26" (outstanding-order tracking). The BUY-side adopt-open after a late
+  buzzer fill is still a smaller residual (covered by the inflight guard's
+  abort-if-already-filled + orphan reconciliation, not a full adopt-open reconciler).
 - **L5 intra-pass serialism:** within one risk pass, positions are still marked
   serially, so a slow close on position A delays B *within that pass* (the event loop
   and the next iteration are no longer blocked). Fine for the 1-lot single-instrument
@@ -131,3 +130,36 @@ manual-SL GTT resync. `test_broker_factory.py` covers the bounded/configurable t
 `test_engine_loops.py` covers the event-loop-stays-responsive property. The old
 `test_open_returns_none_and_records_nothing_when_not_filled` still holds (it asserts
 the REJECTED zero-fill case, which is still correct).
+
+---
+
+## RESOLVED — 2026-06-26 (test-first; 335 tests green, all gated behind `PT_EXECUTION=live`)
+
+- **Double-send / outstanding-order tracking** (the L1/L2 TIMEOUT residual). `LiveBroker`
+  now records an order whose outcome is unknown — a TIMEOUT (no fill) or an ERROR after
+  submission — as **in-flight** (`_inflight[symbol]`). Before placing ANY new order for
+  that contract, `_ensure_no_inflight` resolves it: **cancel & confirm** a still-working
+  order (new `KiteOrderClient.cancel`), **abort** (no second order) if it already filled
+  or if the stuck order can't be cancelled. Invariant: at most one working bot order per
+  contract. `test_live_broker.py` covers the working-cancel, already-filled-abort,
+  cancel-failure-abort, TIMEOUT-records-inflight (open + close) and ERROR-records-inflight cases.
+- **L8 — orphan confirmation.** `reconcile_orphans` books a position closed only after
+  `orphan_confirm_count` (default 2) **consecutive** reads show it gone; a backed/absent
+  read resets the streak. At the ~30s reconcile cadence a sub-30s feed glitch can't
+  phantom-close a live position.
+- **L9 — terminal-status mapping.** `execute_order` treats any **REJECT-family** status
+  as terminal (no longer polls a dead order to timeout) and carries the **raw last
+  status** into the TIMEOUT reason so an unmapped terminal is reconciled, not silently
+  dropped. Unknown statuses still poll (safe default — never assume terminal).
+- **L11 — notify logging.** `LiveBroker._notify` now logs (`NOTIFY_FAIL`, with the
+  dropped text) inside its `except` — a money-critical alert can't vanish silently.
+- **L13 — stop debounce.** `evaluate_exit` won't fire a market `STOP_LOSS` on a
+  non-positive premium (a bad/missing tick); a genuine floor is a small positive that
+  still trips on the next mark.
+
+### Residuals still open (need the live account, or LOW)
+- Live-account shadow calibration of `account_equity(net)` vs the real margins API, then
+  the supervised 1-lot single-instrument pilot.
+- BUY-side adopt-open after a buzzer fill landing past the single re-query (bounded by
+  the inflight abort-if-already-filled + orphan reconcile; not a full adopt reconciler).
+- L5 intra-pass serialism (fine for the 1-lot pilot).
