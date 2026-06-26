@@ -78,6 +78,10 @@ export interface SignalRow {
   product?: 'options' | 'equity_intraday'
   priority_flag?: boolean      // watchlist "purple" intraday priority
   strategy_key?: string | null // assigned strategy (null = default)
+  signals_today?: number
+  signals_rolling?: number
+  overtrade_flag?: boolean       // red "overtrading" flag (advisory)
+  overtrade_suggested?: boolean  // count crossed a threshold -> suggest red
 }
 
 export interface PositionRow extends PositionDTO {

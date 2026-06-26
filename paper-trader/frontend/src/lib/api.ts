@@ -22,6 +22,8 @@ export const setProduct = (key: string, product: string) =>
   post(`/api/instruments/${key}/product`, { product })
 export const setPriorityFlag = (key: string, priority_flag: boolean) =>
   post(`/api/instruments/${key}/priority`, { priority_flag })
+export const setOvertradeFlag = (key: string, flag: boolean) =>
+  post(`/api/instruments/${key}/overtrade`, { flag })
 export const setInstrumentStrategy = (key: string, strategy_key: string | null) =>
   post(`/api/instruments/${key}/strategy`, { strategy_key })
 export const closePosition = (key: string) => post(`/api/positions/${key}/close`, {})

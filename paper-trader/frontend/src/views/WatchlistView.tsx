@@ -3,7 +3,7 @@ import { useLive } from '../state/LiveContext'
 import {
   getSignals, toggleInstrument, getCandles, getOptionCandles, setLiveInterval, blockEntries,
   addToPortfolio, removeFromPortfolio, getStatus,
-  getStrategies, setProduct, setPriorityFlag, setInstrumentStrategy,
+  getStrategies, setProduct, setPriorityFlag, setOvertradeFlag, setInstrumentStrategy,
 } from '../lib/api'
 import { PriceChart, LineChart } from '../components/Charts'
 import SessionBanner from '../components/SessionBanner'
@@ -118,6 +118,11 @@ export default function Watchlist() {
     const next = !r.priority_flag
     patchRow(r.key, { priority_flag: next })
     setPriorityFlag(r.key, next).catch(() => patchRow(r.key, { priority_flag: r.priority_flag }))
+  }
+  const toggleOvertrade = (r: SignalRow) => {
+    const next = !r.overtrade_flag
+    patchRow(r.key, { overtrade_flag: next })
+    setOvertradeFlag(r.key, next).catch(() => patchRow(r.key, { overtrade_flag: r.overtrade_flag }))
   }
   const changeProduct = (r: SignalRow, product: 'options' | 'equity_intraday') => {
     patchRow(r.key, { product })
@@ -248,6 +253,21 @@ export default function Watchlist() {
                       className={`text-sm leading-none ${r.priority_flag ? 'text-purple-300' : 'text-zinc-600 hover:text-purple-300'}`}>
                       {r.priority_flag ? '🟣' : '○'}
                     </button>
+                    <button onClick={() => toggleOvertrade(r)}
+                      title={r.overtrade_flag
+                        ? 'red overtrading flag ON — advisory only; consider removing this name'
+                        : (r.overtrade_suggested
+                            ? `high signal count (today ${r.signals_today ?? 0} · 7d ${r.signals_rolling ?? 0}) — consider flagging red`
+                            : 'flag as red (overtrading)')}
+                      className={`text-sm leading-none ${r.overtrade_flag ? 'text-red-400'
+                        : r.overtrade_suggested ? 'text-red-400/70 hover:text-red-400 animate-pulse'
+                        : 'text-zinc-600 hover:text-red-400'}`}>
+                      {r.overtrade_flag ? '🔴' : '○'}
+                    </button>
+                    <span className={`badge text-[10px] ${r.overtrade_suggested ? 'bg-red-500/20 text-red-300' : 'bg-zinc-700/40 text-muted'}`}
+                      title="entry signals: today · last 7 days">
+                      {r.signals_today ?? 0}·{r.signals_rolling ?? 0}
+                    </span>
                     <button onClick={() => changeProduct(r, r.product === 'equity_intraday' ? 'options' : 'equity_intraday')}
                       title="trading segment: options vs MIS intraday equity"
                       className={`badge ${r.product === 'equity_intraday' ? 'bg-purple-500/20 text-purple-200' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>

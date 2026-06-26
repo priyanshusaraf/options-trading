@@ -55,6 +55,9 @@ const META: Record<string, { label: string; help: string }> = {
   intraday_square_off_buffer_minutes: { label: 'Intraday square-off (min before close)', help: 'Force every MIS position flat this long before the session close — MIS cannot carry overnight. Recommended 15.' },
   intraday_stop_loss_pct: { label: 'Intraday stop (−%)', help: 'Stop as a fraction of entry price (0.01 = −1%). Tight, unlike the option-premium stop.' },
   intraday_target_pct: { label: 'Intraday target (+%)', help: 'Target as a fraction of entry price (0.02 = +2%).' },
+  overtrade_today_threshold: { label: 'Overtrade suggest — today (signals)', help: 'Suggest the red overtrading flag when an instrument fires at least this many entry signals today. 0 disables. Advisory only — never blocks trading.' },
+  overtrade_rolling_threshold: { label: 'Overtrade suggest — rolling (signals)', help: 'Suggest red when signals over the rolling window reach this many. 0 disables.' },
+  overtrade_rolling_days: { label: 'Overtrade rolling window (days)', help: 'Length of the rolling window for the signal-count suggestion.' },
 }
 
 const GROUPS: [string, (k: string) => boolean][] = [
@@ -65,6 +68,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Risk & cadence', (k) => ['stop_loss_pct', 'target_pct', 'max_stale_seconds', 'position_loop_seconds', 'signal_loop_seconds'].includes(k)],
   ['Position & trade limits', (k) => ['max_open_positions', 'reentry_cooldown_minutes', 'max_capital_per_trade'].includes(k)],
   ['Intraday equity (MIS)', (k) => k.startsWith('intraday_')],
+  ['Overtrading guard', (k) => k.startsWith('overtrade_')],
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
   ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'bot_capital_cap' || k === 'capital_reserve' || k === 'gtt_stop_enabled'],
 ]
