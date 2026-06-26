@@ -87,8 +87,13 @@ class Position(Base):
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
     def to_dict(self) -> dict:
-        mtm = (self.last_premium or self.entry_premium) * self.qty
-        unrealized = mtm - self.entry_premium * self.qty
+        last = self.last_premium or self.entry_premium
+        # equity intraday can be a real SHORT (profits as price falls); the options
+        # path is always long-premium. Mark P&L direction-aware for equity.
+        if self.segment == "equity_intraday" and self.direction == "SHORT":
+            unrealized = (self.entry_premium - last) * self.qty
+        else:
+            unrealized = (last - self.entry_premium) * self.qty
         return {
             "id": self.id,
             "instrument_key": self.instrument_key,
