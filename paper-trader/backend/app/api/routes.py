@@ -220,6 +220,44 @@ def portfolio_remove(body: AddInstrument, request: Request):
     return res
 
 
+class BulkItem(BaseModel):
+    key: str
+    interval: str | None = None
+    strategy_key: str | None = None
+    product: str | None = None
+    on_home: bool = True
+
+
+class BulkAdd(BaseModel):
+    items: list[BulkItem]
+
+
+@router.post("/api/portfolio/add-bulk")
+def portfolio_add_bulk(body: BulkAdd, request: Request):
+    """Add several instruments at once (backtest winners). Each carries its best
+    interval / strategy / product; every successfully added item is enabled for
+    live trading. Over-budget names are excluded client-side before posting."""
+    from app.core import universe_resolver
+    r = _runner(request)
+    added, skipped = [], []
+    for it in body.items:
+        res = universe_resolver.add_instrument(
+            it.key, r.provider, on_home=it.on_home, interval=it.interval,
+            strategy_key=it.strategy_key, product=it.product)
+        if "error" in res:
+            skipped.append({"key": it.key, "reason": res["error"]})
+            continue
+        r.enabled.add(it.key)
+        if res.get("interval"):
+            r.intervals[it.key] = res["interval"]
+        if res.get("product"):
+            r.products[it.key] = res["product"]
+        if res.get("strategy_key"):
+            r.strategy_keys[it.key] = res["strategy_key"]
+        added.append(res)
+    return {"added": added, "skipped": skipped}
+
+
 @router.get("/api/portfolio/home")
 def portfolio_home(request: Request):
     """Instruments pinned to the customizable homepage, with live state."""
