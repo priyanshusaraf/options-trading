@@ -189,6 +189,8 @@ class AddInstrument(BaseModel):
     key: str
     on_home: bool = True
     interval: str | None = None   # carry a backtest winner's timeframe into live
+    strategy_key: str | None = None  # carry the winner's best strategy
+    product: str | None = None       # options | equity_intraday
 
 
 @router.post("/api/portfolio/add")
@@ -196,11 +198,16 @@ def portfolio_add(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
     res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home,
-                                           interval=body.interval)
+                                           interval=body.interval,
+                                           strategy_key=body.strategy_key, product=body.product)
     if "error" not in res:
         r.enabled.add(body.key)   # the live engine picks it up next tick
         if res.get("interval"):
             r.intervals[body.key] = res["interval"]
+        if res.get("product"):
+            r.products[body.key] = res["product"]
+        if res.get("strategy_key"):
+            r.strategy_keys[body.key] = res["strategy_key"]
     return res
 
 
