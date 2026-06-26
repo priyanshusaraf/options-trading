@@ -40,6 +40,8 @@ OVERRIDABLE = (
     "intraday_enabled", "intraday_max_positions", "intraday_min_margin",
     "intraday_max_margin", "intraday_purple_margin", "intraday_leverage",
     "intraday_square_off_buffer_minutes", "intraday_stop_loss_pct", "intraday_target_pct",
+    # overtrading guard (advisory)
+    "overtrade_today_threshold", "overtrade_rolling_threshold", "overtrade_rolling_days",
 )
 
 
@@ -89,6 +91,9 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "intraday_square_off_buffer_minutes": (0.0, 360.0),
     "intraday_stop_loss_pct": (0.001, 0.50),
     "intraday_target_pct": (0.001, 2.0),
+    "overtrade_today_threshold": (0, 200),       # 0 disables the today arm of the suggestion
+    "overtrade_rolling_threshold": (0, 1000),    # 0 disables the rolling arm
+    "overtrade_rolling_days": (1, 90),
 }
 
 

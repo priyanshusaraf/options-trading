@@ -160,6 +160,11 @@ class Settings(BaseSettings):
     intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
     intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price
 
+    # overtrading guard (advisory red-flag suggestion — no engine effect)
+    overtrade_today_threshold: int = 5      # suggest red when an instrument fires >= this many signals today
+    overtrade_rolling_threshold: int = 15   # ...or >= this many over the rolling window
+    overtrade_rolling_days: int = 7         # rolling window length, in days
+
     # ── notifications (Telegram) ───────────────────────────────────────────
     notify_enabled: bool = True              # master switch (no-op anyway if creds unset)
     notify_on_signal: bool = False           # also ping on every fresh entry signal (noisy)
