@@ -7,10 +7,12 @@ Dashboard analytics, computed from the persisted ledger (Trade + EquitySnapshot)
 """
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import CapitalState, EquitySnapshot, Position, Trade
+from app.db.models import CapitalState, EquitySnapshot, Position, SignalEvent, Trade
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
 
 
@@ -183,3 +185,21 @@ def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
     # segment/strategy filtered in Python so legacy NULLs normalise to options/v3
     trades = _apply(list(s.scalars(q)), segment, strategy)
     return [t.to_dict() for t in trades[:limit]]
+
+
+def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7) -> dict[str, dict]:
+    """Per-instrument entry-signal tallies: `today` (since IST start-of-day) and
+    `rolling` (last `rolling_days`). `now` must be naive IST wall-clock so it
+    compares correctly against SignalEvent.time. Only instruments that fired in
+    the rolling window appear; callers default the rest to zero."""
+    if now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_roll = now - dt.timedelta(days=rolling_days)
+    out: dict[str, dict] = {}
+    for ev in s.scalars(select(SignalEvent).where(SignalEvent.time >= start_roll)):
+        d = out.setdefault(ev.instrument_key, {"today": 0, "rolling": 0})
+        d["rolling"] += 1
+        if ev.time >= start_today:
+            d["today"] += 1
+    return out
