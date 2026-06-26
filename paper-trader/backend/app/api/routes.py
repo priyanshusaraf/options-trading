@@ -34,6 +34,22 @@ def _runner(req_or_ws):
     return req_or_ws.app.state.runner
 
 
+def _period_since(period: str | None, now):
+    """Map a period token to a naive-IST cutoff (exit_time >= cutoff). None = all-time.
+    `now` comes from provider.now(); strip tz so it compares to naive exit_time."""
+    if not period or period == "all":
+        return None
+    if getattr(now, "tzinfo", None) is not None:
+        now = now.replace(tzinfo=None)
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "7d":
+        return now - dt.timedelta(days=7)
+    if period == "30d":
+        return now - dt.timedelta(days=30)
+    return None
+
+
 def _df(candles):
     import pandas as pd
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
@@ -282,28 +298,43 @@ def account_pnl_route(request: Request):
 
 
 @router.get("/api/dashboard")
-def dashboard(request: Request, segment: str | None = None, strategy: str | None = None):
-    """Portfolio dashboard. Optional ?segment=options|equity_intraday and ?strategy=<key>
+def dashboard(request: Request, segment: str | None = None, strategy: str | None = None,
+              period: str | None = None):
+    """Portfolio dashboard. Optional ?segment=, ?strategy=, and ?period=all|today|7d|30d
     slice the summary / curves / trades. The headline `equity_curve` is the global
-    mark-to-market series (EquitySnapshot) when unfiltered; for a slice it's the
-    realized-P&L curve from that slice's trades. `segment_curves` and `strategy_curves`
-    always carry the per-segment / per-strategy overlays so the UI can compare."""
+    mark-to-market series when unfiltered; for a slice it's the realized-P&L curve."""
     seg = segment or None
     strat = strategy or None
+    since = _period_since(period, _runner(request).provider.now())
     with SessionLocal() as s:
-        equity = (analytics.equity_curve(s) if not (seg or strat)
-                  else analytics.realized_curve(s, seg, strat))
+        equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
+                  else analytics.realized_curve(s, seg, strat, since))
         return {
             "capital": analytics.capital_dict(s),
-            "summary": analytics.summary(s, seg, strat),
+            "summary": analytics.summary(s, seg, strat, since),
             "equity_curve": equity,
-            "instrument_curves": analytics.per_instrument_curves(s, seg, strat),
-            "segment_curves": analytics.segment_curves(s),
-            "strategy_curves": analytics.strategy_curves(s, seg),
-            "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat),
+            "instrument_curves": analytics.per_instrument_curves(s, seg, strat, since),
+            "segment_curves": analytics.segment_curves(s, since),
+            "strategy_curves": analytics.strategy_curves(s, seg, since),
+            "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat, since=since),
             "open_positions": [p.to_dict() for p in analytics.open_positions(s)],
-            "segment": seg, "strategy": strat,
+            "segment": seg, "strategy": strat, "period": period or "all",
         }
+
+
+@router.get("/api/instrument/{key}")
+def instrument_detail(key: str, request: Request, segment: str | None = None,
+                      strategy: str | None = None, period: str | None = None):
+    """Full per-instrument stat block + that instrument's trades, honoring
+    ?segment=, ?strategy=, ?period=."""
+    inst = get_instrument(key)
+    since = _period_since(period, _runner(request).provider.now())
+    with SessionLocal() as s:
+        stats = analytics.instrument_stats(s, key, segment or None, strategy or None, since)
+        trades = analytics.instrument_trades(s, key, segment or None, strategy or None, since)
+    return {"key": key, "name": inst.name if inst else key,
+            "segment": inst.segment if inst else None,
+            "stats": stats, "trades": trades, "period": period or "all"}
 
 
 @router.get("/api/trades")
