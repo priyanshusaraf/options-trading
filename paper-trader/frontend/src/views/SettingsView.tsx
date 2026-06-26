@@ -46,6 +46,15 @@ const META: Record<string, { label: string; help: string }> = {
   bot_capital_cap: { label: 'Bot capital cap (₹)', help: 'Hard ceiling on what the bot may ever deploy. 0 = no extra cap. Protects your capital even if Kite briefly mis-reports margin.' },
   capital_reserve: { label: 'Capital reserve (₹)', help: 'Live: account margin kept free for your own trades — the bot never dips into it.' },
   gtt_stop_enabled: { label: 'Exchange-side GTT stop', help: 'Live only: also place a Good-Till-Triggered stop on Zerodha so the position is protected even if the bot/laptop/internet goes down. Trails with the bot stop; cancelled when the bot exits.' },
+  intraday_enabled: { label: 'Intraday equity enabled', help: 'Master switch for the MIS intraday-equity segment. Off = only options trade. Flag instruments as INTRA on the Watchlist to route them here.' },
+  intraday_max_positions: { label: 'Max concurrent intraday trades', help: 'Hard cap on simultaneous MIS positions (purple-priority names included). Recommended 3 — keeps costs down.' },
+  intraday_min_margin: { label: 'Min margin / trade (₹)', help: 'Skip an intraday signal if less than this margin can be deployed. Recommended 7000.' },
+  intraday_max_margin: { label: 'Max margin / trade (₹)', help: 'Target margin deployed per (non-purple) intraday trade. At 5× this controls ~5× the stock. Recommended 10000.' },
+  intraday_purple_margin: { label: 'Purple margin / trade (₹)', help: 'Margin for a purple-flagged priority name — always taken, sized at the top of the band. Recommended 10000.' },
+  intraday_leverage: { label: 'Intraday leverage (×)', help: 'Zerodha MIS equity leverage. qty = margin × this ÷ share price. Recommended 5.' },
+  intraday_square_off_buffer_minutes: { label: 'Intraday square-off (min before close)', help: 'Force every MIS position flat this long before the session close — MIS cannot carry overnight. Recommended 15.' },
+  intraday_stop_loss_pct: { label: 'Intraday stop (−%)', help: 'Stop as a fraction of entry price (0.01 = −1%). Tight, unlike the option-premium stop.' },
+  intraday_target_pct: { label: 'Intraday target (+%)', help: 'Target as a fraction of entry price (0.02 = +2%).' },
 }
 
 const GROUPS: [string, (k: string) => boolean][] = [
@@ -55,6 +64,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Option-data cache', (k) => k.startsWith('option_cache_')],
   ['Risk & cadence', (k) => ['stop_loss_pct', 'target_pct', 'max_stale_seconds', 'position_loop_seconds', 'signal_loop_seconds'].includes(k)],
   ['Position & trade limits', (k) => ['max_open_positions', 'reentry_cooldown_minutes', 'max_capital_per_trade'].includes(k)],
+  ['Intraday equity (MIS)', (k) => k.startsWith('intraday_')],
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
   ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'bot_capital_cap' || k === 'capital_reserve' || k === 'gtt_stop_enabled'],
 ]

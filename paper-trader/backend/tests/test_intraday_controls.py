@@ -14,6 +14,12 @@ from app.main import app
 
 
 def _client():
+    prev = getattr(app.state, "runner", None)
+    if prev is not None:
+        try:
+            prev.broker.close()   # release the prior test's long-lived broker session
+        except Exception:
+            pass
     init_db(reset=True)
     r = EngineRunner()
     app.state.runner = r
@@ -96,6 +102,27 @@ def _seed_trade(s, seg, net):
                 exit_time=dt.datetime(2026, 6, 1, 11, 0), exit_reason="TARGET",
                 gross_pnl=net + 5, charges_total=5.0, net_pnl=net, return_pct=0.0,
                 holding_minutes=60.0, win=net > 0))
+
+
+def test_intraday_settings_overridable_and_reach_engine():
+    c, _ = _client()
+    from app.core import runtime_config
+    # exposed in the settings schema (so the SettingsView renders the group)
+    keys = {r["key"] for r in c.get("/api/settings").json()["params"]}
+    assert {"intraday_enabled", "intraday_max_positions", "intraday_leverage",
+            "intraday_min_margin", "intraday_max_margin"} <= keys
+    # override flows into effective() — the dict the engine's self.params is built from
+    c.post("/api/settings", json={"key": "intraday_enabled", "value": "true"})
+    c.post("/api/settings", json={"key": "intraday_max_positions", "value": "2"})
+    eff = runtime_config.effective()
+    assert eff["intraday_enabled"] is True
+    assert eff["intraday_max_positions"] == 2
+
+
+def test_intraday_settings_bounds_reject_bad_values():
+    c, _ = _client()
+    bad = c.post("/api/settings", json={"key": "intraday_leverage", "value": "100"}).json()
+    assert "error" in bad   # leverage capped at 20x
 
 
 def test_analytics_by_segment_net_of_costs():
