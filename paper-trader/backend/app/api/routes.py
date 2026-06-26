@@ -305,7 +305,7 @@ def dashboard(request: Request, segment: str | None = None, strategy: str | None
     mark-to-market series when unfiltered; for a slice it's the realized-P&L curve."""
     seg = segment or None
     strat = strategy or None
-    since = _period_since(period, _runner(request).provider.now())
+    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
     with SessionLocal() as s:
         equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
                   else analytics.realized_curve(s, seg, strat, since))
@@ -328,7 +328,7 @@ def instrument_detail(key: str, request: Request, segment: str | None = None,
     """Full per-instrument stat block + that instrument's trades, honoring
     ?segment=, ?strategy=, ?period=."""
     inst = get_instrument(key)
-    since = _period_since(period, _runner(request).provider.now())
+    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
     with SessionLocal() as s:
         stats = analytics.instrument_stats(s, key, segment or None, strategy or None, since)
         trades = analytics.instrument_trades(s, key, segment or None, strategy or None, since)
