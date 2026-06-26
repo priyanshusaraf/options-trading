@@ -7,6 +7,7 @@ import {
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
 import type { BacktestRun, BTResult, BTTradeDTO, BTInstrument, StrategyMeta } from '../lib/types'
+import BulkAddModal from './BulkAddModal'
 
 // display label -> Kite interval name
 const INTERVALS: [string, string][] = [
@@ -50,6 +51,8 @@ export default function BacktestsView() {
   const [unaffordable, setUnaffordable] = useState(0)
   const [drill, setDrill] = useState<BTResult | null>(null)
   const [added, setAdded] = useState<Set<string>>(new Set())
+  const [topN, setTopN] = useState(5)
+  const [bulkWinners, setBulkWinners] = useState<BTResult[] | null>(null)
   // browse history: null = latest run
   const [runsList, setRunsList] = useState<any[]>([])
   const [viewRunId, setViewRunId] = useState<number | undefined>(undefined)
@@ -169,6 +172,17 @@ export default function BacktestsView() {
       const av = (a[sort] ?? -1e18) as number, bv = (b[sort] ?? -1e18) as number
       return ASC.has(sort) ? av - bv : bv - av
     })
+
+  // best row per instrument (across intervals × strategies) by the CURRENT sort,
+  // honoring lower-is-better metrics. Used by the "Add top N" bulk action.
+  const bestPerInstrument = (() => {
+    const best = new Map<string, BTResult>()
+    for (const r of view) {            // `view` is already sorted best-first
+      if (!best.has(r.instrument_key)) best.set(r.instrument_key, r)
+    }
+    return [...best.values()]          // preserves `view` order = sorted best-first
+  })()
+  const openBulk = () => setBulkWinners(bestPerInstrument.slice(0, Math.max(1, topN)))
 
   // which strategy_keys are present across the visible set (drives the column +
   // filter + best-per-cell highlight only showing up once a multi-strategy run exists)
@@ -397,6 +411,14 @@ export default function BacktestsView() {
             </select>
           </label>
         )}
+        <span className="stat-label ml-2">Add top</span>
+        <input type="number" min={1} max={50} value={topN}
+          onChange={(e) => setTopN(parseInt(e.target.value) || 1)}
+          className="bg-panel2 border border-edge rounded px-1 py-0.5 text-xs w-14" />
+        <button onClick={openBulk} disabled={bestPerInstrument.length === 0}
+          className="btn border-up/50 text-up text-xs" title="add the top N best instruments (each at its best strategy + timeframe) to the watchlist">
+          + add top {topN} to portfolio
+        </button>
         <span className="ml-auto text-[11px] text-muted self-center flex items-center gap-2 flex-wrap justify-end">
           <span>{view.length} of {rows.length} shown</span>
           <span className="text-zinc-400">·</span>
@@ -490,6 +512,11 @@ export default function BacktestsView() {
       {drill && <Drill r={drill} siblings={siblingsOf(drill)} stratLabel={stratLabel}
         onClose={() => setDrill(null)} onAdd={() => add(drill)}
         added={added.has(drill.instrument_key)} />}
+      {bulkWinners && (
+        <BulkAddModal winners={bulkWinners} stratLabel={stratLabel}
+          onClose={() => setBulkWinners(null)}
+          onDone={() => setAdded((s) => { const n = new Set(s); bulkWinners.forEach((w) => n.add(w.instrument_key)); return n })} />
+      )}
     </div>
   )
 }

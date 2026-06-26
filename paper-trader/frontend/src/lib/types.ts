@@ -158,6 +158,7 @@ export interface BTResult {
   notional: number; lots: number; affordable: boolean
   option_cost?: number; budget?: number
   affordable_futures?: boolean; affordable_options?: boolean
+  has_options?: boolean
   // tail risk (BT-8) + intra-trade pain (BT-4)
   worst_trade_pnl: number; worst_mae_pct: number
   // realised vs marked-to-last open (BT-5)

@@ -73,6 +73,9 @@ export const addToPortfolio = (key: string, on_home = true, interval?: string) =
   post('/api/portfolio/add', { key, on_home, interval })
 export const removeFromPortfolio = (key: string) =>
   post('/api/portfolio/remove', { key, on_home: false })
+export const addBulkToPortfolio = (items: Array<{
+  key: string; interval?: string; strategy_key?: string | null; product?: string; on_home?: boolean
+}>) => post('/api/portfolio/add-bulk', { items })
 
 // ── backtest sweep ──────────────────────────────────────────────────────────
 export interface SweepOpts {
