@@ -125,6 +125,16 @@ export interface TradeDTO {
   mode?: 'paper' | 'live'
 }
 
+export interface InstrumentStatBlock {
+  trades: number; wins: number; win_rate: number; net: number; gross: number
+  charges: number; avg_pnl: number; avg_win: number; avg_loss: number
+  expectancy: number; avg_holding_minutes: number; best: number; worst: number
+}
+export interface InstrumentDetailDTO {
+  key: string; name: string; segment: string | null
+  stats: InstrumentStatBlock; trades: TradeDTO[]; period: string
+}
+
 // ── backtest ────────────────────────────────────────────────────────────────
 export interface BacktestRun {
   id: number; created_at: string; status: string; scope: string

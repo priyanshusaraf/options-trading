@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
 import { getDashboard, getAccountPnl, getStrategies } from '../lib/api'
+import InstrumentDetailModal from './InstrumentDetailModal'
 import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
@@ -58,13 +59,15 @@ export default function DashboardView() {
   const [seg, setSeg] = useState<Seg>('all')
   const [strat, setStrat] = useState<string>('')   // '' = all strategies
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [period, setPeriod] = useState<'all' | 'today' | '7d' | '30d'>('all')
+  const [detailKey, setDetailKey] = useState<string | null>(null)
   useEffect(() => { getStrategies().then((x) => setStrategies(x.strategies || [])).catch(() => {}) }, [])
   useEffect(() => {
-    const load = () => getDashboard(seg === 'all' ? undefined : seg, strat || undefined).then(setD)
+    const load = () => getDashboard(seg === 'all' ? undefined : seg, strat || undefined, period).then(setD)
     load()
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
-  }, [seg, strat])
+  }, [seg, strat, period])
 
   const stratLabel = (k: string) => strategies.find((x) => x.key === k)?.display_name || k
 
@@ -108,6 +111,13 @@ export default function DashboardView() {
           <option value="">all strategies</option>
           {strategies.map((x) => <option key={x.key} value={x.key}>{x.display_name}</option>)}
         </select>
+        <span className="stat-label mx-1">Period</span>
+        {(['all', 'today', '7d', '30d'] as const).map((p) => (
+          <button key={p} onClick={() => setPeriod(p)}
+            className={`badge ${period === p ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            {p === 'all' ? 'All-time' : p}
+          </button>
+        ))}
         <span className="ml-auto text-[11px] text-muted">
           showing <b className="text-zinc-300">{segName}</b>{strat ? ` · ${stratLabel(strat)}` : ''} — net of all costs
         </span>
@@ -204,7 +214,8 @@ export default function DashboardView() {
             <tbody>
               {perInst.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-muted">—</td></tr>}
               {perInst.map(([k, v]) => (
-                <tr key={k} className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums">
+                <tr key={k} onClick={() => setDetailKey(k)}
+                  className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums cursor-pointer hover:bg-panel2/50">
                   <td className="font-semibold text-zinc-100">{k}</td>
                   <td>{v.trades}</td>
                   <td>{v.win_rate}%</td>
@@ -242,6 +253,11 @@ export default function DashboardView() {
           </table>
         </div>
       </div>
+      {detailKey && (
+        <InstrumentDetailModal instrumentKey={detailKey}
+          segment={seg === 'all' ? undefined : seg} strategy={strat || undefined} period={period}
+          onClose={() => setDetailKey(null)} />
+      )}
     </div>
   )
 }

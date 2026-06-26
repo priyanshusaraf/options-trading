@@ -43,12 +43,21 @@ export const getAnalytics = (segment?: string) =>
 export const getCandles = (key: string) => j(`/api/candles/${key}`)
 export const getOptionCandles = (key: string) => j(`/api/option-candles/${key}`)
 export const getOptionsCalc = (key: string) => j(`/api/options-calc/${key}`)
-export const getDashboard = (segment?: string, strategy?: string) => {
+export const getDashboard = (segment?: string, strategy?: string, period?: string) => {
   const q = new URLSearchParams()
   if (segment) q.set('segment', segment)
   if (strategy) q.set('strategy', strategy)
+  if (period && period !== 'all') q.set('period', period)
   const qs = q.toString()
   return j(`/api/dashboard${qs ? `?${qs}` : ''}`)
+}
+export const getInstrumentDetail = (key: string, segment?: string, strategy?: string, period?: string) => {
+  const q = new URLSearchParams()
+  if (segment) q.set('segment', segment)
+  if (strategy) q.set('strategy', strategy)
+  if (period && period !== 'all') q.set('period', period)
+  const qs = q.toString()
+  return j(`/api/instrument/${key}${qs ? `?${qs}` : ''}`)
 }
 export const getAccountPnl = () => j('/api/account-pnl')
 export const getTrades = (n = 1000) => j(`/api/trades?limit=${n}`)
