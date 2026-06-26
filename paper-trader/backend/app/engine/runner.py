@@ -169,6 +169,51 @@ class EngineRunner:
         self.entry_blocks.add(key) if blocked else self.entry_blocks.discard(key)
         log.info(f"{'BLOCKED' if blocked else 'UNBLOCKED'} new entries", instrument=key)
 
+    def _upsert_state(self, key: str):
+        """Get the InstrumentState row for `key`, creating it if missing (a freshly
+        added instrument may not have a row yet)."""
+        s = SessionLocal()
+        r = s.get(InstrumentState, key)
+        if r is None:
+            r = InstrumentState(instrument_key=key)
+            s.add(r)
+        return s, r
+
+    def set_product(self, key: str, product: str) -> str:
+        """Assign an instrument to the options or equity_intraday segment (live-applied)."""
+        product = "equity_intraday" if product == "equity_intraday" else "options"
+        s, r = self._upsert_state(key)
+        r.product = product
+        s.commit(); s.close()
+        self.products[key] = product
+        log.info(f"PRODUCT set to {product}", instrument=key)
+        return product
+
+    def set_priority_flag(self, key: str, flag: bool) -> None:
+        """Toggle the watchlist 'purple' priority flag (intraday selection always wins)."""
+        s, r = self._upsert_state(key)
+        r.priority_flag = bool(flag)
+        s.commit(); s.close()
+        if flag:
+            self.priority_flags[key] = True
+        else:
+            self.priority_flags.pop(key, None)
+        log.info(f"PRIORITY {'set' if flag else 'cleared'}", instrument=key)
+
+    def set_strategy(self, key: str, strategy_key: str | None) -> str | None:
+        """Assign which registered strategy trades this instrument (None = default v3)."""
+        from app.strategy.registry import strategy_keys as _keys
+        sk = strategy_key if (strategy_key and strategy_key in _keys()) else None
+        s, r = self._upsert_state(key)
+        r.strategy_key = sk
+        s.commit(); s.close()
+        if sk:
+            self.strategy_keys[key] = sk
+        else:
+            self.strategy_keys.pop(key, None)
+        log.info(f"STRATEGY set to {sk or 'default'}", instrument=key)
+        return sk
+
     # ── lane 1: strategy recompute (per-instrument interval) ──────────────
     def scan_signals(self) -> None:
         s, prov = self.settings, self.provider

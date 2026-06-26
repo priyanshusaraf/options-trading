@@ -356,14 +356,19 @@ def signals(request: Request):
             "entries_blocked": inst.key in r.entry_blocks,
             "stale": stale,
             "market_open": market_open,
+            # dual-segment / multi-strategy per-instrument config
+            "product": r.products.get(inst.key, "options"),
+            "priority_flag": r.priority_flags.get(inst.key, False),
+            "strategy_key": r.strategy_keys.get(inst.key),
         })
     return {"instruments": out, "health": h, "feed_auth_error": feed_auth_error,
             "any_market_open": any_market_open}
 
 
 @router.get("/api/positions")
-async def positions(request: Request):
-    """Active-positions cockpit rows: marks, trailing stop, stale/health.
+async def positions(request: Request, segment: str | None = None):
+    """Active-positions cockpit rows: marks, trailing stop, stale/health. Optional
+    ?segment=options|equity_intraday filters to one trading window.
 
     Async + engine-lock: this reads the broker's long-lived Session, which the
     engine loops also use. Running on the event loop under r._lock keeps all
@@ -373,14 +378,24 @@ async def positions(request: Request):
     out = []
     async with r._lock:
         for p in r.broker.open_positions():
+            seg = p.segment or "options"
+            if segment and seg != segment:
+                continue
             d = p.to_dict()
             t = ticks.get(p.instrument_key, {})
             d["live_premium"] = t.get("option_premium")
             d["live_spot"] = t.get("spot")
             d["stale"] = t.get("stale", True)
             d["stale_age"] = t.get("stale_age")
-            d["dist_to_stop"] = round(d["last_premium"] - d["stop_price"], 2)
-            d["dist_to_target"] = round(d["target_price"] - d["last_premium"], 2)
+            # distance to the trigger, signed so positive = still safe / has room —
+            # direction-aware so an equity SHORT (stop above, target below) reads right.
+            last = d["last_premium"]
+            if seg == "equity_intraday" and p.direction == "SHORT":
+                d["dist_to_stop"] = round(d["stop_price"] - last, 2)
+                d["dist_to_target"] = round(last - d["target_price"], 2)
+            else:
+                d["dist_to_stop"] = round(last - d["stop_price"], 2)
+                d["dist_to_target"] = round(d["target_price"] - last, 2)
             out.append(d)
         cap = r.capital_dict()
     return {"positions": out, "capital": cap}
@@ -410,6 +425,50 @@ class BlockBody(BaseModel):
 def block_entries(key: str, body: BlockBody, request: Request):
     _runner(request).set_entries_blocked(key, body.blocked)
     return {"key": key, "entries_blocked": body.blocked}
+
+
+# ── dual-segment / multi-strategy per-instrument controls (Phase 3) ──────────
+class ProductBody(BaseModel):
+    product: str            # "options" | "equity_intraday"
+
+
+@router.post("/api/instruments/{key}/product")
+def set_product(key: str, body: ProductBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    p = _runner(request).set_product(key, body.product)
+    return {"key": key, "product": p}
+
+
+class PriorityBody(BaseModel):
+    priority_flag: bool     # the watchlist "purple" intraday-priority flag
+
+
+@router.post("/api/instruments/{key}/priority")
+def set_priority(key: str, body: PriorityBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    _runner(request).set_priority_flag(key, body.priority_flag)
+    return {"key": key, "priority_flag": body.priority_flag}
+
+
+class StrategyBody(BaseModel):
+    strategy_key: str | None = None   # None = default strategy
+
+
+@router.post("/api/instruments/{key}/strategy")
+def set_strategy(key: str, body: StrategyBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    sk = _runner(request).set_strategy(key, body.strategy_key)
+    return {"key": key, "strategy_key": sk}
+
+
+@router.get("/api/strategies")
+def strategies():
+    """The registered strategies, for per-instrument assignment dropdowns."""
+    from app.strategy.registry import strategy_meta
+    return {"strategies": strategy_meta()}
 
 
 # ── manual paper overrides (F8) — never touch real Kite orders ───────────────
@@ -599,18 +658,31 @@ def reset_setting(body: SettingKey, request: Request):
 
 # ── intraday vs overnight analytics + option dataset ─────────────────────────
 @router.get("/api/analytics")
-def analytics_split(request: Request):
+def analytics_split(request: Request, segment: str | None = None):
+    """Trade analytics. Optional ?segment=options|equity_intraday narrows the
+    headline split AND the per-segment block to one window. All figures are net of
+    the full charge stack (Trade.net_pnl is gross − charges)."""
     from app.options.cache import stats as option_stats
     with SessionLocal() as s:
-        trades = list(s.scalars(select(Trade)))
+        all_trades = list(s.scalars(select(Trade)))
+
+    def seg_of(t):
+        return t.segment or "options"
 
     def agg(ts):
         n = len(ts)
         wins = sum(1 for t in ts if t.win)
         return {"trades": n, "wins": wins,
                 "win_rate": round(100 * wins / n, 1) if n else 0.0,
-                "net_pnl": round(sum(t.net_pnl for t in ts), 2)}
+                "net_pnl": round(sum(t.net_pnl for t in ts), 2),
+                "charges": round(sum(t.charges_total for t in ts), 2)}
 
+    # per-segment summary (net of costs) across BOTH windows — never filtered, so
+    # the dashboard can always show options vs equity side by side
+    by_segment = {seg: agg([t for t in all_trades if seg_of(t) == seg])
+                  for seg in ("options", "equity_intraday")}
+
+    trades = [t for t in all_trades if seg_of(t) == segment] if segment else all_trades
     overnight = [t for t in trades if t.held_overnight]
     intraday = [t for t in trades if not t.held_overnight]
     return {
@@ -619,6 +691,7 @@ def analytics_split(request: Request):
         "overnight_gap_pnl": round(sum(t.overnight_pnl for t in trades), 2),
         "reinforced_trades": sum(1 for t in trades if t.reinforcements > 0),
         "option_dataset": option_stats(),
+        "by_segment": by_segment,
     }
 
 

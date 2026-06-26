@@ -10,15 +10,16 @@ function AnalyticsStrip() {
   if (!a) return null
   const cell = (label: string, v: string, cls = '') =>
     <div><div className="stat-label">{label}</div><div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
+  const bs = a.by_segment
   return (
     <div className="card p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px,1fr))' }}>
-      <div className="stat-label col-span-full">Where the P&amp;L comes from — intraday vs overnight</div>
-      {cell('Intraday net', signedInr(a.intraday.net_pnl), pnlColor(a.intraday.net_pnl))}
-      {cell('Intraday trades', `${a.intraday.trades} · ${a.intraday.win_rate}%`)}
-      {cell('Overnight net', signedInr(a.overnight.net_pnl), pnlColor(a.overnight.net_pnl))}
-      {cell('Overnight trades', `${a.overnight.trades} · ${a.overnight.win_rate}%`)}
+      <div className="stat-label col-span-full">Performance by segment — net of all costs (STT/charges included)</div>
+      {bs && cell('Options net', signedInr(bs.options.net_pnl), pnlColor(bs.options.net_pnl))}
+      {bs && cell('Options trades', `${bs.options.trades} · ${bs.options.win_rate}%`)}
+      {bs && cell('Intraday net', signedInr(bs.equity_intraday.net_pnl), pnlColor(bs.equity_intraday.net_pnl))}
+      {bs && cell('Intraday trades', `${bs.equity_intraday.trades} · ${bs.equity_intraday.win_rate}%`)}
+      {bs && cell('Intraday charges', inr(bs.equity_intraday.charges || 0), 'text-down')}
       {cell('Overnight gap P&L', signedInr(a.overnight_gap_pnl), pnlColor(a.overnight_gap_pnl))}
-      {cell('Reinforced trades', String(a.reinforced_trades))}
       {cell('Option dataset', `${a.option_dataset.rows.toLocaleString()} rows`)}
     </div>
   )
@@ -86,6 +87,8 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
         <div className="flex items-center gap-2">
           <span className="font-semibold text-zinc-100">{p.instrument_key}</span>
           <span className={`badge ${p.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>{p.direction} {p.option_type}</span>
+          {p.segment === 'equity_intraday' && <span className="badge bg-purple-500/15 text-purple-200" title="MIS intraday equity">INTRA</span>}
+          {p.strategy_key && <span className="badge bg-zinc-700/40 text-muted" title="strategy">{p.strategy_key}</span>}
           {p.mode === 'live'
             ? <span className="badge bg-down/20 text-down" title="REAL Kite position — actual money">🔴 REAL</span>
             : <span className="badge bg-emerald-500/15 text-emerald-300" title="paper position — simulated fill, no real order">📝 PAPER</span>}
@@ -100,10 +103,10 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
 
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(92px,1fr))' }}>
         <Cell label="Entry" v={num(p.entry_premium)} />
-        <Cell label="Option LTP" v={num(prem)} />
+        <Cell label={p.segment === 'equity_intraday' ? 'Share LTP' : 'Option LTP'} v={num(prem)} />
         <Cell label="Spot" v={num(p.live_spot ?? p.last_spot)} />
         <Cell label="High water" v={num(p.high_water_premium)} cls="text-up/80" />
-        <Cell label="Stop (trail)" v={num(p.stop_price)} cls="text-down" />
+        <Cell label={p.segment === 'equity_intraday' ? 'Stop' : 'Stop (trail)'} v={num(p.stop_price)} cls="text-down" />
         <Cell label="Target" v={num(p.target_price)} cls="text-up" />
         <Cell label="→ stop" v={num(p.dist_to_stop)} />
         <Cell label="→ target" v={num(p.dist_to_target)} />
@@ -175,11 +178,17 @@ function ManualEntry({ tradable, onDone, mode }:
   )
 }
 
+type Seg = 'all' | 'options' | 'equity_intraday'
+const SEG_TABS: [Seg, string][] = [
+  ['all', 'All'], ['options', 'Options'], ['equity_intraday', 'Intraday / Equity'],
+]
+
 export default function ActivePositionsView() {
   const { positionTicks, state } = useLive()
   const mode = state?.broker_mode ?? 'paper'   // which ledger the engine is executing into right now
   const [rows, setRows] = useState<PositionRow[]>([])
   const [tradable, setTradable] = useState<SignalRow[]>([])
+  const [seg, setSeg] = useState<Seg>('all')   // which trading window to show
 
   const load = () => {
     getPositions().then((d) => setRows(d.positions || [])).catch(() => {})
@@ -195,15 +204,35 @@ export default function ActivePositionsView() {
       high_water_premium: t.high_water_premium, stale: t.stale, stale_age: t.stale_age } : p
   }), [rows, positionTicks])
 
+  const shown = useMemo(() =>
+    seg === 'all' ? merged : merged.filter((p) => (p.segment || 'options') === seg),
+    [merged, seg])
+  const countFor = (s: Seg) => s === 'all' ? merged.length
+    : merged.filter((p) => (p.segment || 'options') === s).length
+
   return (
     <div className="flex flex-col gap-3">
       <AnalyticsStrip />
+      {/* two trading windows: options vs intraday/equity */}
+      <div className="card p-3 flex items-center gap-2 flex-wrap">
+        <span className="stat-label mr-1">Window</span>
+        {SEG_TABS.map(([s, label]) => (
+          <button key={s} onClick={() => setSeg(s)}
+            className={`badge ${seg === s ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            {label} ({countFor(s)})
+          </button>
+        ))}
+      </div>
       <ManualEntry tradable={tradable} onDone={load} mode={mode} />
-      {merged.length === 0 ? (
-        <div className="card p-8 text-center text-muted">No open positions. The engine opens one on the next fresh signal, or open one manually above.</div>
+      {shown.length === 0 ? (
+        <div className="card p-8 text-center text-muted">
+          {seg === 'equity_intraday'
+            ? 'No open intraday/equity positions. Flag instruments as INTRA on the Watchlist (and arm + enable intraday in Settings) to trade this window.'
+            : 'No open positions. The engine opens one on the next fresh signal, or open one manually above.'}
+        </div>
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))' }}>
-          {merged.map((p) => <PositionCard key={p.instrument_key} p={p} onChanged={load} />)}
+          {shown.map((p) => <PositionCard key={p.instrument_key} p={p} onChanged={load} />)}
         </div>
       )}
     </div>

@@ -3,11 +3,12 @@ import { useLive } from '../state/LiveContext'
 import {
   getSignals, toggleInstrument, getCandles, getOptionCandles, setLiveInterval, blockEntries,
   addToPortfolio, removeFromPortfolio, getStatus,
+  getStrategies, setProduct, setPriorityFlag, setInstrumentStrategy,
 } from '../lib/api'
 import { PriceChart, LineChart } from '../components/Charts'
 import SessionBanner from '../components/SessionBanner'
 import ModeChip from '../components/ModeChip'
-import type { InstrState, SignalRow, ProviderHealth } from '../lib/types'
+import type { InstrState, SignalRow, ProviderHealth, StrategyMeta } from '../lib/types'
 import { inr, num, signedInr, pnlColor, signalStyle } from '../lib/format'
 import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
 
@@ -82,6 +83,7 @@ export default function Watchlist() {
   const [adding, setAdding] = useState('')
   const [busy, setBusy] = useState(false)
   const [authed, setAuthed] = useState<boolean | null>(null)
+  const [strategies, setStrategies] = useState<StrategyMeta[]>([])
 
   const load = () => getSignals().then((d) => setRows(d.instruments || [])).catch(() => {})
   useEffect(() => {
@@ -89,6 +91,7 @@ export default function Watchlist() {
     const t = setInterval(load, 2500)   // lightweight: server never fetches candles for this
     return () => clearInterval(t)
   }, [])
+  useEffect(() => { getStrategies().then((d) => setStrategies(d.strategies || [])).catch(() => {}) }, [])
 
   // Poll auth so the session-expired banner shows on the DEFAULT landing page even
   // pre-market, when no candle scan has failed yet to set health.auth_error (KITE-1).
@@ -109,6 +112,20 @@ export default function Watchlist() {
   const toggleBlock = (r: SignalRow) => {
     patchRow(r.key, { entries_blocked: !r.entries_blocked })
     blockEntries(r.key, !r.entries_blocked).catch(() => patchRow(r.key, { entries_blocked: r.entries_blocked }))
+  }
+  // dual-segment / multi-strategy per-instrument config (optimistic + reconcile)
+  const togglePriority = (r: SignalRow) => {
+    const next = !r.priority_flag
+    patchRow(r.key, { priority_flag: next })
+    setPriorityFlag(r.key, next).catch(() => patchRow(r.key, { priority_flag: r.priority_flag }))
+  }
+  const changeProduct = (r: SignalRow, product: 'options' | 'equity_intraday') => {
+    patchRow(r.key, { product })
+    setProduct(r.key, product).catch(() => patchRow(r.key, { product: r.product }))
+  }
+  const changeStrategy = (r: SignalRow, strategy_key: string | null) => {
+    patchRow(r.key, { strategy_key })
+    setInstrumentStrategy(r.key, strategy_key).catch(() => patchRow(r.key, { strategy_key: r.strategy_key }))
   }
   // Pin = add to the curated portfolio (also enables trading, matching the old
   // Home behavior). Unpin = remove (also disables); a user-added name then drops
@@ -199,12 +216,12 @@ export default function Watchlist() {
           <thead className="text-muted border-b border-edge text-left">
             <tr className="[&>th]:py-1 [&>th]:pr-3">
               <th></th><th>Instrument</th><th>Live TF</th><th>Signal</th><th className="text-right">z</th>
-              <th>Trend</th><th>Position</th><th>Options</th><th>Data</th><th>Entries</th><th></th>
+              <th>Trend</th><th>Position</th><th>Segment / Strategy</th><th>Options</th><th>Data</th><th>Entries</th><th></th>
             </tr>
           </thead>
           <tbody>
             {view.length === 0 && (
-              <tr><td colSpan={11} className="py-8 text-center text-muted">
+              <tr><td colSpan={12} className="py-8 text-center text-muted">
                 {pinnedOnly ? 'no pinned instruments — ★ a row or add one above' : 'no instruments match the filters'}
               </td></tr>
             )}
@@ -224,6 +241,27 @@ export default function Watchlist() {
                 <td className="text-right">{num(r.z)}</td>
                 <td className="text-muted">{r.trend || '—'}</td>
                 <td>{r.has_position ? <span className="text-up">● held</span> : <span className="text-muted">flat</span>}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => togglePriority(r)}
+                      title={r.priority_flag ? 'purple priority ON — intraday selection always takes this name, sized at the top of the band' : 'flag as purple intraday priority'}
+                      className={`text-sm leading-none ${r.priority_flag ? 'text-purple-300' : 'text-zinc-600 hover:text-purple-300'}`}>
+                      {r.priority_flag ? '🟣' : '○'}
+                    </button>
+                    <button onClick={() => changeProduct(r, r.product === 'equity_intraday' ? 'options' : 'equity_intraday')}
+                      title="trading segment: options vs MIS intraday equity"
+                      className={`badge ${r.product === 'equity_intraday' ? 'bg-purple-500/20 text-purple-200' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                      {r.product === 'equity_intraday' ? 'INTRA' : 'OPT'}
+                    </button>
+                    <select value={r.strategy_key || ''} onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => changeStrategy(r, e.target.value || null)}
+                      title="strategy this instrument trades (default = Trend Impulse V3)"
+                      className="bg-panel2 border border-edge rounded px-1 py-0.5 text-[11px] max-w-[120px]">
+                      <option value="">default</option>
+                      {strategies.map((s) => <option key={s.key} value={s.key}>{s.display_name}</option>)}
+                    </select>
+                  </div>
+                </td>
                 <td className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</td>
                 <td>{r.market_open === false
                   ? <span className="text-muted" title="market closed — no new candle prints; not a feed fault">closed</span>

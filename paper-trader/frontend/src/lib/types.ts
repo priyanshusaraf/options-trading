@@ -15,6 +15,10 @@ export interface PositionDTO {
   reinforcement_count?: number; held_overnight?: boolean
   unrealized_pnl: number
   mode?: 'paper' | 'live'
+  segment?: 'options' | 'equity_intraday'; strategy_key?: string | null
+  live_premium?: number | null; live_spot?: number | null
+  stale?: boolean; stale_age?: number | null
+  dist_to_stop?: number; dist_to_target?: number
 }
 
 export interface InstrState {
@@ -70,6 +74,10 @@ export interface SignalRow {
   has_position: boolean; has_options: boolean; entries_blocked: boolean; stale: boolean
   market_open?: boolean   // OPS-R2-1: closed market -> stale is benign idle, not broken
   pinned?: boolean        // in the curated portfolio (Watchlist "pinned only" filter)
+  // dual-segment / multi-strategy per-instrument config (Phase 3)
+  product?: 'options' | 'equity_intraday'
+  priority_flag?: boolean      // watchlist "purple" intraday priority
+  strategy_key?: string | null // assigned strategy (null = default)
 }
 
 export interface PositionRow extends PositionDTO {
@@ -157,11 +165,12 @@ export interface BTTradeDTO {
 
 export interface SettingRow { key: string; type: 'bool' | 'int' | 'float' | 'str'; default: any; value: any }
 
-export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number }
+export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number; charges?: number }
 export interface AnalyticsSplit {
   intraday: AnalyticsAgg; overnight: AnalyticsAgg; overnight_gap_pnl: number
   reinforced_trades: number
   option_dataset: { rows: number; instruments: number; first_ts: string | null; last_ts: string | null }
+  by_segment?: { options: AnalyticsAgg; equity_intraday: AnalyticsAgg }
 }
 
 export interface HomeInstrument {
