@@ -22,7 +22,8 @@ from app.db.models import DailyAccountSnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
-from app.strategy.signals import compute_signals, to_payload
+from app.strategy.registry import get_strategy
+from app.strategy.signals import to_payload
 from app.ws.manager import manager
 
 router = APIRouter()
@@ -226,9 +227,9 @@ def candles(key: str, request: Request, interval: str | None = None):
     if not cs:
         return {"candles": [], "ema": [], "zscore": [], "markers": [], "latest": None,
                 "name": inst.name}
-    sig = compute_signals(_df(cs), ema_length=settings.ema_length,
-                          z_length=settings.z_length, entry_z=settings.entry_z,
-                          slope_lookback=settings.slope_lookback)
+    sig = get_strategy(None).signals(_df(cs), ema_length=settings.ema_length,
+                                     z_length=settings.z_length, entry_z=settings.entry_z,
+                                     slope_lookback=settings.slope_lookback)
     payload = to_payload(sig, entry_z=settings.entry_z)
     payload["name"] = inst.name
     return payload

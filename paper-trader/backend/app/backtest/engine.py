@@ -41,7 +41,7 @@ import pandas as pd
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
-from app.strategy.signals import compute_signals
+from app.strategy.registry import get_strategy
 
 # Map an instrument's live segment to the charge schedule for its UNDERLYING.
 _BACKTEST_SEGMENT = {
@@ -147,9 +147,9 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     # budget at the payload layer (so it never goes stale when funds change).
     option_cost = estimate_option_cost(inst, candles)
 
-    sig = compute_signals(_candles_to_df(candles), ema_length=ema_length,
-                          z_length=z_length, entry_z=entry_z,
-                          slope_lookback=slope_lookback)
+    sig = get_strategy(None).signals(_candles_to_df(candles), ema_length=ema_length,
+                                     z_length=z_length, entry_z=entry_z,
+                                     slope_lookback=slope_lookback)
     sig = sig.dropna(subset=["ema", "z", "slope"]).reset_index(drop=True)
     if sig.empty:
         m = BTMetrics()

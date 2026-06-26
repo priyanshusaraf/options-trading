@@ -37,6 +37,10 @@ class InstrumentState(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     live_interval: Mapped[str] = mapped_column(String(12), default="15minute")
     entries_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # dual-segment / multi-strategy assignment (Phase 0 foundation)
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # None = default strategy
+    priority_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "purple" intraday priority
+    product: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
 
 
 class Position(Base):
@@ -47,6 +51,9 @@ class Position(Base):
     option_type: Mapped[str] = mapped_column(String(4))     # CE | PE
     tradingsymbol: Mapped[str] = mapped_column(String(64))
     exchange: Mapped[str] = mapped_column(String(8))        # NFO/BFO/MCX/NCDEX
+    # product family + originating strategy (Phase 0 foundation)
+    segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     lot_size: Mapped[int] = mapped_column(Integer)
@@ -108,6 +115,8 @@ class Position(Base):
             "no_take_profit": self.no_take_profit,
             "unrealized_pnl": round(unrealized, 2),
             "mode": self.mode,
+            "segment": self.segment or "options",
+            "strategy_key": self.strategy_key,
         }
 
 
@@ -119,6 +128,9 @@ class Trade(Base):
     option_type: Mapped[str] = mapped_column(String(4))
     tradingsymbol: Mapped[str] = mapped_column(String(64))
     exchange: Mapped[str] = mapped_column(String(8))
+    # product family + originating strategy (Phase 0 foundation)
+    segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     qty: Mapped[int] = mapped_column(Integer)
@@ -178,6 +190,8 @@ class Trade(Base):
             "intraday_pnl": round(self.intraday_pnl, 2),
             "reinforcements": self.reinforcements,
             "mode": self.mode,
+            "segment": self.segment or "options",
+            "strategy_key": self.strategy_key,
         }
 
 
@@ -190,6 +204,9 @@ class EquitySnapshot(Base):
     invested: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float)
     open_count: Mapped[int] = mapped_column(Integer)
+    # optional segment/strategy partition (null = global portfolio snapshot)
+    segment: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -261,6 +278,7 @@ class BacktestResult(Base):
     instrument_key: Mapped[str] = mapped_column(String(48), index=True)
     name: Mapped[str] = mapped_column(String(64), default="")
     segment: Mapped[str] = mapped_column(String(12), default="")   # backtest charge segment
+    strategy_key: Mapped[str] = mapped_column(String(64), default="trend_impulse_v3", index=True)
     interval: Mapped[str] = mapped_column(String(12), index=True)
     trades: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
@@ -313,7 +331,8 @@ class BacktestResult(Base):
         return {
             "id": self.id, "run_id": self.run_id,
             "instrument_key": self.instrument_key, "name": self.name,
-            "segment": self.segment, "interval": self.interval,
+            "segment": self.segment, "strategy_key": self.strategy_key or "trend_impulse_v3",
+            "interval": self.interval,
             "trades": self.trades, "wins": self.wins,
             "win_rate": round(self.win_rate, 1),
             "profit_factor": round(self.profit_factor, 3) if self.profit_factor is not None else None,

@@ -66,6 +66,18 @@ CHARGE_SCHEDULE: dict[str, dict] = {
     "NCDEX_FUT": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.00006,
                   "tax_sell_pct": 0.0, "stamp_buy_pct": 0.00002, "sebi_pct": 1e-6,
                   "gst_pct": 0.18},
+
+    # ── EQUITY INTRADAY / MIS (intraday-equity segment) ── price turnover ────────
+    # Distinct from delivery (NSE_EQ/BSE_EQ): brokerage is min(₹20, 0.03%) per leg
+    # (NOT ₹0); STT is HALF the delivery rate at 0.025% on the SELL leg only; stamp
+    # is the 0.003% intraday rate on BUY (NOT the 0.015% delivery rate); and there
+    # is NO DP charge because nothing is debited from the demat account intraday.
+    "NSE_INTRADAY": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.0000297,
+                     "tax_sell_pct": 0.00025, "stamp_buy_pct": 0.00003, "sebi_pct": 1e-6,
+                     "gst_pct": 0.18},
+    "BSE_INTRADAY": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.0000375,
+                     "tax_sell_pct": 0.00025, "stamp_buy_pct": 0.00003, "sebi_pct": 1e-6,
+                     "gst_pct": 0.18},
 }
 
 

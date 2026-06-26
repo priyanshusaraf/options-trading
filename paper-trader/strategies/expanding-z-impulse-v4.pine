@@ -1,0 +1,384 @@
+//@version=5
+// =====================================================================
+// Expanding Z Impulse V4  —  best-of-three merge
+// =====================================================================
+// One compiled strategy distilled from three predecessors. The lineage is
+// recorded here on purpose so no feature is lost when this is ported into the
+// Python engine (backend/app/strategy/signals.py).
+//
+// FEATURE LEDGER — what each parent contributes and why it survived:
+//
+//   1. Expanding Trend Impulse V3  (the original "soul")
+//        * MANDATORY still-expanding entry gate: only enter while the
+//          displacement is still GROWING (absZ > absZ[1]). This is V3's
+//          defining idea — catch the impulse as it expands, never after it
+//          has already peaked. In V4 it is required on EVERY entry.
+//        * Fast "displacement-lost" exit. Note V3's exits are ALREADY fully
+//          contained in the AbsZ base: because z = (close - ema)/stdev,
+//          V3's  z < 0  long-exit IS the EMA-cross exit (close < ema), and
+//          V3's trend-flip exit IS the EMA-drift-flip exit. Nothing dropped.
+//
+//   2. Absolute Z Drift Simple v1 @ entryPct=70  (the engine)
+//        * Non-repainting execution: barstate.isconfirmed +
+//          process_orders_on_close=false => signals fill on the NEXT bar
+//          open. No same-bar fills, no entry-bar MFE credit, no lookahead.
+//        * RESIDUAL z-score: z of the spread (close - ema), a cleaner,
+//          more stationary signal than V3's raw (close - ema)/stdev(close).
+//        * ADAPTIVE percentile entry threshold: self-tunes to each symbol's
+//          own volatility regime instead of a hard-coded z = 1.0.
+//        * ATR-unit drift filter + signal-bar blow-off filter.
+//        * Ratchet risk engine: initial ATR stop -> Chandelier trail ->
+//          MFE-capture floor. The stop only ever moves in your favour.
+//
+//   3. Absolute Z Drift Simple v1 @ entryPct=65  (the frequency)
+//        * Identical to #2 except a LOOSER entry percentile => more entries.
+//          More symbols x more trades = more upside surface. V4 defaults
+//          entryPct to 65 and leaves it as a tunable input.
+//
+// UPSIDE ENGINE (the whole point of the rebuild): "ratchet a runner."
+//   Let a winner run on the Chandelier trail; once it is up >= captureStartR,
+//   lock a fixed % of the peak (MFE-capture floor). One lot throughout — no
+//   pyramiding — so this stays in lockstep with the engine's fixed-1-lot
+//   additive model.
+// =====================================================================
+
+strategy(
+     "Expanding Z Impulse V4",
+     overlay=true,
+     initial_capital=100000,
+     pyramiding=0,
+     process_orders_on_close=false,
+     calc_on_order_fills=false,
+     calc_on_every_tick=false)
+
+// =====================================================
+// Execution model
+// =====================================================
+// Signals are evaluated only after the bar closes (barstate.isconfirmed).
+// Market entries and discretionary exits are submitted on the signal-bar close
+// and filled on the next bar open because process_orders_on_close=false.
+// No same-bar entries, no same-bar discretionary exits, no entry-bar MFE credit.
+
+// =====================================================
+// Inputs
+// =====================================================
+emaLength      = input.int(50,  "EMA Length", minval=1)
+zLength        = input.int(50,  "Residual Z-Score Length", minval=5)
+adaptLength    = input.int(200, "Adaptive Percentile Lookback", minval=50)
+atrLength      = input.int(14,  "ATR Length", minval=1)
+slopeLookback  = input.int(5,   "EMA Drift Lookback", minval=1)
+
+// Default 65 = the higher-frequency variant (#3). Raise it to be more selective.
+entryPct       = input.float(65.0, "Absolute Z Entry Percentile", minval=50.0, maxval=95.0)
+exitPct        = input.float(35.0, "Absolute Z Contraction Exit Percentile", minval=5.0, maxval=70.0)
+
+minAbsZ        = input.float(0.60, "Minimum Absolute Z", minval=0.0, step=0.05)
+minDriftATR    = input.float(0.08, "Minimum EMA Drift In ATR Units", step=0.01)
+maxSignalATR   = input.float(2.75, "Maximum Signal Bar Range ATR", minval=0.25, step=0.25)
+
+// V3's soul, made explicit and toggleable. ON => every entry must still be
+// expanding (absZ > absZ[1]). This is what makes V4 "Expanding".
+requireExpansion       = input.bool(true,  "Require Still-Expanding Entry (V3 gate)")
+allowReExpansionEntry  = input.bool(true,  "Allow Re-Expansion Entries")
+useAbsZContractionExit = input.bool(false, "Use Absolute Z Contraction Exit")
+exitOnDriftFlip        = input.bool(true,  "Exit On EMA Drift Flip (= V3 trend-flip exit)")
+exitOnEmaCross         = input.bool(true,  "Exit On EMA Cross (= V3 z<0 displacement-lost exit)")
+
+// Position sizing
+sizingMode = input.string(
+     "Fixed contracts",
+     "Sizing Mode",
+     options=["Fixed contracts", "Equity percent approx", "Risk percent"])
+
+fixedQty   = input.float(1.0,  "Fixed Contracts / Lots", minval=0.01, step=0.01)
+equityPct  = input.float(10.0, "Equity % Approx Position", minval=0.1, maxval=100.0, step=0.1)
+riskPct    = input.float(1.0,  "Risk % Of Equity", minval=0.05, maxval=10.0, step=0.05)
+
+// Ratchet risk engine
+initialRiskATR = input.float(1.25, "Initial Risk ATR", minval=0.25, step=0.05)
+trailStartR    = input.float(1.75, "Start Trail After MFE R", minval=0.25, step=0.25)
+trailATR       = input.float(3.00, "Chandelier Trail ATR", minval=0.50, step=0.25)
+
+useMfeCaptureFloor = input.bool(true,  "Use MFE Capture Floor")
+captureStartR      = input.float(1.25, "Start MFE Capture After R", minval=0.25, step=0.25)
+capturePct         = input.float(0.35, "MFE Capture Percent", minval=0.05, maxval=0.90, step=0.05)
+
+// =====================================================
+// Core indicators
+// =====================================================
+ema = ta.ema(close, emaLength)
+atr = ta.atr(atrLength)
+
+spread = close - ema
+spreadStdev = ta.stdev(spread, zLength)
+zscore = spreadStdev > 0 ? spread / spreadStdev : 0.0
+absZ = math.abs(zscore)
+
+entryAbsRaw = ta.percentile_nearest_rank(absZ, adaptLength, entryPct)
+exitAbsRaw  = ta.percentile_nearest_rank(absZ, adaptLength, exitPct)
+
+// Prior-bar thresholds avoid current-bar contamination.
+entryAbs = math.max(nz(entryAbsRaw[1], minAbsZ), minAbsZ)
+exitAbs  = math.max(nz(exitAbsRaw[1],  minAbsZ * 0.50), minAbsZ * 0.25)
+
+driftScore = atr > 0 ? (ema - ema[slopeLookback]) / atr : 0.0
+bullDrift = driftScore > minDriftATR
+bearDrift = driftScore < -minDriftATR
+
+signalRangeATR = atr > 0 ? (high - low) / atr : 0.0
+signalBarOK = signalRangeATR <= maxSignalATR
+
+// =====================================================
+// Entry logic  (AbsZ adaptive impulse + V3 mandatory expansion gate)
+// =====================================================
+// absZ decides whether the move is statistically strong enough.
+// zscore sign + EMA drift decide direction.
+expanding = absZ > absZ[1]                          // V3's defining condition
+
+absZBreakout = ta.crossover(absZ, entryAbs)
+
+absZReExpansion =
+     absZ > entryAbs and
+     absZ > absZ[1] and
+     absZ[1] < absZ[2]
+
+absZImpulseRaw =
+     absZBreakout or
+     (allowReExpansionEntry and absZReExpansion)
+
+// Fold V3 in: when requireExpansion is ON, no entry survives unless the
+// displacement is still growing on the signal bar.
+absZImpulse = absZImpulseRaw and (not requireExpansion or expanding)
+
+longSignal =
+     barstate.isconfirmed and
+     strategy.position_size <= 0 and
+     signalBarOK and
+     absZImpulse and
+     zscore > 0 and
+     bullDrift
+
+shortSignal =
+     barstate.isconfirmed and
+     strategy.position_size >= 0 and
+     signalBarOK and
+     absZImpulse and
+     zscore < 0 and
+     bearDrift
+
+// =====================================================
+// Position sizing
+// =====================================================
+riskPtsForSizing = initialRiskATR * atr
+riskCash = strategy.equity * riskPct / 100.0
+pointValue = syminfo.pointvalue > 0 ? syminfo.pointvalue : 1.0
+riskQty = riskPtsForSizing > 0 ? riskCash / (riskPtsForSizing * pointValue) : fixedQty
+
+equityQty = close != 0 ? strategy.equity * equityPct / 100.0 / close : fixedQty
+
+tradeQty =
+     sizingMode == "Fixed contracts" ? fixedQty :
+     sizingMode == "Equity percent approx" ? equityQty :
+     riskQty
+
+// =====================================================
+// Entries (fill next bar open)
+// =====================================================
+if longSignal
+    strategy.close("Short", comment="Close Short For Long Signal")
+    strategy.entry("Long", strategy.long, qty=tradeQty, comment="ExpZ Long")
+
+if shortSignal
+    strategy.close("Long", comment="Close Long For Short Signal")
+    strategy.entry("Short", strategy.short, qty=tradeQty, comment="ExpZ Short")
+
+// =====================================================
+// Trade state
+// =====================================================
+var float longEntryATR = na
+var float shortEntryATR = na
+var float longHigh = na
+var float shortLow = na
+var int longEntryBar = na
+var int shortEntryBar = na
+var float longStop = na
+var float shortStop = na
+
+newLong = strategy.position_size > 0 and strategy.position_size[1] <= 0
+newShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+flat = strategy.position_size == 0
+
+if newLong
+    longEntryATR := atr
+    longEntryBar := bar_index
+    longHigh := strategy.position_avg_price
+    longStop := strategy.position_avg_price - initialRiskATR * atr
+
+    shortEntryATR := na
+    shortEntryBar := na
+    shortLow := na
+    shortStop := na
+
+if newShort
+    shortEntryATR := atr
+    shortEntryBar := bar_index
+    shortLow := strategy.position_avg_price
+    shortStop := strategy.position_avg_price + initialRiskATR * atr
+
+    longEntryATR := na
+    longEntryBar := na
+    longHigh := na
+    longStop := na
+
+longCanManage = strategy.position_size > 0 and not na(longEntryBar) and bar_index > longEntryBar
+shortCanManage = strategy.position_size < 0 and not na(shortEntryBar) and bar_index > shortEntryBar
+
+// No entry-bar MFE credit.
+if longCanManage
+    longHigh := math.max(nz(longHigh, strategy.position_avg_price), high)
+
+if shortCanManage
+    shortLow := math.min(nz(shortLow, strategy.position_avg_price), low)
+
+if flat
+    longEntryATR := na
+    shortEntryATR := na
+    longHigh := na
+    shortLow := na
+    longEntryBar := na
+    shortEntryBar := na
+    longStop := na
+    shortStop := na
+
+// =====================================================
+// Ratchet stop model: initial stop + Chandelier trail + MFE capture floor
+// =====================================================
+longAvg = strategy.position_size > 0 ? strategy.position_avg_price : na
+shortAvg = strategy.position_size < 0 ? strategy.position_avg_price : na
+
+longATR = na(longEntryATR) ? atr : longEntryATR
+shortATR = na(shortEntryATR) ? atr : shortEntryATR
+
+longRiskPts = initialRiskATR * longATR
+shortRiskPts = initialRiskATR * shortATR
+
+longMfePts = strategy.position_size > 0 ? longHigh - longAvg : na
+shortMfePts = strategy.position_size < 0 ? shortAvg - shortLow : na
+
+longMfeR = strategy.position_size > 0 and longRiskPts > 0 ? longMfePts / longRiskPts : na
+shortMfeR = strategy.position_size < 0 and shortRiskPts > 0 ? shortMfePts / shortRiskPts : na
+
+longInitialStop = longAvg - longRiskPts
+shortInitialStop = shortAvg + shortRiskPts
+
+longTrailStop = longHigh - trailATR * atr
+shortTrailStop = shortLow + trailATR * atr
+
+longCaptureStop = longAvg + longMfePts * capturePct
+shortCaptureStop = shortAvg - shortMfePts * capturePct
+
+longCandidateStop = longInitialStop
+shortCandidateStop = shortInitialStop
+
+if longCanManage and nz(longMfeR, 0.0) >= trailStartR
+    longCandidateStop := math.max(longCandidateStop, longTrailStop)
+
+if shortCanManage and nz(shortMfeR, 0.0) >= trailStartR
+    shortCandidateStop := math.min(shortCandidateStop, shortTrailStop)
+
+if longCanManage and useMfeCaptureFloor and nz(longMfeR, 0.0) >= captureStartR
+    longCandidateStop := math.max(longCandidateStop, longCaptureStop)
+
+if shortCanManage and useMfeCaptureFloor and nz(shortMfeR, 0.0) >= captureStartR
+    shortCandidateStop := math.min(shortCandidateStop, shortCaptureStop)
+
+// Stop only ratchets in your favour.
+if strategy.position_size > 0
+    longStop := na(longStop) ? longCandidateStop : math.max(longStop, longCandidateStop)
+
+if strategy.position_size < 0
+    shortStop := na(shortStop) ? shortCandidateStop : math.min(shortStop, shortCandidateStop)
+
+// =====================================================
+// Close-confirmed exits, filled next bar open
+// =====================================================
+longStopHit =
+     barstate.isconfirmed and
+     longCanManage and
+     not na(longStop) and
+     close <= longStop
+
+shortStopHit =
+     barstate.isconfirmed and
+     shortCanManage and
+     not na(shortStop) and
+     close >= shortStop
+
+longAbsZContracted =
+     useAbsZContractionExit and
+     barstate.isconfirmed and
+     longCanManage and
+     absZ < exitAbs and
+     zscore > 0
+
+shortAbsZContracted =
+     useAbsZContractionExit and
+     barstate.isconfirmed and
+     shortCanManage and
+     absZ < exitAbs and
+     zscore < 0
+
+// = V3 trend-flip exit
+longDriftExit =
+     exitOnDriftFlip and
+     barstate.isconfirmed and
+     longCanManage and
+     driftScore < 0
+
+shortDriftExit =
+     exitOnDriftFlip and
+     barstate.isconfirmed and
+     shortCanManage and
+     driftScore > 0
+
+// = V3 z<0 displacement-lost exit (close<ema  <=>  zscore<0)
+longEmaExit =
+     exitOnEmaCross and
+     barstate.isconfirmed and
+     longCanManage and
+     close < ema
+
+shortEmaExit =
+     exitOnEmaCross and
+     barstate.isconfirmed and
+     shortCanManage and
+     close > ema
+
+longExit = longStopHit or longAbsZContracted or longDriftExit or longEmaExit
+shortExit = shortStopHit or shortAbsZContracted or shortDriftExit or shortEmaExit
+
+if longExit
+    strategy.close("Long", comment="Long Close Confirmed Exit")
+
+if shortExit
+    strategy.close("Short", comment="Short Close Confirmed Exit")
+
+// =====================================================
+// Visuals
+// =====================================================
+plot(ema, title="EMA", color=color.orange, linewidth=2)
+plot(longStop,  title="Long Virtual Stop",  color=color.red, linewidth=1, style=plot.style_linebr)
+plot(shortStop, title="Short Virtual Stop", color=color.red, linewidth=1, style=plot.style_linebr)
+
+plotshape(longSignal,  title="Long Signal",  location=location.belowbar, style=shape.triangleup,   size=size.tiny, color=color.green)
+plotshape(shortSignal, title="Short Signal", location=location.abovebar, style=shape.triangledown, size=size.tiny, color=color.red)
+plotshape(longExit,    title="Long Exit",    location=location.abovebar, style=shape.xcross,        size=size.tiny, color=color.yellow)
+plotshape(shortExit,   title="Short Exit",   location=location.belowbar, style=shape.xcross,        size=size.tiny, color=color.yellow)
+
+plot(zscore,    title="Residual Z-Score",          color=color.blue,   display=display.none)
+plot(absZ,      title="Absolute Z",                 color=color.purple, display=display.none)
+plot(entryAbs,  title="Absolute Z Entry Threshold", color=color.green,  display=display.none)
+plot(exitAbs,   title="Absolute Z Exit Threshold",  color=color.gray,   display=display.none)
+plot(driftScore,title="EMA Drift Score",            color=color.gray,   display=display.none)
+plot(longMfeR,  title="Long MFE R",                 color=color.green,  display=display.none)
+plot(shortMfeR, title="Short MFE R",                color=color.red,    display=display.none)

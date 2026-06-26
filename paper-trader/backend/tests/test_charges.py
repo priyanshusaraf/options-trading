@@ -126,3 +126,63 @@ def test_underlying_total_includes_all_components():
     parts = (c["brokerage"] + c["stt_ctt"] + c["exchange_txn"] + c["sebi"]
              + c["stamp"] + c["dp"] + c["gst"])
     assert c["total"] == pytest.approx(parts, abs=0.02)
+
+
+# ── EQUITY INTRADAY / MIS schedules (used by the intraday-equity segment) ─────
+# Zerodha MIS equity: brokerage min(₹20, 0.03%) per leg; STT 0.025% SELL only
+# (half the delivery rate); stamp 0.003% BUY only (NOT the 0.015% delivery rate);
+# NO DP charge (nothing is debited from demat intraday).
+
+def test_intraday_stt_is_0p025pct_sell_only():
+    buy = compute_charges("NSE_INTRADAY", "BUY", premium=1000.0, qty=10)
+    sell = compute_charges("NSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    assert buy["stt_ctt"] == 0.0
+    assert sell["stt_ctt"] == pytest.approx(0.00025 * 1000.0 * 10, rel=1e-6)
+
+
+def test_intraday_brokerage_capped_at_20():
+    # ₹6L turnover -> 0.03% = ₹180, capped to ₹20
+    c = compute_charges("NSE_INTRADAY", "BUY", premium=6000.0, qty=100)
+    assert c["brokerage"] == 20.0
+
+
+def test_intraday_brokerage_pct_when_small():
+    # ₹10k turnover -> 0.03% = ₹3, below the ₹20 cap
+    c = compute_charges("NSE_INTRADAY", "BUY", premium=1000.0, qty=10)
+    assert c["brokerage"] == pytest.approx(0.0003 * 10_000, rel=1e-6)
+
+
+def test_intraday_has_no_dp_charge():
+    buy = compute_charges("NSE_INTRADAY", "BUY", premium=1000.0, qty=10)
+    sell = compute_charges("NSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    assert buy["dp"] == 0.0
+    assert sell["dp"] == 0.0
+
+
+def test_intraday_stamp_buy_only_at_0p003pct():
+    buy = compute_charges("NSE_INTRADAY", "BUY", premium=1000.0, qty=10)
+    sell = compute_charges("NSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    assert buy["stamp"] == pytest.approx(0.00003 * 10_000, rel=1e-6)
+    assert sell["stamp"] == 0.0
+
+
+def test_intraday_gst_base_excludes_dp():
+    c = compute_charges("NSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    expected = 0.18 * (c["brokerage"] + c["exchange_txn"] + c["sebi"])
+    assert c["gst"] == pytest.approx(expected, abs=0.01)
+
+
+def test_intraday_known_totals():
+    # BUY: turnover 10000; brokerage 3.0; txn 0.297; sebi 0.01; stamp 0.3;
+    #   gst 0.18*(3.0+0.297+0.01)=0.59526; total = 4.2023
+    buy = compute_charges("NSE_INTRADAY", "BUY", premium=1000.0, qty=10)
+    assert buy["total"] == pytest.approx(4.20, abs=0.02)
+    # SELL: + STT 2.5, no stamp; total = 3.0+2.5+0.297+0.01+0.59526 = 6.4023
+    sell = compute_charges("NSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    assert sell["total"] == pytest.approx(6.40, abs=0.02)
+
+
+def test_bse_intraday_also_defined():
+    c = compute_charges("BSE_INTRADAY", "SELL", premium=1000.0, qty=10)
+    assert c["stt_ctt"] == pytest.approx(0.00025 * 1000.0 * 10, rel=1e-6)
+    assert c["dp"] == 0.0

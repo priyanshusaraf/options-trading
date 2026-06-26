@@ -42,7 +42,8 @@ from app.engine.risk_controls import (
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
-from app.strategy.signals import compute_signals, to_payload
+from app.strategy.registry import get_strategy
+from app.strategy.signals import to_payload
 
 
 def _to_df(candles) -> pd.DataFrame:
@@ -163,9 +164,9 @@ class EngineRunner:
                 continue
             if len(candles) < s.ema_length + 5:
                 continue
-            sig = compute_signals(_to_df(candles), ema_length=s.ema_length,
-                                  z_length=s.z_length, entry_z=s.entry_z,
-                                  slope_lookback=s.slope_lookback)
+            sig = get_strategy(None).signals(_to_df(candles), ema_length=s.ema_length,
+                                             z_length=s.z_length, entry_z=s.entry_z,
+                                             slope_lookback=s.slope_lookback)
             latest = to_payload(sig, entry_z=s.entry_z)["latest"]
             if not latest:
                 continue

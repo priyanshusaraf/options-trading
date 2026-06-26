@@ -101,8 +101,14 @@ def _migrate_schema() -> None:
         "instrument_state": [
             ("live_interval", "VARCHAR(12) DEFAULT '15minute'"),
             ("entries_blocked", "BOOLEAN DEFAULT 0"),
+            # dual-segment / multi-strategy assignment (Phase 0)
+            ("strategy_key", "VARCHAR(64)"),
+            ("priority_flag", "BOOLEAN DEFAULT 0"),
+            ("product", "VARCHAR(16) DEFAULT 'options'"),
         ],
         "positions": [
+            ("segment", "VARCHAR(16) DEFAULT 'options'"),
+            ("strategy_key", "VARCHAR(64)"),
             ("last_mark_time", "DATETIME"),
             ("high_water_premium", "FLOAT DEFAULT 0.0"),
             ("reinforcement_count", "INTEGER DEFAULT 0"),
@@ -122,6 +128,12 @@ def _migrate_schema() -> None:
             ("intraday_pnl", "FLOAT DEFAULT 0.0"),
             ("reinforcements", "INTEGER DEFAULT 0"),
             ("mode", "VARCHAR(8) DEFAULT 'paper'"),
+            ("segment", "VARCHAR(16) DEFAULT 'options'"),
+            ("strategy_key", "VARCHAR(64)"),
+        ],
+        "equity_snapshots": [
+            ("segment", "VARCHAR(16)"),
+            ("strategy_key", "VARCHAR(64)"),
         ],
         "backtest_results": [
             ("params_hash", "VARCHAR(64) DEFAULT ''"),
@@ -150,6 +162,7 @@ def _migrate_schema() -> None:
             ("effective_days", "INTEGER DEFAULT 0"),
             ("clamped", "BOOLEAN DEFAULT 0"),
             ("bh_curve_json", "TEXT DEFAULT '[]'"),
+            ("strategy_key", "VARCHAR(64) DEFAULT 'trend_impulse_v3'"),
         ],
         "backtest_runs": [
             ("window", "VARCHAR(64) DEFAULT ''"),
