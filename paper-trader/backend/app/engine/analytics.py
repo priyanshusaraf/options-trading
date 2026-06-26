@@ -25,12 +25,40 @@ def _strat(t: Trade) -> str:
     return t.strategy_key or DEFAULT_STRATEGY_KEY
 
 
-def _apply(trades: list[Trade], segment: str | None, strategy: str | None) -> list[Trade]:
+def _apply(trades: list[Trade], segment: str | None, strategy: str | None,
+           since: "dt.datetime | None" = None) -> list[Trade]:
+    if since is not None:
+        cut = since.replace(tzinfo=None) if since.tzinfo else since
+        trades = [t for t in trades if t.exit_time >= cut]
     if segment:
         trades = [t for t in trades if _seg(t) == segment]
     if strategy:
         trades = [t for t in trades if _strat(t) == strategy]
     return trades
+
+
+def _stat_block(trades: list[Trade]) -> dict:
+    """Full per-group performance block (used for per-instrument + instrument detail)."""
+    n = len(trades)
+    wins = [t for t in trades if t.win]
+    nw = len(wins)
+    nl = n - nw
+    net = sum(t.net_pnl for t in trades)
+    return {
+        "trades": n,
+        "wins": nw,
+        "win_rate": round(100 * nw / n, 1) if n else 0.0,
+        "net": round(net, 2),
+        "gross": round(sum(t.gross_pnl for t in trades), 2),
+        "charges": round(sum(t.charges_total for t in trades), 2),
+        "avg_pnl": round(net / n, 2) if n else 0.0,
+        "avg_win": round(sum(t.net_pnl for t in wins) / nw, 2) if nw else 0.0,
+        "avg_loss": round(sum(t.net_pnl for t in trades if not t.win) / nl, 2) if nl else 0.0,
+        "expectancy": round(net / n, 2) if n else 0.0,
+        "avg_holding_minutes": round(sum(t.holding_minutes for t in trades) / n, 1) if n else 0.0,
+        "best": round(max((t.net_pnl for t in trades), default=0.0), 2),
+        "worst": round(min((t.net_pnl for t in trades), default=0.0), 2),
+    }
 
 
 def _cumulative_curve(trades: list[Trade]) -> list[dict]:
@@ -95,14 +123,18 @@ def open_positions(s: Session) -> list[Position]:
     return list(s.scalars(select(Position)))
 
 
-def equity_curve(s: Session, limit: int = 2000) -> list[dict]:
+def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = None) -> list[dict]:
     snaps = list(s.scalars(select(EquitySnapshot).order_by(EquitySnapshot.time)))
+    if since is not None:
+        cut = since.replace(tzinfo=None) if since.tzinfo else since
+        snaps = [sn for sn in snaps if sn.time >= cut]
     return [sn.to_dict() for sn in snaps[-limit:]]
 
 
 def per_instrument_curves(s: Session, segment: str | None = None,
-                          strategy: str | None = None) -> dict[str, list[dict]]:
-    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy)
+                          strategy: str | None = None,
+                          since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
+    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy, since)
     curves: dict[str, list[dict]] = {}
     cum: dict[str, float] = {}
     for t in trades:
@@ -113,52 +145,50 @@ def per_instrument_curves(s: Session, segment: str | None = None,
 
 
 def realized_curve(s: Session, segment: str | None = None,
-                   strategy: str | None = None) -> list[dict]:
+                   strategy: str | None = None,
+                   since: "dt.datetime | None" = None) -> list[dict]:
     """Cumulative realized net-P&L curve for a (segment, strategy) slice."""
-    return _cumulative_curve(_apply(list(s.scalars(select(Trade))), segment, strategy))
+    return _cumulative_curve(_apply(list(s.scalars(select(Trade))), segment, strategy, since))
 
 
-def segment_curves(s: Session) -> dict[str, list[dict]]:
+def segment_curves(s: Session, since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
     """One realized curve per segment (options vs equity_intraday) — the portfolio
     overlay so options and outrights are visible side by side."""
     trades = list(s.scalars(select(Trade)))
+    if since is not None:
+        cut = since.replace(tzinfo=None) if since.tzinfo else since
+        trades = [t for t in trades if t.exit_time >= cut]
     return {seg: _cumulative_curve([t for t in trades if _seg(t) == seg])
             for seg in ("options", "equity_intraday")}
 
 
-def strategy_curves(s: Session, segment: str | None = None) -> dict[str, list[dict]]:
+def strategy_curves(s: Session, segment: str | None = None,
+                    since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
     """One realized curve per strategy (optionally within a segment) — so you can see
     how each strategy performed inside options and inside outrights."""
     trades = list(s.scalars(select(Trade)))
+    if since is not None:
+        cut = since.replace(tzinfo=None) if since.tzinfo else since
+        trades = [t for t in trades if t.exit_time >= cut]
     if segment:
         trades = [t for t in trades if _seg(t) == segment]
     keys = sorted({_strat(t) for t in trades})
     return {k: _cumulative_curve([t for t in trades if _strat(t) == k]) for k in keys}
 
 
-def summary(s: Session, segment: str | None = None, strategy: str | None = None) -> dict:
-    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy)
+def summary(s: Session, segment: str | None = None, strategy: str | None = None,
+            since: "dt.datetime | None" = None) -> dict:
+    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy, since)
     n = len(trades)
     wins = [t for t in trades if t.win]
     net = sum(t.net_pnl for t in trades)
     gross = sum(t.gross_pnl for t in trades)
     charges = sum(t.charges_total for t in trades)
 
-    per: dict[str, dict] = {}
+    groups: dict[str, list[Trade]] = {}
     for t in trades:
-        d = per.setdefault(t.instrument_key,
-                           {"trades": 0, "wins": 0, "net": 0.0, "gross": 0.0, "charges": 0.0})
-        d["trades"] += 1
-        d["wins"] += 1 if t.win else 0
-        d["net"] += t.net_pnl
-        d["gross"] += t.gross_pnl
-        d["charges"] += t.charges_total
-    for d in per.values():
-        d["win_rate"] = round(100 * d["wins"] / d["trades"], 1) if d["trades"] else 0.0
-        d["net"] = round(d["net"], 2)
-        d["gross"] = round(d["gross"], 2)
-        d["charges"] = round(d["charges"], 2)
-
+        groups.setdefault(t.instrument_key, []).append(t)
+    per = {k: _stat_block(v) for k, v in groups.items()}
     ranked = sorted(per.items(), key=lambda x: x[1]["net"], reverse=True)
     return {
         "trades": n,
@@ -178,12 +208,30 @@ def summary(s: Session, segment: str | None = None, strategy: str | None = None)
 
 
 def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
-                  segment: str | None = None, strategy: str | None = None) -> list[dict]:
+                  segment: str | None = None, strategy: str | None = None,
+                  since: "dt.datetime | None" = None) -> list[dict]:
     q = select(Trade).order_by(Trade.exit_time.desc())
     if mode in ("paper", "live"):
         q = q.where(Trade.mode == mode)   # keep paper and real trades cleanly separated
     # segment/strategy filtered in Python so legacy NULLs normalise to options/v3
-    trades = _apply(list(s.scalars(q)), segment, strategy)
+    trades = _apply(list(s.scalars(q)), segment, strategy, since)
+    return [t.to_dict() for t in trades[:limit]]
+
+
+def instrument_stats(s: Session, key: str, segment: str | None = None,
+                     strategy: str | None = None, since: "dt.datetime | None" = None) -> dict:
+    """Full stat block for one instrument (segment/strategy/period aware)."""
+    trades = _apply(list(s.scalars(select(Trade).where(Trade.instrument_key == key))),
+                    segment, strategy, since)
+    return _stat_block(trades)
+
+
+def instrument_trades(s: Session, key: str, segment: str | None = None,
+                      strategy: str | None = None, since: "dt.datetime | None" = None,
+                      limit: int = 500) -> list[dict]:
+    """That instrument's trades, newest first (segment/strategy/period aware)."""
+    q = select(Trade).where(Trade.instrument_key == key).order_by(Trade.exit_time.desc())
+    trades = _apply(list(s.scalars(q)), segment, strategy, since)
     return [t.to_dict() for t in trades[:limit]]
 
 
