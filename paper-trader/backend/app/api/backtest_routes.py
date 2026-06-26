@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 
 from app.backtest import sweep
 from app.core.config import get_settings
+from app.core.instruments import get_instrument
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
 
@@ -196,6 +197,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             skipped_filtered += 1
             continue
         d = _with_affordability(r.summary(), budget)
+        _inst = get_instrument(r.instrument_key)
+        d["has_options"] = bool(_inst.has_options) if _inst else True
         if not d["affordable_options"]:
             unaffordable += 1
         out.append(d)
