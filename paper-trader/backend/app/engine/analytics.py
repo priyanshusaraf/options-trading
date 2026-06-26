@@ -11,6 +11,35 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import CapitalState, EquitySnapshot, Position, Trade
+from app.strategy.registry import DEFAULT_STRATEGY_KEY
+
+
+def _seg(t: Trade) -> str:
+    return t.segment or "options"
+
+
+def _strat(t: Trade) -> str:
+    # a null strategy_key means the engine default (v3) produced the trade
+    return t.strategy_key or DEFAULT_STRATEGY_KEY
+
+
+def _apply(trades: list[Trade], segment: str | None, strategy: str | None) -> list[Trade]:
+    if segment:
+        trades = [t for t in trades if _seg(t) == segment]
+    if strategy:
+        trades = [t for t in trades if _strat(t) == strategy]
+    return trades
+
+
+def _cumulative_curve(trades: list[Trade]) -> list[dict]:
+    """Cumulative realized net P&L by exit time (real rupees) — the realized-P&L
+    curve used for per-segment / per-strategy views (EquitySnapshot is global-only)."""
+    cum = 0.0
+    out = []
+    for t in sorted(trades, key=lambda x: x.exit_time):
+        cum += t.net_pnl
+        out.append({"time": int(t.exit_time.timestamp()), "value": round(cum, 2)})
+    return out
 
 
 def bot_vs_you(account_equity_now: float | None, account_baseline: float | None,
@@ -69,8 +98,9 @@ def equity_curve(s: Session, limit: int = 2000) -> list[dict]:
     return [sn.to_dict() for sn in snaps[-limit:]]
 
 
-def per_instrument_curves(s: Session) -> dict[str, list[dict]]:
-    trades = list(s.scalars(select(Trade).order_by(Trade.exit_time)))
+def per_instrument_curves(s: Session, segment: str | None = None,
+                          strategy: str | None = None) -> dict[str, list[dict]]:
+    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy)
     curves: dict[str, list[dict]] = {}
     cum: dict[str, float] = {}
     for t in trades:
@@ -80,8 +110,32 @@ def per_instrument_curves(s: Session) -> dict[str, list[dict]]:
     return curves
 
 
-def summary(s: Session) -> dict:
-    trades = list(s.scalars(select(Trade).order_by(Trade.exit_time)))
+def realized_curve(s: Session, segment: str | None = None,
+                   strategy: str | None = None) -> list[dict]:
+    """Cumulative realized net-P&L curve for a (segment, strategy) slice."""
+    return _cumulative_curve(_apply(list(s.scalars(select(Trade))), segment, strategy))
+
+
+def segment_curves(s: Session) -> dict[str, list[dict]]:
+    """One realized curve per segment (options vs equity_intraday) — the portfolio
+    overlay so options and outrights are visible side by side."""
+    trades = list(s.scalars(select(Trade)))
+    return {seg: _cumulative_curve([t for t in trades if _seg(t) == seg])
+            for seg in ("options", "equity_intraday")}
+
+
+def strategy_curves(s: Session, segment: str | None = None) -> dict[str, list[dict]]:
+    """One realized curve per strategy (optionally within a segment) — so you can see
+    how each strategy performed inside options and inside outrights."""
+    trades = list(s.scalars(select(Trade)))
+    if segment:
+        trades = [t for t in trades if _seg(t) == segment]
+    keys = sorted({_strat(t) for t in trades})
+    return {k: _cumulative_curve([t for t in trades if _strat(t) == k]) for k in keys}
+
+
+def summary(s: Session, segment: str | None = None, strategy: str | None = None) -> dict:
+    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy)
     n = len(trades)
     wins = [t for t in trades if t.win]
     net = sum(t.net_pnl for t in trades)
@@ -121,9 +175,11 @@ def summary(s: Session) -> dict:
     }
 
 
-def recent_trades(s: Session, limit: int = 50, mode: str | None = None) -> list[dict]:
+def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
+                  segment: str | None = None, strategy: str | None = None) -> list[dict]:
     q = select(Trade).order_by(Trade.exit_time.desc())
     if mode in ("paper", "live"):
         q = q.where(Trade.mode == mode)   # keep paper and real trades cleanly separated
-    trades = list(s.scalars(q.limit(limit)))
-    return [t.to_dict() for t in trades]
+    # segment/strategy filtered in Python so legacy NULLs normalise to options/v3
+    trades = _apply(list(s.scalars(q)), segment, strategy)
+    return [t.to_dict() for t in trades[:limit]]

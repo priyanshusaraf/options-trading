@@ -282,15 +282,27 @@ def account_pnl_route(request: Request):
 
 
 @router.get("/api/dashboard")
-def dashboard(request: Request):
+def dashboard(request: Request, segment: str | None = None, strategy: str | None = None):
+    """Portfolio dashboard. Optional ?segment=options|equity_intraday and ?strategy=<key>
+    slice the summary / curves / trades. The headline `equity_curve` is the global
+    mark-to-market series (EquitySnapshot) when unfiltered; for a slice it's the
+    realized-P&L curve from that slice's trades. `segment_curves` and `strategy_curves`
+    always carry the per-segment / per-strategy overlays so the UI can compare."""
+    seg = segment or None
+    strat = strategy or None
     with SessionLocal() as s:
+        equity = (analytics.equity_curve(s) if not (seg or strat)
+                  else analytics.realized_curve(s, seg, strat))
         return {
             "capital": analytics.capital_dict(s),
-            "summary": analytics.summary(s),
-            "equity_curve": analytics.equity_curve(s),
-            "instrument_curves": analytics.per_instrument_curves(s),
-            "recent_trades": analytics.recent_trades(s, 50),
+            "summary": analytics.summary(s, seg, strat),
+            "equity_curve": equity,
+            "instrument_curves": analytics.per_instrument_curves(s, seg, strat),
+            "segment_curves": analytics.segment_curves(s),
+            "strategy_curves": analytics.strategy_curves(s, seg),
+            "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat),
             "open_positions": [p.to_dict() for p in analytics.open_positions(s)],
+            "segment": seg, "strategy": strat,
         }
 
 
