@@ -515,7 +515,7 @@ export default function BacktestsView() {
       {bulkWinners && (
         <BulkAddModal winners={bulkWinners} stratLabel={stratLabel}
           onClose={() => setBulkWinners(null)}
-          onDone={() => setAdded((s) => { const n = new Set(s); bulkWinners.forEach((w) => n.add(w.instrument_key)); return n })} />
+          onDone={(keys) => setAdded((s) => { const n = new Set(s); keys.forEach((k) => n.add(k)); return n })} />
       )}
     </div>
   )

@@ -11,7 +11,7 @@ type Row = {
 
 export default function BulkAddModal(
   { winners, stratLabel, onClose, onDone }:
-  { winners: BTResult[]; stratLabel: (k: string) => string; onClose: () => void; onDone: () => void }) {
+  { winners: BTResult[]; stratLabel: (k: string) => string; onClose: () => void; onDone: (addedKeys: string[]) => void }) {
   // over-budget for an options name = ATM option cost over budget; intraday names are
   // effectively always sizeable, so they default to included.
   const [rows, setRows] = useState<Row[]>(() => winners.map((r) => {
@@ -20,7 +20,7 @@ export default function BulkAddModal(
     return { r, product, include: !overBudget }
   }))
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<{ added: any[]; skipped: any[] } | null>(null)
+  const [result, setResult] = useState<{ added: { key: string }[]; skipped: { key: string; reason: string }[] } | null>(null)
 
   const setRow = (i: number, patch: Partial<Row>) =>
     setRows((rs) => rs.map((row, j) => (j === i ? { ...row, ...patch } : row)))
@@ -31,8 +31,15 @@ export default function BulkAddModal(
       key: x.r.instrument_key, interval: x.r.interval,
       strategy_key: x.r.strategy_key, product: x.product, on_home: true,
     }))
-    const res = await addBulkToPortfolio(items)
-    setResult(res); setBusy(false); onDone()
+    try {
+      const res = await addBulkToPortfolio(items)
+      setResult(res)
+      onDone(res.added.map((a: { key: string }) => a.key))   // mark ONLY what the API actually added
+    } catch {
+      setResult({ added: [], skipped: items.map((it) => ({ key: it.key, reason: 'request failed' })) })
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
