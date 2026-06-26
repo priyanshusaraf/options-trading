@@ -64,3 +64,11 @@ def test_instrument_detail_stats_and_trade_list():
     assert d["stats"]["avg_holding_minutes"] == 45.0
     assert len(d["trades"]) == 2
     assert all(t["instrument_key"] == "GOLDM" for t in d["trades"])
+
+
+def test_instrument_detail_unknown_key_does_not_500():
+    c, r = _client()
+    d = c.get("/api/instrument/NOPE_NOT_REAL").json()
+    assert d["key"] == "NOPE_NOT_REAL"
+    assert d["stats"]["trades"] == 0
+    assert d["trades"] == []

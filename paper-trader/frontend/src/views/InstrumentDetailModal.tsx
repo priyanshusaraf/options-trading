@@ -7,8 +7,10 @@ export default function InstrumentDetailModal(
   { instrumentKey, segment, strategy, period, onClose }:
   { instrumentKey: string; segment?: string; strategy?: string; period?: string; onClose: () => void }) {
   const [d, setD] = useState<InstrumentDetailDTO | null>(null)
+  const [err, setErr] = useState(false)
   useEffect(() => {
-    getInstrumentDetail(instrumentKey, segment, strategy, period).then(setD).catch(() => setD(null))
+    setErr(false)
+    getInstrumentDetail(instrumentKey, segment, strategy, period).then(setD).catch(() => { setD(null); setErr(true) })
   }, [instrumentKey, segment, strategy, period])
 
   const Stat = ({ label, v, cls = '' }: { label: string; v: string; cls?: string }) => (
@@ -25,7 +27,7 @@ export default function InstrumentDetailModal(
           <span className="text-lg font-semibold text-zinc-100">{d?.name || instrumentKey}</span>
           <button onClick={onClose} className="btn">&#x2715; close</button>
         </div>
-        {!d ? <div className="text-muted text-xs py-10 text-center">loading…</div> : (
+        {err ? <div className="text-muted text-xs py-10 text-center">couldn't load this instrument</div> : !d ? <div className="text-muted text-xs py-10 text-center">loading…</div> : (
           <>
             <div className="grid gap-2 shrink-0" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
               <Stat label="Trades" v={String(d.stats.trades)} />

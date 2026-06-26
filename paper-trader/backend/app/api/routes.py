@@ -241,9 +241,13 @@ def portfolio_add_bulk(body: BulkAdd, request: Request):
     r = _runner(request)
     added, skipped = [], []
     for it in body.items:
-        res = universe_resolver.add_instrument(
-            it.key, r.provider, on_home=it.on_home, interval=it.interval,
-            strategy_key=it.strategy_key, product=it.product)
+        try:
+            res = universe_resolver.add_instrument(
+                it.key, r.provider, on_home=it.on_home, interval=it.interval,
+                strategy_key=it.strategy_key, product=it.product)
+        except Exception as e:
+            skipped.append({"key": it.key, "reason": str(e)})
+            continue
         if "error" in res:
             skipped.append({"key": it.key, "reason": res["error"]})
             continue
@@ -372,7 +376,10 @@ def instrument_detail(key: str, request: Request, segment: str | None = None,
                       strategy: str | None = None, period: str | None = None):
     """Full per-instrument stat block + that instrument's trades, honoring
     ?segment=, ?strategy=, ?period=."""
-    inst = get_instrument(key)
+    try:
+        inst = get_instrument(key)
+    except KeyError:
+        inst = None
     since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
     with SessionLocal() as s:
         stats = analytics.instrument_stats(s, key, segment or None, strategy or None, since)
