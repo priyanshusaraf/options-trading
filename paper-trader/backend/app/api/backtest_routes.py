@@ -197,8 +197,10 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             skipped_filtered += 1
             continue
         d = _with_affordability(r.summary(), budget)
-        _inst = get_instrument(r.instrument_key)
-        d["has_options"] = bool(_inst.has_options) if _inst else True
+        try:
+            d["has_options"] = bool(get_instrument(r.instrument_key).has_options)
+        except KeyError:
+            d["has_options"] = True
         if not d["affordable_options"]:
             unaffordable += 1
         out.append(d)
