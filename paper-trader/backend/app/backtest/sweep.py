@@ -118,14 +118,18 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                 capital: float = 50_000.0, provider=None,
                 instruments: list[str] | None = None,
                 lookback_days: int | None = None,
-                start_date: str | None = None, end_date: str | None = None) -> int:
+                start_date: str | None = None, end_date: str | None = None,
+                strategies: list[str] | None = None) -> int:
     """Create a run row, resolve the universe, launch the background thread.
     Returns the new run id. Raises if a sweep is already in flight.
 
     `instruments`  — restrict the sweep to these instrument keys (e.g. just
                      GOLD/SILVER/COPPER); None/empty = the whole scope.
     `lookback_days`— preset window in days (None = max available history).
-    `start_date`/`end_date` — ISO custom window (overrides lookback_days)."""
+    `start_date`/`end_date` — ISO custom window (overrides lookback_days).
+    `strategies`   — registry strategy keys to run EACH instrument×interval across;
+                     None/empty = just the default strategy (single-strategy sweep)."""
+    from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
     global _running, _worker
     with _state_lock:
         if _running:
@@ -133,6 +137,17 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
         _running = True
     try:
         intervals = [i for i in (intervals or DEFAULT_INTERVALS) if i in MAX_DAYS]
+        # resolve + de-dupe strategy keys (preserve request order); default = v3
+        req_keys = [k for k in (strategies or [DEFAULT_STRATEGY_KEY]) if k]
+        seen: set[str] = set()
+        strat_objs = []
+        for k in req_keys:
+            strat = get_strategy(k)
+            if strat.key not in seen:
+                seen.add(strat.key)
+                strat_objs.append(strat)
+        if not strat_objs:
+            strat_objs = [get_strategy(DEFAULT_STRATEGY_KEY)]
         provider = provider or get_provider()
         specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
         if instruments:
@@ -142,19 +157,23 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                 raise RuntimeError(f"none of the requested instruments exist: {sorted(want)}")
         win = {"lookback_days": lookback_days, "start": start_date, "end": end_date,
                "label": window_label(lookback_days, start_date, end_date)}
-        total = len(specs) * len(intervals)
+        total = len(specs) * len(intervals) * len(strat_objs)
+        strat_label = "×".join(st.key for st in strat_objs)
         with SessionLocal() as s:
             run = BacktestRun(status="running", scope=scope,
                               intervals=",".join(intervals), capital=capital,
                               total=total, done=0, window=win["label"],
                               instruments=",".join(i.key for i in specs) if instruments else "",
-                              note=f"{len(specs)} instruments × {len(intervals)} intervals · {win['label']}")
+                              strategies=",".join(st.key for st in strat_objs),
+                              note=f"{len(specs)} instruments × {len(intervals)} intervals "
+                                   f"× {len(strat_objs)} strategies · {win['label']}")
             s.add(run)
             s.commit()
             run_id = run.id
-        log.info(f"backtest sweep #{run_id} started — {total} cells, window={win['label']}")
+        log.info(f"backtest sweep #{run_id} started — {total} cells, "
+                 f"window={win['label']}, strategies={strat_label}")
         t = threading.Thread(target=_run,
-                             args=(run_id, provider, specs, intervals, capital, win),
+                             args=(run_id, provider, specs, intervals, capital, win, strat_objs),
                              daemon=True)
         _worker = t
         t.start()
@@ -164,14 +183,18 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
         raise
 
 
-def _run(run_id, provider, specs, intervals, capital, win=None) -> None:
+def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None) -> None:
     global _running
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
+    if not strategies:
+        from app.strategy.registry import get_strategy
+        strategies = [get_strategy(None)]
     try:
         for inst in specs:
             for interval in intervals:
-                _one(run_id, provider, inst, interval, capital, win)
-                _bump(run_id)
+                for strat in strategies:
+                    _one(run_id, provider, inst, interval, capital, win, strat)
+                    _bump(run_id)
         _finish(run_id, "done")
         log.info(f"backtest sweep #{run_id} complete")
     except Exception as e:  # never let the thread die silently
@@ -181,7 +204,10 @@ def _run(run_id, provider, specs, intervals, capital, win=None) -> None:
         _running = False
 
 
-def _one(run_id, provider, inst, interval, capital, win) -> None:
+def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
+    if strat is None:
+        from app.strategy.registry import get_strategy
+        strat = get_strategy(None)
     from app.backtest import cache
     start, end = win.get("start"), win.get("end")
     clamped = _is_clamped(interval, win.get("lookback_days"), start)
@@ -191,6 +217,7 @@ def _one(run_id, provider, inst, interval, capital, win) -> None:
     if _window_out_of_range(interval, start, end):
         cap = MAX_DAYS.get(interval, 200)
         return _store(run_id, inst, interval, None, [], 0, clamped=clamped,
+                      strategy_key=strat.key,
                       error=f"window older than Kite max for this interval "
                             f"(≈{cap}d on {interval})")
     days = _fetch_days(interval, win.get("lookback_days"), start, end)
@@ -198,27 +225,30 @@ def _one(run_id, provider, inst, interval, capital, win) -> None:
         candles = provider.get_candles(inst, interval, days, end=end) \
             if _supports_end(provider) else provider.get_candles(inst, interval, days)
     except Exception as e:
-        return _store(run_id, inst, interval, None, [], 0, error=f"candles: {e}")
+        return _store(run_id, inst, interval, None, [], 0, strategy_key=strat.key,
+                      error=f"candles: {e}")
     candles = _clip_to_window(candles, start, end)
     if len(candles) < MIN_BARS:
         # distinguish "the window is reachable but thin" from "older than ceiling"
         if (start or end):
             return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
+                          strategy_key=strat.key,
                           error="window older than Kite max for this interval"
                           if len(candles) == 0 else "insufficient history in window")
         return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
-                      error="insufficient history")
+                      strategy_key=strat.key, error="insufficient history")
     first_ts = ist_epoch(candles[0].ts)
     last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
     effective_days = max(0, round((last_ts - first_ts) / 86400))
-    phash = cache.params_signature(capital, window=win.get("label", ""))
+    phash = cache.params_signature(capital, window=win.get("label", ""), strategy=strat)
     with SessionLocal() as s:
         hit = cache.find_reusable(s, inst.key, interval, phash, last_ts)
         if hit is not None:
             _copy_from_cache(s, run_id, hit)   # nothing changed -> reuse computed metrics
             return
-    trades, m = simulate(candles, inst, interval, capital=capital)
-    _store(run_id, inst, interval, m, trades, len(candles),
+    trades, m = simulate(candles, inst, interval, capital=capital,
+                         strategy=strat, params=dict(strat.default_params))
+    _store(run_id, inst, interval, m, trades, len(candles), strategy_key=strat.key,
            params_hash=phash, last_candle_ts=last_ts,
            first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
            clamped=clamped)
@@ -239,7 +269,8 @@ def _copy_from_cache(session, run_id, src) -> None:
     import datetime as dt
     session.add(BacktestResult(
         run_id=run_id, instrument_key=src.instrument_key, name=src.name,
-        segment=src.segment, interval=src.interval, trades=src.trades, wins=src.wins,
+        segment=src.segment, strategy_key=src.strategy_key or "trend_impulse_v3",
+        interval=src.interval, trades=src.trades, wins=src.wins,
         win_rate=src.win_rate, profit_factor=src.profit_factor,
         max_drawdown_pct=src.max_drawdown_pct, return_pct=src.return_pct,
         net_pnl=src.net_pnl, gross_pnl=src.gross_pnl, charges=src.charges,
@@ -262,12 +293,12 @@ def _copy_from_cache(session, run_id, src) -> None:
 
 def _store(run_id, inst, interval, m, trades, bars, error="",
            params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
-           effective_days=0, clamped=False) -> None:
+           effective_days=0, clamped=False, strategy_key="trend_impulse_v3") -> None:
     import datetime as dt
     from app.backtest import cache
     seg = backtest_charge_segment(inst)
     common = dict(run_id=run_id, instrument_key=inst.key, name=inst.name,
-                  segment=seg, interval=interval, bars=bars,
+                  segment=seg, strategy_key=strategy_key, interval=interval, bars=bars,
                   params_hash=params_hash, last_candle_ts=last_candle_ts,
                   first_ts=first_ts, last_ts=last_ts_span,
                   effective_days=effective_days, clamped=clamped,

@@ -30,12 +30,24 @@ SCHEMA_VERSION = 5
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,
                      entry_z: float = 1.0, slope_lookback: int = 5,
-                     window: str = "") -> str:
+                     window: str = "", strategy=None) -> str:
     """Stable hash of everything that affects a backtest result other than the
-    candle data itself. Changing any knob — including the requested date window —
-    invalidates the cache so a 1-year run never reuses a 10-year run's metrics."""
-    raw = (f"v{SCHEMA_VERSION}|cap={capital}|ema={ema_length}|z={z_length}"
-           f"|ez={entry_z}|sl={slope_lookback}|win={window}")
+    candle data itself. Changing any knob — including the requested date window or
+    the STRATEGY — invalidates the cache so a 1-year run never reuses a 10-year
+    run's metrics and an Expanding-Z run never reuses a Trend-Impulse run's.
+
+    Back-compat is load-bearing: the default strategy (trend_impulse_v3) reproduces
+    the historical signature EXACTLY, so the owner's large existing cache of v3
+    results stays valid. Only non-default strategies get a new, distinct signature."""
+    from app.strategy.registry import DEFAULT_STRATEGY_KEY
+    if strategy is None or strategy.key == DEFAULT_STRATEGY_KEY:
+        raw = (f"v{SCHEMA_VERSION}|cap={capital}|ema={ema_length}|z={z_length}"
+               f"|ez={entry_z}|sl={slope_lookback}|win={window}")
+    else:
+        ps = ",".join(f"{k}={strategy.default_params[k]}"
+                      for k in sorted(strategy.default_params))
+        raw = (f"v{SCHEMA_VERSION}|cap={capital}|win={window}"
+               f"|strat={strategy.key}|params={ps}")
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 

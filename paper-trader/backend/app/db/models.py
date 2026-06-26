@@ -256,6 +256,7 @@ class BacktestRun(Base):
     note: Mapped[str] = mapped_column(String(400), default="")
     window: Mapped[str] = mapped_column(String(64), default="")          # lookback label: "1y" | "max" | "2024-01-01→2024-06-01"
     instruments: Mapped[str] = mapped_column(String(400), default="")    # csv of selected keys (empty = whole scope)
+    strategies: Mapped[str] = mapped_column(String(400), default="")     # csv of strategy keys this run swept
 
     def to_dict(self) -> dict:
         return {
@@ -267,6 +268,7 @@ class BacktestRun(Base):
             "note": self.note,
             "window": self.window or "max",
             "instruments": [i for i in self.instruments.split(",") if i],
+            "strategies": [s for s in self.strategies.split(",") if s] or ["trend_impulse_v3"],
         }
 
 

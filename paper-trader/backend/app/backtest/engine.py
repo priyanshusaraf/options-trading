@@ -126,10 +126,23 @@ def estimate_option_cost(inst, candles, r: float = 0.065) -> float:
 
 
 def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
+             strategy=None, params: dict | None = None,
              ema_length: int = 50, z_length: int = 50, entry_z: float = 1.0,
              slope_lookback: int = 5) -> tuple[list[BTTrade], BTMetrics]:
-    """Run the strategy over `candles` and return (trades, metrics)."""
-    if len(candles) < ema_length + slope_lookback + 2:
+    """Run a strategy over `candles` and return (trades, metrics).
+
+    `strategy` is a registry Strategy (None → the default trend_impulse_v3); `params`
+    overrides its inputs (None → the strategy's own defaults, or the legacy v3 kwargs
+    when no strategy is given). Entries/exits come purely from the strategy's
+    canonical flag columns; the engine owns no premium stop/target here."""
+    strat = strategy if strategy is not None else get_strategy(None)
+    if params is None:
+        params = (dict(strat.default_params) if strategy is not None
+                  else {"ema_length": ema_length, "z_length": z_length,
+                        "entry_z": entry_z, "slope_lookback": slope_lookback})
+    warmup = int(params.get("ema_length", ema_length)) + \
+        int(params.get("slope_lookback", slope_lookback)) + 2
+    if len(candles) < warmup:
         return [], BTMetrics()
 
     seg = backtest_charge_segment(inst)
@@ -147,10 +160,12 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     # budget at the payload layer (so it never goes stale when funds change).
     option_cost = estimate_option_cost(inst, candles)
 
-    sig = get_strategy(None).signals(_candles_to_df(candles), ema_length=ema_length,
-                                     z_length=z_length, entry_z=entry_z,
-                                     slope_lookback=slope_lookback)
-    sig = sig.dropna(subset=["ema", "z", "slope"]).reset_index(drop=True)
+    sig = strat.signals(_candles_to_df(candles), **params)
+    # trim warmup rows where the strategy's indicators are still NaN. The columns
+    # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
+    # known indicator columns this strategy actually emitted — keeps v3 identical.
+    warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
+    sig = sig.dropna(subset=warm_cols).reset_index(drop=True)
     if sig.empty:
         m = BTMetrics()
         m.bh_return_pct = bh_return_pct

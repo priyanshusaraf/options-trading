@@ -118,11 +118,14 @@ export interface BacktestRun {
   id: number; created_at: string; status: string; scope: string
   intervals: string[]; capital: number; total: number; done: number
   progress: number; note: string; window?: string; instruments?: string[]
+  strategies?: string[]
 }
+
+export interface StrategyMeta { key: string; display_name: string; default_params: Record<string, any> }
 
 export interface BTResult {
   id: number; run_id: number; instrument_key: string; name: string
-  segment: string; interval: string; trades: number; wins: number
+  segment: string; strategy_key: string; interval: string; trades: number; wins: number
   win_rate: number; profit_factor: number | null; max_drawdown_pct: number
   return_pct: number; net_pnl: number; gross_pnl: number; charges: number
   expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string

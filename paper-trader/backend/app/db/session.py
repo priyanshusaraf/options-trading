@@ -167,6 +167,7 @@ def _migrate_schema() -> None:
         "backtest_runs": [
             ("window", "VARCHAR(64) DEFAULT ''"),
             ("instruments", "VARCHAR(400) DEFAULT ''"),
+            ("strategies", "VARCHAR(400) DEFAULT ''"),
         ],
     }
     with engine.begin() as conn:

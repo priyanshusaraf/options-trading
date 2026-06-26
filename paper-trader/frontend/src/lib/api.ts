@@ -50,7 +50,7 @@ export const removeFromPortfolio = (key: string) =>
 // ── backtest sweep ──────────────────────────────────────────────────────────
 export interface SweepOpts {
   instruments?: string[]; lookback_days?: number | null
-  start_date?: string; end_date?: string
+  start_date?: string; end_date?: string; strategies?: string[]
 }
 export const startSweep = (scope: string, intervals: string[], capital = 50000,
   opts: SweepOpts = {}) =>
@@ -64,7 +64,8 @@ export const sweepExportUrl = (runId?: number) =>
   `/api/backtest/export${runId ? `?run_id=${runId}` : ''}`
 
 export interface ResultFilters {
-  run_id?: number; interval?: string; min_win_rate?: number; min_profit_factor?: number
+  run_id?: number; interval?: string; strategy?: string
+  min_win_rate?: number; min_profit_factor?: number
   max_drawdown?: number; min_return?: number; min_trades?: number; sort?: string
 }
 export const getSweepResults = (f: ResultFilters = {}) => {
@@ -72,5 +73,10 @@ export const getSweepResults = (f: ResultFilters = {}) => {
   Object.entries(f).forEach(([k, v]) => { if (v !== undefined && v !== '') q.set(k, String(v)) })
   return j(`/api/backtest/results?${q.toString()}`)
 }
-export const getSweepResult = (key: string, interval: string, runId?: number) =>
-  j(`/api/backtest/result/${key}/${interval}${runId ? `?run_id=${runId}` : ''}`)
+export const getSweepResult = (key: string, interval: string, runId?: number, strategy?: string) => {
+  const q = new URLSearchParams()
+  if (runId) q.set('run_id', String(runId))
+  if (strategy) q.set('strategy', strategy)
+  const qs = q.toString()
+  return j(`/api/backtest/result/${key}/${interval}${qs ? `?${qs}` : ''}`)
+}
