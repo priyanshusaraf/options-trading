@@ -105,6 +105,7 @@ def _migrate_schema() -> None:
             ("strategy_key", "VARCHAR(64)"),
             ("priority_flag", "BOOLEAN DEFAULT 0"),
             ("product", "VARCHAR(16) DEFAULT 'options'"),
+            ("overtrade_flag", "BOOLEAN DEFAULT 0"),
         ],
         "positions": [
             ("segment", "VARCHAR(16) DEFAULT 'options'"),

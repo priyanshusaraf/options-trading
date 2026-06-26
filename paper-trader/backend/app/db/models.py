@@ -41,6 +41,7 @@ class InstrumentState(Base):
     strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # None = default strategy
     priority_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "purple" intraday priority
     product: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    overtrade_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "red" overtrading flag (advisory)
 
 
 class Position(Base):

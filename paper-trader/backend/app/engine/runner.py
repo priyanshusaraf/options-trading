@@ -73,7 +73,7 @@ class EngineRunner:
         self.intervals: dict[str, str] = self._load_intervals()   # per-instrument live TF
         self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
         # dual-segment / multi-strategy per-instrument config
-        self.products, self.strategy_keys, self.priority_flags = self._load_instr_config()
+        self.products, self.strategy_keys, self.priority_flags, self.overtrade_flags = self._load_instr_config()
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
@@ -124,10 +124,11 @@ class EngineRunner:
             return {r.instrument_key for r in s.scalars(select(InstrumentState))
                     if r.entries_blocked}
 
-    def _load_instr_config(self) -> tuple[dict, dict, dict]:
-        """Per-instrument product (options|equity_intraday), assigned strategy, and
-        the purple priority flag. Missing/legacy rows default to options/v3/not-priority."""
-        products, strategies, priority = {}, {}, {}
+    def _load_instr_config(self) -> tuple[dict, dict, dict, dict]:
+        """Per-instrument product (options|equity_intraday), assigned strategy, the
+        purple priority flag, and the red overtrading flag. Missing/legacy rows
+        default to options/v3/not-priority/not-overtraded."""
+        products, strategies, priority, overtrade = {}, {}, {}, {}
         with SessionLocal() as s:
             for r in s.scalars(select(InstrumentState)):
                 products[r.instrument_key] = r.product or "options"
@@ -135,7 +136,9 @@ class EngineRunner:
                     strategies[r.instrument_key] = r.strategy_key
                 if r.priority_flag:
                     priority[r.instrument_key] = True
-        return products, strategies, priority
+                if getattr(r, "overtrade_flag", False):
+                    overtrade[r.instrument_key] = True
+        return products, strategies, priority, overtrade
 
     def _interval_for(self, key: str) -> str:
         return normalize_live_interval(self.intervals.get(key, DEFAULT_LIVE_INTERVAL))
@@ -199,6 +202,18 @@ class EngineRunner:
         else:
             self.priority_flags.pop(key, None)
         log.info(f"PRIORITY {'set' if flag else 'cleared'}", instrument=key)
+
+    def set_overtrade_flag(self, key: str, flag: bool) -> None:
+        """Toggle the watchlist 'red' overtrading flag. Advisory only — the engine
+        does NOT change behavior based on it."""
+        s, r = self._upsert_state(key)
+        r.overtrade_flag = bool(flag)
+        s.commit(); s.close()
+        if flag:
+            self.overtrade_flags[key] = True
+        else:
+            self.overtrade_flags.pop(key, None)
+        log.info(f"OVERTRADE {'set' if flag else 'cleared'}", instrument=key)
 
     def set_strategy(self, key: str, strategy_key: str | None) -> str | None:
         """Assign which registered strategy trades this instrument (None = default v3)."""
