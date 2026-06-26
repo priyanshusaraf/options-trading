@@ -29,6 +29,48 @@ def equity_qty(margin: float, leverage: float, price: float) -> int:
     return int((margin * leverage) // price)
 
 
+# ── direction-aware exit geometry (equity LONG *and* real intraday SHORT) ────
+# Unlike the options path (always long-premium: stop below, target above), an
+# equity SHORT profits when price FALLS, so its stop is ABOVE entry and target
+# BELOW. These small pure helpers keep that geometry in one tested place.
+
+def equity_stop_target(direction: str, entry: float, sl_pct: float,
+                       tp_pct: float) -> tuple[float, float]:
+    """(stop_price, target_price) for an equity position. LONG: stop below / target
+    above; SHORT: stop above / target below."""
+    if direction == "LONG":
+        return entry * (1 - sl_pct), entry * (1 + tp_pct)
+    return entry * (1 + sl_pct), entry * (1 - tp_pct)
+
+
+def equity_exit(direction: str, price: float, stop: float, target: float,
+                strat_long_exit: bool, strat_short_exit: bool) -> tuple[bool, str]:
+    """Decide whether an open equity position should close on this mark. Order of
+    precedence: protective stop, then target, then the strategy's own exit flag.
+    Returns (exit, reason) with reason in {STOP_LOSS, TARGET, STRATEGY_EXIT, ""}."""
+    if direction == "LONG":
+        if price <= stop:
+            return True, "STOP_LOSS"
+        if price >= target:
+            return True, "TARGET"
+        if strat_long_exit:
+            return True, "STRATEGY_EXIT"
+    else:  # SHORT
+        if price >= stop:
+            return True, "STOP_LOSS"
+        if price <= target:
+            return True, "TARGET"
+        if strat_short_exit:
+            return True, "STRATEGY_EXIT"
+    return False, ""
+
+
+def equity_unrealized(direction: str, entry: float, price: float, qty: int) -> float:
+    """Mark-to-market P&L on the full share notional (LONG profits up, SHORT down)."""
+    move = (price - entry) if direction == "LONG" else (entry - price)
+    return move * qty
+
+
 @dataclass
 class IntradayCandidate:
     instrument_key: str
