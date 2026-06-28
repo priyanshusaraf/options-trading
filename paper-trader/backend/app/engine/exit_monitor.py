@@ -31,26 +31,32 @@ def evaluate_exit(direction: str, stop_price: float, target_price: float,
 
 
 def trailing_stop(entry: float, high_water: float, current_stop: float,
-                  *, trigger_pct: float, lock_pct: float, target_pct: float) -> float:
-    """Ratchet the premium stop UP as profit thresholds are crossed; never down.
+                  *, trigger_pct: float, first_step_lock_pct: float,
+                  step_lock_pct: float) -> float:
+    """Ratchet the premium stop UP as profit thresholds are crossed; never down,
+    and with NO upper ceiling (so a let-it-run winner keeps locking profit forever).
 
-    Each time the high-water premium clears another `trigger_pct` of profit (as a
-    fraction of entry), the stop is raised by `lock_pct` of entry, until the
-    `target_pct` final target. Returns the new stop (>= current_stop).
+    The high-water premium is bucketed into `trigger_pct` steps of profit (as a
+    fraction of entry). The first step locks a gentle `first_step_lock_pct`; every
+    step beyond that trails exactly one step behind the high-water — i.e. it locks
+    `(steps - 1) * step_lock_pct`. Returns the new stop (>= current_stop).
 
-    Owner's example — entry 400, trigger 10%, lock 2.5%, target 60%:
-        high-water 440 (+10%) -> 1 step -> stop 410
-        high-water 480 (+20%) -> 2 steps -> stop 420
+    Owner's schedule — entry 400, trigger 10%, first step 2.5%, step lock 10%:
+        high-water 440 (+10%)  -> step 1 -> lock 2.5% -> stop 410
+        high-water 480 (+20%)  -> step 2 -> lock 10%  -> stop 440
+        high-water 520 (+30%)  -> step 3 -> lock 20%  -> stop 480
         ...
-        high-water 640 (+60%) -> 6 steps -> stop 460  (capped at target)
+        high-water 640 (+60%)  -> step 6 -> lock 50%  -> stop 600
+        high-water 800 (+100%) -> step 10 -> lock 90% -> stop 760  (no cap)
     """
     if entry <= 0 or high_water <= entry or trigger_pct <= 0:
         return current_stop
-    profit_frac = min((high_water - entry) / entry, target_pct)
+    profit_frac = (high_water - entry) / entry
     steps = int(profit_frac / trigger_pct + 1e-9)
     if steps <= 0:
         return current_stop
-    ratchet = entry * (1 + steps * lock_pct)
+    lock_frac = first_step_lock_pct if steps == 1 else (steps - 1) * step_lock_pct
+    ratchet = entry * (1 + lock_frac)
     return max(current_stop, round(ratchet, 2))
 
 

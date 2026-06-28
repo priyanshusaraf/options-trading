@@ -44,7 +44,7 @@ def test_override_rejects_out_of_band_values():
     assert "error" in set_override("max_stale_seconds", "-5")
     # rejected values must NOT be stored — effective() still shows the defaults
     eff = effective()
-    assert eff["stop_loss_pct"] == 0.35
+    assert eff["stop_loss_pct"] == 0.30
     assert eff["target_pct"] == 0.60
 
 
@@ -65,6 +65,6 @@ def test_sltp_default_when_no_override():
     chain = b.provider.get_option_chain(inst)
     q = chain.quotes[0]
     pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot)
-    # default -35% / +60%
-    assert pos.stop_price == pytest.approx(q.ltp * 0.65)
+    # default -30% / +60%
+    assert pos.stop_price == pytest.approx(q.ltp * 0.70)
     assert pos.target_price == pytest.approx(q.ltp * 1.60)

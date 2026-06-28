@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # capital & risk
     initial_capital: float = 50_000.0
-    stop_loss_pct: float = 0.35
+    stop_loss_pct: float = 0.30
     target_pct: float = 0.60
 
     # ── trader risk controls (additive entry guards; 0 = off, back-compat) ──
@@ -86,12 +86,14 @@ class Settings(BaseSettings):
     max_stale_seconds: float = 30.0      # a mark older than this is stale -> no SL/TP fires on it
 
     # trailing stop-loss (ratchets the premium stop UP as profit thresholds are crossed)
-    #   defaults reproduce the owner's example: entry 400, +10% step, lock 2.5%/step
-    #   -> SL 410 at +10%, 420 at +20%, … up to the +60% target. Never loosens.
+    #   gentle 2.5% lock on the first +10% step, then trail exactly one step (10%)
+    #   behind the high-water profit, with NO upper ceiling so a let-it-run winner
+    #   keeps locking profit forever. Entry 400: SL 410 at +10%, 440 at +20%,
+    #   480 at +30%, … 600 at +60%, 760 at +100%. Never loosens.
     trail_enabled: bool = True
-    trail_trigger_pct: float = 0.10      # profit (fraction of entry) per ratchet step
-    trail_lock_pct: float = 0.025        # SL raised by this fraction of entry per step crossed
-    trail_target_pct: float = 0.60       # stop ratcheting once profit reaches the final target
+    trail_trigger_pct: float = 0.10         # profit (fraction of entry) per ratchet step
+    trail_first_step_lock_pct: float = 0.025  # gentle SL lock at the first (+10%) step
+    trail_step_lock_pct: float = 0.10       # SL trails this fraction of entry behind each step >=2
 
     # ── reinforcement (a same-direction crossover while holding a winner) ───
     # Does NOT add quantity (no pyramiding). It strengthens management: ratchet

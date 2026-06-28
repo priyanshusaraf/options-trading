@@ -384,8 +384,8 @@ class EngineRunner:
         new_stop = trailing_stop(
             pos.entry_premium, pos.high_water_premium or pos.entry_premium, pos.stop_price,
             trigger_pct=p["trail_trigger_pct"],
-            lock_pct=p["trail_lock_pct"],
-            target_pct=p["trail_target_pct"])
+            first_step_lock_pct=p["trail_first_step_lock_pct"],
+            step_lock_pct=p["trail_step_lock_pct"])
         if new_stop > pos.stop_price:
             log.info(f"TRAIL SL {pos.tradingsymbol} {pos.stop_price:.2f} -> {new_stop:.2f} "
                      f"(high {pos.high_water_premium:.2f})", instrument=pos.instrument_key,
