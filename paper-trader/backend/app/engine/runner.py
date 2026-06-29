@@ -1043,7 +1043,10 @@ class EngineRunner:
     def capital_dict(self) -> dict:
         cap = self.broker.capital()
         opens = self.broker.open_positions()
-        mtm = sum((p.last_premium or p.entry_premium) * p.qty for p in opens)
+        # equity = cash + each open position's mark-to-market VALUE. For leveraged
+        # MIS equity that's margin + unrealized P&L, not the full notional (mtm_value
+        # handles the distinction); options stay premium × qty.
+        mtm = sum(p.mtm_value() for p in opens)
         d = {
             "initial": cap.initial_capital, "cash": round(cap.cash, 2),
             "invested": round(sum(p.entry_cost for p in opens), 2),

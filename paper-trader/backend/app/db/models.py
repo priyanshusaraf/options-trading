@@ -87,14 +87,26 @@ class Position(Base):
     gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
-    def to_dict(self) -> dict:
+    def unrealized_pnl(self) -> float:
+        """Mark-to-market P&L. Equity intraday can be a real SHORT (profits as price
+        falls); the options path is always long-premium."""
         last = self.last_premium or self.entry_premium
-        # equity intraday can be a real SHORT (profits as price falls); the options
-        # path is always long-premium. Mark P&L direction-aware for equity.
         if self.segment == "equity_intraday" and self.direction == "SHORT":
-            unrealized = (self.entry_premium - last) * self.qty
-        else:
-            unrealized = (last - self.entry_premium) * self.qty
+            return (self.entry_premium - last) * self.qty
+        return (last - self.entry_premium) * self.qty
+
+    def mtm_value(self) -> float:
+        """Contribution to portfolio equity. Options: the contract's liquidation value
+        (premium × qty), since the full cost left cash. Leveraged equity (MIS): only
+        the MARGIN left cash, so the position returns its margin (entry_cost) plus its
+        unrealized P&L — NOT the full notional (last × qty), which double-counts the
+        leverage and inflates equity."""
+        if self.segment == "equity_intraday":
+            return self.entry_cost + self.unrealized_pnl()
+        return (self.last_premium or self.entry_premium) * self.qty
+
+    def to_dict(self) -> dict:
+        unrealized = self.unrealized_pnl()
         return {
             "id": self.id,
             "instrument_key": self.instrument_key,

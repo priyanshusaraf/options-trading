@@ -108,6 +108,25 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
     assert pos.entry_premium != candle_close          # ...not the stale candle close
 
 
+def test_equity_intraday_equity_uses_margin_not_notional():
+    """capital_dict equity must add an MIS position's MARGIN + unrealized P&L, not the
+    full leveraged notional — the bug that ballooned equity to ~₹169k on a ₹50k base."""
+    from app.core.instruments import get_instrument
+    init_db(reset=True)
+    r = EngineRunner()
+    inst = get_instrument(_cheap_keys(1)[0])
+    price = r.provider._candles[inst.key][r.provider._cursor].close
+    qty = int(50000 / price)                      # ~₹50k notional -> ~₹10k margin at 5x
+    r.broker.open_equity_position(inst, "SHORT", price, qty, "NSE_INTRADAY",
+                                  "t", r.provider.now(), params=r.params)
+    cap = r.capital_dict()
+    # cash (~₹40k) + margin (~₹10k) + ~0 unrealized ≈ ₹50k — NOT ₹50k + full notional
+    assert abs(cap["equity"] - 50000.0) < 2000.0
+    assert cap["equity"] < 60000.0
+    # the ledger split itself is already correct (cash + invested == base)
+    assert abs(cap["cash"] + cap["invested"] - 50000.0) < 1.0
+
+
 def test_options_path_untouched_when_intraday_disabled():
     """With intraday off (the default), an instrument left as product='options'
     still trades options exactly as before — the equity branch is inert."""
