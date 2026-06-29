@@ -404,7 +404,8 @@ class EngineRunner:
         if not pos_stale:
             should, reason = equity_exit(
                 pos.direction, spot, pos.stop_price, pos.target_price,
-                st.get("long_exit", False), st.get("short_exit", False))
+                st.get("long_exit", False), st.get("short_exit", False),
+                target_disabled=pos.no_take_profit)
             if should:
                 trade = self.broker.close_equity_position(pos, spot, reason, now)
                 if trade is not None:
@@ -481,7 +482,14 @@ class EngineRunner:
                 if halted:
                     log.warn(f"DAILY LOSS HALT — not taking {key}", instrument=key, event="HALT_SKIP")
                     continue
-                eq_cands.append(IntradayCandidate(key, direction, float(st["close"]),
+                # price the entry at the LIVE spot, not the last completed-candle
+                # close (st["close"]). Exits mark against the live spot, so opening at
+                # a stale candle close on a fast move lands the position already past
+                # its SL/TP — an instant exit + re-entry loop. Fall back to the candle
+                # close only if there's no live tick.
+                live_spot = self.provider.get_ltp(inst)
+                entry_price = float(live_spot) if live_spot and live_spot > 0 else float(st["close"])
+                eq_cands.append(IntradayCandidate(key, direction, entry_price,
                                                   self.priority_flags.get(key, False)))
                 eq_meta[key] = (inst, direction)
                 continue

@@ -80,6 +80,49 @@ def _open(b, client):
                            params={}, plan=MKT), q, chain
 
 
+def test_reconcile_books_equity_via_the_equity_path_not_options():
+    """An orphaned intraday-equity position must be booked through the EQUITY close
+    (margin-based, direction-aware) — not the options close, which mistook the
+    released notional for profit (+₹40k on a ₹10k margin) and mislabeled it 'options'."""
+    import datetime as dt
+    from app.db.session import SessionLocal
+    from app.engine.broker import PaperBroker
+    c = FakeClient()
+    b = _broker(c, account=[])      # account backs nothing -> every position is an orphan
+    inst = get_instrument("NIFTY")
+    # a pre-existing intraday-equity SHORT in the ledger (booked via PaperBroker)
+    pos = PaperBroker.open_equity_position(b, inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
+                                           "t", b.provider.now(), params={})
+    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s guard
+    pos.last_premium = 99.0          # short entered 100, now 99 -> a small real profit
+    b.commit()
+    # orphan_confirm_count defaults to 2 -> needs two consecutive orphaned reads
+    b.reconcile_orphans(b.provider.now())
+    b.reconcile_orphans(b.provider.now())
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert len(trades) == 1
+    tr = trades[0]
+    assert tr.exit_reason == "RECONCILED_EXTERNAL_EXIT"
+    assert tr.segment == "equity_intraday"          # NOT mislabeled 'options'
+    assert tr.gross_pnl == 10.0                      # (entry-exit)*qty for a short, NOT -10
+    assert tr.net_pnl < 100.0                        # tiny real P&L, NOT ~+notional
+
+
+def test_live_broker_refuses_equity_entries_instead_of_paper_booking_them():
+    """Real intraday-equity (MIS) routing isn't implemented, so the LiveBroker must
+    REFUSE an equity entry — not silently paper-book it as a REAL trade that never
+    reaches Kite (the foot-gun that produced a fleet of phantom 'live' positions)."""
+    c = FakeClient()
+    b = _broker(c, account=[])
+    inst = get_instrument("NIFTY")
+    pos = b.open_equity_position(inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
+                                 "t", b.provider.now(), params={})
+    assert pos is None              # refused
+    assert not b.open_positions()   # nothing booked into the ledger
+    assert not c.placed             # and no order attempted
+
+
 def test_open_books_the_actual_fill_price():
     c = FakeClient(fill_price=123.45)
     b = _broker(c)

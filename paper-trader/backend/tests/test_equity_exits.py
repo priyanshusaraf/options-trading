@@ -35,6 +35,18 @@ def test_short_exits():
     assert equity_exit("SHORT", 100.0, stop, target, False, False) == (False, "")
 
 
+def test_target_disabled_lets_a_winner_run():
+    # "let it run" (no_take_profit): the take-profit is removed, so a price past the
+    # target does NOT exit — but the protective stop and the strategy exit still fire.
+    stop, target = 101.0, 98.0  # a SHORT
+    assert equity_exit("SHORT", 97.0, stop, target, False, False, target_disabled=True) == (False, "")
+    assert equity_exit("SHORT", 101.1, stop, target, False, False, target_disabled=True) == (True, "STOP_LOSS")
+    assert equity_exit("SHORT", 100.0, stop, target, False, True, target_disabled=True) == (True, "STRATEGY_EXIT")
+    # long mirror: past the target with let-it-run on -> hold
+    assert equity_exit("LONG", 103.0, 99.0, 102.0, False, False, target_disabled=True) == (False, "")
+    assert equity_exit("LONG", 98.9, 99.0, 102.0, False, False, target_disabled=True) == (True, "STOP_LOSS")
+
+
 def test_stop_beats_target_when_both_would_trigger():
     # a gap that is past BOTH levels resolves to the protective stop first
     assert equity_exit("LONG", 90.0, 99.0, 102.0, False, False)[1] == "STOP_LOSS"

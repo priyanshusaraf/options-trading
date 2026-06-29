@@ -43,22 +43,59 @@ def equity_stop_target(direction: str, entry: float, sl_pct: float,
     return entry * (1 + sl_pct), entry * (1 - tp_pct)
 
 
+def resolve_sltp(*, is_short: bool, entry: float, cur_stop: float, cur_target: float,
+                 stop_price: float | None = None, stop_pct: float | None = None,
+                 target_price: float | None = None, target_pct: float | None = None
+                 ) -> tuple[float | None, float | None, str | None]:
+    """Resolve an owner SL/TP edit into (stop, target, error). Direction-aware: a
+    SHORT-equity position keeps its stop ABOVE entry and target BELOW; everything else
+    (long options, long equity) keeps stop below / target above. Absolute prices win
+    over percentages; an omitted side keeps the position's current value."""
+    if stop_price is not None:
+        stop = stop_price
+    elif stop_pct is not None:
+        stop = entry * (1 + stop_pct) if is_short else entry * (1 - stop_pct)
+    else:
+        stop = cur_stop
+    if target_price is not None:
+        target = target_price
+    elif target_pct is not None:
+        target = entry * (1 - target_pct) if is_short else entry * (1 + target_pct)
+    else:
+        target = cur_target
+    if stop is None or target is None or stop <= 0 or target <= 0:
+        return None, None, "stop and target must be positive"
+    if is_short:
+        if stop <= target:
+            return None, None, "for a SHORT, the stop must be ABOVE the target"
+    elif stop >= target:
+        return None, None, "stop must be below target"
+    # return precise values — the caller rounds for display; the stored stop/target
+    # stay exact so a pct edit lands at entry×(1±pct) to the paisa.
+    return stop, target, None
+
+
 def equity_exit(direction: str, price: float, stop: float, target: float,
-                strat_long_exit: bool, strat_short_exit: bool) -> tuple[bool, str]:
+                strat_long_exit: bool, strat_short_exit: bool,
+                target_disabled: bool = False) -> tuple[bool, str]:
     """Decide whether an open equity position should close on this mark. Order of
     precedence: protective stop, then target, then the strategy's own exit flag.
-    Returns (exit, reason) with reason in {STOP_LOSS, TARGET, STRATEGY_EXIT, ""}."""
+    Returns (exit, reason) with reason in {STOP_LOSS, TARGET, STRATEGY_EXIT, ""}.
+
+    `target_disabled` = the owner's per-position "let it run" (no_take_profit): the
+    take-profit is removed (for a runner you want to ride) but the protective stop
+    and the strategy exit are UNAFFECTED — the position is never left unprotected."""
     if direction == "LONG":
         if price <= stop:
             return True, "STOP_LOSS"
-        if price >= target:
+        if not target_disabled and price >= target:
             return True, "TARGET"
         if strat_long_exit:
             return True, "STRATEGY_EXIT"
     else:  # SHORT
         if price >= stop:
             return True, "STOP_LOSS"
-        if price <= target:
+        if not target_disabled and price <= target:
             return True, "TARGET"
         if strat_short_exit:
             return True, "STRATEGY_EXIT"

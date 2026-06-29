@@ -161,6 +161,20 @@ class LiveBroker(PaperBroker):
         self._place_gtt(pos, avg)   # exchange-side backstop stop on the real qty
         return pos
 
+    def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
+                             now, params=None, strategy_key=None):
+        """Real intraday-equity (MIS) order routing is NOT implemented on the live
+        broker — only options route to Kite. Refuse rather than silently paper-book
+        the position as a REAL trade (which never reaches the account, can't be closed
+        by the ownership-guarded path, and pollutes the ledger as a phantom 'live'
+        fill). Run equity in paper mode until live MIS routing exists."""
+        log.error(f"LIVE equity entry refused {inst.key} {direction} {qty}@{price:.2f} — "
+                  f"real MIS order routing is not implemented (options only). No order placed.",
+                  instrument=inst.key, event="LIVE_EQUITY_UNSUPPORTED")
+        self._notify(f"🚫 {inst.key}: live equity (MIS) isn't supported yet — no order "
+                     f"placed. Run equity in paper mode.")
+        return None
+
     def close_position(self, pos, exit_premium, reason, now, spot):
         sym = pos.tradingsymbol
         # never two working bot orders on one contract — resolve any prior in-flight
@@ -298,8 +312,16 @@ class LiveBroker(PaperBroker):
                 continue  # not enough consecutive confirmations yet — wait
             gid, sym = pos.gtt_trigger_id, pos.tradingsymbol
             prem = pos.last_premium or pos.entry_premium
-            PaperBroker.close_position(self, pos, prem, "RECONCILED_EXTERNAL_EXIT",
-                                       now, pos.last_spot)   # ledger-only, no order
+            # book through the segment's correct close (ledger-only, no order): equity
+            # is margin-based and direction-aware; routing it through the options close
+            # mistakes the released notional for profit (+₹40k on ₹10k margin) and
+            # mislabels the trade 'options'.
+            if pos.segment == "equity_intraday":
+                PaperBroker.close_equity_position(self, pos, prem,
+                                                  "RECONCILED_EXTERNAL_EXIT", now)
+            else:
+                PaperBroker.close_position(self, pos, prem, "RECONCILED_EXTERNAL_EXIT",
+                                           now, pos.last_spot)
             self._cancel_gtt(gid, sym)
             self._orphan_seen.pop(k, None)
             self._notify(f"ℹ️ {sym} is no longer in your account (GTT fired, manual "

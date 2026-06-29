@@ -627,28 +627,27 @@ class SLTPBody(BaseModel):
 @router.post("/api/positions/{key}/sltp")
 async def set_position_sltp(key: str, body: SLTPBody, request: Request):
     """Owner override of the stop/target on one open position. Absolute prices or
-    percentages of entry. Setting a target by hand pins it (reinforcement won't
-    auto-extend it); the trailing stop still ratchets up from a manual stop."""
+    percentages of entry. Direction-aware: a SHORT-equity position keeps its stop
+    ABOVE entry and target BELOW (a long option/equity keeps stop below / target
+    above). Setting a target by hand pins it (reinforcement won't auto-extend it);
+    the trailing stop still ratchets up from a manual stop."""
+    from app.engine.equity_entry import resolve_sltp
     r = _runner(request)
     async with r._lock:
         pos = r.broker.position_for(key)
         if not pos:
             return {"error": "no open position for this instrument"}
-        new_stop = body.stop_price
-        if new_stop is None and body.stop_pct is not None:
-            new_stop = pos.entry_premium * (1 - body.stop_pct)
-        new_target = body.target_price
-        if new_target is None and body.target_pct is not None:
-            new_target = pos.entry_premium * (1 + body.target_pct)
-        stop = new_stop if new_stop is not None else pos.stop_price
-        target = new_target if new_target is not None else pos.target_price
-        if stop <= 0 or target <= 0:
-            return {"error": "stop and target must be positive"}
-        if stop >= target:
-            return {"error": "stop must be below target"}
+        is_short = pos.segment == "equity_intraday" and pos.direction == "SHORT"
+        stop, target, err = resolve_sltp(
+            is_short=is_short, entry=pos.entry_premium,
+            cur_stop=pos.stop_price, cur_target=pos.target_price,
+            stop_price=body.stop_price, stop_pct=body.stop_pct,
+            target_price=body.target_price, target_pct=body.target_pct)
+        if err:
+            return {"error": err}
         pos.stop_price = stop
         pos.target_price = target
-        if new_target is not None:
+        if body.target_price is not None or body.target_pct is not None:
             pos.manual_target = True
         r.broker.commit()
         # push the owner's new stop to the exchange GTT backstop (no-op on paper;

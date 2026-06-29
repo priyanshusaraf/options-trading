@@ -74,6 +74,40 @@ def test_intraday_equity_trades_end_to_end():
                                  "INTRADAY_SQUAREOFF") for t in eq_trades)
 
 
+def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
+    """The storm bug: equity entries opened at the last *completed candle* close while
+    exits mark against the live spot — so a fast move makes the position open already
+    past its target and instantly 'TARGET'-close, re-entering forever. Entries must
+    price at the LIVE spot."""
+    from app.core.instruments import get_instrument
+    init_db(reset=True)
+    key = _cheap_keys(1)[0]
+    with SessionLocal() as s:
+        row = s.get(InstrumentState, key) or InstrumentState(instrument_key=key)
+        row.enabled = True
+        row.product = "equity_intraday"
+        s.add(row)
+        s.commit()
+    r = EngineRunner()
+    r.armed = True
+    r.params["intraday_enabled"] = True
+    r.params["notify_enabled"] = False
+
+    candle_close = r.provider._candles[key][r.provider._cursor].close
+    live_spot = round(candle_close * 0.90, 2)        # a 10% gap down since the candle closed
+    r.provider.get_ltp = lambda i: live_spot if i.key == key else None
+    # a fresh SHORT signal sitting in engine state with the (stale) candle close
+    r.state[key] = {"signal": "SHORT_ENTRY", "close": candle_close, "z": -2.0,
+                    "slope": -1.0, "long_exit": False, "short_exit": False}
+
+    r.process_entries()
+
+    pos = r.broker.position_for(key)
+    assert pos is not None and pos.segment == "equity_intraday"
+    assert pos.entry_premium == live_spot            # priced at the LIVE spot...
+    assert pos.entry_premium != candle_close          # ...not the stale candle close
+
+
 def test_options_path_untouched_when_intraday_disabled():
     """With intraday off (the default), an instrument left as product='options'
     still trades options exactly as before — the equity branch is inert."""
