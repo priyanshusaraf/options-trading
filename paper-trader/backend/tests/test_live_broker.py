@@ -50,12 +50,12 @@ class FakeClient:
         return {"status": self._status, "filled_qty": fq,
                 "avg_price": self.fill_price, "reason": "x"}
 
-    def place_stop_gtt(self, tradingsymbol, exchange, qty, trigger_price, last_price):
-        self.gtt_placed.append((tradingsymbol, trigger_price))
+    def place_stop_gtt(self, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
+        self.gtt_placed.append((tradingsymbol, trigger_price, side, exchange))
         self.log.append(("place_gtt", tradingsymbol))
         return "GTT-1"
 
-    def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price):
+    def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
         self.gtt_modified.append((trigger_id, trigger_price))
         self.log.append(("modify_gtt", trigger_id))
 
@@ -109,18 +109,73 @@ def test_reconcile_books_equity_via_the_equity_path_not_options():
     assert tr.net_pnl < 100.0                        # tiny real P&L, NOT ~+notional
 
 
-def test_live_broker_refuses_equity_entries_instead_of_paper_booking_them():
-    """Real intraday-equity (MIS) routing isn't implemented, so the LiveBroker must
-    REFUSE an equity entry — not silently paper-book it as a REAL trade that never
-    reaches Kite (the foot-gun that produced a fleet of phantom 'live' positions)."""
-    c = FakeClient()
-    b = _broker(c, account=[])
-    inst = get_instrument("NIFTY")
-    pos = b.open_equity_position(inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
-                                 "t", b.provider.now(), params={})
-    assert pos is None              # refused
-    assert not b.open_positions()   # nothing booked into the ledger
-    assert not c.placed             # and no order attempted
+# ── live MIS (intraday-equity) real order routing ────────────────────────────
+def _open_eq(b, direction="LONG", price=100.0, qty=10):
+    inst = get_instrument("NIFTY")   # the NSE_INTRADAY charge-segment forces the equity path
+    return b.open_equity_position(inst, direction, price, qty, "NSE_INTRADAY",
+                                  "t", b.provider.now(), params={})
+
+
+def test_open_equity_long_places_a_mis_buy_and_books_the_fill():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    assert pos is not None and pos.segment == "equity_intraday"
+    req = c.placed[-1]
+    assert req.side == "BUY" and req.product == "MIS" and req.exchange == "NSE"   # NSE_INTRADAY -> NSE
+    assert pos.qty == 10 and pos.entry_premium == 100.0
+
+
+def test_open_equity_short_places_a_mis_sell():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "SHORT", 100.0, 10)
+    assert pos is not None and pos.direction == "SHORT"
+    assert c.placed[-1].side == "SELL" and c.placed[-1].product == "MIS"
+
+
+def test_open_equity_short_places_a_buy_stop_gtt_above_entry():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    _open_eq(b, "SHORT", 100.0, 10)
+    sym, trig, side, exch = c.gtt_placed[-1]   # a short's protective GTT covers (BUY) above entry
+    assert side == "BUY" and trig > 100.0 and exch == "NSE"
+
+
+def test_open_equity_long_places_a_sell_stop_gtt_below_entry():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    _open_eq(b, "LONG", 100.0, 10)
+    sym, trig, side, exch = c.gtt_placed[-1]
+    assert side == "SELL" and trig < 100.0
+
+
+def test_close_equity_long_sells_when_account_backs_it():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol, "quantity": 10}]
+    tr = b.close_equity_position(pos, 101.0, "MANUAL_CLOSE", b.provider.now())
+    assert tr is not None and c.placed[-1].side == "SELL" and c.placed[-1].product == "MIS"
+
+
+def test_close_equity_short_buys_to_cover_when_account_is_short():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "SHORT", 100.0, 10)
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol, "quantity": -10}]  # account is short
+    tr = b.close_equity_position(pos, 99.0, "MANUAL_CLOSE", b.provider.now())
+    assert tr is not None and c.placed[-1].side == "BUY"
+
+
+def test_close_equity_short_blocked_when_account_is_not_short():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "SHORT", 100.0, 10)
+    b.provider.account_positions = lambda: []   # account holds 0 -> not backed
+    before = len(c.placed)
+    tr = b.close_equity_position(pos, 99.0, "MANUAL_CLOSE", b.provider.now())
+    assert tr is None and len(c.placed) == before   # no cover order sent
 
 
 def test_open_books_the_actual_fill_price():

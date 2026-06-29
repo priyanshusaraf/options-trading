@@ -25,6 +25,17 @@ def product_for_segment(segment: str, default: str = "NRML") -> str:
     return "MIS" if segment in EQUITY_INTRADAY_SEGMENTS else default
 
 
+def exchange_for_segment(segment: str) -> str:
+    """Real Kite exchange for a charge-segment. Intraday-equity charge-segments carry
+    an _INTRADAY suffix for the charge schedule; the exchange Kite wants is the bare
+    NSE/BSE. Options/futures segments (NFO/BFO/MCX/NCDEX) are already Kite exchanges."""
+    if segment == "NSE_INTRADAY":
+        return "NSE"
+    if segment == "BSE_INTRADAY":
+        return "BSE"
+    return segment
+
+
 class KiteOrderClient:
     def __init__(self, kite, *, token_source=None,
                  product: str = "NRML", variety: str = "regular",
@@ -55,18 +66,20 @@ class KiteOrderClient:
 
     # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
     def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,
-                       trigger_price: float, last_price: float) -> str:
+                       trigger_price: float, last_price: float, side: str = "SELL") -> str:
         self._sync_token()
+        product = "MIS" if exchange in ("NSE", "BSE") else self.product
         res = self.kite.place_gtt(**stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
+            tradingsymbol, exchange, qty, trigger_price, last_price, product, side))
         tid = res.get("trigger_id") if isinstance(res, dict) else res
         return str(tid)
 
     def modify_stop_gtt(self, trigger_id: str, tradingsymbol: str, exchange: str,
-                        qty: int, trigger_price: float, last_price: float):
+                        qty: int, trigger_price: float, last_price: float, side: str = "SELL"):
         self._sync_token()
+        product = "MIS" if exchange in ("NSE", "BSE") else self.product
         return self.kite.modify_gtt(trigger_id=trigger_id, **stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, self.product))
+            tradingsymbol, exchange, qty, trigger_price, last_price, product, side))
 
     def delete_gtt(self, trigger_id: str):
         self._sync_token()

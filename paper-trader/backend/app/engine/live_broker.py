@@ -14,6 +14,7 @@ from dataclasses import replace
 
 from app.core.logging import log
 from app.engine.broker import PaperBroker
+from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.engine.order_executor import OrderRequest, execute_order
 from app.engine.reconcile import can_bot_close
 
@@ -163,17 +164,83 @@ class LiveBroker(PaperBroker):
 
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
                              now, params=None, strategy_key=None):
-        """Real intraday-equity (MIS) order routing is NOT implemented on the live
-        broker — only options route to Kite. Refuse rather than silently paper-book
-        the position as a REAL trade (which never reaches the account, can't be closed
-        by the ownership-guarded path, and pollutes the ledger as a phantom 'live'
-        fill). Run equity in paper mode until live MIS routing exists."""
-        log.error(f"LIVE equity entry refused {inst.key} {direction} {qty}@{price:.2f} — "
-                  f"real MIS order routing is not implemented (options only). No order placed.",
-                  instrument=inst.key, event="LIVE_EQUITY_UNSUPPORTED")
-        self._notify(f"🚫 {inst.key}: live equity (MIS) isn't supported yet — no order "
-                     f"placed. Run equity in paper mode.")
-        return None
+        """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
+        the options open path but direction-aware: LONG buys to open, SHORT sells to
+        open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it."""
+        tsym = getattr(inst, "spot_symbol", None) or inst.key
+        if not self._ensure_no_inflight(tsym):
+            return None
+        side = "BUY" if direction == "LONG" else "SELL"
+        res = self._execute(OrderRequest(tsym, exchange_for_segment(charge_segment), side,
+                                         qty, "MARKET", None, tag=TAG,
+                                         product=product_for_segment(charge_segment)))
+        filled, avg = self._actual_fill(res)
+        if filled <= 0:
+            self._record_inflight(tsym, res)
+            log.error(f"LIVE EQUITY OPEN not filled [{res.status}] {tsym} — {res.reason}",
+                      instrument=inst.key, event="LIVE_EQUITY_OPEN_FAIL")
+            self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} {res.status}: {res.reason}")
+            return None
+        pos = super().open_equity_position(inst, direction, avg, filled, charge_segment,
+                                           reason, now, params, strategy_key)
+        if filled < qty:
+            log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
+                      f"(order {res.order_id})", instrument=inst.key,
+                      event="LIVE_EQUITY_OPEN_PARTIAL")
+            self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} only PARTIAL: {filled}/{qty} @ "
+                         f"{avg:.2f} — managing the partial; verify on Zerodha")
+        else:
+            log.info(f"LIVE FILLED {side} {tsym} {filled}@{avg:.2f} (order {res.order_id})",
+                     instrument=inst.key, event="LIVE_EQUITY_OPEN")
+        self._place_gtt(pos, avg)
+        return pos
+
+    def close_equity_position(self, pos, exit_price, reason, now):
+        """Flat an intraday-equity position with a REAL MIS order: a LONG sells, a
+        SHORT buys to cover. Same ownership boundary + cancel-GTT-then-send as options."""
+        sym = pos.tradingsymbol
+        if not self._ensure_no_inflight(sym):
+            return None
+        chk = can_bot_close(pos, self.provider.account_positions())
+        if not chk.ok:
+            log.error(f"LIVE EQUITY CLOSE BLOCKED {sym} — {chk.reason}",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_BLOCKED")
+            self._notify(f"🚫 CLOSE blocked {sym}: {chk.reason}")
+            return None
+        self._cancel_gtt(pos.gtt_trigger_id, sym)
+        chk2 = can_bot_close(pos, self.provider.account_positions())
+        if not chk2.ok:
+            log.error(f"LIVE EQUITY CLOSE ABORTED {sym} — {chk2.reason}",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_ABORT")
+            self._notify(f"🚫 CLOSE aborted {sym}: {chk2.reason}")
+            self._place_gtt(pos, pos.last_premium or pos.entry_premium)
+            return None
+        side = "SELL" if pos.direction == "LONG" else "BUY"   # buy to cover a short
+        res = self._execute(OrderRequest(sym, exchange_for_segment(pos.exchange), side,
+                                         pos.qty, "MARKET", None, tag=TAG,
+                                         product=product_for_segment(pos.exchange)))
+        filled, avg = self._actual_fill(res)
+        if filled <= 0:
+            self._record_inflight(sym, res)
+            log.error(f"LIVE EQUITY CLOSE not filled [{res.status}] {sym} — {res.reason}",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_FAIL")
+            self._notify(f"⚠️ LIVE EQUITY CLOSE {sym} {res.status}: {res.reason}")
+            self._place_gtt(pos, pos.last_premium or pos.entry_premium)
+            return None
+        if filled < pos.qty:
+            # covered only part — guard against an over-cover retry and leave the
+            # remainder for the orphan reconciler to book (it sees the account no
+            # longer fully backs the position). v1 limitation: no partial booking.
+            log.error(f"LIVE EQUITY CLOSE PARTIAL {sym} {filled}/{pos.qty} @ {avg:.2f} "
+                      f"(order {res.order_id}) — reconciler will book the rest",
+                      instrument=pos.instrument_key, event="LIVE_CLOSE_PARTIAL")
+            self._notify(f"⚠️ LIVE EQUITY CLOSE {sym} PARTIAL {filled}/{pos.qty} @ {avg:.2f} "
+                         f"— verify on Zerodha")
+            self._inflight[sym] = res.order_id
+            return None
+        log.info(f"LIVE FILLED {side} {sym} {filled}@{avg:.2f} (order {res.order_id})",
+                 instrument=pos.instrument_key, event="LIVE_CLOSE")
+        return super().close_equity_position(pos, avg, reason, now)
 
     def close_position(self, pos, exit_premium, reason, now, spot):
         sym = pos.tradingsymbol
@@ -246,9 +313,13 @@ class LiveBroker(PaperBroker):
     def _place_gtt(self, pos, last_price) -> None:
         if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:
             return
+        # a long position's protective stop SELLs below; an intraday-equity SHORT's
+        # BUYs to cover above. Equity charge-segments map to the bare NSE/BSE exchange.
+        side = "BUY" if (pos.segment == "equity_intraday" and pos.direction == "SHORT") else "SELL"
+        exchange = exchange_for_segment(pos.exchange)
         try:
-            tid = self.client.place_stop_gtt(pos.tradingsymbol, pos.exchange, pos.qty,
-                                             pos.stop_price, last_price)
+            tid = self.client.place_stop_gtt(pos.tradingsymbol, exchange, pos.qty,
+                                             pos.stop_price, last_price, side=side)
             pos.gtt_trigger_id = tid
             self.s.commit()
             log.info(f"GTT stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (gtt {tid})",
@@ -274,9 +345,10 @@ class LiveBroker(PaperBroker):
         if not gid or not self._gtt_enabled():
             return
         lp = last_price or pos.last_premium or pos.entry_premium
+        side = "BUY" if (pos.segment == "equity_intraday" and pos.direction == "SHORT") else "SELL"
         try:
-            self.client.modify_stop_gtt(gid, pos.tradingsymbol, pos.exchange, pos.qty,
-                                        pos.stop_price, lp)
+            self.client.modify_stop_gtt(gid, pos.tradingsymbol, exchange_for_segment(pos.exchange),
+                                        pos.qty, pos.stop_price, lp, side=side)
             log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                      instrument=pos.instrument_key, event="GTT_MODIFY")
         except Exception as e:

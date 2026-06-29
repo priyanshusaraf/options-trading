@@ -1052,7 +1052,12 @@ class EngineRunner:
         if square_off:
             for pos in list(self.broker.open_positions()):
                 prem = pos.last_premium or pos.entry_premium
-                tr = self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
+                # route each segment through its correct close (equity covers a short
+                # via BUY; the options close always SELLs) — same fix as reconcile.
+                if pos.segment == "equity_intraday":
+                    tr = self.broker.close_equity_position(pos, prem, "KILL_SWITCH", now)
+                else:
+                    tr = self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
                 if tr is None:
                     log.error(f"KILL could not square off {pos.tradingsymbol} — left open",
                               instrument=pos.instrument_key, event="KILL_FAIL")

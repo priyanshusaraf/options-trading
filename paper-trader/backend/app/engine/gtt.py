@@ -17,7 +17,10 @@ from __future__ import annotations
 
 def stop_gtt_params(tradingsymbol: str, exchange: str, qty: int,
                     trigger_price: float, last_price: float,
-                    product: str = "NRML") -> dict:
+                    product: str = "NRML", side: str = "SELL") -> dict:
+    """`side` is the protective order's transaction type: SELL for a long position
+    (long option, long equity) whose stop is below; BUY to cover for an intraday
+    equity SHORT whose stop is above."""
     trig = round(trigger_price, 2)
     return {
         "trigger_type": "single",
@@ -26,7 +29,7 @@ def stop_gtt_params(tradingsymbol: str, exchange: str, qty: int,
         "trigger_values": [trig],
         "last_price": round(last_price, 2),
         "orders": [{
-            "transaction_type": "SELL",
+            "transaction_type": side,
             "quantity": int(qty),
             "order_type": "LIMIT",
             "product": product,
