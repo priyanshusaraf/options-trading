@@ -102,6 +102,40 @@ def equity_exit(direction: str, price: float, stop: float, target: float,
     return False, ""
 
 
+def lockstep_band(direction: str, entry: float, qty: int, margin: float,
+                  cur_stop: float, cur_target: float, price: float, *,
+                  trigger_pct: float, sl_pct: float, tp_pct: float,
+                  breakeven_price: float) -> tuple[float, float]:
+    """Ratchet an intraday-equity position's stop AND target together once it's in
+    profit. Each `trigger_pct`-of-margin of unrealized profit slides the whole band
+    one step in your favour (LONG up, SHORT down), preserving the initial SL→TP width.
+    Ratchet-only (never loosens), and once green the stop is floored at break-even so a
+    winner can't be stopped out red. Returns (new_stop, new_target).
+
+      profit  = (price-entry)*qty (long) | (entry-price)*qty (short)
+      steps   = floor( profit / (trigger_pct * margin) )
+      slide   = steps * trigger_pct * margin / qty            (price units)
+    """
+    if margin <= 0 or qty <= 0 or trigger_pct <= 0:
+        return cur_stop, cur_target
+    profit = (price - entry) * qty if direction == "LONG" else (entry - price) * qty
+    if profit <= 0:
+        return cur_stop, cur_target
+    steps = int((profit / margin) / trigger_pct + 1e-9)
+    if steps <= 0:
+        return cur_stop, cur_target
+    slide = steps * trigger_pct * margin / qty
+    if direction == "LONG":
+        init_stop, init_target = entry * (1 - sl_pct), entry * (1 + tp_pct)
+        new_stop = max(init_stop + slide, breakeven_price)        # break-even floor
+        new_target = init_target + slide
+        return max(cur_stop, round(new_stop, 2)), max(cur_target, round(new_target, 2))
+    init_stop, init_target = entry * (1 + sl_pct), entry * (1 - tp_pct)
+    new_stop = min(init_stop - slide, breakeven_price)            # break-even ceiling (short)
+    new_target = init_target - slide
+    return min(cur_stop, round(new_stop, 2)), min(cur_target, round(new_target, 2))
+
+
 def equity_unrealized(direction: str, entry: float, price: float, qty: int) -> float:
     """Mark-to-market P&L on the full share notional (LONG profits up, SHORT down)."""
     move = (price - entry) if direction == "LONG" else (entry - price)

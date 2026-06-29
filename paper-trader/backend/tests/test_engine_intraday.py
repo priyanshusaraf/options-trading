@@ -127,6 +127,26 @@ def test_equity_intraday_equity_uses_margin_not_notional():
     assert abs(cap["cash"] + cap["invested"] - 50000.0) < 1.0
 
 
+def test_lockstep_ratchets_both_sl_and_tp_on_an_open_position():
+    """Wiring check: once an open equity position is in profit, _apply_lockstep slides
+    the stop AND the target up together and floors the stop at break-even."""
+    from app.core.instruments import get_instrument
+    init_db(reset=True)
+    r = EngineRunner()
+    inst = get_instrument(_cheap_keys(1)[0])
+    price = r.provider._candles[inst.key][r.provider._cursor].close
+    qty = int(50000 / price)
+    pos = r.broker.open_equity_position(inst, "LONG", price, qty, "NSE_INTRADAY",
+                                        "t", r.provider.now(), params=r.params)
+    base_stop, base_target = pos.stop_price, pos.target_price
+    margin = pos.entry_cost - pos.entry_charges
+    pos.last_premium = price + (0.06 * margin) / qty    # +6% of margin = 3 lockstep steps
+    r._apply_lockstep(pos)
+    assert pos.stop_price > base_stop          # stop ratcheted up
+    assert pos.target_price > base_target      # target slid up in lockstep
+    assert pos.stop_price >= price             # break-even floored (>= entry)
+
+
 def test_options_path_untouched_when_intraday_disabled():
     """With intraday off (the default), an instrument left as product='options'
     still trades options exactly as before — the equity branch is inert."""

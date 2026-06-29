@@ -393,15 +393,43 @@ class EngineRunner:
             pos.stop_price = new_stop
             self.broker.update_stop_protection(pos, pos.last_premium)  # ratchet the GTT too (live)
 
+    def _apply_lockstep(self, pos) -> None:
+        """Lockstep band: once an equity position is in profit, ratchet its stop AND
+        target together (break-even floored). A hand-pinned target is left in place;
+        only the stop slides then."""
+        from app.engine.equity_entry import lockstep_band
+        p = self.params
+        if not p.get("intraday_lockstep_enabled", True):
+            return
+        last = pos.last_premium or pos.entry_premium
+        margin = pos.entry_cost - pos.entry_charges
+        rt = (2.0 * pos.entry_charges / pos.qty) if pos.qty else 0.0   # round-trip cost/share
+        be = pos.entry_premium + rt if pos.direction == "LONG" else pos.entry_premium - rt
+        new_stop, new_target = lockstep_band(
+            pos.direction, pos.entry_premium, pos.qty, margin,
+            pos.stop_price, pos.target_price, last,
+            trigger_pct=p.get("intraday_lockstep_trigger_pct", 0.02),
+            sl_pct=p.get("intraday_stop_loss_pct", 0.01),
+            tp_pct=p.get("intraday_target_pct", 0.02),
+            breakeven_price=be)
+        if pos.manual_target:
+            new_target = pos.target_price   # owner-pinned target isn't auto-extended
+        if new_stop != pos.stop_price or new_target != pos.target_price:
+            log.info(f"LOCKSTEP {pos.tradingsymbol} SL {pos.stop_price:.2f}->{new_stop:.2f} "
+                     f"TP {pos.target_price:.2f}->{new_target:.2f}",
+                     instrument=pos.instrument_key, event="LOCKSTEP")
+            pos.stop_price, pos.target_price = new_stop, new_target
+
     def _mark_exit_equity(self, pos, key, spot, now, ticks, opens) -> None:
         """Mark + exit an intraday-equity position against SPOT (direction-aware
-        SL/TP + strategy flag). No trailing, no proximity alerts; mirrors the
+        SL/TP + strategy flag + lockstep band). No proximity alerts; mirrors the
         options lane's bookkeeping (ticks, cooldown, state) for the equity case."""
         if spot is not None:
             self.broker.mark(pos, spot, spot, now=now)
         pos_stale = spot is None or is_stale(pos.last_mark_time, now, self.settings.max_stale_seconds)
         st = self.state.get(key, {})
         if not pos_stale:
+            self._apply_lockstep(pos)   # ratchet SL+TP together before the exit check
             should, reason = equity_exit(
                 pos.direction, spot, pos.stop_price, pos.target_price,
                 st.get("long_exit", False), st.get("short_exit", False),

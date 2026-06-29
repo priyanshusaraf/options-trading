@@ -161,6 +161,11 @@ class Settings(BaseSettings):
     intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
     intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
     intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price
+    # lockstep band: once an equity position is in profit, slide BOTH the stop and
+    # target together by one step per `trigger_pct` of margin (default 2% = ₹200 on a
+    # ₹10k margin), ratchet-only, with a break-even floor. On by default.
+    intraday_lockstep_enabled: bool = True
+    intraday_lockstep_trigger_pct: float = 0.02  # profit per lockstep, as a fraction of deployed margin
 
     # overtrading guard (advisory red-flag suggestion — no engine effect)
     overtrade_today_threshold: int = 5      # suggest red when an instrument fires >= this many signals today
