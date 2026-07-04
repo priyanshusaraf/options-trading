@@ -12,6 +12,7 @@ class FakeKite:
         self.gtt_modified = []
         self.gtt_deleted = []
         self.cancelled = []
+        self.modified = []
 
     def place_order(self, **kw):
         self.placed.append(kw)
@@ -34,6 +35,10 @@ class FakeKite:
 
     def cancel_order(self, **kw):
         self.cancelled.append(kw)
+        return kw.get("order_id")
+
+    def modify_order(self, **kw):
+        self.modified.append(kw)
         return kw.get("order_id")
 
 
@@ -133,6 +138,36 @@ def test_modify_and_delete_gtt():
     assert k.gtt_deleted == ["555"]
 
 
+# ── #18 SL-M protective stop for intraday (MIS), where GTT is not allowed ──────
+def test_place_stop_order_maps_sl_m_fields():
+    # GTT can't back a MIS position (Zerodha: GTT only on CNC/NRML), so the intraday
+    # backstop is a real SL-M order resting at the exchange.
+    k = FakeKite()
+    oid = KiteOrderClient(k).place_stop_order("SYM", "NSE", 13, trigger_price=100.0,
+                                              side="SELL", tag="pt-bot")
+    assert oid == "OID-9"
+    p = k.placed[0]
+    assert p["order_type"] == "SL-M" and p["trigger_price"] == 100.0
+    assert p["transaction_type"] == "SELL" and p["quantity"] == 13
+    assert p["product"] == "MIS" and p["variety"] == "regular"
+    assert "price" not in p                        # market-on-trigger — no limit price
+    assert p["market_protection"] == -1            # SL-M IS a market order → SEBI protection
+    assert p["tag"] == "pt-bot"
+
+
+def test_place_stop_order_buy_side_covers_a_short():
+    k = FakeKite()
+    KiteOrderClient(k).place_stop_order("SYM", "NSE", 13, trigger_price=110.0, side="BUY")
+    assert k.placed[0]["transaction_type"] == "BUY" and k.placed[0]["order_type"] == "SL-M"
+
+
+def test_modify_stop_order_changes_the_trigger():
+    k = FakeKite()
+    KiteOrderClient(k).modify_stop_order("OID-9", trigger_price=95.0)
+    m = k.modified[0]
+    assert m["order_id"] == "OID-9" and m["trigger_price"] == 95.0 and m["variety"] == "regular"
+
+
 class FakeKiteWithToken(FakeKite):
     def __init__(self, history=None):
         super().__init__(history)
@@ -159,3 +194,35 @@ def test_token_source_syncs_current_token_before_orders():
     token["v"] = "tok-day2"                     # simulate a morning re-login
     c.place_stop_gtt("SYM", "NFO", 75, trigger_price=100.0, last_price=140.0)
     assert k.tokens == ["tok-day1", "tok-day2"]  # picked up the fresh token, no restart
+
+
+# ── GTT is CNC/NRML-only at Zerodha: an equity-exchange (MIS) GTT must fail LOUDLY ──
+# The 2026-07-03 class of failure: place_stop_gtt built product=MIS GTTs for NSE/BSE
+# which the broker silently rejected server-side — options backstops worked, intraday
+# ones never existed. The client must refuse locally (the caller then falls back to
+# the SL-M path / alerts) instead of shipping a payload Zerodha will never accept.
+def test_stop_gtt_refuses_equity_exchange():
+    import pytest
+    k = FakeKite()
+    c = KiteOrderClient(k)
+    with pytest.raises(ValueError):
+        c.place_stop_gtt("LODHA", "NSE", 10, 940.0, 990.0)
+    with pytest.raises(ValueError):
+        c.place_stop_gtt("SENSEXBEES", "BSE", 10, 940.0, 990.0)
+    assert k.gtt_placed == []          # nothing reached the broker
+
+
+def test_modify_stop_gtt_refuses_equity_exchange():
+    import pytest
+    k = FakeKite()
+    c = KiteOrderClient(k)
+    with pytest.raises(ValueError):
+        c.modify_stop_gtt("555", "LODHA", "NSE", 10, 945.0, 990.0)
+    assert k.gtt_modified == []
+
+
+def test_stop_gtt_still_places_for_fo_exchanges():
+    k = FakeKite()
+    tid = KiteOrderClient(k).place_stop_gtt("NIFTY26JUL24000CE", "NFO", 75, 55.0, 80.0)
+    assert tid == "555"
+    assert k.gtt_placed[0]["orders"][0]["product"] == "NRML"

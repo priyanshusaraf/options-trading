@@ -340,11 +340,19 @@ class PaperBroker:
         while the bot was down). No-op on paper."""
         return []
 
+    def adopt_pending_entries(self, now: dt.datetime) -> list:
+        """Adopt any bot entry order that filled AFTER its poll window into the book.
+        No-op on paper (paper fills are synchronous, never late)."""
+        return []
+
     # ── analytics support ─────────────────────────────────────────────────
     def snapshot(self, now: dt.datetime) -> EquitySnapshot:
         opens = self.open_positions()
         invested = sum(p.entry_cost for p in opens)
-        mtm = sum((p.last_premium or p.entry_premium) * p.qty for p in opens)
+        # mtm_value() is segment-aware: options = premium × qty (full cost left cash),
+        # leveraged MIS = margin + unrealized P&L (only margin left cash). Summing raw
+        # last × qty double-counts MIS leverage and inflates the persisted equity curve.
+        mtm = sum(p.mtm_value() for p in opens)
         cap = self.capital()
         snap = EquitySnapshot(time=now, equity=cap.cash + mtm, cash=cap.cash,
                               invested=invested, realized_pnl=cap.realized_pnl,

@@ -544,7 +544,10 @@ class ProductBody(BaseModel):
 def set_product(key: str, body: ProductBody, request: Request):
     if key not in {i.key for i in all_instruments()}:
         return {"error": "unknown instrument"}
-    p = _runner(request).set_product(key, body.product)
+    try:
+        p = _runner(request).set_product(key, body.product)
+    except ValueError as e:           # #5: not MIS-eligible -> refuse the intraday assignment
+        return {"error": str(e)}
     return {"key": key, "product": p}
 
 
@@ -612,9 +615,13 @@ async def close_position(key: str, request: Request):
         from app.core.logging import log
         log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
                  event="MANUAL_CLOSE", manual=True)
+        # #2: a manual close blocks same-day re-entry for this symbol — the bot must not
+        # re-open what you deliberately exited. Clear it from the window to re-allow.
+        r.set_entries_blocked(key, True)
         if key in r.state:
             r.state[key]["position"] = None
-        return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
+        return {"closed": True, "key": key, "exit_premium": round(premium, 2),
+                "entries_blocked": True}
 
 
 class SLTPBody(BaseModel):

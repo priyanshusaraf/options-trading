@@ -1,0 +1,8 @@
+{
+ "min_multiplier": 2.0,
+ "count": 1,
+ "blocked": [
+  "ELITECON"
+ ],
+ "source": "https://docs.google.com/spreadsheets/d/1fLTsNpFJPK349RTjs0GRSXJZD-5soCUkZt9eSMTJ2m4/export?format=csv&gid=288818195"
+}

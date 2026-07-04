@@ -39,8 +39,12 @@ from app.engine.equity_entry import (
 from app.engine.execution_policy import plan_order
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
+from app.core.market_hours import ist_epoch
+from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
-    daily_loss_halt, in_reentry_cooldown, over_per_trade_cap, slots_available)
+    before_entry_window, daily_loss_halt, expiry_too_close, in_reentry_cooldown,
+    intraday_blocked_for_expiry_day, outside_trading_session, over_per_trade_cap,
+    round_trip_cap_reached, signal_already_evaluated, signal_too_old, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
@@ -58,6 +62,11 @@ def _equity_charge_segment(inst) -> str:
     everything else on NSE."""
     seg = (getattr(inst, "segment", "") or "").upper()
     return "BSE_INTRADAY" if seg in ("BSE", "BSE_EQ") else "NSE_INTRADAY"
+
+
+# live-interval string -> candle minutes (shared by the scan gate and the
+# signal-age guard; an unknown interval falls back to 15m, the strategy default)
+_INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}
 
 
 class EngineRunner:
@@ -80,6 +89,7 @@ class EngineRunner:
         self.last_scan_ok: dict[str, object] = {}   # key -> last successful candle scan time (per-instrument freshness)
         self._stopped_at: dict[str, object] = {}    # instrument -> last stop-out time (re-entry cooldown)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
+        self.last_entry_bar: dict[str, int] = {}    # key -> candle epoch of the last ENTRY signal evaluated (fresh-signal guard #12)
         self.running = False
         # ARM-TO-TRADE gate: the engine always scans, marks open positions, fires
         # SL/TP and sends alerts — but it NEVER opens a new position until the owner
@@ -183,8 +193,12 @@ class EngineRunner:
         return s, r
 
     def set_product(self, key: str, product: str) -> str:
-        """Assign an instrument to the options or equity_intraday segment (live-applied)."""
+        """Assign an instrument to the options or equity_intraday segment (live-applied).
+        Refuses intraday for a name the MIS-availability sheet marks ineligible (#5)."""
         product = "equity_intraday" if product == "equity_intraday" else "options"
+        if product == "equity_intraday" and is_mis_blocked(key):
+            raise ValueError(f"{key} is not MIS-eligible (no/low intraday leverage) — "
+                             f"can't add it to the intraday portfolio")
         s, r = self._upsert_state(key)
         r.product = product
         s.commit(); s.close()
@@ -411,14 +425,21 @@ class EngineRunner:
             trigger_pct=p.get("intraday_lockstep_trigger_pct", 0.02),
             sl_pct=p.get("intraday_stop_loss_pct", 0.01),
             tp_pct=p.get("intraday_target_pct", 0.02),
-            breakeven_price=be)
+            breakeven_price=be, rt_per_share=rt,
+            profit_lock_threshold=p.get("intraday_profit_lock_threshold", 200.0),
+            profit_lock_frac=p.get("intraday_profit_lock_frac", 0.5))
         if pos.manual_target:
             new_target = pos.target_price   # owner-pinned target isn't auto-extended
         if new_stop != pos.stop_price or new_target != pos.target_price:
             log.info(f"LOCKSTEP {pos.tradingsymbol} SL {pos.stop_price:.2f}->{new_stop:.2f} "
                      f"TP {pos.target_price:.2f}->{new_target:.2f}",
                      instrument=pos.instrument_key, event="LOCKSTEP")
+            stop_moved = new_stop != pos.stop_price
             pos.stop_price, pos.target_price = new_stop, new_target
+            if stop_moved:
+                # #18: ratchet the exchange-side SL-M backstop too (no-op on paper;
+                # LiveBroker re-prices the resting SL-M). Options trail this at L402.
+                self.broker.update_stop_protection(pos, pos.last_premium)
 
     def _mark_exit_equity(self, pos, key, spot, now, ticks, opens) -> None:
         """Mark + exit an intraday-equity position against SPOT (direction-aware
@@ -463,6 +484,22 @@ class EngineRunner:
         now = prov.now()
         held = {p.instrument_key: p for p in self.broker.open_positions()}
         halted = self._entries_halted(now)   # daily-loss circuit breaker (new entries only)
+        # #14 order circuit breaker: N CONSECUTIVE live order failures means the
+        # problem is systemic (expired token, IP not whitelisted, margin exhausted)
+        # — every further attempt is another real-money order shot into the same
+        # wall. DISARM once and alert; the owner re-arms after fixing the cause
+        # (arm(True) resets the streak). Exits/protection keep running regardless.
+        cb = self.params.get("order_failure_disarm_count", 3)
+        streak = getattr(self.broker, "order_fail_streak", 0)
+        if self.armed and cb and cb > 0 and streak >= cb:
+            self.arm(False)
+            log.error(f"ORDER CIRCUIT BREAKER — {streak} consecutive live order "
+                      f"failures; DISARMED. Check Zerodha/token/IP, then re-arm.",
+                      event="ORDER_CB_DISARM")
+            if self.params.get("notify_enabled", True):
+                self.notifier._emit(f"⛔ ORDER CIRCUIT BREAKER: {streak} consecutive "
+                                    f"live order failures — bot DISARMED. Fix the "
+                                    f"cause (token/IP/margin), then re-arm.")
         cands: list[Candidate] = []
         meta: dict[str, tuple] = {}
         eq_cands: list[IntradayCandidate] = []   # intraday-equity signals this tick
@@ -492,11 +529,68 @@ class EngineRunner:
             self._record_signal(now, key, st)
             if self.params.get("notify_on_signal", False):
                 self.notifier.signal(key, sig)
+            # fresh-signal guard (#12): evaluate each candle's entry signal ONCE. A
+            # signal that fires but can't enter (no capital / concurrency cap full) is
+            # DROPPED, not re-attempted every tick and filled stale when a slot frees
+            # up. Held positions (reinforcement) are handled above and exempt.
+            bar = st.get("time")
+            if signal_already_evaluated(bar, self.last_entry_bar.get(key)):
+                continue
+            if bar is not None:
+                self.last_entry_bar[key] = bar
+            # ── day-shape guards — BOTH branches (options AND intraday) ──
+            # #15: act only on a LIVE crossover. After a (re)start the latest
+            # completed candle can be hours old (pre-open it is the PREVIOUS
+            # session's last bar) — that crossover is history and the move has
+            # already left (LODHA 2026-07-03: fired at 09:00 on a prior-session
+            # bar, ~5% past its origin by noon). Age runs from candle COMPLETION.
+            iv_min = _INTERVAL_MINUTES.get(self._interval_for(key), 15)
+            if signal_too_old(bar, ist_epoch(now), iv_min,
+                              self.params.get("max_signal_age_minutes", 5.0)):
+                age_min = (ist_epoch(now) - (bar + iv_min * 60)) / 60.0
+                log.info(f"STALE SIGNAL — {key} crossover candle completed "
+                         f"~{age_min:.0f}m ago; dropped (history, not a live signal)",
+                         instrument=key, event="SIGNAL_STALE_SKIP")
+                continue
+            # #16: never OPEN outside continuous trading. A protected-market order
+            # placed pre-open (before 09:15) just rests and can miss the uncross —
+            # the LODHA 09:01:25 dangling-limit. Gates entries only; open positions
+            # are still managed/exited elsewhere.
+            seg = (_equity_charge_segment(inst)
+                   if self.products.get(key, "options") == "equity_intraday"
+                   else inst.segment)
+            if outside_trading_session(seg, now):
+                log.info(f"SESSION not open — not taking {key} "
+                         f"(pre-open/closed; a resting order can miss the uncross)",
+                         instrument=key, event="SESSION_SKIP")
+                continue
+            # #16b: the owner's start-of-day gate — in-session but before the entry
+            # window opens (default 09:30; the first minutes after the 09:15 open
+            # are erratic and the 09:00-09:15 window took the 2026-07-03 orders).
+            if before_entry_window(now, self.params.get("entry_window_start", "09:30")):
+                log.info(f"ENTRY WINDOW closed — not taking {key} before "
+                         f"{self.params.get('entry_window_start', '09:30')}",
+                         instrument=key, event="ENTRY_WINDOW_SKIP")
+                continue
+            # #9 (extended): sit out the weekly-expiry weekday (default Tuesday) for
+            # ALL entries unless the owner opted in for today
+            # (intraday_override_date == today).
+            if intraday_blocked_for_expiry_day(
+                    now.date(), self.params.get("intraday_override_date", ""),
+                    self.params.get("intraday_block_weekday", 1)):
+                log.info(f"ENTRIES blocked today (expiry-day guard) — not taking {key}; "
+                         f"set intraday_override_date to opt in",
+                         instrument=key, event="EXPIRY_DAY_SKIP")
+                continue
             # ── intraday-equity branch (MIS): collect a candidate; the cap-3 /
             # purple / qty-max selection runs after the loop. Guarded by the
             # opt-in flag so the default options behaviour is unchanged. ──
             if self.products.get(key, "options") == "equity_intraday":
                 if not intraday_on:
+                    continue
+                if is_mis_blocked(key):   # #5: never intraday-trade a non-MIS-eligible name
+                    log.info(f"INTRADAY skip — {key} not MIS-eligible (blocklist)",
+                             instrument=key, event="MIS_BLOCK")
                     continue
                 if in_reentry_cooldown(self._stopped_at.get(key), now,
                                        self.params.get("reentry_cooldown_minutes", 0.0)):
@@ -539,6 +633,14 @@ class EngineRunner:
             chain = prov.get_option_chain(inst)
             if not chain:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
+                continue
+            # theta-cliff guard (#1): never OPEN an option within N days of expiry —
+            # 0/1/2-DTE premium can evaporate on a small adverse move. Owner rule: >=3 DTE.
+            min_dte = self.params.get("entry_min_days_to_expiry", 3)
+            if expiry_too_close(chain.expiry, now.date(), min_dte):
+                dte = (chain.expiry - now.date()).days
+                log.warn(f"signal skipped — option expiry too close ({dte}d < {min_dte}d, "
+                         f"theta cliff)", instrument=key, event="DTE_SKIP")
                 continue
             pick = pick_option(chain, direction, s, now)
             if self.params.get("option_cache_enabled", True):
@@ -589,6 +691,10 @@ class EngineRunner:
             slots = slots_available(len(held), self.params.get("max_open_positions", 0))
             opened = 0
             for c in alloc.funded:
+                if not self.armed:   # #8 defense-in-depth: arm() flips WITHOUT the engine
+                    log.warn("DISARMED mid-cycle — aborting remaining entries (gate re-check)",
+                             event="ARM_RECHECK_ABORT")
+                    break            # lock, so a disarm can land after the entry gate-check
                 if slots is not None and opened >= slots:
                     log.info(f"MAX POSITIONS reached ({len(held)} open, cap "
                              f"{self.params['max_open_positions']}) — skipping {c.instrument_key}",
@@ -628,6 +734,10 @@ class EngineRunner:
                     leverage=self.params.get("intraday_leverage", 5.0),
                     available_cash=self.deployable_cash())
                 for pickk in sel.selected:
+                    if not self.armed:   # #8 defense-in-depth: disarm may have landed mid-cycle
+                        log.warn("DISARMED mid-cycle — aborting remaining intraday entries",
+                                 event="ARM_RECHECK_ABORT")
+                        break
                     inst, direction = eq_meta[pickk.instrument_key]
                     seg = _equity_charge_segment(inst)
                     log.info(f"INTRADAY {pickk.direction} {pickk.instrument_key} "
@@ -762,6 +872,14 @@ class EngineRunner:
             return sum(t.net_pnl for t in s.scalars(select(Trade))
                        if t.exit_time and t.exit_time.date() == today)
 
+    def _today_round_trips(self, today) -> int:
+        """Count of completed round trips (closed trades) today — drives the hard
+        daily round-trip cap (#10)."""
+        from app.db.models import Trade
+        with SessionLocal() as s:
+            return sum(1 for t in s.scalars(select(Trade))
+                       if t.exit_time and t.exit_time.date() == today)
+
     def _open_unrealized(self) -> float:
         """Mark-to-market P&L across all currently open positions (can be negative).
         Direction-aware for intraday-equity SHORTs (which profit as price falls)."""
@@ -776,31 +894,40 @@ class EngineRunner:
 
     def _entries_halted(self, now) -> bool:
         """Halt NEW entries for the day once a circuit breaker trips (open positions
-        are still managed throughout). Two breakers, either trips:
-          • max_daily_loss    — today's REALIZED net loss.
-          • max_open_drawdown — today's REALIZED + UNREALIZED (open MTM) loss.
+        are still managed throughout). Three breakers, any trips:
+          • max_daily_loss          — today's REALIZED net loss.
+          • max_open_drawdown       — today's REALIZED + UNREALIZED (open MTM) loss.
+          • max_round_trips_per_day — count of completed round trips today (#10).
         Alerts at most once per day; the open-drawdown breaker un-trips on recovery."""
         max_loss = self.params.get("max_daily_loss", 0.0)
         max_dd = self.params.get("max_open_drawdown", 0.0)
-        if (not max_loss or max_loss <= 0) and (not max_dd or max_dd <= 0):
+        max_rt = self.params.get("max_round_trips_per_day", 0)
+        if ((not max_loss or max_loss <= 0) and (not max_dd or max_dd <= 0)
+                and (not max_rt or max_rt <= 0)):
             return False
         today = now.date()
         realized = self._today_net_realized(today)
         unreal = self._open_unrealized() if (max_dd and max_dd > 0) else 0.0
         halted, why = daily_loss_halt(realized, unreal, max_loss, max_dd)
+        rts = self._today_round_trips(today) if (max_rt and max_rt > 0) else 0
+        if not halted and round_trip_cap_reached(rts, max_rt):
+            halted, why = True, "round_trips"
         if halted and self._halt_notified_date != today:
             self._halt_notified_date = today
-            if why == "open_drawdown":
+            if why == "round_trips":
+                log.warn(f"ROUND-TRIP CAP — {rts} completed round trips today >= cap "
+                         f"{max_rt}; no new entries today")
+            elif why == "open_drawdown":
                 combined = realized + unreal
                 log.warn(f"DAILY DRAWDOWN HALT — today realized ₹{realized:,.0f} + open "
                          f"₹{unreal:,.0f} = ₹{combined:,.0f} <= -₹{max_dd:,.0f}; no new entries today")
-                amount, cap = combined, max_dd
+                if self.params.get("notify_enabled", True):
+                    self.notifier.daily_halt(combined, max_dd)
             else:
                 log.warn(f"DAILY LOSS HALT — today realized net ₹{realized:,.0f} <= "
                          f"-₹{max_loss:,.0f}; no new entries today")
-                amount, cap = realized, max_loss
-            if self.params.get("notify_enabled", True):
-                self.notifier.daily_halt(amount, cap)
+                if self.params.get("notify_enabled", True):
+                    self.notifier.daily_halt(realized, max_loss)
         return halted
 
     def halt_status(self, now) -> dict:
@@ -809,21 +936,28 @@ class EngineRunner:
         NOT log, notify, or mutate _halt_notified_date — safe to call on every WS
         push. _entries_halted stays the one place that fires the once-per-day alert.
 
-        Returns: {halted, reason ('', 'realized', 'open_drawdown'), realized,
-        open_unrealized, max_daily_loss, max_open_drawdown}."""
+        Returns: {halted, reason ('', 'realized', 'open_drawdown', 'round_trips'),
+        realized, open_unrealized, max_daily_loss, max_open_drawdown, round_trips,
+        max_round_trips}."""
         max_loss = self.params.get("max_daily_loss", 0.0) or 0.0
         max_dd = self.params.get("max_open_drawdown", 0.0) or 0.0
-        if max_loss <= 0 and max_dd <= 0:
+        max_rt = self.params.get("max_round_trips_per_day", 0) or 0
+        if max_loss <= 0 and max_dd <= 0 and max_rt <= 0:
             return {"halted": False, "reason": "", "realized": 0.0,
                     "open_unrealized": 0.0, "max_daily_loss": max_loss,
-                    "max_open_drawdown": max_dd}
+                    "max_open_drawdown": max_dd, "round_trips": 0,
+                    "max_round_trips": max_rt}
         realized = self._today_net_realized(now.date())
         unreal = self._open_unrealized() if max_dd > 0 else 0.0
         halted, reason = daily_loss_halt(realized, unreal, max_loss, max_dd)
+        rts = self._today_round_trips(now.date()) if max_rt > 0 else 0
+        if not halted and round_trip_cap_reached(rts, max_rt):
+            halted, reason = True, "round_trips"
         return {
             "halted": halted, "reason": reason,
             "realized": round(realized, 2), "open_unrealized": round(unreal, 2),
             "max_daily_loss": max_loss, "max_open_drawdown": max_dd,
+            "round_trips": rts, "max_round_trips": max_rt,
         }
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
@@ -841,8 +975,7 @@ class EngineRunner:
         epoch = now.timestamp() if isinstance(now, _dt.datetime) else float(now)
         nxt = self._next_scan.get(key)
         if nxt is None or epoch >= nxt:
-            minutes = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}.get(
-                self._interval_for(key), 15)
+            minutes = _INTERVAL_MINUTES.get(self._interval_for(key), 15)
             self._next_scan[key] = epoch + minutes * 60
             return True
         return False
@@ -907,9 +1040,21 @@ class EngineRunner:
         if epoch >= self._next_reconcile_epoch:
             self._next_reconcile_epoch = epoch + 30.0
             try:
-                self.broker.reconcile_orphans(now)
+                # #17: first adopt any bot entry that filled after its poll window (a late
+                # uncross / slow open), so it's booked + stopped rather than left orphaned.
+                self.broker.adopt_pending_entries(now)
+                reconciled = self.broker.reconcile_orphans(now) or []
             except Exception as e:
                 log.error(f"orphan reconcile error: {e}")
+                return
+            # #2: a position that vanished from the account (manual Zerodha exit or a GTT
+            # fire) is an exit the bot didn't initiate — block same-day re-entry so the
+            # live signal can't immediately re-open it (the PAYTM/IREDA thrash).
+            for k in reconciled:
+                if k not in self.entry_blocks:
+                    self.set_entries_blocked(k, True)
+                    log.info("auto-blocked re-entry after external/reconciled exit",
+                             instrument=k, event="AUTO_BLOCK")
 
     # ── option-chain research cache (whole watchlist, not just traded names) ─
     def cache_option_chains(self, now) -> int:
@@ -1036,6 +1181,10 @@ class EngineRunner:
         """Owner control: arm (start auto-executing) or disarm (pause new entries —
         open positions are still managed and protected)."""
         self.armed = bool(value)
+        if self.armed and hasattr(self.broker, "order_fail_streak"):
+            # #14: a deliberate re-arm is the owner saying the cause is fixed —
+            # give the circuit breaker a clean slate.
+            self.broker.order_fail_streak = 0
         log.info("engine ARMED — will auto-execute trades" if self.armed
                  else "engine DISARMED — no new entries (open positions still managed)",
                  event="ARM" if self.armed else "DISARM")

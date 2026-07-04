@@ -76,3 +76,32 @@ def test_close_equity_short_loss_when_price_rises():
     assert tr.gross_pnl == pytest.approx((100.0 - 103.0) * 200)       # -600
     assert tr.net_pnl < 0
     assert b.reconcile()["diff"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_portfolio_equity_is_margin_plus_pnl_not_full_notional():
+    """Regression: portfolio equity for a leveraged MIS position must be margin +
+    unrealized P&L (mtm_value), NOT cash + full notional. The full-notional bug
+    double-counts borrowed leverage and inflates equity (it showed ~₹130k against a
+    ₹50k book live). Guards BOTH equity surfaces: broker.snapshot() (the persisted
+    equity curve) and analytics.capital_dict() (the /api/status field)."""
+    from app.engine.analytics import capital_dict as analytics_capital_dict
+
+    b = _broker()
+    pos = b.open_equity_position(get_instrument("NIFTY"), "LONG", price=100.0, qty=200,
+                                 charge_segment="NSE_INTRADAY", reason="t", now=NOW,
+                                 params=PARAMS)
+    pos.last_premium = 101.0          # share +1.00 → LONG unrealized = +1.00 * 200 = +200
+    b.s.flush()
+
+    # correct equity = initial 50,000 + 200 unrealized (entry charges left cash but are
+    # added back through entry_cost in mtm_value, so they cancel). 5x leverage means the
+    # full-notional bug would instead report ~₹70k here.
+    full_notional_equity = b.cash() + 101.0 * 200
+    expected = 50_000.0 + 200.0
+
+    snap = b.snapshot(NOW + dt.timedelta(minutes=5))
+    assert snap.equity == pytest.approx(expected, abs=0.01)
+    assert snap.equity < full_notional_equity - 10_000   # not the inflated figure
+
+    cap = analytics_capital_dict(b.s)
+    assert cap["equity"] == pytest.approx(expected, abs=0.01)

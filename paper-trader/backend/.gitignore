@@ -1,2 +1,4 @@
 *.bak
 *.sql.gz
+*.bak-*
+ledger-backup-*.sql

@@ -105,16 +105,26 @@ def equity_exit(direction: str, price: float, stop: float, target: float,
 def lockstep_band(direction: str, entry: float, qty: int, margin: float,
                   cur_stop: float, cur_target: float, price: float, *,
                   trigger_pct: float, sl_pct: float, tp_pct: float,
-                  breakeven_price: float) -> tuple[float, float]:
+                  breakeven_price: float, rt_per_share: float = 0.0,
+                  profit_lock_threshold: float = 0.0,
+                  profit_lock_frac: float = 0.0) -> tuple[float, float]:
     """Ratchet an intraday-equity position's stop AND target together once it's in
     profit. Each `trigger_pct`-of-margin of unrealized profit slides the whole band
     one step in your favour (LONG up, SHORT down), preserving the initial SL→TP width.
     Ratchet-only (never loosens), and once green the stop is floored at break-even so a
-    winner can't be stopped out red. Returns (new_stop, new_target).
+    winner can't be stopped out red.
+
+    #6 profit-lock: once unrealized profit clears `profit_lock_threshold` (₹), the stop
+    is ADDITIONALLY floored to lock a positive buffer — `profit_lock_frac` of the
+    favourable move PLUS the round-trip cost (`rt_per_share`) — so a pullback can't
+    surrender the gains (the "+₹200 then stopped at break-even" problem). All three
+    extra args default to 0 (off) so existing callers are unchanged. Returns
+    (new_stop, new_target).
 
       profit  = (price-entry)*qty (long) | (entry-price)*qty (short)
       steps   = floor( profit / (trigger_pct * margin) )
-      slide   = steps * trigger_pct * margin / qty            (price units)
+      slide   = steps * trigger_pct * margin / qty                    (price units)
+      lock    = rt_per_share + profit_lock_frac * |price-entry|       (price units, once profit>=threshold)
     """
     if margin <= 0 or qty <= 0 or trigger_pct <= 0:
         return cur_stop, cur_target
@@ -122,16 +132,26 @@ def lockstep_band(direction: str, entry: float, qty: int, margin: float,
     if profit <= 0:
         return cur_stop, cur_target
     steps = int((profit / margin) / trigger_pct + 1e-9)
-    if steps <= 0:
+    slide = steps * trigger_pct * margin / qty if steps > 0 else 0.0
+    # profit-lock buffer (price units above/below entry), once the gain is "good enough"
+    lock = None
+    if (profit_lock_threshold > 0 and profit >= profit_lock_threshold
+            and profit_lock_frac > 0):
+        move = (price - entry) if direction == "LONG" else (entry - price)
+        lock = rt_per_share + profit_lock_frac * move
+    if slide <= 0 and lock is None:
         return cur_stop, cur_target
-    slide = steps * trigger_pct * margin / qty
     if direction == "LONG":
         init_stop, init_target = entry * (1 - sl_pct), entry * (1 + tp_pct)
         new_stop = max(init_stop + slide, breakeven_price)        # break-even floor
+        if lock is not None:
+            new_stop = max(new_stop, entry + lock)                # profit-lock floor (#6)
         new_target = init_target + slide
         return max(cur_stop, round(new_stop, 2)), max(cur_target, round(new_target, 2))
     init_stop, init_target = entry * (1 + sl_pct), entry * (1 - tp_pct)
     new_stop = min(init_stop - slide, breakeven_price)            # break-even ceiling (short)
+    if lock is not None:
+        new_stop = min(new_stop, entry - lock)                    # profit-lock ceiling (#6, short)
     new_target = init_target - slide
     return min(cur_stop, round(new_stop, 2)), min(cur_target, round(new_target, 2))
 

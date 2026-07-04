@@ -109,7 +109,9 @@ def capital_dict(s: Session) -> dict:
     """Capital snapshot from a caller-owned session (thread-safe for API use)."""
     cap = s.get(CapitalState, 1)
     opens = list(s.scalars(select(Position)))
-    mtm = sum((p.last_premium or p.entry_premium) * p.qty for p in opens)
+    # segment-aware: leveraged MIS contributes margin + unrealized P&L, not full
+    # notional (raw last × qty), which double-counts leverage and inflates equity.
+    mtm = sum(p.mtm_value() for p in opens)
     return {
         "initial": cap.initial_capital, "cash": round(cap.cash, 2),
         "invested": round(sum(p.entry_cost for p in opens), 2),

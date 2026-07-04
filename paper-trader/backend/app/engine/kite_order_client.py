@@ -67,23 +67,57 @@ class KiteOrderClient:
     # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
     def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,
                        trigger_price: float, last_price: float, side: str = "SELL") -> str:
+        # Zerodha accepts GTTs only for CNC/NRML — an equity-exchange (MIS) GTT is
+        # rejected server-side, silently leaving the position stopless (the
+        # 2026-07-03 class of failure: option GTTs worked, intraday ones never
+        # existed). Refuse locally and loudly; the MIS backstop is place_stop_order.
+        if exchange in ("NSE", "BSE"):
+            raise ValueError(f"GTT not supported on equity exchange {exchange} "
+                             f"(intraday/MIS) — use place_stop_order (SL-M) instead")
         self._sync_token()
-        product = "MIS" if exchange in ("NSE", "BSE") else self.product
         res = self.kite.place_gtt(**stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, product, side))
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side))
         tid = res.get("trigger_id") if isinstance(res, dict) else res
         return str(tid)
 
     def modify_stop_gtt(self, trigger_id: str, tradingsymbol: str, exchange: str,
                         qty: int, trigger_price: float, last_price: float, side: str = "SELL"):
+        if exchange in ("NSE", "BSE"):
+            raise ValueError(f"GTT not supported on equity exchange {exchange} "
+                             f"(intraday/MIS) — use modify_stop_order (SL-M) instead")
         self._sync_token()
-        product = "MIS" if exchange in ("NSE", "BSE") else self.product
         return self.kite.modify_gtt(trigger_id=trigger_id, **stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, product, side))
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side))
 
     def delete_gtt(self, trigger_id: str):
         self._sync_token()
         return self.kite.delete_gtt(trigger_id=trigger_id)
+
+    # ── SL-M protective stop (a real resting order — the MIS backstop) ────
+    def place_stop_order(self, tradingsymbol: str, exchange: str, qty: int,
+                         trigger_price: float, side: str = "SELL",
+                         tag: str | None = None) -> str:
+        """Rest a Stop-Loss-Market order at the exchange as the protective stop for an
+        intraday (MIS) position — GTT can't be used for MIS (Zerodha allows GTT only on
+        CNC/NRML). It triggers a MARKET order when the LTP crosses `trigger_price`: a
+        LONG is protected by a SELL below entry, a SHORT by a BUY (cover) above. Returns
+        the broker order id."""
+        self._sync_token()
+        product = "MIS" if exchange in ("NSE", "BSE") else self.product
+        kw = dict(variety=self.variety, exchange=exchange, tradingsymbol=tradingsymbol,
+                  transaction_type=side, quantity=int(qty), product=product,
+                  order_type="SL-M", trigger_price=round(trigger_price, 2),
+                  # SL-M fires a MARKET order → same SEBI 1-Apr-2026 protection as MARKET.
+                  market_protection=self.market_protection or -1.0)
+        if tag:
+            kw["tag"] = tag
+        return str(self.kite.place_order(**kw))
+
+    def modify_stop_order(self, order_id: str, trigger_price: float):
+        """Re-price a resting SL-M stop's trigger (trailing the stop as it ratchets)."""
+        self._sync_token()
+        return self.kite.modify_order(variety=self.variety, order_id=order_id,
+                                      trigger_price=round(trigger_price, 2))
 
     def place(self, req: OrderRequest) -> str:
         self._sync_token()

@@ -27,6 +27,8 @@ class FakeClient:
         self.gtt_placed = []
         self.gtt_modified = []
         self.gtt_deleted = []
+        self.stop_orders = []                # (tradingsymbol, trigger, side, exchange) SL-M stops
+        self.stop_modified = []              # (order_id, trigger) SL-M re-prices
         self.cancelled = []                  # order ids passed to cancel()
         self.log = []                        # ordered call log across orders + GTTs
 
@@ -54,6 +56,15 @@ class FakeClient:
         self.gtt_placed.append((tradingsymbol, trigger_price, side, exchange))
         self.log.append(("place_gtt", tradingsymbol))
         return "GTT-1"
+
+    def place_stop_order(self, tradingsymbol, exchange, qty, trigger_price, side="SELL", tag=None):
+        self.stop_orders.append((tradingsymbol, trigger_price, side, exchange))
+        self.log.append(("place_stop", tradingsymbol))
+        return "SLM-1"
+
+    def modify_stop_order(self, order_id, trigger_price):
+        self.stop_modified.append((order_id, trigger_price))
+        self.log.append(("modify_stop", order_id))
 
     def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
         self.gtt_modified.append((trigger_id, trigger_price))
@@ -134,20 +145,134 @@ def test_open_equity_short_places_a_mis_sell():
     assert c.placed[-1].side == "SELL" and c.placed[-1].product == "MIS"
 
 
-def test_open_equity_short_places_a_buy_stop_gtt_above_entry():
+# ── #7 GTT-orphan hardening: abort the close if the exchange GTT can't be cancelled ──
+class FailCancelClient(FakeClient):
+    def delete_gtt(self, trigger_id):
+        raise RuntimeError("GTT cancel rejected by broker")
+
+
+# ── #18: an intraday (MIS) protective stop is an SL-M order, not a GTT (GTT is not
+# allowed for MIS). Cancelling it that fails must ABORT the close, same as #7. ──
+class FailStopCancelClient(FakeClient):
+    def cancel(self, order_id):
+        raise RuntimeError("SL-M cancel rejected by broker")
+
+
+def test_cancel_gtt_returns_true_on_success_or_noop():
+    b = _broker(FakeClient())
+    assert b._cancel_gtt("GTT-9", "NIFTY") is True
+    assert b._cancel_gtt(None, "NIFTY") is True           # nothing to cancel -> ok
+
+
+def test_cancel_gtt_returns_false_on_failure():
+    b = _broker(FailCancelClient())
+    assert b._cancel_gtt("GTT-9", "NIFTY") is False
+
+
+def test_equity_close_aborts_when_stop_cancel_fails():
+    from sqlalchemy import select as _select
+
+    from app.db.models import Trade as _Trade
+    from app.db.session import SessionLocal
+    c = FailStopCancelClient(fill_price=100.0)
+    b = _broker(c, account=[{"tradingsymbol": "NIFTY", "quantity": 10}])  # account backs the long
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    assert pos.gtt_trigger_id is not None                 # SL-M order id stored
+    placed_before = len(c.placed)
+    res = b.close_equity_position(pos, 101.0, "STOP_LOSS", b.provider.now())
+    assert res is None                                    # close ABORTED — SL-M still resting
+    assert len(c.placed) == placed_before                 # NO closing order was sent
+    with SessionLocal() as s:
+        assert list(s.scalars(_select(_Trade))) == []     # nothing booked closed
+
+
+# ── #3 keep-both-stops, fix the race: the broker GTT and the bot SL can't BOTH fill ──
+def test_close_aborts_if_position_vanished_mid_close_no_double_fill():
+    """If the position disappears from the account between the ownership check and the
+    send (its GTT fired, or the owner exited) the bot sends NO closing order — so the
+    GTT and the bot can never both fill (oversell / reversed position). The orphan
+    reconciler books it instead. This is what makes 'keep both stops' safe."""
+    from sqlalchemy import select as _sel
+
+    from app.db.models import Trade as _Tr
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=100.0)            # GTT cancel SUCCEEDS here; the race is at the re-check
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    placed_after_open = len(c.placed)
+    # account backs the long at the FIRST check, then reads flat at the RE-check (GTT fired)
+    state = {"n": 0}
+
+    def acct():
+        state["n"] += 1
+        return [{"tradingsymbol": "NIFTY", "quantity": 10}] if state["n"] == 1 else []
+    b.provider.account_positions = acct
+    res = b.close_equity_position(pos, 101.0, "STOP_LOSS", b.provider.now())
+    assert res is None                                    # aborted at the GTT-fired re-check
+    assert len(c.placed) == placed_after_open             # NO second order — no double-fill
+    with SessionLocal() as s:
+        assert list(s.scalars(_sel(_Tr))) == []           # not booked by us; reconciler will
+
+
+def test_open_equity_short_places_a_buy_sl_m_above_entry():
+    # MIS short: protective SL-M BUY (cover) resting ABOVE entry — NOT a GTT (GTT is
+    # rejected for MIS; the mock used to hide that).
     c = FakeClient(fill_price=100.0)
     b = _broker(c)
-    _open_eq(b, "SHORT", 100.0, 10)
-    sym, trig, side, exch = c.gtt_placed[-1]   # a short's protective GTT covers (BUY) above entry
+    pos = _open_eq(b, "SHORT", 100.0, 10)
+    assert c.gtt_placed == []                   # no GTT on the MIS path
+    sym, trig, side, exch = c.stop_orders[-1]
     assert side == "BUY" and trig > 100.0 and exch == "NSE"
+    assert pos.gtt_trigger_id == "SLM-1"         # the resting SL-M order id
 
 
-def test_open_equity_long_places_a_sell_stop_gtt_below_entry():
+def test_open_equity_long_places_a_sell_sl_m_below_entry():
     c = FakeClient(fill_price=100.0)
     b = _broker(c)
-    _open_eq(b, "LONG", 100.0, 10)
-    sym, trig, side, exch = c.gtt_placed[-1]
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    assert c.gtt_placed == []
+    sym, trig, side, exch = c.stop_orders[-1]
     assert side == "SELL" and trig < 100.0
+    assert pos.gtt_trigger_id == "SLM-1"
+
+
+def test_equity_close_cancels_the_sl_m_before_selling():
+    # cancel-then-sell: the resting SL-M must be pulled BEFORE the market close, or a
+    # gap could fire both (oversell / reversed position) — same guarantee as the GTT path.
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol, "quantity": 10}]
+    c.log.clear()
+    b.close_equity_position(pos, 101.0, "MANUAL_CLOSE", b.provider.now())
+    cancel_i = c.log.index(("cancel", "SLM-1"))
+    sell_i = c.log.index(("place", "SELL"))
+    assert cancel_i < sell_i                     # backstop pulled BEFORE the sell
+
+
+def test_equity_trail_reprices_the_sl_m():
+    # ratcheting the software stop must re-price the resting SL-M so the backstop follows.
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.stop_price = 98.5
+    b.update_stop_protection(pos, 103.0)
+    assert c.stop_modified and c.stop_modified[-1] == ("SLM-1", 98.5)
+    assert c.gtt_modified == []                   # not a GTT
+
+
+def test_reconciled_equity_orphan_cancels_its_sl_m():
+    import datetime as dt
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c, account=[])                    # nothing backs it -> orphan
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s grace
+    b.commit()
+    need = b.settings.orphan_confirm_count
+    for _ in range(need):
+        b.reconcile_orphans(b.provider.now())
+    assert c.cancelled == ["SLM-1"]               # the resting SL-M was pulled, no GTT delete
+    assert c.gtt_deleted == []
 
 
 def test_close_equity_long_sells_when_account_backs_it():
@@ -507,6 +632,67 @@ def test_timed_out_sell_is_cancelled_before_the_next_sell_is_sent():
     b.close_position(pos, 90.0, "STOP_LOSS", b.provider.now(), chain.spot)
     assert ("cancel", "OID-1") in c.log
     assert c.log.index(("cancel", "OID-1")) < c.log.index(("place", "SELL"))
+
+
+# ── #17: a bot entry that fills AFTER the poll window is ADOPTED, never orphaned ──
+# (the BSE 2026-07-03 incident: the entry filled just after the open, outside the 30s
+#  confirm window → an untracked, stopless position invisible to the engine.)
+def test_timed_out_equity_entry_records_a_pending_entry():
+    c = FakeClient(status="OPEN", filled_qty=0)   # entry never confirms within the window
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos = _open_eq(b, "LONG", 100.0, 13)
+    assert pos is None                             # nothing booked at entry time
+    assert len(b._pending_entries) == 1            # ...but tracked (by tradingsymbol) for adoption
+
+
+def test_late_filled_entry_is_adopted_with_a_stop():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    assert _open_eq(b, "LONG", 100.0, 13) is None  # timed out, no fill yet
+    assert b.position_for("NIFTY") is None
+    c._status, c._filled_qty, c.fill_price = "COMPLETE", 13, 100.0   # it fills later
+    adopted = b.adopt_pending_entries(b.provider.now())
+    assert "NIFTY" in adopted
+    p = b.position_for("NIFTY")
+    assert p is not None and p.qty == 13 and p.entry_premium == 100.0
+    assert p.gtt_trigger_id == "SLM-1"             # adopted WITH a protective SL-M stop
+    assert "NIFTY" not in b._pending_entries        # cleared once adopted
+
+
+def test_dead_pending_entry_is_dropped_without_adoption():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    _open_eq(b, "LONG", 100.0, 13)
+    c._status, c._filled_qty = "REJECTED", 0       # the order died with no fill
+    assert b.adopt_pending_entries(b.provider.now()) == []
+    assert b.position_for("NIFTY") is None
+    assert "NIFTY" not in b._pending_entries        # nothing to adopt → dropped
+
+
+def test_still_working_pending_entry_is_retained():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    _open_eq(b, "LONG", 100.0, 13)
+    assert b.adopt_pending_entries(b.provider.now()) == []   # still OPEN, unfilled
+    assert len(b._pending_entries) == 1             # kept — it may still fill
+
+
+def test_adoption_does_not_double_book_an_existing_position():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    _open_eq(b, "LONG", 100.0, 13)
+    # a position for the key already exists (e.g. adopted on a prior pass / re-entered)
+    b.provider.account_positions = lambda: []
+    existing = super(LiveBroker, b).open_equity_position(
+        get_instrument("NIFTY"), "LONG", 100.0, 13, "NSE_INTRADAY", "t", b.provider.now(), params={})
+    c._status, c._filled_qty, c.fill_price = "COMPLETE", 13, 100.0
+    b.adopt_pending_entries(b.provider.now())
+    assert len([p for p in b.open_positions() if p.instrument_key == "NIFTY"]) == 1  # no duplicate
 
 
 def _reinforce_params():

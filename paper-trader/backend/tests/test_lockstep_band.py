@@ -34,3 +34,31 @@ def test_never_loosens():
 def test_short_mirror():
     # SHORT @ 100, +1 step (+₹200 @ 99.60): stop floored to break-even 100, target -> 97.60
     assert lockstep_band("SHORT", ENTRY, QTY, MARGIN, 101.0, 98.0, 99.60, breakeven_price=100.0, **P) == (100.0, 97.60)
+
+
+# ── #6 profit-lock: once the gain is "good enough", lock a positive buffer ──
+LOCK = dict(trigger_pct=0.02, sl_pct=0.01, tp_pct=0.02,
+            profit_lock_threshold=200.0, profit_lock_frac=0.5)
+
+
+def test_profit_lock_floors_positive_buffer_long():
+    # +1 step (+₹200 @ 100.40): WITHOUT the lock the stop floors at break-even 100.0;
+    # WITH profit-lock (≥₹200, 50% of the +₹0.40 move) it floors at 100.20 — locking
+    # +₹100 net (500 sh × ₹0.20) instead of handing the gain back at break-even.
+    stop, _ = lockstep_band("LONG", ENTRY, QTY, MARGIN, 99.0, 102.0, 100.40,
+                            breakeven_price=BE, **LOCK)
+    assert stop == 100.20
+
+
+def test_profit_lock_dormant_below_threshold():
+    # @100.20 the gain is +₹100 < ₹200 threshold -> no lock, no ratchet (stop unchanged)
+    stop, _ = lockstep_band("LONG", ENTRY, QTY, MARGIN, 99.0, 102.0, 100.20,
+                            breakeven_price=BE, **LOCK)
+    assert stop == 99.0
+
+
+def test_profit_lock_short_side():
+    # SHORT @ 100, +₹200 @ 99.60: the lock floors the stop DOWN to 99.80 (mirror of long)
+    stop, _ = lockstep_band("SHORT", ENTRY, QTY, MARGIN, 101.0, 98.0, 99.60,
+                            breakeven_price=100.0, **LOCK)
+    assert stop == 99.80
