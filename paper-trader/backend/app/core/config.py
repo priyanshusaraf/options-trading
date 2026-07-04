@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # capital & risk
     initial_capital: float = 50_000.0
-    stop_loss_pct: float = 0.35
+    stop_loss_pct: float = 0.30
     target_pct: float = 0.60
 
     # ── trader risk controls (additive entry guards; 0 = off, back-compat) ──
@@ -86,12 +86,14 @@ class Settings(BaseSettings):
     max_stale_seconds: float = 30.0      # a mark older than this is stale -> no SL/TP fires on it
 
     # trailing stop-loss (ratchets the premium stop UP as profit thresholds are crossed)
-    #   defaults reproduce the owner's example: entry 400, +10% step, lock 2.5%/step
-    #   -> SL 410 at +10%, 420 at +20%, … up to the +60% target. Never loosens.
+    #   gentle 2.5% lock on the first +10% step, then trail exactly one step (10%)
+    #   behind the high-water profit, with NO upper ceiling so a let-it-run winner
+    #   keeps locking profit forever. Entry 400: SL 410 at +10%, 440 at +20%,
+    #   480 at +30%, … 600 at +60%, 760 at +100%. Never loosens.
     trail_enabled: bool = True
-    trail_trigger_pct: float = 0.10      # profit (fraction of entry) per ratchet step
-    trail_lock_pct: float = 0.025        # SL raised by this fraction of entry per step crossed
-    trail_target_pct: float = 0.60       # stop ratcheting once profit reaches the final target
+    trail_trigger_pct: float = 0.10         # profit (fraction of entry) per ratchet step
+    trail_first_step_lock_pct: float = 0.025  # gentle SL lock at the first (+10%) step
+    trail_step_lock_pct: float = 0.10       # SL trails this fraction of entry behind each step >=2
 
     # ── reinforcement (a same-direction crossover while holding a winner) ───
     # Does NOT add quantity (no pyramiding). It strengthens management: ratchet
@@ -111,6 +113,12 @@ class Settings(BaseSettings):
     overnight_max_pct: float = 0.25          # >25% of capital never held overnight, even reinforced
     overnight_min_reinforcements: int = 1    # 10%–25% positions need >=1 reinforcement to hold
     overnight_min_days_to_expiry: int = 2    # force square-off if expiry within N days (theta cliff)
+    entry_min_days_to_expiry: int = 3        # refuse to OPEN an option within N days of expiry (theta cliff): blocks 0/1/2-DTE. 0 = off
+    intraday_block_weekday: int = 1          # block ALL new entries on this weekday (Mon=0..Sun=6; 1=Tue/NIFTY-expiry; -1=off). Name kept for override back-compat
+    intraday_override_date: str = ""         # 'YYYY-MM-DD' to allow entries despite the weekday block, that one day only (self-expires)
+    max_signal_age_minutes: float = 5.0      # act on a crossover only within this long of its candle COMPLETING; older = history, never entered (#15). 0 = off
+    entry_window_start: str = "09:30"        # no NEW entry before this IST wall-clock time (session opens 09:15; first minutes are erratic). blank = off
+    order_failure_disarm_count: int = 3      # DISARM after this many CONSECUTIVE live order failures (systemic: bad token/IP/margin) — re-arm manually after fixing (#14). 0 = off
     block_overnight_into_weekend: bool = False
     max_holding_days: int = 5                # hard cap on holding period (trading days)
     square_off_buffer_minutes: float = 15.0  # decide / square-off this long before session close
@@ -129,6 +137,7 @@ class Settings(BaseSettings):
     order_poll_seconds: float = 0.5            # gap between order-status polls
     order_timeout_seconds: float = 10.0        # give up polling after this; reconcile, never assume filled
     max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
+    max_round_trips_per_day: int = 9           # halt NEW entries after this many completed round trips today (0 = off)
     max_open_drawdown: float = 0.0             # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off)
     gtt_stop_enabled: bool = True              # live: also place an exchange-side GTT stop (survives bot/laptop downtime)
     # market protection for every live MARKET order (entries + protective exits, all
@@ -141,6 +150,36 @@ class Settings(BaseSettings):
     # this many CONSECUTIVE reconcile reads — one transient positions() glitch (>60s)
     # must not phantom-close a still-open real position.
     orphan_confirm_count: int = 2
+
+    # ── intraday equity segment (MIS, 5x; separate from the options segment) ──
+    # Opt-in. Sizing is by MARGIN deployed per trade (not notional): 7–10k of margin
+    # controls ~35–50k of stock at 5x. qty = floor(margin × leverage / share_price).
+    # Concurrency is a HARD cap of 3 TOTAL (purple included). Purple = a watchlist
+    # priority flag: those names always win selection and size at purple_margin;
+    # other names compete for leftover slots by the higher-quantity (cheaper-share)
+    # rule. The portfolio-wide 5k daily-loss halt (max_daily_loss, cost-inclusive)
+    # governs BOTH segments — there is no separate intraday loss cap.
+    intraday_enabled: bool = False
+    intraday_max_positions: int = 3            # hard cap on concurrent intraday trades (purple included)
+    intraday_min_margin: float = 7_000.0       # don't open an intraday trade with less margin than this
+    intraday_max_margin: float = 10_000.0      # target margin per (non-purple) intraday trade
+    intraday_purple_margin: float = 10_000.0   # margin for a purple-flagged priority name
+    intraday_leverage: float = 5.0             # Zerodha MIS equity leverage
+    intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
+    intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
+    intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price
+    # lockstep band: once an equity position is in profit, slide BOTH the stop and
+    # target together by one step per `trigger_pct` of margin (default 2% = ₹200 on a
+    # ₹10k margin), ratchet-only, with a break-even floor. On by default.
+    intraday_lockstep_enabled: bool = True
+    intraday_lockstep_trigger_pct: float = 0.02  # profit per lockstep, as a fraction of deployed margin
+    intraday_profit_lock_threshold: float = 200.0  # #6: once unrealized profit clears this (₹), lock a positive buffer above costs
+    intraday_profit_lock_frac: float = 0.5         # #6: fraction of the favourable move to lock once past the threshold
+
+    # overtrading guard (advisory red-flag suggestion — no engine effect)
+    overtrade_today_threshold: int = 5      # suggest red when an instrument fires >= this many signals today
+    overtrade_rolling_threshold: int = 15   # ...or >= this many over the rolling window
+    overtrade_rolling_days: int = 7         # rolling window length, in days
 
     # ── notifications (Telegram) ───────────────────────────────────────────
     notify_enabled: bool = True              # master switch (no-op anyway if creds unset)

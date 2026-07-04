@@ -1,10 +1,29 @@
 import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getDashboard, getAccountPnl } from '../lib/api'
+import { getDashboard, getAccountPnl, getStrategies } from '../lib/api'
+import InstrumentDetailModal from './InstrumentDetailModal'
 import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
-import type { TradeDTO } from '../lib/types'
+import type { TradeDTO, StrategyMeta } from '../lib/types'
+
+type Seg = 'all' | 'options' | 'equity_intraday'
+const SEG_TABS: [Seg, string][] = [
+  ['all', 'Portfolio'], ['options', 'Options'], ['equity_intraday', 'Outrights'],
+]
+
+function Legend({ series }: { series: { name: string; color: string }[] }) {
+  if (!series.length) return null
+  return (
+    <div className="flex flex-wrap gap-3 mt-2">
+      {series.map((c) => (
+        <span key={c.name} className="flex items-center gap-1 text-[11px] text-muted">
+          <span className="w-3 h-0.5 inline-block" style={{ background: c.color }} />{c.name}
+        </span>
+      ))}
+    </div>
+  )
+}
 
 function Card({ label, v, cls = '', sub }: { label: string; v: string; cls?: string; sub?: string }) {
   return (
@@ -37,12 +56,20 @@ function BotVsYou() {
 export default function DashboardView() {
   const { state } = useLive()
   const [d, setD] = useState<any>(null)
+  const [seg, setSeg] = useState<Seg>('all')
+  const [strat, setStrat] = useState<string>('')   // '' = all strategies
+  const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [period, setPeriod] = useState<'all' | 'today' | '7d' | '30d'>('all')
+  const [detailKey, setDetailKey] = useState<string | null>(null)
+  useEffect(() => { getStrategies().then((x) => setStrategies(x.strategies || [])).catch(() => {}) }, [])
   useEffect(() => {
-    const load = () => getDashboard().then(setD)
+    const load = () => getDashboard(seg === 'all' ? undefined : seg, strat || undefined, period).then(setD)
     load()
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
-  }, [])
+  }, [seg, strat, period])
+
+  const stratLabel = (k: string) => strategies.find((x) => x.key === k)?.display_name || k
 
   if (!d) return <div className="card p-8 text-center text-muted">loading analytics…</div>
   const s = d.summary, cap = d.capital
@@ -51,15 +78,50 @@ export default function DashboardView() {
   const grossMag = Math.abs(s.gross_pnl) || 1
   const chargeDrag = (s.charges / grossMag) * 100
   const avgCharge = s.trades ? s.charges / s.trades : 0
-  const equity = (d.equity_curve || []).map((x: any) => ({ time: x.time, value: x.equity }))
+  // unfiltered curve is MTM ({time,equity}); a filtered slice is realized ({time,value})
+  const equity = (d.equity_curve || []).map((x: any) => ({ time: x.time, value: x.equity ?? x.value }))
   const curves = Object.entries(d.instrument_curves || {})
     .map(([k, v]) => ({ name: k, data: v as any[], color: colorFor(k) }))
   const perInst = Object.entries(s.per_instrument || {})
     .sort((a: any, b: any) => b[1].net - a[1].net) as [string, any][]
+  // per-segment + per-strategy realized overlays (Phase 4)
+  const segCurves = Object.entries(d.segment_curves || {})
+    .filter(([, v]) => (v as any[]).length)
+    .map(([k, v]) => ({ name: k === 'equity_intraday' ? 'Outrights' : 'Options', data: v as any[], color: colorFor(k) }))
+  const strategyCurves = Object.entries(d.strategy_curves || {})
+    .filter(([, v]) => (v as any[]).length)
+    .map(([k, v]) => ({ name: stratLabel(k), data: v as any[], color: colorFor(k) }))
+  const segName = SEG_TABS.find(([k]) => k === seg)?.[1] || 'Portfolio'
 
   return (
     <div className="flex flex-col gap-3">
       <BotVsYou />
+      {/* segment + strategy selector — slice the whole dashboard */}
+      <div className="card p-3 flex items-center gap-2 flex-wrap">
+        <span className="stat-label mr-1">View</span>
+        {SEG_TABS.map(([k, label]) => (
+          <button key={k} onClick={() => setSeg(k)}
+            className={`badge ${seg === k ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            {label}
+          </button>
+        ))}
+        <span className="stat-label mx-1">Strategy</span>
+        <select value={strat} onChange={(e) => setStrat(e.target.value)}
+          className="bg-panel2 border border-edge rounded px-2 py-1 text-xs">
+          <option value="">all strategies</option>
+          {strategies.map((x) => <option key={x.key} value={x.key}>{x.display_name}</option>)}
+        </select>
+        <span className="stat-label mx-1">Period</span>
+        {(['all', 'today', '7d', '30d'] as const).map((p) => (
+          <button key={p} onClick={() => setPeriod(p)}
+            className={`badge ${period === p ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            {p === 'all' ? 'All-time' : p}
+          </button>
+        ))}
+        <span className="ml-auto text-[11px] text-muted">
+          showing <b className="text-zinc-300">{segName}</b>{strat ? ` · ${stratLabel(strat)}` : ''} — net of all costs
+        </span>
+      </div>
       {/* capital + headline stats */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px,1fr))' }}>
         <Card label="Equity (MTM)" v={inr(cap.equity)} />
@@ -87,12 +149,15 @@ export default function DashboardView() {
       </div>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)' }}>
-        {/* portfolio equity curve */}
+        {/* equity / realized curve for the current selection */}
         <div className="card p-3">
-          <div className="stat-label mb-1">Portfolio equity curve</div>
+          <div className="stat-label mb-1">
+            {seg === 'all' && !strat ? 'Portfolio equity curve (mark-to-market)'
+              : `${segName}${strat ? ` · ${stratLabel(strat)}` : ''} — cumulative realized P&L`}
+          </div>
           {equity.length ? <LineChart data={equity} height={260} color="#2ebd85"
-            priceLines={[{ price: cap.initial, color: '#8b93a7', title: 'start' }]} />
-            : <div className="text-muted text-xs py-10 text-center">no snapshots yet</div>}
+            priceLines={[{ price: seg === 'all' && !strat ? cap.initial : 0, color: '#8b93a7', title: 'start' }]} />
+            : <div className="text-muted text-xs py-10 text-center">no data yet for this view</div>}
         </div>
         {/* avg win/loss + best/worst */}
         <div className="card p-3 flex flex-col gap-3">
@@ -113,18 +178,30 @@ export default function DashboardView() {
         </div>
       </div>
 
+      {/* portfolio split: options vs outrights (cumulative realized) */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)' }}>
+        <div className="card p-3">
+          <div className="stat-label mb-1">By segment — Options vs Outrights (cumulative realized P&L)</div>
+          {segCurves.length ? <MultiLineChart series={segCurves} height={240} />
+            : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
+          <Legend series={segCurves} />
+        </div>
+        <div className="card p-3">
+          <div className="stat-label mb-1">
+            By strategy{seg !== 'all' ? ` · within ${segName}` : ''} (cumulative realized P&L)
+          </div>
+          {strategyCurves.length ? <MultiLineChart series={strategyCurves} height={240} />
+            : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
+          <Legend series={strategyCurves} />
+        </div>
+      </div>
+
       {/* per-instrument equity curves */}
       <div className="card p-3">
         <div className="stat-label mb-1">Per-instrument equity curves (cumulative realized P&L)</div>
         {curves.length ? <MultiLineChart series={curves} height={280} />
           : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
-        <div className="flex flex-wrap gap-3 mt-2">
-          {curves.map((c) => (
-            <span key={c.name} className="flex items-center gap-1 text-[11px] text-muted">
-              <span className="w-3 h-0.5 inline-block" style={{ background: c.color }} />{c.name}
-            </span>
-          ))}
-        </div>
+        <Legend series={curves} />
       </div>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.3fr)' }}>
@@ -137,7 +214,8 @@ export default function DashboardView() {
             <tbody>
               {perInst.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-muted">—</td></tr>}
               {perInst.map(([k, v]) => (
-                <tr key={k} className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums">
+                <tr key={k} onClick={() => setDetailKey(k)}
+                  className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums cursor-pointer hover:bg-panel2/50">
                   <td className="font-semibold text-zinc-100">{k}</td>
                   <td>{v.trades}</td>
                   <td>{v.win_rate}%</td>
@@ -175,6 +253,11 @@ export default function DashboardView() {
           </table>
         </div>
       </div>
+      {detailKey && (
+        <InstrumentDetailModal instrumentKey={detailKey}
+          segment={seg === 'all' ? undefined : seg} strategy={strat || undefined} period={period}
+          onClose={() => setDetailKey(null)} />
+      )}
     </div>
   )
 }

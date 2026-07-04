@@ -36,7 +36,10 @@ def test_overnight_keep_then_book_gap():
     r, nifty, chain, q, pos = _runner_with_long()
     r.params["overnight_auto_pct"] = 5.0       # force auto-hold regardless of size
     r.params["overnight_max_pct"] = 5.0
-    r.params["overnight_min_days_to_expiry"] = 0   # disable the expiry gate for this test
+    # disable the expiry gate for this test: the shared mock sim-clock may already
+    # sit PAST this chain's expiry (dte < 0) depending on how many earlier tests
+    # advanced the singleton provider — 0 would still square off on a negative dte.
+    r.params["overnight_min_days_to_expiry"] = -9999
     close = r.provider.now()
     r.square_off_for_overnight(close)
     p = r.broker.position_for("NIFTY")

@@ -160,7 +160,9 @@ class MarketDataProvider(ABC):
             pos = by_key.get(inst.key)
             spot = self.get_live_price(inst)
             premium = None
-            if pos:
+            # intraday-equity positions (option_type "EQ") have no option to price —
+            # they mark to spot. Only price an actual option contract.
+            if pos and pos.option_type != "EQ":
                 premium = self.option_ltp(
                     inst, pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type)
             out[inst.key] = {

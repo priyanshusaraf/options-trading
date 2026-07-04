@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 
 from app.backtest import sweep
 from app.core.config import get_settings
+from app.core.instruments import get_instrument
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
 
@@ -60,6 +61,7 @@ class SweepRequest(BaseModel):
     lookback_days: int | None = None      # preset window in days (None = entire history)
     start_date: str | None = None         # ISO custom window start (overrides lookback)
     end_date: str | None = None           # ISO custom window end
+    strategies: list[str] | None = None   # registry strategy keys (None = default v3)
 
 
 @router.post("/sweep")
@@ -70,7 +72,8 @@ def start(body: SweepRequest):
         run_id = sweep.start_sweep(
             scope=body.scope, intervals=body.intervals, capital=body.capital,
             instruments=body.instruments, lookback_days=body.lookback_days,
-            start_date=body.start_date, end_date=body.end_date)
+            start_date=body.start_date, end_date=body.end_date,
+            strategies=body.strategies)
     except Exception as e:
         return {"error": str(e)}
     return {"run_id": run_id, "running": True}
@@ -82,13 +85,15 @@ def instruments(scope: str = "liquid"):
     preset lookback windows and per-interval max history the UI discloses."""
     from app.backtest.universe import full_universe, liquid_universe
     from app.providers.factory import get_provider
+    from app.strategy.registry import strategy_meta
     prov = get_provider()
     specs = full_universe(prov) if scope == "full" else liquid_universe(prov)
     out = sorted(({"key": i.key, "name": i.name, "segment": i.segment,
                    "has_options": getattr(i, "has_options", True)} for i in specs),
                  key=lambda d: (d["segment"], d["key"]))
     return {"instruments": out, "presets": list(sweep.PRESET_DAYS.keys()),
-            "preset_days": sweep.PRESET_DAYS, "max_days": sweep.MAX_DAYS}
+            "preset_days": sweep.PRESET_DAYS, "max_days": sweep.MAX_DAYS,
+            "strategies": strategy_meta()}
 
 
 @router.get("/status")
@@ -124,7 +129,7 @@ def runs(limit: int = 100):
 def export(run_id: int | None = None):
     """Download a run's results as CSV (so a sweep's output survives outside the
     app). Defaults to the latest run."""
-    cols = ["instrument_key", "name", "segment", "interval", "trades", "wins",
+    cols = ["instrument_key", "name", "segment", "strategy_key", "interval", "trades", "wins",
             "win_rate", "win_rate_realised", "open_at_end", "profit_factor",
             "max_drawdown_pct", "worst_mae_pct", "return_pct", "return_pct_realised",
             "bh_return_pct", "net_pnl", "worst_trade_pnl", "gross_pnl", "charges",
@@ -152,6 +157,7 @@ def export(run_id: int | None = None):
 
 @router.get("/results")
 def results(request: Request, run_id: int | None = None, interval: str | None = None,
+            strategy: str | None = None,
             min_win_rate: float = 0.0, min_profit_factor: float = 0.0,
             max_drawdown: float = 100.0, min_return: float = -1e9,
             min_trades: int = 1, sort: str = "return_pct", limit: int = 500):
@@ -161,6 +167,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
             run_id = run.id if run else -1
         q = select(BacktestResult).where(BacktestResult.run_id == run_id)
+        if strategy:
+            q = q.where(BacktestResult.strategy_key == strategy)
         rows = list(s.scalars(q))
 
     out = []
@@ -189,6 +197,10 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             skipped_filtered += 1
             continue
         d = _with_affordability(r.summary(), budget)
+        try:
+            d["has_options"] = bool(get_instrument(r.instrument_key).has_options)
+        except KeyError:
+            d["has_options"] = True
         if not d["affordable_options"]:
             unaffordable += 1
         out.append(d)
@@ -205,15 +217,19 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
 
 
 @router.get("/result/{key}/{interval}")
-def result_detail(key: str, interval: str, request: Request, run_id: int | None = None):
+def result_detail(key: str, interval: str, request: Request, run_id: int | None = None,
+                  strategy: str | None = None):
     with SessionLocal() as s:
         if run_id is None:
             run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
             run_id = run.id if run else -1
-        r = s.scalar(select(BacktestResult).where(
+        q = select(BacktestResult).where(
             BacktestResult.run_id == run_id,
             BacktestResult.instrument_key == key,
-            BacktestResult.interval == interval))
+            BacktestResult.interval == interval)
+        if strategy:   # disambiguate when a run swept several strategies
+            q = q.where(BacktestResult.strategy_key == strategy)
+        r = s.scalar(q)
         if not r:
             return {"error": "no such result"}
         d = _with_affordability(r.summary(), _budget(request))

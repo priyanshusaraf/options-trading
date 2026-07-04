@@ -52,7 +52,8 @@ def resolve_spec(key: str, provider) -> Instrument | None:
 
 
 def add_instrument(key: str, provider, on_home: bool = True,
-                   interval: str | None = None) -> dict:
+                   interval: str | None = None, strategy_key: str | None = None,
+                   product: str | None = None) -> dict:
     spec = resolve_spec(key, provider)
     if spec is None:
         return {"error": f"could not resolve instrument '{key}'"}
@@ -84,6 +85,15 @@ def add_instrument(key: str, provider, on_home: bool = True,
             st.enabled = True
         if iv:
             st.live_interval = iv
+        applied_product = applied_strategy = None
+        if product in ("options", "equity_intraday"):
+            st.product = product
+            applied_product = product
+        if strategy_key:
+            from app.strategy.registry import strategy_keys as _skeys
+            if strategy_key in _skeys():
+                st.strategy_key = strategy_key
+                applied_strategy = strategy_key
         s.commit()
     reg.load_universe()
     log.info(f"added {key} to portfolio universe (has_options={spec.has_options}"
@@ -94,6 +104,10 @@ def add_instrument(key: str, provider, on_home: bool = True,
         out["interval"] = iv
     if warning:
         out["interval_warning"] = warning
+    if applied_product:
+        out["product"] = applied_product
+    if applied_strategy:
+        out["strategy_key"] = applied_strategy
     return out
 
 

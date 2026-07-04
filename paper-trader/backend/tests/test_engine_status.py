@@ -45,6 +45,41 @@ def test_halt_status_reflects_realized_breaker():
     assert halt["realized"] == -6000.0
 
 
+# ── #10 hard daily round-trip cap ──
+def test_halt_status_reflects_round_trip_cap():
+    r = _runner()
+    r.params = dict(r.params)
+    r.params["max_daily_loss"] = 0.0          # only the round-trip breaker active
+    r.params["max_open_drawdown"] = 0.0
+    r.params["max_round_trips_per_day"] = 9
+    r._today_round_trips = lambda today: 9     # cap reached
+    halt = r.halt_status(r.provider.now())
+    assert halt["halted"] is True
+    assert halt["reason"] == "round_trips"
+    assert halt["round_trips"] == 9 and halt["max_round_trips"] == 9
+
+
+def test_round_trip_cap_under_limit_no_halt():
+    r = _runner()
+    r.params = dict(r.params)
+    r.params["max_daily_loss"] = 0.0
+    r.params["max_open_drawdown"] = 0.0
+    r.params["max_round_trips_per_day"] = 9
+    r._today_round_trips = lambda today: 8     # under the cap
+    halt = r.halt_status(r.provider.now())
+    assert halt["halted"] is False and halt["reason"] == ""
+
+
+def test_entries_halted_fires_on_round_trip_cap():
+    r = _runner()
+    r.params = dict(r.params)
+    r.params["max_daily_loss"] = 0.0
+    r.params["max_open_drawdown"] = 0.0
+    r.params["max_round_trips_per_day"] = 3
+    r._today_round_trips = lambda today: 3
+    assert r._entries_halted(r.provider.now()) is True
+
+
 def test_halt_status_is_pure_no_notifier_no_mutation():
     r = _runner()
     fired = []

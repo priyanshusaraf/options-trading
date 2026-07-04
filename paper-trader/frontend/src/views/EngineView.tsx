@@ -88,11 +88,14 @@ export default function EngineView() {
           {halt?.halted ? (
             <div className="badge bg-down/20 text-down border border-down/50 font-semibold"
               title="New entries are halted by a circuit breaker. Open positions are still managed & protected.">
-              ⛔ HALT — {halt.reason === 'open_drawdown' ? 'open drawdown' : 'daily loss'}
+              ⛔ HALT — {halt.reason === 'open_drawdown' ? 'open drawdown'
+                : halt.reason === 'round_trips' ? 'round-trip cap' : 'daily loss'}
               {' · '}
-              {halt.reason === 'open_drawdown'
-                ? `${signedInr(halt.realized + halt.open_unrealized)} / cap ${inr(-halt.max_open_drawdown)}`
-                : `${signedInr(halt.realized)} / cap ${inr(-halt.max_daily_loss)}`}
+              {halt.reason === 'round_trips'
+                ? `${halt.round_trips} / ${halt.max_round_trips} round trips`
+                : halt.reason === 'open_drawdown'
+                  ? `${signedInr(halt.realized + halt.open_unrealized)} / cap ${inr(-halt.max_open_drawdown)}`
+                  : `${signedInr(halt.realized)} / cap ${inr(-halt.max_daily_loss)}`}
             </div>
           ) : (
             <span className="badge bg-up/15 text-up">no halt</span>
@@ -108,7 +111,7 @@ export default function EngineView() {
         it is between candles. The bot only OPENS new trades when armed and not halted.
       </div>
 
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1.7fr) minmax(0,1fr)' }}>
+      <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-3 min-w-0">
           {/* Per-instrument freshness / scan + position health */}
           <div className="card p-3 overflow-auto">

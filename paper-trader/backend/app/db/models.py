@@ -37,6 +37,11 @@ class InstrumentState(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     live_interval: Mapped[str] = mapped_column(String(12), default="15minute")
     entries_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # dual-segment / multi-strategy assignment (Phase 0 foundation)
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)  # None = default strategy
+    priority_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "purple" intraday priority
+    product: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    overtrade_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "red" overtrading flag (advisory)
 
 
 class Position(Base):
@@ -47,6 +52,9 @@ class Position(Base):
     option_type: Mapped[str] = mapped_column(String(4))     # CE | PE
     tradingsymbol: Mapped[str] = mapped_column(String(64))
     exchange: Mapped[str] = mapped_column(String(8))        # NFO/BFO/MCX/NCDEX
+    # product family + originating strategy (Phase 0 foundation)
+    segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     lot_size: Mapped[int] = mapped_column(Integer)
@@ -79,9 +87,26 @@ class Position(Base):
     gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
+    def unrealized_pnl(self) -> float:
+        """Mark-to-market P&L. Equity intraday can be a real SHORT (profits as price
+        falls); the options path is always long-premium."""
+        last = self.last_premium or self.entry_premium
+        if self.segment == "equity_intraday" and self.direction == "SHORT":
+            return (self.entry_premium - last) * self.qty
+        return (last - self.entry_premium) * self.qty
+
+    def mtm_value(self) -> float:
+        """Contribution to portfolio equity. Options: the contract's liquidation value
+        (premium × qty), since the full cost left cash. Leveraged equity (MIS): only
+        the MARGIN left cash, so the position returns its margin (entry_cost) plus its
+        unrealized P&L — NOT the full notional (last × qty), which double-counts the
+        leverage and inflates equity."""
+        if self.segment == "equity_intraday":
+            return self.entry_cost + self.unrealized_pnl()
+        return (self.last_premium or self.entry_premium) * self.qty
+
     def to_dict(self) -> dict:
-        mtm = (self.last_premium or self.entry_premium) * self.qty
-        unrealized = mtm - self.entry_premium * self.qty
+        unrealized = self.unrealized_pnl()
         return {
             "id": self.id,
             "instrument_key": self.instrument_key,
@@ -108,6 +133,8 @@ class Position(Base):
             "no_take_profit": self.no_take_profit,
             "unrealized_pnl": round(unrealized, 2),
             "mode": self.mode,
+            "segment": self.segment or "options",
+            "strategy_key": self.strategy_key,
         }
 
 
@@ -119,6 +146,9 @@ class Trade(Base):
     option_type: Mapped[str] = mapped_column(String(4))
     tradingsymbol: Mapped[str] = mapped_column(String(64))
     exchange: Mapped[str] = mapped_column(String(8))
+    # product family + originating strategy (Phase 0 foundation)
+    segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     qty: Mapped[int] = mapped_column(Integer)
@@ -178,6 +208,8 @@ class Trade(Base):
             "intraday_pnl": round(self.intraday_pnl, 2),
             "reinforcements": self.reinforcements,
             "mode": self.mode,
+            "segment": self.segment or "options",
+            "strategy_key": self.strategy_key,
         }
 
 
@@ -190,6 +222,9 @@ class EquitySnapshot(Base):
     invested: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float)
     open_count: Mapped[int] = mapped_column(Integer)
+    # optional segment/strategy partition (null = global portfolio snapshot)
+    segment: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -239,6 +274,7 @@ class BacktestRun(Base):
     note: Mapped[str] = mapped_column(String(400), default="")
     window: Mapped[str] = mapped_column(String(64), default="")          # lookback label: "1y" | "max" | "2024-01-01→2024-06-01"
     instruments: Mapped[str] = mapped_column(String(400), default="")    # csv of selected keys (empty = whole scope)
+    strategies: Mapped[str] = mapped_column(String(400), default="")     # csv of strategy keys this run swept
 
     def to_dict(self) -> dict:
         return {
@@ -250,6 +286,7 @@ class BacktestRun(Base):
             "note": self.note,
             "window": self.window or "max",
             "instruments": [i for i in self.instruments.split(",") if i],
+            "strategies": [s for s in self.strategies.split(",") if s] or ["trend_impulse_v3"],
         }
 
 
@@ -261,6 +298,7 @@ class BacktestResult(Base):
     instrument_key: Mapped[str] = mapped_column(String(48), index=True)
     name: Mapped[str] = mapped_column(String(64), default="")
     segment: Mapped[str] = mapped_column(String(12), default="")   # backtest charge segment
+    strategy_key: Mapped[str] = mapped_column(String(64), default="trend_impulse_v3", index=True)
     interval: Mapped[str] = mapped_column(String(12), index=True)
     trades: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
@@ -313,7 +351,8 @@ class BacktestResult(Base):
         return {
             "id": self.id, "run_id": self.run_id,
             "instrument_key": self.instrument_key, "name": self.name,
-            "segment": self.segment, "interval": self.interval,
+            "segment": self.segment, "strategy_key": self.strategy_key or "trend_impulse_v3",
+            "interval": self.interval,
             "trades": self.trades, "wins": self.wins,
             "win_rate": round(self.win_rate, 1),
             "profit_factor": round(self.profit_factor, 3) if self.profit_factor is not None else None,

@@ -21,7 +21,7 @@ from app.db.session import SessionLocal
 OVERRIDABLE = (
     "stop_loss_pct", "target_pct",
     "max_open_positions", "reentry_cooldown_minutes", "max_capital_per_trade",
-    "trail_enabled", "trail_trigger_pct", "trail_lock_pct", "trail_target_pct",
+    "trail_enabled", "trail_trigger_pct", "trail_first_step_lock_pct", "trail_step_lock_pct",
     "reinforce_enabled", "reinforce_min_profit_pct", "reinforce_lock_pct",
     "reinforce_extend_tp", "reinforce_tp_extend_pct", "reinforce_tp_max_pct",
     "reinforce_cooldown_minutes", "max_reinforcements",
@@ -33,8 +33,25 @@ OVERRIDABLE = (
     "notify_enabled", "notify_on_signal", "alert_proximity_pct",
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
-    "max_open_drawdown",
+    "max_open_drawdown", "max_round_trips_per_day",
     "bot_capital_cap", "capital_reserve", "gtt_stop_enabled",
+    # intraday-equity segment (MIS) — also the channel by which these reach the
+    # engine's self.params (effective() only surfaces OVERRIDABLE keys).
+    "intraday_enabled", "intraday_max_positions", "intraday_min_margin",
+    "intraday_max_margin", "intraday_purple_margin", "intraday_leverage",
+    "intraday_square_off_buffer_minutes", "intraday_stop_loss_pct", "intraday_target_pct",
+    "intraday_lockstep_enabled", "intraday_lockstep_trigger_pct",
+    "intraday_profit_lock_threshold", "intraday_profit_lock_frac",
+    # overtrading guard (advisory)
+    "overtrade_today_threshold", "overtrade_rolling_threshold", "overtrade_rolling_days",
+    # entry guards (theta-cliff / expiry)
+    "entry_min_days_to_expiry",
+    # day-shape guards: no-entries weekday (NIFTY-expiry Tuesdays, ALL entries),
+    # stale-crossover age cap, start-of-day entry window
+    "intraday_block_weekday", "intraday_override_date",
+    "max_signal_age_minutes", "entry_window_start",
+    # #14 live order-failure circuit breaker
+    "order_failure_disarm_count",
 )
 
 
@@ -48,8 +65,8 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "reentry_cooldown_minutes": (0.0, 1440.0),  # 0 = off
     "max_capital_per_trade": (0.0, 100000000.0),  # 0 = no cap
     "trail_trigger_pct": (0.001, 1.0),
-    "trail_lock_pct": (0.0, 1.0),
-    "trail_target_pct": (0.001, 10.0),
+    "trail_first_step_lock_pct": (0.0, 1.0),
+    "trail_step_lock_pct": (0.0, 1.0),
     "reinforce_min_profit_pct": (0.0, 5.0),
     "reinforce_lock_pct": (0.0, 1.0),
     "reinforce_tp_extend_pct": (0.0, 5.0),
@@ -75,6 +92,26 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "max_open_drawdown": (0.0, 100000000.0),  # 0 disables the realized+unrealized halt
     "bot_capital_cap": (0.0, 100000000.0),  # 0 = no extra cap
     "capital_reserve": (0.0, 100000000.0),
+    # intraday-equity segment
+    "intraday_max_positions": (0, 50),       # 0 = no intraday positions
+    "intraday_min_margin": (0.0, 100000000.0),
+    "intraday_max_margin": (0.0, 100000000.0),
+    "intraday_purple_margin": (0.0, 100000000.0),
+    "intraday_leverage": (1.0, 20.0),
+    "intraday_square_off_buffer_minutes": (0.0, 360.0),
+    "intraday_stop_loss_pct": (0.001, 0.50),
+    "intraday_target_pct": (0.001, 2.0),
+    "intraday_lockstep_trigger_pct": (0.001, 1.0),
+    "intraday_profit_lock_threshold": (0.0, 1000000.0),
+    "intraday_profit_lock_frac": (0.0, 1.0),
+    "overtrade_today_threshold": (0, 200),       # 0 disables the today arm of the suggestion
+    "overtrade_rolling_threshold": (0, 1000),    # 0 disables the rolling arm
+    "overtrade_rolling_days": (1, 90),
+    "entry_min_days_to_expiry": (0, 30),
+    "intraday_block_weekday": (-1, 6),
+    "max_signal_age_minutes": (0.0, 1440.0),   # 0 disables the stale-crossover guard
+    "order_failure_disarm_count": (0, 100),    # 0 disables the order circuit breaker
+    "max_round_trips_per_day": (0, 100),
 }
 
 

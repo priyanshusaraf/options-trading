@@ -33,6 +33,6 @@ def test_cadence_and_trail_settings_present():
     s = config.get_settings()
     assert s.position_loop_seconds > 0 and s.signal_loop_seconds > 0
     assert s.max_stale_seconds >= 1
-    # trailing-stop knobs (reproduce the owner's example: entry 400 -> SL 410/420…)
+    # trailing-stop knobs (aggressive schedule: entry 400 -> SL 410/440/480…, no cap)
     assert s.trail_enabled in (True, False)
-    assert s.trail_trigger_pct > 0 and s.trail_lock_pct > 0 and s.trail_target_pct > 0
+    assert s.trail_trigger_pct > 0 and s.trail_first_step_lock_pct > 0 and s.trail_step_lock_pct > 0

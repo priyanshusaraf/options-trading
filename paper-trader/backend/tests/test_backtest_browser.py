@@ -49,6 +49,50 @@ def test_export_returns_csv():
     assert "text/csv" in res.headers["content-type"]
     assert f"backtest_run_{rid}.csv" in res.headers["content-disposition"]
     body = res.text.splitlines()
-    assert body[0].startswith("instrument_key,name,segment,interval")
+    assert body[0].startswith("instrument_key,name,segment,strategy_key,interval")
     assert any(line.startswith("NIFTY,") for line in body)
     assert any(line.startswith("CRUDEOIL,") for line in body)
+
+
+def _seed_multistrategy_run() -> int:
+    init_db(reset=True)
+    with SessionLocal() as s:
+        run = BacktestRun(status="done", scope="liquid", intervals="15minute",
+                          capital=50_000.0, total=2, done=2,
+                          strategies="trend_impulse_v3,expanding_z_v4", note="seed")
+        s.add(run); s.commit()
+        rid = run.id
+        for sk, ret in (("trend_impulse_v3", 24.0), ("expanding_z_v4", 31.0)):
+            s.add(BacktestResult(run_id=rid, instrument_key="NIFTY", name="Nifty 50",
+                                 segment="NFO_FUT", strategy_key=sk, interval="15minute",
+                                 trades=10, wins=6, win_rate=60.0, profit_factor=1.8,
+                                 max_drawdown_pct=12.0, return_pct=ret, net_pnl=ret * 500,
+                                 gross_pnl=ret * 520, charges=500, expectancy=1200,
+                                 cagr=30.0, bars=5000, error=""))
+        s.commit()
+    return rid
+
+
+def test_results_filter_by_strategy():
+    rid = _seed_multistrategy_run()
+    c = TestClient(app)
+    # unfiltered: both strategies' rows present, each tagged
+    allr = c.get(f"/api/backtest/results?run_id={rid}").json()
+    assert {r["strategy_key"] for r in allr["results"]} == {"trend_impulse_v3", "expanding_z_v4"}
+    # filtered to one strategy
+    v4 = c.get(f"/api/backtest/results?run_id={rid}&strategy=expanding_z_v4").json()
+    assert all(r["strategy_key"] == "expanding_z_v4" for r in v4["results"])
+    assert len(v4["results"]) == 1
+    # drill-down disambiguates by strategy
+    detail = c.get(f"/api/backtest/result/NIFTY/15minute?run_id={rid}&strategy=expanding_z_v4").json()
+    assert detail["strategy_key"] == "expanding_z_v4"
+    assert detail["return_pct"] == 31.0
+
+
+def test_instruments_endpoint_lists_strategies():
+    init_db(reset=True)
+    c = TestClient(app)
+    data = c.get("/api/backtest/instruments").json()
+    keys = {s["key"] for s in data["strategies"]}
+    assert {"trend_impulse_v3", "expanding_z_v4"} <= keys
+    assert all("display_name" in s for s in data["strategies"])

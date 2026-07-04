@@ -6,7 +6,8 @@ import {
 } from '../lib/api'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
-import type { BacktestRun, BTResult, BTTradeDTO, BTInstrument } from '../lib/types'
+import type { BacktestRun, BTResult, BTTradeDTO, BTInstrument, StrategyMeta } from '../lib/types'
+import BulkAddModal from './BulkAddModal'
 
 // display label -> Kite interval name
 const INTERVALS: [string, string][] = [
@@ -50,9 +51,15 @@ export default function BacktestsView() {
   const [unaffordable, setUnaffordable] = useState(0)
   const [drill, setDrill] = useState<BTResult | null>(null)
   const [added, setAdded] = useState<Set<string>>(new Set())
+  const [topN, setTopN] = useState(5)
+  const [bulkWinners, setBulkWinners] = useState<BTResult[] | null>(null)
   // browse history: null = latest run
   const [runsList, setRunsList] = useState<any[]>([])
   const [viewRunId, setViewRunId] = useState<number | undefined>(undefined)
+
+  // strategies: which to sweep (multiselect) + the registry's full list for labels
+  const [availStrategies, setAvailStrategies] = useState<StrategyMeta[]>([])
+  const [selStrategies, setSelStrategies] = useState<Set<string>>(new Set(['trend_impulse_v3']))
 
   // window selection: a preset (days, null=max) OR a custom date range
   const [preset, setPreset] = useState<number | null>(null)
@@ -71,7 +78,10 @@ export default function BacktestsView() {
   const [maxDD, setMaxDD] = useState(100)
   const [minRet, setMinRet] = useState(-1e9)
   const [fInterval, setFInterval] = useState('')
+  const [fStrategy, setFStrategy] = useState('')   // filter visible rows to one strategy
   const [sort, setSort] = useState<keyof BTResult>('return_pct')
+
+  const stratLabel = (k: string) => availStrategies.find((s) => s.key === k)?.display_name || k
 
   const loadResults = () => getSweepResults({ min_trades: 1, run_id: viewRunId })
     .then((d) => {
@@ -86,9 +96,12 @@ export default function BacktestsView() {
     loadRuns()
   }, [])
 
-  // (re)load the instrument universe for the picker when the scope changes
+  // (re)load the instrument universe + registry strategies when the scope changes
   useEffect(() => {
-    getSweepInstruments(scope).then((d) => setUniverse(d.instruments || [])).catch(() => {})
+    getSweepInstruments(scope).then((d) => {
+      setUniverse(d.instruments || [])
+      if (d.strategies) setAvailStrategies(d.strategies)
+    }).catch(() => {})
   }, [scope])
 
   // reload results whenever the browsed run changes (undefined = latest)
@@ -110,6 +123,8 @@ export default function BacktestsView() {
     setPicked((s) => { const n = new Set(s); n.has(iv) ? n.delete(iv) : n.add(iv); return n })
   const toggleInst = (k: string) =>
     setSelInst((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
+  const toggleStrategy = (k: string) =>
+    setSelStrategies((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
 
   const instMatches = useMemo(() => {
     const q = instQuery.trim().toUpperCase()
@@ -126,6 +141,7 @@ export default function BacktestsView() {
     if (!intervals.length) return
     const opts: SweepOpts = {}
     if (selInst.size) opts.instruments = [...selInst]
+    if (selStrategies.size) opts.strategies = [...selStrategies]
     if (useCustom && (startDate || endDate)) {
       opts.start_date = startDate || undefined
       opts.end_date = endDate || undefined
@@ -150,11 +166,49 @@ export default function BacktestsView() {
     .filter((r) => !r.error && r.win_rate >= minWin
       && (r.profit_factor == null || r.profit_factor >= minPF)
       && r.max_drawdown_pct <= maxDD && r.return_pct >= minRet
-      && (!fInterval || r.interval === fInterval))
+      && (!fInterval || r.interval === fInterval)
+      && (!fStrategy || r.strategy_key === fStrategy))
     .sort((a, b) => {
       const av = (a[sort] ?? -1e18) as number, bv = (b[sort] ?? -1e18) as number
       return ASC.has(sort) ? av - bv : bv - av
     })
+
+  // best row per instrument (across intervals × strategies) by the CURRENT sort,
+  // honoring lower-is-better metrics. Used by the "Add top N" bulk action.
+  const bestPerInstrument = (() => {
+    const best = new Map<string, BTResult>()
+    for (const r of view) {            // `view` is already sorted best-first
+      if (!best.has(r.instrument_key)) best.set(r.instrument_key, r)
+    }
+    return [...best.values()]          // preserves `view` order = sorted best-first
+  })()
+  const openBulk = () => setBulkWinners(bestPerInstrument.slice(0, Math.max(1, topN)))
+
+  // which strategy_keys are present across the visible set (drives the column +
+  // filter + best-per-cell highlight only showing up once a multi-strategy run exists)
+  const strategiesInView = useMemo(
+    () => [...new Set(rows.map((r) => r.strategy_key).filter(Boolean))], [rows])
+  const multiStrategy = strategiesInView.length > 1
+
+  // "best strategy per (instrument × timeframe)" — among traded rows, the highest
+  // return_pct for each instrument+interval cell wins; we badge that row so you can
+  // see at a glance which strategy works best for each name on each timeframe.
+  const bestRowIds = useMemo(() => {
+    const best = new Map<string, BTResult>()
+    for (const r of view) {
+      if (r.trades <= 0) continue
+      const cell = `${r.instrument_key}|${r.interval}`
+      const cur = best.get(cell)
+      if (!cur || r.return_pct > cur.return_pct) best.set(cell, r)
+    }
+    return new Set([...best.values()].map((r) => r.id))
+  }, [view])
+
+  // all rows for a given instrument+interval cell (across strategies) — the
+  // "this instrument across all strategies" comparison the drill-down overlays
+  const siblingsOf = (r: BTResult) =>
+    rows.filter((x) => x.instrument_key === r.instrument_key
+      && x.interval === r.interval && !x.error)
 
   // scan-level win/loss tally + total Net P&L over the VISIBLE set — so a
   // winners-on-top sort (or survivorship) can't be misread as "the strategy
@@ -193,8 +247,8 @@ export default function BacktestsView() {
       {/* sweep controls */}
       <div className="card p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="stat-label">Strategy sweep — EMA50 + z-score on the underlying, net of all charges</div>
-          <span className="text-[11px] text-muted">sized to capital, no leverage · pure-strategy exits</span>
+          <div className="stat-label">Strategy sweep — N instruments × timeframes × strategies on the underlying, net of all charges</div>
+          <span className="text-[11px] text-muted">fixed 1 lot, no leverage · pure-strategy exits</span>
         </div>
         <div className="flex items-end gap-4 flex-wrap">
           <div className="flex flex-col gap-1">
@@ -217,7 +271,22 @@ export default function BacktestsView() {
                 className={`badge ${scope === 'full' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>FULL MARKET</button>
             </div>
           </div>
-          <button onClick={launch} disabled={running || picked.size === 0}
+          <div className="flex flex-col gap-1">
+            <span className="stat-label">Strategies
+              <span className="ml-1 text-muted/70 normal-case">— each selected strategy runs on every instrument × timeframe</span>
+            </span>
+            <div className="flex gap-1 flex-wrap">
+              {availStrategies.map((st) => (
+                <button key={st.key} onClick={() => toggleStrategy(st.key)}
+                  title={st.key}
+                  className={`badge ${selStrategies.has(st.key) ? 'bg-purple-500/25 text-purple-200' : 'bg-zinc-700/40 text-muted'}`}>
+                  {st.display_name}
+                </button>
+              ))}
+              {!availStrategies.length && <span className="text-[11px] text-muted">loading…</span>}
+            </div>
+          </div>
+          <button onClick={launch} disabled={running || picked.size === 0 || selStrategies.size === 0}
             className={`btn ${running ? 'opacity-50' : 'border-up/50 text-up'}`}>
             {running ? 'sweep running…' : '▶ Run sweep'}
           </button>
@@ -332,6 +401,24 @@ export default function BacktestsView() {
             {INTERVALS.map(([label, v]) => <option key={v} value={v}>{label}</option>)}
           </select>
         </label>
+        {multiStrategy && (
+          <label className="flex flex-col gap-0.5">
+            <span className="stat-label">Strategy</span>
+            <select value={fStrategy} onChange={(e) => setFStrategy(e.target.value)}
+              className="bg-panel2 border border-edge rounded px-2 py-1 text-xs max-w-[200px]">
+              <option value="">all strategies</option>
+              {strategiesInView.map((k) => <option key={k} value={k}>{stratLabel(k)}</option>)}
+            </select>
+          </label>
+        )}
+        <span className="stat-label ml-2">Add top</span>
+        <input type="number" min={1} max={50} value={topN}
+          onChange={(e) => setTopN(parseInt(e.target.value) || 1)}
+          className="bg-panel2 border border-edge rounded px-1 py-0.5 text-xs w-14" />
+        <button onClick={openBulk} disabled={bestPerInstrument.length === 0}
+          className="btn border-up/50 text-up text-xs" title="add the top N best instruments (each at its best strategy + timeframe) to the watchlist">
+          + add top {topN} to portfolio
+        </button>
         <span className="ml-auto text-[11px] text-muted self-center flex items-center gap-2 flex-wrap justify-end">
           <span>{view.length} of {rows.length} shown</span>
           <span className="text-zinc-400">·</span>
@@ -351,6 +438,7 @@ export default function BacktestsView() {
           <thead className="text-muted border-b border-edge">
             <tr>
               <Th k="instrument_key">Instrument</Th>
+              {multiStrategy && <Th k="strategy_key" title="which strategy produced this row · ★ = best strategy for this instrument+timeframe">Strategy</Th>}
               <Th k="interval">TF</Th>
               <Th k="effective_days" right title="actual first→last candle span for THIS interval (clamped per Kite's per-timeframe ceiling) — never compare timeframes on different spans">Span</Th>
               <Th k="trades" right>Trades</Th>
@@ -372,7 +460,7 @@ export default function BacktestsView() {
           </thead>
           <tbody>
             {view.length === 0 && (
-              <tr><td colSpan={18} className="py-8 text-center text-muted">
+              <tr><td colSpan={multiStrategy ? 19 : 18} className="py-8 text-center text-muted">
                 {running ? 'sweep running — results stream in…' : 'no results — run a sweep above'}</td></tr>
             )}
             {view.map((r) => {
@@ -383,6 +471,12 @@ export default function BacktestsView() {
                 <td className="font-semibold text-zinc-100">{r.instrument_key}
                   {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}
                   {optUnaff && <span className="badge bg-amber-500/20 text-amber-300 ml-1" title="can't afford 1 lot of the ATM option at your current budget — kept visible, on your radar for later">over budget</span>}</td>
+                {multiStrategy && (
+                  <td>
+                    <span className="badge bg-purple-500/15 text-purple-200" title={r.strategy_key}>{stratLabel(r.strategy_key)}</span>
+                    {bestRowIds.has(r.id) && <span className="ml-1 text-amber-300" title="best strategy for this instrument + timeframe (by return%)">★</span>}
+                  </td>
+                )}
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
                 <td className="text-right text-muted whitespace-nowrap" title={r.first_ts ? `${dt(new Date(r.first_ts * 1000).toISOString())} → ${dt(new Date(r.last_ts * 1000).toISOString())}` : ''}>
                   {spanLabel(r)}
@@ -415,16 +509,38 @@ export default function BacktestsView() {
         </table>
       </div>
 
-      {drill && <Drill r={drill} onClose={() => setDrill(null)} onAdd={() => add(drill)}
+      {drill && <Drill r={drill} siblings={siblingsOf(drill)} stratLabel={stratLabel}
+        onClose={() => setDrill(null)} onAdd={() => add(drill)}
         added={added.has(drill.instrument_key)} />}
+      {bulkWinners && (
+        <BulkAddModal winners={bulkWinners} stratLabel={stratLabel}
+          onClose={() => setBulkWinners(null)}
+          onDone={(keys) => setAdded((s) => { const n = new Set(s); keys.forEach((k) => n.add(k)); return n })} />
+      )}
     </div>
   )
 }
 
-function Drill({ r, onClose, onAdd, added }:
-  { r: BTResult; onClose: () => void; onAdd: () => void; added: boolean }) {
-  const [detail, setDetail] = useState<any>(null)
-  useEffect(() => { getSweepResult(r.instrument_key, r.interval, r.run_id).then(setDetail) }, [r])
+function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
+  { r: BTResult; siblings: BTResult[]; stratLabel: (k: string) => string
+    onClose: () => void; onAdd: () => void; added: boolean }) {
+  // a multi-strategy run gives several rows for this instrument+timeframe — one per
+  // strategy. We let the owner flip between them AND overlay all their equity curves
+  // so "where did this name perform best" is answerable at a glance.
+  const multi = siblings.length > 1
+  const [selKey, setSelKey] = useState(r.strategy_key)
+  const [details, setDetails] = useState<Record<string, any>>({})
+  useEffect(() => {
+    let alive = true
+    siblings.forEach((s) => {
+      getSweepResult(s.instrument_key, s.interval, s.run_id, s.strategy_key)
+        .then((d) => { if (alive) setDetails((m) => ({ ...m, [s.strategy_key]: d })) })
+    })
+    return () => { alive = false }
+  }, [r.instrument_key, r.interval, r.run_id, siblings.length])
+
+  const cur = siblings.find((s) => s.strategy_key === selKey) || r
+  const detail = details[selKey]
   const curve = (detail?.equity_curve || []).map((p: any) => ({ time: p.time, value: p.value }))
   // buy-and-hold overlay, re-based to the equity curve's start so both lines
   // share an index origin and the strategy's edge-vs-beta is visible.
@@ -436,7 +552,18 @@ function Drill({ r, onClose, onAdd, added }:
     : []
   const trades: BTTradeDTO[] = detail?.trades || []
   // the live engine runs 5m/15m/30m/60m candles (per-instrument); 1m & 1D are not live-tradable
-  const liveTradable = ['5minute', '15minute', '30minute', '60minute'].includes(r.interval)
+  const liveTradable = ['5minute', '15minute', '30minute', '60minute'].includes(cur.interval)
+
+  // across-strategies equity overlay (real rupees, 1-lot) + a scoreboard ranking
+  // each strategy on this exact instrument+timeframe by return%.
+  const overlay = siblings
+    .map((s) => ({ s, d: details[s.strategy_key] }))
+    .filter((x) => x.d?.equity_curve?.length)
+    .map((x) => ({ name: stratLabel(x.s.strategy_key),
+      data: x.d.equity_curve.map((p: any) => ({ time: p.time, value: p.value })),
+      color: colorFor(x.s.strategy_key) }))
+  const board = [...siblings].filter((s) => s.trades > 0).sort((a, b) => b.return_pct - a.return_pct)
+  const bestKey = board[0]?.strategy_key
 
   // biggest winners / losers (by net P&L) — the worst N ACTUAL losers and best N
   // actual winners (BT-8 fix: a global bottom-3 slice could drop the 4th-worst
@@ -485,17 +612,18 @@ function Drill({ r, onClose, onAdd, added }:
     </div>
   )
 
-  const optCost = r.option_cost ?? 0
-  const budget = r.budget ?? 0
+  const optCost = cur.option_cost ?? 0
+  const budget = cur.budget ?? 0
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="card w-full max-w-6xl p-4 flex flex-col gap-3 max-h-[92vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-lg font-semibold text-zinc-100">{r.name || r.instrument_key}</span>
-            <span className="badge bg-zinc-700/40 text-muted">{r.interval}</span>
-            <span className="badge bg-zinc-700/40 text-muted">{r.segment}</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-lg font-semibold text-zinc-100">{cur.name || cur.instrument_key}</span>
+            <span className="badge bg-zinc-700/40 text-muted">{cur.interval}</span>
+            <span className="badge bg-zinc-700/40 text-muted">{cur.segment}</span>
+            {!multi && <span className="badge bg-purple-500/15 text-purple-200">{stratLabel(cur.strategy_key)}</span>}
           </div>
           <div className="flex gap-2">
             <button onClick={onAdd} className={`btn ${added ? 'text-up border-up/50' : 'border-up/50 text-up'}`}>
@@ -504,32 +632,75 @@ function Drill({ r, onClose, onAdd, added }:
             <button onClick={onClose} className="btn">✕ close</button>
           </div>
         </div>
+
+        {/* strategy switcher — flip the detail below between this name's strategies */}
+        {multi && (
+          <div className="flex items-center gap-1 flex-wrap shrink-0">
+            <span className="stat-label mr-1">Strategy</span>
+            {siblings.map((s) => (
+              <button key={s.strategy_key} onClick={() => setSelKey(s.strategy_key)} title={s.strategy_key}
+                className={`badge ${selKey === s.strategy_key ? 'bg-purple-500/30 text-purple-100' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                {stratLabel(s.strategy_key)}{s.strategy_key === bestKey ? ' ★' : ''}
+              </button>
+            ))}
+            <span className="text-[11px] text-muted ml-1">★ = best return on this name + timeframe</span>
+          </div>
+        )}
+
         {span && (
           <div className="text-[11px] text-muted shrink-0">
-            History tested: <b className="text-zinc-300">{span}</b> · {r.bars} bars · fixed <b className="text-zinc-300">1 lot</b>, additive (no compounding)
+            History tested: <b className="text-zinc-300">{span}</b> · {cur.bars} bars · fixed <b className="text-zinc-300">1 lot</b>, additive (no compounding)
           </div>
         )}
 
         {/* Affordability — futures vs options, against your real budget */}
         <div className="flex items-center gap-2 flex-wrap text-[11px] shrink-0">
           <span className="badge bg-zinc-700/40 text-muted" title="capital to hold 1 lot of the underlying (the return base)">
-            1-lot capital {r.notional ? inr(r.notional) : '—'}
+            1-lot capital {cur.notional ? inr(cur.notional) : '—'}
           </span>
-          <span className={`badge ${r.affordable_futures ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}
+          <span className={`badge ${cur.affordable_futures ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}
             title="can you afford one lot of the FUTURE at your current budget?">
-            futures {r.affordable_futures ? 'affordable' : 'over budget'}
+            futures {cur.affordable_futures ? 'affordable' : 'over budget'}
           </span>
-          <span className={`badge ${r.affordable_options ? 'bg-up/15 text-up' : 'bg-amber-500/20 text-amber-300'}`}
+          <span className={`badge ${cur.affordable_options ? 'bg-up/15 text-up' : 'bg-amber-500/20 text-amber-300'}`}
             title="estimated cost to buy 1 lot of an ATM option (BS at realised vol) vs your budget — this is how you'd actually trade it">
-            options ≈ {optCost ? inr(optCost) : '—'} {r.affordable_options ? '· affordable now' : '· over budget'}
+            options ≈ {optCost ? inr(optCost) : '—'} {cur.affordable_options ? '· affordable now' : '· over budget'}
           </span>
           {budget > 0 && <span className="text-muted">budget {inr(budget)}</span>}
         </div>
 
+        {/* strategy scoreboard — rank every strategy on THIS instrument+timeframe */}
+        {multi && board.length > 0 && (
+          <div className="card p-2 shrink-0 overflow-auto">
+            <div className="stat-label mb-1">Strategy scoreboard — {cur.instrument_key} · {cur.interval} · best return first (click a row to inspect)</div>
+            <table className="w-full text-[11px] tabular-nums">
+              <thead className="text-muted">
+                <tr className="[&>th]:text-right [&>th]:pr-3 [&>th:first-child]:text-left">
+                  <th>Strategy</th><th>Return%</th><th>Sharpe</th><th>PF</th><th>Max DD%</th><th>Trades</th><th>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.map((s) => (
+                  <tr key={s.strategy_key} onClick={() => setSelKey(s.strategy_key)}
+                    className={`[&>td]:text-right [&>td]:pr-3 [&>td:first-child]:text-left cursor-pointer border-t border-edge/50 ${selKey === s.strategy_key ? 'bg-purple-500/10' : 'hover:bg-panel2/50'}`}>
+                    <td className="text-zinc-200">{stratLabel(s.strategy_key)}{s.strategy_key === bestKey ? ' ★' : ''}</td>
+                    <td className={pnlColor(s.return_pct)}>{num(s.return_pct, 1)}</td>
+                    <td className="text-muted">{s.sharpe == null ? '—' : num(s.sharpe, 2)}</td>
+                    <td className="text-muted">{s.profit_factor == null ? 'n/a' : num(s.profit_factor, 2)}</td>
+                    <td className="text-down">{num(s.max_drawdown_pct, 1)}</td>
+                    <td className="text-muted">{s.trades}</td>
+                    <td className={pnlColor(s.net_pnl)}>{signedInr(s.net_pnl)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {!liveTradable && (
           <div className="text-[11px] text-amber-400/90 bg-amber-400/10 rounded px-2 py-1 shrink-0">
             Note: the live engine runs 5m / 15m / 30m / 60m candles (set per instrument on the Watchlist page).
-            This {r.interval} edge is informational — adding pins it to the watchlist and trades it on the
+            This {cur.interval} edge is informational — adding pins it to the watchlist and trades it on the
             configured live interval.
           </div>
         )}
@@ -540,27 +711,27 @@ function Drill({ r, onClose, onAdd, added }:
 
           <div className="flex flex-col gap-3 min-h-0 overflow-auto pr-1">
             <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px,1fr))' }}>
-              <Mini label="Trades" v={r.open_at_end ? `${r.trades} (incl. 1 open)` : String(r.trades)} />
-              <Mini label="Win rate" v={num(r.win_rate, 0) + '%'} />
-              <Mini label="Win rate (realised)" v={r.open_at_end ? num(r.win_rate_realised, 0) + '%' : num(r.win_rate, 0) + '%'}
-                cls={r.open_at_end ? 'text-amber-300' : ''} />
-              <Mini label="Profit factor" v={r.profit_factor == null ? 'n/a' : num(r.profit_factor, 2)} />
-              <Mini label="Return (on 1-lot capital)" v={num(r.return_pct, 1) + '%'} cls={pnlColor(r.return_pct)} />
-              <Mini label="Return (realised)" v={r.open_at_end ? num(r.return_pct_realised, 1) + '%' : num(r.return_pct, 1) + '%'}
-                cls={r.open_at_end ? 'text-amber-300' : pnlColor(r.return_pct_realised)} />
-              <Mini label="vs buy & hold" v={r.bh_return_pct == null ? '—' : num(r.bh_return_pct, 1) + '%'}
-                cls={r.bh_return_pct == null ? '' : pnlColor(r.bh_return_pct)} />
-              <Mini label="Max DD (close-to-close)" v={num(r.max_drawdown_pct, 1) + '%'} cls="text-down" />
-              <Mini label="Worst MAE (intra-trade)" v={r.worst_mae_pct == null ? '—' : num(r.worst_mae_pct, 1) + '%'} cls="text-down" />
-              <Mini label="Calmar" v={r.calmar == null ? '—' : num(r.calmar, 2)} cls={(r.calmar ?? 0) >= 1 ? 'text-up' : ''} />
-              <Mini label="Consistency (per-trade)" v={r.consistency == null ? '—' : num(r.consistency, 2)} />
-              <Mini label="Sharpe (annualised)" v={r.sharpe == null ? '—' : num(r.sharpe, 2)} />
-              <Mini label="Underwater" v={r.time_underwater_pct == null ? '—' : num(r.time_underwater_pct, 0) + '%'} />
-              <Mini label="Loss streak" v={r.max_consec_losses == null ? '—' : String(r.max_consec_losses)} />
-              <Mini label="Net P&L (1 lot)" v={signedInr(r.net_pnl)} cls={pnlColor(r.net_pnl)} />
-              <Mini label="Worst trade" v={r.worst_trade_pnl ? signedInr(r.worst_trade_pnl) : '—'} cls={r.worst_trade_pnl < 0 ? 'text-down' : ''} />
-              <Mini label="Charges" v={inr(r.charges)} cls="text-down" />
-              <Mini label="CAGR" v={r.cagr == null ? '—' : num(r.cagr, 1) + '%'} />
+              <Mini label="Trades" v={cur.open_at_end ? `${cur.trades} (incl. 1 open)` : String(cur.trades)} />
+              <Mini label="Win rate" v={num(cur.win_rate, 0) + '%'} />
+              <Mini label="Win rate (realised)" v={cur.open_at_end ? num(cur.win_rate_realised, 0) + '%' : num(cur.win_rate, 0) + '%'}
+                cls={cur.open_at_end ? 'text-amber-300' : ''} />
+              <Mini label="Profit factor" v={cur.profit_factor == null ? 'n/a' : num(cur.profit_factor, 2)} />
+              <Mini label="Return (on 1-lot capital)" v={num(cur.return_pct, 1) + '%'} cls={pnlColor(cur.return_pct)} />
+              <Mini label="Return (realised)" v={cur.open_at_end ? num(cur.return_pct_realised, 1) + '%' : num(cur.return_pct, 1) + '%'}
+                cls={cur.open_at_end ? 'text-amber-300' : pnlColor(cur.return_pct_realised)} />
+              <Mini label="vs buy & hold" v={cur.bh_return_pct == null ? '—' : num(cur.bh_return_pct, 1) + '%'}
+                cls={cur.bh_return_pct == null ? '' : pnlColor(cur.bh_return_pct)} />
+              <Mini label="Max DD (close-to-close)" v={num(cur.max_drawdown_pct, 1) + '%'} cls="text-down" />
+              <Mini label="Worst MAE (intra-trade)" v={cur.worst_mae_pct == null ? '—' : num(cur.worst_mae_pct, 1) + '%'} cls="text-down" />
+              <Mini label="Calmar" v={cur.calmar == null ? '—' : num(cur.calmar, 2)} cls={(cur.calmar ?? 0) >= 1 ? 'text-up' : ''} />
+              <Mini label="Consistency (per-trade)" v={cur.consistency == null ? '—' : num(cur.consistency, 2)} />
+              <Mini label="Sharpe (annualised)" v={cur.sharpe == null ? '—' : num(cur.sharpe, 2)} />
+              <Mini label="Underwater" v={cur.time_underwater_pct == null ? '—' : num(cur.time_underwater_pct, 0) + '%'} />
+              <Mini label="Loss streak" v={cur.max_consec_losses == null ? '—' : String(cur.max_consec_losses)} />
+              <Mini label="Net P&L (1 lot)" v={signedInr(cur.net_pnl)} cls={pnlColor(cur.net_pnl)} />
+              <Mini label="Worst trade" v={cur.worst_trade_pnl ? signedInr(cur.worst_trade_pnl) : '—'} cls={cur.worst_trade_pnl < 0 ? 'text-down' : ''} />
+              <Mini label="Charges" v={inr(cur.charges)} cls="text-down" />
+              <Mini label="CAGR" v={cur.cagr == null ? '—' : num(cur.cagr, 1) + '%'} />
             </div>
 
             {(winners.length > 0 || losers.length > 0) && (
@@ -584,23 +755,33 @@ function Drill({ r, onClose, onAdd, added }:
 
             <div className="card p-3">
               <div className="stat-label mb-1 flex items-center gap-3 flex-wrap">
-                <span>Equity curve — ₹ from a fixed 1-lot position (base + cumulative net P&amp;L), net of charges</span>
-                {bhCurve.length > 1 && (
-                  <span className="flex items-center gap-3 normal-case text-[10px]">
-                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: colorFor(r.instrument_key) }} /> strategy</span>
-                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#8b93a7]" /> buy &amp; hold</span>
-                  </span>
-                )}
+                <span>Equity curve — ₹ from a fixed 1-lot position (base + cumulative net P&amp;L), net of charges{multi && overlay.length > 1 ? ' · all strategies overlaid' : ''}</span>
+                {multi && overlay.length > 1
+                  ? <span className="flex items-center gap-3 normal-case text-[10px] flex-wrap">
+                      {overlay.map((o) => (
+                        <span key={o.name} className="flex items-center gap-1">
+                          <span className="inline-block w-3 h-0.5" style={{ background: o.color }} /> {o.name}
+                        </span>
+                      ))}
+                    </span>
+                  : bhCurve.length > 1 && (
+                    <span className="flex items-center gap-3 normal-case text-[10px]">
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5" style={{ background: colorFor(cur.instrument_key) }} /> strategy</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-[#8b93a7]" /> buy &amp; hold</span>
+                    </span>
+                  )}
               </div>
-              {curve.length
-                ? (bhCurve.length > 1
-                    ? <MultiLineChart height={240} series={[
-                        { name: 'strategy', data: curve, color: colorFor(r.instrument_key) },
-                        { name: 'buy & hold', data: bhCurve, color: '#8b93a7' },
-                      ]} />
-                    : <LineChart data={curve} height={240} color={colorFor(r.instrument_key)}
-                        priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
-                : <div className="text-muted text-xs py-10 text-center">loading…</div>}
+              {multi && overlay.length > 1
+                ? <MultiLineChart height={240} series={overlay} />
+                : curve.length
+                  ? (bhCurve.length > 1
+                      ? <MultiLineChart height={240} series={[
+                          { name: 'strategy', data: curve, color: colorFor(cur.instrument_key) },
+                          { name: 'buy & hold', data: bhCurve, color: '#8b93a7' },
+                        ]} />
+                      : <LineChart data={curve} height={240} color={colorFor(cur.instrument_key)}
+                          priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
+                  : <div className="text-muted text-xs py-10 text-center">loading…</div>}
             </div>
           </div>
         </div>

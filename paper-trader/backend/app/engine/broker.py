@@ -19,6 +19,7 @@ from app.db.models import CapitalState, EquitySnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.core.runtime_config import effective
 from app.engine.charges import compute_charges
+from app.engine.equity_entry import equity_stop_target
 from app.providers.base import MarketDataProvider, OptionQuote
 
 
@@ -87,6 +88,93 @@ class PaperBroker:
             instrument=inst.key, event="OPEN", tradingsymbol=q.tradingsymbol,
             premium=premium, cost=round(cost, 2))
         return pos
+
+    # ── intraday equity (MIS): margin-sized shares, direction-aware ──────────
+    def open_equity_position(self, inst: Instrument, direction: str, price: float,
+                             qty: int, charge_segment: str, reason: str,
+                             now: dt.datetime, params: dict | None = None,
+                             strategy_key: str | None = None) -> Position:
+        """Open an intraday equity (MIS) position of `qty` shares at `price`.
+
+        MIS is leveraged: only the MARGIN (notional/leverage) leaves cash, not the
+        full notional — but P&L is on the full share move. We store entry_cost =
+        margin + entry charges (the actual cash out), so the ledger reconciliation
+        invariant holds exactly. SL/TP are direction-aware (a SHORT's stop is above
+        entry). Charges use the intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
+        p = params if params is not None else effective(self.settings)
+        leverage = p.get("intraday_leverage", 5.0) or 5.0
+        sl_pct = p.get("intraday_stop_loss_pct", 0.01)
+        tp_pct = p.get("intraday_target_pct", 0.02)
+        notional = price * qty
+        margin = notional / leverage
+        charges = compute_charges(charge_segment, "BUY", price, qty)["total"]
+        cost = margin + charges
+        stop, target = equity_stop_target(direction, price, sl_pct, tp_pct)
+
+        cap = self.capital()
+        cap.cash -= cost
+        cap.updated_at = now
+
+        pos = Position(
+            instrument_key=inst.key, direction=direction, option_type="EQ",
+            tradingsymbol=getattr(inst, "spot_symbol", "") or inst.key,
+            exchange=charge_segment, segment="equity_intraday", strategy_key=strategy_key,
+            strike=0.0, expiry=now.date(), lot_size=qty, qty=qty, entry_premium=price,
+            entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
+            entry_reason=reason, stop_price=stop, target_price=target,
+            last_premium=price, last_spot=price, last_mark_time=now,
+            high_water_premium=price, mode=self.MODE)
+        self.s.add(pos)
+        self.s.commit()
+        log.trade(
+            f"OPEN EQUITY {direction} {pos.tradingsymbol} {qty}@{price:.2f} "
+            f"— margin ₹{margin:,.0f} (chg ₹{charges:.0f}); SL {stop:.2f} / TP {target:.2f}",
+            instrument=inst.key, event="OPEN_EQUITY", tradingsymbol=pos.tradingsymbol,
+            premium=price, cost=round(cost, 2))
+        return pos
+
+    def close_equity_position(self, pos: Position, exit_price: float, reason: str,
+                              now: dt.datetime) -> Trade:
+        """Close an intraday equity position. Releases the blocked margin and books
+        direction-aware P&L (a SHORT profits when price falls), net of both legs'
+        charges. proceeds = entry_cost + net, so the ledger invariant stays exact."""
+        qty = pos.qty
+        charges = compute_charges(pos.exchange, "SELL", exit_price, qty)["total"]
+        gross = ((exit_price - pos.entry_premium) * qty if pos.direction == "LONG"
+                 else (pos.entry_premium - exit_price) * qty)
+        total_charges = pos.entry_charges + charges
+        net = gross - total_charges
+        proceeds = pos.entry_cost + net    # == released margin + gross − exit charges
+        margin = pos.entry_cost - pos.entry_charges
+
+        cap = self.capital()
+        cap.cash += proceeds
+        cap.realized_pnl += net
+        cap.updated_at = now
+
+        tr = Trade(
+            instrument_key=pos.instrument_key, direction=pos.direction,
+            option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
+            segment="equity_intraday", strategy_key=pos.strategy_key,
+            strike=0.0, expiry=pos.expiry, qty=qty,
+            entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
+            entry_spot=pos.entry_spot, entry_time=pos.entry_time,
+            exit_premium=exit_price, exit_charges=charges, exit_spot=exit_price,
+            exit_time=now, exit_reason=reason, gross_pnl=gross,
+            charges_total=total_charges, net_pnl=net,
+            return_pct=(net / margin * 100) if margin else 0.0,
+            holding_minutes=(now - pos.entry_time).total_seconds() / 60,
+            win=net > 0, held_overnight=False, overnight_pnl=0.0,
+            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE)
+        self.s.delete(pos)
+        self.s.add(tr)
+        self.s.commit()
+        log.trade(
+            f"CLOSE EQUITY {pos.tradingsymbol} @ {exit_price:.2f} [{reason}] "
+            f"— net ₹{net:,.0f} ({tr.return_pct:+.1f}% on margin)",
+            instrument=pos.instrument_key, event="CLOSE_EQUITY", reason=reason,
+            net_pnl=round(net, 2))
+        return tr
 
     def manual_open(self, inst: Instrument, direction: str, chain, settings,
                     now: dt.datetime) -> tuple[Position | None, str]:
@@ -252,11 +340,19 @@ class PaperBroker:
         while the bot was down). No-op on paper."""
         return []
 
+    def adopt_pending_entries(self, now: dt.datetime) -> list:
+        """Adopt any bot entry order that filled AFTER its poll window into the book.
+        No-op on paper (paper fills are synchronous, never late)."""
+        return []
+
     # ── analytics support ─────────────────────────────────────────────────
     def snapshot(self, now: dt.datetime) -> EquitySnapshot:
         opens = self.open_positions()
         invested = sum(p.entry_cost for p in opens)
-        mtm = sum((p.last_premium or p.entry_premium) * p.qty for p in opens)
+        # mtm_value() is segment-aware: options = premium × qty (full cost left cash),
+        # leveraged MIS = margin + unrealized P&L (only margin left cash). Summing raw
+        # last × qty double-counts MIS leverage and inflates the persisted equity curve.
+        mtm = sum(p.mtm_value() for p in opens)
         cap = self.capital()
         snap = EquitySnapshot(time=now, equity=cap.cash + mtm, cash=cap.cash,
                               invested=invested, realized_pnl=cap.realized_pnl,

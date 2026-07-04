@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LiveProvider } from './state/LiveContext'
 import TopBar from './components/TopBar'
+import MobileTopBar from './components/MobileTopBar'
 import Watchlist from './views/WatchlistView'
 import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
@@ -23,17 +24,36 @@ const TABS: [string, string][] = [
   ['settings', 'Settings'],
 ]
 
+// Desktop ≥768px keeps the original layout; below that we render the phone header.
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const onChange = () => setIsDesktop(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return isDesktop
+}
+
 function Shell() {
   const [tab, setTab] = useState('watchlist')
+  const isDesktop = useIsDesktop()
   return (
     <div className="min-h-full flex flex-col">
-      <TopBar tab={tab} setTab={setTab} tabs={TABS} />
+      {isDesktop
+        ? <TopBar tab={tab} setTab={setTab} tabs={TABS} />
+        : <MobileTopBar tab={tab} setTab={setTab} tabs={TABS} />}
       <main className="flex-1 p-3">
         {tab === 'watchlist' && <Watchlist />}
         {tab === 'positions' && <ActivePositionsView />}
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}
-        {tab === 'backtests' && <BacktestsView />}
+        {tab === 'backtests' && (isDesktop
+          ? <BacktestsView />
+          : <div className="card p-4 text-sm text-muted">Backtests is desktop-only — open this on your Mac.</div>)}
         {tab === 'trades' && <TradesView />}
         {tab === 'calendar' && <CalendarView />}
         {tab === 'dashboard' && <DashboardView />}

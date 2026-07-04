@@ -35,12 +35,28 @@ def account_net_qty(account_positions: list[dict], tradingsymbol: str) -> int:
                if p.get("tradingsymbol") == tradingsymbol)
 
 
+def _is_short_equity(pos) -> bool:
+    return getattr(pos, "segment", None) == "equity_intraday" and pos.direction == "SHORT"
+
+
 def can_bot_close(pos, account_positions: list[dict]) -> OwnershipCheck:
-    """The bot holds `pos` (always a bought option, long, qty > 0). It is safe to
-    send a closing SELL only if the account is long at least `pos.qty` of that exact
-    contract — otherwise selling would eat into the owner's holding or open/deepen a
-    short for them."""
+    """It is safe to send the bot's closing order only if the live account actually
+    backs the bot's position of that exact symbol — otherwise the order would eat into
+    the owner's own holding or open/deepen a position for them.
+
+      long (bought option, long equity): account must be long  >= +pos.qty -> SELL.
+      intraday-equity SHORT: account must be short <= -pos.qty            -> BUY to cover.
+    Position-based (not margin) because positions are the reliable signal during the
+    owner's intraday exits when margin can lag."""
     net = account_net_qty(account_positions, pos.tradingsymbol)
+    if _is_short_equity(pos):
+        if net <= -pos.qty:
+            return OwnershipCheck(True, net, "account backs the bot short")
+        return OwnershipCheck(
+            False, net,
+            f"account holds {net} of {pos.tradingsymbol} but the bot expects "
+            f"<= -{pos.qty} (short) — NOT sending a cover order (your position, a manual "
+            f"exit, or a margin/position glitch). Flagging for you instead.")
     if net >= pos.qty:
         return OwnershipCheck(True, net, "account backs the bot position")
     return OwnershipCheck(

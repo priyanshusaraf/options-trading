@@ -15,6 +15,10 @@ export interface PositionDTO {
   reinforcement_count?: number; held_overnight?: boolean
   unrealized_pnl: number
   mode?: 'paper' | 'live'
+  segment?: 'options' | 'equity_intraday'; strategy_key?: string | null
+  live_premium?: number | null; live_spot?: number | null
+  stale?: boolean; stale_age?: number | null
+  dist_to_stop?: number; dist_to_target?: number
 }
 
 export interface InstrState {
@@ -31,11 +35,12 @@ export interface CatHealth {
 }
 export interface ProviderHealth { quote: CatHealth; candle: CatHealth }
 
-// Daily-loss / open-drawdown circuit-breaker status on the WS snapshot (C2).
+// Daily-loss / open-drawdown / round-trip circuit-breaker status on the WS snapshot (C2).
 export interface HaltStatus {
-  halted: boolean; reason: '' | 'realized' | 'open_drawdown'
+  halted: boolean; reason: '' | 'realized' | 'open_drawdown' | 'round_trips'
   realized: number; open_unrealized: number
   max_daily_loss: number; max_open_drawdown: number
+  round_trips?: number; max_round_trips?: number
 }
 
 export interface PositionTick {
@@ -70,6 +75,14 @@ export interface SignalRow {
   has_position: boolean; has_options: boolean; entries_blocked: boolean; stale: boolean
   market_open?: boolean   // OPS-R2-1: closed market -> stale is benign idle, not broken
   pinned?: boolean        // in the curated portfolio (Watchlist "pinned only" filter)
+  // dual-segment / multi-strategy per-instrument config (Phase 3)
+  product?: 'options' | 'equity_intraday'
+  priority_flag?: boolean      // watchlist "purple" intraday priority
+  strategy_key?: string | null // assigned strategy (null = default)
+  signals_today?: number
+  signals_rolling?: number
+  overtrade_flag?: boolean       // red "overtrading" flag (advisory)
+  overtrade_suggested?: boolean  // count crossed a threshold -> suggest red
 }
 
 export interface PositionRow extends PositionDTO {
@@ -113,16 +126,29 @@ export interface TradeDTO {
   mode?: 'paper' | 'live'
 }
 
+export interface InstrumentStatBlock {
+  trades: number; wins: number; win_rate: number; net: number; gross: number
+  charges: number; avg_pnl: number; avg_win: number; avg_loss: number
+  expectancy: number; avg_holding_minutes: number; best: number; worst: number
+}
+export interface InstrumentDetailDTO {
+  key: string; name: string; segment: string | null
+  stats: InstrumentStatBlock; trades: TradeDTO[]; period: string
+}
+
 // ── backtest ────────────────────────────────────────────────────────────────
 export interface BacktestRun {
   id: number; created_at: string; status: string; scope: string
   intervals: string[]; capital: number; total: number; done: number
   progress: number; note: string; window?: string; instruments?: string[]
+  strategies?: string[]
 }
+
+export interface StrategyMeta { key: string; display_name: string; default_params: Record<string, any> }
 
 export interface BTResult {
   id: number; run_id: number; instrument_key: string; name: string
-  segment: string; interval: string; trades: number; wins: number
+  segment: string; strategy_key: string; interval: string; trades: number; wins: number
   win_rate: number; profit_factor: number | null; max_drawdown_pct: number
   return_pct: number; net_pnl: number; gross_pnl: number; charges: number
   expectancy: number; cagr: number | null; bars: number; from_cache?: boolean; error: string
@@ -133,6 +159,7 @@ export interface BTResult {
   notional: number; lots: number; affordable: boolean
   option_cost?: number; budget?: number
   affordable_futures?: boolean; affordable_options?: boolean
+  has_options?: boolean
   // tail risk (BT-8) + intra-trade pain (BT-4)
   worst_trade_pnl: number; worst_mae_pct: number
   // realised vs marked-to-last open (BT-5)
@@ -154,11 +181,12 @@ export interface BTTradeDTO {
 
 export interface SettingRow { key: string; type: 'bool' | 'int' | 'float' | 'str'; default: any; value: any }
 
-export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number }
+export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number; charges?: number }
 export interface AnalyticsSplit {
   intraday: AnalyticsAgg; overnight: AnalyticsAgg; overnight_gap_pnl: number
   reinforced_trades: number
   option_dataset: { rows: number; instruments: number; first_ts: string | null; last_ts: string | null }
+  by_segment?: { options: AnalyticsAgg; equity_intraday: AnalyticsAgg }
 }
 
 export interface HomeInstrument {

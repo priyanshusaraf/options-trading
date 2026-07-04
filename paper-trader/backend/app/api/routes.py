@@ -22,7 +22,8 @@ from app.db.models import DailyAccountSnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
-from app.strategy.signals import compute_signals, to_payload
+from app.strategy.registry import get_strategy
+from app.strategy.signals import to_payload
 from app.ws.manager import manager
 
 router = APIRouter()
@@ -31,6 +32,22 @@ settings = get_settings()
 
 def _runner(req_or_ws):
     return req_or_ws.app.state.runner
+
+
+def _period_since(period: str | None, now):
+    """Map a period token to a naive-IST cutoff (exit_time >= cutoff). None = all-time.
+    `now` comes from provider.now(); strip tz so it compares to naive exit_time."""
+    if not period or period == "all":
+        return None
+    if getattr(now, "tzinfo", None) is not None:
+        now = now.replace(tzinfo=None)
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "7d":
+        return now - dt.timedelta(days=7)
+    if period == "30d":
+        return now - dt.timedelta(days=30)
+    return None
 
 
 def _df(candles):
@@ -172,6 +189,8 @@ class AddInstrument(BaseModel):
     key: str
     on_home: bool = True
     interval: str | None = None   # carry a backtest winner's timeframe into live
+    strategy_key: str | None = None  # carry the winner's best strategy
+    product: str | None = None       # options | equity_intraday
 
 
 @router.post("/api/portfolio/add")
@@ -179,11 +198,16 @@ def portfolio_add(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
     res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home,
-                                           interval=body.interval)
+                                           interval=body.interval,
+                                           strategy_key=body.strategy_key, product=body.product)
     if "error" not in res:
         r.enabled.add(body.key)   # the live engine picks it up next tick
         if res.get("interval"):
             r.intervals[body.key] = res["interval"]
+        if res.get("product"):
+            r.products[body.key] = res["product"]
+        if res.get("strategy_key"):
+            r.strategy_keys[body.key] = res["strategy_key"]
     return res
 
 
@@ -194,6 +218,48 @@ def portfolio_remove(body: AddInstrument, request: Request):
     res = universe_resolver.remove_instrument(body.key)
     r.enabled.discard(body.key)
     return res
+
+
+class BulkItem(BaseModel):
+    key: str
+    interval: str | None = None
+    strategy_key: str | None = None
+    product: str | None = None
+    on_home: bool = True
+
+
+class BulkAdd(BaseModel):
+    items: list[BulkItem]
+
+
+@router.post("/api/portfolio/add-bulk")
+def portfolio_add_bulk(body: BulkAdd, request: Request):
+    """Add several instruments at once (backtest winners). Each carries its best
+    interval / strategy / product; every successfully added item is enabled for
+    live trading. Over-budget names are excluded client-side before posting."""
+    from app.core import universe_resolver
+    r = _runner(request)
+    added, skipped = [], []
+    for it in body.items:
+        try:
+            res = universe_resolver.add_instrument(
+                it.key, r.provider, on_home=it.on_home, interval=it.interval,
+                strategy_key=it.strategy_key, product=it.product)
+        except Exception as e:
+            skipped.append({"key": it.key, "reason": str(e)})
+            continue
+        if "error" in res:
+            skipped.append({"key": it.key, "reason": res["error"]})
+            continue
+        r.enabled.add(it.key)
+        if res.get("interval"):
+            r.intervals[it.key] = res["interval"]
+        if res.get("product"):
+            r.products[it.key] = res["product"]
+        if res.get("strategy_key"):
+            r.strategy_keys[it.key] = res["strategy_key"]
+        added.append(res)
+    return {"added": added, "skipped": skipped}
 
 
 @router.get("/api/portfolio/home")
@@ -226,9 +292,9 @@ def candles(key: str, request: Request, interval: str | None = None):
     if not cs:
         return {"candles": [], "ema": [], "zscore": [], "markers": [], "latest": None,
                 "name": inst.name}
-    sig = compute_signals(_df(cs), ema_length=settings.ema_length,
-                          z_length=settings.z_length, entry_z=settings.entry_z,
-                          slope_lookback=settings.slope_lookback)
+    sig = get_strategy(None).signals(_df(cs), ema_length=settings.ema_length,
+                                     z_length=settings.z_length, entry_z=settings.entry_z,
+                                     slope_lookback=settings.slope_lookback)
     payload = to_payload(sig, entry_z=settings.entry_z)
     payload["name"] = inst.name
     return payload
@@ -281,16 +347,46 @@ def account_pnl_route(request: Request):
 
 
 @router.get("/api/dashboard")
-def dashboard(request: Request):
+def dashboard(request: Request, segment: str | None = None, strategy: str | None = None,
+              period: str | None = None):
+    """Portfolio dashboard. Optional ?segment=, ?strategy=, and ?period=all|today|7d|30d
+    slice the summary / curves / trades. The headline `equity_curve` is the global
+    mark-to-market series when unfiltered; for a slice it's the realized-P&L curve."""
+    seg = segment or None
+    strat = strategy or None
+    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
     with SessionLocal() as s:
+        equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
+                  else analytics.realized_curve(s, seg, strat, since))
         return {
             "capital": analytics.capital_dict(s),
-            "summary": analytics.summary(s),
-            "equity_curve": analytics.equity_curve(s),
-            "instrument_curves": analytics.per_instrument_curves(s),
-            "recent_trades": analytics.recent_trades(s, 50),
+            "summary": analytics.summary(s, seg, strat, since),
+            "equity_curve": equity,
+            "instrument_curves": analytics.per_instrument_curves(s, seg, strat, since),
+            "segment_curves": analytics.segment_curves(s, since),
+            "strategy_curves": analytics.strategy_curves(s, seg, since),
+            "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat, since=since),
             "open_positions": [p.to_dict() for p in analytics.open_positions(s)],
+            "segment": seg, "strategy": strat, "period": period or "all",
         }
+
+
+@router.get("/api/instrument/{key}")
+def instrument_detail(key: str, request: Request, segment: str | None = None,
+                      strategy: str | None = None, period: str | None = None):
+    """Full per-instrument stat block + that instrument's trades, honoring
+    ?segment=, ?strategy=, ?period=."""
+    try:
+        inst = get_instrument(key)
+    except KeyError:
+        inst = None
+    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
+    with SessionLocal() as s:
+        stats = analytics.instrument_stats(s, key, segment or None, strategy or None, since)
+        trades = analytics.instrument_trades(s, key, segment or None, strategy or None, since)
+    return {"key": key, "name": inst.name if inst else key,
+            "segment": inst.segment if inst else None,
+            "stats": stats, "trades": trades, "period": period or "all"}
 
 
 @router.get("/api/trades")
@@ -328,6 +424,13 @@ def signals(request: Request):
     candle = h.get("candle", {})
     feed_auth_error = bool(candle.get("auth_error")) or bool(h.get("quote", {}).get("auth_error"))
     now = r.provider.now()
+    from app.core import runtime_config
+    eff = runtime_config.effective()
+    today_thr = int(eff.get("overtrade_today_threshold", 5))
+    roll_thr = int(eff.get("overtrade_rolling_threshold", 15))
+    roll_days = int(eff.get("overtrade_rolling_days", 7))
+    with SessionLocal() as _s:
+        sig_counts = analytics.signal_counts(_s, now, rolling_days=roll_days)
     out = []
     any_market_open = False
     for inst in all_instruments():
@@ -355,14 +458,25 @@ def signals(request: Request):
             "entries_blocked": inst.key in r.entry_blocks,
             "stale": stale,
             "market_open": market_open,
+            # dual-segment / multi-strategy per-instrument config
+            "product": r.products.get(inst.key, "options"),
+            "priority_flag": r.priority_flags.get(inst.key, False),
+            "strategy_key": r.strategy_keys.get(inst.key),
+            "signals_today": sig_counts.get(inst.key, {}).get("today", 0),
+            "signals_rolling": sig_counts.get(inst.key, {}).get("rolling", 0),
+            "overtrade_flag": r.overtrade_flags.get(inst.key, False),
+            "overtrade_suggested": (
+                (today_thr > 0 and sig_counts.get(inst.key, {}).get("today", 0) >= today_thr)
+                or (roll_thr > 0 and sig_counts.get(inst.key, {}).get("rolling", 0) >= roll_thr)),
         })
     return {"instruments": out, "health": h, "feed_auth_error": feed_auth_error,
             "any_market_open": any_market_open}
 
 
 @router.get("/api/positions")
-async def positions(request: Request):
-    """Active-positions cockpit rows: marks, trailing stop, stale/health.
+async def positions(request: Request, segment: str | None = None):
+    """Active-positions cockpit rows: marks, trailing stop, stale/health. Optional
+    ?segment=options|equity_intraday filters to one trading window.
 
     Async + engine-lock: this reads the broker's long-lived Session, which the
     engine loops also use. Running on the event loop under r._lock keeps all
@@ -372,14 +486,24 @@ async def positions(request: Request):
     out = []
     async with r._lock:
         for p in r.broker.open_positions():
+            seg = p.segment or "options"
+            if segment and seg != segment:
+                continue
             d = p.to_dict()
             t = ticks.get(p.instrument_key, {})
             d["live_premium"] = t.get("option_premium")
             d["live_spot"] = t.get("spot")
             d["stale"] = t.get("stale", True)
             d["stale_age"] = t.get("stale_age")
-            d["dist_to_stop"] = round(d["last_premium"] - d["stop_price"], 2)
-            d["dist_to_target"] = round(d["target_price"] - d["last_premium"], 2)
+            # distance to the trigger, signed so positive = still safe / has room —
+            # direction-aware so an equity SHORT (stop above, target below) reads right.
+            last = d["last_premium"]
+            if seg == "equity_intraday" and p.direction == "SHORT":
+                d["dist_to_stop"] = round(d["stop_price"] - last, 2)
+                d["dist_to_target"] = round(last - d["target_price"], 2)
+            else:
+                d["dist_to_stop"] = round(last - d["stop_price"], 2)
+                d["dist_to_target"] = round(d["target_price"] - last, 2)
             out.append(d)
         cap = r.capital_dict()
     return {"positions": out, "capital": cap}
@@ -411,6 +535,65 @@ def block_entries(key: str, body: BlockBody, request: Request):
     return {"key": key, "entries_blocked": body.blocked}
 
 
+# ── dual-segment / multi-strategy per-instrument controls (Phase 3) ──────────
+class ProductBody(BaseModel):
+    product: str            # "options" | "equity_intraday"
+
+
+@router.post("/api/instruments/{key}/product")
+def set_product(key: str, body: ProductBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    try:
+        p = _runner(request).set_product(key, body.product)
+    except ValueError as e:           # #5: not MIS-eligible -> refuse the intraday assignment
+        return {"error": str(e)}
+    return {"key": key, "product": p}
+
+
+class PriorityBody(BaseModel):
+    priority_flag: bool     # the watchlist "purple" intraday-priority flag
+
+
+@router.post("/api/instruments/{key}/priority")
+def set_priority(key: str, body: PriorityBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    _runner(request).set_priority_flag(key, body.priority_flag)
+    return {"key": key, "priority_flag": body.priority_flag}
+
+
+class OvertradeBody(BaseModel):
+    flag: bool
+
+
+@router.post("/api/instruments/{key}/overtrade")
+def set_overtrade(key: str, body: OvertradeBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    _runner(request).set_overtrade_flag(key, body.flag)
+    return {"key": key, "overtrade_flag": body.flag}
+
+
+class StrategyBody(BaseModel):
+    strategy_key: str | None = None   # None = default strategy
+
+
+@router.post("/api/instruments/{key}/strategy")
+def set_strategy(key: str, body: StrategyBody, request: Request):
+    if key not in {i.key for i in all_instruments()}:
+        return {"error": "unknown instrument"}
+    sk = _runner(request).set_strategy(key, body.strategy_key)
+    return {"key": key, "strategy_key": sk}
+
+
+@router.get("/api/strategies")
+def strategies():
+    """The registered strategies, for per-instrument assignment dropdowns."""
+    from app.strategy.registry import strategy_meta
+    return {"strategies": strategy_meta()}
+
+
 # ── manual paper overrides (F8) — never touch real Kite orders ───────────────
 @router.post("/api/positions/{key}/close")
 async def close_position(key: str, request: Request):
@@ -432,9 +615,13 @@ async def close_position(key: str, request: Request):
         from app.core.logging import log
         log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
                  event="MANUAL_CLOSE", manual=True)
+        # #2: a manual close blocks same-day re-entry for this symbol — the bot must not
+        # re-open what you deliberately exited. Clear it from the window to re-allow.
+        r.set_entries_blocked(key, True)
         if key in r.state:
             r.state[key]["position"] = None
-        return {"closed": True, "key": key, "exit_premium": round(premium, 2)}
+        return {"closed": True, "key": key, "exit_premium": round(premium, 2),
+                "entries_blocked": True}
 
 
 class SLTPBody(BaseModel):
@@ -447,28 +634,27 @@ class SLTPBody(BaseModel):
 @router.post("/api/positions/{key}/sltp")
 async def set_position_sltp(key: str, body: SLTPBody, request: Request):
     """Owner override of the stop/target on one open position. Absolute prices or
-    percentages of entry. Setting a target by hand pins it (reinforcement won't
-    auto-extend it); the trailing stop still ratchets up from a manual stop."""
+    percentages of entry. Direction-aware: a SHORT-equity position keeps its stop
+    ABOVE entry and target BELOW (a long option/equity keeps stop below / target
+    above). Setting a target by hand pins it (reinforcement won't auto-extend it);
+    the trailing stop still ratchets up from a manual stop."""
+    from app.engine.equity_entry import resolve_sltp
     r = _runner(request)
     async with r._lock:
         pos = r.broker.position_for(key)
         if not pos:
             return {"error": "no open position for this instrument"}
-        new_stop = body.stop_price
-        if new_stop is None and body.stop_pct is not None:
-            new_stop = pos.entry_premium * (1 - body.stop_pct)
-        new_target = body.target_price
-        if new_target is None and body.target_pct is not None:
-            new_target = pos.entry_premium * (1 + body.target_pct)
-        stop = new_stop if new_stop is not None else pos.stop_price
-        target = new_target if new_target is not None else pos.target_price
-        if stop <= 0 or target <= 0:
-            return {"error": "stop and target must be positive"}
-        if stop >= target:
-            return {"error": "stop must be below target"}
+        is_short = pos.segment == "equity_intraday" and pos.direction == "SHORT"
+        stop, target, err = resolve_sltp(
+            is_short=is_short, entry=pos.entry_premium,
+            cur_stop=pos.stop_price, cur_target=pos.target_price,
+            stop_price=body.stop_price, stop_pct=body.stop_pct,
+            target_price=body.target_price, target_pct=body.target_pct)
+        if err:
+            return {"error": err}
         pos.stop_price = stop
         pos.target_price = target
-        if new_target is not None:
+        if body.target_price is not None or body.target_pct is not None:
             pos.manual_target = True
         r.broker.commit()
         # push the owner's new stop to the exchange GTT backstop (no-op on paper;
@@ -598,18 +784,31 @@ def reset_setting(body: SettingKey, request: Request):
 
 # ── intraday vs overnight analytics + option dataset ─────────────────────────
 @router.get("/api/analytics")
-def analytics_split(request: Request):
+def analytics_split(request: Request, segment: str | None = None):
+    """Trade analytics. Optional ?segment=options|equity_intraday narrows the
+    headline split AND the per-segment block to one window. All figures are net of
+    the full charge stack (Trade.net_pnl is gross − charges)."""
     from app.options.cache import stats as option_stats
     with SessionLocal() as s:
-        trades = list(s.scalars(select(Trade)))
+        all_trades = list(s.scalars(select(Trade)))
+
+    def seg_of(t):
+        return t.segment or "options"
 
     def agg(ts):
         n = len(ts)
         wins = sum(1 for t in ts if t.win)
         return {"trades": n, "wins": wins,
                 "win_rate": round(100 * wins / n, 1) if n else 0.0,
-                "net_pnl": round(sum(t.net_pnl for t in ts), 2)}
+                "net_pnl": round(sum(t.net_pnl for t in ts), 2),
+                "charges": round(sum(t.charges_total for t in ts), 2)}
 
+    # per-segment summary (net of costs) across BOTH windows — never filtered, so
+    # the dashboard can always show options vs equity side by side
+    by_segment = {seg: agg([t for t in all_trades if seg_of(t) == seg])
+                  for seg in ("options", "equity_intraday")}
+
+    trades = [t for t in all_trades if seg_of(t) == segment] if segment else all_trades
     overnight = [t for t in trades if t.held_overnight]
     intraday = [t for t in trades if not t.held_overnight]
     return {
@@ -618,6 +817,7 @@ def analytics_split(request: Request):
         "overnight_gap_pnl": round(sum(t.overnight_pnl for t in trades), 2),
         "reinforced_trades": sum(1 for t in trades if t.reinforcements > 0),
         "option_dataset": option_stats(),
+        "by_segment": by_segment,
     }
 
 

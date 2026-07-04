@@ -9,6 +9,7 @@ from app.notify.notifier import Notifier
 def _runner_with_capture():
     init_db(reset=True)
     r = EngineRunner()
+    r.params["entry_min_days_to_expiry"] = 0   # mock NIFTY chain is ~1-DTE; these tests aren't the DTE guard
     sent: list[str] = []
     r.notifier = Notifier(sender=lambda t: sent.append(t))
     return r, sent

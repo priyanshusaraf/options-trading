@@ -30,6 +30,7 @@ class OrderRequest:
     order_type: str                 # "MARKET" | "LIMIT"
     limit_price: float | None = None
     tag: str | None = None          # idempotency / correlation tag
+    product: str | None = None      # override the client's product (e.g. MIS for intraday equity); None = client default
 
 
 @dataclass
