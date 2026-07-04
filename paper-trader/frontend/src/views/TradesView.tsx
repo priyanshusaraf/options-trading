@@ -98,13 +98,13 @@ export default function TradesView() {
           <thead className="text-muted">
             <tr className="border-b border-edge">
               <th className="text-left p-2">Exit time</th>
-              <th className="text-left p-2">Ledger</th>
+              <th className="text-left p-2 hidden md:table-cell">Ledger</th>
               <th className="text-left p-2">Underlying</th>
-              <th className="text-left p-2">Contract</th>
-              <th className="text-right p-2">Underlying entry → exit</th>
-              <th className="text-right p-2">Spot %</th>
-              <th className="text-right p-2">Option entry → exit</th>
-              <th className="text-right p-2">Option %</th>
+              <th className="text-left p-2 hidden md:table-cell">Contract</th>
+              <th className="text-right p-2 hidden md:table-cell">Underlying entry → exit</th>
+              <th className="text-right p-2 hidden md:table-cell">Spot %</th>
+              <th className="text-right p-2 hidden md:table-cell">Option entry → exit</th>
+              <th className="text-right p-2 hidden md:table-cell">Option %</th>
               <th className="text-left p-2">Reason</th>
               <th className="text-right p-2">Net P&amp;L</th>
             </tr>
@@ -113,7 +113,7 @@ export default function TradesView() {
             {rows.map((t) => (
               <tr key={t.id} className="border-b border-edge/40 hover:bg-panel2/40">
                 <td className="p-2 whitespace-nowrap text-muted">{new Date(t.exit_time).toLocaleString()}</td>
-                <td className="p-2">
+                <td className="p-2 hidden md:table-cell">
                   <span className={`badge ${modeOf(t) === 'live'
                     ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300'}`}>
                     {modeOf(t) === 'live' ? 'REAL' : 'PAPER'}</span>
@@ -123,11 +123,11 @@ export default function TradesView() {
                     {t.direction} {t.option_type}</span>
                   {t.held_overnight && <span className="badge ml-1 bg-indigo-400/15 text-indigo-300">🌙</span>}
                 </td>
-                <td className="p-2 text-muted whitespace-nowrap">{t.tradingsymbol} ·{t.qty}</td>
-                <td className="p-2 text-right tabular-nums whitespace-nowrap">{n(t.entry_spot)} → {n(t.exit_spot)}</td>
-                <td className={`p-2 text-right tabular-nums ${pnlColor(t.spot_move_pct ?? 0)}`}>{pct(t.spot_move_pct)}</td>
-                <td className="p-2 text-right tabular-nums whitespace-nowrap">{n(t.entry_premium)} → {n(t.exit_premium)}</td>
-                <td className={`p-2 text-right tabular-nums ${pnlColor(t.premium_move_pct ?? 0)}`}>{pct(t.premium_move_pct)}</td>
+                <td className="p-2 text-muted whitespace-nowrap hidden md:table-cell">{t.tradingsymbol} ·{t.qty}</td>
+                <td className="p-2 text-right tabular-nums whitespace-nowrap hidden md:table-cell">{n(t.entry_spot)} → {n(t.exit_spot)}</td>
+                <td className={`p-2 text-right tabular-nums hidden md:table-cell ${pnlColor(t.spot_move_pct ?? 0)}`}>{pct(t.spot_move_pct)}</td>
+                <td className="p-2 text-right tabular-nums whitespace-nowrap hidden md:table-cell">{n(t.entry_premium)} → {n(t.exit_premium)}</td>
+                <td className={`p-2 text-right tabular-nums hidden md:table-cell ${pnlColor(t.premium_move_pct ?? 0)}`}>{pct(t.premium_move_pct)}</td>
                 <td className="p-2 text-muted whitespace-nowrap">{t.exit_reason}</td>
                 <td className={`p-2 text-right tabular-nums font-semibold ${pnlColor(t.net_pnl)}`}>{signedInr(t.net_pnl)}</td>
               </tr>

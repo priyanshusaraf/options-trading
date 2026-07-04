@@ -221,7 +221,7 @@ export default function Watchlist() {
           <thead className="text-muted border-b border-edge text-left">
             <tr className="[&>th]:py-1 [&>th]:pr-3">
               <th></th><th>Instrument</th><th>Live TF</th><th>Signal</th><th className="text-right">z</th>
-              <th>Trend</th><th>Position</th><th>Segment / Strategy</th><th>Options</th><th>Data</th><th>Entries</th><th></th>
+              <th>Trend</th><th>Position</th><th>Entries</th><th>Options</th><th>Data</th><th>Segment / Strategy</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -247,6 +247,21 @@ export default function Watchlist() {
                 <td className="text-muted">{r.trend || '—'}</td>
                 <td>{r.has_position ? <span className="text-up">● held</span> : <span className="text-muted">flat</span>}</td>
                 <td onClick={(e) => e.stopPropagation()}>
+                  <button onClick={() => toggleBlock(r)}
+                    title={r.entries_blocked
+                      ? 'entries BLOCKED — the bot will NOT open new positions on this symbol; click to allow'
+                      : 'BLOCK the bot from opening new positions on this symbol (this is the real stop — not the red flag)'}
+                    className={`badge ${r.entries_blocked ? 'bg-down/15 text-down' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                    {r.entries_blocked ? 'blocked' : 'allow'}
+                  </button>
+                </td>
+                <td className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</td>
+                <td>{r.market_open === false
+                  ? <span className="text-muted" title="market closed — no new candle prints; not a feed fault">closed</span>
+                  : r.stale
+                    ? <span className="text-amber-400">stale</span>
+                    : <span className="text-up/80">live</span>}</td>
+                <td onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-1">
                     <button onClick={() => togglePriority(r)}
                       title={r.priority_flag ? 'purple priority ON — intraday selection always takes this name, sized at the top of the band' : 'flag as purple intraday priority'}
@@ -255,10 +270,10 @@ export default function Watchlist() {
                     </button>
                     <button onClick={() => toggleOvertrade(r)}
                       title={r.overtrade_flag
-                        ? 'red overtrading flag ON — advisory only; consider removing this name'
+                        ? 'red overtrading flag ON — advisory only (does NOT block); to actually stop entries use "blocked" on the left'
                         : (r.overtrade_suggested
-                            ? `high signal count (today ${r.signals_today ?? 0} · 7d ${r.signals_rolling ?? 0}) — consider flagging red`
-                            : 'flag as red (overtrading)')}
+                            ? `high signal count (today ${r.signals_today ?? 0} · 7d ${r.signals_rolling ?? 0}) — consider flagging red (advisory only)`
+                            : 'flag as red (overtrading) — advisory only, does NOT block')}
                       className={`text-sm leading-none ${r.overtrade_flag ? 'text-red-400'
                         : r.overtrade_suggested ? 'text-red-400/70 hover:text-red-400 animate-pulse'
                         : 'text-zinc-600 hover:text-red-400'}`}>
@@ -281,18 +296,6 @@ export default function Watchlist() {
                       {strategies.map((s) => <option key={s.key} value={s.key}>{s.display_name}</option>)}
                     </select>
                   </div>
-                </td>
-                <td className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</td>
-                <td>{r.market_open === false
-                  ? <span className="text-muted" title="market closed — no new candle prints; not a feed fault">closed</span>
-                  : r.stale
-                    ? <span className="text-amber-400">stale</span>
-                    : <span className="text-up/80">live</span>}</td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => toggleBlock(r)}
-                    className={`badge ${r.entries_blocked ? 'bg-down/15 text-down' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
-                    {r.entries_blocked ? 'blocked' : 'allow'}
-                  </button>
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => toggleEnabled(r)}

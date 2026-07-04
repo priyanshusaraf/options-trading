@@ -231,7 +231,7 @@ export default function ActivePositionsView() {
             : 'No open positions. The engine opens one on the next fresh signal, or open one manually above.'}
         </div>
       ) : (
-        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))' }}>
+        <div className="grid gap-3 grid-cols-1 md:grid-cols-[repeat(auto-fill,minmax(420px,1fr))]">
           {shown.map((p) => <PositionCard key={p.instrument_key} p={p} onChanged={load} />)}
         </div>
       )}

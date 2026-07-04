@@ -3,12 +3,12 @@ import { useLive } from '../state/LiveContext'
 import { getStatus, getExecState, armBot, killBot } from '../lib/api'
 import { inr, signedInr, pnlColor } from '../lib/format'
 
-function Stat({ label, v, cls = '' }: { label: string; v: string; cls?: string }) {
-  return <div className="text-right"><div className="stat-label">{label}</div>
+function Stat({ label, v, cls = '', title }: { label: string; v: string; cls?: string; title?: string }) {
+  return <div className="text-right" title={title}><div className="stat-label">{label}</div>
     <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
 }
 
-function ExecutionControls() {
+export function ExecutionControls({ compact = false }: { compact?: boolean }) {
   const [armed, setArmed] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
   const refresh = () => getExecState().then((s) => setArmed(s.armed)).catch(() => {})
@@ -27,7 +27,7 @@ function ExecutionControls() {
       <button disabled={busy} onClick={toggle}
         title="Armed = the bot may auto-execute trades. Disarmed = it watches & alerts but opens nothing."
         className={`btn ${armed ? 'border-up/60 text-up bg-up/10' : 'border-amber-400/60 text-amber-400'}`}>
-        {armed === null ? '…' : armed ? '● ARMED' : '○ ARM TO TRADE'}
+        {armed === null ? '…' : armed ? '● ARMED' : (compact ? '○ ARM' : '○ ARM TO TRADE')}
       </button>
       <button disabled={busy} onClick={kill}
         title="Emergency stop: disarm and square off everything now"
@@ -36,7 +36,7 @@ function ExecutionControls() {
   )
 }
 
-function ArmBanner() {
+export function ArmBanner() {
   const [armed, setArmed] = useState<boolean | null>(null)
   useEffect(() => {
     const f = () => getExecState().then((s) => {
@@ -66,9 +66,11 @@ export default function TopBar({ tab, setTab, tabs }:
     return () => clearInterval(t)
   }, [])
   const cap = state?.capital
-  // LIVE: show the REAL Kite account balance (free funds ≈ what the bot may deploy),
-  // not the paper-ledger 50k. Falls back to the ledger until the first margins poll.
-  const live = state?.broker_mode === 'live' && cap?.account_available != null
+  // LIVE: the account slots show ONLY the real Kite balance (margins poll). Before
+  // the first successful poll they show '—', never the internal bot ledger — the
+  // old silent fallback rendered ledger figures in the account slots, so the header
+  // flipped between a ~50k ledger number and the real funds (the 2026-07 confusion).
+  const isLive = state?.broker_mode === 'live'
 
   return (
     <header className="border-b border-edge bg-panel sticky top-0 z-40">
@@ -92,19 +94,23 @@ export default function TopBar({ tab, setTab, tabs }:
           <ExecutionControls />
         </div>
         <div className="flex items-center gap-5">
-          {live ? (
+          {isLive ? (
             <>
-              <Stat label="Acct equity" v={inr(cap?.account_net)} />
-              <Stat label="Free funds" v={inr(cap?.account_available)} />
+              <Stat label="Acct equity" v={cap?.account_net != null ? inr(cap.account_net) : '—'}
+                title="Your REAL Kite account equity (margins net). '—' until the first successful margins poll — re-auth Kite if it stays blank." />
+              <Stat label="Free funds" v={cap?.account_available != null ? inr(cap.account_available) : '—'}
+                title="REAL free funds in your Kite account (live balance). This is what new entries can actually draw on." />
             </>
           ) : (
             <>
-              <Stat label="Equity" v={inr(cap?.equity)} />
-              <Stat label="Cash" v={inr(cap?.cash)} />
+              <Stat label="Equity" v={inr(cap?.equity)} title="Paper-ledger equity (simulated)" />
+              <Stat label="Cash" v={inr(cap?.cash)} title="Paper-ledger cash (simulated)" />
             </>
           )}
-          <Stat label="Invested" v={inr(cap?.invested)} />
-          <Stat label="Realized P&L" v={signedInr(cap?.realized_pnl)} cls={pnlColor(cap?.realized_pnl)} />
+          <Stat label={isLive ? 'Bot deployed' : 'Invested'} v={inr(cap?.invested)}
+            title={isLive ? "Margin/premium the BOT's open positions are using (internal ledger)" : 'Cost of open paper positions'} />
+          <Stat label="Realized P&L" v={signedInr(cap?.realized_pnl)} cls={pnlColor(cap?.realized_pnl)}
+            title={isLive ? "BOT's booked P&L since the last ledger re-anchor (internal ledger, net of charges)" : 'Booked paper P&L, net of charges'} />
           <Stat label="Open" v={String(cap?.open_count ?? '—')} />
           <Stat label="Tick" v={String(state?.tick ?? '—')} />
         </div>

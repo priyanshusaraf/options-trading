@@ -35,11 +35,12 @@ export interface CatHealth {
 }
 export interface ProviderHealth { quote: CatHealth; candle: CatHealth }
 
-// Daily-loss / open-drawdown circuit-breaker status on the WS snapshot (C2).
+// Daily-loss / open-drawdown / round-trip circuit-breaker status on the WS snapshot (C2).
 export interface HaltStatus {
-  halted: boolean; reason: '' | 'realized' | 'open_drawdown'
+  halted: boolean; reason: '' | 'realized' | 'open_drawdown' | 'round_trips'
   realized: number; open_unrealized: number
   max_daily_loss: number; max_open_drawdown: number
+  round_trips?: number; max_round_trips?: number
 }
 
 export interface PositionTick {
