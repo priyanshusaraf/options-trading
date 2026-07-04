@@ -83,6 +83,25 @@ sells neither.
   *opens* a new position until explicitly armed. It is **disarmed on every process start** — you
   arm each session — and the kill switch disarms it again. Live entries are further gated by the
   daily-loss halt, adaptive order routing, and an ownership guard.
+- **ARM gates entries only — not exits.** `mark_and_exit_positions` (risk loop) marks every open
+  position to market and fires SL/TP/square-off *regardless of arm state* (gate is in
+  `process_entries` at `runner.py:506,532`). Consequence for live: **the persisted book must contain
+  only positions the real account actually holds before `PT_EXECUTION=live`**, or the engine will
+  place real orders to flatten phantom rows. Reconcile/clear the ledger before flipping to live.
+- **Live execution has never placed a real order.** The whole live path (`LiveBroker`,
+  `KiteOrderClient`, `LiveExecutionKite`) is exercised only against a mock order client in tests.
+  The first real order is its first real-world test, on a strategy with no validated track record.
+
+### Going live (operational checklist — read `Safety model` first)
+1. **Whitelist the static IP** in the Kite developer console (order routes reject otherwise). Owner-only.
+2. **Re-auth Kite** that morning via the **Connect Kite** button — the access token expires ~06:00 IST
+   daily and is stored in `backend/access_token.json` (`{date, access_token}`); the order client reads
+   it live via `token_source`, so a re-login flows through without a backend restart.
+3. **Clean the book** — the live ledger must hold only positions the real account holds (see ARM note
+   above). `capital_state` and `positions` carry over across restarts in non-mock mode.
+4. **Set `PT_EXECUTION=live`** in `backend/.env` (`PT_LIVE_ACK=I_UNDERSTAND_REAL_MONEY` + `PT_PROVIDER=kite`
+   must already be set) and restart the backend. Logs print `🔴 LIVE EXECUTION ENABLED` when armed.
+5. **ARM** from the cockpit (disarmed on every start). KILL disarms + squares off everything.
 
 ### Config layering (`backend/app/core/`)
 - `config.py` — `Settings` (pydantic-settings), the static base. All knobs documented here with
