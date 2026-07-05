@@ -73,6 +73,14 @@ class ExpandingZImpulseV4(Strategy):
         "use_absz_contraction_exit": False,
         "exit_on_drift_flip": True, "exit_on_ema_cross": True,
     }
+    # Pine risk engine defaults (expanding-z-impulse-v4.pine inputs, lines 98-104):
+    # the backtest arbiter applies these; the .pine applies them natively in TV.
+    risk_model = {
+        "atr_length": 14, "initial_risk_atr": 1.25,
+        "trail_start_r": 1.75, "trail_atr": 3.0,
+        "use_mfe_capture_floor": True,
+        "capture_start_r": 1.25, "capture_pct": 0.35,
+    }
 
     def compute(self, df: pd.DataFrame, ema_length: int = 50, z_length: int = 50,
                 adapt_length: int = 200, atr_length: int = 14, slope_lookback: int = 5,

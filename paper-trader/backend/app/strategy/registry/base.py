@@ -29,6 +29,12 @@ class Strategy:
     key: str = ""
     display_name: str = ""
     default_params: dict[str, Any] = {}
+    # Optional trade-management declaration for the BACKTEST ratchet overlay
+    # (initial ATR stop -> Chandelier trail -> MFE-capture floor). None = the
+    # strategy exits on its canonical flags only. Keys (all required if set):
+    # atr_length, initial_risk_atr, trail_start_r, trail_atr,
+    # use_mfe_capture_floor, capture_start_r, capture_pct.
+    risk_model: dict[str, Any] | None = None
 
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError
