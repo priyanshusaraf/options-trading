@@ -31,11 +31,16 @@ def test_capture_floor_then_chandelier_activate_and_ratchet():
 
 
 def test_stop_never_loosens():
-    s = RatchetState("LONG", 100.0, 2.0, RM)
-    s.update(104.0, 101.5, 103.5, 2.0)
-    locked = s.stop
-    s.update(103.0, 101.0, 101.5, 8.0)   # huge ATR -> looser chandelier candidate
-    assert s.stop == pytest.approx(locked)  # ratchet only, never down
+    # capture floor OFF so the chandelier alone drives the stop — a later ATR
+    # spike then forces the candidate BELOW the locked stop, which only the
+    # never-loosen clamp survives (a mutant `stop = best` would drop to 98).
+    rm = dict(RM, use_mfe_capture_floor=False)
+    s = RatchetState("LONG", 100.0, 2.0, rm)
+    s.update(104.0, 101.5, 103.5, 2.0)   # MFE 4 = 2R -> chandelier 104-2 = 102
+    assert s.stop == pytest.approx(102.0)
+    s.update(103.0, 101.0, 101.5, 8.0)   # ATR spike: chandelier 104-8 = 96 < 102
+    assert s.stop == pytest.approx(102.0)   # clamp holds; initial-stop cand is 98
+    assert s.stop_hit(101.9)
 
 
 def test_close_confirmed_wick_through_stop_survives():
