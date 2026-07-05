@@ -23,7 +23,7 @@ class BTTrade:
     gross_pnl: float
     charges: float
     net_pnl: float
-    reason: str             # "STRATEGY_EXIT" | "OPEN_AT_END" (still open at last candle)
+    reason: str             # "STRATEGY_EXIT" | "RATCHET_STOP" | "OPEN_AT_END"
     bars_held: int
     # per-trade Maximum Adverse Excursion: worst % the position ran against entry
     # while open (from candle highs/lows), so true mid-trade pain is captured even

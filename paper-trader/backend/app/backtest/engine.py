@@ -4,9 +4,12 @@ Single-instrument backtest of the EMA50 + z-score strategy on the UNDERLYING.
 Options history is mostly unavailable, so the sweep evaluates the *strategy's*
 raw edge on the underlying price series — exactly what the owner asked for ("only
 the z-score + EMA strategy performance matters"). Entries fire on the strategy's
-longEntry/shortEntry crossovers; exits fire on its own longExit/shortExit (z
-reversal / trend flip) — **pure strategy signal**, no option-premium stop/target
-(those don't map to the underlying).
+longEntry/shortEntry flags; exits fire on its own longExit/shortExit flags plus —
+when the strategy DECLARES a risk_model — the Pine-parity ratchet overlay (initial
+ATR stop -> Chandelier trail -> MFE-capture floor, close-confirmed; see
+app/backtest/ratchet.py). Every decision confirmed on bar i fills at bar i+1's
+OPEN (Pine process_orders_on_close=false parity); the option-premium stop/target
+of the LIVE engine is not modelled here (it doesn't map to the underlying).
 
 POSITION SIZING (fixed ONE lot — the owner's chosen model):
   Every position is exactly ONE F&O lot (cash equities: floor(capital/price)
@@ -174,38 +177,47 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
         return [], m
 
     trades: list[BTTrade] = []
-    pos = None  # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
+    pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
+    pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
 
     rows = sig.to_dict("records")
     for i, r in enumerate(rows):
         t = ist_epoch(r["date"])   # IST wall-clock -> true instant (no +5:30 shift)
+        open_px = float(r["open"])
         close = float(r["close"])
-        if pos is None:
-            direction = None
-            if r["longEntry"]:
-                direction = "LONG"
-            elif r["shortEntry"]:
-                direction = "SHORT"
-            if direction:
-                qty, notional, lots = _position(inst, close, capital)
-                if qty <= 0:
-                    continue
-                pos = {"direction": direction, "entry_price": close,
-                       "entry_time": t, "entry_idx": i, "qty": qty,
-                       "notional": notional, "lots": lots,
-                       "mae_pct": 0.0}
-        else:
-            # track Maximum Adverse Excursion from this bar's high/low while open
-            _update_mae(pos, r)
-            d = pos["direction"]
-            exit_now = (d == "LONG" and bool(r["longExit"])) or \
-                       (d == "SHORT" and bool(r["shortExit"]))
-            if exit_now:
-                trades.append(_close(pos, close, t, i, seg, "STRATEGY_EXIT"))
+
+        # 1) execute the PREVIOUS bar's confirmed decision at THIS bar's open
+        #    (Pine parity: process_orders_on_close=false — no same-bar fills).
+        if pending is not None:
+            kind, arg = pending
+            pending = None
+            if kind == "ENTER" and pos is None:
+                qty, notional, lots = _position(inst, open_px, capital)
+                if qty > 0:
+                    pos = {"direction": arg, "entry_price": open_px,
+                           "entry_time": t, "entry_idx": i, "qty": qty,
+                           "notional": notional, "lots": lots,
+                           "mae_pct": 0.0}
+            elif kind == "EXIT" and pos is not None:
+                trades.append(_close(pos, open_px, t, i, seg, arg))
                 pos = None
 
-    # close any still-open position at the LAST AVAILABLE CANDLE (end of data, not
-    # end of day) — it never hit a strategy reversal within the loaded history.
+        if pos is not None:
+            # MAE includes the fill bar (the position lives through it) …
+            _update_mae(pos, r)
+            # … but exit DECISIONS start the bar AFTER the fill (Pine canManage:
+            # no same-bar management, pine:233-234).
+            if i > pos["entry_idx"]:
+                d = pos["direction"]
+                if (d == "LONG" and bool(r["longExit"])) or \
+                        (d == "SHORT" and bool(r["shortExit"])):
+                    pending = ("EXIT", "STRATEGY_EXIT")
+        elif r["longEntry"] or r["shortEntry"]:
+            pending = ("ENTER", "LONG" if r["longEntry"] else "SHORT")
+
+    # close any still-open position at the LAST AVAILABLE CANDLE (end of data,
+    # not end of day) — includes a decision confirmed on the final bar, which
+    # has no next open to fill at.
     if pos is not None:
         last = rows[-1]
         trades.append(_close(pos, float(last["close"]),
