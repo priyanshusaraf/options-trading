@@ -42,6 +42,7 @@ import math
 import pandas as pd
 
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
+from app.backtest.ratchet import RatchetState, wilder_atr
 from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
 from app.strategy.registry import get_strategy
@@ -164,6 +165,10 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     option_cost = estimate_option_cost(inst, candles)
 
     sig = strat.signals(_candles_to_df(candles), **params)
+    rm = getattr(strat, "risk_model", None)
+    if rm:
+        # computed on the FULL frame so warmup trimming can't shift ATR values
+        sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
     # trim warmup rows where the strategy's indicators are still NaN. The columns
     # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
     # known indicator columns this strategy actually emitted — keeps v3 identical.
@@ -179,6 +184,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     trades: list[BTTrade] = []
     pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
     pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
+    ratchet = None  # RatchetState for the open position, iff strat declares risk_model
 
     rows = sig.to_dict("records")
     for i, r in enumerate(rows):
@@ -198,9 +204,18 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
                            "entry_time": t, "entry_idx": i, "qty": qty,
                            "notional": notional, "lots": lots,
                            "mae_pct": 0.0}
+                    ratchet = None
+                    if rm:
+                        entry_atr = r.get("_ratchet_atr")
+                        if entry_atr is not None and math.isfinite(entry_atr) \
+                                and entry_atr > 0:
+                            # risk units freeze at the FILL bar (pine:212)
+                            ratchet = RatchetState(arg, open_px,
+                                                   float(entry_atr), rm)
             elif kind == "EXIT" and pos is not None:
                 trades.append(_close(pos, open_px, t, i, seg, arg))
                 pos = None
+                ratchet = None
 
         if pos is not None:
             # MAE includes the fill bar (the position lives through it) …
@@ -209,8 +224,14 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
             # no same-bar management, pine:233-234).
             if i > pos["entry_idx"]:
                 d = pos["direction"]
-                if (d == "LONG" and bool(r["longExit"])) or \
-                        (d == "SHORT" and bool(r["shortExit"])):
+                if ratchet is not None:
+                    ratchet.update(float(r["high"]), float(r["low"]), close,
+                                   float(r["_ratchet_atr"]))
+                    if ratchet.stop_hit(close):
+                        pending = ("EXIT", "RATCHET_STOP")
+                if pending is None and (
+                        (d == "LONG" and bool(r["longExit"])) or
+                        (d == "SHORT" and bool(r["shortExit"]))):
                     pending = ("EXIT", "STRATEGY_EXIT")
         elif r["longEntry"] or r["shortEntry"]:
             pending = ("ENTER", "LONG" if r["longEntry"] else "SHORT")
