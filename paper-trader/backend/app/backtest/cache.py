@@ -25,7 +25,10 @@ from app.db.models import BacktestResult
 #     rupees; return% = total P&L / base) replacing compounding-%-on-notional, and
 #     an estimated ATM option_cost for the options-affordability flag. Return/curve
 #     semantics changed -> force a clean recompute.
-SCHEMA_VERSION = 5
+# v6: fills moved to next-bar-open for ALL strategies (Pine parity) and a
+#     strategy's declared risk_model (ratchet overlay) joined the signature.
+#     Both change trade outcomes for every cell -> force a clean recompute.
+SCHEMA_VERSION = 6
 
 
 def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50,
@@ -36,9 +39,11 @@ def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50
     the STRATEGY — invalidates the cache so a 1-year run never reuses a 10-year
     run's metrics and an Expanding-Z run never reuses a Trend-Impulse run's.
 
-    Back-compat is load-bearing: the default strategy (trend_impulse_v3) reproduces
-    the historical signature EXACTLY, so the owner's large existing cache of v3
-    results stays valid. Only non-default strategies get a new, distinct signature."""
+    Back-compat note: through v5 the default strategy reproduced its historical
+    signature so the owner's v3 cache stayed valid; v6's fill-model change makes
+    every pre-v6 cell stale BY DESIGN, so that guarantee is intentionally reset
+    at v6 (the format is kept stable from here so future v3 caches survive
+    non-breaking bumps)."""
     from app.strategy.registry import DEFAULT_STRATEGY_KEY
     if strategy is None or strategy.key == DEFAULT_STRATEGY_KEY:
         raw = (f"v{SCHEMA_VERSION}|cap={capital}|ema={ema_length}|z={z_length}"
@@ -46,8 +51,11 @@ def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50
     else:
         ps = ",".join(f"{k}={strategy.default_params[k]}"
                       for k in sorted(strategy.default_params))
+        rm = getattr(strategy, "risk_model", None)
+        rs = ("none" if not rm else
+              ",".join(f"{k}={rm[k]}" for k in sorted(rm)))
         raw = (f"v{SCHEMA_VERSION}|cap={capital}|win={window}"
-               f"|strat={strategy.key}|params={ps}")
+               f"|strat={strategy.key}|params={ps}|risk={rs}")
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
