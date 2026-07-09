@@ -101,6 +101,8 @@ class EngineRunner:
         self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
         self._account_funds: dict | None = None  # cached live Kite funds {available, net}
         self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
+        self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
+        self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -1017,6 +1019,33 @@ class EngineRunner:
         except Exception as e:
             log.warn(f"account funds refresh failed: {e}")
 
+    def _maybe_check_ledger(self) -> None:
+        """H10: run the cash-invariant self-check in production (it was only ever run by
+        the offline dry-run). A nonzero diff means the ledger drifted from
+        cash == initial + realized − Σ(open entry_cost) — a bad write or partial commit.
+        Throttled; alerts once per drift episode (log + Telegram) and clears when it
+        returns to balance. Detection only — it never mutates the ledger."""
+        epoch = self.provider.now().timestamp()
+        if epoch < self._next_ledger_epoch:
+            return
+        self._next_ledger_epoch = epoch + float(self.params.get("ledger_check_seconds", 60))
+        rec = self.broker.reconcile()
+        if abs(rec["diff"]) > 0.01:
+            if not self._ledger_drift_alerted:
+                log.error(f"LEDGER DRIFT ₹{rec['diff']} — cash {rec['cash']} vs expected "
+                          f"{rec['expected_cash']} (realized {rec['realized_pnl']}, "
+                          f"{rec['open']} open); invariant broken, investigate",
+                          event="LEDGER_DRIFT")
+                try:
+                    self.notifier._emit(f"🚨 LEDGER DRIFT ₹{rec['diff']}: cash "
+                                        f"{rec['cash']} vs expected {rec['expected_cash']} "
+                                        f"— the bot's cash invariant is broken; verify.")
+                except Exception:
+                    pass
+                self._ledger_drift_alerted = True
+        else:
+            self._ledger_drift_alerted = False
+
     def _persist_daily_snapshot(self, funds: dict) -> None:
         """Upsert today's (IST) account equity row for the Calendar view. Called from
         the throttled funds refresh, so it captures the latest balance of the day."""
@@ -1117,6 +1146,7 @@ class EngineRunner:
         self._maybe_cache_chains()     # grow the watchlist-wide options dataset
         self.handle_overnight(self.provider.now())   # no-op for mock
         self.broker.snapshot(self.provider.now())
+        self._maybe_check_ledger()     # H10: periodic cash-invariant drift alarm
         self.tick_count += 1
 
     async def _signal_iteration(self) -> None:
