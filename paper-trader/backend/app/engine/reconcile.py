@@ -29,8 +29,12 @@ class OwnershipCheck:
     reason: str
 
 
-def account_net_qty(account_positions: list[dict], tradingsymbol: str) -> int:
-    """Net signed quantity the ACCOUNT holds for a symbol (long +, short -)."""
+def account_net_qty(account_positions: list[dict] | None, tradingsymbol: str) -> int:
+    """Net signed quantity the ACCOUNT holds for a symbol (long +, short -).
+    A None read (API/auth failure) is NOT a flat account — returns 0, but callers
+    must fail closed via can_bot_close/find_orphans, not treat 0 as 'flat'."""
+    if account_positions is None:
+        return 0
     return sum(int(p.get("quantity", 0)) for p in account_positions
                if p.get("tradingsymbol") == tradingsymbol)
 
@@ -39,7 +43,7 @@ def _is_short_equity(pos) -> bool:
     return getattr(pos, "segment", None) == "equity_intraday" and pos.direction == "SHORT"
 
 
-def can_bot_close(pos, account_positions: list[dict]) -> OwnershipCheck:
+def can_bot_close(pos, account_positions: list[dict] | None) -> OwnershipCheck:
     """It is safe to send the bot's closing order only if the live account actually
     backs the bot's position of that exact symbol — otherwise the order would eat into
     the owner's own holding or open/deepen a position for them.
@@ -47,7 +51,16 @@ def can_bot_close(pos, account_positions: list[dict]) -> OwnershipCheck:
       long (bought option, long equity): account must be long  >= +pos.qty -> SELL.
       intraday-equity SHORT: account must be short <= -pos.qty            -> BUY to cover.
     Position-based (not margin) because positions are the reliable signal during the
-    owner's intraday exits when margin can lag."""
+    owner's intraday exits when margin can lag.
+
+    account_positions is None when the live read failed (network/rate-limit/expired
+    token — the routine ~06:00 IST expiry). That is NOT a flat account: fail closed,
+    send no order, so a dead-token read can never be mistaken for 'the owner exited'."""
+    if account_positions is None:
+        return OwnershipCheck(
+            False, 0,
+            f"account read unavailable (API/auth failure) — cannot verify the account "
+            f"backs {pos.tradingsymbol}; sending no order")
     net = account_net_qty(account_positions, pos.tradingsymbol)
     if _is_short_equity(pos):
         if net <= -pos.qty:
@@ -66,7 +79,14 @@ def can_bot_close(pos, account_positions: list[dict]) -> OwnershipCheck:
         f"or a margin/position glitch). Flagging for you instead.")
 
 
-def find_orphans(bot_positions, account_positions: list[dict]) -> list:
+def find_orphans(bot_positions, account_positions: list[dict] | None) -> list:
     """Bot-tracked positions the live account no longer fully backs — these need the
-    owner's attention (and must never be auto-traded)."""
+    owner's attention (and must never be auto-traded).
+
+    A None read (API/auth failure) returns [] — we cannot confirm anything is orphaned
+    without a reliable account read, so nothing is phantom-closed. This is the fix for
+    the daily-token-expiry mass-phantom-close bug (audit C4): [] read == flat account,
+    but None read == 'unknown', and the two must not be conflated."""
+    if account_positions is None:
+        return []
     return [p for p in bot_positions if not can_bot_close(p, account_positions).ok]

@@ -48,3 +48,21 @@ def test_find_orphans_flags_bot_positions_not_in_account():
     acct = [{"tradingsymbol": "A", "quantity": 75}]      # B missing from the account
     orphans = find_orphans(bot, acct)
     assert [o.tradingsymbol for o in orphans] == ["B"]
+
+
+# ── C4: a failed/unauthenticated account read must never look like a flat account ──
+def test_account_net_qty_none_read_is_zero():
+    # a failed read (None) is not a flat account — net is 0 but callers must fail closed
+    assert account_net_qty(None, "X") == 0
+
+
+def test_cannot_close_when_account_read_unavailable():
+    # provider.account_positions() returned None (API/auth failure) — never send an order
+    chk = can_bot_close(FakePos("X", 75), None)
+    assert chk.ok is False and "unavailable" in chk.reason.lower()
+
+
+def test_find_orphans_returns_none_when_account_read_unavailable():
+    # a None read must NOT mark every bot position as orphaned (that is the phantom-close bug)
+    bot = [FakePos("A", 75), FakePos("B", 50)]
+    assert find_orphans(bot, None) == []

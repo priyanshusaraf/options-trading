@@ -150,12 +150,12 @@ class KiteProvider(MarketDataProvider):
         funds = self.account_funds()
         return funds["net"] if funds else None
 
-    def account_positions(self) -> list[dict]:
+    def account_positions(self) -> list[dict] | None:
         try:
             pos = self.kite.positions()
         except Exception as e:
             log.warn(f"positions() failed: {e}")
-            return []
+            return None   # read failed — NOT a flat account (audit C4). Callers fail closed.
         net = (pos or {}).get("net", []) or []
         return [{"tradingsymbol": r.get("tradingsymbol"),
                  "quantity": int(r.get("quantity", 0) or 0),

@@ -109,9 +109,11 @@ class MarketDataProvider(ABC):
         (mock, not authenticated, or a transient error)."""
         return None
 
-    def account_positions(self) -> list[dict]:
+    def account_positions(self) -> list[dict] | None:
         """Live net positions in the account: [{tradingsymbol, quantity, ...}].
-        Empty list if unavailable. Used to keep the bot off the owner's positions."""
+        [] = genuinely flat; None = read failed (unavailable/unauthenticated). Callers
+        must fail closed on None, never treat it as flat (audit C4). Used to keep the
+        bot off the owner's positions."""
         return []
 
     def account_equity(self) -> float | None:

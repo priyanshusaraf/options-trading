@@ -837,3 +837,18 @@ def test_a_backed_read_resets_the_orphan_confirmation_counter():
     booked = b.reconcile_orphans(b.provider.now())              # orphaned again, streak = 1
     assert booked == []
     assert b.position_for("NIFTY") is not None                  # not booked — streak was reset
+
+
+def test_failed_account_read_never_phantom_closes():
+    # audit C4: account_positions() returns None on API/auth failure (e.g. the daily
+    # ~06:00 IST token expiry). A None read must NEVER be treated as a flat account —
+    # no matter how many consecutive times it fails, the real held position is not booked.
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    _age_out(b, pos)
+    b.provider.account_positions = lambda: None                  # read failed (dead token)
+    for _ in range(5):                                           # far past orphan_confirm_count
+        assert b.reconcile_orphans(b.provider.now()) == []
+    assert b.position_for("NIFTY") is not None                   # still held — NOT phantom-closed
+    assert c.gtt_deleted == []                                   # GTT left intact
