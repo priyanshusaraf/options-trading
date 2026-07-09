@@ -28,7 +28,7 @@ Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, comm
 - ✅ C3 (commit `15ea775`) options late-fill never adopted → extend pending-adoption to options path
 - ✅ H4 (commit `95da329`) stale `gtt_trigger_id` wedge → persist cancel before close order
 - ✅ H8 (`7b2ed61`) KILL cancels working/timed-out entry orders
-- 📐 H16 partial equity (MIS) close → see below (order-lifecycle; partial-close booking for equity)
+- ✅ H16 (`bb8777e`) partial equity (MIS) close → book slice + re-protect remainder, paisa-exact
 
 ## Batch 5 — Picker liquidity
 - ✅ C8 (commit `37c9eb3`) zero bid/ask collapses `spread_pct` to 0 → reject empty-depth quotes
@@ -38,7 +38,7 @@ Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, comm
 - ✅ H3 (`a38bf2e`) no rollback on exception → rollback both iterations
 - ✅ H6 (`06a73e0`) startup lot-size repair corrupts partial fills → guard real partials
 - ✅ H10 (`b2b1c61`) periodic ledger-drift alarm in the signal loop
-- 📐 H13 persisted order journal → design in `audit-deferred-design.md`
+- 📐 H13 persisted order journal → full spec in `audit-remaining-impl-guide.md`
 - ✅ P1 substantially resolved by H3 (rollback) + P2 (busy_timeout); see `audit-deferred-design.md`
 - ✅ P2 (commit `6ea0cc4`) SQLite `busy_timeout` → explicit 10s PRAGMA
 
@@ -50,6 +50,6 @@ Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, comm
 - ✅ P3 (`e3f504f`) per-lane heartbeats + risk-lane staleness watchdog
 
 ## Batch 8 — Strategy / backtest validity (design-scope)
-- 📐 C6 backtest models underlying → synthetic-premium design in `audit-deferred-design.md`
-- 📐 H2 live trailing ≠ backtest ratchet → unify plan in `audit-deferred-design.md`
-- 📐 H9 walk-forward / OOS gate → design in `audit-deferred-design.md`
+- 📐 C6 backtest models underlying → full spec in `audit-remaining-impl-guide.md`
+- 📐 H2 live trailing ≠ backtest ratchet → full spec in `audit-remaining-impl-guide.md` (Option A: unify onto ratchet)
+- 📐 H9 walk-forward / OOS gate → full spec in `audit-remaining-impl-guide.md`
