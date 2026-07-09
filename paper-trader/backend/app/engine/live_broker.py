@@ -124,6 +124,34 @@ class LiveBroker(PaperBroker):
             return False
         return True
 
+    def cancel_working_entries(self) -> list[str]:
+        """H8: cancel every working/timed-out bot ENTRY order so KILL is a true hard
+        stop — a still-resting entry can't fill after the kill and leave an untracked,
+        stopless position. Best-effort per order; an order whose cancel FAILS (it may
+        have just raced to a fill) is kept in the trackers so adopt_pending_entries can
+        still catch and manage that fill. Successfully-cancelled orders are cleared."""
+        order_ids = set(self._inflight.values())
+        order_ids |= {ctx["order_id"] for ctx in self._pending_entries.values()
+                      if ctx.get("order_id")}
+        cancelled, failed = [], set()
+        for oid in order_ids:
+            try:
+                self.client.cancel(oid)
+                cancelled.append(oid)
+                log.warn(f"KILL: cancelled working entry order {oid}", event="KILL_CANCEL")
+            except Exception as e:
+                failed.add(oid)
+                log.error(f"KILL: cancel({oid}) failed: {e} — verify on Zerodha",
+                          event="KILL_CANCEL_FAIL")
+                self._notify(f"⚠️ KILL: couldn't cancel working order {oid} — it may have "
+                             f"filled; verify on Zerodha")
+        # keep only orders whose cancel failed (a fill may have beaten the cancel — let
+        # adoption manage it); drop everything successfully cancelled.
+        self._inflight = {s: o for s, o in self._inflight.items() if o in failed}
+        self._pending_entries = {s: c for s, c in self._pending_entries.items()
+                                 if c.get("order_id") in failed}
+        return cancelled
+
     def _actual_fill(self, res) -> tuple[int, float]:
         """How much actually filled, and at what average price. The poll's own count
         is authoritative for FILLED/PARTIAL; on a TIMEOUT (poll gave up reporting

@@ -919,3 +919,31 @@ def test_crash_after_gtt_cancel_leaves_no_stale_trigger_id():
         reloaded = s.get(Position, pos.id)
         assert reloaded is not None
         assert reloaded.gtt_trigger_id is None            # cancel persisted — no stale id
+
+
+# ── H8: KILL must cancel working/timed-out entry orders, not just booked positions ──
+def test_cancel_working_entries_cancels_and_clears_them():
+    c = FakeClient(status="OPEN", filled_qty=0)     # entry times out, still working
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, chain = _open(b, c)
+    assert pos is None and q.tradingsymbol in b._pending_entries   # a working order exists
+    cancelled = b.cancel_working_entries()
+    assert "OID-1" in cancelled and "OID-1" in c.cancelled         # the order was cancelled
+    assert b._pending_entries == {} and b._inflight == {}          # trackers cleared
+
+
+def test_cancel_working_entries_keeps_orders_whose_cancel_failed():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, chain = _open(b, c)
+
+    def boom(order_id):
+        raise RuntimeError("cancel rejected (may have filled)")
+
+    c.cancel = boom
+    b.cancel_working_entries()
+    # a cancel that failed (the order may have raced to a fill) is kept so adoption can
+    # still catch + manage that fill instead of losing it
+    assert q.tradingsymbol in b._pending_entries

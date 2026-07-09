@@ -1210,6 +1210,10 @@ class EngineRunner:
         open position at its last mark. Used when things go south."""
         now = now or self.provider.now()
         self.armed = False
+        # H8: a hard stop must also cancel working/timed-out ENTRY orders — otherwise one
+        # still resting at the exchange can fill AFTER the kill and leave an untracked,
+        # stopless position. (No-op on paper.)
+        cancelled = self.broker.cancel_working_entries()
         closed: list[str] = []
         if square_off:
             for pos in list(self.broker.open_positions()):
@@ -1228,8 +1232,8 @@ class EngineRunner:
                 if pos.instrument_key in self.state:
                     self.state[pos.instrument_key]["position"] = None
                 closed.append(pos.instrument_key)
-        log.info(f"KILL SWITCH — disarmed; squared off {len(closed)} position(s)",
-                 event="KILL")
+        log.info(f"KILL SWITCH — disarmed; cancelled {len(cancelled)} working order(s); "
+                 f"squared off {len(closed)} position(s)", event="KILL")
         if self.params.get("notify_enabled", True):
             self.notifier.killed(closed)
         return closed

@@ -348,6 +348,11 @@ class PaperBroker:
         No-op on paper (paper fills are synchronous, never late)."""
         return []
 
+    def cancel_working_entries(self) -> list:
+        """Cancel working/timed-out entry orders on KILL. No-op on paper (paper fills
+        are synchronous — there is never a resting entry order)."""
+        return []
+
     # ── analytics support ─────────────────────────────────────────────────
     def snapshot(self, now: dt.datetime) -> EquitySnapshot:
         opens = self.open_positions()
