@@ -103,6 +103,8 @@ class EngineRunner:
         self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
+        self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
+        self._infra_alert_epoch: dict[str, float] = {}  # throttle infra alerts per key (M1)
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -985,6 +987,46 @@ class EngineRunner:
         return False
 
     # ── per-lane single iterations (lock-serialised DB mutation) ──────────
+    # ── liveness + infra alerting (M1/P3) ─────────────────────────────────
+    def _alert_infra(self, key: str, msg: str, now: float | None = None) -> bool:
+        """M1: surface an infrastructure/provider failure (loop death, token expiry,
+        data staleness) as a Telegram alert + log — the loops previously swallowed
+        these silently, so a dead engine looked healthy. Throttled per key so a
+        recurring failure alerts once, not every tick. Returns True if it fired."""
+        now = self.provider.now().timestamp() if now is None else now
+        window = float(self.params.get("infra_alert_throttle_seconds", 300))
+        if now < self._infra_alert_epoch.get(key, 0.0):
+            return False
+        self._infra_alert_epoch[key] = now + window
+        log.error(f"INFRA ALERT [{key}]: {msg}", event="INFRA_ALERT")
+        try:
+            self.notifier._emit(f"🚨 {msg}")
+        except Exception:
+            pass
+        return True
+
+    def _beat_now(self, lane: str, now: float | None = None) -> None:
+        """P3: record a heartbeat for a loop lane at the end of each iteration."""
+        self._beat[lane] = self.provider.now().timestamp() if now is None else now
+
+    def _lane_stale(self, lane: str, max_age: float, now: float | None = None) -> bool:
+        """P3: True if a lane hasn't beaten within max_age seconds (dead/stuck loop)."""
+        last = self._beat.get(lane)
+        if last is None:
+            return False   # never started beating yet — not 'stale'
+        now = self.provider.now().timestamp() if now is None else now
+        return (now - last) > max_age
+
+    def _maybe_watchdog(self) -> None:
+        """P3: from the (free, post-offload) signal lane, alert if the risk lane has
+        stopped beating — the fast lane marks positions + fires SL/TP, so a stall there
+        is the dangerous one. Only meaningful once the risk lane has beaten at least once."""
+        max_age = float(self.params.get("watchdog_stale_seconds", 30))
+        if self._lane_stale("risk", max_age):
+            self._alert_infra("risk_loop_stalled",
+                              f"risk loop has not run for >{max_age:.0f}s — open positions "
+                              f"may be UNMANAGED (no marking / SL / TP). Check the backend.")
+
     def _rollback_session(self) -> None:
         """H3: discard any half-applied dirty state after a mid-iteration exception, so
         the next lane never inherits a partially-mutated session (there was no rollback
@@ -1006,6 +1048,7 @@ class EngineRunner:
             except Exception:
                 self._rollback_session()   # H3 — clean the session before releasing the lock
                 raise
+        self._beat_now("risk")             # P3 heartbeat
         if self.on_position_ticks:
             try:
                 await self.on_position_ticks(self.position_ticks)
@@ -1172,6 +1215,8 @@ class EngineRunner:
             except Exception:
                 self._rollback_session()   # H3 — clean the session before releasing the lock
                 raise
+        self._beat_now("signal")           # P3 heartbeat
+        self._maybe_watchdog()             # P3 — alert if the risk lane has stalled
         if self.on_update:
             try:
                 await self.on_update(self.snapshot_state())
@@ -1187,6 +1232,8 @@ class EngineRunner:
                 await self._risk_iteration()
             except Exception as e:
                 log.error(f"risk loop error: {e}")
+                self._alert_infra("risk_loop_error",   # M1 — no longer a silent failure
+                                  f"risk loop error: {e} — open positions may be unmanaged")
             await asyncio.sleep(self.settings.position_loop_seconds)
 
     async def run_signal_loop(self) -> None:
@@ -1227,6 +1274,8 @@ class EngineRunner:
                         await asyncio.sleep(self.settings.signal_loop_seconds)
             except Exception as e:
                 log.error(f"signal loop error: {e}")
+                self._alert_infra("signal_loop_error",   # M1 — no longer a silent failure
+                                  f"signal loop error: {e} — new entries/scan may be stalled")
                 await asyncio.sleep(self.settings.signal_loop_seconds)
 
     async def run(self) -> None:   # back-compat alias (signal lane)
