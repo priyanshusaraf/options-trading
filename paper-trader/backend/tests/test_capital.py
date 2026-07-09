@@ -37,3 +37,12 @@ def test_never_negative_when_owner_locked_the_capital():
     d = deployable_capital(ledger_base=100000, bot_deployed=0,
                            account_available=3000, reserve=5000, cap=0, is_live=True)
     assert d == 0.0
+
+
+def test_live_fails_closed_when_account_read_unavailable():
+    # live but the real account margin is unreadable (margins()/token failure -> None):
+    # deploy NOTHING rather than sizing off the bot's ledger cap while blind to the
+    # actual account headroom (audit H12 — fail closed, not open).
+    d = deployable_capital(ledger_base=100000, bot_deployed=0,
+                           account_available=None, reserve=0, cap=0, is_live=True)
+    assert d == 0.0

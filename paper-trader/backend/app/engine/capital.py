@@ -20,6 +20,11 @@ def deployable_capital(*, ledger_base: float, bot_deployed: float,
                        cap: float, is_live: bool) -> float:
     base = cap if cap and cap > 0 else ledger_base
     cap_headroom = base - bot_deployed
+    if is_live and account_available is None:
+        # H12: live but the real account headroom is unknown (margins()/token failure).
+        # Fail CLOSED — never size a new entry off the bot's ledger cap while blind to
+        # the real account; deploy nothing until the funds read recovers.
+        return 0.0
     headroom = cap_headroom
     if is_live and account_available is not None:
         headroom = min(cap_headroom, account_available - reserve)
