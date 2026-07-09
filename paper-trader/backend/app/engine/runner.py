@@ -127,6 +127,27 @@ class EngineRunner:
         self.enabled.add(key) if enabled else self.enabled.discard(key)
         log.info(f"{'ENABLED' if enabled else 'DISABLED'} {key} for trading")
 
+    def apply_universe_entry(self, key: str, res: dict) -> None:
+        """H11: apply a newly-added instrument's config THEN enable it. Enabling LAST
+        means the engine loops — which snapshot `enabled` with list() — never see the
+        key before its interval/product/strategy are set, so a config-add from the API
+        threadpool can't race the loops to a half-applied state. Individual set/dict
+        writes are GIL-atomic; ordering gives a consistent view without a lock."""
+        if res.get("interval"):
+            self.intervals[key] = res["interval"]
+        if res.get("product"):
+            self.products[key] = res["product"]
+        if res.get("strategy_key"):
+            self.strategy_keys[key] = res["strategy_key"]
+        self.enabled.add(key)   # LAST — the loop only ever sees a fully-configured key
+
+    def remove_universe_entry(self, key: str) -> None:
+        """H11: disable FIRST (the loop stops acting on it), then drop its config."""
+        self.enabled.discard(key)
+        self.intervals.pop(key, None)
+        self.products.pop(key, None)
+        self.strategy_keys.pop(key, None)
+
     # ── per-instrument live interval + entry blocks ───────────────────────
     def _load_intervals(self) -> dict[str, str]:
         with SessionLocal() as s:

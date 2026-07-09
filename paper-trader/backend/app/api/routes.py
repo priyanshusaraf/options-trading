@@ -201,13 +201,7 @@ def portfolio_add(body: AddInstrument, request: Request):
                                            interval=body.interval,
                                            strategy_key=body.strategy_key, product=body.product)
     if "error" not in res:
-        r.enabled.add(body.key)   # the live engine picks it up next tick
-        if res.get("interval"):
-            r.intervals[body.key] = res["interval"]
-        if res.get("product"):
-            r.products[body.key] = res["product"]
-        if res.get("strategy_key"):
-            r.strategy_keys[body.key] = res["strategy_key"]
+        r.apply_universe_entry(body.key, res)   # config-then-enable (H11); live next tick
     return res
 
 
@@ -216,7 +210,7 @@ def portfolio_remove(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
     res = universe_resolver.remove_instrument(body.key)
-    r.enabled.discard(body.key)
+    r.remove_universe_entry(body.key)   # disable-first (H11)
     return res
 
 
@@ -251,13 +245,7 @@ def portfolio_add_bulk(body: BulkAdd, request: Request):
         if "error" in res:
             skipped.append({"key": it.key, "reason": res["error"]})
             continue
-        r.enabled.add(it.key)
-        if res.get("interval"):
-            r.intervals[it.key] = res["interval"]
-        if res.get("product"):
-            r.products[it.key] = res["product"]
-        if res.get("strategy_key"):
-            r.strategy_keys[it.key] = res["strategy_key"]
+        r.apply_universe_entry(it.key, res)   # config-then-enable (H11)
         added.append(res)
     return {"added": added, "skipped": skipped}
 
