@@ -157,6 +157,15 @@ class LiveBroker(PaperBroker):
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(q.tradingsymbol, res)   # may still be working — guard next tick
+            # C3: the option order may still fill after the poll window (a slow ack).
+            # Remember enough to ADOPT that late fill on the reconcile sweep — otherwise
+            # it becomes an invisible, stopless position (the equity #17 fix, now for
+            # options, the default segment).
+            if res.order_id and res.status in ("TIMEOUT", "ERROR"):
+                self._pending_entries[q.tradingsymbol] = {
+                    "kind": "options", "order_id": res.order_id, "inst": inst,
+                    "direction": direction, "q": q, "reason": reason, "spot": spot,
+                    "params": params}
             log.error(f"LIVE OPEN not filled [{res.status}] {q.tradingsymbol} — {res.reason}",
                       instrument=inst.key, event="LIVE_OPEN_FAIL")
             self._notify(f"⚠️ LIVE OPEN {q.tradingsymbol} {res.status}: {res.reason}")
@@ -199,6 +208,7 @@ class LiveBroker(PaperBroker):
             # enough to ADOPT that fill on the reconcile sweep instead of orphaning it.
             if res.order_id and res.status in ("TIMEOUT", "ERROR"):
                 self._pending_entries[tsym] = {
+                    "kind": "equity",
                     "order_id": res.order_id, "inst": inst, "direction": direction,
                     "charge_segment": charge_segment, "reason": reason, "params": params,
                     "strategy_key": strategy_key}
@@ -541,10 +551,21 @@ class LiveBroker(PaperBroker):
             if filled > 0 and avg > 0:
                 inst = ctx["inst"]
                 if self.position_for(inst.key) is None:
-                    pos = super().open_equity_position(
-                        inst, ctx["direction"], avg, filled, ctx["charge_segment"],
-                        ctx["reason"], now, ctx["params"], ctx["strategy_key"])
-                    self._place_equity_stop(pos, avg)
+                    if ctx.get("kind") == "options":
+                        # C3: adopt an options late fill and rest its GTT backstop, mirroring
+                        # the live open_position booking (real filled qty at the real price).
+                        q = ctx["q"]
+                        pos = super().open_position(
+                            inst, ctx["direction"], replace(q, ltp=avg, lot_size=filled),
+                            ctx["reason"], now, ctx["spot"], ctx["params"])
+                        pos.lot_size = q.lot_size
+                        self.s.commit()
+                        self._place_gtt(pos, avg)
+                    else:
+                        pos = super().open_equity_position(
+                            inst, ctx["direction"], avg, filled, ctx["charge_segment"],
+                            ctx["reason"], now, ctx["params"], ctx["strategy_key"])
+                        self._place_equity_stop(pos, avg)
                     log.warn(f"ADOPTED late fill {sym} {filled}@{avg:.2f} — was untracked; "
                              f"now managed + stopped", instrument=inst.key, event="ADOPT_FILL")
                     self._notify(f"ℹ️ {sym}: a bot order filled late ({filled}@{avg:.2f}) — "

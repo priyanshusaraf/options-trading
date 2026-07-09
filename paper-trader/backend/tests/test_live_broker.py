@@ -852,3 +852,41 @@ def test_failed_account_read_never_phantom_closes():
         assert b.reconcile_orphans(b.provider.now()) == []
     assert b.position_for("NIFTY") is not None                   # still held — NOT phantom-closed
     assert c.gtt_deleted == []                                   # GTT left intact
+
+
+# ── C3: an OPTIONS entry that fills after the poll window must be adopted too ──
+# (#17 fixed this for equity_intraday only; options — the default segment — was left
+#  recording just _inflight, so a late-filled option became an invisible, stopless
+#  position the engine never adopted.)
+def test_timed_out_options_entry_records_a_pending_entry():
+    c = FakeClient(status="OPEN", filled_qty=0)     # entry never confirms within the window
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, chain = _open(b, c)
+    assert pos is None                              # nothing booked at entry time
+    assert q.tradingsymbol in b._pending_entries    # ...but tracked for adoption (C3)
+
+
+def test_late_filled_options_entry_is_adopted_with_a_gtt():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, chain = _open(b, c)
+    assert pos is None and b.position_for("NIFTY") is None
+    c._status, c._filled_qty, c.fill_price = "COMPLETE", q.lot_size, 100.0   # it fills later
+    adopted = b.adopt_pending_entries(b.provider.now())
+    assert "NIFTY" in adopted
+    p = b.position_for("NIFTY")
+    assert p is not None and p.gtt_trigger_id == "GTT-1"    # adopted WITH a GTT backstop
+    assert q.tradingsymbol not in b._pending_entries        # cleared once adopted
+
+
+def test_dead_pending_options_entry_is_dropped_without_adoption():
+    c = FakeClient(status="OPEN", filled_qty=0)
+    b = _broker(c)
+    b.poll_seconds = 0.001
+    pos, q, chain = _open(b, c)
+    c._status, c._filled_qty = "REJECTED", 0        # order died with no fill
+    assert b.adopt_pending_entries(b.provider.now()) == []
+    assert b.position_for("NIFTY") is None
+    assert q.tradingsymbol not in b._pending_entries
