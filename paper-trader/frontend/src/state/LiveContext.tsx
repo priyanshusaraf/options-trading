@@ -23,8 +23,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let stop = false
+    const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
     const connect = () => {
-      const ws = new WebSocket(`ws://${location.host}/ws`)
+      const ws = new WebSocket(
+        `ws://${location.host}/ws${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''}`,
+      )
       wsRef.current = ws
       ws.onopen = () => setConnected(true)
       ws.onclose = () => { setConnected(false); if (!stop) setTimeout(connect, 1500) }

@@ -737,6 +737,8 @@ async def manual_open(body: ManualOpenBody, request: Request):
     r = _runner(request)
     if body.direction not in ("LONG", "SHORT"):
         return {"error": "direction must be LONG or SHORT"}
+    if not r.armed:
+        return {"error": "engine is disarmed — ARM before opening a position"}
     inst = get_instrument(body.key)
     if not inst.has_options:
         return {"error": "instrument has no listed options (tracking only)"}
@@ -824,6 +826,10 @@ def analytics_split(request: Request, segment: str | None = None):
 # ── websockets ──────────────────────────────────────────────────────────────
 @router.websocket("/ws")
 async def ws_main(ws: WebSocket):
+    from app.api.auth import ws_authorized
+    if not ws_authorized(ws):
+        await ws.close(code=1008)
+        return
     await manager.connect(ws)
     try:
         # prime the new client with the current state + recent logs
@@ -841,6 +847,10 @@ async def ws_main(ws: WebSocket):
 
 @router.websocket("/ws/instrument/{key}")
 async def ws_instrument(ws: WebSocket, key: str):
+    from app.api.auth import ws_authorized
+    if not ws_authorized(ws):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     r = _runner(ws)
     inst = get_instrument(key)

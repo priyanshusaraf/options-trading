@@ -61,6 +61,7 @@ def _client():
     for _ in range(160):
         r.tick(); r.provider.advance()
     app.state.runner = r
+    r.arm(True)  # SEC-3: manual-open now requires ARM; ticks above ran disarmed on purpose
     return TestClient(app), r
 
 

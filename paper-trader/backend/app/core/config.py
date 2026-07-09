@@ -202,9 +202,20 @@ class Settings(BaseSettings):
     # captured we bounce the browser back to the FRONTEND so the user lands on the UI.
     frontend_url: str = "http://localhost:5173"   # env: PT_FRONTEND_URL
 
+    # ── API auth + CORS ───────────────────────────────────────────────────────
+    # env PT_API_TOKEN; when non-empty every REST/WS call (except OAuth redirect
+    # endpoints and /api/health) must present it; empty = auth disabled (dev/mock/tests).
+    api_token: str = ""
+    # env PT_CORS_ORIGINS, comma-separated browser origins allowed with credentials.
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
     # misc
     risk_free_rate: float = 0.065
     db_path: str = "paper_trader.db"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def candle_minutes(self) -> int:

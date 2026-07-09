@@ -1,7 +1,16 @@
-const j = (u: string) => fetch(u).then((r) => r.json())
+const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
+
+const j = (u: string) =>
+  fetch(u, { headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} }).then((r) => r.json())
 const post = (u: string, body: any) =>
-  fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    .then((r) => r.json())
+  fetch(u, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+    },
+    body: JSON.stringify(body),
+  }).then((r) => r.json())
 
 export const getStatus = () => j('/api/status')
 export const getExecState = () => j('/api/execution/state')

@@ -15,6 +15,7 @@ def _client():
     init_db(reset=True)
     r = EngineRunner()
     app.state.runner = r
+    r.arm(True)  # SEC-3: manual-open now requires ARM; this file exercises manual-open directly
     return TestClient(app), r
 
 

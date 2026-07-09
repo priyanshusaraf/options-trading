@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import backtest_routes, routes
+from app.api.auth import extract_token, token_ok
 from app.core.instruments import get_instrument
 from app.core.config import get_settings
 from app.core.logging import log
@@ -68,8 +70,38 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)
+
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/session"}
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    """SEC-1: gate every /api/* call behind PT_API_TOKEN. Empty token (the
+    default) disables auth entirely — dev/mock/tests are unaffected. Exempt
+    even with a token configured: /api/health (uptime probe) and the Kite
+    OAuth redirect endpoints (/api/login, /api/session — the browser hits
+    these directly and can't attach a header), plus CORS preflight (OPTIONS)
+    and anything outside /api."""
+    settings = get_settings()
+    path = request.url.path
+    if (
+        settings.api_token
+        and path.startswith("/api")
+        and path not in _AUTH_EXEMPT_PATHS
+        and request.method != "OPTIONS"
+    ):
+        if not token_ok(extract_token(request.headers)):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+# CORSMiddleware is registered AFTER auth_gate above so it ends up OUTERMOST
+# (Starlette wraps middleware in reverse-of-registration order): a 401 minted
+# by auth_gate still passes back out through CORS and gets its headers
+# attached, and a preflight OPTIONS is answered by CORS before it ever
+# reaches auth_gate.
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+    CORSMiddleware, allow_origins=get_settings().cors_origins_list, allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
 app.include_router(routes.router)

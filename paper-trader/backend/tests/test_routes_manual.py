@@ -17,6 +17,7 @@ def _client():
     # No warmup ticks: /api/signals lists all instruments regardless of state, and
     # a clean book keeps manual-open deterministic (ticking can auto-open NIFTY).
     app.state.runner = r
+    r.arm(True)  # SEC-3: manual-open now requires ARM; this file exercises manual-open directly
     return TestClient(app), r
 
 
