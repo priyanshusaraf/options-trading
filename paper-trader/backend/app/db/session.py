@@ -22,6 +22,9 @@ def _set_sqlite_pragma(dbapi_conn, _rec):
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")   # concurrent reads while engine writes
     cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA busy_timeout=10000") # P2: wait out a contended write (engine +
+                                             # API threadpool + backtest thread) instead
+                                             # of failing 'database is locked'
     cur.close()
 
 

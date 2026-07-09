@@ -255,7 +255,8 @@ class KiteProvider(MarketDataProvider):
         if not token:
             log.warn(f"no underlying token resolved", instrument=inst.key)
             return []
-        now = dt.datetime.now()
+        now = self.now()   # IST wall-clock (naive), NOT server-local — a UTC host would
+                           # otherwise truncate the window ~5.5h early and drop recent bars (H7)
         try:
             raw = self._historical(token, now - dt.timedelta(days=days), now, interval)
         except Exception as e:
