@@ -306,15 +306,50 @@ class LiveBroker(PaperBroker):
             self._place_equity_stop(pos, pos.last_premium or pos.entry_premium)
             return None
         if filled < pos.qty:
-            # covered only part — guard against an over-cover retry and leave the
-            # remainder for the orphan reconciler to book (it sees the account no
-            # longer fully backs the position). v1 limitation: no partial booking.
+            # H16: book the sold slice and re-protect the REMAINDER, instead of leaving a
+            # stopless position + a full-qty phantom for the reconciler to mis-book.
+            # If the close order may still be working (timeout-partial), it must be
+            # cancel-confirmed first — a fresh SL-M alongside a live close order could
+            # both execute → oversell into the owner's account.
+            if "timeout" in (res.reason or ""):
+                try:
+                    self.client.cancel(res.order_id)
+                except Exception as e:
+                    # couldn't cancel a possibly-live order — re-query: a raced full fill
+                    # means the whole position closed; otherwise the working order still
+                    # owns the exit (don't book, don't re-stop).
+                    st = {}
+                    try:
+                        st = self.client.status(res.order_id)
+                    except Exception:
+                        pass
+                    if int(st.get("filled_qty", 0) or 0) >= pos.qty:
+                        return super().close_equity_position(
+                            pos, float(st.get("avg_price", avg) or avg), reason, now)
+                    log.error(f"LIVE EQUITY CLOSE PARTIAL {sym} {filled}/{pos.qty} — cancel "
+                              f"failed ({e}); working order still owns the exit",
+                              instrument=pos.instrument_key, event="LIVE_CLOSE_PARTIAL")
+                    self._notify(f"⚠️ LIVE EQUITY CLOSE {sym} PARTIAL {filled}/{pos.qty} — "
+                                 f"a working order still owns the rest; verify on Zerodha")
+                    self._inflight[sym] = res.order_id
+                    return None
+                # cancel succeeded — re-query for the final fill (a lot can land between
+                # the poll giving up and the cancel landing).
+                try:
+                    st = self.client.status(res.order_id)
+                    filled = int(st.get("filled_qty", filled) or filled)
+                    avg = float(st.get("avg_price", avg) or avg)
+                except Exception:
+                    pass
+                if filled >= pos.qty:
+                    return super().close_equity_position(pos, avg, reason, now)
             log.error(f"LIVE EQUITY CLOSE PARTIAL {sym} {filled}/{pos.qty} @ {avg:.2f} "
-                      f"(order {res.order_id}) — reconciler will book the rest",
+                      f"(order {res.order_id}) — booking the slice, re-protecting the rest",
                       instrument=pos.instrument_key, event="LIVE_CLOSE_PARTIAL")
             self._notify(f"⚠️ LIVE EQUITY CLOSE {sym} PARTIAL {filled}/{pos.qty} @ {avg:.2f} "
-                         f"— verify on Zerodha")
-            self._inflight[sym] = res.order_id
+                         f"— booked the sold lots; {pos.qty - filled} still open & re-stopped")
+            self.book_partial_close_equity(pos, filled, avg, reason, now)   # shrinks pos.qty
+            self._place_equity_stop(pos, avg)   # SL-M for the (now smaller) remainder
             return None
         log.info(f"LIVE FILLED {side} {sym} {filled}@{avg:.2f} (order {res.order_id})",
                  instrument=pos.instrument_key, event="LIVE_CLOSE")

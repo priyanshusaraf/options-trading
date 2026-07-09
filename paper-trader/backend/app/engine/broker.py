@@ -331,6 +331,57 @@ class PaperBroker:
             net_pnl=round(net, 2))
         return tr
 
+    def book_partial_close_equity(self, pos: Position, qty: int, exit_price: float,
+                                  reason: str, now: dt.datetime) -> Trade:
+        """Realize PART of an intraday-equity (MIS) position — the equity analogue of
+        book_partial_close (H16). Direction-aware P&L (a SHORT profits when price
+        falls), releases the sold slice's margin, and splits entry cost/charges
+        proportionally so the cash invariant stays exact (the realized slice + the
+        remaining entry_cost sum to the original). The position stays open at the
+        reduced qty so the remainder can be re-stopped and exited later."""
+        qty = min(int(qty), pos.qty)
+        exit_charges = compute_charges(pos.exchange, "SELL", exit_price, qty)["total"]
+        gross = ((exit_price - pos.entry_premium) * qty if pos.direction == "LONG"
+                 else (pos.entry_premium - exit_price) * qty)
+        remaining_cost = pos.entry_cost * (pos.qty - qty) / pos.qty
+        cost_slice = pos.entry_cost - remaining_cost
+        remaining_entry_charges = pos.entry_charges * (pos.qty - qty) / pos.qty
+        charges_slice = pos.entry_charges - remaining_entry_charges
+        margin_slice = cost_slice - charges_slice
+        net = gross - charges_slice - exit_charges
+        proceeds = cost_slice + net    # released margin slice + net
+
+        cap = self.capital()
+        cap.cash += proceeds
+        cap.realized_pnl += net
+        cap.updated_at = now
+
+        tr = Trade(
+            instrument_key=pos.instrument_key, direction=pos.direction,
+            option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
+            segment="equity_intraday", strategy_key=pos.strategy_key,
+            strike=0.0, expiry=pos.expiry, qty=qty,
+            entry_premium=pos.entry_premium, entry_cost=cost_slice,
+            entry_spot=pos.entry_spot, entry_time=pos.entry_time,
+            exit_premium=exit_price, exit_charges=exit_charges, exit_spot=exit_price,
+            exit_time=now, exit_reason=reason, gross_pnl=gross,
+            charges_total=charges_slice + exit_charges, net_pnl=net,
+            return_pct=(net / margin_slice * 100) if margin_slice else 0.0,
+            holding_minutes=(now - pos.entry_time).total_seconds() / 60,
+            win=net > 0, held_overnight=False, overnight_pnl=0.0,
+            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE)
+        pos.qty -= qty
+        pos.entry_cost = remaining_cost
+        pos.entry_charges = remaining_entry_charges
+        self.s.add(tr)
+        self.s.commit()
+        log.trade(
+            f"PARTIAL CLOSE EQUITY {pos.tradingsymbol} {qty} @ {exit_price:.2f} "
+            f"[{reason}] — net ₹{net:,.0f}; {pos.qty} still open",
+            instrument=pos.instrument_key, event="PARTIAL_CLOSE_EQUITY", reason=reason,
+            net_pnl=round(net, 2))
+        return tr
+
     # ── exchange-side stop protection (no-op for paper; LiveBroker overrides) ──
     def update_stop_protection(self, pos, last_price) -> None:
         """Sync an exchange-side GTT stop to the (possibly ratcheted) stop price."""

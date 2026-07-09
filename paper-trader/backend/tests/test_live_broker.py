@@ -59,6 +59,7 @@ class FakeClient:
 
     def place_stop_order(self, tradingsymbol, exchange, qty, trigger_price, side="SELL", tag=None):
         self.stop_orders.append((tradingsymbol, trigger_price, side, exchange))
+        self.last_stop_qty = qty
         self.log.append(("place_stop", tradingsymbol))
         return "SLM-1"
 
@@ -947,3 +948,23 @@ def test_cancel_working_entries_keeps_orders_whose_cancel_failed():
     # a cancel that failed (the order may have raced to a fill) is kept so adoption can
     # still catch + manage that fill instead of losing it
     assert q.tradingsymbol in b._pending_entries
+
+
+# ── H16: a partial equity close books the slice + re-protects the remainder ──
+def test_live_equity_partial_close_books_and_reprotects_remainder():
+    c = FakeClient(fill_price=100.0)                       # full fill for the open
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 100)                  # opens 100, rests SL-M
+    assert pos.qty == 100
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol,
+                                             "quantity": 100}]
+    # the close order fills only 60 and is dead (cancelled after partial)
+    c._status, c._filled_qty, c.fill_price = "CANCELLED", 60, 102.0
+    res = b.close_equity_position(pos, 102.0, "CLOSE", b.provider.now())
+    assert res is None                                     # not a full close
+    p = b.position_for("NIFTY")
+    assert p is not None and p.qty == 40                  # 60 booked, 40 remainder open
+    assert b.reconcile()["diff"] == 0.0                   # ledger invariant exact
+    assert b._inflight == {}                              # NOT poisoned (remainder closable)
+    assert p.gtt_trigger_id == "SLM-1"                    # remainder re-protected
+    assert c.last_stop_qty == 40                          # stop is for the remainder, not 100
