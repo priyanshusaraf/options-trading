@@ -392,6 +392,7 @@ class EngineRunner:
 
     def _apply_trailing(self, pos) -> None:
         """Ratchet the premium stop upward as profit thresholds are crossed."""
+        self.broker.ensure_stop_protection(pos, pos.last_premium)  # self-heal a missing backstop every tick
         p = self.params
         if not p.get("trail_enabled", True):
             return
@@ -411,6 +412,7 @@ class EngineRunner:
         """Lockstep band: once an equity position is in profit, ratchet its stop AND
         target together (break-even floored). A hand-pinned target is left in place;
         only the stop slides then."""
+        self.broker.ensure_stop_protection(pos, pos.last_premium)  # self-heal a missing backstop every tick
         from app.engine.equity_entry import lockstep_band
         p = self.params
         if not p.get("intraday_lockstep_enabled", True):

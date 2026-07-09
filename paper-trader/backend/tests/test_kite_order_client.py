@@ -168,6 +168,22 @@ def test_modify_stop_order_changes_the_trigger():
     assert m["order_id"] == "OID-9" and m["trigger_price"] == 95.0 and m["variety"] == "regular"
 
 
+# ── tick-size snapping (2026-07-08 LODHA incident): a computed stop that's clean to
+# 2 decimals but not a multiple of the exchange tick size (0.05) is REJECTED outright
+# by Zerodha ("Tick size for this script is 0.05..."). Both the initial placement and
+# every later trailing re-price must snap to the tick grid, not just round(x, 2). ────
+def test_place_stop_order_snaps_trigger_to_tick_size():
+    k = FakeKite()
+    KiteOrderClient(k).place_stop_order("LODHA", "NSE", 44, trigger_price=1125.13, side="SELL")
+    assert k.placed[0]["trigger_price"] == 1125.15
+
+
+def test_modify_stop_order_snaps_trigger_to_tick_size():
+    k = FakeKite()
+    KiteOrderClient(k).modify_stop_order("OID-9", trigger_price=1125.13)
+    assert k.modified[0]["trigger_price"] == 1125.15
+
+
 class FakeKiteWithToken(FakeKite):
     def __init__(self, history=None):
         super().__init__(history)

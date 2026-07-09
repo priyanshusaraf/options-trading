@@ -14,6 +14,17 @@ trail handles normal exits.
 """
 from __future__ import annotations
 
+# Zerodha's standard NSE/BSE equity + most F&O tick size. A trigger/limit price that
+# isn't an exact multiple of this is rejected outright ("Tick size for this script is
+# 0.05...") — plain round(x, 2) makes a price clean to the paisa but does not
+# guarantee it lands on the tick grid (the 2026-07-08 LODHA stop-loss failure).
+TICK_SIZE = 0.05
+
+
+def round_to_tick(price: float, tick_size: float = TICK_SIZE) -> float:
+    """Snap a price to the exchange's tick grid (nearest multiple of `tick_size`)."""
+    return round(round(price / tick_size) * tick_size, 2)
+
 
 def stop_gtt_params(tradingsymbol: str, exchange: str, qty: int,
                     trigger_price: float, last_price: float,
@@ -21,7 +32,7 @@ def stop_gtt_params(tradingsymbol: str, exchange: str, qty: int,
     """`side` is the protective order's transaction type: SELL for a long position
     (long option, long equity) whose stop is below; BUY to cover for an intraday
     equity SHORT whose stop is above."""
-    trig = round(trigger_price, 2)
+    trig = round_to_tick(trigger_price)
     return {
         "trigger_type": "single",
         "tradingsymbol": tradingsymbol,

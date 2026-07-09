@@ -37,3 +37,17 @@ def test_lockstep_flat_does_not_touch_the_exchange_stop():
     r._apply_lockstep(pos)
     assert pos.stop_price == 99.0
     assert calls == []
+
+
+def test_lockstep_flat_still_self_heals_a_missing_backstop():
+    """2026-07-08 LODHA: the initial SL-M placement failed and the position never
+    ratcheted into profit again that session — update_stop_protection was never
+    called, so the missing backstop was never retried. _apply_lockstep must check
+    for a missing backstop on EVERY tick, not only when the stop moves."""
+    r, pos, calls = _runner_with_long_equity()
+    ensure_calls = []
+    r.broker.ensure_stop_protection = lambda p, lp: ensure_calls.append(p.stop_price)
+    pos.last_premium = 100.0            # flat -> no ratchet
+    r._apply_lockstep(pos)
+    assert calls == []                  # update_stop_protection still untouched (correct)
+    assert ensure_calls == [99.0]        # but the self-heal check ran anyway

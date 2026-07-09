@@ -335,6 +335,9 @@ class PaperBroker:
     def update_stop_protection(self, pos, last_price) -> None:
         """Sync an exchange-side GTT stop to the (possibly ratcheted) stop price."""
 
+    def ensure_stop_protection(self, pos, last_price) -> None:
+        """Per-tick check that a backstop is resting; no-op for paper."""
+
     def reconcile_orphans(self, now: dt.datetime) -> list:
         """Book any bot position the live account no longer backs (e.g. a GTT fired
         while the bot was down). No-op on paper."""

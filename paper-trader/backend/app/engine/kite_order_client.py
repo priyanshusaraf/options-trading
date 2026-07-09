@@ -11,7 +11,7 @@ by this client — it only ever places the specific orders the LiveBroker hands 
 """
 from __future__ import annotations
 
-from app.engine.gtt import stop_gtt_params
+from app.engine.gtt import round_to_tick, stop_gtt_params
 from app.engine.order_executor import OrderRequest
 
 # Charge-segments that trade as intraday equity (MIS): same-day, leveraged, the
@@ -106,7 +106,7 @@ class KiteOrderClient:
         product = "MIS" if exchange in ("NSE", "BSE") else self.product
         kw = dict(variety=self.variety, exchange=exchange, tradingsymbol=tradingsymbol,
                   transaction_type=side, quantity=int(qty), product=product,
-                  order_type="SL-M", trigger_price=round(trigger_price, 2),
+                  order_type="SL-M", trigger_price=round_to_tick(trigger_price),
                   # SL-M fires a MARKET order → same SEBI 1-Apr-2026 protection as MARKET.
                   market_protection=self.market_protection or -1.0)
         if tag:
@@ -117,7 +117,7 @@ class KiteOrderClient:
         """Re-price a resting SL-M stop's trigger (trailing the stop as it ratchets)."""
         self._sync_token()
         return self.kite.modify_order(variety=self.variety, order_id=order_id,
-                                      trigger_price=round(trigger_price, 2))
+                                      trigger_price=round_to_tick(trigger_price))
 
     def place(self, req: OrderRequest) -> str:
         self._sync_token()

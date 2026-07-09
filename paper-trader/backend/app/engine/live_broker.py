@@ -430,9 +430,29 @@ class LiveBroker(PaperBroker):
             self._notify(f"⚠️ could not cancel GTT {gid} for {sym} — check/cancel it on Zerodha")
             return False
 
+    def ensure_stop_protection(self, pos, last_price) -> None:
+        """Cheap per-tick check: if this open position has no resting exchange-side
+        backstop (never placed, or an earlier placement attempt failed — e.g. the
+        2026-07-08 LODHA tick-size rejection), place one now. A single attribute
+        check once a backstop exists, so it's safe to call every risk-loop tick
+        regardless of whether the stop ratcheted — a position that never ratchets
+        (flat or underwater all session) still gets its missing stop retried."""
+        if getattr(pos, "gtt_trigger_id", None) or not self._gtt_enabled():
+            return
+        lp = last_price or pos.last_premium or pos.entry_premium
+        if pos.segment == "equity_intraday":
+            self._place_equity_stop(pos, lp)
+        else:
+            self._place_gtt(pos, lp)
+
     def update_stop_protection(self, pos, last_price) -> None:
+        if not self._gtt_enabled():
+            return
         gid = getattr(pos, "gtt_trigger_id", None)
-        if not gid or not self._gtt_enabled():
+        if not gid:
+            # never placed, or an earlier attempt failed — place fresh at the
+            # ratcheted level instead of silently no-op'ing forever.
+            self.ensure_stop_protection(pos, last_price)
             return
         lp = last_price or pos.last_premium or pos.entry_premium
         try:

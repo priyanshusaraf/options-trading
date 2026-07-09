@@ -361,6 +361,60 @@ def test_trail_modifies_the_gtt():
     assert c.gtt_modified and c.gtt_modified[0] == ("GTT-1", 95.0)
 
 
+# ── 2026-07-08 LODHA incident: the initial SL-M placement failed (tick-size reject)
+# and gtt_trigger_id stayed None forever — every later ratchet tick silently did
+# nothing, so the position ran naked at the broker for its whole life. A ratchet (or
+# any per-tick check) must instead PLACE a fresh backstop when none is resting. ─────
+def test_update_stop_protection_places_a_fresh_sl_m_if_none_was_resting():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.gtt_trigger_id = None            # simulate the initial SL-M placement having failed
+    c.stop_orders.clear()
+    pos.stop_price = 97.0
+    b.update_stop_protection(pos, 103.0)
+    assert c.stop_modified == []                              # nothing was resting to MODIFY
+    assert c.stop_orders and c.stop_orders[-1][:3] == (pos.tradingsymbol, 97.0, "SELL")
+    assert pos.gtt_trigger_id == "SLM-1"                       # now actually resting
+
+
+def test_update_stop_protection_places_a_fresh_gtt_if_none_was_resting():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, _ = _open(b, c)
+    pos.gtt_trigger_id = None            # simulate the initial GTT placement having failed
+    c.gtt_placed.clear()
+    pos.stop_price = 90.0
+    b.update_stop_protection(pos, 110.0)
+    assert c.gtt_modified == []                                # nothing was resting to MODIFY
+    assert c.gtt_placed and c.gtt_placed[-1][0] == pos.tradingsymbol
+    assert pos.gtt_trigger_id == "GTT-1"
+
+
+# ── ensure_stop_protection: the cheap per-tick self-healing check, called every risk-
+# loop tick regardless of whether the ratchet moved this tick (so a naked position that
+# never ratchets — flat or underwater all day — still gets retried, not just one that
+# happens to move into profit). ──────────────────────────────────────────────────────
+def test_ensure_stop_protection_is_a_noop_when_a_stop_already_rests():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    assert pos.gtt_trigger_id == "SLM-1"
+    c.log.clear()
+    b.ensure_stop_protection(pos, 101.0)
+    assert c.log == []                   # single attribute check — no broker call at all
+
+
+def test_ensure_stop_protection_places_a_fresh_stop_when_missing():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.gtt_trigger_id = None
+    c.stop_orders.clear()
+    b.ensure_stop_protection(pos, 101.0)
+    assert c.stop_orders and pos.gtt_trigger_id == "SLM-1"
+
+
 def test_self_close_cancels_the_gtt():
     c = FakeClient(fill_price=100.0)
     b = _broker(c)

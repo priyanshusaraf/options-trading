@@ -1,7 +1,7 @@
 """GTT safety-net stop payload. A SINGLE Good-Till-Triggered order that SELLs the
 bot's long option when the premium falls to the stop — it lives on Zerodha's
 servers, so it protects the position even if the bot/laptop/internet dies."""
-from app.engine.gtt import stop_gtt_params
+from app.engine.gtt import round_to_tick, stop_gtt_params
 
 
 def test_single_sell_stop_payload():
@@ -16,3 +16,19 @@ def test_single_sell_stop_payload():
     assert o["quantity"] == 75
     assert o["order_type"] == "LIMIT" and o["price"] == 110.0
     assert o["product"] == "NRML"
+
+
+# ── tick-size snapping (2026-07-08: LODHA's SL-M was rejected outright by Zerodha —
+# "Tick size for this script is 0.05..." — because round(x, 2) makes a price clean to
+# the paisa but does NOT guarantee it lands on the exchange's actual tick grid) ──────
+def test_round_to_tick_snaps_to_the_nearest_multiple():
+    assert round_to_tick(1125.13) == 1125.15    # nearest 0.05 multiple, rounding up
+    assert round_to_tick(1125.11) == 1125.10    # nearest 0.05 multiple, rounding down
+    assert round_to_tick(110.0) == 110.0        # already aligned -> unchanged
+    assert round_to_tick(1400.75) == 1400.75    # already aligned -> unchanged (BDL's stop)
+
+
+def test_stop_gtt_params_snaps_trigger_and_limit_to_the_tick_grid():
+    p = stop_gtt_params("NIFTY25CE", "NFO", 75, trigger_price=110.12, last_price=140.0)
+    assert p["trigger_values"] == [110.10]      # NOT 110.12 — 110.12 isn't a 0.05 multiple
+    assert p["orders"][0]["price"] == 110.10
