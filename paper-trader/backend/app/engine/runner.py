@@ -1048,6 +1048,28 @@ class EngineRunner:
                               f"risk loop has not run for >{max_age:.0f}s — open positions "
                               f"may be UNMANAGED (no marking / SL / TP). Check the backend.")
 
+    def startup_account_reconcile(self) -> list[str]:
+        """H14: surface any REAL account position the bot's book does NOT track — a
+        position it may have opened before a crash that never persisted, or a fill it
+        lost. It does NOT adopt them: the account also holds the owner's discretionary
+        trades and positions() carries no bot tag, so the bot can't prove ownership.
+        Flags them for the operator to reconcile. Returns the untracked tradingsymbols.
+        No-op on mock/paper (account_positions is []) or on a failed read (None)."""
+        acct = self.provider.account_positions()
+        if not acct:
+            return []
+        booked = {p.tradingsymbol for p in self.broker.open_positions()}
+        untracked = [p["tradingsymbol"] for p in acct
+                     if int(p.get("quantity", 0) or 0) != 0 and p.get("tradingsymbol") not in booked]
+        if untracked:
+            log.warn(f"STARTUP: {len(untracked)} account position(s) NOT in the bot book: "
+                     f"{untracked} — may be yours (discretionary) or a lost bot fill; the bot "
+                     f"will NOT touch them. Verify on Zerodha.", event="STARTUP_UNTRACKED")
+            self._alert_infra("startup_untracked",
+                              f"{len(untracked)} account position(s) not tracked by the bot at "
+                              f"startup: {untracked} — verify on Zerodha (the bot won't touch them).")
+        return untracked
+
     def _rollback_session(self) -> None:
         """H3: discard any half-applied dirty state after a mid-iteration exception, so
         the next lane never inherits a partially-mutated session (there was no rollback
@@ -1262,6 +1284,10 @@ class EngineRunner:
         self.running = True
         log.info(f"engine started — provider={self.provider.name}, "
                  f"enabled={sorted(self.enabled)}")
+        try:
+            self.startup_account_reconcile()   # H14 — surface untracked real positions once
+        except Exception as e:
+            log.error(f"startup account reconcile failed: {e}")
         while self.running:
             try:
                 if self.provider.name == "mock":
