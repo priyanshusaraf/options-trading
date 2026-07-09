@@ -54,7 +54,8 @@ class OrderClient(Protocol):
 
 def execute_order(client: OrderClient, req: OrderRequest, *,
                   poll_seconds: float = 0.5, timeout_seconds: float = 30.0,
-                  sleep_fn: Callable[[float], None] | None = None) -> OrderResult:
+                  sleep_fn: Callable[[float], None] | None = None,
+                  on_placed: Callable[[str], None] | None = None) -> OrderResult:
     sleep = sleep_fn or _time.sleep
 
     # Place exactly once. A failure here means nothing reached the exchange.
@@ -62,6 +63,15 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
         order_id = client.place(req)
     except Exception as e:
         return OrderResult("ERROR", None, 0, 0.0, f"place failed: {e}")
+
+    # H13 — stamp the order id into the journal the instant placement acks, so a crash
+    # in the poll window below is recoverable. Wrapped: a journal write must never
+    # disturb a real, already-placed order.
+    if on_placed is not None:
+        try:
+            on_placed(order_id)
+        except Exception:
+            pass
 
     waited = 0.0
     last: dict = {}

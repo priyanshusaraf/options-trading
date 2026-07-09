@@ -460,3 +460,31 @@ class DailyAccountSnapshot(Base):
     def to_dict(self) -> dict:
         return {"day": self.day, "account_net": round(self.account_net, 2),
                 "account_available": round(self.account_available, 2)}
+
+
+class OrderJournal(Base):
+    """Persisted record of every real order the bot places (H13). Its WORKING set is
+    the durable mirror of LiveBroker._inflight ∪ _pending_entries — the in-memory
+    trackers are wiped on restart, so a crash in the ~10s order-poll window would
+    otherwise leave an order whose outcome is unknown and unrecoverable. A row is
+    written WORKING before placement, stamped with the order id once it acks, and
+    marked TERMINAL on resolution. recover_journal() replays WORKING rows on startup.
+    Every site that pops _inflight/_pending_entries must mark its row terminal so the
+    two stay in lockstep."""
+    __tablename__ = "order_journal"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    tradingsymbol: Mapped[str] = mapped_column(String(64))
+    instrument_key: Mapped[str] = mapped_column(String(64))
+    side: Mapped[str] = mapped_column(String(8))          # BUY | SELL
+    kind: Mapped[str] = mapped_column(String(12))         # options | equity
+    intent: Mapped[str] = mapped_column(String(8))        # ENTRY | EXIT
+    qty: Mapped[int] = mapped_column(Integer, default=0)
+    context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="WORKING", index=True)   # WORKING | TERMINAL
+    resolution: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # FILLED | REJECTED | CANCELLED | ADOPTED | DEAD | RACED_FILL | NEVER_PLACED | UNKNOWN
+    filled_qty: Mapped[int] = mapped_column(Integer, default=0)
+    avg_price: Mapped[float] = mapped_column(Float, default=0.0)
+    placed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

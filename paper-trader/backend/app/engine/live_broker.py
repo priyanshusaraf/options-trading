@@ -10,9 +10,14 @@ so the engine keeps managing the position and alerts instead of assuming a fill.
 """
 from __future__ import annotations
 
+import datetime as dt
+import json
 from dataclasses import replace
 
+from sqlalchemy import select
+
 from app.core.logging import log
+from app.db.models import OrderJournal
 from app.engine.broker import PaperBroker
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.engine.order_executor import OrderRequest, execute_order
@@ -65,9 +70,111 @@ class LiveBroker(PaperBroker):
                 # in the Engine/Logs console even when Telegram is down.
                 log.error(f"ALERT NOT DELIVERED ({e}): {text}", event="NOTIFY_FAIL")
 
-    def _execute(self, req: OrderRequest):
-        return execute_order(self.client, req, poll_seconds=self.poll_seconds,
-                             timeout_seconds=self.timeout_seconds)
+    def _execute(self, req: OrderRequest, *, intent: str = "", kind: str = "", context=None):
+        """Place a real order, JOURNAL it (H13), and return (res, filled, avg). The
+        journal row is WORKING before placement, stamped with the order id the instant
+        placement acks, and marked TERMINAL on resolution — so a crash in the poll
+        window is recoverable on restart. ALL journal I/O is non-fatal: a journal
+        write must never block or fail a real order/exit."""
+        row_id = self._journal_open(req, intent, kind, context)
+        on_placed = (lambda oid: self._journal_set_order_id(row_id, oid)) if row_id else None
+        res = execute_order(self.client, req, poll_seconds=self.poll_seconds,
+                            timeout_seconds=self.timeout_seconds, on_placed=on_placed)
+        filled, avg = self._actual_fill(res)
+        self._journal_resolve(row_id, res, filled, avg)
+        return res, filled, avg
+
+    # ── order journal (H13) — durable mirror of _inflight ∪ _pending_entries ──
+    def _journal_open(self, req, intent: str, kind: str, context) -> int | None:
+        if not intent:
+            return None
+        try:
+            row = OrderJournal(
+                order_id=None, tradingsymbol=req.tradingsymbol,
+                instrument_key=(context or {}).get("inst_key", ""), side=req.side,
+                kind=kind, intent=intent, qty=req.qty,
+                context_json=json.dumps(context or {}), status="WORKING",
+                placed_at=self.provider.now())
+            self.s.add(row)
+            self.s.commit()
+            return row.id
+        except Exception as e:
+            log.error(f"journal open failed: {e}", event="JOURNAL_FAIL")
+            return None
+
+    def _journal_set_order_id(self, row_id: int, order_id: str) -> None:
+        try:
+            row = self.s.get(OrderJournal, row_id)
+            if row:
+                row.order_id = order_id
+                self.s.commit()
+        except Exception as e:
+            log.error(f"journal order_id set failed: {e}", event="JOURNAL_FAIL")
+
+    @staticmethod
+    def _journal_resolution(res, filled: int, qty: int) -> str | None:
+        """None => the row stays WORKING (order may still be live); else terminal."""
+        if qty > 0 and filled >= qty:
+            return "FILLED"
+        if filled > 0:                              # partial
+            if "timeout" in (res.reason or "").lower():
+                return None                         # may still work — H16 resolves it
+            return "CANCELLED"                      # cancelled-after-partial (dead)
+        if res.status == "REJECTED":
+            return "REJECTED"
+        if res.status == "ERROR" and not res.order_id:
+            return "NEVER_PLACED"
+        if res.order_id and res.status in ("TIMEOUT", "ERROR"):
+            return None                             # working — recover on restart
+        return "UNKNOWN"
+
+    def _journal_resolve(self, row_id: int | None, res, filled: int, avg: float) -> None:
+        if row_id is None:
+            return
+        try:
+            row = self.s.get(OrderJournal, row_id)
+            if not row:
+                return
+            resolution = self._journal_resolution(res, filled, row.qty)
+            if resolution is not None:
+                row.status = "TERMINAL"
+                row.resolution = resolution
+                row.filled_qty = filled
+                row.avg_price = avg
+                row.resolved_at = self.provider.now()
+                self.s.commit()
+        except Exception as e:
+            log.error(f"journal resolve failed: {e}", event="JOURNAL_FAIL")
+
+    def journal_mark_terminal(self, order_id: str, resolution: str,
+                              filled: int = 0, avg: float = 0.0) -> None:
+        """Mark the WORKING journal row for an order terminal — called from every site
+        that pops _inflight/_pending_entries, keeping the journal in lockstep."""
+        if not order_id:
+            return
+        try:
+            row = self.s.scalars(
+                select(OrderJournal).where(OrderJournal.order_id == order_id,
+                                           OrderJournal.status == "WORKING")).first()
+            if row:
+                row.status = "TERMINAL"
+                row.resolution = resolution
+                if filled:
+                    row.filled_qty = filled
+                if avg:
+                    row.avg_price = avg
+                row.resolved_at = self.provider.now()
+                self.s.commit()
+        except Exception as e:
+            log.error(f"journal mark terminal failed: {e}", event="JOURNAL_FAIL")
+
+    @staticmethod
+    def _quote_to_ctx(q) -> dict:
+        """JSON-safe snapshot of an OptionQuote for the journal, rebuilt on recovery."""
+        exp = q.expiry.isoformat() if hasattr(q.expiry, "isoformat") else q.expiry
+        return {"tradingsymbol": q.tradingsymbol, "exchange": q.exchange, "strike": q.strike,
+                "expiry": exp, "option_type": q.option_type, "lot_size": q.lot_size,
+                "ltp": q.ltp, "bid": q.bid, "ask": q.ask, "volume": q.volume, "oi": q.oi}
 
     def _note_order_outcome(self, filled: int) -> None:
         """#14: feed the order circuit breaker — a zero-fill outcome extends the
@@ -177,11 +284,13 @@ class LiveBroker(PaperBroker):
             return None
         order_type = plan.action if (plan and plan.action in ("MARKET", "LIMIT")) else "MARKET"
         limit = plan.limit_price if (plan and plan.action == "LIMIT") else None
-        res = self._execute(OrderRequest(q.tradingsymbol, inst.segment, "BUY",
-                                         q.lot_size, order_type, limit, tag=TAG))
+        res, filled, avg = self._execute(
+            OrderRequest(q.tradingsymbol, inst.segment, "BUY", q.lot_size, order_type, limit, tag=TAG),
+            intent="ENTRY", kind="options",
+            context={"inst_key": inst.key, "direction": direction, "reason": reason,
+                     "spot": spot, "params": params, "q": self._quote_to_ctx(q)})
         # L1 — ADOPT whatever actually filled (partial fills and buzzer fills too),
         # never silently drop a real position. Only a genuine zero-fill records nothing.
-        filled, avg = self._actual_fill(res)
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(q.tradingsymbol, res)   # may still be working — guard next tick
@@ -225,10 +334,12 @@ class LiveBroker(PaperBroker):
         if not self._ensure_no_inflight(tsym):
             return None
         side = "BUY" if direction == "LONG" else "SELL"
-        res = self._execute(OrderRequest(tsym, exchange_for_segment(charge_segment), side,
-                                         qty, "MARKET", None, tag=TAG,
-                                         product=product_for_segment(charge_segment)))
-        filled, avg = self._actual_fill(res)
+        res, filled, avg = self._execute(
+            OrderRequest(tsym, exchange_for_segment(charge_segment), side, qty, "MARKET", None,
+                         tag=TAG, product=product_for_segment(charge_segment)),
+            intent="ENTRY", kind="equity",
+            context={"inst_key": inst.key, "direction": direction, "charge_segment": charge_segment,
+                     "reason": reason, "params": params, "strategy_key": strategy_key})
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(tsym, res)
@@ -293,10 +404,11 @@ class LiveBroker(PaperBroker):
             self._place_equity_stop(pos, pos.last_premium or pos.entry_premium)
             return None
         side = "SELL" if pos.direction == "LONG" else "BUY"   # buy to cover a short
-        res = self._execute(OrderRequest(sym, exchange_for_segment(pos.exchange), side,
-                                         pos.qty, "MARKET", None, tag=TAG,
-                                         product=product_for_segment(pos.exchange)))
-        filled, avg = self._actual_fill(res)
+        res, filled, avg = self._execute(
+            OrderRequest(sym, exchange_for_segment(pos.exchange), side, pos.qty, "MARKET", None,
+                         tag=TAG, product=product_for_segment(pos.exchange)),
+            intent="EXIT", kind="equity",
+            context={"inst_key": pos.instrument_key, "position_id": pos.id, "segment": pos.segment})
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(sym, res)
@@ -405,11 +517,12 @@ class LiveBroker(PaperBroker):
             self._place_gtt(pos, pos.last_premium or pos.entry_premium)
             return None
         want = pos.qty
-        res = self._execute(OrderRequest(sym, pos.exchange, "SELL",
-                                         want, "MARKET", None, tag=TAG))
+        res, sold, avg = self._execute(
+            OrderRequest(sym, pos.exchange, "SELL", want, "MARKET", None, tag=TAG),
+            intent="EXIT", kind="options",
+            context={"inst_key": pos.instrument_key, "position_id": pos.id, "segment": pos.segment})
         # L2 — book what ACTUALLY sold (re-querying a TIMEOUT to catch a buzzer fill),
         # never assume the full size sold.
-        sold, avg = self._actual_fill(res)
         if sold <= 0:
             self._record_inflight(sym, res)   # may still be working — guard next tick
             log.error(f"LIVE CLOSE not filled [{res.status}] {sym} — {res.reason}",
