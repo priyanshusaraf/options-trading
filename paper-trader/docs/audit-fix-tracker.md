@@ -51,5 +51,5 @@ Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, comm
 
 ## Batch 8 — Strategy / backtest validity (design-scope)
 - 📐 C6 backtest models underlying → full spec in `audit-remaining-impl-guide.md`
-- 📐 H2 live trailing ≠ backtest ratchet → full spec in `audit-remaining-impl-guide.md` (Option A: unify onto ratchet)
-- 📐 H9 walk-forward / OOS gate → full spec in `audit-remaining-impl-guide.md`
+- ⬜ H2 live trailing ≠ backtest ratchet → SPECCED (Option A) in `audit-remaining-impl-guide.md`; needs a focused session + adversarial review (live risk mgmt)
+- ✅ H9 (`c5d16d2`) OOS gate math + min_trades default 1→10 (column persistence deferred to C6 session)
