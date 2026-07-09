@@ -115,3 +115,35 @@ async def _probe_loop_free(r):
     stop["v"] = True
     await t
     assert ticks_during >= 3              # the loop ran concurrently with the poll
+
+
+def test_signal_iteration_keeps_the_event_loop_responsive():
+    """C5: the signal-loop entry path (scan_signals + process_entries, which in live
+    mode places an order and polls it to a terminal state for up to ~10s) must be
+    offloaded like the risk pass — otherwise a slow entry freezes WS heartbeats, the
+    risk scheduler, and the cockpit for the whole poll window."""
+    import time
+    r = _runner()
+
+    def slow_entries():                   # stand-in for a bounded live order poll
+        time.sleep(0.3)
+
+    r.process_entries = slow_entries
+    asyncio.run(_probe_signal_loop_free(r))
+
+
+async def _probe_signal_loop_free(r):
+    ticks = {"n": 0}
+    stop = {"v": False}
+
+    async def ticker():
+        while not stop["v"]:
+            await asyncio.sleep(0.01)
+            ticks["n"] += 1
+
+    t = asyncio.create_task(ticker())
+    await r._signal_iteration()           # ~0.3s of blocking work inside
+    ticks_during = ticks["n"]             # accrued WHILE the signal pass ran
+    stop["v"] = True
+    await t
+    assert ticks_during >= 3              # the loop ran concurrently with the entry poll

@@ -1103,17 +1103,28 @@ class EngineRunner:
         except Exception as e:
             log.error(f"option cache sweep error: {e}")
 
+    def _signal_iteration_blocking(self) -> None:
+        # C5 — the body that can block: scan_signals fetches Kite candles per
+        # instrument, and process_entries places a live order and polls it to a
+        # terminal state (up to order_timeout_seconds). Runs OFF the event loop
+        # (see _signal_iteration) so a slow entry never freezes the risk scheduler,
+        # WS heartbeats, or the cockpit — the same guarantee the risk lane already has.
+        self.refresh_params()          # pick up live Settings overrides
+        self._maybe_refresh_funds()    # cache real account balance (live only)
+        self._maybe_reconcile_orphans()
+        self.scan_signals()
+        self.process_entries()
+        self._maybe_cache_chains()     # grow the watchlist-wide options dataset
+        self.handle_overnight(self.provider.now())   # no-op for mock
+        self.broker.snapshot(self.provider.now())
+        self.tick_count += 1
+
     async def _signal_iteration(self) -> None:
+        # Offload the blocking body but keep the lock across it, so the single shared
+        # DB session is only ever touched by one lane at a time (signal vs risk stay
+        # serialised) — identical discipline to _risk_iteration.
         async with self._lock:
-            self.refresh_params()          # pick up live Settings overrides
-            self._maybe_refresh_funds()    # cache real account balance (live only)
-            self._maybe_reconcile_orphans()
-            self.scan_signals()
-            self.process_entries()
-            self._maybe_cache_chains()     # grow the watchlist-wide options dataset
-            self.handle_overnight(self.provider.now())   # no-op for mock
-            self.broker.snapshot(self.provider.now())
-            self.tick_count += 1
+            await asyncio.to_thread(self._signal_iteration_blocking)
         if self.on_update:
             try:
                 await self.on_update(self.snapshot_state())
