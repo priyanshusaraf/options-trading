@@ -845,6 +845,27 @@ async def ws_main(ws: WebSocket):
         manager.disconnect(ws)
 
 
+def _instrument_payload(provider, key: str) -> dict:
+    """H1: the blocking per-tick fetch for /ws/instrument — synchronous Kite calls
+    (get_live_price, option_ltp) plus a DB read. Kept as a plain function so the WS
+    handler can run it OFF the event loop via asyncio.to_thread; called directly on the
+    loop it froze WS heartbeats, the risk scheduler, and the cockpit once per second per
+    open tile."""
+    inst = get_instrument(key)
+    spot = provider.get_live_price(inst)
+    with SessionLocal() as s:
+        pos = s.scalar(select(Position).where(Position.instrument_key == key))
+        contract = (pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type) if pos else None
+    opt = provider.option_ltp(inst, *contract) if contract else None
+    return {
+        "instrument": key,
+        "time": provider.now().isoformat(),
+        "spot": spot,
+        "option_premium": round(opt, 2) if opt else None,
+        "tradingsymbol": contract[0] if contract else None,
+    }
+
+
 @router.websocket("/ws/instrument/{key}")
 async def ws_instrument(ws: WebSocket, key: str):
     from app.api.auth import ws_authorized
@@ -853,21 +874,10 @@ async def ws_instrument(ws: WebSocket, key: str):
         return
     await ws.accept()
     r = _runner(ws)
-    inst = get_instrument(key)
     try:
         while True:
-            spot = r.provider.get_live_price(inst)
-            with SessionLocal() as s:
-                pos = s.scalar(select(Position).where(Position.instrument_key == key))
-                contract = (pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type) if pos else None
-            opt = r.provider.option_ltp(inst, *contract) if contract else None
-            await ws.send_json({
-                "instrument": key,
-                "time": r.provider.now().isoformat(),
-                "spot": spot,
-                "option_premium": round(opt, 2) if opt else None,
-                "tradingsymbol": contract[0] if contract else None,
-            })
+            payload = await asyncio.to_thread(_instrument_payload, r.provider, key)
+            await ws.send_json(payload)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         return
