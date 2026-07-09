@@ -64,6 +64,14 @@ async def lifespan(app: FastAPI):
     # entries on completed candles. The old single-cadence live_quotes task is
     # gone — the risk loop now produces the live UI position feed.
     runner.running = True
+    # H13: replay the persisted order journal BEFORE the loops start — a crash in the
+    # order-poll window leaves in-flight orders whose in-memory tracking was wiped;
+    # recovery adopts late fills / books filled exits so a restart resumes mid-flight.
+    # Must finish before the signal loop can re-enter an instrument. Non-fatal.
+    try:
+        await asyncio.to_thread(runner.broker.recover_journal, runner.provider.now())
+    except Exception as e:
+        log.error(f"order journal recovery failed at startup: {e}")
     signal_task = asyncio.create_task(runner.run_signal_loop())
     risk_task = asyncio.create_task(runner.run_risk_loop())
     log.info("backend ready — open the dashboard")

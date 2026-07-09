@@ -16,9 +16,11 @@ from dataclasses import replace
 
 from sqlalchemy import select
 
+from app.core.instruments import get_instrument
 from app.core.logging import log
-from app.db.models import OrderJournal
+from app.db.models import OrderJournal, Position
 from app.engine.broker import PaperBroker
+from app.providers.base import OptionQuote
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.engine.order_executor import OrderRequest, execute_order
 from app.engine.reconcile import can_bot_close
@@ -168,6 +170,95 @@ class LiveBroker(PaperBroker):
         except Exception as e:
             log.error(f"journal mark terminal failed: {e}", event="JOURNAL_FAIL")
 
+    def _rebuild_pending(self, row, ctx) -> dict:
+        """Reconstruct a _pending_entries context from a journaled ENTRY row (H13)."""
+        inst = get_instrument(ctx["inst_key"])
+        if row.kind == "options":
+            qd = dict(ctx.get("q", {}))
+            exp = qd.get("expiry")
+            if isinstance(exp, str):
+                try:
+                    qd["expiry"] = dt.date.fromisoformat(exp)
+                except Exception:
+                    pass
+            q = OptionQuote(instrument_key=ctx["inst_key"], **qd)
+            return {"kind": "options", "order_id": row.order_id, "inst": inst,
+                    "direction": ctx["direction"], "q": q,
+                    "reason": ctx.get("reason", "recovered"),
+                    "spot": ctx.get("spot", 0.0), "params": ctx.get("params")}
+        return {"kind": "equity", "order_id": row.order_id, "inst": inst,
+                "direction": ctx["direction"], "charge_segment": ctx.get("charge_segment", ""),
+                "reason": ctx.get("reason", "recovered"), "params": ctx.get("params"),
+                "strategy_key": ctx.get("strategy_key")}
+
+    def recover_journal(self, now) -> list:
+        """H13: on startup, replay WORKING journal rows — the in-memory in-flight
+        trackers were wiped by the restart. A late-filled ENTRY is adopted (book +
+        stop); a filled EXIT is booked ledger-only at the REAL price (beats the orphan
+        reconciler's stale mark); still-working orders are re-tracked; dead ones closed.
+        A status read failure leaves the row WORKING (fail open — retry next start)."""
+        recovered: list[str] = []
+        rows = self.s.scalars(
+            select(OrderJournal).where(OrderJournal.status == "WORKING")).all()
+        for row in rows:
+            if not row.order_id:
+                continue   # never-acked placement — the tag sweep surfaces it
+            try:
+                st = self.client.status(row.order_id)
+            except Exception as e:
+                log.error(f"RECOVER {row.tradingsymbol}: status({row.order_id}) failed: {e} "
+                          f"— left WORKING", event="RECOVER_FAIL")
+                continue
+            status = str(st.get("status", "")).upper()
+            filled = int(st.get("filled_qty", 0) or 0)
+            avg = float(st.get("avg_price", 0.0) or 0.0)
+            try:
+                ctx = json.loads(row.context_json or "{}")
+            except Exception:
+                ctx = {}
+            if row.intent == "ENTRY":
+                if filled > 0 and avg > 0:
+                    self._pending_entries[row.tradingsymbol] = self._rebuild_pending(row, ctx)
+                elif status in _DEAD_STATUSES:
+                    self.journal_mark_terminal(row.order_id, "DEAD")
+                else:
+                    self._inflight[row.tradingsymbol] = row.order_id
+                    self._pending_entries[row.tradingsymbol] = self._rebuild_pending(row, ctx)
+            else:   # EXIT
+                pos = self.s.get(Position, ctx["position_id"]) if ctx.get("position_id") else None
+                if filled >= row.qty and pos is not None:
+                    if pos.segment == "equity_intraday":
+                        PaperBroker.close_equity_position(self, pos, avg, "RECOVERED_EXIT_FILL", now)
+                    else:
+                        PaperBroker.close_position(self, pos, avg, "RECOVERED_EXIT_FILL", now, pos.last_spot)
+                    self.journal_mark_terminal(row.order_id, "FILLED", filled, avg)
+                    recovered.append(row.tradingsymbol)
+                elif status in _DEAD_STATUSES:
+                    self.journal_mark_terminal(row.order_id, "DEAD")
+                else:
+                    self._inflight[row.tradingsymbol] = row.order_id
+        try:
+            recovered.extend(self.adopt_pending_entries(now))   # books + marks ADOPTED
+        except Exception as e:
+            log.error(f"RECOVER adopt failed: {e}", event="RECOVER_FAIL")
+        self._recover_tag_sweep()
+        return recovered
+
+    def _recover_tag_sweep(self) -> None:
+        """Surface any tag=pt-bot exchange order with NO journal row (a crash between the
+        journal write and the placement ack). Never auto-books — alerts to verify."""
+        try:
+            orders = self.client.orders()
+        except Exception:
+            return
+        known = {r.order_id for r in self.s.scalars(select(OrderJournal)).all() if r.order_id}
+        for o in orders or []:
+            if o.get("tag") == TAG and o.get("order_id") not in known:
+                log.error(f"RECOVER: tagged order {o.get('order_id')} ({o.get('tradingsymbol')}) "
+                          f"has no journal row — verify on Zerodha", event="RECOVER_UNTRACKED")
+                self._notify(f"⚠️ a bot-tagged order ({o.get('order_id')}) has no journal record "
+                             f"— verify on Zerodha; the bot won't touch it.")
+
     @staticmethod
     def _quote_to_ctx(q) -> dict:
         """JSON-safe snapshot of an OptionQuote for the journal, rebuilt on recovery."""
@@ -245,6 +336,7 @@ class LiveBroker(PaperBroker):
             try:
                 self.client.cancel(oid)
                 cancelled.append(oid)
+                self.journal_mark_terminal(oid, "CANCELLED")   # H13
                 log.warn(f"KILL: cancelled working entry order {oid}", event="KILL_CANCEL")
             except Exception as e:
                 failed.add(oid)
@@ -760,8 +852,10 @@ class LiveBroker(PaperBroker):
                     self._notify(f"ℹ️ {sym}: a bot order filled late ({filled}@{avg:.2f}) — "
                                  f"adopted into the book with a stop; verify on Zerodha")
                     adopted.append(inst.key)
+                self.journal_mark_terminal(ctx["order_id"], "ADOPTED", filled, avg)   # H13
                 self._pending_entries.pop(sym, None)
                 self._inflight.pop(sym, None)
             elif status in _DEAD_STATUSES:
+                self.journal_mark_terminal(ctx["order_id"], "DEAD")   # H13
                 self._pending_entries.pop(sym, None)   # died with no fill — nothing to adopt
         return adopted

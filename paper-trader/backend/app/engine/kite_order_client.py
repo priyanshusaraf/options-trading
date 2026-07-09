@@ -153,3 +153,10 @@ class KiteOrderClient:
             "avg_price": float(last.get("average_price", 0.0) or 0.0),
             "reason": last.get("status_message") or "",
         }
+
+    def orders(self) -> list[dict]:
+        """Today's orders, normalized to {order_id, tradingsymbol, tag} — for the
+        journal recovery tag-sweep (H13): find bot-tagged orders with no journal row."""
+        self._sync_token()
+        return [{"order_id": o.get("order_id"), "tradingsymbol": o.get("tradingsymbol"),
+                 "tag": o.get("tag")} for o in (self.kite.orders() or [])]

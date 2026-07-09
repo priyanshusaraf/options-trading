@@ -404,6 +404,11 @@ class PaperBroker:
         are synchronous — there is never a resting entry order)."""
         return []
 
+    def recover_journal(self, now) -> list:
+        """Replay the persisted order journal on startup (H13). No-op on paper (paper
+        fills are synchronous — nothing is ever left in flight across a restart)."""
+        return []
+
     # ── analytics support ─────────────────────────────────────────────────
     def snapshot(self, now: dt.datetime) -> EquitySnapshot:
         opens = self.open_positions()
