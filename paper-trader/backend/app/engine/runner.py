@@ -985,6 +985,15 @@ class EngineRunner:
         return False
 
     # ── per-lane single iterations (lock-serialised DB mutation) ──────────
+    def _rollback_session(self) -> None:
+        """H3: discard any half-applied dirty state after a mid-iteration exception, so
+        the next lane never inherits a partially-mutated session (there was no rollback
+        anywhere in the codebase)."""
+        try:
+            self.broker.s.rollback()
+        except Exception as e:
+            log.error(f"session rollback failed: {e}", event="ROLLBACK_FAIL")
+
     async def _risk_iteration(self) -> None:
         # L5 — mark_and_exit_positions can block for the live order-poll window
         # (place + poll to a terminal state). Run it OFF the event loop so a slow
@@ -992,7 +1001,11 @@ class EngineRunner:
         # The lock is still held across the offload, so the single shared DB session
         # is only ever touched by one lane at a time (risk vs signal stay serialised).
         async with self._lock:
-            await asyncio.to_thread(self.mark_and_exit_positions)
+            try:
+                await asyncio.to_thread(self.mark_and_exit_positions)
+            except Exception:
+                self._rollback_session()   # H3 — clean the session before releasing the lock
+                raise
         if self.on_position_ticks:
             try:
                 await self.on_position_ticks(self.position_ticks)
@@ -1154,7 +1167,11 @@ class EngineRunner:
         # DB session is only ever touched by one lane at a time (signal vs risk stay
         # serialised) — identical discipline to _risk_iteration.
         async with self._lock:
-            await asyncio.to_thread(self._signal_iteration_blocking)
+            try:
+                await asyncio.to_thread(self._signal_iteration_blocking)
+            except Exception:
+                self._rollback_session()   # H3 — clean the session before releasing the lock
+                raise
         if self.on_update:
             try:
                 await self.on_update(self.snapshot_state())

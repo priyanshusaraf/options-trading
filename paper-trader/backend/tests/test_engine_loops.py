@@ -147,3 +147,20 @@ async def _probe_signal_loop_free(r):
     stop["v"] = True
     await t
     assert ticks_during >= 3              # the loop ran concurrently with the entry poll
+
+
+def test_risk_iteration_rolls_back_session_on_error():
+    """H3: an exception mid-iteration must roll back the shared broker session, so the
+    next lane doesn't inherit half-applied dirty state (there was no rollback anywhere)."""
+    import pytest
+    r = _runner()
+    original = r.broker.capital().cash
+
+    def boom():
+        r.broker.capital().cash += 999.0     # dirty the session mid-operation
+        raise RuntimeError("mid-op failure")
+
+    r.mark_and_exit_positions = boom
+    with pytest.raises(RuntimeError):
+        asyncio.run(r._risk_iteration())
+    assert r.broker.capital().cash == original     # dirty change rolled back
