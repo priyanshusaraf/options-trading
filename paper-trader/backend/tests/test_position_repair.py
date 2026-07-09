@@ -49,3 +49,38 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     assert pos.entry_charges == pytest.approx(expected_charges, abs=0.01)
     assert pos.entry_cost == pytest.approx(expected_cost, abs=0.01)
     assert s.get(CapitalState, 1).cash == pytest.approx(49_611.07 - (expected_cost - 388.93), abs=0.01)
+
+
+def test_repair_leaves_a_genuine_partial_fill_untouched():
+    """audit H6: a real live PARTIAL fill records qty<lot_size with the CORRECT full
+    lot_size. The legacy-repair heuristic must not mistake it for the one-unit bug and
+    inflate qty to a full lot (which debits cash never spent and makes the position
+    unclosable). The discriminator: a partial has pos.lot_size == inst.lot_size."""
+    s = _session()
+    now = dt.datetime(2026, 6, 19, 9, 30)
+    s.add(CapitalState(id=1, initial_capital=50_000, cash=40_000.0, realized_pnl=0))
+    s.add(UniverseInstrument(
+        key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
+        spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
+        strike_step=50, priority=4, has_options=True, source="seed",
+        on_home=True, active=True, mock_spot=6500, mock_vol=0.30,
+    ))
+    charges = compute_charges("MCX", "BUY", 365.10, 25)["total"]
+    s.add(Position(
+        instrument_key="CRUDEOIL", direction="LONG", option_type="CE",
+        tradingsymbol="CRUDEOIL26JUL7200CE", exchange="MCX", strike=7200,
+        expiry=dt.date(2026, 7, 16), lot_size=100, qty=25, entry_premium=365.10,
+        entry_charges=charges, entry_cost=365.10 * 25 + charges, entry_spot=7119,
+        entry_time=now, entry_reason="partial fill", stop_price=237.315,
+        target_price=584.16, last_premium=370.0, last_spot=7119,
+    ))
+    s.commit()
+    cash_before = s.get(CapitalState, 1).cash
+
+    fixed = _repair_open_position_lot_sizes(s)
+
+    pos = s.query(Position).one()
+    assert fixed == 0
+    assert pos.qty == 25                                     # partial NOT inflated
+    assert pos.lot_size == 100
+    assert s.get(CapitalState, 1).cash == cash_before        # no phantom cash debit

@@ -79,6 +79,12 @@ def _repair_open_position_lot_sizes(sess) -> int:
             continue
         if pos.qty > inst.lot_size:
             continue
+        if pos.lot_size == inst.lot_size:
+            # H6: lot_size already records the true full lot, so pos.qty < lot_size is a
+            # genuine PARTIAL fill — NOT the legacy one-unit bug (which mis-recorded
+            # lot_size too). Never inflate a real partial to a full lot: that debits cash
+            # never spent and leaves a position the account can't back / the bot can't close.
+            continue
         old_cost = pos.entry_cost
         pos.qty = inst.lot_size
         pos.lot_size = inst.lot_size
