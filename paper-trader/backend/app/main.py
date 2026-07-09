@@ -30,6 +30,12 @@ async def lifespan(app: FastAPI):
     # run: its synthetic clock restarts each process, so a persisted mock position
     # would be mispriced against a different sim-time on the next launch.
     settings = get_settings()
+    # C7: refuse to start a second backend against the same persistent (non-mock) DB
+    # — two instances would trade the same real account with independent in-flight
+    # state. Mock (tests, dry-run) skips this so multiple TestClients can coexist.
+    if settings.provider != "mock":
+        from app.core.instance_lock import acquire_db_lock
+        app.state.db_lock = acquire_db_lock(settings.db_path)
     init_db(reset=settings.provider == "mock")
     if settings.provider == "kite":
         from app.engine.broker_factory import live_execution_enabled
