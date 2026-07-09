@@ -252,6 +252,11 @@ class LiveBroker(PaperBroker):
             self._notify(f"🚫 CLOSE aborted {sym}: SL-M cancel failed — still protected by its "
                          f"stop; verify on Zerodha")
             return None
+        # H4 — the SL-M stop is now cancelled; persist that before the close order so a
+        # crash mid-close can't leave a dead trigger id that self-heal trusts.
+        if pos.gtt_trigger_id:
+            pos.gtt_trigger_id = None
+            self.s.commit()
         chk2 = can_bot_close(pos, self.provider.account_positions())
         if not chk2.ok:
             log.error(f"LIVE EQUITY CLOSE ABORTED {sym} — {chk2.reason}",
@@ -314,6 +319,14 @@ class LiveBroker(PaperBroker):
             self._notify(f"🚫 CLOSE aborted {sym}: GTT cancel failed — still protected by its "
                          f"GTT; verify on Zerodha")
             return None
+        # H4 — the GTT is now cancelled at the exchange. Persist that immediately: if the
+        # process dies during the SELL poll below, the DB must not keep a dead trigger id
+        # (ensure_stop_protection would trust it and never re-place a stop, and the next
+        # close would re-cancel a dead GTT and abort forever). Every path from here either
+        # re-places a fresh GTT (abort/partial/fail) or deletes the row (full fill).
+        if gid:
+            pos.gtt_trigger_id = None
+            self.s.commit()
         # Re-check the account immediately before sending. If the GTT already fired
         # (or the owner exited) the account no longer backs us — send NO order and
         # leave the now-orphaned position for reconcile_orphans to book.

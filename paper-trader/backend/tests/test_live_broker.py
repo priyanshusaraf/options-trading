@@ -890,3 +890,32 @@ def test_dead_pending_options_entry_is_dropped_without_adoption():
     assert b.adopt_pending_entries(b.provider.now()) == []
     assert b.position_for("NIFTY") is None
     assert q.tradingsymbol not in b._pending_entries
+
+
+# ── H4: a crash between the GTT cancel and the SELL must not leave a stale id ──
+def test_crash_after_gtt_cancel_leaves_no_stale_trigger_id():
+    """close_position cancels the exchange GTT before the SELL. If the process dies
+    during the SELL poll, the DB must NOT still hold the (now dead) gtt_trigger_id —
+    otherwise ensure_stop_protection trusts it and never re-places a stop, and the
+    next close re-cancels a dead GTT and aborts forever (wedged, unprotected)."""
+    import pytest
+    from app.db.session import SessionLocal
+    from app.db.models import Position
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos, q, chain = _open(b, c)
+    assert pos.gtt_trigger_id == "GTT-1"
+    b.provider.account_positions = lambda: [{"tradingsymbol": pos.tradingsymbol,
+                                             "quantity": pos.qty}]   # account backs it
+
+    def boom(*a, **k):
+        raise RuntimeError("process died mid-close (after the GTT cancel)")
+
+    b._execute = boom
+    with pytest.raises(RuntimeError):
+        b.close_position(pos, 90.0, "t", b.provider.now(), chain.spot)
+    assert c.gtt_deleted == ["GTT-1"]                     # the cancel did happen
+    with SessionLocal() as s:
+        reloaded = s.get(Position, pos.id)
+        assert reloaded is not None
+        assert reloaded.gtt_trigger_id is None            # cancel persisted — no stale id
