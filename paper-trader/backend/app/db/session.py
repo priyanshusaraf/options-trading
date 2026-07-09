@@ -182,6 +182,15 @@ def _migrate_schema() -> None:
 
 
 def init_db(reset: bool = False) -> None:
+    # Fail closed: a destructive reset is only ever legitimate in mock mode (the
+    # sim clock restarts each run). In any other provider, refuse to DROP — this
+    # is the last line of defence against a stray init_db(reset=True) (e.g. a bare
+    # `python -c` run outside the pytest/conftest isolation) wiping the live book.
+    if reset and get_settings().provider != "mock":
+        raise RuntimeError(
+            "init_db(reset=True) refused: destructive reset is only allowed in mock "
+            "mode (provider='mock'). Refusing to DROP tables on a non-mock database."
+        )
     if reset:
         Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
