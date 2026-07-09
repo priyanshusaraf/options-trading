@@ -258,3 +258,25 @@ def compute_metrics(trades: list[BTTrade], initial_capital: float) -> BTMetrics:
         m.win_rate_realised = 0.0
         m.return_pct_realised = 0.0
     return m
+
+
+def split_metrics(trades: list[BTTrade], initial_capital: float,
+                  split_ts: int) -> tuple[BTMetrics, BTMetrics]:
+    """H9: chronological in-sample / out-of-sample split by entry_time, for a promotion
+    gate that rejects in-sample cherry-picking across the sweep grid. Trades are assigned
+    by ENTRY time; a trade that opens in-sample but exits out-of-sample counts in-sample.
+    Returns (in_sample_metrics, out_of_sample_metrics)."""
+    is_trades = [t for t in trades if t.entry_time < split_ts]
+    oos_trades = [t for t in trades if t.entry_time >= split_ts]
+    return (compute_metrics(is_trades, initial_capital),
+            compute_metrics(oos_trades, initial_capital))
+
+
+def oos_pass(oos: BTMetrics, min_oos_trades: int = 20) -> bool:
+    """H9: is the out-of-sample record strong enough to promote? Enough OOS trades,
+    positive OOS expectancy, and a profit factor at least break-even. A 1-lucky-trade
+    or in-sample-only cell can never pass."""
+    pf = oos.profit_factor   # None == no losing trades (undefined, treat as passing)
+    return (oos.trades_realised >= min_oos_trades
+            and oos.expectancy > 0
+            and (pf is None or pf >= 1.0))

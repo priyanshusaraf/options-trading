@@ -160,7 +160,9 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             strategy: str | None = None,
             min_win_rate: float = 0.0, min_profit_factor: float = 0.0,
             max_drawdown: float = 100.0, min_return: float = -1e9,
-            min_trades: int = 1, sort: str = "return_pct", limit: int = 500):
+            min_trades: int = 10, sort: str = "return_pct", limit: int = 500):
+            # H9: default raised 1 -> 10 so a 1-lucky-trade cell is never surfaced as
+            # promotable by default (grid selection bias across the sweep). Overridable.
     budget = _budget(request)
     with SessionLocal() as s:
         if run_id is None:
