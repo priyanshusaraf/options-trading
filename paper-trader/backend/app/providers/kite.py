@@ -361,7 +361,9 @@ class KiteProvider(MarketDataProvider):
                 expiry=expiry,
                 option_type=r["instrument_type"],
                 lot_size=self._contract_lot_size(inst, r),
-                ltp=ltp, bid=bid or ltp, ask=ask or ltp,
+                # keep raw bid/ask (0 when a depth side is empty) — do NOT substitute
+                # ltp, which would hide a one-sided book and collapse spread_pct (C8)
+                ltp=ltp, bid=bid, ask=ask,
                 volume=int(q.get("volume", 0)),
                 oi=int(q.get("oi", 0)),
             ))

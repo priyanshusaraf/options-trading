@@ -62,7 +62,13 @@ class OptionQuote:
 
     @property
     def spread_pct(self) -> float:
-        return (self.spread / self.ltp) if self.ltp > 0 else 1.0
+        # No genuine two-sided market (a side has no resting depth, so bid or ask is 0)
+        # reads as maximally illiquid, not ~0 — otherwise a missing side collapses the
+        # spread and defeats the liquidity filter, letting the picker choose an
+        # unfillable strike (audit C8).
+        if self.bid <= 0 or self.ask <= 0 or self.ltp <= 0:
+            return 1.0
+        return self.spread / self.ltp
 
     def to_dict(self) -> dict:
         return {
