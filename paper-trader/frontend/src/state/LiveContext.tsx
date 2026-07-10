@@ -25,8 +25,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     let stop = false
     const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
     const connect = () => {
+      const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(
-        `ws://${location.host}/ws${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''}`,
+        `${wsScheme}://${location.host}/ws${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''}`,
       )
       wsRef.current = ws
       ws.onopen = () => setConnected(true)
