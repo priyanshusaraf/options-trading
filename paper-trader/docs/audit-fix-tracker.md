@@ -51,5 +51,5 @@ Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, comm
 
 ## Batch 8 — Strategy / backtest validity (design-scope)
 - 📐 C6 backtest models underlying → full spec in `audit-remaining-impl-guide.md`
-- ⬜ H2 live trailing ≠ backtest ratchet → SPECCED (Option A) in `audit-remaining-impl-guide.md`; needs a focused session + adversarial review (live risk mgmt)
+- ✅ H2 (`02cab60`+`24b1a85`) unify live trailing onto the validated RatchetState (parity-tested)
 - ✅ H9 (`c5d16d2`) OOS gate math + min_trades default 1→10 (column persistence deferred to C6 session)
