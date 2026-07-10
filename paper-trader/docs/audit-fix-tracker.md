@@ -5,6 +5,8 @@ Base commit: `301c628` (#21 tick-size fix). Branch: `feat/backtest-arbiter`.
 Convention: TDD (test-first, watch fail, minimal impl, targeted tests green), one atomic commit per batch.
 **Deploy is user-gated** — the live backend (PID running) is NOT restarted by this work.
 
+**STATUS: ALL 26 CONFIRMED FINDINGS IMPLEMENTED + TESTED + COMMITTED (branch feat/backtest-arbiter; NOT deployed).**
+
 Status key: ⬜ todo · 🔨 in progress · ✅ code-complete (tests green, committed) · 📐 design-staged (spec written, impl deferred)
 
 ## Batch 0 — Incident prevention (2026-07-09)
