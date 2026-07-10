@@ -46,9 +46,22 @@ def resolve_spec(key: str, provider) -> Instrument | None:
         return cat[key]
     try:
         from app.backtest.universe import full_universe
-        return {i.key: i for i in full_universe(provider)}.get(key)
+        by_key = {i.key: i for i in full_universe(provider)}
     except Exception:
         return None
+    if key in by_key:
+        return by_key[key]
+    # A bare cash-equity symbol (e.g. "HEG"): full_universe keys equities as
+    # "NSE:HEG"/"BSE:HEG", while options/F&O underlyings are keyed by bare name
+    # (matched above). The add UI posts the plain typed symbol, so try the
+    # exchange-prefixed forms here — otherwise an intraday-only equity can never
+    # be added by its plain symbol. NSE is preferred (more liquid) over BSE.
+    if ":" not in key:
+        for exch in ("NSE", "BSE"):
+            hit = by_key.get(f"{exch}:{key}")
+            if hit is not None:
+                return hit
+    return None
 
 
 def add_instrument(key: str, provider, on_home: bool = True,
@@ -57,6 +70,15 @@ def add_instrument(key: str, provider, on_home: bool = True,
     spec = resolve_spec(key, provider)
     if spec is None:
         return {"error": f"could not resolve instrument '{key}'"}
+    # Canonicalise: the user may have typed a bare symbol ("HEG") that resolves to
+    # an exchange-prefixed equity ("NSE:HEG"). Use the spec's key everywhere below
+    # so the universe row and its InstrumentState never split across two keys.
+    key = spec.key
+    # A no-options cash equity can only trade the intraday (MIS) path, so default it
+    # there unless the caller chose a product — otherwise product falls back to
+    # "options" and the name sits tracking-only, never trading.
+    if product is None and not spec.has_options:
+        product = "equity_intraday"
     # promotion carry-over: keep a supported live interval; else fall back + warn
     from app.core.config import LIVE_INTERVALS, normalize_live_interval
     iv = warning = None

@@ -71,9 +71,6 @@ SEED_INSTRUMENTS: dict[str, Instrument] = {
     "SENSEX": Instrument(
         "SENSEX", "SENSEX", "BFO", "BSE", "SENSEX", "SENSEX",
         lot_size=20, strike_step=100, priority=7, mock_spot=79000, mock_vol=0.12),
-    "COPPERM": Instrument(
-        "COPPERM", "COPPER MINI", "MCX", "MCX", "COPPER", "COPPER",
-        lot_size=250, strike_step=5, priority=8, mock_spot=850, mock_vol=0.20),
 }
 
 # ── registry (SEED base, overlaid with DB rows) ──────────────────────────────

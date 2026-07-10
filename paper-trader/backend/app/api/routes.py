@@ -201,7 +201,7 @@ def portfolio_add(body: AddInstrument, request: Request):
                                            interval=body.interval,
                                            strategy_key=body.strategy_key, product=body.product)
     if "error" not in res:
-        r.apply_universe_entry(body.key, res)   # config-then-enable (H11); live next tick
+        r.apply_universe_entry(res["key"], res)   # canonical key (H11); live next tick
     return res
 
 
@@ -245,7 +245,7 @@ def portfolio_add_bulk(body: BulkAdd, request: Request):
         if "error" in res:
             skipped.append({"key": it.key, "reason": res["error"]})
             continue
-        r.apply_universe_entry(it.key, res)   # config-then-enable (H11)
+        r.apply_universe_entry(res["key"], res)   # canonical key (H11)
         added.append(res)
     return {"added": added, "skipped": skipped}
 

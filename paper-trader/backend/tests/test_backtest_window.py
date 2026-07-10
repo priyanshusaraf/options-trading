@@ -187,11 +187,11 @@ def test_sweep_restricted_to_commodities():
     init_db(reset=True)
     prov = MockProvider()
     rid = sweep.start_sweep(scope="liquid", intervals=["day"],
-                            instruments=["GOLDM", "SILVERM", "COPPERM"], provider=prov)
+                            instruments=["GOLDM", "SILVERM", "NATURALGAS"], provider=prov)
     sweep._join()
     with SessionLocal() as s:
         keys = {r.instrument_key for r in s.scalars(select_results(rid))}
-    assert keys == {"GOLDM", "SILVERM", "COPPERM"}
+    assert keys == {"GOLDM", "SILVERM", "NATURALGAS"}
 
 
 def test_instruments_endpoint_lists_universe_and_presets():

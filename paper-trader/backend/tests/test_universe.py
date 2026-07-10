@@ -9,8 +9,8 @@ from app.core.instruments import (
 
 def test_trim_removed_illiquid_names():
     keys = {i.key for i in all_instruments()}
-    assert {"LEAD", "ZINC", "DHANIYA"} & keys == set()
-    assert len(SEED_INSTRUMENTS) == 8
+    assert {"LEAD", "ZINC", "DHANIYA", "COPPERM"} & keys == set()
+    assert len(SEED_INSTRUMENTS) == 7
 
 
 def test_seed_instruments_have_options():
@@ -19,7 +19,7 @@ def test_seed_instruments_have_options():
 
 def test_priorities_are_unique_and_dense():
     pris = sorted(i.priority for i in SEED_INSTRUMENTS.values())
-    assert pris == list(range(1, 9))  # 1..8, no gaps
+    assert pris == list(range(1, 8))  # 1..7, no gaps
 
 
 def test_home_is_subset_of_universe():
