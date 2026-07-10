@@ -85,6 +85,13 @@ class Position(Base):
     manual_target: Mapped[bool] = mapped_column(Boolean, default=False)  # owner set the target by hand — reinforcement won't auto-extend it
     no_take_profit: Mapped[bool] = mapped_column(Boolean, default=False)  # owner "let it run": suppress the TP cap (trailing stop still protects)
     gtt_trigger_id: Mapped[str | None] = mapped_column(String(32), nullable=True)  # Zerodha GTT safety-net stop id (live execution)
+    # H2 — live ratchet state (unify onto the backtest-validated RatchetState). NULL =>
+    # not ratchet-managed (no risk_model). entry_atr frozen at fill; hw/spot_stop ratchet
+    # on completed underlying candles; last_bar_ts guards against double-consuming a bar.
+    entry_atr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ratchet_hw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spot_stop: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ratchet_last_bar_ts: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
     def unrealized_pnl(self) -> float:

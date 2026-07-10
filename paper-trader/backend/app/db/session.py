@@ -130,6 +130,10 @@ def _migrate_schema() -> None:
             ("manual_target", "BOOLEAN DEFAULT 0"),
             ("no_take_profit", "BOOLEAN DEFAULT 0"),
             ("gtt_trigger_id", "VARCHAR(32)"),
+            ("entry_atr", "FLOAT"),
+            ("ratchet_hw", "FLOAT"),
+            ("spot_stop", "FLOAT"),
+            ("ratchet_last_bar_ts", "DATETIME"),
             ("mode", "VARCHAR(8) DEFAULT 'paper'"),
         ],
         "trades": [

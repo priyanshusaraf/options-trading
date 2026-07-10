@@ -38,6 +38,17 @@ class RatchetState:
         self.rm = rm
         self.stop = self.fill - self.d * self.risk_pts   # pine:215/226
 
+    @classmethod
+    def restore(cls, direction: str, fill_price: float, entry_atr: float, rm: dict,
+                *, hw: float, stop: float) -> "RatchetState":
+        """Rebuild live ratchet state from persisted fields (H2) — risk_pts is
+        re-derived deterministically from entry_atr+rm; hw/stop resume where they left
+        off, so a restart continues the exact same ratchet (never re-derives the stop)."""
+        rs = cls(direction, fill_price, entry_atr, rm)
+        rs.hw = float(hw)
+        rs.stop = float(stop)
+        return rs
+
     def update(self, high: float, low: float, close: float,
                current_atr: float) -> None:
         ext = high if self.d > 0 else low
