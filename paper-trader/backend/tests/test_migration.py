@@ -29,6 +29,11 @@ def test_migration_adds_missing_columns(tmp_path, monkeypatch):
             "clamped", "open_at_end", "win_rate_realised", "return_pct_realised",
             "bh_return_pct", "worst_trade_pnl", "sharpe", "worst_mae_pct",
             "bh_curve_json"} <= bt
+    # synthetic-premium backtest (audit C6) columns must be added in place too
+    assert {"premium_trades", "premium_win_rate", "premium_net_pnl",
+            "premium_return_pct", "premium_profit_factor", "premium_max_drawdown_pct",
+            "premium_expectancy", "premium_charges", "premium_trades_json",
+            "premium_error"} <= bt
 
     # existing data preserved + idempotent (second run must not raise)
     with eng.begin() as c:

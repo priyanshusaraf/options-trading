@@ -347,6 +347,19 @@ class BacktestResult(Base):
     bh_curve_json: Mapped[str] = mapped_column(Text, default="[]")  # buy-and-hold overlay
     trades_json: Mapped[str] = mapped_column(Text, default="[]")    # trade list (drill-down)
     error: Mapped[str] = mapped_column(String(400), default="")
+    # synthetic-premium backtest (audit C6) — a Black-Scholes-on-realised-vol
+    # premium path computed alongside the spot cell above. A premium-side bug
+    # never kills the spot result: it lands in premium_error instead.
+    premium_trades: Mapped[int] = mapped_column(Integer, default=0)
+    premium_win_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_profit_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    premium_max_drawdown_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_expectancy: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_charges: Mapped[float] = mapped_column(Float, default=0.0)
+    premium_trades_json: Mapped[str] = mapped_column(Text, default="[]")
+    premium_error: Mapped[str] = mapped_column(String(200), default="")
     # reusable-cache metadata (content-addressed reuse across runs)
     params_hash: Mapped[str] = mapped_column(String(64), default="")
     last_candle_ts: Mapped[int] = mapped_column(Integer, default=0)
@@ -392,6 +405,17 @@ class BacktestResult(Base):
             "bars": self.bars,
             "from_cache": self.from_cache,
             "error": self.error,
+            # synthetic-premium backtest (audit C6)
+            "premium_trades": self.premium_trades,
+            "premium_win_rate": round(self.premium_win_rate, 1),
+            "premium_net_pnl": round(self.premium_net_pnl, 0),
+            "premium_return_pct": round(self.premium_return_pct, 1),
+            "premium_profit_factor": (round(self.premium_profit_factor, 3)
+                                      if self.premium_profit_factor is not None else None),
+            "premium_max_drawdown_pct": round(self.premium_max_drawdown_pct, 1),
+            "premium_expectancy": round(self.premium_expectancy, 0),
+            "premium_charges": round(self.premium_charges, 0),
+            "premium_error": self.premium_error,
         }
 
 

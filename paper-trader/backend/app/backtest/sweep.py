@@ -13,6 +13,8 @@ import json
 import threading
 
 from app.backtest.engine import backtest_charge_segment, simulate
+from app.backtest.metrics import BTMetrics
+from app.backtest.premium import simulate_premium
 from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
@@ -248,10 +250,25 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
             return
     trades, m = simulate(candles, inst, interval, capital=capital,
                          strategy=strat, params=dict(strat.default_params))
+    # synthetic-premium backtest (audit C6) — runs alongside the spot cell above.
+    # A premium-side bug must NEVER kill the spot result: any exception here is
+    # caught and surfaced as premium_error instead of aborting the sweep.
+    if not getattr(inst, "has_options", True):
+        p_trades, p_metrics, premium_error = [], BTMetrics(), \
+            "instrument has no listed options (has_options=False)"
+    else:
+        try:
+            p_trades, p_metrics = simulate_premium(
+                candles, inst, interval, strategy=strat,
+                params=dict(strat.default_params), capital=capital)
+            premium_error = ""
+        except Exception as e:
+            p_trades, p_metrics, premium_error = [], BTMetrics(), str(e)
     _store(run_id, inst, interval, m, trades, len(candles), strategy_key=strat.key,
            params_hash=phash, last_candle_ts=last_ts,
            first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
-           clamped=clamped)
+           clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
+           premium_error=premium_error)
 
 
 def _supports_end(provider) -> bool:
@@ -287,13 +304,20 @@ def _copy_from_cache(session, run_id, src) -> None:
         effective_days=src.effective_days, clamped=src.clamped,
         bars=src.bars, curve_json=src.curve_json, trades_json=src.trades_json,
         params_hash=src.params_hash, last_candle_ts=src.last_candle_ts,
-        schema_version=src.schema_version, from_cache=True, computed_at=dt.datetime.now()))
+        schema_version=src.schema_version, from_cache=True, computed_at=dt.datetime.now(),
+        premium_trades=src.premium_trades, premium_win_rate=src.premium_win_rate,
+        premium_net_pnl=src.premium_net_pnl, premium_return_pct=src.premium_return_pct,
+        premium_profit_factor=src.premium_profit_factor,
+        premium_max_drawdown_pct=src.premium_max_drawdown_pct,
+        premium_expectancy=src.premium_expectancy, premium_charges=src.premium_charges,
+        premium_trades_json=src.premium_trades_json, premium_error=src.premium_error))
     session.commit()
 
 
 def _store(run_id, inst, interval, m, trades, bars, error="",
            params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
-           effective_days=0, clamped=False, strategy_key="trend_impulse_v3") -> None:
+           effective_days=0, clamped=False, strategy_key="trend_impulse_v3",
+           premium_trades=None, premium_metrics=None, premium_error="") -> None:
     import datetime as dt
     from app.backtest import cache
     seg = backtest_charge_segment(inst)
@@ -304,9 +328,19 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
                   effective_days=effective_days, clamped=clamped,
                   schema_version=cache.SCHEMA_VERSION, from_cache=False,
                   computed_at=dt.datetime.now())
+    pm = premium_metrics if premium_metrics is not None else BTMetrics()
+    ptrades = premium_trades or []
+    premium_common = dict(
+        premium_trades=pm.trades, premium_win_rate=pm.win_rate,
+        premium_net_pnl=pm.net_pnl, premium_return_pct=pm.return_pct,
+        premium_profit_factor=pm.profit_factor,
+        premium_max_drawdown_pct=pm.max_drawdown_pct,
+        premium_expectancy=pm.expectancy, premium_charges=pm.charges,
+        premium_trades_json=json.dumps([t.to_dict() for t in ptrades]),
+        premium_error=premium_error)
     with SessionLocal() as s:
         if m is None:
-            s.add(BacktestResult(error=error, **common))
+            s.add(BacktestResult(error=error, **premium_common, **common))
         else:
             s.add(BacktestResult(
                 trades=m.trades, wins=m.wins, win_rate=m.win_rate,
@@ -323,7 +357,7 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
                 worst_mae_pct=m.worst_mae_pct,
                 curve_json=json.dumps(m.equity_curve),
                 trades_json=json.dumps([t.to_dict() for t in trades]),
-                bh_curve_json=json.dumps(m.bh_curve), **common))
+                bh_curve_json=json.dumps(m.bh_curve), **premium_common, **common))
         s.commit()
 
 

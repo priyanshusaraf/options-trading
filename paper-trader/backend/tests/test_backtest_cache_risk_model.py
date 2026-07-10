@@ -15,8 +15,9 @@ def _strat(rm):
                            default_params={"ema_length": 50}, risk_model=rm)
 
 
-def test_schema_version_is_6():
-    assert SCHEMA_VERSION == 6
+def test_schema_version_is_7():
+    # bumped for the synthetic-premium backtest (audit C6) — see cache.py's v7 note
+    assert SCHEMA_VERSION == 7
 
 
 def test_risk_model_changes_signature():

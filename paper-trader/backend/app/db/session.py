@@ -177,6 +177,19 @@ def _migrate_schema() -> None:
             ("clamped", "BOOLEAN DEFAULT 0"),
             ("bh_curve_json", "TEXT DEFAULT '[]'"),
             ("strategy_key", "VARCHAR(64) DEFAULT 'trend_impulse_v3'"),
+            # synthetic-premium backtest (audit C6) — Black-Scholes-on-realised-vol
+            # premium path, computed alongside the spot cell so a premium bug never
+            # kills the underlying result.
+            ("premium_trades", "INTEGER DEFAULT 0"),
+            ("premium_win_rate", "FLOAT DEFAULT 0.0"),
+            ("premium_net_pnl", "FLOAT DEFAULT 0.0"),
+            ("premium_return_pct", "FLOAT DEFAULT 0.0"),
+            ("premium_profit_factor", "FLOAT"),
+            ("premium_max_drawdown_pct", "FLOAT DEFAULT 0.0"),
+            ("premium_expectancy", "FLOAT DEFAULT 0.0"),
+            ("premium_charges", "FLOAT DEFAULT 0.0"),
+            ("premium_trades_json", "TEXT DEFAULT '[]'"),
+            ("premium_error", "VARCHAR(200) DEFAULT ''"),
         ],
         "backtest_runs": [
             ("window", "VARCHAR(64) DEFAULT ''"),
