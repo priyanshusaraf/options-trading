@@ -1,0 +1,187 @@
+//@version=5
+// =====================================================================
+// Pullback EMA V1 — buy value inside the trend (manufacturing / capex)
+// =====================================================================
+// WHY THIS EXISTS (2026-07 sector autopsy)
+//   Manufacturing (defence, railways, EMS, capex) was already a TOP sector for
+//   the V3 displacement entry (+12.5% median, RVNL/BDL/COCHINSHIP/BHEL/ABB in
+//   the top-20). But V3 pays a stretch premium: it buys at +1σ displacement,
+//   bleeds in the opening hour (−11.5 bps bucket), and its winners' median MAE
+//   is ~0.4% — meaning good trends usually RETURN TO THE MEAN before running.
+//   This strategy enters at that return instead:
+//
+//     same EMA, same z, same slope — but BUY THE TOUCH, SELL THE STRETCH.
+//
+//   ENTRY  : trend up (slope > 0) and z crosses UP through pullbackZ (default
+//            0.0 = price reclaims its EMA50 from below, inside an uptrend).
+//   EXIT   : z ≥ takeZ (default +1.5 — sell into the displacement V3 buys),
+//            or slope flips (trend over), or z ≤ panicZ (pullback became
+//            breakdown), or the optional ATR initial stop.
+//   Shorts : exact mirror, toggleable (default ON; turn OFF for structurally
+//            drifting-up names).
+//
+//   It is the natural COMPLEMENT to V3 on the same instruments (different
+//   entry location, opposite exit direction), and the intended default for
+//   high-drift / low-jump names flagged by the regime router.
+//
+// CHART: 15m/30m for the intraday flow sectors; also valid on daily.
+//
+// PINE -> PYTHON PARITY (registry module `pullback_ema_v1`)
+//   z        = (close − EMA50) / stdev(close, 50)   — V3's raw-close z, NOT
+//              V4's residual z (population stdev, ddof=0).
+//   longEntry  := slope>0 and ta.crossover(z, pullbackZ)
+//   longExit   := z ≥ takeZ  or slope<0  or z ≤ panicZ
+//   shortEntry := slope<0 and ta.crossunder(z, −pullbackZ)
+//   shortExit  := z ≤ −takeZ or slope>0  or z ≥ −panicZ
+//   ATR stop stays in the ENGINE's risk layer when ported (here it exists so
+//   TradingView results aren't flattered by unbounded adverse excursion).
+//
+// EXECUTION MODEL: house standard — confirmed-bar signals, next-bar-open
+//   fills, no lookahead. SIZING: fixed contracts (engine 1-lot lockstep).
+// =====================================================================
+
+strategy(
+     "Pullback EMA V1",
+     overlay=true,
+     initial_capital=100000,
+     pyramiding=0,
+     process_orders_on_close=false,
+     calc_on_order_fills=false,
+     calc_on_every_tick=false)
+
+// =====================================================
+// Inputs
+// =====================================================
+emaLength     = input.int(50, "EMA Length",         minval=1, group="Core")
+zLength       = input.int(50, "Z-Score Length",     minval=5, group="Core")
+slopeLookback = input.int(5,  "EMA Slope Lookback", minval=1, group="Core")
+
+pullbackZ = input.float(0.0,  "Pullback Entry Z", minval=-1.0, maxval=0.5, step=0.05, group="Levels",
+     tooltip="Z level whose upward cross (in an uptrend) triggers entry. 0.0 = EMA reclaim; negative = demand a deeper dip.")
+takeZ     = input.float(1.5,  "Take-Strength Exit Z", minval=0.5, step=0.1, group="Levels",
+     tooltip="Sell when displacement reaches this — the stretch V3 would be BUYING.")
+panicZ    = input.float(-1.25, "Breakdown Exit Z", maxval=0.0, step=0.05, group="Levels",
+     tooltip="Long-side invalidation: the pullback kept going. (Mirrored for shorts.)")
+
+enableLongs  = input.bool(true, "Enable Long Entries",  group="Sides")
+enableShorts = input.bool(true, "Enable Short Entries", group="Sides")
+
+blockOpen  = input.bool(true, "Block Entries: Opening Window", group="Session Filter",
+     tooltip="First-hour entries were negative in every sector of the 2026 autopsy. Exits are never blocked.")
+openWindow = input.session("0915-1015", "Opening Blackout (exchange time)", group="Session Filter")
+
+useATRStop = input.bool(true, "Use Initial ATR Stop", group="Risk",
+     tooltip="Entries at the mean have no displacement cushion, so a hard invalidation is default-ON here (unlike V3.1). The engine's risk layer owns this once ported.")
+atrLength  = input.int(14,    "ATR Length",           minval=1,               group="Risk")
+stopATR    = input.float(2.0, "Initial Stop (ATR units)", minval=0.5, step=0.25, group="Risk")
+
+fixedQty = input.float(1.0, "Contracts / Lots", minval=0.01, step=0.01, group="Sizing")
+
+// =====================================================
+// Core math (V3's raw-close z — see parity notes)
+// =====================================================
+ema = ta.ema(close, emaLength)
+sd  = ta.stdev(close, zLength)
+z   = sd > 0 ? (close - ema) / sd : 0.0
+slope = ema - ema[slopeLookback]
+atr = ta.atr(atrLength)
+
+bull = slope > 0
+bear = slope < 0
+
+inSess(sess) =>
+     not na(time(timeframe.period, sess + ":1234567"))
+entryBlocked = blockOpen and inSess(openWindow)
+
+longSignal =
+     barstate.isconfirmed and
+     enableLongs and
+     not entryBlocked and
+     strategy.position_size <= 0 and
+     bull and
+     ta.crossover(z, pullbackZ)
+
+shortSignal =
+     barstate.isconfirmed and
+     enableShorts and
+     not entryBlocked and
+     strategy.position_size >= 0 and
+     bear and
+     ta.crossunder(z, -pullbackZ)
+
+// =====================================================
+// Entries (fill next bar open)
+// =====================================================
+if longSignal
+    strategy.close("Short", comment="Close Short For Long Signal")
+    strategy.entry("Long", strategy.long, qty=fixedQty, comment="Pullback Long")
+
+if shortSignal
+    strategy.close("Long", comment="Close Long For Short Signal")
+    strategy.entry("Short", strategy.short, qty=fixedQty, comment="Pullback Short")
+
+// =====================================================
+// Trade state — initial stop only (no trail: takeZ is the profit exit)
+// =====================================================
+var float stopL = na
+var float stopS = na
+var int   entryBar = na
+
+newLong  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+newShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+
+if newLong
+    entryBar := bar_index
+    stopL := strategy.position_avg_price - stopATR * atr
+    stopS := na
+
+if newShort
+    entryBar := bar_index
+    stopS := strategy.position_avg_price + stopATR * atr
+    stopL := na
+
+if strategy.position_size == 0
+    entryBar := na
+    stopL := na
+    stopS := na
+
+canManageL = strategy.position_size > 0 and not na(entryBar) and bar_index > entryBar
+canManageS = strategy.position_size < 0 and not na(entryBar) and bar_index > entryBar
+
+// =====================================================
+// Close-confirmed exits, filled next bar open
+// =====================================================
+longExit =
+     barstate.isconfirmed and canManageL and (
+         z >= takeZ or
+         bear or
+         z <= panicZ or
+         (useATRStop and not na(stopL) and close <= stopL))
+
+shortExit =
+     barstate.isconfirmed and canManageS and (
+         z <= -takeZ or
+         bull or
+         z >= -panicZ or
+         (useATRStop and not na(stopS) and close >= stopS))
+
+if longExit
+    strategy.close("Long", comment=z >= takeZ ? "Take Strength" : bear ? "Trend Flip" : "Invalidated")
+
+if shortExit
+    strategy.close("Short", comment=z <= -takeZ ? "Take Strength" : bull ? "Trend Flip" : "Invalidated")
+
+// =====================================================
+// Visuals
+// =====================================================
+plot(ema, title="EMA", color=color.orange, linewidth=2)
+plot(useATRStop ? stopL : na, title="Long Stop",  color=color.red, linewidth=1, style=plot.style_linebr)
+plot(useATRStop ? stopS : na, title="Short Stop", color=color.red, linewidth=1, style=plot.style_linebr)
+
+plotshape(longSignal,  title="Pullback Long",  location=location.belowbar, style=shape.triangleup,   size=size.tiny, color=color.green)
+plotshape(shortSignal, title="Pullback Short", location=location.abovebar, style=shape.triangledown, size=size.tiny, color=color.red)
+
+bgcolor(entryBlocked and timeframe.isintraday ? color.new(color.gray, 92) : na, title="Entry Blackout Shading")
+
+plot(z,     title="Z-Score",   color=color.blue, display=display.none)
+plot(slope, title="EMA Slope", color=color.gray, display=display.none)

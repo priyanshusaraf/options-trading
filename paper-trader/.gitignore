@@ -10,6 +10,11 @@ __pycache__/
 *.db-shm
 backend/access_token.json
 backend/.env
+backend/predrop-*.sql          # live-ledger recovery dumps — real trades, never commit
+backend/*-ledger-*.sql
+
+# local tooling scratch (spec-driven-dev progress, not source)
+.superpowers/
 
 # node / build
 frontend/node_modules/

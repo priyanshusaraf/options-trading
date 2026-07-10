@@ -1,0 +1,152 @@
+//@version=5
+// =====================================================================
+// Pair Z V1 — sector-sibling spread mean-reversion (PHARMA / IT natural fit)
+// =====================================================================
+// WHY THIS EXISTS (2026-07 sector autopsy)
+//   Pharma killed the trend strategies precisely BECAUSE it mean-reverts
+//   intraday and disperses cross-sectionally (LUPIN −50.8% strategy return
+//   while LAURUSLABS +23.4% in the SAME window; sector index churned while
+//   singles jumped on idiosyncratic FDA/tariff news). Dispersion + reversion
+//   is exactly the raw material for a PAIRS trade. Same z-score machinery the
+//   platform already trusts — applied to a SPREAD instead of a price:
+//
+//     spread = ln(chartClose / refClose)
+//     z      = (spread − SMA(spread, n)) / stdev(spread, n)
+//
+//   ENTRY : z crosses DOWN through −entryZ  → chart leg is CHEAP vs sibling
+//           → LONG the chart symbol   (platform: + SHORT the reference leg)
+//           z crosses UP through +entryZ    → SHORT the chart symbol
+//   EXIT  : z returns to 0 (mean), or |z| ≥ stopZ (relationship broke), or
+//           optional time stop.
+//
+// ⚠️ WHAT TRADINGVIEW CAN AND CANNOT VERIFY HERE
+//   A real pairs position is TWO legs (market-neutral). A TV strategy trades
+//   ONE symbol. This script therefore verifies the SIGNAL — does the spread
+//   z mean-revert profitably on the chart leg? — while showing the spread
+//   itself in the pane. Expect the platform's two-leg version to be smoother
+//   (the hedge removes the sector-direction lottery, which is the point).
+//   Backtest BOTH orientations (chart A vs ref B, then chart B vs ref A).
+//
+// SUGGESTED PAIRS (2025-26 liquid F&O siblings):
+//   SUNPHARMA/CIPLA, DRREDDY/AUROPHARMA, LUPIN/ZYDUSLIFE (pharma)
+//   TCS/INFY, HCLTECH/TECHM (IT) — IT was also a losing trend sector.
+//
+// CHART: daily or 60m+. Spread half-lives at 15m are shorter than Indian
+//   single-stock friction; verify coarse first.
+//
+// REPAINT NOTE: request.security on the SAME timeframe, lookahead OFF, and
+//   all signals gated on barstate.isconfirmed ⇒ no historical repaint. The
+//   live bar can tick until confirmed, like any confirmed-bar strategy.
+//
+// PORTING NOTES (registry module `pair_z_v1`)
+//   Needs the platform's first TWO-LEG position type (the biggest lift and
+//   the biggest diversification payoff — its P&L is uncorrelated with every
+//   trend module). Engine executes both legs; z math identical to here.
+// =====================================================================
+
+strategy(
+     "Pair Z V1 (spread mean-reversion)",
+     overlay=false,
+     initial_capital=100000,
+     pyramiding=0,
+     process_orders_on_close=false,
+     calc_on_order_fills=false,
+     calc_on_every_tick=false)
+
+// =====================================================
+// Inputs
+// =====================================================
+refSymbol = input.symbol("NSE:SUNPHARMA", "Reference Leg (the sibling)", group="Pair",
+     tooltip="Open the chart on leg A; set this to leg B. LONG signals mean A is cheap vs B.")
+zLen   = input.int(50, "Spread Z Length", minval=10, group="Pair")
+
+entryZ = input.float(2.0, "Entry |Z|", minval=0.5, step=0.1, group="Levels")
+meanZ  = input.float(0.0, "Mean-Reversion Exit Z", step=0.1, group="Levels")
+stopZ  = input.float(3.0, "Divergence Stop |Z|", minval=1.0, step=0.1, group="Levels",
+     tooltip="If the spread stretches this far, the relationship has broken — take the loss.")
+maxHold = input.int(0, "Time Stop (bars, 0 = off)", minval=0, group="Levels")
+
+enableLongs  = input.bool(true, "Enable Long-Chart-Leg Entries",  group="Sides")
+enableShorts = input.bool(true, "Enable Short-Chart-Leg Entries", group="Sides")
+
+fixedQty = input.float(1.0, "Contracts / Lots", minval=0.01, step=0.01, group="Sizing")
+
+// =====================================================
+// Spread z-score
+// =====================================================
+refClose = request.security(refSymbol, timeframe.period, close,
+     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+spread = refClose > 0 and close > 0 ? math.log(close / refClose) : na
+spreadMean = ta.sma(spread, zLen)
+spreadSd   = ta.stdev(spread, zLen)
+z = not na(spread) and spreadSd > 0 ? (spread - spreadMean) / spreadSd : na
+
+// =====================================================
+// Signals (confirmed bars, fill next bar open)
+// =====================================================
+longSignal =
+     barstate.isconfirmed and
+     enableLongs and
+     strategy.position_size == 0 and
+     not na(z) and
+     ta.crossunder(z, -entryZ)          // chart leg cheap vs sibling
+
+shortSignal =
+     barstate.isconfirmed and
+     enableShorts and
+     strategy.position_size == 0 and
+     not na(z) and
+     ta.crossover(z, entryZ)            // chart leg rich vs sibling
+
+if longSignal
+    strategy.entry("Long", strategy.long, qty=fixedQty, comment="Spread Cheap")
+
+if shortSignal
+    strategy.entry("Short", strategy.short, qty=fixedQty, comment="Spread Rich")
+
+// =====================================================
+// Exits
+// =====================================================
+var int entryBar = na
+newPos = strategy.position_size != 0 and strategy.position_size[1] == 0
+if newPos
+    entryBar := bar_index
+if strategy.position_size == 0
+    entryBar := na
+
+canManage = strategy.position_size != 0 and not na(entryBar) and bar_index > entryBar
+barsHeld  = na(entryBar) ? 0 : bar_index - entryBar
+timeUp    = maxHold > 0 and barsHeld >= maxHold
+
+longExit =
+     barstate.isconfirmed and canManage and strategy.position_size > 0 and
+     (z >= meanZ or z <= -stopZ or timeUp)
+
+shortExit =
+     barstate.isconfirmed and canManage and strategy.position_size < 0 and
+     (z <= meanZ or z >= stopZ or timeUp)
+
+if longExit
+    strategy.close("Long", comment=z >= meanZ ? "Mean Reached" : timeUp ? "Time Stop" : "Diverged")
+
+if shortExit
+    strategy.close("Short", comment=z <= meanZ ? "Mean Reached" : timeUp ? "Time Stop" : "Diverged")
+
+// =====================================================
+// Visuals (pane): the spread z with entry/stop bands
+// =====================================================
+plot(z, title="Spread Z", color=color.blue, linewidth=2)
+
+hEntryU = hline(entryZ,   "Entry +Z",  color=color.red,   linestyle=hline.style_dashed)
+hEntryL = hline(-entryZ,  "Entry −Z",  color=color.green, linestyle=hline.style_dashed)
+hline(meanZ, "Mean", color=color.gray)
+hStopU  = hline(stopZ,    "Stop +Z",   color=color.maroon, linestyle=hline.style_dotted)
+hStopL  = hline(-stopZ,   "Stop −Z",   color=color.maroon, linestyle=hline.style_dotted)
+fill(hEntryU, hStopU, color=color.new(color.red, 90),   title="Short Zone")
+fill(hEntryL, hStopL, color=color.new(color.green, 90), title="Long Zone")
+
+plotshape(longSignal,  title="Long Chart Leg",  location=location.bottom, style=shape.triangleup,   size=size.tiny, color=color.green)
+plotshape(shortSignal, title="Short Chart Leg", location=location.top,    style=shape.triangledown, size=size.tiny, color=color.red)
+
+plot(spread, title="Log Spread", color=color.purple, display=display.none)

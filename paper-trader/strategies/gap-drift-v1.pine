@@ -1,0 +1,195 @@
+//@version=5
+// =====================================================================
+// Gap Drift V1 — post-event continuation for overnight-gap sectors (PHARMA)
+// =====================================================================
+// WHY THIS EXISTS (2026-07 sector autopsy)
+//   Pharma was the worst major sector for displacement-following intraday
+//   (median −11.7% over 197 days, PF 0.66, shorts −27.7 bps/trade) because its
+//   information arrives as OVERNIGHT gaps (US tariff/FDA news lands outside
+//   IST hours: Apr 3 '25 +5% gap, Sep 26 '25 −2.5%, Feb 3 '26 +3%, Apr 2 '26
+//   Section-232 exemption → weeks-long relief drift to record highs Jul '26).
+//   The intraday z-score can only chase a move that already completed.
+//   BUT the sector was profitable on multi-year DAILY bars (median PF 1.20) —
+//   the edge lives at the horizon where the news arcs resolve.
+//
+//   So: stop predicting the gap, TRADE THE DRIFT AFTER IT. Classic
+//   post-announcement drift, reduced to two numbers:
+//     gap size in ATR units  +  did day 1 endorse the gap (close > open)?
+//
+// CHART: DAILY bars. Long-only by default (pharma short cell was the single
+//   worst directional cell in the entire book — enable shorts consciously).
+//
+// ENTRY (signal on confirmed daily bar, fill next day's open):
+//   gap      = open − close[1]  >  gapATR × ATR14[1]     (yesterday's ATR)
+//   endorsed = close > open                              (gap HELD, no fade)
+//   → long at next open. The platform version enters at 10:15 IST instead of
+//     the open (first-hour entries were negative everywhere in the autopsy);
+//     TV cannot express that on daily bars — expect the engine port to do
+//     slightly better than this script on the same signals.
+//
+// EXITS (risk-owned, not signal-owned — this strategy has no natural
+//   displacement exit, so the risk block IS core, not optional):
+//   1. Initial stop:      entry − initATR × ATR(at entry)
+//   2. Chandelier ratchet: highest-high-since-entry − trailATR × ATR
+//   3. Gap-fill failsafe:  close back below the SIGNAL DAY's open ⇒ the
+//      market rejected the event; thesis dead (default ON)
+//   4. Time stop:          maxHold sessions after entry (drift decays; the
+//      2026 pharma relief-drifts ran ~2–8 sessions)
+//   Stops only ratchet in your favour (house convention).
+//
+// EXECUTION MODEL: house standard — barstate.isconfirmed signals,
+//   process_orders_on_close=false ⇒ next-bar-open fills, no lookahead.
+// SIZING: fixed contracts (1 lot) — engine lockstep.
+//
+// PORTING NOTES (registry module `gap_drift_v1`):
+//   longEntry  := gap-up ≥ gapATR×ATR[1]  and close>open      (daily bars)
+//   longExit   := any of exits 1–4 (engine risk layer owns 1–2 natively;
+//                 3–4 are strategy flags: `gap_fill_exit`, `time_exit`)
+//   shortEntry := mirror, behind an off-by-default param.
+// =====================================================================
+
+strategy(
+     "Gap Drift V1",
+     overlay=true,
+     initial_capital=100000,
+     pyramiding=0,
+     process_orders_on_close=false,
+     calc_on_order_fills=false,
+     calc_on_every_tick=false)
+
+// =====================================================
+// Inputs
+// =====================================================
+atrLength = input.int(14,    "ATR Length",                    minval=1,               group="Signal")
+gapATR    = input.float(1.25, "Min Gap (ATR units)",          minval=0.25, step=0.25, group="Signal",
+     tooltip="Gap between today's open and yesterday's close, in units of yesterday's ATR.")
+maxGapATR = input.float(99.0, "Max Gap (ATR units, blow-off guard)", minval=1.0, step=0.5, group="Signal",
+     tooltip="Skip freak gaps above this size. 99 = effectively off (uncalibrated — tune in TV before trusting).")
+
+enableLongs  = input.bool(true,  "Enable Long Entries (gap-up drift)",    group="Sides")
+enableShorts = input.bool(false, "Enable Short Entries (gap-down drift)", group="Sides",
+     tooltip="OFF by default: pharma shorts were the worst directional cell in the 2026 autopsy (−27.7 bps/trade).")
+
+initATR    = input.float(1.50, "Initial Stop (ATR units)",     minval=0.25, step=0.25, group="Risk")
+trailATR   = input.float(2.50, "Chandelier Trail (ATR units)", minval=0.50, step=0.25, group="Risk")
+useGapFillExit = input.bool(true, "Exit If Signal-Day Open Is Lost (gap-fill failsafe)", group="Risk")
+maxHold    = input.int(10,   "Time Stop (sessions)",           minval=1,               group="Risk")
+
+fixedQty = input.float(1.0, "Contracts / Lots", minval=0.01, step=0.01, group="Sizing")
+
+// =====================================================
+// Signal
+// =====================================================
+atr = ta.atr(atrLength)
+
+gapPts     = open - close[1]                       // signed overnight gap
+gapUpOK    = gapPts >  gapATR * atr[1] and gapPts <  maxGapATR * atr[1]
+gapDownOK  = gapPts < -gapATR * atr[1] and gapPts > -maxGapATR * atr[1]
+
+longSignal =
+     barstate.isconfirmed and
+     enableLongs and
+     strategy.position_size == 0 and
+     gapUpOK and
+     close > open                                  // day 1 endorsed the gap
+
+shortSignal =
+     barstate.isconfirmed and
+     enableShorts and
+     strategy.position_size == 0 and
+     gapDownOK and
+     close < open
+
+// Remember the signal day's open — losing it later means the event failed.
+var float signalDayOpen = na
+if longSignal or shortSignal
+    signalDayOpen := open
+
+if longSignal
+    strategy.entry("Long", strategy.long, qty=fixedQty, comment="GapDrift Long")
+
+if shortSignal
+    strategy.entry("Short", strategy.short, qty=fixedQty, comment="GapDrift Short")
+
+// =====================================================
+// Trade state + ratchet stop (initial → chandelier, favour-only)
+// =====================================================
+var float entryATR = na
+var float hiSince  = na
+var float loSince  = na
+var int   entryBar = na
+var float stopL    = na
+var float stopS    = na
+
+newLong  = strategy.position_size > 0 and strategy.position_size[1] <= 0
+newShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+flat     = strategy.position_size == 0
+
+if newLong
+    entryATR := atr
+    entryBar := bar_index
+    hiSince  := strategy.position_avg_price
+    stopL    := strategy.position_avg_price - initATR * atr
+    stopS    := na
+    loSince  := na
+
+if newShort
+    entryATR := atr
+    entryBar := bar_index
+    loSince  := strategy.position_avg_price
+    stopS    := strategy.position_avg_price + initATR * atr
+    stopL    := na
+    hiSince  := na
+
+canManageL = strategy.position_size > 0 and not na(entryBar) and bar_index > entryBar
+canManageS = strategy.position_size < 0 and not na(entryBar) and bar_index > entryBar
+
+// No entry-bar MFE credit (house convention).
+if canManageL
+    hiSince := math.max(nz(hiSince, strategy.position_avg_price), high)
+    stopL   := math.max(stopL, hiSince - trailATR * atr)
+
+if canManageS
+    loSince := math.min(nz(loSince, strategy.position_avg_price), low)
+    stopS   := math.min(stopS, loSince + trailATR * atr)
+
+if flat
+    entryATR := na
+    hiSince  := na
+    loSince  := na
+    entryBar := na
+    stopL    := na
+    stopS    := na
+
+// =====================================================
+// Close-confirmed exits, filled next bar open
+// =====================================================
+barsHeld = na(entryBar) ? 0 : bar_index - entryBar
+
+longStopHit  = canManageL and not na(stopL) and close <= stopL
+shortStopHit = canManageS and not na(stopS) and close >= stopS
+
+longGapFail  = useGapFillExit and canManageL and not na(signalDayOpen) and close < signalDayOpen
+shortGapFail = useGapFillExit and canManageS and not na(signalDayOpen) and close > signalDayOpen
+
+timeUp = barsHeld >= maxHold
+
+longExit  = barstate.isconfirmed and canManageL and (longStopHit  or longGapFail  or timeUp)
+shortExit = barstate.isconfirmed and canManageS and (shortStopHit or shortGapFail or timeUp)
+
+if longExit
+    strategy.close("Long", comment=timeUp ? "Time Stop" : longGapFail ? "Gap Failed" : "Trail Stop")
+
+if shortExit
+    strategy.close("Short", comment=timeUp ? "Time Stop" : shortGapFail ? "Gap Failed" : "Trail Stop")
+
+// =====================================================
+// Visuals
+// =====================================================
+plot(stopL, title="Long Stop",  color=color.red, linewidth=1, style=plot.style_linebr)
+plot(stopS, title="Short Stop", color=color.red, linewidth=1, style=plot.style_linebr)
+
+plotshape(longSignal,  title="Gap-Up Signal",   location=location.belowbar, style=shape.triangleup,   size=size.tiny, color=color.green)
+plotshape(shortSignal, title="Gap-Down Signal", location=location.abovebar, style=shape.triangledown, size=size.tiny, color=color.red)
+
+plot(gapPts / math.max(atr[1], syminfo.mintick), title="Gap In ATR Units", color=color.purple, display=display.none)
