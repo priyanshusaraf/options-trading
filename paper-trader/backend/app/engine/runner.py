@@ -37,6 +37,7 @@ from app.engine.charges import compute_charges
 from app.engine.equity_entry import (
     IntradayCandidate, equity_exit, select_intraday_entries)
 from app.engine.execution_policy import plan_order
+from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
 from app.core.market_hours import ist_epoch
@@ -315,6 +316,57 @@ class EngineRunner:
                 "strategy": strat.key,
                 "priority_flag": self.priority_flags.get(key, False),
             }
+            # H2 — ratchet management for strategies that declare a risk_model: stash the
+            # latest completed-bar ATR (for seeding a new entry) and, for a held
+            # ratchet-managed position, advance its spot ratchet + flag a close-confirmed hit.
+            rm = getattr(strat, "risk_model", None)
+            if rm:
+                try:
+                    atr_ser = wilder_atr(_to_df(candles), int(rm["atr_length"]))
+                    last_atr = float(atr_ser.iloc[-1]) if len(atr_ser) else float("nan")
+                    self.state[key]["_ratchet_atr"] = last_atr if last_atr == last_atr else None
+                    if held is not None and held.entry_atr is not None:
+                        self.state[key]["ratchet_exit"] = self._apply_ratchet(held, candles, rm)
+                except Exception as e:
+                    log.error(f"ratchet update failed: {e}", instrument=key)
+
+    def _apply_ratchet(self, pos, candles, rm) -> bool:
+        """H2 — drive the backtest-validated RatchetState on the underlying's COMPLETED
+        candles for a ratchet-managed options position, persisting hw/spot_stop and
+        advancing ratchet_last_bar_ts (so a bar is never consumed twice). Manages bars
+        strictly after the fill bar (Pine canManage). Returns True if the spot stop is
+        close-confirmed hit — the risk loop consumes it as a RATCHET_STOP exit."""
+        if pos.entry_atr is None or not candles:
+            return False
+        atr = wilder_atr(_to_df(candles), int(rm["atr_length"]))
+        rs = RatchetState.restore(
+            pos.direction, pos.entry_spot, pos.entry_atr, rm,
+            hw=pos.ratchet_hw if pos.ratchet_hw is not None else pos.entry_spot,
+            stop=pos.spot_stop if pos.spot_stop is not None else pos.entry_spot)
+        for i, c in enumerate(candles):
+            if c.ts <= pos.entry_time:
+                continue   # no management on/before the fill bar
+            if pos.ratchet_last_bar_ts is not None and c.ts <= pos.ratchet_last_bar_ts:
+                continue   # already consumed on a prior scan
+            rs.update(c.high, c.low, c.close, float(atr.iloc[i]))
+            pos.ratchet_last_bar_ts = c.ts
+        pos.ratchet_hw = rs.hw
+        pos.spot_stop = rs.stop
+        self.broker.commit()
+        return rs.stop_hit(candles[-1].close)
+
+    def _seed_ratchet(self, pos, spot, rm, atr, strategy_key) -> None:
+        """H2 — freeze the entry ATR + seed the initial spot stop at fill, so scan_signals
+        can manage the position with the same ratchet the strategy was backtested with."""
+        if not rm or atr is None or atr <= 0:
+            return
+        d = 1.0 if pos.direction == "LONG" else -1.0
+        pos.strategy_key = strategy_key
+        pos.entry_atr = float(atr)
+        pos.ratchet_hw = float(spot)
+        pos.spot_stop = float(spot) - d * float(rm["initial_risk_atr"]) * float(atr)
+        pos.ratchet_last_bar_ts = pos.entry_time
+        self.broker.commit()
 
     def _generic_latest(self, sig) -> dict | None:
         """Strategy-agnostic 'latest bar' for non-default strategies — reads the
@@ -380,7 +432,8 @@ class EngineRunner:
                 should, reason = evaluate_exit(
                     pos.direction, pos.stop_price, pos.target_price, premium,
                     st.get("long_exit", False), st.get("short_exit", False),
-                    target_disabled=pos.no_take_profit)
+                    target_disabled=pos.no_take_profit,
+                    ratchet_exit=st.get("ratchet_exit", False))   # H2
                 if should:
                     trade = self.broker.close_position(pos, premium, reason, now, spot)
                     if trade is not None:
@@ -419,6 +472,12 @@ class EngineRunner:
         """Ratchet the premium stop upward as profit thresholds are crossed."""
         self.broker.ensure_stop_protection(pos, pos.last_premium)  # self-heal a missing backstop every tick
         p = self.params
+        # H2 — a ratchet-managed position (declared risk_model, entry_atr seeded) is
+        # governed by the backtest-validated spot ratchet in scan_signals, NOT this
+        # legacy percent-of-premium trail. The GTT stays parked at the initial premium
+        # stop as the disaster floor; the ratchet fires the primary exit.
+        if pos.entry_atr is not None:
+            return
         if not p.get("trail_enabled", True):
             return
         new_stop = trailing_stop(
@@ -735,6 +794,14 @@ class EngineRunner:
                                                 pick.reason, now, chain.spot, self.params, plan=plan)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
+                # H2 — seed the ratchet for a risk_model strategy so this position is
+                # managed by the backtest-validated ratchet, not the legacy premium trail.
+                strat_e = get_strategy(self.strategy_keys.get(c.instrument_key))
+                rm_e = getattr(strat_e, "risk_model", None)
+                if rm_e:
+                    self._seed_ratchet(pos, chain.spot, rm_e,
+                                       self.state.get(c.instrument_key, {}).get("_ratchet_atr"),
+                                       strat_e.key)
                 opened += 1
                 if self.params.get("notify_enabled", True):
                     self.notifier.opened(pos)

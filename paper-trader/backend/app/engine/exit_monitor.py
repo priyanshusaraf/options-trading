@@ -8,7 +8,7 @@ from __future__ import annotations
 
 def evaluate_exit(direction: str, stop_price: float, target_price: float,
                   current_premium: float, long_exit: bool, short_exit: bool,
-                  target_disabled: bool = False
+                  target_disabled: bool = False, ratchet_exit: bool = False
                   ) -> tuple[bool, str | None]:
     # protective premium guards first.
     # L13 — a non-positive premium is a missing / bad tick, not a tradeable price (an
@@ -22,6 +22,11 @@ def evaluate_exit(direction: str, stop_price: float, target_price: float,
     # floor (the trailing stop).
     if not target_disabled and current_premium >= target_price:
         return True, "TARGET"
+    # H2 — the backtest-validated ratchet on the underlying (bar-cadence, close-confirmed).
+    # After the premium disaster floor, before the strategy's own exit, matching the
+    # backtest exit priority (engine.simulate: ratchet checked before longExit/shortExit).
+    if ratchet_exit:
+        return True, "RATCHET_STOP"
     # then the strategy's own exit on the underlying
     if direction == "LONG" and long_exit:
         return True, "STRATEGY_EXIT"
