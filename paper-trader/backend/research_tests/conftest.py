@@ -46,6 +46,17 @@ def make_series(n=300):
     return out
 
 
+def make_uptrend(n=400):
+    """Deterministic strong uptrend with shallow periodic pullbacks — a series the
+    trend strategy actually qualifies on, so the qualify->optimize path is exercised."""
+    base = dt.datetime(2024, 1, 1, 9, 15)
+    out, px = [], 100.0
+    for i in range(n):
+        px += 2.5 if (i % 10) < 8 else -1.5
+        out.append(Candle(base + dt.timedelta(days=i), px - 0.5, px + 1.2, px - 1.2, px))
+    return out
+
+
 @pytest.fixture
 def fake_inst():
     return FakeInst()
@@ -59,6 +70,11 @@ def inst_factory():
 @pytest.fixture
 def candles_factory():
     return make_series
+
+
+@pytest.fixture
+def uptrend_factory():
+    return make_uptrend
 
 
 @pytest.fixture

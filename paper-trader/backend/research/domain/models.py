@@ -18,6 +18,7 @@ import datetime as dt
 
 from sqlalchemy import (
     DDL,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -123,6 +124,26 @@ class Finding(ResearchBase):
     superseded_by: Mapped[int | None] = mapped_column(
         ForeignKey("research_finding.id"), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class OptimizationTrial(ResearchBase):
+    """One parameterization evaluated on one walk-forward fold's in-sample window.
+    Immutable and append-only: this is the trial ledger the Deflated Sharpe deflation
+    counts over, so it must be a faithful, tamper-proof record of the search."""
+    __tablename__ = "research_optimization_trial"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("research_experiment_run.id"), index=True)
+    instrument_key: Mapped[str] = mapped_column(String(48), index=True)
+    fold_index: Mapped[int] = mapped_column(Integer)
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_objective: Mapped[float] = mapped_column(Float, default=0.0)  # in-sample objective
+    is_trades: Mapped[int] = mapped_column(Integer, default=0)
+    oos_trades: Mapped[int] = mapped_column(Integer, default=0)
+    selected: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+_make_immutable(OptimizationTrial.__table__)
 
 
 class PromotionCandidate(ResearchBase):

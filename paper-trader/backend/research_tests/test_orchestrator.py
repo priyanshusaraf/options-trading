@@ -96,3 +96,29 @@ def test_run_nightly_writes_report_files(research_session, inst_factory, candles
 def test_run_nightly_empty_plan_is_noop(research_session):
     from research.orchestrator.run import run_nightly
     assert run_nightly(research_session, source=None, plan=[]) == []
+
+
+def test_run_experiment_with_optimization_persists_immutable_trials(
+        research_session, inst_factory, uptrend_factory):
+    import pytest
+    from sqlalchemy.exc import DatabaseError
+
+    from research.domain.models import OptimizationTrial
+    from research.orchestrator.run import run_experiment
+    strat = kernels.get_strategy("trend_impulse_v3")
+    keys = ["UPA", "UPB"]
+    src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})
+    datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
+    run_experiment(research_session, program_name="Trend Following",
+                   hypothesis_statement="EMA trend persists in large-caps", strategy=strat,
+                   datasets=datasets, params=dict(strat.default_params), git_commit="deadbeef",
+                   seed=1, min_trades=1, n_folds=3, min_positive_fold_frac=0.0,
+                   optimize_search=True)
+    trials = research_session.query(OptimizationTrial).all()
+    assert len(trials) > 0
+    assert any(t.selected for t in trials)
+    # the trial ledger is immutable — tampering must abort
+    trials[0].is_objective = 999.0
+    with pytest.raises(DatabaseError):
+        research_session.commit()
+    research_session.rollback()

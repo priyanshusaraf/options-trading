@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 
 from research.data.store import materialize
@@ -23,14 +24,16 @@ from research.domain.models import (
     ExperimentSpec,
     Finding,
     Hypothesis,
+    OptimizationTrial,
     PromotionCandidate,
     ResearchProgram,
 )
 from research.evaluation import kernels
 from research.orchestrator.report import write_report
+from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
-from research.pipeline.validate import validate
+from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
 
 
@@ -66,7 +69,7 @@ def _confidence(trades: int) -> float:
 
 def run_experiment(session, *, program_name, hypothesis_statement, strategy, datasets,
                    params=None, git_commit="unknown", seed=0, min_trades=20, n_folds=4,
-                   min_positive_fold_frac=0.6, capital=50_000.0,
+                   min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
                    qualifier_version="q1", optimizer_version="none",
                    validator_version="v1", scoring_version="s1") -> dict:
     """`datasets` = list of (instrument, Dataset). Returns a report dict."""
@@ -79,6 +82,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         "strategy": strategy.key, "params": params, "interval": interval,
         "datasets": {ds.instrument_key: ds.content_hash for _, ds in datasets},
         "min_trades": min_trades, "n_folds": n_folds, "seed": seed,
+        "optimize_search": optimize_search,
         "versions": [qualifier_version, optimizer_version, validator_version, scoring_version],
     }
     sid = spec_hash(recipe)
@@ -114,11 +118,28 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                           f"({interval}): {ie.reason}"))
             continue
         qualified.append(ie.instrument_key)
-        v = validate(ds.candles, inst, strategy, params, n_folds=n_folds, capital=capital,
-                     min_oos_trades=min_trades, min_positive_fold_frac=min_positive_fold_frac,
-                     seed=seed)
-        if not v.passed:
-            failed = [g for g, r in v.gates.items() if not r["passed"]]
+        # Optimization runs ONLY here — after qualification — and always as nested
+        # walk-forward (search on each fold's IS, evaluate the winner on untouched OOS).
+        if optimize_search:
+            opt = optimize(ds.candles, inst, strategy, n_folds=n_folds, capital=capital)
+            for tr in opt.trials:
+                session.add(OptimizationTrial(
+                    run_id=run.id, instrument_key=ie.instrument_key, fold_index=tr.fold_index,
+                    params_json=json.dumps(tr.params),
+                    is_objective=(tr.is_objective if math.isfinite(tr.is_objective) else -1e12),
+                    is_trades=tr.is_trades, oos_trades=tr.oos_trades, selected=tr.selected))
+            gates = gates_from_folds(opt.per_fold_oos, min_oos_trades=min_trades,
+                                     min_positive_fold_frac=min_positive_fold_frac, seed=seed)
+            passed = gates_passed(gates)
+            score_metrics, n_trials = opt.oos_metrics, opt.n_trials
+        else:
+            v = validate(ds.candles, inst, strategy, params, n_folds=n_folds, capital=capital,
+                         min_oos_trades=min_trades, min_positive_fold_frac=min_positive_fold_frac,
+                         seed=seed)
+            gates, passed, score_metrics, n_trials = v.gates, v.passed, ie.metrics, 1
+
+        if not passed:
+            failed = [g for g, r in gates.items() if not r["passed"]]
             rejected.append({"instrument": ie.instrument_key,
                              "reason": f"failed validation: {', '.join(failed)}"})
             session.add(Finding(
@@ -127,9 +148,9 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 statement=f"{strategy.key} qualified but failed validation on "
                           f"{ie.instrument_key}: {', '.join(failed)}"))
             continue
-        sc = build_scorecard(ie.instrument_key, ie.metrics, n_trials=1)
+        sc = build_scorecard(ie.instrument_key, score_metrics, n_trials=n_trials)
         validated.append({"instrument": ie.instrument_key, "dsr": sc.dsr,
-                          "gates": v.gates, "scorecard": sc.components})
+                          "gates": gates, "scorecard": sc.components})
         session.add(Finding(
             hypothesis_id=hyp.id, polarity="positive", confidence=_confidence(ie.trades),
             evidence_run_id=run.id,
@@ -184,7 +205,8 @@ def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") 
             hypothesis_statement=item["hypothesis"], strategy=strat, datasets=datasets,
             params=item.get("params"), git_commit=git_commit, seed=item.get("seed", 0),
             min_trades=item.get("min_trades", 20), n_folds=item.get("n_folds", 4),
-            min_positive_fold_frac=item.get("min_positive_fold_frac", 0.6))
+            min_positive_fold_frac=item.get("min_positive_fold_frac", 0.6),
+            optimize_search=item.get("optimize_search", False))
         path = os.path.join(report_dir, f"report_run_{report['run_id']}.md")
         write_report(report, path)
         report["report_path"] = path

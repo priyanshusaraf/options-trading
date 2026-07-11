@@ -30,22 +30,34 @@ def slippage_stressed_nets(trades, *, slippage_bps: float, mult: float) -> list:
     return [t.net_pnl - cost(t) for t in trades]
 
 
-def validation_gates(wf, *, min_oos_trades: int = 20, min_positive_fold_frac: float = 0.6,
-                     slippage_bps: float = 5.0, slippage_mult: float = 2.0,
-                     seed: int = 0) -> dict:
-    pooled = [t for f in wf.folds for t in f.trades]
+def gates_from_folds(fold_trade_lists, *, min_oos_trades: int = 20,
+                     min_positive_fold_frac: float = 0.6, slippage_bps: float = 5.0,
+                     slippage_mult: float = 2.0, seed: int = 0) -> dict:
+    """The hard gate battery over a list of per-fold OOS trade lists. Shared by the
+    fixed-param walk-forward path and the nested-WF optimization path."""
+    pooled = [t for fold in fold_trade_lists for t in fold]
     pooled_net = [t.net_pnl for t in pooled]
+    traded = [fold for fold in fold_trade_lists if fold]
+    pos_frac = (sum(1 for fold in traded if sum(t.net_pnl for t in fold) > 0) / len(traded)
+                if traded else 0.0)
     stressed = slippage_stressed_nets(pooled, slippage_bps=slippage_bps, mult=slippage_mult)
     lb = bootstrap_mean_lower_bound(pooled_net, seed=seed) if pooled_net else 0.0
     stressed_mean = (sum(stressed) / len(stressed)) if stressed else 0.0
     return {
-        "min_oos_trades": {"passed": wf.total_oos_trades >= min_oos_trades,
-                           "value": wf.total_oos_trades},
-        "temporal_stability": {"passed": wf.positive_fold_fraction >= min_positive_fold_frac,
-                               "value": round(wf.positive_fold_fraction, 3)},
+        "min_oos_trades": {"passed": len(pooled) >= min_oos_trades, "value": len(pooled)},
+        "temporal_stability": {"passed": pos_frac >= min_positive_fold_frac,
+                               "value": round(pos_frac, 3)},
         "confident_edge": {"passed": lb > 0.0, "value": round(lb, 2)},
         "slippage_stress_2x": {"passed": stressed_mean > 0.0, "value": round(stressed_mean, 2)},
     }
+
+
+def validation_gates(wf, **kw) -> dict:
+    return gates_from_folds([f.trades for f in wf.folds], **kw)
+
+
+def gates_passed(gates: dict) -> bool:
+    return all(g["passed"] for g in gates.values())
 
 
 def validate(candles, inst, strategy, params, *, n_folds: int = 4,
