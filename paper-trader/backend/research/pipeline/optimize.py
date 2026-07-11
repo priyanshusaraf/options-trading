@@ -15,9 +15,15 @@ path-dependent EMA/ATR seeds.
 from __future__ import annotations
 
 import dataclasses
+import math
 
 from research.evaluation import kernels
 from research.strategy.spec import grid, is_valid, param_space
+
+# In-sample selection must reward a *repeatable* edge, not a lucky one. A candidate
+# with fewer than this many in-sample trades is not evidence of an edge, however
+# large its per-trade P&L, so it is never selected.
+_MIN_IS_TRADES = 5
 
 
 @dataclasses.dataclass
@@ -41,8 +47,19 @@ class OptimizationResult:
 
 
 def _objective(metrics) -> float:
-    """Rank in-sample candidates by expectancy; a candidate with no trades is worst."""
-    return metrics.expectancy if metrics.trades >= 1 else float("-inf")
+    """Rank in-sample candidates by a trade-count-aware t-statistic (per-trade Sharpe
+    · √n), NOT raw expectancy.
+
+    Raw expectancy (mean P&L per trade) rewards a single huge buy-and-hold winner over
+    a consistent many-trade edge — and that lone winner then completes no round-trip
+    inside a fold's out-of-sample window (0 OOS trades → the candidate spuriously fails
+    validation). The t-statistic instead asks "is this mean *reliably* positive?",
+    balancing edge size, consistency, and sample count. Candidates below the minimum
+    trade floor, or with undefined dispersion (a single trade), are worst."""
+    n = metrics.trades
+    if n < _MIN_IS_TRADES or metrics.consistency is None:
+        return float("-inf")
+    return metrics.consistency * math.sqrt(n)
 
 
 def _key(params: dict):

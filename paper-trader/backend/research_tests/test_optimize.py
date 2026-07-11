@@ -7,12 +7,42 @@ it); here we test the mechanics directly.
 from collections import defaultdict
 
 from research.evaluation import kernels
-from research.pipeline.optimize import OptimizationResult, optimize
+from research.pipeline.optimize import OptimizationResult, _objective, optimize
 from research.strategy.spec import grid, param_space
 
 
 def _strat():
     return kernels.get_strategy("trend_impulse_v3")
+
+
+class _M:
+    """Minimal BTMetrics stand-in for objective unit tests."""
+    def __init__(self, trades, expectancy, consistency):
+        self.trades = trades
+        self.expectancy = expectancy
+        self.consistency = consistency
+
+
+def test_objective_prefers_many_consistent_trades_over_one_big_trade():
+    # The bug: raw expectancy makes a single huge buy-and-hold win beat a real
+    # many-trade edge; that winner then completes 0 round-trips out-of-sample.
+    one_big = _M(trades=1, expectancy=500_000.0, consistency=None)
+    many_consistent = _M(trades=40, expectancy=1_500.0, consistency=0.5)
+    assert _objective(many_consistent) > _objective(one_big)
+
+
+def test_objective_excludes_too_few_trades():
+    # a lone trade (or a handful) is not evidence of an edge, however big
+    assert _objective(_M(trades=1, expectancy=1e9, consistency=None)) == float("-inf")
+    assert _objective(_M(trades=3, expectancy=1e9, consistency=2.0)) == float("-inf")
+
+
+def test_objective_is_a_trade_count_aware_t_stat():
+    base = _M(trades=40, expectancy=100, consistency=0.3)
+    more_consistent = _M(trades=40, expectancy=100, consistency=0.6)
+    more_trades = _M(trades=90, expectancy=100, consistency=0.3)
+    assert _objective(more_consistent) > _objective(base)   # higher per-trade Sharpe wins
+    assert _objective(more_trades) > _objective(base)        # more trades at same edge wins (√n)
 
 
 def test_optimize_records_every_trial_and_pools_oos(fake_inst, candles_factory):
