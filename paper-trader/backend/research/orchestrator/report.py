@@ -7,6 +7,25 @@ ones — that is the point.
 from __future__ import annotations
 
 
+def _render_explanation(ex: dict) -> list[str]:
+    """The 'how this strategy works' block — thesis + primitives + the numbered rules
+    with the live parameters, so a human can judge the logic, not just the score."""
+    lines = ["## How this strategy works",
+             f"**{ex.get('display_name', '')}** — `{ex.get('strategy_key', '')}`", "",
+             f"**Thesis:** {ex.get('thesis', '')}", ""]
+    prim = ex.get("primitives") or []
+    if prim:
+        lines += ["**Primitives:** " + " · ".join(prim), ""]
+    lines.append("**Logic (with this run's parameters):**")
+    lines += [f"{i}. {r}" for i, r in enumerate(ex.get("rules", []), 1)]
+    lines.append("")
+    if ex.get("note"):
+        lines += [f"> {ex['note']}", ""]
+    if ex.get("caveats"):
+        lines += [f"_Not modelled: {ex['caveats']}_", ""]
+    return lines
+
+
 def render_markdown(report: dict) -> str:
     lines: list[str] = []
     lines.append("# Research report")
@@ -18,6 +37,9 @@ def render_markdown(report: dict) -> str:
     lines.append(f"- **Decision:** {report.get('decision', '')}  ·  "
                  f"bars evaluated: {report.get('total_bars', 0)}")
     lines.append("")
+
+    if report.get("explanation"):
+        lines.extend(_render_explanation(report["explanation"]))
 
     validated = report.get("validated", [])
     lines.append(f"## Validated candidates ({len(validated)})")
