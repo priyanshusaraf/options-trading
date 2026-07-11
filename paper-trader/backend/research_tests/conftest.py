@@ -29,8 +29,10 @@ class FakeInst:
     lot_size = 1
     strike_step = 1.0
     has_options = False
-    key = "TEST"
-    name = "TEST"
+
+    def __init__(self, key="TEST"):
+        self.key = key
+        self.name = key
 
 
 def make_series(n=300):
@@ -47,6 +49,11 @@ def make_series(n=300):
 @pytest.fixture
 def fake_inst():
     return FakeInst()
+
+
+@pytest.fixture
+def inst_factory():
+    return FakeInst
 
 
 @pytest.fixture

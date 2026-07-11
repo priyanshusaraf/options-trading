@@ -6,6 +6,7 @@ Ratio (does the edge survive the number of trials that produced it?).
 from research.stats.dsr import deflated_sharpe, probabilistic_sharpe
 from research.stats.evidence import bootstrap_mean_lower_bound, min_evidence
 from research.stats.neff import effective_sample_size
+from research.stats.retest import retest_priority
 
 
 def test_neff_uncorrelated_equals_n():
@@ -58,3 +59,27 @@ def test_min_evidence_requires_enough_trades_and_confident_edge():
     assert min_evidence([3.0] * 60, min_trades=30, seed=1) is True
     assert min_evidence([3.0] * 10, min_trades=30, seed=1) is False       # too few trades
     assert min_evidence([10.0, -9.5] * 30, min_trades=30, seed=1) is False  # not confidently positive
+
+
+def test_retest_priority_low_right_after_test_and_never_below_floor():
+    p = retest_priority(days_since_test=0, kill_strength=1.0, floor=0.05)
+    assert p == 0.05  # just tested + decisively killed -> at the floor, never banned
+
+
+def test_retest_priority_recovers_as_it_goes_stale():
+    fresh = retest_priority(days_since_test=10, kill_strength=0.5)
+    stale = retest_priority(days_since_test=400, kill_strength=0.5)
+    assert stale > fresh  # a dormant hypothesis becomes worth revisiting
+
+
+def test_retest_priority_decisive_kill_stays_suppressed_longer():
+    at = 180
+    marginal = retest_priority(days_since_test=at, kill_strength=0.0)
+    decisive = retest_priority(days_since_test=at, kill_strength=1.0)
+    assert decisive < marginal  # a coin-flip kill reopens sooner than a decisive one
+
+
+def test_retest_priority_stays_within_bounds():
+    for d in (0, 50, 500, 5000):
+        p = retest_priority(days_since_test=d, kill_strength=0.3)
+        assert 0.05 <= p <= 1.0
