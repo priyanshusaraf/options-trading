@@ -307,6 +307,31 @@ class WatchlistMembership(Base):
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 
+class StrategyLifecycle(Base):
+    """The archive: one row per strategy the platform has ever considered, and its
+    current lifecycle state. Keeping retired strategies (rather than deleting them)
+    is deliberate — a shelved idea can be revived and re-tested when regimes change, or
+    tried on a different universe. `last_dsr` carries the last validated performance so
+    the archive is a browsable record of what worked, where, and how well."""
+    __tablename__ = "strategy_lifecycle"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(12), default="candidate")
+    # candidate | running | probation | on_hold | retired
+    source: Mapped[str] = mapped_column(String(12), default="builtin")  # builtin | generated
+    deployed_watchlist_id: Mapped[int | None] = mapped_column(
+        ForeignKey("watchlists.id"), nullable=True)
+    last_dsr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {"strategy_key": self.strategy_key, "status": self.status,
+                "source": self.source, "deployed_watchlist_id": self.deployed_watchlist_id,
+                "last_dsr": self.last_dsr, "note": self.note}
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
