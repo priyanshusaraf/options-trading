@@ -13,6 +13,16 @@ default** (see Safety model). Starting capital is ₹50,000, persisted across re
 Two processes: a FastAPI backend on **:8090** and a Vite/React frontend on **:5173**.
 `:8000` is intentionally left free for an unrelated analyst app in the parent repo.
 
+> **Product direction (from 2026-07):** near-term focus is **equity + index research
+> and trading on the underlying — NOT stock-specific options.** Options stay fully
+> supported and are **not** being removed or degraded, but they drop to the lowest
+> priority and are treated as **index-only** for the foreseeable future (index
+> futures/spot first; index options much later). New research and strategy work should
+> target the equity/index underlying unless a task explicitly says otherwise. This
+> also means the mature *spot* backtester now tests the actual traded instrument for
+> equities, so the historic "backtests spot but trades options" validation gap does
+> not apply to the equity/index universe.
+
 ## Commands
 
 Run everything from `backend/` or `frontend/` — never the repo root.
