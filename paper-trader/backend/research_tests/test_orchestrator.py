@@ -74,3 +74,25 @@ def test_report_renders_markdown(research_session, inst_factory, candles_factory
     assert "# Research report" in md
     assert "Trend Following" in md
     assert report["hypothesis"] in md
+
+
+def test_run_nightly_writes_report_files(research_session, inst_factory, candles_factory, tmp_path):
+    import os
+
+    from research.orchestrator.run import run_nightly
+    keys = ["AAA", "BBB"]
+    src = StaticDataSource({(k, "day"): candles_factory(400) for k in keys})
+    plan = [{"program": "Trend Following", "hypothesis": "EMA trend persists",
+             "strategy_key": "trend_impulse_v3",
+             "instruments": [inst_factory(k) for k in keys], "interval": "day",
+             "min_trades": 1, "n_folds": 4, "min_positive_fold_frac": 0.0}]
+    reports = run_nightly(research_session, src, plan, git_commit="abc",
+                          report_dir=str(tmp_path))
+    assert len(reports) == 1
+    assert os.path.exists(reports[0]["report_path"])
+    assert research_session.query(ExperimentRun).count() == 1
+
+
+def test_run_nightly_empty_plan_is_noop(research_session):
+    from research.orchestrator.run import run_nightly
+    assert run_nightly(research_session, source=None, plan=[]) == []

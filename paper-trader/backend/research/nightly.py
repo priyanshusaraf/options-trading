@@ -1,21 +1,24 @@
 """Nightly research entry point — the cron one-shot (`python -m research.nightly`).
 
-Foundations stub: it does the two things every research run must do first —
-(1) enforce the fail-closed capital guardrails, (2) ensure research.db exists —
-and nothing else yet. The pipeline stages (qualify -> optimize -> validate ->
-score -> decide -> report) land in M1 and hang off here.
+It (1) enforces the fail-closed capital guardrails, (2) ensures research.db exists,
+then (3) runs the configured research plan through the orchestrator (qualify ->
+validate -> score -> knowledge -> promotion -> report). The plan is empty until the
+scheduler/config lands (M3), so an unconfigured run is a safe no-op that still proves
+the guardrails and schema.
 
-Run by cron at ~19:00 IST (well after the 15:30 close, well before the ~06:00
-token rollover), under its own lockfile so a slow run never overlaps the next.
+Run by cron at ~19:00 IST (well after the 15:30 close, well before the ~06:00 token
+rollover), under its own lockfile so a slow run never overlaps the next.
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 from research.config import research_db_path
-from research.domain.base import init_research_db, make_engine
+from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.guards import enforce
+from research.orchestrator.run import run_nightly
 
 
 def _execution_db_path() -> str:
@@ -26,14 +29,36 @@ def _execution_db_path() -> str:
     return get_settings().db_path
 
 
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL).strip()[:40] or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _load_plan() -> list:
+    """The research plan (which programs/hypotheses/instruments to run tonight).
+    Empty until the M3 scheduler + config supplies one; a configured autonomous run
+    would resolve the qualifying universe by Hypothesis.retest_priority."""
+    return []
+
+
 def main() -> int:
     research_db = research_db_path()
     # Fail closed BEFORE any research work: distinct DB, no capital-moving imports,
     # not live. Any violation raises ResearchIsolationError and aborts the run.
     enforce(research_db=research_db, exec_db=_execution_db_path(),
             loaded_modules=sys.modules, env=os.environ)
-    init_research_db(make_engine(research_db))
-    print(f"research.db ready at {research_db}; pipeline stages arrive in M1")
+    engine = make_engine(research_db)
+    init_research_db(engine)
+    Session = make_sessionmaker(engine)
+    with Session() as session:
+        reports = run_nightly(session, source=None, plan=_load_plan(),
+                              git_commit=_git_commit(),
+                              report_dir=os.environ.get("PT_RESEARCH_REPORT_DIR", "."))
+    print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
     return 0
 
 

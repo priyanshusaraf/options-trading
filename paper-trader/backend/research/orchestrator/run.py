@@ -15,7 +15,9 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import os
 
+from research.data.store import materialize
 from research.domain.models import (
     ExperimentRun,
     ExperimentSpec,
@@ -24,6 +26,8 @@ from research.domain.models import (
     PromotionCandidate,
     ResearchProgram,
 )
+from research.evaluation import kernels
+from research.orchestrator.report import write_report
 from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
 from research.pipeline.validate import validate
@@ -161,3 +165,28 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         "qualified": qualified, "rejected": rejected, "validated": validated,
         "promotion": promotion, "decision": run.decision, "total_bars": total_bars,
     }
+
+
+def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") -> list:
+    """Run every experiment in `plan` and write a report per run. Each plan item:
+    {program, hypothesis, strategy_key, instruments:[inst], interval, ...gate knobs}.
+    `source` (a DataSource) supplies candles for each instrument via `materialize`;
+    it is only touched here (the collection phase), never inside the pipeline. An
+    empty plan is a valid no-op. Returns the report dicts (with `report_path`)."""
+    reports = []
+    for item in plan:
+        strat = kernels.get_strategy(item["strategy_key"])
+        interval = item.get("interval", "day")
+        datasets = [(inst, materialize(source, inst, interval))
+                    for inst in item["instruments"]]
+        report = run_experiment(
+            session, program_name=item["program"],
+            hypothesis_statement=item["hypothesis"], strategy=strat, datasets=datasets,
+            params=item.get("params"), git_commit=git_commit, seed=item.get("seed", 0),
+            min_trades=item.get("min_trades", 20), n_folds=item.get("n_folds", 4),
+            min_positive_fold_frac=item.get("min_positive_fold_frac", 0.6))
+        path = os.path.join(report_dir, f"report_run_{report['run_id']}.md")
+        write_report(report, path)
+        report["report_path"] = path
+        reports.append(report)
+    return reports
