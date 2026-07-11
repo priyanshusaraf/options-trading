@@ -125,6 +125,13 @@ def apply_resolution(session, resolution: Resolution) -> None:
         assign_instrument(session, instrument_key, watchlist_id)
 
 
+def membership_map(session) -> dict:
+    """`{instrument_key: watchlist_id}` for every assigned instrument — the incumbency
+    map the deploy bridge feeds to conflict resolution."""
+    return {m.instrument_key: m.watchlist_id
+            for m in session.scalars(select(WatchlistMembership))}
+
+
 def in_watchlist_keys(session) -> set:
     """Every instrument committed to a watchlist (any status). The research plane treats
     these as blacklisted for strategy development (bar the always-allowed sandbox)."""
