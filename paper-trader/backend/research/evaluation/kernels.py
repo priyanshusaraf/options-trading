@@ -12,7 +12,12 @@ Not re-exported on purpose:
 - `sweep` / `cache` — DB-bound orchestration tied to paper_trader.db; the research
   plane owns its own fan-out, persistence, and content-addressing instead.
 """
-from app.backtest.engine import simulate
+from app.backtest.engine import (
+    backtest_charge_segment,
+    compute_signals,
+    run_trades,
+    simulate,
+)
 from app.backtest.metrics import (
     BTMetrics,
     BTTrade,
@@ -24,6 +29,9 @@ from app.strategy.registry import all_strategies, get_strategy, strategy_keys
 
 __all__ = [
     "simulate",
+    "compute_signals",  # signals over the full series (once)
+    "run_trades",       # replay trades over a fold's sub-window (walk-forward seam)
+    "backtest_charge_segment",
     "BTMetrics",
     "BTTrade",
     "compute_metrics",

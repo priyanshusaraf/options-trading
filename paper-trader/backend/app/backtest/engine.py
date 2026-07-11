@@ -164,6 +164,31 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     # budget at the payload layer (so it never goes stale when funds change).
     option_cost = estimate_option_cost(inst, candles)
 
+    rm = getattr(strat, "risk_model", None)
+    sig = compute_signals(candles, strat, params)
+    if sig.empty:
+        m = BTMetrics()
+        m.bh_return_pct = bh_return_pct
+        m.bh_curve = bh_curve
+        m.option_cost = option_cost
+        return [], m
+
+    trades = run_trades(sig, inst, seg, capital, rm)
+    m = compute_metrics(trades, capital)
+    m.bh_return_pct = bh_return_pct
+    m.bh_curve = bh_curve
+    m.option_cost = option_cost
+    return trades, m
+
+
+def compute_signals(candles, strat, params) -> pd.DataFrame:
+    """Compute a strategy's canonical signal frame over the FULL candle series and
+    trim warmup. Split out of `simulate` (behaviour-preserving) so a caller can
+    compute signals ONCE and replay trades over each walk-forward fold with
+    identical, seed-consistent indicator values — slicing candles *before* signal
+    computation would shift the path-dependent EMA/ATR seeds. Adds `_ratchet_atr`
+    when the strategy declares a risk_model. Returns a fresh 0-indexed frame
+    (possibly empty)."""
     sig = strat.signals(_candles_to_df(candles), **params)
     rm = getattr(strat, "risk_model", None)
     if rm:
@@ -173,14 +198,14 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
     # known indicator columns this strategy actually emitted — keeps v3 identical.
     warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
-    sig = sig.dropna(subset=warm_cols).reset_index(drop=True)
-    if sig.empty:
-        m = BTMetrics()
-        m.bh_return_pct = bh_return_pct
-        m.bh_curve = bh_curve
-        m.option_cost = option_cost
-        return [], m
+    return sig.dropna(subset=warm_cols).reset_index(drop=True)
 
+
+def run_trades(sig, inst, seg: str, capital: float, rm) -> list[BTTrade]:
+    """Replay the fill-next-bar-open trade state machine over a 0-indexed signal
+    (sub)frame and return the closed trades. This is the seam walk-forward slices
+    per fold; pure over its inputs. `sig` must carry the canonical flag columns
+    (+ `_ratchet_atr` when `rm` is set). Extracted verbatim from `simulate`."""
     trades: list[BTTrade] = []
     pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
     pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
@@ -244,12 +269,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
         trades.append(_close(pos, float(last["close"]),
                              ist_epoch(last["date"]),
                              len(rows) - 1, seg, "OPEN_AT_END"))
-
-    m = compute_metrics(trades, capital)
-    m.bh_return_pct = bh_return_pct
-    m.bh_curve = bh_curve
-    m.option_cost = option_cost
-    return trades, m
+    return trades
 
 
 def _update_mae(pos, row) -> None:
