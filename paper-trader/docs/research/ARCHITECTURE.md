@@ -242,12 +242,15 @@ requirements-research.txt   # research-only deps (pyarrow, alembic, optuna…) �
 
 ## 10. Implementation roadmap (milestones)
 
-- **M0 — Foundations (this branch, now).** Repo skeleton, `ResearchBase` + `research.db` + Alembic,
-  the corrected domain model tables, fail-closed **guardrails**, the pure-kernel evaluation wrapper,
-  the `run_trades`/`compute_signals` split (test-protected). No pipeline logic yet. Commit frequently.
-- **M1 — Harness over existing strategies.** DataStore + content-hash; capital-aware SizingModel +
-  segment numeraire; Qualify → (WF-outer) Validate → Score over `trend_impulse_v3`/`expanding_z_v4`
-  with **fixed** params; N_eff clustering; PBO/DSR/bootstrap gates; nightly cron + report artifact.
+- **M0 — Foundations. ✅ DONE.** Repo skeleton, `ResearchBase` + `research.db`, the corrected
+  domain spine, fail-closed **guardrails**, the pure-kernel evaluation wrapper, the
+  `run_trades`/`compute_signals` split (test-protected). (Alembic deferred to first schema change.)
+- **M1 — Harness over existing strategies. 🟢 IMPLEMENTED (fixed params).** Content-hashed
+  DataStore + `DataSource` seam; walk-forward (WF-outer); Qualify → Validate (hard gate battery:
+  min-OOS-trades, temporal stability, confident bootstrap edge, 2× slippage-stress) → DSR score +
+  Pareto front; Findings (±) + PromotionCandidate + markdown report; nightly cron loop.
+  *Remaining M1:* wire `N_eff` clustering into scoring, capital-aware `SizingModel`/segment
+  numeraire, real Kite universe plan + parquet persistence for the eval store.
 - **M2 — Optimization.** Constrained param search *inside* WF folds; trial ledger + firehose shards;
   multi-fidelity halving + sequential abort; budget accounting in bar-count/CPU-seconds.
 - **M3 — Knowledge & scheduling.** Findings (incl. negative) + `retest_priority` backlog scheduler;
