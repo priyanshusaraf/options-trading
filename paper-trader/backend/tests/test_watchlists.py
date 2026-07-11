@@ -88,6 +88,26 @@ def test_list_watchlists_reports_members_and_strategy():
         assert set(listed["Bullion"]["instruments"]) == {"GOLDM", "SILVERM"}
 
 
+def test_research_snapshot_round_trips_into_eligibility(tmp_path):
+    # exec side exports committed instruments; research side reads it and blacklists
+    from research.universe import eligible_for_research, read_watchlist_snapshot
+    _fresh()
+    with SessionLocal() as s:
+        a = wl.create_watchlist(s, "A", "trend_impulse_v3")
+        s.commit()
+        wl.assign_instrument(s, "NIFTY", a.id)
+        wl.assign_instrument(s, "GOLDM", a.id)     # a sandbox name, but committed
+        s.commit()
+        snap_path = str(tmp_path / "snap.json")
+        wl.write_research_snapshot(s, snap_path)
+    committed = read_watchlist_snapshot(snap_path)
+    assert committed == {"NIFTY", "GOLDM"}
+    elig = eligible_for_research({"NIFTY", "BANKNIFTY", "GOLDM"}, committed)
+    assert "NIFTY" not in elig                     # committed non-sandbox → blacklisted
+    assert "GOLDM" in elig                          # committed sandbox → still eligible
+    assert "BANKNIFTY" in elig                      # uncommitted → eligible
+
+
 def test_engine_prefers_active_watchlist_strategy_over_instrument_state():
     _fresh()
     from app.engine.runner import EngineRunner

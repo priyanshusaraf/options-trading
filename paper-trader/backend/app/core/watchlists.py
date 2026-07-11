@@ -13,6 +13,7 @@ belongs elsewhere MOVES it — an instrument is always in at most one watchlist.
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -122,6 +123,22 @@ def apply_resolution(session, resolution: Resolution) -> None:
     losers are never moved, so applying a resolution is safe to replay."""
     for instrument_key, watchlist_id in resolution.assign.items():
         assign_instrument(session, instrument_key, watchlist_id)
+
+
+def in_watchlist_keys(session) -> set:
+    """Every instrument committed to a watchlist (any status). The research plane treats
+    these as blacklisted for strategy development (bar the always-allowed sandbox)."""
+    return set(session.scalars(select(WatchlistMembership.instrument_key)))
+
+
+def write_research_snapshot(session, path: str) -> dict:
+    """Export a read-only snapshot of watchlist membership for the research plane to
+    read. Deliberately a plain file: the research process must never open this DB, so it
+    consumes the export instead of importing the execution session."""
+    snap = {"in_watchlists": sorted(in_watchlist_keys(session))}
+    with open(path, "w") as f:
+        json.dump(snap, f)
+    return snap
 
 
 def list_watchlists(session) -> list[dict]:

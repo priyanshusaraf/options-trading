@@ -40,7 +40,18 @@ DAYS = 180
 
 
 def _plan(get_instrument):
-    insts = [get_instrument(k) for k in UNIVERSE]
+    # Dev-blacklist: never develop on an instrument committed to a live watchlist
+    # (except the always-allowed sandbox). Membership comes from a read-only snapshot
+    # the execution side exports — the research process never opens the trading DB.
+    from research.universe import eligible_for_research, read_watchlist_snapshot
+    committed = read_watchlist_snapshot(os.environ.get("PT_WATCHLIST_SNAPSHOT", ""))
+    eligible = eligible_for_research(set(UNIVERSE), committed)
+    universe = [k for k in UNIVERSE if k in eligible]
+    excluded = [k for k in UNIVERSE if k not in eligible]
+    if excluded:
+        logging.getLogger("research").info(
+            "dev-blacklist: skipping %s (committed to live watchlists)", excluded)
+    insts = [get_instrument(k) for k in universe]
     common = dict(instruments=insts, interval=INTERVAL, days=DAYS,
                   min_trades=30, n_folds=4, min_positive_fold_frac=0.5,
                   optimize_search=True)
