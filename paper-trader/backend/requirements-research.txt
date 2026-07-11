@@ -1,0 +1,14 @@
+# Research-plane dependencies — kept separate from the execution app's
+# requirements.txt so the engine's dependency surface stays unchanged (and merge
+# conflicts on requirements.txt are avoided). Install alongside the base env:
+#   .venv/bin/pip install -r requirements.txt -r requirements-research.txt
+#
+# The foundations (domain model, guardrails, kernel reuse) need nothing beyond
+# what the app already pins (SQLAlchemy, pandas, numpy, pytest). The lines below
+# are the anticipated M1+ additions, commented until the stage that needs them
+# lands, so this file documents the intended surface without inflating the env yet.
+#
+# alembic            # research-plane migrations (isolated from the execution DB)
+# pyarrow            # append-only parquet shards for the trial/eval firehose (M2)
+# scipy              # bootstrap CIs, distributions for DSR/PBO (M1 stats gates)
+# optuna             # constrained parameter search with pruning (M2 optimizer)
