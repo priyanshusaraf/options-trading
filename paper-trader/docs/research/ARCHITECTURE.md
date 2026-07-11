@@ -251,8 +251,11 @@ requirements-research.txt   # research-only deps (pyarrow, alembic, optuna…) �
   Pareto front; Findings (±) + PromotionCandidate + markdown report; nightly cron loop.
   *Remaining M1:* wire `N_eff` clustering into scoring, capital-aware `SizingModel`/segment
   numeraire, real Kite universe plan + parquet persistence for the eval store.
-- **M2 — Optimization.** Constrained param search *inside* WF folds; trial ledger + firehose shards;
-  multi-fidelity halving + sequential abort; budget accounting in bar-count/CPU-seconds.
+- **M2 — Optimization. 🟢 CORE LANDED.** Constrained, bounded param search *inside* WF folds
+  (`pipeline/optimize.py`), nested so OOS is never selection-contaminated; immutable
+  `OptimizationTrial` ledger; DSR deflated by `n_trials`; wired into the orchestrator behind
+  `optimize_search`. *Remaining:* multi-fidelity halving + sequential abort, parquet firehose
+  shards, budget accounting in bar-count/CPU-seconds.
 - **M3 — Knowledge & scheduling.** Findings (incl. negative) + `retest_priority` backlog scheduler;
   cross-experiment eval dedup; slippage-stress + regime + book-correlation + capacity gates.
 - **M4 — Read-only research dashboard.** A polled `/api/research/*` read surface + one desktop-only
