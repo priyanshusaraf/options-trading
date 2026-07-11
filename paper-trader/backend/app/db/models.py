@@ -13,7 +13,16 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -266,6 +275,36 @@ class UniverseInstrument(Base):
     # mock seeds (only used by the synthetic market in tests/dryrun)
     mock_spot: Mapped[float] = mapped_column(Float, default=1000.0)
     mock_vol: Mapped[float] = mapped_column(Float, default=0.2)
+
+
+class Watchlist(Base):
+    """A named list bound to exactly ONE strategy. Instruments assigned to an *active*
+    watchlist are run by the engine on that watchlist's strategy (overriding the
+    per-instrument default). New tables (this + the membership below) are created
+    additively by `create_all`, so an existing live DB gains them with no ALTER on the
+    instrument ledger — behaviour-preserving until a watchlist is actually populated."""
+    __tablename__ = "watchlists"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    strategy_key: Mapped[str] = mapped_column(String(64), default="trend_impulse_v3")
+    status: Mapped[str] = mapped_column(String(12), default="active")  # active|paused|archived
+    interval: Mapped[str | None] = mapped_column(String(12), nullable=True)  # optional default TF
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "strategy_key": self.strategy_key,
+                "status": self.status, "interval": self.interval, "notes": self.notes}
+
+
+class WatchlistMembership(Base):
+    """An instrument's membership in a watchlist. `instrument_key` is the primary key,
+    so an instrument belongs to AT MOST ONE watchlist — the structural guarantee the
+    dispute/incumbency rules rely on."""
+    __tablename__ = "watchlist_membership"
+    instrument_key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    watchlist_id: Mapped[int] = mapped_column(ForeignKey("watchlists.id"), index=True)
+    added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 
 class BacktestRun(Base):

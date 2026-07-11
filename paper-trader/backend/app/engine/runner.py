@@ -164,6 +164,7 @@ class EngineRunner:
         """Per-instrument product (options|equity_intraday), assigned strategy, the
         purple priority flag, and the red overtrading flag. Missing/legacy rows
         default to options/v3/not-priority/not-overtraded."""
+        from app.core.watchlists import effective_strategy_map
         products, strategies, priority, overtrade = {}, {}, {}, {}
         with SessionLocal() as s:
             for r in s.scalars(select(InstrumentState)):
@@ -174,6 +175,9 @@ class EngineRunner:
                     priority[r.instrument_key] = True
                 if getattr(r, "overtrade_flag", False):
                     overtrade[r.instrument_key] = True
+            # An active watchlist's strategy overrides the per-instrument default for
+            # its members. Empty when no watchlists exist -> resolution unchanged.
+            strategies.update(effective_strategy_map(s))
         return products, strategies, priority, overtrade
 
     def _interval_for(self, key: str) -> str:
