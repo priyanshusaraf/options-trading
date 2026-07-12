@@ -14,7 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import backtest_routes, routes
+from app.api import backtest_routes, portfolio_routes, routes
 from app.api.auth import extract_token, token_ok
 from app.core.instruments import get_instrument
 from app.core.config import get_settings
@@ -120,6 +120,7 @@ app.add_middleware(
 )
 app.include_router(routes.router)
 app.include_router(backtest_routes.router)
+app.include_router(portfolio_routes.router)
 
 
 @app.get("/api/health")
