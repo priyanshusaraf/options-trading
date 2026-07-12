@@ -119,3 +119,42 @@ export const getSweepResult = (key: string, interval: string, runId?: number, st
   const qs = q.toString()
   return j(`/api/backtest/result/${key}/${interval}${qs ? `?${qs}` : ''}`)
 }
+
+// ── Portfolio: promotions (approve→deploy), watchlists, strategy archive ──────
+export interface Promotion {
+  id: number; run_id: number; status: string
+  strategy_key: string; interval: string; params: Record<string, any>
+  qualified_universe: string[]
+  validated_universe: { instrument: string; dsr: number; scorecard?: any }[]
+  best?: { instrument: string; dsr: number } | null
+  generated: boolean
+  composition?: any | null
+  generated_source?: string | null
+  explanation: {
+    strategy_key: string; display_name: string; thesis: string
+    primitives: string[]; rules: string[]; caveats: string; note?: string
+  }
+  created_at?: string | null
+}
+export interface Watchlist {
+  id: number; name: string; strategy_key: string; status: string
+  interval: string | null; instruments: string[]
+}
+export interface ArchiveStrategy {
+  strategy_key: string; status: string; source: string
+  deployed_watchlist_id: number | null; last_dsr: number | null; note: string
+}
+
+export const getPromotions = (): Promise<{ promotions: Promotion[] }> =>
+  j('/api/portfolio/promotions')
+export const deployPromotion = (
+  id: number, body: { watchlist_name?: string; dry_run?: boolean } = {},
+) => post(`/api/portfolio/promotions/${id}/deploy`, body)
+export const getWatchlists = (): Promise<{ watchlists: Watchlist[] }> =>
+  j('/api/portfolio/watchlists')
+export const getArchive = (): Promise<{ strategies: ArchiveStrategy[] }> =>
+  j('/api/portfolio/archive')
+export const setWatchlistStatus = (name: string, status: string) =>
+  post(`/api/portfolio/watchlists/${encodeURIComponent(name)}/status`, { status })
+export const setArchiveStatus = (strategyKey: string, status: string) =>
+  post(`/api/portfolio/archive/${encodeURIComponent(strategyKey)}/status`, { status })

@@ -7,6 +7,7 @@ import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
+import PortfolioView from './views/PortfolioView'
 import DashboardView from './views/DashboardView'
 import TradesView from './views/TradesView'
 import CalendarView from './views/CalendarView'
@@ -18,6 +19,7 @@ const TABS: [string, string][] = [
   ['engine', 'Engine / Logs'],
   ['options', 'Options Calc'],
   ['backtests', 'Backtests'],
+  ['portfolio', 'Portfolio'],
   ['trades', 'Trade Log'],
   ['calendar', 'Calendar'],
   ['dashboard', 'Dashboard'],
@@ -54,6 +56,7 @@ function Shell() {
         {tab === 'backtests' && (isDesktop
           ? <BacktestsView />
           : <div className="card p-4 text-sm text-muted">Backtests is desktop-only — open this on your Mac.</div>)}
+        {tab === 'portfolio' && <PortfolioView />}
         {tab === 'trades' && <TradesView />}
         {tab === 'calendar' && <CalendarView />}
         {tab === 'dashboard' && <DashboardView />}
