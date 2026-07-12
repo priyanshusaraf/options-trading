@@ -71,10 +71,19 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
                     "watchlist": prev.watchlist_name, "strategy_key": prev.strategy_key,
                     "accepted": prev.accepted, "rejected": prev.rejected}
         res = deploy(s, req)
+        # A generated strategy carries its composition across the plane boundary here,
+        # once, at the human-gated deploy — so the engine can reconstruct + run it at the
+        # next restart without ever reaching into research.db at runtime.
+        if cand.get("composition"):
+            import json as _json
+            from app.core.generated_strategies import save_generated
+            save_generated(s, cand["strategy_key"], _json.dumps(cand["composition"]),
+                           source=cand.get("generated_source") or "")
         s.commit()
     research_read.approve_candidate(candidate_id, git_sha="")
     return {"dry_run": False, "candidate_id": candidate_id, "watchlist_id": res.watchlist_id,
             "assigned": res.assigned, "rejected": res.rejected,
+            "generated": bool(cand.get("composition")),
             "note": "staged — effective on next engine restart, then ARM"}
 
 

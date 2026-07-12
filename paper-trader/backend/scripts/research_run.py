@@ -125,6 +125,11 @@ def _dump_db(session) -> None:
     for f in q(Finding).all():
         print(f"  [{f.polarity:8s} conf={f.confidence:.2f}] {f.statement}")
 
+    from research.domain.models import GeneratedStrategyRecord
+    print(f"\nGeneratedStrategyRecord ({q(GeneratedStrategyRecord).count()}) — bot-composed, sandboxed Python")
+    for g in q(GeneratedStrategyRecord).all():
+        print(f"  {g.key}  ({len(g.source.splitlines())} lines of emitted compute)")
+
     print(f"\nPromotionCandidate ({q(PromotionCandidate).count()}) — human-gated, NOT auto-deployed")
     for c in q(PromotionCandidate).all():
         print(f"  #{c.id} run={c.run_id} status={c.status} "
@@ -147,7 +152,9 @@ def main() -> int:
     from app.core.instruments import get_instrument
     from app.providers.factory import get_provider
     from research.data.store import KiteDataSource
+    from research.orchestrator.generate import run_generated
     from research.orchestrator.run import run_nightly
+    from research.universe import ALWAYS_ALLOWED
 
     research_db = research_db_path()
     exec_db = get_settings().db_path
@@ -168,10 +175,20 @@ def main() -> int:
     report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
     os.makedirs(report_dir, exist_ok=True)
 
-    # (4) run the plan through the full pipeline
+    # (4) run the plan through the full pipeline, then let the bot GENERATE + evaluate
+    #     its own strategies on the permanent research sandbox (the always-allowed
+    #     commodities). Generated survivors become human-gated candidates like any other.
     with Session() as session:
         reports = run_nightly(session, source, _plan(get_instrument),
                               git_commit=_git_commit(), report_dir=report_dir)
+        sandbox = [get_instrument(k) for k in UNIVERSE if k in ALWAYS_ALLOWED]
+        if sandbox:
+            print(f"\n── code-gen: composing strategies on the sandbox "
+                  f"{[i.key for i in sandbox]} ──")
+            for interval in INTERVALS:
+                run_generated(session, source, sandbox, interval, limit=8,
+                              git_commit=_git_commit(), min_trades=30, n_folds=4,
+                              min_positive_fold_frac=0.5)
         _dump_db(session)
 
     # (5) show every generated report

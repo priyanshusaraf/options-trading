@@ -22,6 +22,53 @@ from research.domain.models import (
 )
 
 
+_GEN_COMP = {
+    "key": "gen_api_test_v1",
+    "longEntry":  {"all": ["ema_slope_up(50,5)", "zscore_cross_up(50,1.0)"]},
+    "shortEntry": {"all": ["ema_slope_down(50,5)", "zscore_cross_down(50,1.0)"]},
+    "longExit":   {"any": ["zscore_lt(50,0.0)", "ema_slope_down(50,5)"]},
+    "shortExit":  {"any": ["zscore_gt(50,0.0)", "ema_slope_up(50,5)"]},
+}
+
+
+def _seed_generated_candidate(path: str) -> int:
+    """A candidate for a bot-GENERATED strategy, with its composition persisted."""
+    from research.domain.models import GeneratedStrategyRecord
+    from research.strategy.builder.grammar import Composition
+    from research.strategy.builder.load import build_strategy
+    eng = make_engine(path)
+    init_research_db(eng)
+    Session = make_sessionmaker(eng)
+    with Session() as s:
+        prog = ResearchProgram(name="Generated", thesis="")
+        s.add(prog)
+        s.flush()
+        hyp = Hypothesis(program_id=prog.id, statement="generated has edge")
+        s.add(hyp)
+        s.flush()
+        recipe = {"strategy": "gen_api_test_v1", "params": {}, "interval": "30minute"}
+        sid = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:32]
+        s.add(ExperimentSpec(id=sid, hypothesis_id=hyp.id,
+                             recipe_json=json.dumps(recipe), git_commit="gen"))
+        s.flush()
+        run = ExperimentRun(spec_id=sid, status="completed", decision="propose")
+        s.add(run)
+        s.flush()
+        strat = build_strategy(Composition.from_dict(_GEN_COMP))
+        s.add(GeneratedStrategyRecord(key="gen_api_test_v1",
+                                      composition_json=json.dumps(_GEN_COMP),
+                                      source=strat.source))
+        s.add(PromotionCandidate(
+            run_id=run.id, parameterization_hash="pg",
+            qualifying_universe_json=json.dumps(["GOLDM"]),
+            scorecard_json=json.dumps({"best": {"instrument": "GOLDM", "dsr": 0.3},
+                                       "validated": [{"instrument": "GOLDM", "dsr": 0.3,
+                                                      "scorecard": {}}]}),
+            status="pending"))
+        s.commit()
+        return run.id
+
+
 def _seed_research_db(path: str) -> int:
     eng = make_engine(path)
     init_research_db(eng)
@@ -119,3 +166,45 @@ def test_deploy_unknown_promotion_returns_error(client):
     res = c.post("/api/portfolio/promotions/9999/deploy",
                  json={"watchlist_name": "X"}).json()
     assert "error" in res
+
+
+@pytest.fixture
+def gen_client(tmp_path, monkeypatch):
+    rdb = str(tmp_path / "research.db")
+    monkeypatch.setenv("PT_RESEARCH_DB_PATH", rdb)
+    _seed_generated_candidate(rdb)
+    prev = getattr(app.state, "runner", None)
+    if prev is not None:
+        try:
+            prev.broker.close()
+        except Exception:
+            pass
+    init_db(reset=True)
+    app.state.runner = EngineRunner()
+    yield TestClient(app)
+    from app.strategy import registry
+    registry._REGISTRY.pop("gen_api_test_v1", None)
+
+
+def test_generated_promotion_surfaces_composition_and_exact_explanation(gen_client):
+    p = gen_client.get("/api/portfolio/promotions").json()["promotions"][0]
+    assert p["generated"] is True
+    assert p["composition"]["key"] == "gen_api_test_v1"
+    assert "def compute(df" in p["generated_source"]
+    # the explanation is composition-exact (mentions the real block math), not generic
+    assert "EMA(50)" in " ".join(p["explanation"]["rules"])
+
+
+def test_deploying_a_generated_candidate_persists_it_for_the_engine(gen_client):
+    from app.core.generated_strategies import register_all
+    from app.db.session import SessionLocal
+    from app.strategy.registry import get_strategy
+
+    res = gen_client.post("/api/portfolio/promotions/1/deploy",
+                          json={"watchlist_name": "GenBullion"}).json()
+    assert res["generated"] is True and res["assigned"] == ["GOLDM"]
+    # the composition was copied into the execution store; on the next startup the engine
+    # reconstructs it and the gen_* key resolves to the REAL generated strategy
+    with SessionLocal() as s:
+        assert register_all(s) >= 1
+    assert get_strategy("gen_api_test_v1").key == "gen_api_test_v1"

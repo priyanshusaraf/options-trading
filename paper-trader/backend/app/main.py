@@ -44,6 +44,16 @@ async def lifespan(app: FastAPI):
                      "disarmed on every start). Use the KILL switch to square off.")
         else:
             log.info("SAFETY: order placement DISABLED — paper trades only, no real capital")
+    # Reconstruct any deployed generated strategies from the DB and register them BEFORE
+    # the runner loads per-instrument config, so a gen_* watchlist assignment resolves to
+    # the real strategy instead of the default fallback. Non-fatal: a bad row is skipped.
+    try:
+        from app.core.generated_strategies import register_all
+        from app.db.session import SessionLocal
+        with SessionLocal() as s:
+            register_all(s)
+    except Exception as e:
+        log.error(f"generated-strategy registration failed at startup: {e}")
     runner = EngineRunner()  # factory logs the chosen provider
     app.state.runner = runner
 

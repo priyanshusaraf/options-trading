@@ -146,6 +146,19 @@ class OptimizationTrial(ResearchBase):
 _make_immutable(OptimizationTrial.__table__)
 
 
+class GeneratedStrategyRecord(ResearchBase):
+    """A bot-composed strategy the builder generated and evaluated. Stores the
+    composition (the declarative block spec) + the emitted source keyed by strategy key,
+    so a PromotionCandidate for a generated strategy can carry its exact composition to
+    the human review and, on approval, into the execution engine. Mutable/upsert on
+    re-generation (unlike the immutable experiment ledger)."""
+    __tablename__ = "research_generated_strategy"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    composition_json: Mapped[str] = mapped_column(Text, default="{}")
+    source: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
 class PromotionCandidate(ResearchBase):
     """An experiment's human-gated proposal toward production. Emitting one is
     autonomous; approval is a human act recorded as a git SHA. The execution plane

@@ -34,6 +34,17 @@ def _discover() -> None:
             _REGISTRY[strat.key] = strat
 
 
+def register(strat: Strategy) -> None:
+    """Register (or replace) a strategy at runtime — the seam for deployed generated
+    strategies, which are reconstructed from the DB at engine startup rather than
+    dropped in as a module. Committing a module with a `STRATEGY` remains the path for
+    hand-written strategies; this never runs pasted code (the generated strategy was
+    already emitted, AST-validated, and sandbox-loaded by the builder)."""
+    _discover()
+    if isinstance(strat, Strategy) and strat.key:
+        _REGISTRY[strat.key] = strat
+
+
 def all_strategies() -> list[Strategy]:
     _discover()
     return sorted(_REGISTRY.values(), key=lambda s: s.display_name or s.key)
@@ -58,5 +69,5 @@ def strategy_meta() -> list[dict]:
              "default_params": dict(s.default_params)} for s in all_strategies()]
 
 
-__all__ = ["Strategy", "CANONICAL_COLUMNS", "DEFAULT_STRATEGY_KEY",
+__all__ = ["Strategy", "CANONICAL_COLUMNS", "DEFAULT_STRATEGY_KEY", "register",
            "all_strategies", "strategy_keys", "get_strategy", "strategy_meta"]

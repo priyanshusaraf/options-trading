@@ -332,6 +332,20 @@ class StrategyLifecycle(Base):
                 "last_dsr": self.last_dsr, "note": self.note}
 
 
+class GeneratedStrategyRow(Base):
+    """A bot-generated strategy that has been APPROVED and deployed, stored as its
+    composition JSON (+ the emitted source, for the owner's audit). At engine startup
+    `app.core.generated_strategies.register_all` reconstructs each row through the
+    sandboxed builder and registers it, so a `gen_*` strategy_key on a watchlist resolves
+    to the real generated strategy instead of falling back to the default. Written only
+    by the human Approve→Deploy bridge — never by the research process."""
+    __tablename__ = "generated_strategies"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    composition_json: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     id: Mapped[int] = mapped_column(primary_key=True)

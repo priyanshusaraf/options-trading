@@ -22,7 +22,12 @@ import os
 
 from research.config import research_db_path
 from research.domain.base import make_engine, make_sessionmaker
-from research.domain.models import ExperimentRun, ExperimentSpec, PromotionCandidate
+from research.domain.models import (
+    ExperimentRun,
+    ExperimentSpec,
+    GeneratedStrategyRecord,
+    PromotionCandidate,
+)
 from research.strategy.explain import explain
 
 
@@ -70,6 +75,11 @@ def _view(session, c: PromotionCandidate) -> dict:
             return default
 
     payload = _load(c.scorecard_json, {})
+    # If this is a bot-generated strategy, carry its exact composition + source so the
+    # human reviews the real logic and deploy can hand the composition to the engine.
+    gen = session.get(GeneratedStrategyRecord, strategy_key)
+    composition = _load(gen.composition_json, None) if gen is not None else None
+    explanation = _explain(strategy_key, params, composition)
     return {
         "id": c.id,
         "run_id": c.run_id,
@@ -81,9 +91,25 @@ def _view(session, c: PromotionCandidate) -> dict:
         "qualified_universe": _load(c.qualifying_universe_json, []),
         "validated_universe": payload.get("validated", []),
         "best": payload.get("best"),
-        "explanation": dataclasses.asdict(explain(strategy_key, params)),
+        "generated": gen is not None,
+        "composition": composition,
+        "generated_source": gen.source if gen is not None else None,
+        "explanation": explanation,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
+
+
+def _explain(strategy_key: str, params: dict, composition) -> dict:
+    """Composition-exact explanation for a generated strategy; the authored/curated one
+    otherwise."""
+    if composition:
+        try:
+            from research.strategy.builder.describe import explain_composition
+            from research.strategy.builder.grammar import Composition
+            return dataclasses.asdict(explain_composition(Composition.from_dict(composition)))
+        except Exception:
+            pass
+    return dataclasses.asdict(explain(strategy_key, params))
 
 
 def list_pending_promotions() -> list[dict]:
