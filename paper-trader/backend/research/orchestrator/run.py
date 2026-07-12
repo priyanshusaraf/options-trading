@@ -37,7 +37,7 @@ from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
 from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
-from research.strategy.explain import explain
+from research.strategy.builder.describe import explanation_for
 
 logger = logging.getLogger("research.orchestrator")
 
@@ -223,7 +223,9 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
 
     # A result nobody can interpret is a result nobody should trust with capital:
     # attach the plain-language 'what this strategy does + the exact logic it used'.
-    explanation = dataclasses.asdict(explain(strategy.key, params))
+    # Generated strategies are explained from their composition (exact); hand-written
+    # ones route through the authored explanation.
+    explanation = dataclasses.asdict(explanation_for(strategy, params))
     if optimize_search:
         explanation["note"] = ("Parameters were optimized within a bounded grid per "
                                "walk-forward fold; the values above are the search base — "
