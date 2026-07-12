@@ -29,14 +29,24 @@ import sys
 # make `app` and `research` importable when this file is run directly as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# The strategy is valid only on 15m/30m candles (see CLAUDE.md), so we test on its
-# native timeframe. Kite caps 30minute history at 200 days/request (sweep.MAX_DAYS).
-# Sweep the full liquid seed universe with BOTH strategies and let a real survivor
+# The strategy is valid only on 15m/30m candles (see CLAUDE.md), so we test on BOTH
+# of its native timeframes and compare — an edge that shows on one bar size but not
+# the other is a useful signal in itself. Kite caps 15minute AND 30minute history at
+# 200 days/request (sweep.MAX_DAYS), so DAYS=180 is safe for both. Sweep the full
+# liquid seed universe with BOTH strategies × BOTH intervals and let a real survivor
 # surface if one exists — gates are never loosened to manufacture one.
 UNIVERSE = ["NIFTY", "BANKNIFTY", "SENSEX", "GOLDM", "SILVERM",
             "CRUDEOIL", "NATURALGAS", "COPPERM"]
-INTERVAL = "30minute"
+INTERVALS = ["15minute", "30minute"]
 DAYS = 180
+
+# (strategy_key, program name, hypothesis stem) — the interval is appended per sweep.
+_STRATEGIES = [
+    ("trend_impulse_v3", "Trend-Impulse (liquid universe)",
+     "Displacement-confirmed EMA50 trend persists on liquid underlyings"),
+    ("expanding_z_v4", "Expanding-Z Reversion (liquid universe)",
+     "Expanding-window z-score reversion adds edge on liquid underlyings"),
+]
 
 
 def _plan(get_instrument):
@@ -52,17 +62,16 @@ def _plan(get_instrument):
         logging.getLogger("research").info(
             "dev-blacklist: skipping %s (committed to live watchlists)", excluded)
     insts = [get_instrument(k) for k in universe]
-    common = dict(instruments=insts, interval=INTERVAL, days=DAYS,
-                  min_trades=30, n_folds=4, min_positive_fold_frac=0.5,
-                  optimize_search=True)
-    return [
-        {"program": "Trend-Impulse (liquid universe)",
-         "hypothesis": "Displacement-confirmed EMA50 trend persists on liquid underlyings (30m)",
-         "strategy_key": "trend_impulse_v3", **common},
-        {"program": "Expanding-Z Reversion (liquid universe)",
-         "hypothesis": "Expanding-window z-score reversion adds edge on liquid underlyings (30m)",
-         "strategy_key": "expanding_z_v4", **common},
-    ]
+    plan = []
+    for interval in INTERVALS:
+        common = dict(instruments=insts, interval=interval, days=DAYS,
+                      min_trades=30, n_folds=4, min_positive_fold_frac=0.5,
+                      optimize_search=True)
+        for key, program, hypothesis in _STRATEGIES:
+            plan.append({"program": program,
+                         "hypothesis": f"{hypothesis} ({interval})",
+                         "strategy_key": key, **common})
+    return plan
 
 
 def _git_commit() -> str:

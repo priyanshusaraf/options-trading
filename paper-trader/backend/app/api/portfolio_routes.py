@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.core import research_read
 from app.core import strategy_archive as arch
 from app.core import watchlists as wl
 from app.core.deploy_bridge import DeployRequest, deploy, preview_deploy
@@ -35,6 +36,46 @@ class DeployIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
+
+
+class PromotionDeployIn(BaseModel):
+    watchlist_name: str | None = None
+    dry_run: bool = False
+
+
+@router.get("/api/portfolio/promotions")
+def get_promotions():
+    """Pending research promotions awaiting a human decision — read from research.db
+    read-only, each carrying its validated universe + a plain-language explanation."""
+    return {"promotions": research_read.list_pending_promotions()}
+
+
+@router.post("/api/portfolio/promotions/{candidate_id}/deploy")
+def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
+    """Approve a research candidate and STAGE its validated universe into a watchlist.
+    The instruments and their DSR (the conflict-resolution score) come straight from
+    the candidate; nothing here places an order. On commit the candidate is recorded
+    approved. `dry_run` previews the assignment/conflicts without writing."""
+    cand = research_read.get_promotion(candidate_id)
+    if cand is None:
+        return {"error": f"no pending promotion #{candidate_id}"}
+    name = body.watchlist_name or cand["strategy_key"]
+    req = DeployRequest(
+        watchlist_name=name, strategy_key=cand["strategy_key"],
+        proposals=[(v["instrument"], v.get("dsr", 0.0)) for v in cand["validated_universe"]],
+        source="research", interval=cand.get("interval"))
+    with SessionLocal() as s:
+        if body.dry_run:
+            prev = preview_deploy(s, req)
+            return {"dry_run": True, "candidate_id": candidate_id,
+                    "watchlist": prev.watchlist_name, "strategy_key": prev.strategy_key,
+                    "accepted": prev.accepted, "rejected": prev.rejected}
+        res = deploy(s, req)
+        s.commit()
+    research_read.approve_candidate(candidate_id, git_sha="")
+    return {"dry_run": False, "candidate_id": candidate_id, "watchlist_id": res.watchlist_id,
+            "assigned": res.assigned, "rejected": res.rejected,
+            "note": "staged — effective on next engine restart, then ARM"}
 
 
 @router.get("/api/portfolio/watchlists")

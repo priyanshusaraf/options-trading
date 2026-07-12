@@ -98,6 +98,33 @@ def test_run_nightly_empty_plan_is_noop(research_session):
     assert run_nightly(research_session, source=None, plan=[]) == []
 
 
+def _validating_run(session, inst_factory, uptrend_factory, keys=("UPA", "UPB")):
+    strat = kernels.get_strategy("trend_impulse_v3")
+    src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})
+    datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
+    return run_experiment(session, program_name="Trend Following",
+                          hypothesis_statement="EMA trend persists", strategy=strat,
+                          datasets=datasets, params=dict(strat.default_params),
+                          git_commit="deadbeef", seed=1, min_trades=1, n_folds=3,
+                          min_positive_fold_frac=0.0)
+
+
+def test_promotion_candidate_carries_validated_universe_with_scores(
+        research_session, inst_factory, uptrend_factory):
+    """The queued candidate must describe the VALIDATED universe (what earned
+    promotion) with a per-instrument score, not just the qualified keys + one best
+    row — that is exactly what the human needs to review and what deploy assigns."""
+    report = _validating_run(research_session, inst_factory, uptrend_factory)
+    cand = research_session.query(PromotionCandidate).one()
+    payload = json.loads(cand.scorecard_json)
+    validated = payload["validated"]
+    assert validated and all("instrument" in v and "dsr" in v for v in validated)
+    # the stored validated universe matches exactly the run's validated instruments
+    assert {v["instrument"] for v in validated} == {v["instrument"] for v in report["validated"]}
+    # the headline best is still present and is one of the validated instruments
+    assert payload["best"]["instrument"] in {v["instrument"] for v in validated}
+
+
 def test_run_experiment_with_optimization_persists_immutable_trials(
         research_session, inst_factory, uptrend_factory):
     import pytest

@@ -183,11 +183,19 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     promotion = None
     if validated:
         best = max(validated, key=lambda x: x["dsr"])
+        # The candidate must carry the VALIDATED universe (what earned promotion) with a
+        # per-instrument score, so the human review — and the deploy that follows — act on
+        # the instruments that actually cleared every gate, not merely the ones that
+        # qualified. `qualifying_universe_json` keeps the qualified keys for context; the
+        # scorecard payload carries {best, validated:[{instrument, dsr, scorecard}]}.
+        validated_universe = [{"instrument": v["instrument"], "dsr": v["dsr"],
+                               "scorecard": v["scorecard"]} for v in validated]
         session.add(PromotionCandidate(
             run_id=run.id,
             parameterization_hash=spec_hash({"strategy": strategy.key, "params": params}),
             qualifying_universe_json=json.dumps(qualified),
-            scorecard_json=json.dumps(best), status="pending"))
+            scorecard_json=json.dumps({"best": best, "validated": validated_universe}),
+            status="pending"))
         promotion = best
         logger.info("[promotion] queued %s (DSR=%.4f) for human review — NOT auto-deployed",
                     best["instrument"], best["dsr"])
