@@ -45,9 +45,10 @@ from app.engine.health import HealthTracker, is_stale
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
-    before_entry_window, daily_loss_halt, expiry_too_close, in_reentry_cooldown,
-    intraday_blocked_for_expiry_day, outside_trading_session, over_per_trade_cap,
-    round_trip_cap_reached, signal_already_evaluated, signal_too_old, slots_available)
+    before_entry_window, daily_loss_halt, expiry_too_close, gap_halt_active,
+    in_reentry_cooldown, intraday_blocked_for_expiry_day, outside_trading_session,
+    over_per_trade_cap, round_trip_cap_reached, signal_already_evaluated,
+    signal_too_old, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
@@ -108,6 +109,8 @@ class EngineRunner:
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
         self._infra_alert_epoch: dict[str, float] = {}  # throttle infra alerts per key (M1)
+        self._gap_cache: tuple | None = None   # (date, open, prev_close) — index gap, once/day (fix D)
+        self._gap_logged_day = None            # de-dupe the daily gap-guard alert
         self.tick_count = 0
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -610,12 +613,56 @@ class EngineRunner:
 
         return sizer
 
+    def _index_open_prevclose(self, now) -> tuple[float | None, float | None]:
+        """Today's index open + prior-session close, from daily candles — cached once
+        per calendar day (both are fixed after 09:15). None,None on any read failure
+        (mock/off-hours/no history) so the gap guard fails open."""
+        if self.provider.name == "mock":
+            return None, None      # no real overnight gaps on the always-open sim clock
+        today = now.date()
+        if self._gap_cache and self._gap_cache[0] == today:
+            return self._gap_cache[1], self._gap_cache[2]
+        o = pc = None
+        try:
+            inst = get_instrument(self.params.get("gap_guard_index", "NIFTY"))
+            candles = self.provider.get_candles(inst, "day", 3)
+            if len(candles) >= 2 and candles[-1].ts.date() == today:
+                o, pc = candles[-1].open, candles[-2].close
+        except Exception as e:
+            log.warn(f"gap guard: index read failed: {e}", event="GAP_GUARD")
+        self._gap_cache = (today, o, pc)
+        return o, pc
+
+    def _gap_guard_active(self, now) -> bool:
+        """Fix D: True if the Nifty opened past the gap threshold and it's before the
+        resume time — block ALL new entries through the erratic post-gap window."""
+        if not self.params.get("gap_guard_enabled", True):
+            return False
+        o, pc = self._index_open_prevclose(now)
+        return gap_halt_active(now, o, pc,
+                               gap_pct=self.params.get("gap_guard_pct", 0.6),
+                               resume_hhmm=self.params.get("gap_guard_resume", "11:00"))
+
     # ── lane 3: entries + reinforcement (fresh crossovers) ────────────────
     def process_entries(self) -> None:
         s, prov = self.settings, self.provider
         now = prov.now()
         held = {p.instrument_key: p for p in self.broker.open_positions()}
         halted = self._entries_halted(now)   # daily-loss circuit breaker (new entries only)
+        # fix D: Nifty opening-gap guard — a big overnight gap makes the first hour
+        # erratic, so block ALL new entries until the resume time (default 11:00).
+        # Computed once/tick (index open+prev-close cached per day); logged once/day.
+        gap_active = self._gap_guard_active(now)
+        if gap_active and self._gap_logged_day != now.date():
+            self._gap_logged_day = now.date()
+            log.warn(f"GAP GUARD active — {self.params.get('gap_guard_index', 'NIFTY')} "
+                     f"gapped ≥ {self.params.get('gap_guard_pct', 0.6)}% at the open; no "
+                     f"new entries until {self.params.get('gap_guard_resume', '11:00')} "
+                     f"(open positions still managed)", event="GAP_GUARD")
+            if self.params.get("notify_enabled", True):
+                self.notifier._emit(f"⏸️ GAP GUARD: index gapped ≥ "
+                                    f"{self.params.get('gap_guard_pct', 0.6)}% — pausing new "
+                                    f"entries until {self.params.get('gap_guard_resume', '11:00')}.")
         # #14 order circuit breaker: N CONSECUTIVE live order failures means the
         # problem is systemic (expired token, IP not whitelisted, margin exhausted)
         # — every further attempt is another real-money order shot into the same
@@ -703,6 +750,8 @@ class EngineRunner:
                 log.info(f"ENTRY WINDOW closed — not taking {key} before "
                          f"{self.params.get('entry_window_start', '09:30')}",
                          instrument=key, event="ENTRY_WINDOW_SKIP")
+                continue
+            if gap_active:      # fix D: index gapped at the open — sit out (logged once above)
                 continue
             # #9 (extended): sit out the weekly-expiry weekday (default Tuesday) for
             # ALL entries unless the owner opted in for today

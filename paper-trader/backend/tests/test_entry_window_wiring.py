@@ -56,7 +56,8 @@ def test_entry_window_blocks_0920_options():
 
 def test_entry_window_open_allows_the_entry():
     # Positive control: identical setup at 09:35 opens — the gate is the clock.
-    r, key = _runner(bar=dt.datetime(2026, 7, 3, 9, 15))      # completes 09:30 — fresh
+    # (affordable name so the ₹5–8k real-margin sizer buys ≥1 share; NIFTY at ₹24k can't)
+    r, key = _runner(key="NATURALGAS", bar=dt.datetime(2026, 7, 3, 9, 15))  # completes 09:30 — fresh
     r.provider.now = lambda: dt.datetime(2026, 7, 3, 9, 33)
     r.process_entries()
     assert _open_intraday(r) != []
@@ -81,7 +82,7 @@ def test_tuesday_blocks_intraday_entries():
 
 
 def test_wednesday_allows_entries_with_block_on():
-    r, key = _runner(bar=dt.datetime(2026, 7, 1, 10, 30), block_weekday=1)
+    r, key = _runner(key="NATURALGAS", bar=dt.datetime(2026, 7, 1, 10, 30), block_weekday=1)
     r.provider.now = lambda: dt.datetime(2026, 7, 1, 10, 46)    # Wednesday
     r.process_entries()
     assert _open_intraday(r) != []

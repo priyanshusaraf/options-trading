@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     intraday_override_date: str = ""         # 'YYYY-MM-DD' to allow entries despite the weekday block, that one day only (self-expires)
     max_signal_age_minutes: float = 5.0      # act on a crossover only within this long of its candle COMPLETING; older = history, never entered (#15). 0 = off
     entry_window_start: str = "09:30"        # no NEW entry before this IST wall-clock time (session opens 09:15; first minutes are erratic). blank = off
+    # Nifty-50 opening-gap guard (fix D): if the index opens ≥ gap_pct from prior close,
+    # the first hour is erratic — block ALL new entries until gap_resume. Exits unaffected.
+    gap_guard_enabled: bool = True
+    gap_guard_pct: float = 0.6               # |open−prev_close|/prev_close % that counts as a gap (0 = off)
+    gap_guard_resume: str = "11:00"          # resume new entries at this IST wall-clock time after a gap
+    gap_guard_index: str = "NIFTY"           # instrument key whose open/prev-close defines the market gap
     order_failure_disarm_count: int = 3      # DISARM after this many CONSECUTIVE live order failures (systemic: bad token/IP/margin) — re-arm manually after fixing (#14). 0 = off
     block_overnight_into_weekend: bool = False
     max_holding_days: int = 5                # hard cap on holding period (trading days)
