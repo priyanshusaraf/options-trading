@@ -749,21 +749,65 @@ class LiveBroker(PaperBroker):
             self.ensure_stop_protection(pos, last_price)
             return
         lp = last_price or pos.last_premium or pos.entry_premium
-        try:
-            if pos.segment == "equity_intraday":
-                # intraday backstop is a resting SL-M order — re-price its trigger.
-                self.client.modify_stop_order(gid, pos.stop_price)
+        if pos.segment == "equity_intraday":
+            # If the ratcheted stop is already crossed by LTP it fires THIS risk-loop
+            # tick (the close cancels the SL-M) — a modify now only draws the same
+            # permissible-range rejection. Leave the resting stop; the internal stop exits.
+            if self._equity_stop_crossed(pos, lp):
+                return
+            try:
+                self.client.modify_stop_order(gid, pos.stop_price)   # re-price the SL-M trigger
                 log.info(f"SL-M {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                          instrument=pos.instrument_key, event="STOP_MODIFY")
-            else:
-                # options backstop is a GTT (long premium → protective SELL).
-                self.client.modify_stop_gtt(gid, pos.tradingsymbol, exchange_for_segment(pos.exchange),
-                                            pos.qty, pos.stop_price, lp, side="SELL")
-                log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
-                         instrument=pos.instrument_key, event="GTT_MODIFY")
+            except Exception as e:
+                # 2026-07-13 SUZLON: a rejected trigger modify left the exchange SL-M stale
+                # at the old level while the internal stop moved (silent divergence). Don't
+                # diverge — cancel the stale resting stop and place a fresh one at the new
+                # trigger so the exchange backstop tracks the ratcheted internal stop.
+                log.warn(f"SL-M trigger modify rejected {pos.tradingsymbol}: {e} — cancel+replacing",
+                         instrument=pos.instrument_key, event="STOP_MODIFY_REJECT")
+                self._resync_equity_stop(pos, gid)
+            return
+        try:
+            # options backstop is a GTT (long premium → protective SELL).
+            self.client.modify_stop_gtt(gid, pos.tradingsymbol, exchange_for_segment(pos.exchange),
+                                        pos.qty, pos.stop_price, lp, side="SELL")
+            log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
+                     instrument=pos.instrument_key, event="GTT_MODIFY")
         except Exception as e:
             log.error(f"stop modify failed {pos.tradingsymbol}: {e}",
                       instrument=pos.instrument_key, event="GTT_FAIL")
+
+    def _equity_stop_crossed(self, pos, lp) -> bool:
+        """Is the intraday stop already triggering at the current mark? (SHORT stops
+        ABOVE, LONG stops BELOW.) When true, the internal risk-loop stop fires this tick,
+        so we skip the exchange modify to avoid a guaranteed permissible-range reject."""
+        if not lp or pos.stop_price <= 0:
+            return False
+        return lp >= pos.stop_price if pos.direction == "SHORT" else lp <= pos.stop_price
+
+    def _resync_equity_stop(self, pos, gid) -> None:
+        """Cancel a stale resting SL-M and place a fresh one at `pos.stop_price` so the
+        exchange backstop tracks the ratcheted internal stop. If the cancel is refused,
+        DO NOT place a second stop (oversell risk) — leave the still-protective stale one
+        and alert. If the replace fails, the position is exchange-unprotected (bot-managed
+        stop only) — alert; `ensure_stop_protection` retries it next tick."""
+        if not self._cancel_equity_stop(gid, pos.tradingsymbol):
+            log.error(f"SL-M resync ABORTED {pos.tradingsymbol} — cancel refused; stale stop "
+                      f"still resting at the old trigger, internal stop is authoritative",
+                      instrument=pos.instrument_key, event="STOP_RESYNC_ABORT")
+            self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange stop (cancel "
+                         f"refused) — verify on Zerodha; bot-managed stop still active")
+            return
+        pos.gtt_trigger_id = None
+        self.s.commit()
+        self._place_equity_stop(pos, pos.last_spot or pos.last_premium)   # places at pos.stop_price
+        if not pos.gtt_trigger_id:
+            log.error(f"SL-M resync REPLACE failed {pos.tradingsymbol} — no exchange stop resting; "
+                      f"bot-managed stop only until retry", instrument=pos.instrument_key,
+                      event="STOP_RESYNC_FAIL")
+            self._notify(f"🚫 {pos.tradingsymbol}: exchange stop NOT re-placed — bot-managed stop "
+                         f"only until it retries; verify on Zerodha")
 
     def reconcile_orphans(self, now) -> list:
         """If the live account no longer backs a bot position (a GTT fired, you
