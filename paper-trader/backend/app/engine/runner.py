@@ -1406,7 +1406,9 @@ class EngineRunner:
         self._maybe_reconcile_orphans()
         self.scan_signals()
         self.process_entries()
-        self._maybe_cache_chains()     # grow the watchlist-wide options dataset
+        # NB: the watchlist option-chain sweep is intentionally NOT here — it runs OFF
+        # the lock (see _signal_iteration). Its ~30s of Kite fetches under the shared
+        # lock were starving the risk loop (2026-07-13 risk_loop_stalled). Fix F.
         self.handle_overnight(self.provider.now())   # no-op for mock
         self.broker.snapshot(self.provider.now())
         self._maybe_check_ledger()     # H10: periodic cash-invariant drift alarm
@@ -1422,6 +1424,14 @@ class EngineRunner:
             except Exception:
                 self._rollback_session()   # H3 — clean the session before releasing the lock
                 raise
+        # fix F: the watchlist option-chain sweep uses its OWN DB session (persist_chain
+        # → SessionLocal) and touches only the provider + option_data — it needs no
+        # shared-session lock. Run it OFF the lock and off the event loop so its ~30s of
+        # Kite fetches can never starve the risk loop (2026-07-13 risk_loop_stalled 24×).
+        try:
+            await asyncio.to_thread(self._maybe_cache_chains)
+        except Exception as e:
+            log.error(f"option cache sweep error: {e}", event="OPTION_CACHE")
         self._beat_now("signal")           # P3 heartbeat
         self._maybe_watchdog()             # P3 — alert if the risk lane has stalled
         if self.on_update:
