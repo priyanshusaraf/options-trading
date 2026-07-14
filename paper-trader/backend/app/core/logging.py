@@ -26,8 +26,30 @@ if not _stdlogger.handlers:
 LogEntry = dict[str, Any]
 
 
+class WarnGate:
+    """Collapses a repeating failure into ONE warning per outage episode, with an
+    optional recovery note when it clears — so a stuck condition (e.g. an expired
+    Kite token making `margins()` fail every poll) doesn't spam the log/ring buffer.
+    `fail(key, msg)` warns only on the first failure of an episode; `ok(key, msg)`
+    clears it and (optionally) logs recovery, re-arming the next distinct episode."""
+
+    def __init__(self) -> None:
+        self._active: set[str] = set()
+
+    def fail(self, key: str, msg: str) -> None:
+        if key not in self._active:
+            self._active.add(key)
+            log.warn(msg)
+
+    def ok(self, key: str, msg: str | None = None) -> None:
+        if key in self._active:
+            self._active.discard(key)
+            if msg:
+                log.info(msg)
+
+
 class LogBus:
-    def __init__(self, maxlen: int = 800) -> None:
+    def __init__(self, maxlen: int = 4000) -> None:
         self._buf: deque[LogEntry] = deque(maxlen=maxlen)
         self._subs: list[Callable[[LogEntry], None]] = []
         self._seq = 0

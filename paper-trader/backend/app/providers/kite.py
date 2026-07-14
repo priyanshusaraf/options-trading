@@ -28,7 +28,7 @@ from datetime import datetime
 from app.core import market_hours
 from app.core.config import get_settings
 from app.core.instruments import Instrument
-from app.core.logging import log
+from app.core.logging import WarnGate, log
 from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
@@ -76,6 +76,7 @@ class KiteProvider(MarketDataProvider):
         self._dumps: dict[str, tuple[str, list]] = {}   # exchange -> (date, instruments)
         self._fut_cache: dict[str, dict] = {}            # inst.key -> near future row
         self._throttle = _Throttle()
+        self._warn = WarnGate()   # de-dupe repeating account-read failures (fix E)
         self._load_saved_token()
 
     # ── throttled Kite calls (respect documented rate limits) ─────────────
@@ -137,8 +138,11 @@ class KiteProvider(MarketDataProvider):
         try:
             m = self.kite.margins()
         except Exception as e:
-            log.warn(f"margins() failed: {e}")
+            # de-duped: warn once per outage episode (an expired token fails every poll)
+            self._warn.fail("margins", f"margins() failed: {e} — suppressing repeats "
+                                       f"until it recovers")
             return None
+        self._warn.ok("margins", "margins() recovered — reading live account funds again")
         eq = (m or {}).get("equity", {}) or {}
         avail = eq.get("available", {}) or {}
         live = avail.get("live_balance")
@@ -156,8 +160,10 @@ class KiteProvider(MarketDataProvider):
         try:
             m = self.kite.order_margins(orders)
         except Exception as e:
-            log.warn(f"order_margins() failed: {e}")
+            self._warn.fail("order_margins", f"order_margins() failed: {e} — suppressing "
+                                             f"repeats until it recovers")
             return None
+        self._warn.ok("order_margins")
         try:
             return float(sum((row or {}).get("total", 0.0) for row in (m or [])))
         except Exception:
@@ -167,8 +173,10 @@ class KiteProvider(MarketDataProvider):
         try:
             pos = self.kite.positions()
         except Exception as e:
-            log.warn(f"positions() failed: {e}")
+            self._warn.fail("positions", f"positions() failed: {e} — suppressing repeats "
+                                         f"until it recovers")
             return None   # read failed — NOT a flat account (audit C4). Callers fail closed.
+        self._warn.ok("positions")
         net = (pos or {}).get("net", []) or []
         return [{"tradingsymbol": r.get("tradingsymbol"),
                  "quantity": int(r.get("quantity", 0) or 0),
