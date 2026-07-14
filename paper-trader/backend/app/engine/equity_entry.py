@@ -29,6 +29,17 @@ def equity_qty(margin: float, leverage: float, price: float) -> int:
     return int((margin * leverage) // price)
 
 
+def qty_for_margin(per_share_margin: float, target_margin: float) -> int:
+    """Share quantity that consumes at most `target_margin` of REAL broker margin,
+    given the real per-share MIS margin (from Kite `order_margins`). Fix A: this
+    replaces the leverage guess — we no longer assume 5x, we size against the margin
+    Zerodha will actually block. Returns 0 when there's no quote (caller falls back to
+    the leverage model) or when even one share exceeds the target."""
+    if per_share_margin <= 0:
+        return 0
+    return int(target_margin // per_share_margin)
+
+
 # ── direction-aware exit geometry (equity LONG *and* real intraday SHORT) ────
 # Unlike the options path (always long-premium: stop below, target above), an
 # equity SHORT profits when price FALLS, so its stop is ABOVE entry and target
@@ -198,10 +209,20 @@ def _priority(key: str) -> int:
 
 def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: int,
                             min_margin: float, max_margin: float, purple_margin: float,
-                            leverage: float, available_cash: float) -> IntradaySelection:
+                            leverage: float, available_cash: float,
+                            sizer=None) -> IntradaySelection:
     """Choose up to `max_positions` intraday entries under the owner's rules
     (see module docstring). Returns selected picks (with sized qty/margin) and the
-    skipped candidates with a reason each."""
+    skipped candidates with a reason each.
+
+    `sizer(cand, target_margin) -> (qty, real_margin)` is the pluggable sizing model.
+    When supplied (live: a Kite `order_margins` quote) qty/margin come from the REAL
+    broker margin. When None, the legacy leverage model is used — identical to before,
+    so paper/mock and the pinned unit tests are unchanged."""
+    if sizer is None:
+        def sizer(c: IntradayCandidate, target_margin: float) -> tuple[int, float]:
+            qty = equity_qty(target_margin, leverage, c.price)
+            return qty, qty * c.price / leverage
     res = IntradaySelection()
     purple = sorted((c for c in cands if c.is_purple),
                     key=lambda c: _priority(c.instrument_key))
@@ -217,12 +238,11 @@ def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: in
         if len(res.selected) >= max_positions:
             res.skipped.append((c, "max concurrent intraday positions reached"))
             return
-        qty = equity_qty(target_margin, leverage, c.price)
+        qty, margin = sizer(c, target_margin)
         if qty < 1:
             res.skipped.append((c, f"share price ₹{c.price:,.0f} too high — target "
                                    f"margin buys <1 share"))
             return
-        margin = qty * c.price / leverage
         if margin < min_margin:
             res.skipped.append((c, f"below the ₹{min_margin:,.0f} margin floor "
                                    f"(only ₹{margin:,.0f} fits at ₹{c.price:,.0f}/share)"))

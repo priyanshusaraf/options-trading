@@ -150,6 +150,19 @@ class KiteProvider(MarketDataProvider):
         funds = self.account_funds()
         return funds["net"] if funds else None
 
+    def order_margin(self, orders: list[dict]) -> float | None:
+        if not self.is_authenticated():
+            return None
+        try:
+            m = self.kite.order_margins(orders)
+        except Exception as e:
+            log.warn(f"order_margins() failed: {e}")
+            return None
+        try:
+            return float(sum((row or {}).get("total", 0.0) for row in (m or [])))
+        except Exception:
+            return None
+
     def account_positions(self) -> list[dict] | None:
         try:
             pos = self.kite.positions()

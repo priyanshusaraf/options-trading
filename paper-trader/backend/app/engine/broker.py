@@ -93,20 +93,23 @@ class PaperBroker:
     def open_equity_position(self, inst: Instrument, direction: str, price: float,
                              qty: int, charge_segment: str, reason: str,
                              now: dt.datetime, params: dict | None = None,
-                             strategy_key: str | None = None) -> Position:
+                             strategy_key: str | None = None,
+                             margin: float | None = None) -> Position:
         """Open an intraday equity (MIS) position of `qty` shares at `price`.
 
-        MIS is leveraged: only the MARGIN (notional/leverage) leaves cash, not the
-        full notional — but P&L is on the full share move. We store entry_cost =
-        margin + entry charges (the actual cash out), so the ledger reconciliation
-        invariant holds exactly. SL/TP are direction-aware (a SHORT's stop is above
-        entry). Charges use the intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
+        MIS is leveraged: only the MARGIN leaves cash, not the full notional — but P&L
+        is on the full share move. We store entry_cost = margin + entry charges (the
+        actual cash out), so the ledger reconciliation invariant holds exactly. When the
+        caller supplies `margin` (fix A: the REAL Zerodha `order_margins` figure the
+        position was sized to) we book that; otherwise we fall back to notional/leverage.
+        SL/TP are direction-aware (a SHORT's stop is above entry). Charges use the
+        intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
         p = params if params is not None else effective(self.settings)
-        leverage = p.get("intraday_leverage", 5.0) or 5.0
+        leverage = p.get("intraday_leverage", 2.5) or 2.5
         sl_pct = p.get("intraday_stop_loss_pct", 0.01)
         tp_pct = p.get("intraday_target_pct", 0.02)
         notional = price * qty
-        margin = notional / leverage
+        margin = margin if (margin is not None and margin > 0) else notional / leverage
         charges = compute_charges(charge_segment, "BUY", price, qty)["total"]
         cost = margin + charges
         stop, target = equity_stop_target(direction, price, sl_pct, tp_pct)

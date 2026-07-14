@@ -35,8 +35,10 @@ from app.engine.broker_factory import make_broker
 from app.engine.capital import deployable_capital
 from app.engine.charges import compute_charges
 from app.engine.equity_entry import (
-    IntradayCandidate, equity_exit, select_intraday_entries)
+    IntradayCandidate, equity_exit, equity_qty, qty_for_margin,
+    select_intraday_entries)
 from app.engine.execution_policy import plan_order
+from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
@@ -568,6 +570,46 @@ class EngineRunner:
             "last_mark_time": pos.last_mark_time.isoformat() if pos.last_mark_time else None,
         }
 
+    def _intraday_margin_sizer(self):
+        """Fix A: a sizer that sizes intraday MIS qty against the REAL Zerodha margin
+        (`order_margins`) instead of an assumed 5x leverage — the 2026-07-13 rejection
+        cascade was a 5x-assumed vs ~2.5x-real mismatch. Returns None on the mock /
+        unauthenticated provider (→ select_intraday_entries uses the leverage model).
+
+        Per (symbol, side) the real per-share margin is quoted once per session and
+        cached (it's stable intraday), so a full entry cycle makes at most one quote
+        per name. A per-name quote failure degrades to the leverage model for that name
+        only — never a hard stop."""
+        prov = self.provider
+        if prov.name != "kite" or not getattr(prov, "is_authenticated", lambda: False)():
+            return None
+        lev = self.params.get("intraday_leverage", 2.5) or 2.5
+        cache: dict[tuple, float] = {}
+
+        def sizer(cand: IntradayCandidate, target_margin: float) -> tuple[int, float]:
+            inst = get_instrument(cand.instrument_key)
+            seg = _equity_charge_segment(inst)
+            tsym = getattr(inst, "spot_symbol", None) or inst.key
+            side = "BUY" if cand.direction == "LONG" else "SELL"
+            ckey = (tsym, side)
+            per_share = cache.get(ckey)
+            if per_share is None:
+                probe = max(1, equity_qty(target_margin, lev, cand.price))
+                total = prov.order_margin([{
+                    "exchange": exchange_for_segment(seg), "tradingsymbol": tsym,
+                    "transaction_type": side, "variety": "regular",
+                    "product": product_for_segment(seg), "order_type": "MARKET",
+                    "quantity": probe, "price": 0}])
+                if not total or total <= 0:
+                    q = equity_qty(target_margin, lev, cand.price)   # graceful fallback
+                    return q, q * cand.price / lev
+                per_share = total / probe
+                cache[ckey] = per_share
+            qty = qty_for_margin(per_share, target_margin)
+            return qty, qty * per_share
+
+        return sizer
+
     # ── lane 3: entries + reinforcement (fresh crossovers) ────────────────
     def process_entries(self) -> None:
         s, prov = self.settings, self.provider
@@ -826,11 +868,12 @@ class EngineRunner:
             else:
                 sel = select_intraday_entries(
                     eq_cands, max_positions=slots,
-                    min_margin=self.params.get("intraday_min_margin", 7000.0),
-                    max_margin=self.params.get("intraday_max_margin", 10000.0),
-                    purple_margin=self.params.get("intraday_purple_margin", 10000.0),
-                    leverage=self.params.get("intraday_leverage", 5.0),
-                    available_cash=self.deployable_cash())
+                    min_margin=self.params.get("intraday_min_margin", 5000.0),
+                    max_margin=self.params.get("intraday_max_margin", 8000.0),
+                    purple_margin=self.params.get("intraday_purple_margin", 8000.0),
+                    leverage=self.params.get("intraday_leverage", 2.5),
+                    available_cash=self.deployable_cash(),
+                    sizer=self._intraday_margin_sizer())
                 for pickk in sel.selected:
                     if not self.armed:   # #8 defense-in-depth: disarm may have landed mid-cycle
                         log.warn("DISARMED mid-cycle — aborting remaining intraday entries",
@@ -845,7 +888,8 @@ class EngineRunner:
                     pos = self.broker.open_equity_position(
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
-                        strategy_key=self.strategy_keys.get(pickk.instrument_key))
+                        strategy_key=self.strategy_keys.get(pickk.instrument_key),
+                        margin=pickk.margin)
                     if pos is None:
                         continue
                     if self.params.get("notify_enabled", True):

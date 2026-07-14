@@ -418,7 +418,7 @@ class LiveBroker(PaperBroker):
         return pos
 
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
-                             now, params=None, strategy_key=None):
+                             now, params=None, strategy_key=None, margin=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
         open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it."""
@@ -447,8 +447,11 @@ class LiveBroker(PaperBroker):
                       instrument=inst.key, event="LIVE_EQUITY_OPEN_FAIL")
             self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} {res.status}: {res.reason}")
             return None
+        # book the REAL margin sized to the ACTUAL fill (scale for a partial fill)
+        fill_margin = (margin * filled / qty) if (margin and margin > 0 and qty) else None
         pos = super().open_equity_position(inst, direction, avg, filled, charge_segment,
-                                           reason, now, params, strategy_key)
+                                           reason, now, params, strategy_key,
+                                           margin=fill_margin)
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
                       f"(order {res.order_id})", instrument=inst.key,
