@@ -1,6 +1,6 @@
 """End-to-end proof that the live tick loop trades the intraday-equity segment in
 paper/mock mode: instruments flagged product='equity_intraday' open MIS positions
-sized in the 7–10k margin band, mark to SPOT, exit on the tight SL/TP, never exceed
+sized in the 5–8k margin band, mark to SPOT, exit on the tight SL/TP, never exceed
 the concurrency cap, and keep the ledger reconciliation exact through every round
 trip. The options path is left to its own (unchanged) tests."""
 from sqlalchemy import select
@@ -13,8 +13,8 @@ from app.providers.mock import MockProvider
 
 
 def _cheap_keys(n: int = 3, lo: float = 100.0, hi: float = 1500.0) -> list[str]:
-    """Mock instruments whose current price lets a 7–10k margin (×5) buy ≥1 share
-    inside the band — so the min-margin floor doesn't skip every signal."""
+    """Mock instruments whose current price lets a 5–8k margin (×2.5 fallback) buy ≥1
+    share inside the band — so the min-margin floor doesn't skip every signal."""
     prov = MockProvider()
     out = []
     for inst in all_instruments():
@@ -65,8 +65,8 @@ def test_intraday_equity_trades_end_to_end():
     assert eq_trades, "no intraday-equity trade ever closed"
     # concurrency cap honoured
     assert max_open <= r.params.get("intraday_max_positions", 3)
-    # every opened position sized inside the 7–10k margin band
-    assert margins and all(6999.0 <= m <= 10001.0 for m in margins)
+    # every opened position sized inside the 5–8k margin band (fix A, 2026-07-14)
+    assert margins and all(4999.0 <= m <= 8001.0 for m in margins)
     # the equity round-trips kept the cash ledger exact
     assert r.broker.reconcile()["diff"] == 0.0
     # closed equity trades carry the segment + a real exit reason

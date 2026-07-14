@@ -50,6 +50,8 @@ OVERRIDABLE = (
     # stale-crossover age cap, start-of-day entry window
     "intraday_block_weekday", "intraday_override_date",
     "max_signal_age_minutes", "entry_window_start",
+    # fix D: Nifty opening-gap guard
+    "gap_guard_enabled", "gap_guard_pct", "gap_guard_resume", "gap_guard_index",
     # #14 live order-failure circuit breaker
     "order_failure_disarm_count",
 )
@@ -110,6 +112,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "entry_min_days_to_expiry": (0, 30),
     "intraday_block_weekday": (-1, 6),
     "max_signal_age_minutes": (0.0, 1440.0),   # 0 disables the stale-crossover guard
+    "gap_guard_pct": (0.0, 10.0),              # 0 disables the opening-gap guard
     "order_failure_disarm_count": (0, 100),    # 0 disables the order circuit breaker
     "max_round_trips_per_day": (0, 100),
 }

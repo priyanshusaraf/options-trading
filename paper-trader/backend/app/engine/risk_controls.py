@@ -101,6 +101,31 @@ def before_entry_window(now: dt.datetime, start_hhmm: str) -> bool:
     return now.time() < start
 
 
+def gap_halt_active(now: dt.datetime, index_open: float | None,
+                    prev_close: float | None, *, gap_pct: float,
+                    resume_hhmm: str) -> bool:
+    """True if NEW entries should be blocked because the index gapped ≥ `gap_pct`
+    percent at the open and it's still before `resume_hhmm` (IST wall-clock).
+
+    Gates ENTRIES only — a big overnight gap makes the first hour's price action
+    erratic/unreliable, so the owner sits out until (default) 11:00. Fails OPEN: a
+    disabled guard (gap_pct ≤ 0), a bad resume time, or a missing index read never
+    blocks — a data hiccup must not halt the whole book."""
+    if not gap_pct or gap_pct <= 0:
+        return False
+    if index_open is None or not prev_close or prev_close <= 0:
+        return False
+    gap = abs(index_open - prev_close) / prev_close * 100.0
+    if gap < gap_pct:
+        return False
+    try:
+        h, m = (resume_hhmm or "").strip().split(":")
+        resume = dt.time(int(h), int(m))
+    except (ValueError, AttributeError):
+        return False
+    return now.time() < resume
+
+
 def intraday_blocked_for_expiry_day(today: dt.date, override_iso: str | None,
                                     block_weekday: int = 1) -> bool:
     """True if NEW entries are blocked today (the owner's "no trades on Tuesday").

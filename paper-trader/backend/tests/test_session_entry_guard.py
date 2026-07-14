@@ -41,7 +41,8 @@ def test_preopen_intraday_entry_is_skipped():
 def test_continuous_session_allows_the_intraday_entry():
     # Positive control: the SAME setup that is blocked pre-open opens a position once the
     # continuous session is live — proving the guard gates on the session, not everything.
-    r, key = _intraday_runner()
+    # (affordable name so the ₹5–8k real-margin sizer buys ≥1 share; NIFTY at ₹24k can't)
+    r, key = _intraday_runner(key="NATURALGAS")
     r.provider.now = lambda: dt.datetime(2026, 7, 3, 11, 0)   # Friday, mid-session
     r.process_entries()
     assert _open_intraday(r) != []
