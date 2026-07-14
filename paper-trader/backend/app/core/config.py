@@ -151,20 +151,23 @@ class Settings(BaseSettings):
     # must not phantom-close a still-open real position.
     orphan_confirm_count: int = 2
 
-    # ── intraday equity segment (MIS, 5x; separate from the options segment) ──
-    # Opt-in. Sizing is by MARGIN deployed per trade (not notional): 7–10k of margin
-    # controls ~35–50k of stock at 5x. qty = floor(margin × leverage / share_price).
-    # Concurrency is a HARD cap of 3 TOTAL (purple included). Purple = a watchlist
-    # priority flag: those names always win selection and size at purple_margin;
-    # other names compete for leftover slots by the higher-quantity (cheaper-share)
-    # rule. The portfolio-wide 5k daily-loss halt (max_daily_loss, cost-inclusive)
-    # governs BOTH segments — there is no separate intraday loss cap.
+    # ── intraday equity segment (MIS; separate from the options segment) ──
+    # Opt-in. Sizing is by REAL MARGIN deployed per trade (not notional): live orders
+    # are sized against Kite `order_margins` so ~5–8k of margin controls whatever the
+    # broker's true MIS multiplier allows (fix A, 2026-07-14). The `intraday_leverage`
+    # below is only a FALLBACK estimate for paper/mock or when a margin quote fails —
+    # set conservative (~2.5x) so paper sizing ≈ live and can never over-size into a
+    # rejection cascade. Concurrency is a HARD cap of 3 TOTAL (purple included). Purple
+    # = a watchlist priority flag: those names always win selection and size at
+    # purple_margin; other names compete for leftover slots by the higher-quantity
+    # (cheaper-share) rule. The portfolio-wide 5k daily-loss halt (max_daily_loss,
+    # cost-inclusive) governs BOTH segments — there is no separate intraday loss cap.
     intraday_enabled: bool = False
     intraday_max_positions: int = 3            # hard cap on concurrent intraday trades (purple included)
-    intraday_min_margin: float = 7_000.0       # don't open an intraday trade with less margin than this
-    intraday_max_margin: float = 10_000.0      # target margin per (non-purple) intraday trade
-    intraday_purple_margin: float = 10_000.0   # margin for a purple-flagged priority name
-    intraday_leverage: float = 5.0             # Zerodha MIS equity leverage
+    intraday_min_margin: float = 5_000.0       # don't open an intraday trade with less REAL margin than this
+    intraday_max_margin: float = 8_000.0       # target REAL margin per (non-purple) intraday trade
+    intraday_purple_margin: float = 8_000.0    # target REAL margin for a purple-flagged priority name
+    intraday_leverage: float = 2.5             # FALLBACK leverage estimate only (real margin governs live)
     intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
     intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
     intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price

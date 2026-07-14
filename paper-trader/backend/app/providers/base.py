@@ -127,6 +127,14 @@ class MarketDataProvider(ABC):
         if unavailable (mock / not authenticated)."""
         return None
 
+    def order_margin(self, orders: list[dict]) -> float | None:
+        """REAL broker margin (₹) required for the given order legs, via Kite's
+        `order_margins` calculator (read-only, allowlisted). Used to size intraday
+        MIS orders against the margin Zerodha will actually block instead of an
+        assumed leverage. None if unavailable (mock / not authenticated / error),
+        in which case the caller falls back to the leverage model."""
+        return None
+
     # ── clock (real for Kite, simulated for Mock) ─────────────────────────
     def now(self) -> datetime:
         return datetime.now()
