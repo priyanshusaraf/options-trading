@@ -18,9 +18,24 @@ def test_nightly_initialises_research_db(tmp_path):
     research_db = str(tmp_path / "research.db")
     r = _run({"PT_RESEARCH_DB_PATH": research_db,
               "PT_DB_PATH": str(tmp_path / "paper_trader.db"),
-              "PT_EXECUTION": "paper"})
+              "PT_EXECUTION": "paper",
+              "PT_RESEARCH_ENABLED": "1"})
     assert r.returncode == 0, r.stderr
     assert os.path.exists(research_db)
+
+
+def test_nightly_skips_when_research_disabled(tmp_path):
+    # freeze flag (default off): the cron one-shot exits cleanly WITHOUT creating
+    # or touching research.db — the plane is dormant, not broken. The guardrails
+    # still run first (see the fail-closed tests below, which pass no flag).
+    research_db = str(tmp_path / "research.db")
+    r = _run({"PT_RESEARCH_DB_PATH": research_db,
+              "PT_DB_PATH": str(tmp_path / "paper_trader.db"),
+              "PT_EXECUTION": "paper",
+              "PT_RESEARCH_ENABLED": "0"})
+    assert r.returncode == 0, r.stderr
+    assert "skipped" in r.stdout
+    assert not os.path.exists(research_db)
 
 
 def test_nightly_fails_closed_when_research_db_equals_execution_db(tmp_path):

@@ -51,6 +51,13 @@ def main() -> int:
     # not live. Any violation raises ResearchIsolationError and aborts the run.
     enforce(research_db=research_db, exec_db=_execution_db_path(),
             loaded_modules=sys.modules, env=os.environ)
+    # Freeze gate (checked AFTER the guardrails so an isolation violation still
+    # fails loudly even while frozen): with the research plane disabled the cron
+    # one-shot is a no-op — no research.db is created or touched.
+    from app.core.config import get_settings
+    if not get_settings().research_enabled:
+        print("research plane disabled (PT_RESEARCH_ENABLED=0) — nightly run skipped")
+        return 0
     engine = make_engine(research_db)
     init_research_db(engine)
     Session = make_sessionmaker(engine)
