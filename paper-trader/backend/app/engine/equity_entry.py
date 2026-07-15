@@ -210,7 +210,9 @@ def _priority(key: str) -> int:
 def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: int,
                             min_margin: float, max_margin: float, purple_margin: float,
                             leverage: float, available_cash: float,
-                            sizer=None) -> IntradaySelection:
+                            sizer=None,
+                            minutes_to_close: dict[str, float] | None = None,
+                            entry_cutoff_minutes: float = 0.0) -> IntradaySelection:
     """Choose up to `max_positions` intraday entries under the owner's rules
     (see module docstring). Returns selected picks (with sized qty/margin) and the
     skipped candidates with a reason each.
@@ -218,7 +220,14 @@ def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: in
     `sizer(cand, target_margin) -> (qty, real_margin)` is the pluggable sizing model.
     When supplied (live: a Kite `order_margins` quote) qty/margin come from the REAL
     broker margin. When None, the legacy leverage model is used — identical to before,
-    so paper/mock and the pinned unit tests are unchanged."""
+    so paper/mock and the pinned unit tests are unchanged.
+
+    `minutes_to_close`/`entry_cutoff_minutes`: skip a candidate whose instrument is
+    within `entry_cutoff_minutes` of its session close (2026-07-15: NCC entered
+    15:15:16, force-flattened 15:15:17 by the square-off buffer, -₹67.7 on
+    charges/spread for a trade that never got a chance to work). Both default to
+    off (no `minutes_to_close` entry, or a 0 cutoff) so existing callers/tests are
+    unaffected."""
     if sizer is None:
         def sizer(c: IntradayCandidate, target_margin: float) -> tuple[int, float]:
             qty = equity_qty(target_margin, leverage, c.price)
@@ -235,6 +244,12 @@ def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: in
 
     def consider(c: IntradayCandidate, target_margin: float) -> None:
         nonlocal cash
+        if entry_cutoff_minutes > 0 and minutes_to_close is not None:
+            mtc = minutes_to_close.get(c.instrument_key)
+            if mtc is not None and mtc <= entry_cutoff_minutes:
+                res.skipped.append((c, f"entry_cutoff — {mtc:.1f}m to close < "
+                                       f"{entry_cutoff_minutes:.0f}m cutoff"))
+                return
         if len(res.selected) >= max_positions:
             res.skipped.append((c, "max concurrent intraday positions reached"))
             return

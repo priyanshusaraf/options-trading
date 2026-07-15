@@ -915,6 +915,11 @@ class EngineRunner:
                 log.info(f"INTRADAY CAP reached ({len(open_equity)} open) — "
                          f"{len(eq_cands)} signals dropped")
             else:
+                # same session-close clock the force-flat uses (square_off_intraday)
+                # — a fresh entry must not land inside the force-flat window.
+                from app.core import market_hours
+                mtc_by_key = {key: market_hours.minutes_to_close(inst.spot_exchange, now)
+                             for key, (inst, _direction) in eq_meta.items()}
                 sel = select_intraday_entries(
                     eq_cands, max_positions=slots,
                     min_margin=self.params.get("intraday_min_margin", 5000.0),
@@ -922,7 +927,10 @@ class EngineRunner:
                     purple_margin=self.params.get("intraday_purple_margin", 8000.0),
                     leverage=self.params.get("intraday_leverage", 2.5),
                     available_cash=self.deployable_cash(),
-                    sizer=self._intraday_margin_sizer())
+                    sizer=self._intraday_margin_sizer(),
+                    minutes_to_close=mtc_by_key,
+                    entry_cutoff_minutes=self.params.get(
+                        "intraday_entry_cutoff_minutes", 25.0))
                 for pickk in sel.selected:
                     if not self.armed:   # #8 defense-in-depth: disarm may have landed mid-cycle
                         log.warn("DISARMED mid-cycle — aborting remaining intraday entries",

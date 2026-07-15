@@ -93,3 +93,45 @@ def test_margin_used_never_exceeds_target():
     p = res.selected[0]
     assert p.margin <= 10_000.0 + 1e-6
     assert p.qty == equity_qty(10_000, LEV, 333)
+
+
+# ── entry cutoff near the square-off boundary (2026-07-15 NCC 1-second-trade bug):
+# an intraday entry with only seconds left before force-flat pays entry+exit
+# charges/spread for a position that never gets a chance to work. Guard: skip any
+# candidate whose instrument is inside `entry_cutoff_minutes` of session close. ──
+
+def test_candidate_inside_cutoff_window_is_skipped_with_reason():
+    # NCC-style repro: signal fires 1 minute before close, cutoff is 25m.
+    res = select_intraday_entries(
+        [_c("NCC", 100)], **{**SEL, "minutes_to_close": {"NCC": 1.0},
+                             "entry_cutoff_minutes": 25.0})
+    assert not res.selected
+    assert res.skipped and res.skipped[0][0].instrument_key == "NCC"
+    assert "entry_cutoff" in res.skipped[0][1]
+
+
+def test_candidate_just_outside_cutoff_window_still_enters():
+    # 25.01m to close, cutoff 25.0m → just outside the blocked window, enters normally.
+    res = select_intraday_entries(
+        [_c("A", 100)], **{**SEL, "minutes_to_close": {"A": 25.01},
+                           "entry_cutoff_minutes": 25.0})
+    assert len(res.selected) == 1
+    assert res.selected[0].instrument_key == "A"
+
+
+def test_cutoff_guard_is_a_noop_without_minutes_to_close_data():
+    # Backward-compatible default: callers that don't pass minutes_to_close (or
+    # pass 0 cutoff) get the pre-existing selection behaviour unchanged.
+    res = select_intraday_entries([_c("A", 100)], **SEL)
+    assert len(res.selected) == 1
+
+
+def test_default_entry_cutoff_exceeds_square_off_buffer():
+    # A new intraday position must always have headroom to work before the
+    # force-flat fires, so the entry cutoff must be strictly later (in
+    # minutes-before-close terms, a LARGER number) than the square-off buffer.
+    from app.core.config import Settings
+    s = Settings()
+    assert s.intraday_entry_cutoff_minutes > s.intraday_square_off_buffer_minutes
+    assert s.intraday_entry_cutoff_minutes == pytest.approx(
+        s.intraday_square_off_buffer_minutes + 10.0)

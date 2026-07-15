@@ -175,6 +175,12 @@ class Settings(BaseSettings):
     intraday_purple_margin: float = 8_000.0    # target REAL margin for a purple-flagged priority name
     intraday_leverage: float = 2.5             # FALLBACK leverage estimate only (real margin governs live)
     intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
+    # don't OPEN a new intraday trade once we're this close to close — must exceed
+    # the square-off buffer above, or a fresh entry can be force-flattened seconds
+    # later (2026-07-15: NCC entered 15:15:16, squared off 15:15:17, -₹67.7 on
+    # charges/spread alone). Default = buffer + 10, so a new position always has
+    # >=10 minutes to actually work before the force-flat fires.
+    intraday_entry_cutoff_minutes: float = 25.0
     intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
     intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price
     # lockstep band: once an equity position is in profit, slide BOTH the stop and

@@ -39,7 +39,8 @@ OVERRIDABLE = (
     # engine's self.params (effective() only surfaces OVERRIDABLE keys).
     "intraday_enabled", "intraday_max_positions", "intraday_min_margin",
     "intraday_max_margin", "intraday_purple_margin", "intraday_leverage",
-    "intraday_square_off_buffer_minutes", "intraday_stop_loss_pct", "intraday_target_pct",
+    "intraday_square_off_buffer_minutes", "intraday_entry_cutoff_minutes",
+    "intraday_stop_loss_pct", "intraday_target_pct",
     "intraday_lockstep_enabled", "intraday_lockstep_trigger_pct",
     "intraday_profit_lock_threshold", "intraday_profit_lock_frac",
     # overtrading guard (advisory)
@@ -101,6 +102,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "intraday_purple_margin": (0.0, 100000000.0),
     "intraday_leverage": (1.0, 20.0),
     "intraday_square_off_buffer_minutes": (0.0, 360.0),
+    "intraday_entry_cutoff_minutes": (0.0, 360.0),
     "intraday_stop_loss_pct": (0.001, 0.50),
     "intraday_target_pct": (0.001, 2.0),
     "intraday_lockstep_trigger_pct": (0.001, 1.0),
