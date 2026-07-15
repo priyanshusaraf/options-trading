@@ -8,16 +8,29 @@ new subsystem's surface stays cohesive.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core import research_read
 from app.core import strategy_archive as arch
 from app.core import watchlists as wl
+from app.core.config import get_settings
 from app.core.deploy_bridge import DeployRequest, deploy, preview_deploy
 from app.db.session import SessionLocal
 
-router = APIRouter()
+
+def _research_gate() -> None:
+    """Freeze gate: every endpoint on this router 403s unless the research plane
+    is enabled (PT_RESEARCH_ENABLED). A request-time dependency rather than
+    conditional mounting, because main.py mounts routers at import time — the
+    dependency keeps the flag testable/flippable without a module reload and
+    matches how tests monkeypatch the cached Settings instance."""
+    if not get_settings().research_enabled:
+        raise HTTPException(status_code=403,
+                            detail="research plane disabled (set PT_RESEARCH_ENABLED=1)")
+
+
+router = APIRouter(dependencies=[Depends(_research_gate)])
 
 
 class ProposalIn(BaseModel):

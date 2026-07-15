@@ -1,9 +1,19 @@
 """Portfolio API: deploy (preview + commit), watchlists/archive reads, and lifecycle
 status control. Deploy is staged config only — the endpoint never arms or trades."""
+import pytest
+
+from app.core.config import get_settings
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.main import app
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _research_on(monkeypatch):
+    # this file exercises the research-plane API itself; lift the freeze gate
+    # (PT_RESEARCH_ENABLED, default off — see tests/test_research_flag.py)
+    monkeypatch.setattr(get_settings(), "research_enabled", True)
 
 
 def _client():

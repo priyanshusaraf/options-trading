@@ -102,6 +102,14 @@ def _seed_research_db(path: str) -> int:
         return cand.id
 
 
+@pytest.fixture(autouse=True)
+def _research_on(monkeypatch):
+    # this file exercises the research-plane API itself; lift the freeze gate
+    # (PT_RESEARCH_ENABLED, default off — see tests/test_research_flag.py)
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "research_enabled", True)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     rdb = str(tmp_path / "research.db")

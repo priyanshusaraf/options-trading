@@ -205,6 +205,19 @@ class Settings(BaseSettings):
     option_cache_enabled: bool = True
     option_cache_snapshot_minutes: float = 15.0  # persist a chain snapshot at most this often
 
+    # ── research plane (frozen by default) ───────────────────────────────────
+    # Master switch for the autonomous research plane: the nightly research run,
+    # startup registration of generated (builder) strategies, and the
+    # /api/portfolio promotions/watchlists/archive/deploy surface. OFF (the
+    # default) freezes the plane without deleting it: the nightly entry point
+    # no-ops, nothing is registered at startup (a stale gen_* assignment
+    # fail-safes to the default strategy), the portfolio routes answer 403, and
+    # the cockpit hides the Portfolio tab. Flip via env PT_RESEARCH_ENABLED=1
+    # (restart to re-register generated strategies). The core universe
+    # endpoints (/api/portfolio/add|remove|add-bulk|home) and the option-data
+    # research cache above are NOT part of the plane and ignore this flag.
+    research_enabled: bool = False
+
     # ── live execution gate (BOTH required, on top of kite-provider + ARM) ──
     # Settings-backed so the SINGLE source of truth is .env (no shell exports
     # needed each session). broker_factory still also honours a real exported

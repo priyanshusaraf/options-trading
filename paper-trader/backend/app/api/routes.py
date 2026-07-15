@@ -73,6 +73,8 @@ def status(request: Request):
         "time": p.now().isoformat(),
         "interval": settings.interval,
         "capital": cap,
+        # research-plane freeze flag — the cockpit hides the Portfolio tab when off
+        "research_enabled": settings.research_enabled,
     }
 
 

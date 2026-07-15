@@ -47,13 +47,19 @@ async def lifespan(app: FastAPI):
     # Reconstruct any deployed generated strategies from the DB and register them BEFORE
     # the runner loads per-instrument config, so a gen_* watchlist assignment resolves to
     # the real strategy instead of the default fallback. Non-fatal: a bad row is skipped.
-    try:
-        from app.core.generated_strategies import register_all
-        from app.db.session import SessionLocal
-        with SessionLocal() as s:
-            register_all(s)
-    except Exception as e:
-        log.error(f"generated-strategy registration failed at startup: {e}")
+    # Frozen behind PT_RESEARCH_ENABLED: with the research plane off nothing registers,
+    # and a stale gen_* assignment fail-safes to the default strategy (registry fallback).
+    if settings.research_enabled:
+        try:
+            from app.core.generated_strategies import register_all
+            from app.db.session import SessionLocal
+            with SessionLocal() as s:
+                register_all(s)
+        except Exception as e:
+            log.error(f"generated-strategy registration failed at startup: {e}")
+    else:
+        log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — generated strategies "
+                 "not registered; portfolio/research API is gated off")
     runner = EngineRunner()  # factory logs the chosen provider
     app.state.runner = runner
 
