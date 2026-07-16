@@ -132,3 +132,107 @@ def test_runner_sizer_none_on_mock_provider():
     init_db(reset=True)
     r = EngineRunner()                              # default mock provider
     assert r._intraday_margin_sizer() is None       # → select uses the leverage model
+
+
+# ── Task 2 (R2): intraday_leverage becomes a BINDING notional cap ────────────
+# 2026-07-15 autopsy: all 7 instruments sized at margin/notional = 5.0 (Zerodha's
+# real MIS multiplier) while intraday_leverage=2.5 was set to HALVE risk. The real
+# margin quote only floors qty against broker rejection; it never capped notional
+# to the owner's intended leverage. Fix: qty = min(real-margin qty, leverage-cap qty).
+
+def test_leverage_cap_binds_when_real_margin_is_permissive():
+    # Real per-share margin implies 5x (₹100 share needs ₹20 margin) but the owner
+    # set intraday_leverage=2.5 to halve risk. The cap must bind: qty comes from the
+    # leverage model, not the generous real-margin quote, and notional stays inside
+    # target_margin × leverage.
+    from app.db.session import init_db
+    from app.engine.runner import EngineRunner
+    from app.core.instruments import all_instruments
+    init_db(reset=True)
+    r = EngineRunner()
+    r.provider = _KiteStub(per_share=20.0)          # ₹20/share margin on a ₹100 share = 5x
+    r.params["intraday_leverage"] = 2.5
+    key = all_instruments()[0].key
+    target_margin = 8_000.0
+    qty, margin = r._intraday_margin_sizer()(_c(key, 100.0), target_margin)
+    real_margin_qty = qty_for_margin(20.0, target_margin)     # 400 — what 5x real margin allows
+    assert real_margin_qty == 400
+    assert qty == 200                                          # capped: floor(8000*2.5/100)
+    assert qty < real_margin_qty                                # cap actually bound
+    notional = qty * 100.0
+    assert notional <= target_margin * 2.5 + 1e-6
+    assert margin == pytest.approx(qty * 20.0)                  # real margin actually blocked
+
+
+def test_real_margin_qty_binds_when_leverage_cap_is_generous():
+    # Same 5x-permissive real margin, but a generous owner leverage (10x) — the real
+    # broker margin is the tighter constraint and must win (never over-size beyond
+    # what Zerodha will actually grant).
+    from app.db.session import init_db
+    from app.engine.runner import EngineRunner
+    from app.core.instruments import all_instruments
+    init_db(reset=True)
+    r = EngineRunner()
+    r.provider = _KiteStub(per_share=20.0)
+    r.params["intraday_leverage"] = 10.0
+    key = all_instruments()[0].key
+    target_margin = 8_000.0
+    qty, margin = r._intraday_margin_sizer()(_c(key, 100.0), target_margin)
+    assert qty == 400                                           # real-margin qty binds
+    assert margin == pytest.approx(8_000.0)                     # 400 × 20
+
+
+def test_fallback_path_scales_with_leverage():
+    # When the quote fails, the pure leverage model is unchanged and scales with
+    # whatever intraday_leverage is currently set to (not hardcoded to 2.5).
+    from app.db.session import init_db
+    from app.engine.runner import EngineRunner
+    from app.engine.equity_entry import equity_qty
+    from app.core.instruments import all_instruments
+    init_db(reset=True)
+    r = EngineRunner()
+    r.provider = _KiteStub(per_share=None)
+    r.params["intraday_leverage"] = 4.0
+    key = all_instruments()[0].key
+    qty, margin = r._intraday_margin_sizer()(_c(key, 100.0), 8_000.0)
+    assert qty == equity_qty(8_000.0, 4.0, 100.0)               # 320, not the 2.5x default
+
+
+def test_leverage_cap_zero_qty_does_not_crash_entry_cycle():
+    # A leverage cap smaller than one share (tiny intraday_leverage) must degrade to
+    # qty=0 and be skipped by the selector — never raise/crash the entry cycle.
+    from app.db.session import init_db
+    from app.engine.runner import EngineRunner
+    from app.core.instruments import all_instruments
+    init_db(reset=True)
+    r = EngineRunner()
+    r.provider = _KiteStub(per_share=20.0)
+    r.params["intraday_leverage"] = 0.01                        # cap collapses to <1 share
+    key = all_instruments()[0].key
+    sizer = r._intraday_margin_sizer()
+    qty, margin = sizer(_c(key, 100.0), 8_000.0)
+    assert qty == 0 and margin == 0.0
+
+    res = select_intraday_entries([_c(key, 100.0)], max_positions=3, min_margin=5_000.0,
+                                  max_margin=8_000.0, purple_margin=8_000.0, leverage=0.01,
+                                  available_cash=1_000_000.0, sizer=sizer)
+    assert not res.selected
+    assert any("target margin buys <1 share" in reason for _, reason in res.skipped)
+
+
+def test_leverage_cap_bind_logs_marker():
+    # A log marker must fire when the leverage cap actually reduces qty below the
+    # real-margin qty, naming both quantities so the owner can see the cap working.
+    from app.db.session import init_db
+    from app.engine.runner import EngineRunner
+    from app.core.instruments import all_instruments
+    from app.core.logging import log
+    init_db(reset=True)
+    r = EngineRunner()
+    r.provider = _KiteStub(per_share=20.0)
+    r.params["intraday_leverage"] = 2.5
+    key = all_instruments()[0].key
+    before = len(log.recent(1))
+    r._intraday_margin_sizer()(_c(key, 100.0), 8_000.0)
+    entries = log.recent(10)
+    assert any("leverage cap" in e["msg"].lower() for e in entries), entries

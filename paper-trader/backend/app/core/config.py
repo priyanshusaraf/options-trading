@@ -158,13 +158,15 @@ class Settings(BaseSettings):
     orphan_confirm_count: int = 2
 
     # ── intraday equity segment (MIS; separate from the options segment) ──
-    # Opt-in. Sizing is by REAL MARGIN deployed per trade (not notional): live orders
-    # are sized against Kite `order_margins` so ~5–8k of margin controls whatever the
-    # broker's true MIS multiplier allows (fix A, 2026-07-14). The `intraday_leverage`
-    # below is only a FALLBACK estimate for paper/mock or when a margin quote fails —
-    # set conservative (~2.5x) so paper sizing ≈ live and can never over-size into a
-    # rejection cascade. Concurrency is a HARD cap of 3 TOTAL (purple included). Purple
-    # = a watchlist priority flag: those names always win selection and size at
+    # Opt-in. Live orders are sized against Kite `order_margins` (real per-share MIS
+    # margin, fix A 2026-07-14) so broker rejection is never a risk — but qty is then
+    # capped so notional never exceeds target_margin × `intraday_leverage` (Task 2,
+    # R2 2026-07-16): the 2026-07-15 autopsy found every position sized at Zerodha's
+    # real ~5x MIS multiplier while intraday_leverage=2.5 was set to HALVE risk, since
+    # the real-margin quote only floored qty against rejection and never capped it.
+    # `intraday_leverage` is ALSO still the pure fallback estimate for paper/mock or a
+    # failed margin quote. Concurrency is a HARD cap of 3 TOTAL (purple included).
+    # Purple = a watchlist priority flag: those names always win selection and size at
     # purple_margin; other names compete for leftover slots by the higher-quantity
     # (cheaper-share) rule. The portfolio-wide 5k daily-loss halt (max_daily_loss,
     # cost-inclusive) governs BOTH segments — there is no separate intraday loss cap.
@@ -173,7 +175,11 @@ class Settings(BaseSettings):
     intraday_min_margin: float = 5_000.0       # don't open an intraday trade with less REAL margin than this
     intraday_max_margin: float = 8_000.0       # target REAL margin per (non-purple) intraday trade
     intraday_purple_margin: float = 8_000.0    # target REAL margin for a purple-flagged priority name
-    intraday_leverage: float = 2.5             # FALLBACK leverage estimate only (real margin governs live)
+    # BINDING notional cap (Task 2, R2 2026-07-16): live qty = min(real-margin qty,
+    # equity_qty(target_margin, this, price)) — Zerodha's real MIS multiplier (often
+    # 5x) only floors qty against broker rejection, it no longer decides notional.
+    # Also still the pure fallback estimate for paper/mock or a failed margin quote.
+    intraday_leverage: float = 2.5
     intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
     # don't OPEN a new intraday trade once we're this close to close — must exceed
     # the square-off buffer above, or a fresh entry can be force-flattened seconds

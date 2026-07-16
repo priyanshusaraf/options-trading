@@ -582,7 +582,17 @@ class EngineRunner:
         Per (symbol, side) the real per-share margin is quoted once per session and
         cached (it's stable intraday), so a full entry cycle makes at most one quote
         per name. A per-name quote failure degrades to the leverage model for that name
-        only — never a hard stop."""
+        only — never a hard stop.
+
+        Task 2 (R2, 2026-07-16 autopsy): the real margin quote only guarded against
+        broker rejection — it never capped notional to the owner's `intraday_leverage`.
+        Every Jul-15 instrument sized at Zerodha's real 5x MIS multiplier while
+        intraday_leverage=2.5 was set to HALVE risk. `intraday_leverage` is now a
+        BINDING notional cap on top of the real-margin sizing: qty is the SMALLER of
+        (a) what the real margin quote allows and (b) what the owner's leverage cap
+        allows, so notional never exceeds target_margin × leverage even when Zerodha
+        would grant more. Returned margin is always qty × per_share — the real margin
+        actually blocked — never the (larger) target margin."""
         prov = self.provider
         if prov.name != "kite" or not getattr(prov, "is_authenticated", lambda: False)():
             return None
@@ -608,7 +618,13 @@ class EngineRunner:
                     return q, q * cand.price / lev
                 per_share = total / probe
                 cache[ckey] = per_share
-            qty = qty_for_margin(per_share, target_margin)
+            margin_qty = qty_for_margin(per_share, target_margin)
+            lev_qty = equity_qty(target_margin, lev, cand.price)
+            qty = min(margin_qty, lev_qty)
+            if qty < margin_qty:
+                log.info(f"sized by leverage cap — leverage_qty={qty} "
+                         f"margin_qty={margin_qty} lev={lev}x",
+                         instrument=cand.instrument_key, event="LEVERAGE_CAP")
             return qty, qty * per_share
 
         return sizer
