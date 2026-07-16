@@ -29,6 +29,7 @@ class FakeClient:
         self.gtt_deleted = []
         self.stop_orders = []                # (tradingsymbol, trigger, side, exchange) SL-M stops
         self.stop_modified = []              # (order_id, trigger) SL-M re-prices
+        self.stop_modify_calls = []          # (order_id, trigger, tradingsymbol, exchange) full args
         self.cancelled = []                  # order ids passed to cancel()
         self.log = []                        # ordered call log across orders + GTTs
 
@@ -63,8 +64,9 @@ class FakeClient:
         self.log.append(("place_stop", tradingsymbol))
         return "SLM-1"
 
-    def modify_stop_order(self, order_id, trigger_price):
+    def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None):
         self.stop_modified.append((order_id, trigger_price))
+        self.stop_modify_calls.append((order_id, trigger_price, tradingsymbol, exchange))
         self.log.append(("modify_stop", order_id))
 
     def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
@@ -260,6 +262,41 @@ def test_equity_trail_reprices_the_sl_m():
     b.update_stop_protection(pos, 103.0)
     assert c.stop_modified and c.stop_modified[-1] == ("SLM-1", 98.5)
     assert c.gtt_modified == []                   # not a GTT
+
+
+def test_equity_trail_reprice_passes_symbol_and_exchange_for_the_real_tick():
+    """2026-07-15: modify_stop_order only took an order id + price and always landed
+    on the hardcoded 0.05 grid. The trail re-price must hand the client the
+    tradingsymbol + exchange so it can resolve the SAME real tick the initial SL-M
+    placement used (LT/MARUTI-class symbols need their own grid, not 0.05)."""
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.stop_price = 98.5
+    b.update_stop_protection(pos, 103.0)
+    assert c.stop_modify_calls[-1] == ("SLM-1", 98.5, pos.tradingsymbol, "NSE")
+
+
+# ── 2026-07-13 SUZLON class of failure: a rejected SL-M trigger modify triggers a
+# cancel+replace resync. Today a SUCCESSFUL re-place is silent — the autopsy could not
+# confirm any recovery happened. An explicit marker must be logged on success. ────────
+def test_resync_recovery_logs_an_explicit_marker():
+    from app.core.logging import log
+
+    class RejectOnceClient(FakeClient):
+        def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None):
+            raise RuntimeError("trigger price out of permissible range")
+
+    c = RejectOnceClient(fill_price=100.0)
+    b = _broker(c)
+    pos = _open_eq(b, "LONG", 100.0, 10)
+    pos.stop_price = 98.5
+    b.update_stop_protection(pos, 103.0)          # modify rejected -> resync -> re-place succeeds
+    assert pos.gtt_trigger_id == "SLM-1"          # a fresh stop is resting
+    recovered = [e for e in log.recent(5000) if e.get("event") == "STOP_RESYNC_RECOVERED"]
+    assert recovered, "expected an explicit SL-M resync recovered marker"
+    assert pos.tradingsymbol in recovered[-1]["msg"]
+    assert "resync recovered" in recovered[-1]["msg"].lower()
 
 
 def test_reconciled_equity_orphan_cancels_its_sl_m():

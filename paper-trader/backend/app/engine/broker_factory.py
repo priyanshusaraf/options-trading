@@ -48,8 +48,13 @@ def make_broker(provider, notifier=None):
         # token_source keeps the order client's token in lock-step with the data
         # provider's: after a daily re-login the provider refreshes access_token, and
         # the order client picks it up on the next order — no backend restart needed.
+        # tick_source resolves each order's REAL exchange tick from the provider's
+        # Kite instrument dump (LT/MARUTI-class symbols don't trade on the
+        # hardcoded 0.05 grid — the 2026-07-15 incident). Falls back to 0.05
+        # inside KiteOrderClient if the provider has no such method.
         client = KiteOrderClient(kite, token_source=lambda: getattr(provider, "access_token", None),
-                                 market_protection=s.market_protection_pct)
+                                 market_protection=s.market_protection_pct,
+                                 tick_source=getattr(provider, "tick_size", None))
         return LiveBroker(provider, client, notifier=notifier,
                           poll_seconds=s.order_poll_seconds,
                           timeout_seconds=s.order_timeout_seconds)

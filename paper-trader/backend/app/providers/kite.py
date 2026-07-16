@@ -75,6 +75,7 @@ class KiteProvider(MarketDataProvider):
         self.access_token: str | None = None
         self._dumps: dict[str, tuple[str, list]] = {}   # exchange -> (date, instruments)
         self._fut_cache: dict[str, dict] = {}            # inst.key -> near future row
+        self._tick_cache: dict[tuple[str, str], float] = {}   # (exchange, tradingsymbol) -> tick_size
         self._throttle = _Throttle()
         self._warn = WarnGate()   # de-dupe repeating account-read failures (fix E)
         self._load_saved_token()
@@ -208,6 +209,31 @@ class KiteProvider(MarketDataProvider):
             return []
         self._dumps[exchange] = (today, rows)
         return rows
+
+    # Zerodha's standard NSE/BSE + most F&O tick size — the safe fallback whenever
+    # an instrument's real tick can't be resolved (dump not loaded, unknown symbol).
+    _DEFAULT_TICK = 0.05
+
+    def tick_size(self, tradingsymbol: str, exchange: str) -> float:
+        """Real per-instrument tick size from the Kite instrument dump's `tick_size`
+        column. Root cause of the 2026-07-15 incident: every SL-M trigger was rounded
+        to a hardcoded 0.05 grid, but LT trades in 0.10 steps and MARUTI in whole
+        rupees — 2,437 stop placements were rejected outright. Cached per
+        (exchange, tradingsymbol) for the session; falls back to 0.05 if the symbol
+        isn't in today's dump (or the dump hasn't loaded yet)."""
+        key = (exchange, tradingsymbol)
+        cached = self._tick_cache.get(key)
+        if cached is not None:
+            return cached
+        tick = self._DEFAULT_TICK
+        for row in self._instruments(exchange):
+            if row.get("tradingsymbol") == tradingsymbol:
+                t = row.get("tick_size")
+                if t:
+                    tick = float(t)
+                break
+        self._tick_cache[key] = tick
+        return tick
 
     def _index_token(self, inst: Instrument) -> int | None:
         for row in self._instruments(inst.spot_exchange):

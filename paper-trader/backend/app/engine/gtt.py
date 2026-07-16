@@ -28,11 +28,14 @@ def round_to_tick(price: float, tick_size: float = TICK_SIZE) -> float:
 
 def stop_gtt_params(tradingsymbol: str, exchange: str, qty: int,
                     trigger_price: float, last_price: float,
-                    product: str = "NRML", side: str = "SELL") -> dict:
+                    product: str = "NRML", side: str = "SELL",
+                    tick_size: float = TICK_SIZE) -> dict:
     """`side` is the protective order's transaction type: SELL for a long position
     (long option, long equity) whose stop is below; BUY to cover for an intraday
-    equity SHORT whose stop is above."""
-    trig = round_to_tick(trigger_price)
+    equity SHORT whose stop is above. `tick_size` is the instrument's REAL exchange
+    tick (from the Kite instrument dump) — callers should pass it whenever it's
+    resolvable; it defaults to the standard 0.05 NFO-options grid."""
+    trig = round_to_tick(trigger_price, tick_size)
     return {
         "trigger_type": "single",
         "tradingsymbol": tradingsymbol,

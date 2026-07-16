@@ -184,6 +184,98 @@ def test_modify_stop_order_snaps_trigger_to_tick_size():
     assert k.modified[0]["trigger_price"] == 1125.15
 
 
+# ── 2026-07-15: per-instrument tick size, not one hardcoded 0.05 grid ──────────────
+# Evidence: 2,437 "SL-M stop place failed" lines on Jul-15 — every one a tick-size
+# rejection — because every trigger was rounded to 0.05 regardless of the real
+# instrument grid. LT trades in 0.10 steps, MARUTI in whole rupees; a 0.05-only
+# rounding produces a price the exchange rejects outright. `tick_source(tradingsymbol,
+# exchange) -> float` is injected into the client and consulted on every trigger.
+def _tick_source():
+    grid = {"LT": 0.10, "MARUTI": 1.00}
+    return lambda sym, exch: grid.get(sym)
+
+
+def test_place_stop_order_uses_the_real_tick_for_a_tenth_rupee_script():
+    """LT-like: a 0.05-only rounding would produce 3837.45 (rejected); the real
+    0.10 grid must land on 3837.4."""
+    k = FakeKite()
+    KiteOrderClient(k, tick_source=_tick_source()).place_stop_order(
+        "LT", "NSE", 1, trigger_price=3837.4499, side="SELL")
+    assert k.placed[0]["trigger_price"] == 3837.4
+
+
+def test_place_stop_order_uses_the_real_tick_for_a_whole_rupee_script():
+    """MARUTI-like: 12786.3 must snap to a whole rupee (12786.0), paise-exact."""
+    k = FakeKite()
+    KiteOrderClient(k, tick_source=_tick_source()).place_stop_order(
+        "MARUTI", "NSE", 1, trigger_price=12786.3, side="SELL")
+    trig = k.placed[0]["trigger_price"]
+    assert trig == 12786.0
+    assert trig * 100 == int(trig * 100)          # paise-exact — no float residue
+
+
+def test_place_stop_order_default_grid_unchanged_for_a_standard_symbol():
+    """A symbol the tick source doesn't recognise (or no tick source at all) keeps
+    the standard 0.05 grid — the existing LODHA-class behavior must not regress."""
+    k = FakeKite()
+    KiteOrderClient(k, tick_source=_tick_source()).place_stop_order(
+        "LODHA", "NSE", 44, trigger_price=1125.13, side="SELL")
+    assert k.placed[0]["trigger_price"] == 1125.15
+
+
+def test_modify_stop_order_uses_the_same_grid_as_the_initial_place():
+    """The trailing re-price path must land on the SAME grid the initial SL-M used —
+    modify_stop_order needs the symbol/exchange to resolve the real tick."""
+    k = FakeKite()
+    c = KiteOrderClient(k, tick_source=_tick_source())
+    c.modify_stop_order("OID-9", trigger_price=3837.4499,
+                        tradingsymbol="LT", exchange="NSE")
+    assert k.modified[0]["trigger_price"] == 3837.4
+
+
+def test_modify_stop_order_without_symbol_falls_back_to_0_05():
+    """Existing callers that don't pass a symbol (or an unknown symbol) keep the
+    0.05 default — no regression for callers that can't resolve one."""
+    k = FakeKite()
+    c = KiteOrderClient(k, tick_source=_tick_source())
+    c.modify_stop_order("OID-9", trigger_price=1125.13)
+    assert k.modified[0]["trigger_price"] == 1125.15
+
+
+def test_unknown_symbol_falls_back_to_0_05_even_with_a_tick_source_configured():
+    k = FakeKite()
+    c = KiteOrderClient(k, tick_source=_tick_source())
+    c.place_stop_order("UNKNOWNSYM", "NSE", 1, trigger_price=1125.13, side="SELL")
+    assert k.placed[0]["trigger_price"] == 1125.15
+
+
+def test_place_stop_gtt_uses_the_real_tick():
+    """Option/NRML GTT stops must also honour the real per-instrument tick, not
+    just the SL-M equity path."""
+    k = FakeKite()
+    c = KiteOrderClient(k, tick_source=lambda sym, exch: 1.0 if sym == "BIGTICKFUT" else None)
+    c.place_stop_gtt("BIGTICKFUT", "MCX", 10, trigger_price=12786.3, last_price=13000.0)
+    assert k.gtt_placed[0]["trigger_values"] == [12786.0]
+
+
+def test_modify_stop_gtt_uses_the_real_tick():
+    k = FakeKite()
+    c = KiteOrderClient(k, tick_source=lambda sym, exch: 1.0 if sym == "BIGTICKFUT" else None)
+    c.modify_stop_gtt("555", "BIGTICKFUT", "MCX", 10, trigger_price=12786.3, last_price=13000.0)
+    assert k.gtt_modified[0]["trigger_values"] == [12786.0]
+
+
+def test_tick_source_lookup_failure_falls_back_to_0_05():
+    """A tick source that raises (e.g. a transient dump-refresh error) must never
+    take down order placement — fall back to the safe 0.05 default."""
+    def boom(sym, exch):
+        raise RuntimeError("dump not loaded yet")
+    k = FakeKite()
+    KiteOrderClient(k, tick_source=boom).place_stop_order(
+        "LODHA", "NSE", 44, trigger_price=1125.13, side="SELL")
+    assert k.placed[0]["trigger_price"] == 1125.15
+
+
 class FakeKiteWithToken(FakeKite):
     def __init__(self, history=None):
         super().__init__(history)

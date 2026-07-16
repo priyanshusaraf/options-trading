@@ -11,7 +11,7 @@ by this client — it only ever places the specific orders the LiveBroker hands 
 """
 from __future__ import annotations
 
-from app.engine.gtt import round_to_tick, stop_gtt_params
+from app.engine.gtt import TICK_SIZE, round_to_tick, stop_gtt_params
 from app.engine.order_executor import OrderRequest
 
 # Charge-segments that trade as intraday equity (MIS): same-day, leveraged, the
@@ -39,10 +39,18 @@ def exchange_for_segment(segment: str) -> str:
 class KiteOrderClient:
     def __init__(self, kite, *, token_source=None,
                  product: str = "NRML", variety: str = "regular",
-                 market_protection: float = -1.0) -> None:
+                 market_protection: float = -1.0, tick_source=None) -> None:
         self.kite = kite
         self.product = product
         self.variety = variety
+        # tick_source(tradingsymbol, exchange) -> float | None — the real per-
+        # instrument exchange tick (sourced from the Kite instrument dump). Every
+        # trigger/limit price sent to Zerodha must land on THIS grid, not a
+        # hardcoded 0.05 one: the 2026-07-15 incident was 2,437 SL-M placements
+        # rejected outright because LT (tick 0.10) and MARUTI (tick 1.00) don't
+        # trade on the 0.05 grid. No source, a lookup failure, or an unresolved
+        # symbol all fall back to the standard 0.05 grid (see `_tick`).
+        self._tick_source = tick_source
         # Market protection for MARKET/SL-M orders. Mandatory since SEBI's 1-Apr-2026
         # rule: a market order placed via API WITHOUT non-zero protection is REJECTED
         # (all segments, MCX included). -1 = automatic exchange-guideline protection;
@@ -64,6 +72,19 @@ class KiteOrderClient:
             self.kite.set_access_token(tok)
             self._last_token = tok
 
+    def _tick(self, tradingsymbol: str | None, exchange: str | None) -> float:
+        """Resolve the real exchange tick for this instrument. No tick source, no
+        symbol, an unrecognised symbol, or any lookup failure (transient dump
+        error) all fall back to the standard 0.05 grid rather than risk sending
+        an unrounded or wrongly-rounded trigger."""
+        if not self._tick_source or not tradingsymbol:
+            return TICK_SIZE
+        try:
+            tick = self._tick_source(tradingsymbol, exchange)
+        except Exception:
+            return TICK_SIZE
+        return float(tick) if tick else TICK_SIZE
+
     # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
     def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,
                        trigger_price: float, last_price: float, side: str = "SELL") -> str:
@@ -76,7 +97,8 @@ class KiteOrderClient:
                              f"(intraday/MIS) — use place_stop_order (SL-M) instead")
         self._sync_token()
         res = self.kite.place_gtt(**stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side))
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side,
+            tick_size=self._tick(tradingsymbol, exchange)))
         tid = res.get("trigger_id") if isinstance(res, dict) else res
         return str(tid)
 
@@ -87,7 +109,8 @@ class KiteOrderClient:
                              f"(intraday/MIS) — use modify_stop_order (SL-M) instead")
         self._sync_token()
         return self.kite.modify_gtt(trigger_id=trigger_id, **stop_gtt_params(
-            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side))
+            tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side,
+            tick_size=self._tick(tradingsymbol, exchange)))
 
     def delete_gtt(self, trigger_id: str):
         self._sync_token()
@@ -106,18 +129,24 @@ class KiteOrderClient:
         product = "MIS" if exchange in ("NSE", "BSE") else self.product
         kw = dict(variety=self.variety, exchange=exchange, tradingsymbol=tradingsymbol,
                   transaction_type=side, quantity=int(qty), product=product,
-                  order_type="SL-M", trigger_price=round_to_tick(trigger_price),
+                  order_type="SL-M",
+                  trigger_price=round_to_tick(trigger_price, self._tick(tradingsymbol, exchange)),
                   # SL-M fires a MARKET order → same SEBI 1-Apr-2026 protection as MARKET.
                   market_protection=self.market_protection or -1.0)
         if tag:
             kw["tag"] = tag
         return str(self.kite.place_order(**kw))
 
-    def modify_stop_order(self, order_id: str, trigger_price: float):
-        """Re-price a resting SL-M stop's trigger (trailing the stop as it ratchets)."""
+    def modify_stop_order(self, order_id: str, trigger_price: float,
+                          tradingsymbol: str | None = None, exchange: str | None = None):
+        """Re-price a resting SL-M stop's trigger (trailing the stop as it ratchets).
+        `tradingsymbol`/`exchange`, when supplied, resolve the instrument's real tick
+        so the re-price lands on the SAME grid the initial placement used — without
+        them this falls back to the standard 0.05 grid."""
         self._sync_token()
-        return self.kite.modify_order(variety=self.variety, order_id=order_id,
-                                      trigger_price=round_to_tick(trigger_price))
+        return self.kite.modify_order(
+            variety=self.variety, order_id=order_id,
+            trigger_price=round_to_tick(trigger_price, self._tick(tradingsymbol, exchange)))
 
     def place(self, req: OrderRequest) -> str:
         self._sync_token()

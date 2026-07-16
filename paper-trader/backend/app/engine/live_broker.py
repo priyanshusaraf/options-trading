@@ -756,7 +756,10 @@ class LiveBroker(PaperBroker):
             if self._equity_stop_crossed(pos, lp):
                 return
             try:
-                self.client.modify_stop_order(gid, pos.stop_price)   # re-price the SL-M trigger
+                # tradingsymbol/exchange let the client resolve the SAME real tick the
+                # initial SL-M placement used, instead of falling back to 0.05.
+                self.client.modify_stop_order(gid, pos.stop_price, pos.tradingsymbol,
+                                              exchange_for_segment(pos.exchange))
                 log.info(f"SL-M {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                          instrument=pos.instrument_key, event="STOP_MODIFY")
             except Exception as e:
@@ -808,6 +811,13 @@ class LiveBroker(PaperBroker):
                       event="STOP_RESYNC_FAIL")
             self._notify(f"🚫 {pos.tradingsymbol}: exchange stop NOT re-placed — bot-managed stop "
                          f"only until it retries; verify on Zerodha")
+        else:
+            # today this recovery was silent — the 2026-07-15 autopsy could not confirm
+            # any recovery ever happened. Log it explicitly so it's visible in the
+            # Engine/Logs console and searchable in the journal.
+            log.info(f"SL-M resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
+                     f"(order {pos.gtt_trigger_id})", instrument=pos.instrument_key,
+                     event="STOP_RESYNC_RECOVERED")
 
     def reconcile_orphans(self, now) -> list:
         """If the live account no longer backs a bot position (a GTT fired, you

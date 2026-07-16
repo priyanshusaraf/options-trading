@@ -32,3 +32,27 @@ def test_stop_gtt_params_snaps_trigger_and_limit_to_the_tick_grid():
     p = stop_gtt_params("NIFTY25CE", "NFO", 75, trigger_price=110.12, last_price=140.0)
     assert p["trigger_values"] == [110.10]      # NOT 110.12 — 110.12 isn't a 0.05 multiple
     assert p["orders"][0]["price"] == 110.10
+
+
+# ── 2026-07-15: per-instrument tick size, not a hardcoded 0.05 grid ────────────────
+# `stop_gtt_params` must accept the instrument's REAL tick size so a GTT stop on a
+# wider-tick contract snaps to ITS grid, not the NFO-options default.
+def test_stop_gtt_params_honours_an_explicit_tick_size():
+    p = stop_gtt_params("SOMEFUT", "MCX", 10, trigger_price=12786.3, last_price=13000.0,
+                        tick_size=1.0)
+    assert p["trigger_values"] == [12786.0]     # snapped to the 1.00 grid, not 0.05
+    assert p["orders"][0]["price"] == 12786.0
+
+
+def test_round_to_tick_handles_a_tenth_rupee_grid():
+    """LT trades in 0.10 steps. A 0.05-only rounding would produce 3837.45, which
+    Zerodha rejects outright for a 0.10-tick script."""
+    assert round_to_tick(3837.4499, tick_size=0.10) == 3837.4
+
+
+def test_round_to_tick_handles_a_whole_rupee_grid():
+    """MARUTI trades in whole-rupee steps; the trigger must be an exact rupee amount
+    with no fractional paisa left over."""
+    trig = round_to_tick(12786.3, tick_size=1.0)
+    assert trig == 12786.0
+    assert trig * 100 == int(trig * 100)          # paise-exact, no float residue
