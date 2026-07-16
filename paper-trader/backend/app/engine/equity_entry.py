@@ -258,21 +258,26 @@ def select_intraday_entries(cands: list[IntradayCandidate], *, max_positions: in
             res.skipped.append((c, f"share price ₹{c.price:,.0f} too high — target "
                                    f"margin buys <1 share"))
             return
-        # Task 2 follow-up (R2 review, 2026-07-16): the floor is a DUST filter — its
-        # job is to reject positions too small for charges/spread to be worth it, not
-        # to react to how much REAL margin a leverage cap happens to consume. Once
-        # `intraday_leverage` binds as a notional cap (`_intraday_margin_sizer`), the
-        # real margin actually blocked shrinks (e.g. ~4k) even though the position's
-        # notional/economic size stays meaningful (e.g. ~20k, an ~8k deployment at
-        # 2.5x) — comparing that shrunken real `margin` against `min_margin` would
-        # zero out the whole segment. `qty * c.price / leverage` is the deployment
-        # this position represents under the configured leverage model regardless of
-        # which sizer produced qty, so that — not the post-cap real margin — is what
-        # the dust floor must measure.
+        # Task 2 follow-up (R2 review, 2026-07-16): the floor is a DUST filter — it
+        # must only reject a position that's small by EVERY measure, since either one
+        # alone can under-read a perfectly meaningful trade:
+        #   - real `margin` under-reads when the leverage cap binds (qty capped below
+        #     what the real broker margin would allow) — the real margin consumed
+        #     shrinks (e.g. ~4k) even though the position's notional/economic size
+        #     stays meaningful (e.g. ~20k, an ~8k deployment at 2.5x).
+        #   - `qty * c.price / leverage` (the deployment this position represents
+        #     under the configured leverage model) under-reads the OTHER way when the
+        #     REAL margin is the binding constraint and the owner's configured
+        #     leverage is more generous than the real broker leverage — e.g. real 5x
+        #     margin binding under a configured 10x cap reads as a "4k deployment"
+        #     even though 8k of real margin is genuinely locked up.
+        # Comparing the LARGER of the two against min_margin means the floor only
+        # fires when BOTH measures agree the position is dust.
         size_equiv = qty * c.price / leverage
-        if size_equiv < min_margin:
+        size_for_floor = max(margin, size_equiv)
+        if size_for_floor < min_margin:
             res.skipped.append((c, f"below the ₹{min_margin:,.0f} margin floor "
-                                   f"(only ₹{size_equiv:,.0f} fits at ₹{c.price:,.0f}/share)"))
+                                   f"(only ₹{size_for_floor:,.0f} fits at ₹{c.price:,.0f}/share)"))
             return
         if margin > cash:
             res.skipped.append((c, f"insufficient cash: need ₹{margin:,.0f}, "

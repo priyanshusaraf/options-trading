@@ -310,3 +310,28 @@ def test_real_margin_binding_regime_floor_unaffected():
     p = res.selected[0]
     assert p.qty == 400                                  # real-margin qty binds
     assert p.margin == pytest.approx(8_000.0)
+
+
+def test_lev_above_real_edge_clears_floor_on_real_margin():
+    # Coordinator follow-up (2026-07-16, second review pass): a configured leverage
+    # cap MUCH more generous than the real broker leverage was flagged as a gap —
+    # exact repro is this task's own production values (target=8000, min_margin=5000)
+    # with a configured cap of 10x against a real 5x margin. `qty*price/leverage`
+    # alone reads this as a "4k deployment" (400*100/10) even though the REAL margin
+    # genuinely locked up is 8,000 (400*20) — comfortably funded. The floor must clear
+    # on `max(margin, size_equiv)`, not `size_equiv` alone, so this is NOT skipped.
+    def sizer(cand, target_margin):
+        margin_qty = qty_for_margin(20.0, target_margin)          # 400, real 5x margin
+        lev_qty = equity_qty(target_margin, 10.0, cand.price)     # generous 10x cap → 800
+        qty = min(margin_qty, lev_qty)
+        return qty, qty * 20.0
+
+    res = select_intraday_entries(
+        [_c("HEG", 100.0)], max_positions=3, min_margin=5_000.0, max_margin=8_000.0,
+        purple_margin=8_000.0, leverage=10.0, available_cash=1_000_000.0, sizer=sizer)
+    assert res.selected, res.skipped
+    p = res.selected[0]
+    assert p.qty == 400                                  # real-margin qty binds
+    assert p.margin == pytest.approx(8_000.0)            # real margin clears the floor
+    # size_equiv alone (qty*price/leverage = 4000) would have wrongly failed the old
+    # single-measure floor — max(margin, size_equiv) = max(8000, 4000) = 8000 passes.
