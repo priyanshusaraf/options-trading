@@ -29,6 +29,7 @@ from app.core import market_hours
 from app.core.config import get_settings
 from app.core.instruments import Instrument
 from app.core.logging import WarnGate, log
+from app.engine.gtt import TICK_SIZE
 from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
@@ -210,29 +211,34 @@ class KiteProvider(MarketDataProvider):
         self._dumps[exchange] = (today, rows)
         return rows
 
-    # Zerodha's standard NSE/BSE + most F&O tick size — the safe fallback whenever
-    # an instrument's real tick can't be resolved (dump not loaded, unknown symbol).
-    _DEFAULT_TICK = 0.05
-
     def tick_size(self, tradingsymbol: str, exchange: str) -> float:
         """Real per-instrument tick size from the Kite instrument dump's `tick_size`
         column. Root cause of the 2026-07-15 incident: every SL-M trigger was rounded
         to a hardcoded 0.05 grid, but LT trades in 0.10 steps and MARUTI in whole
         rupees — 2,437 stop placements were rejected outright. Cached per
         (exchange, tradingsymbol) for the session; falls back to 0.05 if the symbol
-        isn't in today's dump (or the dump hasn't loaded yet)."""
+        isn't in today's dump.
+
+        The fallback is deliberately NOT cached when the dump itself came back
+        empty (`_instruments` degrades to `[]` on a transient failure — not yet
+        authenticated, an API blip). Caching that would poison the lookup with
+        0.05 for the rest of the session even after the dump loads fine on
+        retry — silently reproducing the exact LT/MARUTI incident this method
+        exists to prevent. An empty dump is retried on the NEXT call instead."""
         key = (exchange, tradingsymbol)
         cached = self._tick_cache.get(key)
         if cached is not None:
             return cached
-        tick = self._DEFAULT_TICK
-        for row in self._instruments(exchange):
+        rows = self._instruments(exchange)
+        tick = TICK_SIZE
+        for row in rows:
             if row.get("tradingsymbol") == tradingsymbol:
                 t = row.get("tick_size")
                 if t:
                     tick = float(t)
                 break
-        self._tick_cache[key] = tick
+        if rows:   # only cache once the dump has actually loaded — never a bare fallback
+            self._tick_cache[key] = tick
         return tick
 
     def _index_token(self, inst: Instrument) -> int | None:

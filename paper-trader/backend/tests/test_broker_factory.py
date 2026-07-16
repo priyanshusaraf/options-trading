@@ -86,6 +86,61 @@ def test_make_broker_passes_configured_market_protection_to_order_client(monkeyp
     assert captured["market_protection"] == get_settings().market_protection_pct
 
 
+def test_make_broker_wires_the_provider_tick_size_as_the_tick_source(monkeypatch):
+    """The order client must resolve REAL per-instrument tick sizes (LT trades in
+    0.10 steps, MARUTI in whole rupees — the 2026-07-15 incident was every trigger
+    rounded to a hardcoded 0.05 grid). This one line of wiring connects the whole
+    fix to production: make_broker must pass the provider's tick_size method
+    through as KiteOrderClient's tick_source."""
+    import types
+    monkeypatch.setenv("PT_EXECUTION", "live")
+    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    init_db(reset=True)
+    prov = MockProvider()
+    prov.name = "kite"
+    prov.access_token = "tok"
+    prov.tick_size = lambda tradingsymbol, exchange: 0.10   # stands in for KiteProvider.tick_size
+    monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
+                        lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
+    captured = {}
+
+    def fake_client(kite, **kw):
+        captured.update(kw)
+        return object()
+
+    monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
+    monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
+    assert make_broker(prov) == "LB"
+    assert captured["tick_source"] is prov.tick_size
+    assert captured["tick_source"]("LT", "NSE") == 0.10
+
+
+def test_make_broker_tick_source_is_none_when_the_provider_has_no_tick_size(monkeypatch):
+    """A provider without a tick_size method (shouldn't happen for the real
+    KiteProvider, but keep the wiring defensive) must not blow up make_broker —
+    KiteOrderClient's own fallback then covers every trigger with 0.05."""
+    import types
+    monkeypatch.setenv("PT_EXECUTION", "live")
+    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    init_db(reset=True)
+    prov = MockProvider()
+    prov.name = "kite"
+    prov.access_token = "tok"
+    assert not hasattr(prov, "tick_size")
+    monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
+                        lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
+    captured = {}
+
+    def fake_client(kite, **kw):
+        captured.update(kw)
+        return object()
+
+    monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
+    monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
+    assert make_broker(prov) == "LB"
+    assert captured["tick_source"] is None
+
+
 def test_live_gate_reads_dotenv_via_settings(monkeypatch):
     """The flags must work from .env (Settings), not only a shell export — so the
     owner controls live mode from one file with no per-session exports. Simulate the

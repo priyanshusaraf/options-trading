@@ -120,3 +120,26 @@ def test_tick_size_is_cached_per_session():
     assert p.tick_size("LT", "NSE") == 0.10
     assert p.tick_size("LT", "NSE") == 0.10
     assert calls["n"] == 1
+
+
+def test_tick_size_does_not_poison_the_cache_on_a_transient_dump_failure():
+    """A transient dump failure (not-yet-authenticated / API blip) makes
+    `_instruments` degrade to []. If the resulting 0.05 fallback were cached, the
+    REAL tick would never be re-queried for the rest of the session — silently
+    reproducing the exact 2026-07-15 LT/MARUTI incident (this time the dump loads
+    fine on retry, but the stale cached fallback would still win). The fallback
+    from an empty/failed dump must NOT be cached; once the dump loads, the real
+    tick must be returned."""
+    calls = {"n": 0}
+
+    def failing_then_loaded(exchange):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return []                              # transient failure -> degrades to []
+        return [{"tradingsymbol": "LT", "tick_size": 0.10}]   # dump loads on retry
+
+    p = _provider([])
+    p._instruments = failing_then_loaded
+    assert p.tick_size("LT", "NSE") == 0.05        # first call: uncached fallback
+    assert p.tick_size("LT", "NSE") == 0.10        # second call: real tick, not stale 0.05
+    assert calls["n"] == 2                          # NOT short-circuited by a poisoned cache
