@@ -820,9 +820,16 @@ class LiveBroker(PaperBroker):
                      event="STOP_RESYNC_RECOVERED")
 
     def reconcile_orphans(self, now) -> list:
-        """If the live account no longer backs a bot position (a GTT fired, you
+        """If the live account no longer backs a bot position (a GTT/SL-M fired, you
         exited it, or it expired — typically while the bot was down), book it closed
-        in the ledger WITHOUT sending any order, and cancel its GTT.
+        in the ledger WITHOUT sending any order, and cancel its resting GTT/SL-M.
+
+        R3 — an equity position's OWN exchange-side SL-M filling looks identical to a
+        genuinely external exit from the account-flat read alone (both leave the
+        account flat). Before booking one as external, the resting stop order's own
+        status is checked: COMPLETE-with-a-fill means the bot's own stop closed it, so
+        it's booked STOP_LOSS at the real fill price and NOT returned for the runner's
+        same-day re-entry auto-block (only genuinely external closes are returned).
 
         L8 — booking requires the position to read orphaned on `orphan_confirm_count`
         CONSECUTIVE passes; a single >60s feed glitch that looks like an exit no longer
@@ -853,18 +860,49 @@ class LiveBroker(PaperBroker):
             # mistakes the released notional for profit (+₹40k on ₹10k margin) and
             # mislabels the trade 'options'.
             if pos.segment == "equity_intraday":
-                PaperBroker.close_equity_position(self, pos, prem,
-                                                  "RECONCILED_EXTERNAL_EXIT", now)
-                self._cancel_equity_stop(gid, sym)   # pull the resting SL-M backstop
+                # R3 (2026-07-15 DLF incident): an account-flat read alone can't tell the
+                # bot's OWN exchange-side SL-M firing apart from a genuinely external exit
+                # — both leave the account flat. Ask the resting stop order itself first.
+                # A COMPLETE fill means the bot's OWN protective stop is what closed this,
+                # so it's booked STOP_LOSS at the real fill price (not last_premium), the
+                # (already-dead) cancel is skipped, and it must NOT count as an external
+                # exit — the runner blocks re-entry only on what this method returns.
+                exit_price, reason, is_external = prem, "RECONCILED_EXTERNAL_EXIT", True
+                if gid:
+                    try:
+                        st = self.client.status(gid)
+                    except Exception as e:
+                        log.warn(f"STOP STATUS {sym}: status({gid}) read failed: {e} — "
+                                 f"treating as external exit (conservative fallback)",
+                                 instrument=pos.instrument_key, event="STOP_STATUS_FAIL")
+                    else:
+                        st_status = str(st.get("status", "")).upper()
+                        filled = int(st.get("filled_qty", 0) or 0)
+                        avg = float(st.get("avg_price", 0.0) or 0.0)
+                        if st_status == "COMPLETE" and filled > 0 and avg > 0:
+                            exit_price, reason, is_external = avg, "STOP_LOSS", False
+                            log.info(f"SL-M FILLED at exchange — booked STOP_LOSS "
+                                     f"{sym} @ {avg:.2f} (order {gid})",
+                                     instrument=pos.instrument_key,
+                                     event="STOP_FILL_RECONCILED")
+                PaperBroker.close_equity_position(self, pos, exit_price, reason, now)
+                if is_external:
+                    self._cancel_equity_stop(gid, sym)   # pull the resting SL-M backstop
+                prem = exit_price
             else:
                 PaperBroker.close_position(self, pos, prem, "RECONCILED_EXTERNAL_EXIT",
                                            now, pos.last_spot)
                 self._cancel_gtt(gid, sym)
+                is_external = True
             self._orphan_seen.pop(k, None)
-            self._notify(f"ℹ️ {sym} is no longer in your account (GTT fired, manual "
-                         f"exit, or expiry) — booked closed at ~{prem:.2f}; verify the "
-                         f"fill on Zerodha")
-            booked.append(pos.instrument_key)
+            if is_external:
+                self._notify(f"ℹ️ {sym} is no longer in your account (GTT fired, manual "
+                             f"exit, or expiry) — booked closed at ~{prem:.2f}; verify the "
+                             f"fill on Zerodha")
+                booked.append(pos.instrument_key)
+            else:
+                self._notify(f"✅ {sym}: your own SL-M stop filled at the exchange @ "
+                             f"{prem:.2f} — booked STOP_LOSS")
         return booked
 
     def adopt_pending_entries(self, now) -> list:

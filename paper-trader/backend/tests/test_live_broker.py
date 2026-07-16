@@ -123,6 +123,96 @@ def test_reconcile_books_equity_via_the_equity_path_not_options():
     assert tr.net_pnl < 100.0                        # tiny real P&L, NOT ~+notional
 
 
+# ── R3: classify own-stop fills correctly (the 2026-07-15 DLF incident) ──────────
+# The account-flat read alone can't distinguish the bot's OWN exchange-side SL-M
+# firing from a genuinely external exit. Query the resting stop's own status first.
+def _open_equity_orphan(b, gtt_trigger_id="SLM-9"):
+    import datetime as dt
+    from app.engine.broker import PaperBroker
+    inst = get_instrument("NIFTY")
+    pos = PaperBroker.open_equity_position(b, inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
+                                           "t", b.provider.now(), params={})
+    pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s guard
+    pos.last_premium = 99.0
+    pos.gtt_trigger_id = gtt_trigger_id      # a resting exchange-side SL-M stop order id
+    b.commit()
+    return pos
+
+
+def test_reconcile_equity_own_stop_complete_books_stop_loss_not_external():
+    """The stop order itself reads COMPLETE with a fill: this was the bot's OWN SL-M
+    firing, not an external/manual exit. Must book STOP_LOSS at the order's real avg
+    fill price, must NOT attempt to cancel an already-dead order, and must NOT be
+    returned for the runner's same-day re-entry auto-block."""
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=98.5, status="COMPLETE", filled_qty=10)
+    b = _broker(c, account=[])
+    _open_equity_orphan(b)
+    b.reconcile_orphans(b.provider.now())              # 1st read: streak=1, not yet confirmed
+    booked = b.reconcile_orphans(b.provider.now())      # 2nd (confirmed) read: books it
+    assert booked == []                                 # NOT external -> no re-entry block
+    assert c.cancelled == []                            # already-filled stop -> no cancel sent
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert len(trades) == 1
+    tr = trades[0]
+    assert tr.exit_reason == "STOP_LOSS"
+    assert tr.exit_premium == 98.5                      # the order's real avg fill, not last_premium
+
+
+def test_reconcile_equity_own_stop_still_open_books_external_and_cancels():
+    """The stop order is still OPEN (unfilled) — whatever closed the account position
+    wasn't this stop, so today's external-exit handling applies unchanged: book
+    RECONCILED_EXTERNAL_EXIT, block re-entry, and cancel the (still-resting) stop."""
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=98.5, status="OPEN", filled_qty=0)
+    b = _broker(c, account=[])
+    _open_equity_orphan(b)
+    b.reconcile_orphans(b.provider.now())
+    booked = b.reconcile_orphans(b.provider.now())
+    assert booked == ["NIFTY"]                          # genuinely external -> block re-entry
+    assert c.cancelled == ["SLM-9"]                     # resting (unfilled) stop cancelled
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    tr = trades[0]
+    assert tr.exit_reason == "RECONCILED_EXTERNAL_EXIT"
+    assert tr.exit_premium == 99.0                      # last_premium mark, not a stop fill price
+
+
+class _RaisingStatusClient(FakeClient):
+    def status(self, order_id):
+        raise RuntimeError("network blip")
+
+
+def test_reconcile_equity_stop_status_read_failure_is_conservative_external():
+    """status() itself fails (a transient read error) — fall back to today's
+    conservative behavior: external + block + cancel, plus a warn log so the
+    degraded read is visible."""
+    from app.core.logging import log
+    from app.db.session import SessionLocal
+    c = _RaisingStatusClient(fill_price=98.5)
+    b = _broker(c, account=[])
+    _open_equity_orphan(b)
+    b.reconcile_orphans(b.provider.now())
+    booked = b.reconcile_orphans(b.provider.now())
+    assert booked == ["NIFTY"]                          # conservative fallback -> external + block
+    assert c.cancelled == ["SLM-9"]                      # still attempts the cancel, as before
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert trades[0].exit_reason == "RECONCILED_EXTERNAL_EXIT"
+    warns = [e for e in log.recent(50)
+             if e["level"] == "WARNING" and "SLM-9" in e["msg"]]
+    assert warns, "expected a warn log for the failed stop-status read"
+
+
+def test_reconcile_paper_broker_unaffected():
+    """PaperBroker's reconcile_orphans stays a no-op — this change is LiveBroker-only."""
+    from app.engine.broker import PaperBroker
+    from app.providers.mock import MockProvider
+    pb = PaperBroker(MockProvider())
+    assert pb.reconcile_orphans(pb.provider.now()) == []
+
+
 # ── live MIS (intraday-equity) real order routing ────────────────────────────
 def _open_eq(b, direction="LONG", price=100.0, qty=10):
     inst = get_instrument("NIFTY")   # the NSE_INTRADAY charge-segment forces the equity path
@@ -306,6 +396,10 @@ def test_reconciled_equity_orphan_cancels_its_sl_m():
     pos = _open_eq(b, "LONG", 100.0, 10)
     pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s grace
     b.commit()
+    # R3: the account went flat via something OTHER than this resting SL-M (e.g. a
+    # manual Zerodha exit) — the stop itself is still OPEN/unfilled, so this stays a
+    # genuinely external exit and the resting stop gets cancelled.
+    c._status, c._filled_qty = "OPEN", 0
     need = b.settings.orphan_confirm_count
     for _ in range(need):
         b.reconcile_orphans(b.provider.now())
