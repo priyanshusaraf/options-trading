@@ -12,7 +12,7 @@ exact legacy leverage math (pinned by test_equity_entry.py).
 import pytest
 
 from app.engine.equity_entry import (
-    IntradayCandidate, qty_for_margin, select_intraday_entries)
+    IntradayCandidate, equity_qty, qty_for_margin, select_intraday_entries)
 
 
 def _c(key, price, purple=False, direction="LONG"):
@@ -58,8 +58,14 @@ def test_injected_sizer_below_floor_is_skipped():
 
 def test_injected_sizer_respects_available_cash():
     # Two names each needing ₹8k real margin but only ₹8k available → exactly one funds.
+    # (Fix, R2 review: qty must be leverage-consistent with SEL's leverage=2.5 — a flat
+    # qty=10 regardless of price implied an unrealistic <1x real leverage that the
+    # size-vs-min_margin floor now correctly treats as dust, which isn't what this test
+    # is exercising. Sizing qty at the configured leverage keeps this test isolated to
+    # the cash-affordability behavior it's named for.)
     def sizer(cand, target_margin):
-        return 10, 8_000.0
+        qty = equity_qty(target_margin, 2.5, cand.price)
+        return qty, 8_000.0
     res = select_intraday_entries([_c("A", 100), _c("B", 200)], sizer=sizer,
                                   **{**SEL, "available_cash": 8_000.0})
     assert len(res.selected) == 1
@@ -236,3 +242,71 @@ def test_leverage_cap_bind_logs_marker():
     r._intraday_margin_sizer()(_c(key, 100.0), 8_000.0)
     entries = log.recent(10)
     assert any("leverage cap" in e["msg"].lower() for e in entries), entries
+
+
+# ── Task 2 follow-up (R2 review, 2026-07-16): the min_margin floor must measure
+# economic position size, NOT the post-cap real margin — otherwise the leverage cap
+# and the margin floor combine to zero out the whole intraday segment. Production
+# repro: target_margin=8000, min_margin=5000, intraday_leverage=2.5, real broker
+# leverage 5x → cap binds, real margin consumed shrinks to ~4000 (<5000) even though
+# the position is a legitimate ~8000-deployment/~20000-notional trade. The floor must
+# instead compare qty*price/leverage (the deployment the position represents under
+# the configured leverage model) against min_margin. ─────────────────────────────
+
+def test_cap_bound_entry_clears_floor_on_size_not_real_margin():
+    # Real per-share margin implies 5x (₹20/share on a ₹100 share); intraday_leverage
+    # caps qty to the 2.5x model. The consumed real margin (~4000) is BELOW the 5000
+    # floor, but the position's economic size (qty*price/leverage ≈ 8000) is not — the
+    # entry must NOT be skipped, and the recorded margin is the real, capped ~4000.
+    def sizer(cand, target_margin):
+        margin_qty = qty_for_margin(20.0, target_margin)          # 400 — real 5x margin
+        lev_qty = equity_qty(target_margin, 2.5, cand.price)      # 200 — owner's cap
+        qty = min(margin_qty, lev_qty)
+        return qty, qty * 20.0
+
+    res = select_intraday_entries(
+        [_c("HEG", 100.0)], max_positions=3, min_margin=5_000.0, max_margin=8_000.0,
+        purple_margin=8_000.0, leverage=2.5, available_cash=1_000_000.0, sizer=sizer)
+    assert res.selected, res.skipped
+    p = res.selected[0]
+    assert p.qty == 200
+    assert p.margin == pytest.approx(4_000.0)           # real margin actually blocked
+    assert p.qty * p.price / 2.5 == pytest.approx(8_000.0)   # size_equiv clears the floor
+
+
+def test_dust_candidate_still_skipped_by_floor():
+    # A genuinely tiny target margin (e.g. a small leftover slot) — even after the
+    # leverage-model-size calculation, this is real dust and must still be skipped.
+    def sizer(cand, target_margin):
+        margin_qty = qty_for_margin(20.0, target_margin)
+        lev_qty = equity_qty(target_margin, 2.5, cand.price)
+        qty = min(margin_qty, lev_qty)
+        return qty, qty * 20.0
+
+    res = select_intraday_entries(
+        [_c("DUST", 100.0)], max_positions=3, min_margin=5_000.0, max_margin=2_000.0,
+        purple_margin=2_000.0, leverage=2.5, available_cash=1_000_000.0, sizer=sizer)
+    assert not res.selected
+    assert any("floor" in reason.lower() for _, reason in res.skipped)
+
+
+def test_real_margin_binding_regime_floor_unaffected():
+    # Pre-cap behavior preserved: when the owner's leverage cap is generous enough
+    # relative to the real broker leverage that the REAL margin quote is the binding
+    # constraint (not the cap), a legitimately-sized, well-funded position still
+    # clears the floor. (Real per-share margin implies 6x on a ₹120 share; the owner's
+    # cap of 8x doesn't bind since it's above the real 6x, so qty comes from the real
+    # margin quote — 400 shares, ₹8,000 real margin — exactly as before this fix.)
+    def sizer(cand, target_margin):
+        margin_qty = qty_for_margin(20.0, target_margin)          # 400, real 6x margin
+        lev_qty = equity_qty(target_margin, 8.0, cand.price)      # generous 8x cap → 533
+        qty = min(margin_qty, lev_qty)
+        return qty, qty * 20.0
+
+    res = select_intraday_entries(
+        [_c("HEG", 120.0)], max_positions=3, min_margin=5_000.0, max_margin=8_000.0,
+        purple_margin=8_000.0, leverage=8.0, available_cash=1_000_000.0, sizer=sizer)
+    assert res.selected, res.skipped
+    p = res.selected[0]
+    assert p.qty == 400                                  # real-margin qty binds
+    assert p.margin == pytest.approx(8_000.0)
