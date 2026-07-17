@@ -6,6 +6,11 @@ import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
 import type { TradeDTO, StrategyMeta } from '../lib/types'
+// NOTE: this view already has its own local `Card` stat-tile component, so the
+// shadcn panel is imported as `Panel` to avoid shadowing it.
+import { Card as Panel } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+import { badgeVariants } from '@/components/ui/badge'
 
 type Seg = 'all' | 'options' | 'equity_intraday'
 const SEG_TABS: [Seg, string][] = [
@@ -27,11 +32,11 @@ function Legend({ series }: { series: { name: string; color: string }[] }) {
 
 function Card({ label, v, cls = '', sub }: { label: string; v: string; cls?: string; sub?: string }) {
   return (
-    <div className="card p-3">
+    <Panel className="p-3">
       <div className="stat-label">{label}</div>
       <div className={`stat-value ${cls}`}>{v}</div>
       {sub && <div className="text-[11px] text-muted mt-0.5">{sub}</div>}
-    </div>
+    </Panel>
   )
 }
 
@@ -43,13 +48,13 @@ function BotVsYou() {
   }, [])
   if (!a || !a.available) return null   // live account only
   return (
-    <div className="card p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))' }}>
+    <Panel className="p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px,1fr))' }}>
       <div className="stat-label col-span-full">Bot vs You — your real Kite account, since the bot's baseline</div>
       <Card label="Account equity" v={inr(a.account_equity)} />
       <Card label="Account change" v={signedInr(a.account_change)} cls={pnlColor(a.account_change)} />
       <Card label="Bot P&L (tracked)" v={signedInr(a.bot_pnl)} cls={pnlColor(a.bot_pnl)} sub="what the bot did" />
       <Card label="Your P&L (unrecorded)" v={signedInr(a.your_pnl_unrecorded)} cls={pnlColor(a.your_pnl_unrecorded)} sub="your own trades" />
-    </div>
+    </Panel>
   )
 }
 
@@ -71,7 +76,7 @@ export default function DashboardView() {
 
   const stratLabel = (k: string) => strategies.find((x) => x.key === k)?.display_name || k
 
-  if (!d) return <div className="card p-8 text-center text-muted">loading analytics…</div>
+  if (!d) return <Panel className="p-8 text-center text-muted">loading analytics…</Panel>
   const s = d.summary, cap = d.capital
   const isLive = (state?.provider || 'mock') === 'kite'
   // charge drag: how much of the gross edge is eaten by commissions
@@ -97,11 +102,11 @@ export default function DashboardView() {
     <div className="flex flex-col gap-3">
       <BotVsYou />
       {/* segment + strategy selector — slice the whole dashboard */}
-      <div className="card p-3 flex items-center gap-2 flex-wrap">
+      <Panel className="p-3 flex items-center gap-2 flex-wrap">
         <span className="stat-label mr-1">View</span>
         {SEG_TABS.map(([k, label]) => (
           <button key={k} onClick={() => setSeg(k)}
-            className={`badge ${seg === k ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            className={cn(badgeVariants({ variant: 'chip' }), seg === k ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
             {label}
           </button>
         ))}
@@ -114,14 +119,14 @@ export default function DashboardView() {
         <span className="stat-label mx-1">Period</span>
         {(['all', 'today', '7d', '30d'] as const).map((p) => (
           <button key={p} onClick={() => setPeriod(p)}
-            className={`badge ${period === p ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            className={cn(badgeVariants({ variant: 'chip' }), period === p ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
             {p === 'all' ? 'All-time' : p}
           </button>
         ))}
         <span className="ml-auto text-[11px] text-muted">
           showing <b className="text-zinc-300">{segName}</b>{strat ? ` · ${stratLabel(strat)}` : ''} — net of all costs
         </span>
-      </div>
+      </Panel>
       {/* capital + headline stats */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px,1fr))' }}>
         <Card label="Equity (MTM)" v={inr(cap.equity)} />
@@ -135,7 +140,7 @@ export default function DashboardView() {
       </div>
 
       {/* commissions / cost-honesty strip — net is always after the full charge stack */}
-      <div className="card p-3">
+      <Panel className="p-3">
         <div className="flex items-center justify-between mb-2">
           <div className="stat-label">Commissions &amp; cost — all figures are NET of brokerage, STT/CTT, exchange, SEBI, GST &amp; stamp</div>
           <span className="text-[11px] text-muted">no smooth-curve self-deception</span>
@@ -146,11 +151,11 @@ export default function DashboardView() {
           <Card label="Net P&L" v={signedInr(s.net_pnl)} cls={pnlColor(s.net_pnl)} sub="after charges" />
           <Card label="Charge drag" v={s.trades ? num(chargeDrag, 1) + '%' : '—'} cls="text-down" sub="of gross edge" />
         </div>
-      </div>
+      </Panel>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)' }}>
         {/* equity / realized curve for the current selection */}
-        <div className="card p-3">
+        <Panel className="p-3">
           <div className="stat-label mb-1">
             {seg === 'all' && !strat ? 'Portfolio equity curve (mark-to-market)'
               : `${segName}${strat ? ` · ${stratLabel(strat)}` : ''} — cumulative realized P&L`}
@@ -158,9 +163,9 @@ export default function DashboardView() {
           {equity.length ? <LineChart data={equity} height={260} color="#2ebd85"
             priceLines={[{ price: seg === 'all' && !strat ? cap.initial : 0, color: '#8b93a7', title: 'start' }]} />
             : <div className="text-muted text-xs py-10 text-center">no data yet for this view</div>}
-        </div>
+        </Panel>
         {/* avg win/loss + best/worst */}
-        <div className="card p-3 flex flex-col gap-3">
+        <Panel className="p-3 flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
             <Card label="Avg win" v={signedInr(s.avg_win)} cls="text-up" />
             <Card label="Avg loss" v={signedInr(s.avg_loss)} cls="text-down" />
@@ -175,38 +180,38 @@ export default function DashboardView() {
               ? 'live Kite market data — paper fills only, net of the full Zerodha charge stack.'
               : 'provider mock = synthetic data (dev stand-in, not indicative of real performance).'}
           </div>
-        </div>
+        </Panel>
       </div>
 
       {/* portfolio split: options vs outrights (cumulative realized) */}
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)' }}>
-        <div className="card p-3">
+        <Panel className="p-3">
           <div className="stat-label mb-1">By segment — Options vs Outrights (cumulative realized P&L)</div>
           {segCurves.length ? <MultiLineChart series={segCurves} height={240} />
             : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
           <Legend series={segCurves} />
-        </div>
-        <div className="card p-3">
+        </Panel>
+        <Panel className="p-3">
           <div className="stat-label mb-1">
             By strategy{seg !== 'all' ? ` · within ${segName}` : ''} (cumulative realized P&L)
           </div>
           {strategyCurves.length ? <MultiLineChart series={strategyCurves} height={240} />
             : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
           <Legend series={strategyCurves} />
-        </div>
+        </Panel>
       </div>
 
       {/* per-instrument equity curves */}
-      <div className="card p-3">
+      <Panel className="p-3">
         <div className="stat-label mb-1">Per-instrument equity curves (cumulative realized P&L)</div>
         {curves.length ? <MultiLineChart series={curves} height={280} />
           : <div className="text-muted text-xs py-10 text-center">no closed trades yet</div>}
         <Legend series={curves} />
-      </div>
+      </Panel>
 
       <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.3fr)' }}>
         {/* per-instrument table */}
-        <div className="card p-3 overflow-auto">
+        <Panel className="p-3 overflow-auto">
           <div className="stat-label mb-2">Per-instrument performance</div>
           <table className="w-full text-xs">
             <thead className="text-muted text-left"><tr className="[&>th]:py-1 [&>th]:pr-3">
@@ -224,10 +229,10 @@ export default function DashboardView() {
               ))}
             </tbody>
           </table>
-        </div>
+        </Panel>
 
         {/* recent trades */}
-        <div className="card p-3 overflow-auto">
+        <Panel className="p-3 overflow-auto">
           <div className="stat-label mb-2">Recent trades — 📝 paper vs 🔴 real are tagged per row</div>
           <table className="w-full text-xs">
             <thead className="text-muted text-left"><tr className="[&>th]:py-1 [&>th]:pr-3">
@@ -238,7 +243,7 @@ export default function DashboardView() {
                 <tr key={t.id} className="border-t border-edge [&>td]:py-1 [&>td]:pr-3 tabular-nums">
                   <td className="text-muted">{dt(t.exit_time)}</td>
                   <td>
-                    <span className={`badge ${t.mode === 'live' ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                    <span className={cn(badgeVariants({ variant: 'chip' }), t.mode === 'live' ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300')}>
                       {t.mode === 'live' ? 'REAL' : 'PAPER'}</span>
                   </td>
                   <td className="font-semibold">{t.instrument_key}</td>
@@ -251,7 +256,7 @@ export default function DashboardView() {
               ))}
             </tbody>
           </table>
-        </div>
+        </Panel>
       </div>
       {detailKey && (
         <InstrumentDetailModal instrumentKey={detailKey}
