@@ -17,6 +17,15 @@ def _session(tmp_path):
     return s
 
 
+@pytest.fixture
+def session(tmp_path):
+    engine = make_engine(str(tmp_path / "journal.db"))
+    init_journal_db(engine)
+    Session = make_sessionmaker(engine)
+    with Session() as s:
+        yield s
+
+
 def test_ensure_current_view_creates_once(tmp_path):
     s = _session(tmp_path)
     v1 = service.ensure_current_view(s)
@@ -120,3 +129,61 @@ def test_stats_by_tag_and_missed_summary(tmp_path):
     assert out["by_tag"]["breakout"]["net_pnl"] > 0
     assert out["missed_summary"]["count"] == 1
     assert out["missed_summary"]["hypothetical_net_pnl"] > 0
+
+
+def _seed_inst(s, symbol="GOLDM"):
+    if s.get(JournalInstrument, symbol) is None:
+        s.add(JournalInstrument(symbol=symbol, exchange="MCX", lot_size=10,
+                                tick_size=1.0, multiplier=1.0, active=True))
+        s.commit()
+
+
+def test_upsert_day_is_idempotent(session):
+    d = dt.date(2026, 7, 17)
+    service.upsert_day(session, entry_date=d, market_view="v1")
+    service.upsert_day(session, entry_date=d, result="done")
+    from app.journal.models import JournalDay
+    rows = session.query(JournalDay).all()
+    assert len(rows) == 1
+    assert rows[0].market_view == "v1"   # preserved
+    assert rows[0].result == "done"      # added
+
+
+def test_add_and_delete_note(session):
+    note = service.add_note(session, body="rant", noted_at=dt.datetime(2026, 7, 17, 10))
+    assert service.delete_note(session, note.id) is True
+    assert service.delete_note(session, note.id) is False
+
+
+def test_seed_and_upsert_bias(session):
+    service.seed_bias(session)
+    assert {b.horizon for b in service.list_bias(session)} == {"6M", "1M"}
+    service.upsert_bias(session, horizon="6M", stance="bullish", note="uptrend")
+    assert next(b for b in service.list_bias(session) if b.horizon == "6M").stance == "bullish"
+
+
+def test_upsert_bias_unknown_horizon_raises(session):
+    service.seed_bias(session)
+    import pytest
+    with pytest.raises(ValueError):
+        service.upsert_bias(session, horizon="3Y", stance="x")
+
+
+def test_feed_groups_by_date(session):
+    _seed_inst(session)
+    d = dt.date(2026, 7, 17)
+    service.add_note(session, body="morning", noted_at=dt.datetime(2026, 7, 17, 9))
+    service.add_trade(session, symbol="GOLDM", direction="LONG", lots=1,
+                      entry_price=100.0, entry_time=dt.datetime(2026, 7, 17, 10))
+    service.upsert_day(session, entry_date=d, market_view="broke out")
+    out = service.feed(session, limit=10)
+    day = next(x for x in out["days"] if x["date"] == "2026-07-17")
+    assert day["market_view"] == "broke out"
+    assert len(day["notes"]) == 1
+    assert len(day["trades"]) == 1
+
+
+def test_feed_day_with_only_notes_appears(session):
+    service.add_note(session, body="lone note", noted_at=dt.datetime(2026, 7, 16, 12))
+    out = service.feed(session, limit=10)
+    assert any(x["date"] == "2026-07-16" for x in out["days"])
