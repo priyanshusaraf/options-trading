@@ -19,6 +19,7 @@ acts on completed candles. The owner does nothing after starting it.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 
 import pandas as pd
 from sqlalchemy import select
@@ -93,6 +94,10 @@ class EngineRunner:
         self.last_scan_ok: dict[str, object] = {}   # key -> last successful candle scan time (per-instrument freshness)
         self._stopped_at: dict[str, object] = {}    # instrument -> last stop-out time (re-entry cooldown)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
+        # bad-token latch: once Kite rejects our token, every instrument's fetch would
+        # fail identically (~3,800 lines/morning in the 2026-07-15 autopsy). Latch it and
+        # probe with ONE instrument per loop until the owner re-auths.
+        self._token_bad_until: dt.datetime | None = None
         self.last_entry_bar: dict[str, int] = {}    # key -> candle epoch of the last ENTRY signal evaluated (fresh-signal guard #12)
         self.running = False
         # ARM-TO-TRADE gate: the engine always scans, marks open positions, fires
@@ -278,9 +283,49 @@ class EngineRunner:
         log.info(f"STRATEGY set to {sk or 'default'}", instrument=key)
         return sk
 
+    # ── bad-token latch (autopsy rank 5: token-auth error storm) ──────────
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        """Kite's SDK surfaces a dead/expired token as a generic exception whose
+        message quotes the literal 'Incorrect `api_key` or `access_token`.'"""
+        msg = str(exc)
+        return "Incorrect" in msg and ("api_key" in msg or "access_token" in msg)
+
+    def _is_token_probably_bad(self, now: dt.datetime) -> bool:
+        return self._token_bad_until is not None and now < self._token_bad_until
+
+    def _mark_token_bad(self, now: dt.datetime, cooldown_seconds: float = 20.0) -> None:
+        self._token_bad_until = now + dt.timedelta(seconds=cooldown_seconds)
+
+    def _mark_token_ok(self) -> None:
+        self._token_bad_until = None
+
+    def _token_sweep_suspended(self) -> bool:
+        """True when the sweep should be skipped this loop. While latched we spend
+        exactly ONE provider call on a probe instrument to detect re-auth, instead of
+        letting every enabled instrument hammer historical_data with a dead token."""
+        now = self.provider.now()
+        if not self._is_token_probably_bad(now):
+            return False
+        probe_key = next(iter(sorted(self.enabled)), None)
+        if probe_key is not None:
+            try:
+                self.provider.get_ltp(get_instrument(probe_key))
+                self._mark_token_ok()
+                log.info("token recovered — resuming full market-data sweep",
+                         event="TOKEN_RECOVERED")
+                return False
+            except Exception:
+                pass  # still bad — stay latched, suppressed until next loop's probe
+        log.warn("token invalid — pausing market-data sweep until re-auth",
+                 event="TOKEN_SUSPEND_SWEEP")
+        return True
+
     # ── lane 1: strategy recompute (per-instrument interval) ──────────────
     def scan_signals(self) -> None:
         s, prov = self.settings, self.provider
+        if self._token_sweep_suspended():
+            return
         opens = {p.instrument_key: p for p in self.broker.open_positions()}
         for key in list(self.enabled):
             inst = get_instrument(key)
@@ -292,8 +337,14 @@ class EngineRunner:
                 self.last_scan_ok[key] = prov.now()   # per-instrument freshness
             except Exception as e:
                 self.health.record_fail("candle", str(e), prov.now())
+                if self._is_auth_error(e):
+                    # every other instrument would fail identically this loop — latch
+                    # now so the remaining fetches are skipped, not repeated.
+                    self._mark_token_bad(prov.now())
                 if self.health.should_log_failure("candle"):
                     log.error(f"candles failed: {e}", instrument=key)
+                if self._is_token_probably_bad(prov.now()):
+                    break
                 continue
             if len(candles) < s.ema_length + 5:
                 continue
