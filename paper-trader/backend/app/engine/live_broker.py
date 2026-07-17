@@ -418,10 +418,15 @@ class LiveBroker(PaperBroker):
         return pos
 
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
-                             now, params=None, strategy_key=None, margin=None):
+                             now, params=None, strategy_key=None, margin=None,
+                             sl_pct=None, tp_pct=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
-        open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it."""
+        open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it.
+
+        `sl_pct`/`tp_pct` (purple tiering) are forwarded to PaperBroker so the live row
+        freezes the same band a paper row would, and are carried on `_pending_entries`
+        so a late fill adopted on the reconcile sweep keeps its purple band too."""
         tsym = getattr(inst, "spot_symbol", None) or inst.key
         if not self._ensure_no_inflight(tsym):
             return None
@@ -442,7 +447,7 @@ class LiveBroker(PaperBroker):
                     "kind": "equity",
                     "order_id": res.order_id, "inst": inst, "direction": direction,
                     "charge_segment": charge_segment, "reason": reason, "params": params,
-                    "strategy_key": strategy_key}
+                    "strategy_key": strategy_key, "sl_pct": sl_pct, "tp_pct": tp_pct}
             log.error(f"LIVE EQUITY OPEN not filled [{res.status}] {tsym} — {res.reason}",
                       instrument=inst.key, event="LIVE_EQUITY_OPEN_FAIL")
             self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} {res.status}: {res.reason}")
@@ -451,7 +456,7 @@ class LiveBroker(PaperBroker):
         fill_margin = (margin * filled / qty) if (margin and margin > 0 and qty) else None
         pos = super().open_equity_position(inst, direction, avg, filled, charge_segment,
                                            reason, now, params, strategy_key,
-                                           margin=fill_margin)
+                                           margin=fill_margin, sl_pct=sl_pct, tp_pct=tp_pct)
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
                       f"(order {res.order_id})", instrument=inst.key,
@@ -940,7 +945,8 @@ class LiveBroker(PaperBroker):
                     else:
                         pos = super().open_equity_position(
                             inst, ctx["direction"], avg, filled, ctx["charge_segment"],
-                            ctx["reason"], now, ctx["params"], ctx["strategy_key"])
+                            ctx["reason"], now, ctx["params"], ctx["strategy_key"],
+                            sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"))
                         self._place_equity_stop(pos, avg)
                     log.warn(f"ADOPTED late fill {sym} {filled}@{avg:.2f} — was untracked; "
                              f"now managed + stopped", instrument=inst.key, event="ADOPT_FILL")

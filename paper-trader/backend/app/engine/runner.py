@@ -504,7 +504,10 @@ class EngineRunner:
     def _apply_lockstep(self, pos) -> None:
         """Lockstep band: once an equity position is in profit, ratchet its stop AND
         target together (break-even floored). A hand-pinned target is left in place;
-        only the stop slides then."""
+        only the stop slides then. `pos.entry_sl_pct`/`entry_tp_pct` (purple tiering,
+        2026-07-17), when set, override the global knobs so a purple position's band
+        never reshapes if the global intraday_stop_loss_pct/intraday_target_pct or the
+        purple flag itself changes after entry."""
         self.broker.ensure_stop_protection(pos, pos.last_premium)  # self-heal a missing backstop every tick
         from app.engine.equity_entry import lockstep_band
         p = self.params
@@ -514,12 +517,13 @@ class EngineRunner:
         margin = pos.entry_cost - pos.entry_charges
         rt = (2.0 * pos.entry_charges / pos.qty) if pos.qty else 0.0   # round-trip cost/share
         be = pos.entry_premium + rt if pos.direction == "LONG" else pos.entry_premium - rt
+        sl_pct = pos.entry_sl_pct if pos.entry_sl_pct is not None else p.get("intraday_stop_loss_pct", 0.01)
+        tp_pct = pos.entry_tp_pct if pos.entry_tp_pct is not None else p.get("intraday_target_pct", 0.02)
         new_stop, new_target = lockstep_band(
             pos.direction, pos.entry_premium, pos.qty, margin,
             pos.stop_price, pos.target_price, last,
             trigger_pct=p.get("intraday_lockstep_trigger_pct", 0.02),
-            sl_pct=p.get("intraday_stop_loss_pct", 0.01),
-            tp_pct=p.get("intraday_target_pct", 0.02),
+            sl_pct=sl_pct, tp_pct=tp_pct,
             breakeven_price=be, rt_per_share=rt,
             profit_lock_threshold=p.get("intraday_profit_lock_threshold", 200.0),
             profit_lock_frac=p.get("intraday_profit_lock_frac", 0.5))
@@ -954,6 +958,11 @@ class EngineRunner:
                         break
                     inst, direction = eq_meta[pickk.instrument_key]
                     seg = _equity_charge_segment(inst)
+                    # purple names get the wider band, frozen onto the row at entry
+                    sl_pct = (self.params.get("intraday_purple_stop_loss_pct", 0.015)
+                              if pickk.is_purple else None)
+                    tp_pct = (self.params.get("intraday_purple_target_pct", 0.03)
+                              if pickk.is_purple else None)
                     log.info(f"INTRADAY {pickk.direction} {pickk.instrument_key} "
                              f"{pickk.qty}@{pickk.price:.2f} (margin ₹{pickk.margin:,.0f}"
                              f"{', purple' if pickk.is_purple else ''})",
@@ -962,7 +971,7 @@ class EngineRunner:
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
                         strategy_key=self.strategy_keys.get(pickk.instrument_key),
-                        margin=pickk.margin)
+                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)
                     if pos is None:
                         continue
                     if self.params.get("notify_enabled", True):

@@ -94,7 +94,9 @@ class PaperBroker:
                              qty: int, charge_segment: str, reason: str,
                              now: dt.datetime, params: dict | None = None,
                              strategy_key: str | None = None,
-                             margin: float | None = None) -> Position:
+                             margin: float | None = None,
+                             sl_pct: float | None = None,
+                             tp_pct: float | None = None) -> Position:
         """Open an intraday equity (MIS) position of `qty` shares at `price`.
 
         MIS is leveraged: only the MARGIN leaves cash, not the full notional — but P&L
@@ -102,17 +104,20 @@ class PaperBroker:
         actual cash out), so the ledger reconciliation invariant holds exactly. When the
         caller supplies `margin` (fix A: the REAL Zerodha `order_margins` figure the
         position was sized to) we book that; otherwise we fall back to notional/leverage.
-        SL/TP are direction-aware (a SHORT's stop is above entry). Charges use the
-        intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
+        SL/TP are direction-aware (a SHORT's stop is above entry). `sl_pct`/`tp_pct`, when
+        given (purple-tiered entries), are frozen onto the row (entry_sl_pct/entry_tp_pct)
+        so a later flag toggle can never reshape this position; omitted (the legacy shape)
+        falls back to the global intraday_stop_loss_pct/intraday_target_pct and leaves the
+        columns NULL. Charges use the intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
         p = params if params is not None else effective(self.settings)
         leverage = p.get("intraday_leverage", 2.5) or 2.5
-        sl_pct = p.get("intraday_stop_loss_pct", 0.01)
-        tp_pct = p.get("intraday_target_pct", 0.02)
+        eff_sl_pct = sl_pct if sl_pct is not None else p.get("intraday_stop_loss_pct", 0.01)
+        eff_tp_pct = tp_pct if tp_pct is not None else p.get("intraday_target_pct", 0.02)
         notional = price * qty
         margin = margin if (margin is not None and margin > 0) else notional / leverage
         charges = compute_charges(charge_segment, "BUY", price, qty)["total"]
         cost = margin + charges
-        stop, target = equity_stop_target(direction, price, sl_pct, tp_pct)
+        stop, target = equity_stop_target(direction, price, eff_sl_pct, eff_tp_pct)
 
         cap = self.capital()
         cap.cash -= cost
@@ -125,13 +130,16 @@ class PaperBroker:
             strike=0.0, expiry=now.date(), lot_size=qty, qty=qty, entry_premium=price,
             entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
             entry_reason=reason, stop_price=stop, target_price=target,
+            entry_sl_pct=sl_pct, entry_tp_pct=tp_pct,
             last_premium=price, last_spot=price, last_mark_time=now,
             high_water_premium=price, mode=self.MODE)
         self.s.add(pos)
         self.s.commit()
+        purple_note = f" — purple band SL {eff_sl_pct:.1%} / TP {eff_tp_pct:.1%}" if sl_pct is not None else ""
         log.trade(
             f"OPEN EQUITY {direction} {pos.tradingsymbol} {qty}@{price:.2f} "
-            f"— margin ₹{margin:,.0f} (chg ₹{charges:.0f}); SL {stop:.2f} / TP {target:.2f}",
+            f"— margin ₹{margin:,.0f} (chg ₹{charges:.0f}); SL {stop:.2f} / TP {target:.2f}"
+            f"{purple_note}",
             instrument=inst.key, event="OPEN_EQUITY", tradingsymbol=pos.tradingsymbol,
             premium=price, cost=round(cost, 2))
         return pos
