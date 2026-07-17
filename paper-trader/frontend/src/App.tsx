@@ -6,6 +6,7 @@ import MobileTopBar from './components/MobileTopBar'
 import Watchlist from './views/WatchlistView'
 import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
+import JournalView from './views/JournalView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
 import PortfolioView from './views/PortfolioView'
@@ -17,6 +18,7 @@ import SettingsView from './views/SettingsView'
 const TABS: [string, string][] = [
   ['watchlist', 'Watchlist'],
   ['positions', 'Active Positions'],
+  ['journal', 'Journal'],
   ['engine', 'Engine / Logs'],
   ['options', 'Options Calc'],
   ['backtests', 'Backtests'],
@@ -59,6 +61,7 @@ function Shell() {
       <main className="flex-1 p-3">
         {tab === 'watchlist' && <Watchlist />}
         {tab === 'positions' && <ActivePositionsView />}
+        {tab === 'journal' && <JournalView />}
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}
         {tab === 'backtests' && (isDesktop
