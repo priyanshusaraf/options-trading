@@ -3,6 +3,10 @@ import { useLive } from '../state/LiveContext'
 import { getPositions, getSignals, getAnalytics, closePosition, blockEntries, manualOpen, setPositionSLTP, setNoTakeProfit } from '../lib/api'
 import { inr, num, signedInr, pnlColor } from '../lib/format'
 import type { PositionRow, SignalRow, AnalyticsSplit } from '../lib/types'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 function AnalyticsStrip() {
   const [a, setA] = useState<AnalyticsSplit | null>(null)
@@ -12,7 +16,7 @@ function AnalyticsStrip() {
     <div><div className="stat-label">{label}</div><div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
   const bs = a.by_segment
   return (
-    <div className="card p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px,1fr))' }}>
+    <Card className="p-3 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px,1fr))' }}>
       <div className="stat-label col-span-full">Performance by segment — net of all costs (STT/charges included)</div>
       {bs && cell('Options net', signedInr(bs.options.net_pnl), pnlColor(bs.options.net_pnl))}
       {bs && cell('Options trades', `${bs.options.trades} · ${bs.options.win_rate}%`)}
@@ -21,7 +25,7 @@ function AnalyticsStrip() {
       {bs && cell('Intraday charges', inr(bs.equity_intraday.charges || 0), 'text-down')}
       {cell('Overnight gap P&L', signedInr(a.overnight_gap_pnl), pnlColor(a.overnight_gap_pnl))}
       {cell('Option dataset', `${a.option_dataset.rows.toLocaleString()} rows`)}
-    </div>
+    </Card>
   )
 }
 
@@ -62,8 +66,8 @@ function SLTPEditor({ p, onChanged }: { p: PositionRow; onChanged: () => void })
       <input type="number" step="any" value={target} onChange={(e) => setTarget(e.target.value)}
         title="take-profit premium"
         className="w-24 bg-panel2 border border-up/40 rounded px-2 py-1 text-xs tabular-nums" />
-      <button disabled={busy} onClick={save} className="btn">{busy ? '…' : 'Set'}</button>
-      {p.manual_target && <span className="badge bg-blue-500/15 text-blue-300" title="target pinned by you — reinforcement won't move it">TP pinned</span>}
+      <Button disabled={busy} onClick={save} variant="toolbar" size="toolbar">{busy ? '…' : 'Set'}</Button>
+      {p.manual_target && <Badge variant="chip" className="bg-blue-500/15 text-blue-300" title="target pinned by you — reinforcement won't move it">TP pinned</Badge>}
       {msg && <span className="text-xs text-down">✕ {msg}</span>}
     </div>
   )
@@ -82,21 +86,21 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
     else onChanged()
   }
   return (
-    <div className="card p-3 flex flex-col gap-2">
+    <Card className="p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-zinc-100">{p.instrument_key}</span>
-          <span className={`badge ${p.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>{p.direction} {p.option_type}</span>
-          {p.segment === 'equity_intraday' && <span className="badge bg-purple-500/15 text-purple-200" title="MIS intraday equity">INTRA</span>}
-          {p.strategy_key && <span className="badge bg-zinc-700/40 text-muted" title="strategy">{p.strategy_key}</span>}
+          <Badge variant="chip" className={p.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}>{p.direction} {p.option_type}</Badge>
+          {p.segment === 'equity_intraday' && <Badge variant="chip" className="bg-purple-500/15 text-purple-200" title="MIS intraday equity">INTRA</Badge>}
+          {p.strategy_key && <Badge variant="chip" className="bg-zinc-700/40 text-muted" title="strategy">{p.strategy_key}</Badge>}
           {p.mode === 'live'
-            ? <span className="badge bg-down/20 text-down" title="REAL Kite position — actual money">🔴 REAL</span>
-            : <span className="badge bg-emerald-500/15 text-emerald-300" title="paper position — simulated fill, no real order">📝 PAPER</span>}
+            ? <Badge variant="chip" className="bg-down/20 text-down" title="REAL Kite position — actual money">🔴 REAL</Badge>
+            : <Badge variant="chip" className="bg-emerald-500/15 text-emerald-300" title="paper position — simulated fill, no real order">📝 PAPER</Badge>}
           <span className="text-[11px] text-muted">{p.tradingsymbol} · {p.qty}u</span>
-          {!!p.reinforcement_count && <span className="badge bg-blue-500/15 text-blue-300" title="reinforcements">⊕ ×{p.reinforcement_count}</span>}
-          {p.held_overnight && <span className="badge bg-indigo-400/15 text-indigo-300" title="held overnight">🌙 overnight</span>}
-          {p.no_take_profit && <span className="badge bg-fuchsia-400/15 text-fuchsia-300" title="take-profit removed — runs on the trailing stop only">🚀 no TP</span>}
-          {p.stale && <span className="badge bg-amber-400/15 text-amber-400">stale{p.stale_age != null ? ` ${p.stale_age}s` : ''}</span>}
+          {!!p.reinforcement_count && <Badge variant="chip" className="bg-blue-500/15 text-blue-300" title="reinforcements">⊕ ×{p.reinforcement_count}</Badge>}
+          {p.held_overnight && <Badge variant="chip" className="bg-indigo-400/15 text-indigo-300" title="held overnight">🌙 overnight</Badge>}
+          {p.no_take_profit && <Badge variant="chip" className="bg-fuchsia-400/15 text-fuchsia-300" title="take-profit removed — runs on the trailing stop only">🚀 no TP</Badge>}
+          {p.stale && <Badge variant="chip" className="bg-amber-400/15 text-amber-400">stale{p.stale_age != null ? ` ${p.stale_age}s` : ''}</Badge>}
         </div>
         <span className={`text-sm font-semibold ${pnlColor(p.unrealized_pnl)}`}>{signedInr(p.unrealized_pnl)}</span>
       </div>
@@ -117,19 +121,20 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
       <SLTPEditor p={p} onChanged={onChanged} />
 
       <div className="flex items-center gap-2 pt-1 border-t border-edge/50 flex-wrap">
-        <button disabled={busy} onClick={() => act(() => closePosition(p.instrument_key))}
-          className="btn border-down/50 text-down">{busy ? '…' : '✕ Close now'}</button>
-        <button disabled={busy} onClick={() => act(() => blockEntries(p.instrument_key, true))}
-          className="btn">⊘ Disable new entries</button>
-        <button disabled={busy} onClick={toggleNoTP}
+        <Button disabled={busy} onClick={() => act(() => closePosition(p.instrument_key))}
+          variant="toolbar" size="toolbar" className="border-down/50 text-down">{busy ? '…' : '✕ Close now'}</Button>
+        <Button disabled={busy} onClick={() => act(() => blockEntries(p.instrument_key, true))}
+          variant="toolbar" size="toolbar">⊘ Disable new entries</Button>
+        <Button disabled={busy} onClick={toggleNoTP}
           title="Remove the take-profit cap so an overnight winner can run on news. The trailing stop, strategy exit, and theta/expiry square-offs still protect it. You control this — the bot never sets it."
-          className={`btn ${p.no_take_profit ? 'border-fuchsia-400/60 text-fuchsia-300 bg-fuchsia-400/10' : ''}`}>
+          variant="toolbar" size="toolbar"
+          className={cn(p.no_take_profit && 'border-fuchsia-400/60 text-fuchsia-300 bg-fuchsia-400/10')}>
           {p.no_take_profit ? '🚀 TP off — restore' : '🚀 Let it run (no TP)'}
-        </button>
+        </Button>
         {tpMsg && <span className="text-[11px] text-down">✕ {tpMsg}</span>}
         <span className="ml-auto text-[11px] text-muted">last update {p.last_mark_time ? new Date(p.last_mark_time).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) : '—'}</span>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -149,12 +154,12 @@ function ManualEntry({ tradable, onDone, mode }:
     else { setMsg(`✓ opened ${res.tradingsymbol}`); onDone() }
   }
   return (
-    <div className={`card p-3 flex items-end gap-3 flex-wrap ${live ? 'border-down/40' : ''}`}>
+    <Card className={cn('p-3 flex items-end gap-3 flex-wrap', live && 'border-down/40')}>
       <div className="flex flex-col gap-1">
         <span className="stat-label">Manual entry — 1 lot, capital-checked
           {live
-            ? <span className="badge ml-1 bg-down/20 text-down">🔴 REAL order</span>
-            : <span className="badge ml-1 bg-emerald-500/15 text-emerald-300">📝 paper</span>}
+            ? <Badge variant="chip" className="ml-1 bg-down/20 text-down">🔴 REAL order</Badge>
+            : <Badge variant="chip" className="ml-1 bg-emerald-500/15 text-emerald-300">📝 paper</Badge>}
         </span>
         <div className="flex items-center gap-2">
           <select value={key} onChange={(e) => setKey(e.target.value)}
@@ -162,11 +167,12 @@ function ManualEntry({ tradable, onDone, mode }:
             <option value="">select instrument…</option>
             {tradable.map((t) => <option key={t.key} value={t.key}>{t.name}{t.has_position ? ' (held)' : ''}</option>)}
           </select>
-          <button onClick={() => setDir('LONG')} className={`badge ${dir === 'LONG' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>LONG</button>
-          <button onClick={() => setDir('SHORT')} className={`badge ${dir === 'SHORT' ? 'bg-down/20 text-down' : 'bg-zinc-700/40 text-muted'}`}>SHORT</button>
-          <button disabled={busy || !key} onClick={submit}
-            className={`btn ${live ? 'border-down/60 text-down' : 'border-up/50 text-up'}`}>
-            {busy ? 'opening…' : live ? '+ open REAL position' : '+ open paper position'}</button>
+          <button onClick={() => setDir('LONG')} className={cn(badgeVariants({ variant: 'chip' }), dir === 'LONG' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted')}>LONG</button>
+          <button onClick={() => setDir('SHORT')} className={cn(badgeVariants({ variant: 'chip' }), dir === 'SHORT' ? 'bg-down/20 text-down' : 'bg-zinc-700/40 text-muted')}>SHORT</button>
+          <Button disabled={busy || !key} onClick={submit}
+            variant="toolbar" size="toolbar"
+            className={live ? 'border-down/60 text-down' : 'border-up/50 text-up'}>
+            {busy ? 'opening…' : live ? '+ open REAL position' : '+ open paper position'}</Button>
         </div>
       </div>
       {msg && <span className={`text-xs ${msg.startsWith('✓') ? 'text-up' : 'text-down'}`}>{msg}</span>}
@@ -174,7 +180,7 @@ function ManualEntry({ tradable, onDone, mode }:
         {live ? '🔴 LIVE execution armed — this places a REAL Kite order on your account'
               : '📝 paper mode — simulated fill, never places a real Kite order'}
       </span>
-    </div>
+    </Card>
   )
 }
 
@@ -214,22 +220,22 @@ export default function ActivePositionsView() {
     <div className="flex flex-col gap-3">
       <AnalyticsStrip />
       {/* two trading windows: options vs intraday/equity */}
-      <div className="card p-3 flex items-center gap-2 flex-wrap">
+      <Card className="p-3 flex items-center gap-2 flex-wrap">
         <span className="stat-label mr-1">Window</span>
         {SEG_TABS.map(([s, label]) => (
           <button key={s} onClick={() => setSeg(s)}
-            className={`badge ${seg === s ? 'bg-purple-500/25 text-purple-200 border border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            className={cn(badgeVariants({ variant: 'chip' }), seg === s ? 'bg-purple-500/25 text-purple-200 border-purple-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
             {label} ({countFor(s)})
           </button>
         ))}
-      </div>
+      </Card>
       <ManualEntry tradable={tradable} onDone={load} mode={mode} />
       {shown.length === 0 ? (
-        <div className="card p-8 text-center text-muted">
+        <Card className="p-8 text-center text-muted">
           {seg === 'equity_intraday'
             ? 'No open intraday/equity positions. Flag instruments as INTRA on the Watchlist (and arm + enable intraday in Settings) to trade this window.'
             : 'No open positions. The engine opens one on the next fresh signal, or open one manually above.'}
-        </div>
+        </Card>
       ) : (
         <div className="grid gap-3 grid-cols-1 md:grid-cols-[repeat(auto-fill,minmax(420px,1fr))]">
           {shown.map((p) => <PositionCard key={p.instrument_key} p={p} onChanged={load} />)}

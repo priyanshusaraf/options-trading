@@ -18,12 +18,20 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        // `toolbar` reproduces this cockpit's long-standing `.btn` look (see
+        // index.css). Stock shadcn buttons are h-10 text-sm — roughly double the
+        // height of the app's dense inline action buttons, which sit inside
+        // position cards and toolbars rather than on roomy forms. Pair with
+        // size="toolbar". Callers add accent classes via className.
+        toolbar:
+          "border border-edge bg-panel2 hover:border-zinc-500 hover:bg-panel2 font-normal",
       },
       size: {
         default: "h-10 px-4 py-2",
         sm: "h-9 rounded-md px-3",
         lg: "h-11 rounded-md px-8",
         icon: "h-10 w-10",
+        toolbar: "h-auto rounded px-2.5 py-1 text-xs",
       },
     },
     defaultVariants: {
