@@ -23,7 +23,12 @@ def ensure_current_view(s) -> JournalView:
     ).scalars().first()
     if row is not None:
         return row
-    row = JournalView(name=CURRENT_VIEW_NAME, created_at=dt.datetime.now())
+    name = CURRENT_VIEW_NAME
+    suffix = 2
+    while s.execute(select(JournalView).where(JournalView.name == name)).scalars().first() is not None:
+        name = f"{CURRENT_VIEW_NAME}-{suffix}"
+        suffix += 1
+    row = JournalView(name=name, created_at=dt.datetime.now())
     s.add(row)
     s.commit()
     return row
@@ -53,6 +58,8 @@ def add_trade(s, *, symbol: str, direction: str, lots: int, entry_price: float,
 def close_trade(s, trade_id: int, *, exit_price: float, exit_time: dt.datetime,
                  manual_net_pnl: float | None = None) -> JournalTrade:
     t = s.get(JournalTrade, trade_id)
+    if t is None:
+        raise ValueError(f"no journal trade with id {trade_id}")
     t.exit_price, t.exit_time = exit_price, exit_time
     t.manual_net_pnl = manual_net_pnl
     s.commit()

@@ -1,7 +1,9 @@
 import datetime as dt
 
+import pytest
+
 from app.journal.db import make_engine, make_sessionmaker, init_journal_db
-from app.journal.models import JournalInstrument
+from app.journal.models import JournalInstrument, JournalView
 from app.journal import service
 
 
@@ -20,6 +22,32 @@ def test_ensure_current_view_creates_once(tmp_path):
     v1 = service.ensure_current_view(s)
     v2 = service.ensure_current_view(s)
     assert v1.id == v2.id  # idempotent — doesn't create a second live view
+
+
+def test_ensure_current_view_survives_retired_name_collision(tmp_path):
+    # Reproduces the original bug: a JournalView named "current" already
+    # exists but is retired, and there is no other live view. The old code
+    # only checked for a LIVE view by retired_at IS NULL, then always
+    # hardcoded name="current" for the auto-created row, which collided with
+    # the retired row's UNIQUE(name) and raised IntegrityError.
+    s = _session(tmp_path)
+    retired = JournalView(name=service.CURRENT_VIEW_NAME,
+                           created_at=dt.datetime.now(),
+                           retired_at=dt.datetime.now())
+    s.add(retired)
+    s.commit()
+
+    new_view = service.ensure_current_view(s)  # must not raise
+
+    assert new_view.id != retired.id
+    assert new_view.name != retired.name
+    assert new_view.retired_at is None
+
+
+def test_close_trade_unknown_id_raises_value_error(tmp_path):
+    s = _session(tmp_path)
+    with pytest.raises(ValueError):
+        service.close_trade(s, 999999, exit_price=100.0, exit_time=dt.datetime.now())
 
 
 def test_add_trade_binds_to_current_view_when_unspecified(tmp_path):
