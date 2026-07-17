@@ -67,8 +67,8 @@ Each day card, top to bottom:
 - **Market view** — a large free-text box ("what I'm feeling"); autosaves on blur.
   This is the ranting.
 - **Notes thread** — timestamped quick notes droppable anytime, each with an optional
-  mood emoji + optional instrument tag; an inline `＋ note` composer. Mid-session rants
-  land here.
+  instrument tag; an inline `＋ note` composer. Mid-session rants land here. (No mood/
+  emoji field — the body carries the feeling.)
 - **Trades taken** — compact rows auto-pulled from existing journal trades dated that
   day (symbol · direction · lots · entry→exit · net P&L · tag), plus the existing manual
   quick-add to log one.
@@ -85,9 +85,9 @@ New tables, alongside the existing `JournalInstrument` / `JournalTrade` /
 
 - `JournalDay(entry_date DATE primary key, market_view TEXT nullable,
   result TEXT nullable, created_at, updated_at)` — **upsert by date** (idempotent).
-- `JournalNote(id PK, noted_at DATETIME, body TEXT, instrument_symbol FK→journal_instruments nullable,
-  mood VARCHAR nullable)` — the quick notes. Grouped into days by the calendar date of
-  `noted_at`.
+- `JournalNote(id PK, noted_at DATETIME, body TEXT, instrument_symbol FK→journal_instruments nullable)`
+  — the quick notes. Grouped into days by the calendar date of `noted_at`. No mood/emoji
+  field.
 - `JournalBias(horizon VARCHAR primary key — '6M' | '1M', stance VARCHAR,
   note TEXT nullable, updated_at)` — seeded with `6M` and `1M` rows on first run.
 
@@ -106,7 +106,7 @@ One read endpoint the UI leans on:
   { "bias":  [ {horizon, stance, note, updated_at}, … ],
     "stats": {net_pnl, win_rate, days_journaled, trades},
     "days":  [ {date, market_view, result, net_pnl,
-                notes:   [ {id, noted_at, body, instrument_symbol, mood}, … ],
+                notes:   [ {id, noted_at, body, instrument_symbol}, … ],
                 trades:  [ … existing trade dict … ],
                 missed:  [ … existing missed dict … ] }, … ] }
   ```
@@ -115,7 +115,7 @@ One read endpoint the UI leans on:
 
 Granular writes (each opens its own `journal.db` session, as existing handlers do):
 - `POST /api/journal/days` — upsert `{entry_date, market_view?, result?}`.
-- `POST /api/journal/notes` — `{body, noted_at?, instrument_symbol?, mood?}`; unknown
+- `POST /api/journal/notes` — `{body, noted_at?, instrument_symbol?}`; unknown
   instrument → 400.
 - `DELETE /api/journal/notes/{id}` — 404 if absent.
 - `GET /api/journal/bias` and `PUT /api/journal/bias/{horizon}` — `{stance, note?}`;
