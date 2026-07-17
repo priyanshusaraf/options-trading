@@ -43,6 +43,7 @@ const META: Record<string, { label: string; help: string }> = {
   exec_max_slippage_pct: { label: 'Limit slippage cap', help: 'A marketable-limit order is capped this far off the mid price. Recommended 0.01 (1%).' },
   exec_min_top_qty_lots: { label: 'Min top-of-book (lots)', help: 'Require this many lots on the touch to send a MARKET order; a thinner book routes a capped limit. Recommended 1.' },
   max_daily_loss: { label: 'Daily loss halt (₹)', help: 'Stop opening new trades for the rest of the day once realized net loss reaches this. 0 = off. Recommended 5000.' },
+  max_open_drawdown: { label: 'Open drawdown halt (₹)', help: 'Stop opening new trades once today\'s realized + unrealized (open MTM) loss reaches this. 0 = off. Recommended 2500 — half the daily loss halt, since open MTM bleeds faster than realized.' },
   bot_capital_cap: { label: 'Bot capital cap (₹)', help: 'Hard ceiling on what the bot may ever deploy. 0 = no extra cap. Protects your capital even if Kite briefly mis-reports margin.' },
   capital_reserve: { label: 'Capital reserve (₹)', help: 'Live: account margin kept free for your own trades — the bot never dips into it.' },
   gtt_stop_enabled: { label: 'Exchange-side GTT stop', help: 'Live only: also place a Good-Till-Triggered stop on Zerodha so the position is protected even if the bot/laptop/internet goes down. Trails with the bot stop; cancelled when the bot exits.' },
@@ -72,7 +73,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Intraday equity (MIS)', (k) => k.startsWith('intraday_')],
   ['Overtrading guard', (k) => k.startsWith('overtrade_')],
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
-  ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'bot_capital_cap' || k === 'capital_reserve' || k === 'gtt_stop_enabled'],
+  ['Execution & risk limits', (k) => k.startsWith('exec_') || k === 'max_daily_loss' || k === 'max_open_drawdown' || k === 'bot_capital_cap' || k === 'capital_reserve' || k === 'gtt_stop_enabled'],
 ]
 
 function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {

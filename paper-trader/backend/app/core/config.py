@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     order_timeout_seconds: float = 10.0        # give up polling after this; reconcile, never assume filled
     max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
     max_round_trips_per_day: int = 9           # halt NEW entries after this many completed round trips today (0 = off)
-    max_open_drawdown: float = 0.0             # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off)
+    max_open_drawdown: float = 2_500.0         # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off; H15, enabled 2026-07-17 — half the ₹5k daily-loss halt since open MTM bleeds faster than realized)
     gtt_stop_enabled: bool = True              # live: also place an exchange-side GTT stop (survives bot/laptop downtime)
     # market protection for every live MARKET order (entries + protective exits, all
     # segments incl. MCX). Mandatory since SEBI's 1-Apr-2026 rule: an unprotected
