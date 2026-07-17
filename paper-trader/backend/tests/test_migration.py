@@ -23,6 +23,7 @@ def test_migration_adds_missing_columns(tmp_path, monkeypatch):
         bt = {r[1] for r in c.execute(text("PRAGMA table_info(backtest_results)"))}
     assert {"live_interval", "entries_blocked"} <= istate
     assert {"last_mark_time", "high_water_premium"} <= pos
+    assert {"entry_sl_pct", "entry_tp_pct"} <= pos
     assert {"params_hash", "last_candle_ts", "schema_version", "from_cache", "computed_at"} <= bt
     # round-1 honesty columns must be added in place too (additive, non-destructive)
     assert {"notional", "lots", "affordable", "first_ts", "last_ts", "effective_days",

@@ -78,6 +78,12 @@ class Position(Base):
 
     stop_price: Mapped[float] = mapped_column(Float)        # premium floor (SL)
     target_price: Mapped[float] = mapped_column(Float)      # premium ceiling (TP)
+    # purple SL/TP tiering (2026-07-17): the SL/TP *percentages* this equity_intraday
+    # position was opened with, frozen at entry. NULL for options positions and for
+    # legacy equity rows predating this feature — both fall back to the current global
+    # intraday_stop_loss_pct/intraday_target_pct knobs at ratchet time.
+    entry_sl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_tp_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     last_premium: Mapped[float] = mapped_column(Float, default=0.0)  # live mark
     last_spot: Mapped[float] = mapped_column(Float, default=0.0)

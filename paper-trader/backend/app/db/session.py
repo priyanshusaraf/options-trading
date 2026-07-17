@@ -135,6 +135,8 @@ def _migrate_schema() -> None:
             ("spot_stop", "FLOAT"),
             ("ratchet_last_bar_ts", "DATETIME"),
             ("mode", "VARCHAR(8) DEFAULT 'paper'"),
+            ("entry_sl_pct", "FLOAT"),
+            ("entry_tp_pct", "FLOAT"),
         ],
         "trades": [
             ("held_overnight", "BOOLEAN DEFAULT 0"),

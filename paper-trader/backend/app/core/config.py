@@ -175,6 +175,13 @@ class Settings(BaseSettings):
     intraday_min_margin: float = 5_000.0       # don't open an intraday trade with less REAL margin than this
     intraday_max_margin: float = 8_000.0       # target REAL margin per (non-purple) intraday trade
     intraday_purple_margin: float = 8_000.0    # target REAL margin for a purple-flagged priority name
+    # purple SL/TP tiering: purple names are higher-conviction and more volatile
+    # than the rest of the watchlist (owner, 2026-07-17) — they get wider bands so
+    # normal intraday noise doesn't stop them out. Frozen onto Position.entry_sl_pct/
+    # entry_tp_pct AT ENTRY (see equity_entry.py/broker.py) so a mid-trade purple-flag
+    # toggle never reshapes an already-open position.
+    intraday_purple_stop_loss_pct: float = 0.015   # purple equity SL, fraction of entry price
+    intraday_purple_target_pct: float = 0.03       # purple equity TP, fraction of entry price
     # BINDING notional cap (Task 2, R2 2026-07-16): live qty = min(real-margin qty,
     # equity_qty(target_margin, this, price)) — Zerodha's real MIS multiplier (often
     # 5x) only floors qty against broker rejection, it no longer decides notional.
