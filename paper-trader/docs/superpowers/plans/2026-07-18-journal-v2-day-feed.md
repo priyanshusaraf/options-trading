@@ -468,7 +468,22 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `backend/tests/journal/test_routes.py` (reuse its existing `TestClient` fixture — the file already builds the app/client and points `PT_JOURNAL_DB_PATH` at a tmp DB; follow that exact pattern):
+Append to `backend/tests/journal/test_routes.py`. **First** harden the existing `_client()` helper: `routes.py` caches its engine/sessionmaker in module globals, so deleting the tmp DB file alone does not give a fresh empty DB (the open connection keeps serving old rows). Reset the singleton in `_client()`:
+
+```python
+def _client():
+    path = os.environ["PT_JOURNAL_DB_PATH"]
+    from app.journal import routes as journal_routes
+    if journal_routes._engine is not None:
+        journal_routes._engine.dispose()
+    journal_routes._engine = None
+    journal_routes._SessionLocal = None
+    if os.path.exists(path):
+        os.remove(path)
+    return TestClient(app)
+```
+
+Then append the tests (the `client` fixture already wraps `_client()`):
 
 ```python
 def test_feed_endpoint_empty_ok(client):
@@ -482,7 +497,10 @@ def test_feed_endpoint_empty_ok(client):
 def test_day_and_note_and_bias_flow(client):
     assert client.post("/api/journal/days", json={
         "entry_date": "2026-07-17", "market_view": "broke 24200"}).status_code == 200
-    note = client.post("/api/journal/notes", json={"body": "exited early"})
+    # noted_at MUST be explicit and match the day — a bare note defaults to now(),
+    # which lands on today's date, not the hardcoded 2026-07-17.
+    note = client.post("/api/journal/notes", json={
+        "body": "exited early", "noted_at": "2026-07-17T10:00:00"})
     assert note.status_code == 200
     nid = note.json()["id"]
     assert client.put("/api/journal/bias/6M",
@@ -711,7 +729,10 @@ Check `frontend/src/lib/api.ts` for a `del`/DELETE helper. If none exists, add o
 
 ```typescript
 export const del = (path: string) =>
-  fetch(path, { method: 'DELETE' }).then((r) => {
+  fetch(path, {
+    method: 'DELETE',
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  }).then((r) => {
     if (!r.ok) throw new Error(`${r.status}`)
     return r.json()
   })
