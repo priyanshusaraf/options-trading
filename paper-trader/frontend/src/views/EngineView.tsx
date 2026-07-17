@@ -7,6 +7,9 @@ import ModeChip from '../components/ModeChip'
 import { num, signalStyle, signedInr, pnlColor, inr, epochTime } from '../lib/format'
 import { prio } from '../lib/constants'
 import type { InstrState } from '../lib/types'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 // Budget (seconds) after which a row with no fresh candle is flagged. Mirrors the
 // backend interval grace (interval minutes + 90s slack).
@@ -63,10 +66,10 @@ export default function EngineView() {
       <SessionBanner authenticated={authed} />
 
       {/* Engine status header — is the bot ALIVE, ARMED, PAPER/LIVE, HALTED? */}
-      <div className="card p-3 flex items-center gap-6 flex-wrap">
+      <Card className="p-3 flex items-center gap-6 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-zinc-100 font-semibold">Engine</span>
-          <span className="badge bg-zinc-700/40 text-muted">{state?.provider?.toUpperCase() || '—'}</span>
+          <Badge variant="chip" className="bg-zinc-700/40 text-muted">{state?.provider?.toUpperCase() || '—'}</Badge>
           <ModeChip mode={mode} />
         </div>
         <Stat label="Running">
@@ -86,7 +89,7 @@ export default function EngineView() {
         <Stat label="Open positions"><span className="tabular-nums">{state?.capital?.open_count ?? '—'}</span></Stat>
         <div className="ml-auto">
           {halt?.halted ? (
-            <div className="badge bg-down/20 text-down border border-down/50 font-semibold"
+            <div className={cn(badgeVariants({ variant: 'chip' }), 'bg-down/20 text-down border border-down/50 font-semibold')}
               title="New entries are halted by a circuit breaker. Open positions are still managed & protected.">
               ⛔ HALT — {halt.reason === 'open_drawdown' ? 'open drawdown'
                 : halt.reason === 'round_trips' ? 'round-trip cap' : 'daily loss'}
@@ -98,27 +101,27 @@ export default function EngineView() {
                   : `${signedInr(halt.realized)} / cap ${inr(-halt.max_daily_loss)}`}
             </div>
           ) : (
-            <span className="badge bg-up/15 text-up">no halt</span>
+            <Badge variant="chip" className="bg-up/15 text-up">no halt</Badge>
           )}
         </div>
-      </div>
+      </Card>
 
       {/* What the two loops actually do — honest cadence, not "every tick" */}
-      <div className="card p-3 text-[11px] text-muted leading-relaxed">
+      <Card className="p-3 text-[11px] text-muted leading-relaxed">
         <span className="text-zinc-300 font-semibold">How it runs: </span>
         signal math recomputes on each instrument's completed candle (per its live TF); open positions
         are marked &amp; SL/TP-checked continuously on the fast risk lane. A waiting row is not hung —
         it is between candles. The bot only OPENS new trades when armed and not halted.
-      </div>
+      </Card>
 
       <div className="grid gap-3 grid-cols-1 md:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-3 min-w-0">
           {/* Per-instrument freshness / scan + position health */}
-          <div className="card p-3 overflow-auto">
+          <Card className="p-3 overflow-auto">
             <div className="flex items-center justify-between mb-2">
               <span className="stat-label">Per-instrument health — last completed candle &amp; freshness</span>
               <button onClick={() => setShowMath((v) => !v)}
-                className="badge bg-zinc-700/40 text-muted hover:text-zinc-200">
+                className={cn(badgeVariants({ variant: 'chip' }), 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
                 {showMath ? 'hide strategy math' : 'show strategy math'}
               </button>
             </div>
@@ -148,7 +151,7 @@ export default function EngineView() {
                           : stale
                             ? <span className="text-amber-400" title={`last candle ${age}s ago`}>stale / waiting</span>
                             : <span className="text-up/80">fresh</span>}</td>
-                      <td><span className={`badge ${signalStyle(s.signal)}`}>{s.signal === 'NONE' ? '—' : s.signal.replace('_', ' ')}</span></td>
+                      <td><span className={cn(badgeVariants({ variant: 'chip' }), signalStyle(s.signal))}>{s.signal === 'NONE' ? '—' : s.signal.replace('_', ' ')}</span></td>
                       <td>{s.position
                         ? <span className={s.position.direction === 'LONG' ? 'text-up' : 'text-down'}>
                             {s.position.direction} {s.position.option_type}{' '}
@@ -160,11 +163,11 @@ export default function EngineView() {
                 })}
               </tbody>
             </table>
-          </div>
+          </Card>
 
           {/* Strategy-math table — a subset of Monitor, collapsed by default */}
           {showMath && (
-            <div className="card p-3 overflow-auto">
+            <Card className="p-3 overflow-auto">
               <div className="stat-label mb-2">Strategy math — EMA50 + displacement z-score per instrument</div>
               <table className="w-full text-xs">
                 <thead className="text-muted text-left">
@@ -183,19 +186,19 @@ export default function EngineView() {
                       <td className="text-muted">{num(s.z_prev)}</td>
                       <td>{num(s.slope, 1)}</td>
                       <td className={s.trend === 'bull' ? 'text-up' : s.trend === 'bear' ? 'text-down' : 'text-muted'}>{s.trend}</td>
-                      <td><span className={`badge ${signalStyle(s.signal)}`}>{s.signal === 'NONE' ? '—' : s.signal.replace('_', ' ')}</span></td>
+                      <td><span className={cn(badgeVariants({ variant: 'chip' }), signalStyle(s.signal))}>{s.signal === 'NONE' ? '—' : s.signal.replace('_', ' ')}</span></td>
                       <td className="text-muted">{[s.long_exit && 'L', s.short_exit && 'S'].filter(Boolean).join('/') || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </Card>
           )}
         </div>
 
         <div className="flex flex-col gap-3 min-w-0">
           {/* Recent errors pinned above the raw log */}
-          <div className="card p-3">
+          <Card className="p-3">
             <div className="stat-label mb-2">Recent errors / warnings ({recentErrors.length})</div>
             {recentErrors.length === 0
               ? <div className="text-[11px] text-up/70">none — engine quiet</div>
@@ -207,7 +210,7 @@ export default function EngineView() {
                     </div>
                   ))}
                 </div>}
-          </div>
+          </Card>
           <LogStream />
         </div>
       </div>
