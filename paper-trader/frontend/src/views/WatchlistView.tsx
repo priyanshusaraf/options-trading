@@ -367,8 +367,9 @@ export function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClo
 
   useEffect(() => {
     const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
+    const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(
-      `ws://${location.host}/ws/instrument/${k}${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''}`,
+      `${wsScheme}://${location.host}/ws/instrument/${k}${TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : ''}`,
     )
     ws.onmessage = (e) => setTick(JSON.parse(e.data))
     return () => ws.close()
