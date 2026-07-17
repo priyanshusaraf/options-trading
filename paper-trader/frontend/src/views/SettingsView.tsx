@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { getSettings, setSetting, resetSetting } from '../lib/api'
 import type { SettingRow } from '../lib/types'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 // Human label + one-line doc for each runtime-overridable knob. Anything not
 // listed still renders with its raw key.
@@ -95,13 +98,13 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
     <div className="flex items-start gap-3 py-2 border-t border-edge/50">
       <div className="flex-1 min-w-0">
         <div className="text-sm text-zinc-200">{m.label}
-          {changed && <span className="badge bg-blue-500/15 text-blue-300 ml-2">overridden</span>}</div>
+          {changed && <Badge variant="chip" className="bg-blue-500/15 text-blue-300 ml-2">overridden</Badge>}</div>
         <div className="text-[11px] text-muted">{m.help}</div>
       </div>
       <div className="flex items-center gap-2">
         {r.type === 'bool' ? (
           <button onClick={() => { setV(!v); save(!v) }}
-            className={`badge ${v ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>{v ? 'on' : 'off'}</button>
+            className={cn(badgeVariants({ variant: 'chip' }), v ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted')}>{v ? 'on' : 'off'}</button>
         ) : (
           <input type="number" value={v} step={r.type === 'int' ? 1 : 'any'}
             onChange={(e) => setV(r.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value))}
@@ -110,7 +113,7 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
         )}
         <span className="text-[10px] text-muted w-20 text-right">default {String(r.default)}</span>
         <button disabled={!changed} onClick={() => resetSetting(r.key).then(onSaved)}
-          className={`badge ${changed ? 'bg-zinc-700/40 text-muted hover:text-zinc-200' : 'opacity-30'}`}>reset</button>
+          className={cn(badgeVariants({ variant: 'chip' }), changed ? 'bg-zinc-700/40 text-muted hover:text-zinc-200' : 'opacity-30')}>reset</button>
       </div>
     </div>
   )
@@ -123,18 +126,18 @@ export default function SettingsView() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="card p-3">
+      <Card className="p-3">
         <div className="stat-label">Manual override — every value applies live, no code changes or restart</div>
         <div className="text-[11px] text-muted">Defaults shown are my recommended values; override any of them and the engine picks it up on the next loop.</div>
-      </div>
+      </Card>
       {GROUPS.map(([title, match]) => {
         const group = rows.filter((r) => match(r.key))
         if (!group.length) return null
         return (
-          <div key={title} className="card p-3">
+          <Card key={title} className="p-3">
             <div className="text-sm font-semibold text-zinc-100 mb-1">{title}</div>
             {group.map((r) => <Row key={r.key} r={r} onSaved={load} />)}
-          </div>
+          </Card>
         )
       })}
     </div>
