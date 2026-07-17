@@ -37,3 +37,20 @@ class AddMissedRequest(BaseModel):
 class AddViewRequest(BaseModel):
     name: str
     thesis: str | None = None
+
+
+class UpsertDayRequest(BaseModel):
+    entry_date: dt.date
+    market_view: str | None = None
+    result: str | None = None
+
+
+class AddNoteRequest(BaseModel):
+    body: str
+    noted_at: dt.datetime | None = None
+    instrument_symbol: str | None = None
+
+
+class UpsertBiasRequest(BaseModel):
+    stance: str | None = None
+    note: str | None = None

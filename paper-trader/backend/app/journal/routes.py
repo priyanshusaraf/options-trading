@@ -13,7 +13,10 @@ from app.journal import service
 from app.journal.config import journal_db_path
 from app.journal.db import init_journal_db, make_engine, make_sessionmaker
 from app.journal.models import JournalInstrument, JournalTrade, JournalView
-from app.journal.schemas import AddMissedRequest, AddTradeRequest, AddViewRequest, CloseTradeRequest
+from app.journal.schemas import (
+    AddMissedRequest, AddNoteRequest, AddTradeRequest, AddViewRequest,
+    CloseTradeRequest, UpsertBiasRequest, UpsertDayRequest,
+)
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 
@@ -41,6 +44,7 @@ def _get_sessionmaker():
         _engine = make_engine(journal_db_path())
         init_journal_db(_engine)
         _seed_instruments(_engine)
+        _seed_bias(_engine)
         _SessionLocal = make_sessionmaker(_engine)
     return _SessionLocal
 
@@ -52,6 +56,12 @@ def _seed_instruments(engine) -> None:
             if s.get(JournalInstrument, row["symbol"]) is None:
                 s.add(JournalInstrument(active=True, **row))
         s.commit()
+
+
+def _seed_bias(engine) -> None:
+    Session = make_sessionmaker(engine)
+    with Session() as s:
+        service.seed_bias(s)
 
 
 def _session():
@@ -188,3 +198,56 @@ def list_views():
              "created_at": v.created_at.isoformat(),
              "retired_at": v.retired_at.isoformat() if v.retired_at else None}
             for v in rows]}
+
+
+@router.get("/feed")
+def get_feed(limit: int = 60):
+    with _session() as s:
+        return service.feed(s, limit=limit)
+
+
+@router.post("/days")
+def upsert_day(req: UpsertDayRequest):
+    with _session() as s:
+        d = service.upsert_day(s, entry_date=req.entry_date,
+                               market_view=req.market_view, result=req.result)
+        return {"entry_date": d.entry_date.isoformat(),
+                "market_view": d.market_view, "result": d.result}
+
+
+@router.post("/notes")
+def add_note(req: AddNoteRequest):
+    with _session() as s:
+        if req.instrument_symbol and s.get(JournalInstrument, req.instrument_symbol) is None:
+            raise HTTPException(400, f"unknown journal instrument {req.instrument_symbol}")
+        note = service.add_note(s, body=req.body,
+                                noted_at=req.noted_at or dt.datetime.now(),
+                                instrument_symbol=req.instrument_symbol)
+        return {"id": note.id, "noted_at": note.noted_at.isoformat(),
+                "body": note.body, "instrument_symbol": note.instrument_symbol}
+
+
+@router.delete("/notes/{note_id}")
+def delete_note(note_id: int):
+    with _session() as s:
+        if not service.delete_note(s, note_id):
+            raise HTTPException(404, "note not found")
+        return {"ok": True}
+
+
+@router.get("/bias")
+def get_bias():
+    with _session() as s:
+        return {"bias": [{"horizon": b.horizon, "stance": b.stance, "note": b.note,
+                          "updated_at": b.updated_at.isoformat()} for b in service.list_bias(s)]}
+
+
+@router.put("/bias/{horizon}")
+def put_bias(horizon: str, req: UpsertBiasRequest):
+    with _session() as s:
+        try:
+            b = service.upsert_bias(s, horizon=horizon, stance=req.stance, note=req.note)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"horizon": b.horizon, "stance": b.stance, "note": b.note,
+                "updated_at": b.updated_at.isoformat()}
