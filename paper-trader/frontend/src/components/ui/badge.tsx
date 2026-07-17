@@ -15,6 +15,13 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
         outline: "text-foreground",
+        // `chip` reproduces this cockpit's long-standing `.badge` look (see
+        // index.css): 10px, uppercase, tight, square-ish. Stock shadcn badges are
+        // 12px rounded-full sentence-case, which quietly rewrites the dense
+        // trading-grid typography. Use `chip` for every status/toggle pill so a
+        // re-skinned view stays visually identical to an un-migrated one; callers
+        // pass their own accent via className (twMerge beats the base bg/text).
+        chip: "border-transparent rounded text-[10px] uppercase tracking-wide px-1.5 font-semibold",
       },
     },
     defaultVariants: {

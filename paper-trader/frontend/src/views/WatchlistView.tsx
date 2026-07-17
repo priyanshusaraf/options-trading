@@ -11,6 +11,24 @@ import ModeChip from '../components/ModeChip'
 import type { InstrState, SignalRow, ProviderHealth, StrategyMeta } from '../lib/types'
 import { inr, num, signedInr, pnlColor, signalStyle } from '../lib/format'
 import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { cn } from '@/lib/utils'
+
+// Re-skin notes (F2 template — follow this pattern for the remaining views):
+//   • `.card` → <Card>. Straight swap; the --card token is the old `panel` colour.
+//   • Non-interactive chips → <Badge>, with accent classes passed via className
+//     (cn/twMerge lets them beat the variant's own bg/text).
+//   • INTERACTIVE chips stay real <button> elements styled with `badgeVariants(...)`
+//     rather than becoming <Badge>: Badge renders a <div>, so swapping would drop
+//     button semantics and keyboard focus on the ops toggles (block/enable/product).
+//   • shadcn's Table ships roomy CRUD padding (TableCell p-4, TableHead h-12) which
+//     would ~4x the height of this dense 12-column ops grid. `DENSE` re-tightens it
+//     via child selectors — arbitrary variants outrank the primitive's own utility.
+const DENSE =
+  'text-xs [&_th]:h-auto [&_th]:px-0 [&_th]:py-1 [&_th]:pr-3 [&_td]:px-0 [&_td]:py-1 [&_td]:pr-3'
 
 // Unified Watchlist — the merge of the old Home + Monitor screens. They showed the
 // SAME state.states data and opened the SAME chart modal; the only real difference
@@ -64,13 +82,13 @@ function HealthPill({ health }: { health: ProviderHealth | null }) {
   const dur = bad ? ago(oldestOk) : ''
   const label = authExpired ? 'session expired' : bad ? `degraded${dur ? ` ${dur}` : ''}` : 'healthy'
   return (
-    <span className={`badge ${bad || authExpired ? 'bg-down/15 text-down' : 'bg-up/15 text-up'}`} title={
+    <Badge variant="chip" className={bad || authExpired ? 'bg-down/15 text-down' : 'bg-up/15 text-up'} title={
       `candle fails ${c?.consecutive_failures ?? 0} · quote fails ${q?.consecutive_failures ?? 0}` +
       (authExpired ? '\nKite session expired — re-authenticate' : '') +
       (c?.last_error ? `\n${c.last_error}` : '') +
       (q?.last_error ? `\n${q.last_error}` : '')}>
       data {label}
-    </span>
+    </Badge>
   )
 }
 
@@ -179,89 +197,104 @@ export default function Watchlist() {
       <SessionBanner authenticated={authed} />
 
       {/* add a name (e.g. a backtest winner) to the curated portfolio */}
-      <div className="card p-3 flex items-center gap-2 flex-wrap">
+      <Card className="p-3 flex items-center gap-2 flex-wrap">
         <span className="stat-label mr-1">Add instrument</span>
         <input value={adding} onChange={(e) => setAdding(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && add()}
           placeholder="symbol or key (e.g. RELIANCE, NIFTY)"
           className="bg-panel2 border border-edge rounded px-2 py-1 text-xs w-64" />
-        <button onClick={add} disabled={busy || !adding.trim()}
-          className="btn border-up/50 text-up">{busy ? 'adding…' : '+ add & pin'}</button>
+        <Button onClick={add} disabled={busy || !adding.trim()}
+          variant="outline" size="sm"
+          className="h-auto bg-panel2 px-2.5 py-1 text-xs border-up/50 text-up hover:text-up hover:border-zinc-500">
+          {busy ? 'adding…' : '+ add & pin'}
+        </Button>
         <span className="text-[11px] text-muted ml-1">pinned names are tracked &amp; tradable; ★ any row to pin it</span>
-      </div>
+      </Card>
 
-      <div className="card p-3 flex items-center gap-2 flex-wrap">
+      <Card className="p-3 flex items-center gap-2 flex-wrap">
         <button onClick={() => setPinnedOnly((v) => !v)}
-          className={`badge ${pinnedOnly ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}
+          className={cn(badgeVariants({ variant: 'chip' }), pinnedOnly
+            ? 'bg-amber-400/20 text-amber-300 border-amber-400/40'
+            : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}
           title="Show only your pinned portfolio (the old Home glance).">
           {pinnedOnly ? '★ pinned only' : '☆ pinned only'} ({pinnedCount})
         </button>
         <span className="stat-label mx-1">Filters</span>
         {FILTERS.map(([f, label]) => (
           <button key={f} onClick={() => toggleFilter(f)}
-            className={`badge ${active.has(f) ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+            className={cn(badgeVariants({ variant: 'chip' }), active.has(f)
+              ? 'bg-blue-500/25 text-blue-300'
+              : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
             {label}
           </button>
         ))}
         <span className="ml-auto flex items-center gap-2">
           {state?.any_market_open === false && (
-            <span className="badge bg-zinc-700/40 text-muted"
+            <Badge variant="chip" className="bg-zinc-700/40 text-muted"
               title="All enabled markets are closed — no new candles print, so rows read 'closed' (idle, not broken).">
               ● markets closed
-            </span>
+            </Badge>
           )}
           <ModeChip mode={state?.broker_mode} />
           <HealthPill health={health} />
           <span className="text-[11px] text-muted">{view.length} of {rows.length}</span>
         </span>
-      </div>
+      </Card>
 
-      <div className="card p-3 overflow-auto">
-        <table className="w-full text-xs">
-          <thead className="text-muted border-b border-edge text-left">
-            <tr className="[&>th]:py-1 [&>th]:pr-3">
-              <th></th><th>Instrument</th><th>Live TF</th><th>Signal</th><th className="text-right">z</th>
-              <th>Trend</th><th>Position</th><th>Entries</th><th>Options</th><th>Data</th><th>Segment / Strategy</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
+      <Card className="p-3 overflow-auto">
+        <Table className={DENSE}>
+          <TableHeader className="text-muted border-b border-edge text-left">
+            <TableRow className="border-edge hover:bg-transparent">
+              <TableHead></TableHead><TableHead>Instrument</TableHead><TableHead>Live TF</TableHead>
+              <TableHead>Signal</TableHead><TableHead className="text-right">z</TableHead>
+              <TableHead>Trend</TableHead><TableHead>Position</TableHead><TableHead>Entries</TableHead>
+              <TableHead>Options</TableHead><TableHead>Data</TableHead>
+              <TableHead>Segment / Strategy</TableHead><TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {view.length === 0 && (
-              <tr><td colSpan={12} className="py-8 text-center text-muted">
-                {pinnedOnly ? 'no pinned instruments — ★ a row or add one above' : 'no instruments match the filters'}
-              </td></tr>
+              <TableRow className="border-edge hover:bg-transparent">
+                <TableCell colSpan={12} className="py-8 text-center text-muted">
+                  {pinnedOnly ? 'no pinned instruments — ★ a row or add one above' : 'no instruments match the filters'}
+                </TableCell>
+              </TableRow>
             )}
             {view.map((r) => (
-              <tr key={r.key} onClick={() => setExpanded(r.key)}
-                className={`border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3 ${r.enabled ? '' : 'opacity-50'}`}>
-                <td onClick={(e) => e.stopPropagation()}>
+              <TableRow key={r.key} onClick={() => setExpanded(r.key)}
+                className={cn('border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50',
+                  r.enabled ? '' : 'opacity-50')}>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => togglePin(r)} title={r.pinned ? 'unpin from portfolio (also disables trading)' : 'pin to portfolio'}
                     className={r.pinned ? 'text-amber-300 hover:text-amber-200' : 'text-muted hover:text-zinc-300'}>
                     {r.pinned ? '★' : '☆'}
                   </button>
-                </td>
-                <td className="font-semibold text-zinc-100">{r.name}
-                  <span className="badge bg-zinc-700/40 text-muted ml-1">{r.segment}</span></td>
-                <td><IntervalSelect k={r.key} value={r.interval} /></td>
-                <td><span className={`badge ${signalStyle(r.signal)}`}>{r.signal === 'NONE' ? '—' : r.signal.replace('_', ' ')}</span></td>
-                <td className="text-right">{num(r.z)}</td>
-                <td className="text-muted">{r.trend || '—'}</td>
-                <td>{r.has_position ? <span className="text-up">● held</span> : <span className="text-muted">flat</span>}</td>
-                <td onClick={(e) => e.stopPropagation()}>
+                </TableCell>
+                <TableCell className="font-semibold text-zinc-100">{r.name}
+                  <Badge variant="chip" className="bg-zinc-700/40 text-muted ml-1">{r.segment}</Badge></TableCell>
+                <TableCell><IntervalSelect k={r.key} value={r.interval} /></TableCell>
+                <TableCell><Badge variant="chip" className={signalStyle(r.signal)}>{r.signal === 'NONE' ? '—' : r.signal.replace('_', ' ')}</Badge></TableCell>
+                <TableCell className="text-right">{num(r.z)}</TableCell>
+                <TableCell className="text-muted">{r.trend || '—'}</TableCell>
+                <TableCell>{r.has_position ? <span className="text-up">● held</span> : <span className="text-muted">flat</span>}</TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => toggleBlock(r)}
                     title={r.entries_blocked
                       ? 'entries BLOCKED — the bot will NOT open new positions on this symbol; click to allow'
                       : 'BLOCK the bot from opening new positions on this symbol (this is the real stop — not the red flag)'}
-                    className={`badge ${r.entries_blocked ? 'bg-down/15 text-down' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                    className={cn(badgeVariants({ variant: 'chip' }), r.entries_blocked
+                      ? 'bg-down/15 text-down'
+                      : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
                     {r.entries_blocked ? 'blocked' : 'allow'}
                   </button>
-                </td>
-                <td className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</td>
-                <td>{r.market_open === false
+                </TableCell>
+                <TableCell className={r.has_options ? '' : 'text-amber-400/80'}>{r.has_options ? 'yes' : 'track'}</TableCell>
+                <TableCell>{r.market_open === false
                   ? <span className="text-muted" title="market closed — no new candle prints; not a feed fault">closed</span>
                   : r.stale
                     ? <span className="text-amber-400">stale</span>
-                    : <span className="text-up/80">live</span>}</td>
-                <td onClick={(e) => e.stopPropagation()}>
+                    : <span className="text-up/80">live</span>}</TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <div className="flex items-center gap-1">
                     <button onClick={() => togglePriority(r)}
                       title={r.priority_flag ? 'purple priority ON — intraday selection always takes this name, sized at the top of the band' : 'flag as purple intraday priority'}
@@ -279,13 +312,16 @@ export default function Watchlist() {
                         : 'text-zinc-600 hover:text-red-400'}`}>
                       {r.overtrade_flag ? '🔴' : '○'}
                     </button>
-                    <span className={`badge text-[10px] ${r.overtrade_suggested ? 'bg-red-500/20 text-red-300' : 'bg-zinc-700/40 text-muted'}`}
+                    <Badge variant="chip" className={cn('text-[10px]', r.overtrade_suggested
+                      ? 'bg-red-500/20 text-red-300' : 'bg-zinc-700/40 text-muted')}
                       title="entry signals: today · last 7 days">
                       {r.signals_today ?? 0}·{r.signals_rolling ?? 0}
-                    </span>
+                    </Badge>
                     <button onClick={() => changeProduct(r, r.product === 'equity_intraday' ? 'options' : 'equity_intraday')}
                       title="trading segment: options vs MIS intraday equity"
-                      className={`badge ${r.product === 'equity_intraday' ? 'bg-purple-500/20 text-purple-200' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                      className={cn(badgeVariants({ variant: 'chip' }), r.product === 'equity_intraday'
+                        ? 'bg-purple-500/20 text-purple-200'
+                        : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
                       {r.product === 'equity_intraday' ? 'INTRA' : 'OPT'}
                     </button>
                     <select value={r.strategy_key || ''} onClick={(e) => e.stopPropagation()}
@@ -296,18 +332,19 @@ export default function Watchlist() {
                       {strategies.map((s) => <option key={s.key} value={s.key}>{s.display_name}</option>)}
                     </select>
                   </div>
-                </td>
-                <td onClick={(e) => e.stopPropagation()}>
+                </TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => toggleEnabled(r)}
-                    className={`badge ${r.enabled ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}>
+                    className={cn(badgeVariants({ variant: 'chip' }), r.enabled
+                      ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted')}>
                     {r.enabled ? 'on' : 'off'}
                   </button>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Card>
 
       {expanded && <Expanded k={expanded} st={states[expanded]} onClose={() => setExpanded(null)}
         liveTick={liveTicks[expanded]} />}
@@ -352,15 +389,16 @@ export function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClo
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="card w-full max-w-5xl p-4 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+      <Card className="w-full max-w-5xl p-4 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="text-lg font-semibold text-zinc-100">{st?.name || k}</span>
-            <span className="badge bg-zinc-700/40 text-muted">{st?.segment}</span>
-            {st?.interval && <span className="badge bg-blue-500/20 text-blue-300">{st.interval.replace('minute', 'm')}</span>}
+            <Badge variant="chip" className="bg-zinc-700/40 text-muted">{st?.segment}</Badge>
+            {st?.interval && <Badge variant="chip" className="bg-blue-500/20 text-blue-300">{st.interval.replace('minute', 'm')}</Badge>}
             <span className="flex items-center gap-1 text-xs text-up"><span className="w-2 h-2 rounded-full bg-up animate-pulse" />LIVE WS</span>
           </div>
-          <button onClick={onClose} className="btn">✕ close</button>
+          <Button onClick={onClose} variant="outline" size="sm"
+            className="h-auto bg-panel2 px-2.5 py-1 text-xs hover:border-zinc-500">✕ close</Button>
         </div>
 
         <div className="flex items-center gap-6 text-sm flex-wrap">
@@ -370,15 +408,19 @@ export function Expanded({ k, st, onClose }: { k: string; st?: InstrState; onClo
           {pos && <div><span className="stat-label">Unrealized </span><span className={pnlColor(pos.unrealized_pnl)}>{signedInr(pos.unrealized_pnl)}</span></div>}
           {pos && <div className="text-muted">{pos.tradingsymbol} · inv {inr(pos.entry_cost)} · SL {num(pos.stop_price)}</div>}
           <div className="ml-auto flex gap-1">
-            <button onClick={() => setMode('spot')} className={`badge ${mode === 'spot' ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted'}`}>UNDERLYING</button>
-            <button disabled={!pos} onClick={() => setMode('opt')} className={`badge ${mode === 'opt' ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted'} ${!pos ? 'opacity-40' : ''}`}>OPTION</button>
+            <button onClick={() => setMode('spot')}
+              className={cn(badgeVariants({ variant: 'chip' }), mode === 'spot'
+                ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted')}>UNDERLYING</button>
+            <button disabled={!pos} onClick={() => setMode('opt')}
+              className={cn(badgeVariants({ variant: 'chip' }), mode === 'opt'
+                ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted', !pos && 'opacity-40')}>OPTION</button>
           </div>
         </div>
 
         {mode === 'spot'
           ? <PriceChart candles={under.candles} ema={under.ema} markers={under.markers} height={360} />
           : <LineChart data={(opt?.candles) || []} height={360} color="#e0b341" priceLines={priceLines} />}
-      </div>
+      </Card>
     </div>
   )
 }
