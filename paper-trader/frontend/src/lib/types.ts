@@ -194,3 +194,56 @@ export interface HomeInstrument {
   enabled: boolean; signal: string; trend: string | null
   z: number | null; close: number | null; position: PositionDTO | null
 }
+
+// Trade journal (backend/app/journal) — fully separate from the engine's
+// PositionDTO/TradeDTO; never confuse the two.
+export interface JournalInstrumentDTO {
+  symbol: string
+  exchange: string
+  lot_size: number
+  tick_size: number
+  multiplier: number
+  active: boolean
+}
+
+export interface JournalTradeDTO {
+  id: number
+  instrument_symbol: string
+  direction: 'LONG' | 'SHORT'
+  lots: number
+  entry_price: number
+  entry_time: string
+  exit_price: number | null
+  exit_time: string | null
+  view_id: number
+  setup_tag: string | null
+  notes: string | null
+  manual_net_pnl: number | null
+  unrealized?: number | null
+}
+
+export interface JournalMissedDTO {
+  id: number
+  instrument_symbol: string
+  direction: 'LONG' | 'SHORT'
+  seen_at: string
+  setup_tag: string | null
+  skip_reason: string
+  hypothetical_entry: number | null
+  hypothetical_exit: number | null
+  notes: string | null
+}
+
+export interface JournalViewDTO {
+  id: number
+  name: string
+  thesis: string | null
+  created_at: string
+  retired_at: string | null
+}
+
+export interface JournalStatsDTO {
+  by_tag: Record<string, { trades: number; wins: number; net_pnl: number }>
+  by_view: Record<string, { trades: number; net_pnl: number }>
+  missed_summary: { count: number; hypothetical_net_pnl: number }
+}

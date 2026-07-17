@@ -158,3 +158,26 @@ export const setWatchlistStatus = (name: string, status: string) =>
   post(`/api/portfolio/watchlists/${encodeURIComponent(name)}/status`, { status })
 export const setArchiveStatus = (strategyKey: string, status: string) =>
   post(`/api/portfolio/archive/${encodeURIComponent(strategyKey)}/status`, { status })
+
+// ── Trade journal (backend/app/journal — isolated from the engine) ─────────
+export const getJournalInstruments = () => j('/api/journal/instruments')
+export const getJournalTrades = (openOnly?: boolean) =>
+  j(`/api/journal/trades${openOnly ? '?open_only=true' : ''}`)
+export const getJournalOpenTradesMtm = () => j('/api/journal/trades/open-mtm')
+export const addJournalTrade = (body: {
+  symbol: string; direction: 'LONG' | 'SHORT'; lots: number; entry_price: number
+  setup_tag?: string; notes?: string; view_id?: number
+}) => post('/api/journal/trades', body)
+export const closeJournalTrade = (
+  id: number,
+  body: { exit_price: number; manual_net_pnl?: number },
+) => post(`/api/journal/trades/${id}/close`, body)
+export const addJournalMissed = (body: {
+  symbol: string; direction: 'LONG' | 'SHORT'; skip_reason: string
+  setup_tag?: string; hypothetical_entry?: number; hypothetical_exit?: number
+}) => post('/api/journal/missed', body)
+export const getJournalMissed = () => j('/api/journal/missed')
+export const getJournalStats = () => j('/api/journal/stats')
+export const getJournalViews = () => j('/api/journal/views')
+export const addJournalView = (body: { name: string; thesis?: string }) =>
+  post('/api/journal/views', body)
