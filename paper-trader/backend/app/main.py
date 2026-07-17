@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.logging import log
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.journal import routes as journal_routes
 from app.ws.manager import manager
 
 
@@ -137,6 +138,7 @@ app.add_middleware(
 app.include_router(routes.router)
 app.include_router(backtest_routes.router)
 app.include_router(portfolio_routes.router)
+app.include_router(journal_routes.router)
 
 
 @app.get("/api/health")
