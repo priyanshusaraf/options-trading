@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { getTrades } from '../lib/api'
 import { num, signedInr, pnlColor } from '../lib/format'
 import type { TradeDTO } from '../lib/types'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 type Filter = 'all' | 'win' | 'loss'
 type Mode = 'paper' | 'live'
@@ -62,14 +65,14 @@ export default function TradesView() {
       </div>
 
       {isLive && (
-        <div className="card p-2.5 border-down/40 bg-down/10 text-xs text-down">
+        <Card className="p-2.5 border-down/40 bg-down/10 text-xs text-down">
           🔴 <b>Real-money ledger.</b> These are actual Kite fills. {liveCount === 0
             ? 'None yet — the bot has only ever paper-traded (live execution is gated off).'
             : 'Verify each against your Zerodha order book.'}
-        </div>
+        </Card>
       )}
 
-      <div className="card p-3 flex items-center gap-3 flex-wrap">
+      <Card className="p-3 flex items-center gap-3 flex-wrap">
         <div className="stat-label">
           {isLive ? 'Real trade log — actual orders filled on your account'
                   : 'Paper trade log — simulated fills, no real money'}
@@ -77,7 +80,7 @@ export default function TradesView() {
         <div className="flex gap-1">
           {(['all', 'win', 'loss'] as Filter[]).map((f) => (
             <button key={f} onClick={() => setFilter(f)}
-              className={`badge ${filter === f ? 'bg-panel2 text-zinc-100 border border-edge' : 'text-muted'}`}>
+              className={cn(badgeVariants({ variant: 'chip' }), filter === f ? 'bg-panel2 text-zinc-100 border border-edge' : 'text-muted')}>
               {f === 'all' ? 'All' : f === 'win' ? 'Profitable' : 'Losses'}
             </button>
           ))}
@@ -91,7 +94,7 @@ export default function TradesView() {
           {count} trades · win rate <b className="text-zinc-200">{count ? Math.round(100 * wins / count) : 0}%</b>
           {' '}· net <b className={pnlColor(net)}>{signedInr(net)}</b>
         </span>
-      </div>
+      </Card>
 
       <div className={`card p-0 overflow-x-auto ${isLive ? 'border-down/30' : ''}`}>
         <table className="w-full text-xs">
@@ -114,14 +117,14 @@ export default function TradesView() {
               <tr key={t.id} className="border-b border-edge/40 hover:bg-panel2/40">
                 <td className="p-2 whitespace-nowrap text-muted">{new Date(t.exit_time).toLocaleString()}</td>
                 <td className="p-2 hidden md:table-cell">
-                  <span className={`badge ${modeOf(t) === 'live'
-                    ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                  <span className={cn(badgeVariants({ variant: 'chip' }), modeOf(t) === 'live'
+                    ? 'bg-down/20 text-down' : 'bg-emerald-500/15 text-emerald-300')}>
                     {modeOf(t) === 'live' ? 'REAL' : 'PAPER'}</span>
                 </td>
                 <td className="p-2 whitespace-nowrap">{t.instrument_key}
-                  <span className={`badge ml-1 ${t.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down'}`}>
+                  <span className={cn(badgeVariants({ variant: 'chip' }), 'ml-1', t.direction === 'LONG' ? 'bg-up/15 text-up' : 'bg-down/15 text-down')}>
                     {t.direction} {t.option_type}</span>
-                  {t.held_overnight && <span className="badge ml-1 bg-indigo-400/15 text-indigo-300">🌙</span>}
+                  {t.held_overnight && <Badge variant="chip" className="ml-1 bg-indigo-400/15 text-indigo-300">🌙</Badge>}
                 </td>
                 <td className="p-2 text-muted whitespace-nowrap hidden md:table-cell">{t.tradingsymbol} ·{t.qty}</td>
                 <td className="p-2 text-right tabular-nums whitespace-nowrap hidden md:table-cell">{n(t.entry_spot)} → {n(t.exit_spot)}</td>
