@@ -21,7 +21,10 @@ const put = (u: string, body: any) =>
     body: JSON.stringify(body),
   }).then((r) => r.json())
 export const del = (path: string) =>
-  fetch(path, { method: 'DELETE' }).then((r) => {
+  fetch(path, {
+    method: 'DELETE',
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  }).then((r) => {
     if (!r.ok) throw new Error(`${r.status}`)
     return r.json()
   })
