@@ -247,3 +247,55 @@ export interface JournalStatsDTO {
   by_view: Record<string, { trades: number; net_pnl: number }>
   missed_summary: { count: number; hypothetical_net_pnl: number }
 }
+
+export interface JournalNoteDTO {
+  id: number
+  noted_at: string
+  body: string
+  instrument_symbol: string | null
+}
+
+export interface JournalBiasDTO {
+  horizon: string
+  stance: string | null
+  note: string | null
+  updated_at: string
+}
+
+export interface JournalFeedTradeDTO {
+  id: number
+  instrument_symbol: string
+  direction: 'LONG' | 'SHORT'
+  lots: number
+  entry_price: number
+  entry_time: string
+  exit_price: number | null
+  exit_time: string | null
+  setup_tag: string | null
+  net_pnl: number | null
+}
+
+export interface JournalFeedMissedDTO {
+  id: number
+  instrument_symbol: string
+  direction: 'LONG' | 'SHORT'
+  seen_at: string
+  setup_tag: string | null
+  skip_reason: string
+}
+
+export interface JournalFeedDayDTO {
+  date: string
+  market_view: string | null
+  result: string | null
+  net_pnl: number
+  notes: JournalNoteDTO[]
+  trades: JournalFeedTradeDTO[]
+  missed: JournalFeedMissedDTO[]
+}
+
+export interface JournalFeedDTO {
+  bias: JournalBiasDTO[]
+  stats: { net_pnl: number; win_rate: number | null; days_journaled: number; trades: number }
+  days: JournalFeedDayDTO[]
+}

@@ -11,6 +11,20 @@ const post = (u: string, body: any) =>
     },
     body: JSON.stringify(body),
   }).then((r) => r.json())
+const put = (u: string, body: any) =>
+  fetch(u, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+    },
+    body: JSON.stringify(body),
+  }).then((r) => r.json())
+export const del = (path: string) =>
+  fetch(path, { method: 'DELETE' }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status}`)
+    return r.json()
+  })
 
 export const getStatus = () => j('/api/status')
 export const getExecState = () => j('/api/execution/state')
@@ -181,3 +195,13 @@ export const getJournalStats = () => j('/api/journal/stats')
 export const getJournalViews = () => j('/api/journal/views')
 export const addJournalView = (body: { name: string; thesis?: string }) =>
   post('/api/journal/views', body)
+export const getJournalFeed = (limit = 60): Promise<import('./types').JournalFeedDTO> =>
+  j(`/api/journal/feed?limit=${limit}`)
+export const upsertJournalDay = (body: { entry_date: string; market_view?: string; result?: string }) =>
+  post('/api/journal/days', body)
+export const addJournalNote = (body: { body: string; instrument_symbol?: string }) =>
+  post('/api/journal/notes', body)
+export const deleteJournalNote = (id: number) => del(`/api/journal/notes/${id}`)
+export const getJournalBias = () => j('/api/journal/bias')
+export const putJournalBias = (horizon: string, body: { stance?: string; note?: string }) =>
+  put(`/api/journal/bias/${encodeURIComponent(horizon)}`, body)
