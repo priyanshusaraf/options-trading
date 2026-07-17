@@ -7,6 +7,32 @@ body { margin: 0; }
 
 @layer base {
   body { @apply bg-bg text-zinc-200 font-mono text-sm; }
+
+  /* shadcn/ui design tokens. These layer ALONGSIDE the existing bg/panel/edge/
+     muted palette — both systems coexist while views are re-skinned one at a
+     time, so an un-migrated view keeps rendering exactly as before. Values are
+     tuned to the existing dark palette rather than shadcn's stock zinc, so a
+     migrated view sits next to an un-migrated one without a seam. */
+  :root {
+    --background: 220 17% 4%;      /* = #0a0b0e, the existing `bg` */
+    --foreground: 0 0% 88%;
+    --card: 223 15% 9%;            /* = #121419, the existing `panel` */
+    --card-foreground: 0 0% 88%;
+    --border: 225 17% 17%;         /* = #232733, the existing `edge` */
+    --input: 225 17% 17%;
+    --primary: 158 61% 46%;        /* = #2ebd85, the existing `up` green */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 16% 11%;      /* = #171a21, the existing `panel2` */
+    --secondary-foreground: 0 0% 90%;
+    --destructive: 351 91% 62%;    /* = #f6465d, the existing `down` red */
+    --destructive-foreground: 0 0% 100%;
+    --muted: 222 16% 11%;
+    --muted-foreground: 223 14% 60%;  /* = #8b93a7, the existing `muted` text */
+    --accent: 222 16% 11%;
+    --accent-foreground: 0 0% 88%;
+    --ring: 158 61% 46%;
+    --radius: 0.5rem;
+  }
 }
 
 @layer components {
