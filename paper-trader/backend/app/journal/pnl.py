@@ -16,11 +16,12 @@ def gross_pnl(direction: str, entry_price: float, exit_price: float, *,
     return move * qty * multiplier
 
 
-def round_trip_charges(entry_price: float, exit_price: float, *,
+def round_trip_charges(direction: str, entry_price: float, exit_price: float, *,
                         lots: int, lot_size: int) -> float:
     qty = lots * lot_size
-    entry_leg = compute_charges(SEGMENT, "BUY", entry_price, qty)["total"]
-    exit_leg = compute_charges(SEGMENT, "SELL", exit_price, qty)["total"]
+    entry_side, exit_side = ("BUY", "SELL") if direction == "LONG" else ("SELL", "BUY")
+    entry_leg = compute_charges(SEGMENT, entry_side, entry_price, qty)["total"]
+    exit_leg = compute_charges(SEGMENT, exit_side, exit_price, qty)["total"]
     return entry_leg + exit_leg
 
 
@@ -31,7 +32,7 @@ def net_pnl(direction: str, entry_price: float, exit_price: float, *,
         return manual_net_pnl
     gross = gross_pnl(direction, entry_price, exit_price,
                        lots=lots, lot_size=lot_size, multiplier=multiplier)
-    charges = round_trip_charges(entry_price, exit_price, lots=lots, lot_size=lot_size)
+    charges = round_trip_charges(direction, entry_price, exit_price, lots=lots, lot_size=lot_size)
     return gross - charges
 
 
@@ -42,5 +43,6 @@ def unrealized_pnl(direction: str, entry_price: float, last_price: float, *,
     qty = lots * lot_size
     gross = gross_pnl(direction, entry_price, last_price,
                        lots=lots, lot_size=lot_size, multiplier=multiplier)
-    entry_leg = compute_charges(SEGMENT, "BUY", entry_price, qty)["total"]
+    entry_side = "BUY" if direction == "LONG" else "SELL"
+    entry_leg = compute_charges(SEGMENT, entry_side, entry_price, qty)["total"]
     return gross - entry_leg
