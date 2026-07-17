@@ -6,6 +6,8 @@ html, body, #root { height: 100%; }
 body { margin: 0; }
 
 @layer base {
+  * { @apply border-border; }
+
   body { @apply bg-bg text-zinc-200 font-mono text-sm; }
 
   /* shadcn/ui design tokens. These layer ALONGSIDE the existing bg/panel/edge/
