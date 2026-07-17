@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import backtest_routes, portfolio_routes, routes
 from app.api.auth import extract_token, token_ok
@@ -158,3 +160,26 @@ app.include_router(journal_routes.router)
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+# ── production: serve the built React SPA from the same origin ──────────────
+# Registered LAST so the API routers and /api/health match first. Off unless
+# PT_SERVE_FRONTEND=1 and PT_FRONTEND_DIST points at a real dist/ directory.
+# (Restored 2026-07-18: this block lived only on feat/vps-deploy and was lost
+# when feat/exits-journal was deployed whole-tree over the VPS — see 6cb92c8.)
+_spa_settings = get_settings()
+if _spa_settings.serve_frontend and os.path.isdir(_spa_settings.frontend_dist):
+    _DIST = _spa_settings.frontend_dist
+    _ASSETS = os.path.join(_DIST, "assets")
+    if os.path.isdir(_ASSETS):
+        app.mount("/assets", StaticFiles(directory=_ASSETS), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        # Never hijack the API or WebSocket surfaces.
+        if full_path.startswith("api/") or full_path == "api" or full_path.startswith("ws"):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        candidate = os.path.join(_DIST, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_DIST, "index.html"))

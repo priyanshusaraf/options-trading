@@ -243,6 +243,13 @@ class Settings(BaseSettings):
     # captured we bounce the browser back to the FRONTEND so the user lands on the UI.
     frontend_url: str = "http://localhost:5173"   # env: PT_FRONTEND_URL
 
+    # ── production SPA serving (single-process deploy) ──────────────────────
+    # When true and frontend_dist is a real directory, FastAPI serves the built
+    # React bundle at / (and as SPA fallback) alongside /api and /ws — one origin,
+    # one process. Off by default so dev/tests keep the two-process Vite setup.
+    serve_frontend: bool = False          # env: PT_SERVE_FRONTEND
+    frontend_dist: str = ""               # env: PT_FRONTEND_DIST (abs path to dist/)
+
     # ── API auth + CORS ───────────────────────────────────────────────────────
     # env PT_API_TOKEN; when non-empty every REST/WS call (except OAuth redirect
     # endpoints and /api/health) must present it; empty = auth disabled (dev/mock/tests).
