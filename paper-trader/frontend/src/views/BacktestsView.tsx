@@ -8,6 +8,10 @@ import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
 import { colorFor } from '../lib/constants'
 import type { BacktestRun, BTResult, BTTradeDTO, BTInstrument, StrategyMeta } from '../lib/types'
 import BulkAddModal from './BulkAddModal'
+import { Badge, badgeVariants } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 // display label -> Kite interval name
 const INTERVALS: [string, string][] = [
@@ -228,7 +232,7 @@ export default function BacktestsView() {
   return (
     <div className="flex flex-col gap-3">
       {/* what this backtest actually is — so the numbers are read correctly */}
-      <div className="card p-3 border-amber-400/40 bg-amber-400/5 text-[11px] leading-relaxed text-amber-200/90">
+      <Card className="p-3 border-amber-400/40 bg-amber-400/5 text-[11px] leading-relaxed text-amber-200/90">
         <span className="font-semibold text-amber-300">How to read this:</span> this is a
         <b> signal-quality screen on the underlying</b> (futures/cash, bought outright — <b>no leverage</b>),
         net of the full charge stack, with pure strategy-reversal exits. It does <b>NOT</b> model the
@@ -242,10 +246,10 @@ export default function BacktestsView() {
         <b> Consistency</b> is a <b>per-trade hit ratio (not annualised — not a Sharpe)</b>; <b>Sharpe</b> is the
         annualised, cross-timeframe-comparable ratio. Every row also shows <b>buy-and-hold</b> over the same span
         so a real edge is distinguishable from beta. Prefer <b>smooth, consistent curves</b> that beat hold.
-      </div>
+      </Card>
 
       {/* sweep controls */}
-      <div className="card p-3 flex flex-col gap-3">
+      <Card className="p-3 flex flex-col gap-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="stat-label">Strategy sweep — N instruments × timeframes × strategies on the underlying, net of all charges</div>
           <span className="text-[11px] text-muted">fixed 1 lot, no leverage · pure-strategy exits</span>
@@ -256,7 +260,7 @@ export default function BacktestsView() {
             <div className="flex gap-1">
               {INTERVALS.map(([label, v]) => (
                 <button key={v} onClick={() => toggleInterval(v)}
-                  className={`badge ${picked.has(v) ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted'}`}>
+                  className={cn(badgeVariants({ variant: 'chip' }), picked.has(v) ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted')}>
                   {label}
                 </button>
               ))}
@@ -266,9 +270,9 @@ export default function BacktestsView() {
             <span className="stat-label">Universe</span>
             <div className="flex gap-1">
               <button onClick={() => setScope('liquid')}
-                className={`badge ${scope === 'liquid' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>LIQUID</button>
+                className={cn(badgeVariants({ variant: 'chip' }), scope === 'liquid' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted')}>LIQUID</button>
               <button onClick={() => setScope('full')}
-                className={`badge ${scope === 'full' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted'}`}>FULL MARKET</button>
+                className={cn(badgeVariants({ variant: 'chip' }), scope === 'full' ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted')}>FULL MARKET</button>
             </div>
           </div>
           <div className="flex flex-col gap-1">
@@ -279,7 +283,7 @@ export default function BacktestsView() {
               {availStrategies.map((st) => (
                 <button key={st.key} onClick={() => toggleStrategy(st.key)}
                   title={st.key}
-                  className={`badge ${selStrategies.has(st.key) ? 'bg-purple-500/25 text-purple-200' : 'bg-zinc-700/40 text-muted'}`}>
+                  className={cn(badgeVariants({ variant: 'chip' }), selStrategies.has(st.key) ? 'bg-purple-500/25 text-purple-200' : 'bg-zinc-700/40 text-muted')}>
                   {st.display_name}
                 </button>
               ))}
@@ -287,7 +291,7 @@ export default function BacktestsView() {
             </div>
           </div>
           <button onClick={launch} disabled={running || picked.size === 0 || selStrategies.size === 0}
-            className={`btn ${running ? 'opacity-50' : 'border-up/50 text-up'}`}>
+            className={cn(buttonVariants({ variant: 'toolbar', size: 'toolbar' }), running ? 'opacity-50' : 'border-up/50 text-up')}>
             {running ? 'sweep running…' : '▶ Run sweep'}
           </button>
           {scope === 'full' && <span className="text-[11px] text-down">full-market = thousands of names; slow.</span>}
@@ -301,12 +305,12 @@ export default function BacktestsView() {
           <div className="flex items-center gap-1 flex-wrap">
             {PRESETS.map(([label, days]) => (
               <button key={label} onClick={() => { setUseCustom(false); setPreset(days) }}
-                className={`badge ${!useCustom && preset === days ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted'}`}>
+                className={cn(badgeVariants({ variant: 'chip' }), !useCustom && preset === days ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted')}>
                 {label}
               </button>
             ))}
             <button onClick={() => setUseCustom(true)}
-              className={`badge ${useCustom ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted'}`}>
+              className={cn(badgeVariants({ variant: 'chip' }), useCustom ? 'bg-blue-500/25 text-blue-300' : 'bg-zinc-700/40 text-muted')}>
               Custom…
             </button>
             {useCustom && (
@@ -331,9 +335,9 @@ export default function BacktestsView() {
             <div className="flex items-center gap-1 flex-wrap">
               {[...selInst].map((k) => (
                 <button key={k} onClick={() => toggleInst(k)}
-                  className="badge bg-blue-500/25 text-blue-300" title="click to remove">{k} ✕</button>
+                  className={cn(badgeVariants({ variant: 'chip' }), 'bg-blue-500/25 text-blue-300')} title="click to remove">{k} ✕</button>
               ))}
-              <button onClick={() => setSelInst(new Set())} className="badge bg-zinc-700/40 text-muted">clear all</button>
+              <button onClick={() => setSelInst(new Set())} className={cn(badgeVariants({ variant: 'chip' }), 'bg-zinc-700/40 text-muted')}>clear all</button>
             </div>
           )}
           <div className="flex items-center gap-2 flex-wrap">
@@ -348,7 +352,7 @@ export default function BacktestsView() {
             <div className="flex items-center gap-1 flex-wrap max-h-24 overflow-auto">
               {instMatches.map((i) => (
                 <button key={i.key} onClick={() => toggleInst(i.key)}
-                  className={`badge ${selInst.has(i.key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}
+                  className={cn(badgeVariants({ variant: 'chip' }), selInst.has(i.key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}
                   title={`${i.name} · ${i.segment}`}>
                   {i.key}
                 </button>
@@ -381,14 +385,14 @@ export default function BacktestsView() {
               </option>
             ))}
           </select>
-          <a href={sweepExportUrl(viewRunId)} download className="btn">⬇ Export CSV</a>
+          <a href={sweepExportUrl(viewRunId)} download className={buttonVariants({ variant: 'toolbar', size: 'toolbar' })}>⬇ Export CSV</a>
           {viewRunId != null && <span className="text-[11px] text-amber-400/80">viewing a past run (read-only)</span>}
           <span className="ml-auto text-[11px] text-muted">stored sweeps are cached — reruns are instant & nothing is lost</span>
         </div>
-      </div>
+      </Card>
 
       {/* filters */}
-      <div className="card p-3 flex items-end gap-4 flex-wrap">
+      <Card className="p-3 flex items-end gap-4 flex-wrap">
         <Num label="Min win %" value={minWin} set={setMinWin} step={5} />
         <Num label="Min profit factor" value={minPF} set={setMinPF} step={0.1} />
         <Num label="Max drawdown %" value={maxDD} set={setMaxDD} step={5} />
@@ -416,7 +420,7 @@ export default function BacktestsView() {
           onChange={(e) => setTopN(parseInt(e.target.value) || 1)}
           className="bg-panel2 border border-edge rounded px-1 py-0.5 text-xs w-14" />
         <button onClick={openBulk} disabled={bestPerInstrument.length === 0}
-          className="btn border-up/50 text-up text-xs" title="add the top N best instruments (each at its best strategy + timeframe) to the watchlist">
+          className={cn(buttonVariants({ variant: 'toolbar', size: 'toolbar' }), 'border-up/50 text-up text-xs')} title="add the top N best instruments (each at its best strategy + timeframe) to the watchlist">
           + add top {topN} to portfolio
         </button>
         <span className="ml-auto text-[11px] text-muted self-center flex items-center gap-2 flex-wrap justify-end">
@@ -430,10 +434,10 @@ export default function BacktestsView() {
           {skipped > 0 && (<><span className="text-zinc-400">·</span>
             <span className="text-amber-400/80" title="cells excluded: insufficient history / out-of-range / errored / below filters">{skipped} skipped</span></>)}
         </span>
-      </div>
+      </Card>
 
       {/* results table */}
-      <div className="card p-3 overflow-auto">
+      <Card className="p-3 overflow-auto">
         <table className="w-full text-xs">
           <thead className="text-muted border-b border-edge">
             <tr>
@@ -469,18 +473,18 @@ export default function BacktestsView() {
               <tr key={r.id} onClick={() => setDrill(r)}
                 className="border-t border-edge tabular-nums cursor-pointer hover:bg-panel2/50 [&>td]:py-1 [&>td]:pr-3">
                 <td className="font-semibold text-zinc-100">{r.instrument_key}
-                  {r.from_cache && <span className="badge bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</span>}
-                  {optUnaff && <span className="badge bg-amber-500/20 text-amber-300 ml-1" title="can't afford 1 lot of the ATM option at your current budget — kept visible, on your radar for later">over budget</span>}</td>
+                  {r.from_cache && <Badge variant="chip" className="bg-blue-500/15 text-blue-300 ml-1" title="reused from cache — not recomputed">cached</Badge>}
+                  {optUnaff && <Badge variant="chip" className="bg-amber-500/20 text-amber-300 ml-1" title="can't afford 1 lot of the ATM option at your current budget — kept visible, on your radar for later">over budget</Badge>}</td>
                 {multiStrategy && (
                   <td>
-                    <span className="badge bg-purple-500/15 text-purple-200" title={r.strategy_key}>{stratLabel(r.strategy_key)}</span>
+                    <Badge variant="chip" className="bg-purple-500/15 text-purple-200" title={r.strategy_key}>{stratLabel(r.strategy_key)}</Badge>
                     {bestRowIds.has(r.id) && <span className="ml-1 text-amber-300" title="best strategy for this instrument + timeframe (by return%)">★</span>}
                   </td>
                 )}
                 <td className="text-muted">{r.interval.replace('minute', 'm').replace('1m', '1D')}</td>
                 <td className="text-right text-muted whitespace-nowrap" title={r.first_ts ? `${dt(new Date(r.first_ts * 1000).toISOString())} → ${dt(new Date(r.last_ts * 1000).toISOString())}` : ''}>
                   {spanLabel(r)}
-                  {r.clamped && <span className="badge bg-amber-500/15 text-amber-300 ml-1" title="requested span exceeded Kite's per-timeframe ceiling — coverage was clamped">clamped</span>}
+                  {r.clamped && <Badge variant="chip" className="bg-amber-500/15 text-amber-300 ml-1" title="requested span exceeded Kite's per-timeframe ceiling — coverage was clamped">clamped</Badge>}
                 </td>
                 <td className="text-right">{r.trades}</td>
                 <td className="text-right">{num(r.win_rate, 0)}</td>
@@ -498,7 +502,7 @@ export default function BacktestsView() {
                 <td className={`text-right ${r.worst_trade_pnl < 0 ? 'text-down' : 'text-muted'}`}>{!r.worst_trade_pnl ? '—' : signedInr(r.worst_trade_pnl)}</td>
                 <td className="text-right">
                   <button onClick={(e) => { e.stopPropagation(); add(r) }}
-                    className={`badge ${added.has(r.instrument_key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                    className={cn(badgeVariants({ variant: 'chip' }), added.has(r.instrument_key) ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
                     {added.has(r.instrument_key) ? '✓ added' : '+ add'}
                   </button>
                 </td>
@@ -507,7 +511,7 @@ export default function BacktestsView() {
             })}
           </tbody>
         </table>
-      </div>
+      </Card>
 
       {drill && <Drill r={drill} siblings={siblingsOf(drill)} stratLabel={stratLabel}
         onClose={() => setDrill(null)} onAdd={() => add(drill)}
@@ -589,7 +593,7 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
   // Compact trades list for the LEFT column — each trade stacked so it fits a
   // narrow rail beside the rest of the analysis (newest first).
   const TradesList = () => (
-    <div className="card p-3 flex flex-col min-h-0">
+    <Card className="p-3 flex flex-col min-h-0">
       <div className="stat-label mb-2 shrink-0">Trades ({trades.length}) — 1 lot each, net of charges</div>
       <div className="flex flex-col gap-1 overflow-auto pr-1">
         {!trades.length && <div className="py-4 text-center text-muted text-xs">loading trades…</div>}
@@ -609,7 +613,7 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
           </div>
         ))}
       </div>
-    </div>
+    </Card>
   )
 
   const optCost = cur.option_cost ?? 0
@@ -617,19 +621,19 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="card w-full max-w-6xl p-4 flex flex-col gap-3 max-h-[92vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <Card className="w-full max-w-6xl p-4 flex flex-col gap-3 max-h-[92vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-lg font-semibold text-zinc-100">{cur.name || cur.instrument_key}</span>
-            <span className="badge bg-zinc-700/40 text-muted">{cur.interval}</span>
-            <span className="badge bg-zinc-700/40 text-muted">{cur.segment}</span>
-            {!multi && <span className="badge bg-purple-500/15 text-purple-200">{stratLabel(cur.strategy_key)}</span>}
+            <Badge variant="chip" className="bg-zinc-700/40 text-muted">{cur.interval}</Badge>
+            <Badge variant="chip" className="bg-zinc-700/40 text-muted">{cur.segment}</Badge>
+            {!multi && <Badge variant="chip" className="bg-purple-500/15 text-purple-200">{stratLabel(cur.strategy_key)}</Badge>}
           </div>
           <div className="flex gap-2">
-            <button onClick={onAdd} className={`btn ${added ? 'text-up border-up/50' : 'border-up/50 text-up'}`}>
+            <button onClick={onAdd} className={cn(buttonVariants({ variant: 'toolbar', size: 'toolbar' }), added ? 'text-up border-up/50' : 'border-up/50 text-up')}>
               {added ? '✓ in portfolio' : '+ add to portfolio'}
             </button>
-            <button onClick={onClose} className="btn">✕ close</button>
+            <button onClick={onClose} className={buttonVariants({ variant: 'toolbar', size: 'toolbar' })}>✕ close</button>
           </div>
         </div>
 
@@ -639,7 +643,7 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
             <span className="stat-label mr-1">Strategy</span>
             {siblings.map((s) => (
               <button key={s.strategy_key} onClick={() => setSelKey(s.strategy_key)} title={s.strategy_key}
-                className={`badge ${selKey === s.strategy_key ? 'bg-purple-500/30 text-purple-100' : 'bg-zinc-700/40 text-muted hover:text-zinc-200'}`}>
+                className={cn(badgeVariants({ variant: 'chip' }), selKey === s.strategy_key ? 'bg-purple-500/30 text-purple-100' : 'bg-zinc-700/40 text-muted hover:text-zinc-200')}>
                 {stratLabel(s.strategy_key)}{s.strategy_key === bestKey ? ' ★' : ''}
               </button>
             ))}
@@ -655,14 +659,14 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
 
         {/* Affordability — futures vs options, against your real budget */}
         <div className="flex items-center gap-2 flex-wrap text-[11px] shrink-0">
-          <span className="badge bg-zinc-700/40 text-muted" title="capital to hold 1 lot of the underlying (the return base)">
+          <Badge variant="chip" className="bg-zinc-700/40 text-muted" title="capital to hold 1 lot of the underlying (the return base)">
             1-lot capital {cur.notional ? inr(cur.notional) : '—'}
-          </span>
-          <span className={`badge ${cur.affordable_futures ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted'}`}
+          </Badge>
+          <span className={cn(badgeVariants({ variant: 'chip' }), cur.affordable_futures ? 'bg-up/15 text-up' : 'bg-zinc-700/40 text-muted')}
             title="can you afford one lot of the FUTURE at your current budget?">
             futures {cur.affordable_futures ? 'affordable' : 'over budget'}
           </span>
-          <span className={`badge ${cur.affordable_options ? 'bg-up/15 text-up' : 'bg-amber-500/20 text-amber-300'}`}
+          <span className={cn(badgeVariants({ variant: 'chip' }), cur.affordable_options ? 'bg-up/15 text-up' : 'bg-amber-500/20 text-amber-300')}
             title="estimated cost to buy 1 lot of an ATM option (BS at realised vol) vs your budget — this is how you'd actually trade it">
             options ≈ {optCost ? inr(optCost) : '—'} {cur.affordable_options ? '· affordable now' : '· over budget'}
           </span>
@@ -671,7 +675,7 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
 
         {/* strategy scoreboard — rank every strategy on THIS instrument+timeframe */}
         {multi && board.length > 0 && (
-          <div className="card p-2 shrink-0 overflow-auto">
+          <Card className="p-2 shrink-0 overflow-auto">
             <div className="stat-label mb-1">Strategy scoreboard — {cur.instrument_key} · {cur.interval} · best return first (click a row to inspect)</div>
             <table className="w-full text-[11px] tabular-nums">
               <thead className="text-muted">
@@ -694,7 +698,7 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
         )}
 
         {!liveTradable && (
@@ -736,24 +740,24 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
 
             {(winners.length > 0 || losers.length > 0) && (
               <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <div className="card p-3">
+                <Card className="p-3">
                   <div className="stat-label mb-1 text-up">Biggest winners (1 lot)</div>
                   <div className="flex flex-col gap-1 text-xs">
                     {winners.length ? winners.map((t, i) => <TradeRow key={i} t={t} />)
                       : <span className="text-muted">none</span>}
                   </div>
-                </div>
-                <div className="card p-3">
+                </Card>
+                <Card className="p-3">
                   <div className="stat-label mb-1 text-down">Biggest losers (1 lot)</div>
                   <div className="flex flex-col gap-1 text-xs">
                     {losers.length ? losers.map((t, i) => <TradeRow key={i} t={t} />)
                       : <span className="text-muted">none</span>}
                   </div>
-                </div>
+                </Card>
               </div>
             )}
 
-            <div className="card p-3">
+            <Card className="p-3">
               <div className="stat-label mb-1 flex items-center gap-3 flex-wrap">
                 <span>Equity curve — ₹ from a fixed 1-lot position (base + cumulative net P&amp;L), net of charges{multi && overlay.length > 1 ? ' · all strategies overlaid' : ''}</span>
                 {multi && overlay.length > 1
@@ -782,15 +786,15 @@ function Drill({ r, siblings, stratLabel, onClose, onAdd, added }:
                       : <LineChart data={curve} height={240} color={colorFor(cur.instrument_key)}
                           priceLines={[{ price: curve[0]?.value ?? startVal, color: '#8b93a7', title: 'start' }]} />)
                   : <div className="text-muted text-xs py-10 text-center">loading…</div>}
-            </div>
+            </Card>
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   )
 }
 
 function Mini({ label, v, cls = '' }: { label: string; v: string; cls?: string }) {
-  return <div className="card p-2"><div className="stat-label">{label}</div>
-    <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
+  return <Card className="p-2"><div className="stat-label">{label}</div>
+    <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></Card>
 }
