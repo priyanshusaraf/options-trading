@@ -692,8 +692,11 @@ class LiveBroker(PaperBroker):
             log.info(f"SL-M stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (order {oid})",
                      instrument=pos.instrument_key, event="STOP_PLACE")
         except Exception as e:
-            log.error(f"SL-M stop place failed {pos.tradingsymbol}: {e}",
-                      instrument=pos.instrument_key, event="STOP_FAIL")
+            # rate-limited: this same failure repeated 1,820x/day for LT in the
+            # 2026-07-15 autopsy and buried the rest of the journal.
+            log.error_ratelimited(f"SL-M stop place failed {pos.tradingsymbol}: {e}",
+                                  key=f"{pos.tradingsymbol}:SLM_FAIL", event="STOP_FAIL",
+                                  instrument=pos.instrument_key)
             self._notify(f"⚠️ SL-M stop NOT placed for {pos.tradingsymbol} — "
                          f"bot-managed stop only ({e})")
 

@@ -8,6 +8,7 @@ loop as a background task. The owner just runs this and watches.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -99,6 +100,19 @@ async def lifespan(app: FastAPI):
         signal_task.cancel()
         risk_task.cancel()
 
+
+class _PollingRouteFilter(logging.Filter):
+    """Demote high-frequency UI polling GETs out of the access log (2026-07-15
+    autopsy: ~34% of the 3-day journal was polling noise). Real mutating/rare
+    routes still log normally."""
+    _NOISY = ("/api/execution/state", "/api/status", "/api/signals")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(f"GET {p} " in msg for p in self._NOISY)
+
+
+logging.getLogger("uvicorn.access").addFilter(_PollingRouteFilter())
 
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)
 

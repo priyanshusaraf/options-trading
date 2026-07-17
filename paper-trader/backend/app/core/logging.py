@@ -53,6 +53,7 @@ class LogBus:
         self._buf: deque[LogEntry] = deque(maxlen=maxlen)
         self._subs: list[Callable[[LogEntry], None]] = []
         self._seq = 0
+        self._ratelimit_seen: dict[tuple[str, str], float] = {}  # (key, event) -> last emit
 
     def emit(self, level: str, msg: str, instrument: str | None = None, **fields: Any) -> LogEntry:
         self._seq += 1
@@ -83,6 +84,21 @@ class LogBus:
 
     def error(self, msg: str, **kw: Any) -> LogEntry:
         return self.emit("error", msg, **kw)
+
+    def error_ratelimited(self, msg: str, *, key: str, event: str,
+                          window_seconds: float = 60.0, **kw: Any) -> LogEntry | None:
+        """Like .error(), but suppresses repeats of the same (key, event) within
+        `window_seconds` — the fix for the 1,820x/day LT SL-M-failure spam the
+        2026-07-15 autopsy found burying the journal. Only the FIRST occurrence in a
+        window emits; the condition still re-surfaces once the window elapses, so a
+        persistent failure is never silenced for good."""
+        import time
+        now = time.monotonic()
+        last = self._ratelimit_seen.get((key, event))
+        if last is not None and now - last < window_seconds:
+            return None
+        self._ratelimit_seen[(key, event)] = now
+        return self.error(msg, event=event, **kw)
 
     def trade(self, msg: str, **kw: Any) -> LogEntry:
         return self.emit("trade", msg, **kw)
