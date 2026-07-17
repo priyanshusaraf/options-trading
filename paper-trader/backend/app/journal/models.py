@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.journal.db import JournalBase
@@ -85,3 +85,36 @@ class JournalTag(JournalBase):
     a picker instead of re-typing tags from memory."""
     __tablename__ = "journal_tags"
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class JournalDay(JournalBase):
+    """One row per calendar date — the day-feed backbone. `market_view` is the
+    free-text 'what I'm feeling' narrative; `result` is the end-of-day summary.
+    Upserted by date; a date with only notes/trades needs no row here."""
+    __tablename__ = "journal_days"
+    entry_date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    market_view: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class JournalNote(JournalBase):
+    """A timestamped free-text note ('ranting'), droppable anytime. Grouped into
+    the day feed by `noted_at.date()`. Optional instrument tag; no mood field."""
+    __tablename__ = "journal_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    noted_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    body: Mapped[str] = mapped_column(Text)
+    instrument_symbol: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("journal_instruments.symbol"), nullable=True)
+
+
+class JournalBias(JournalBase):
+    """Persistent directional bias per horizon ('6M' | '1M') shown in the feed
+    header. Seeded once; overwritten in place (not append-only)."""
+    __tablename__ = "journal_bias"
+    horizon: Mapped[str] = mapped_column(String(8), primary_key=True)
+    stance: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
