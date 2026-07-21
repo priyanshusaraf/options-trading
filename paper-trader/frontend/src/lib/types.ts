@@ -85,6 +85,8 @@ export interface SignalRow {
   overtrade_suggested?: boolean  // count crossed a threshold -> suggest red
 }
 
+export interface EarningsInfo { date: string; purpose: string }
+
 export interface PositionRow extends PositionDTO {
   high_water_premium: number; last_mark_time: string | null
   live_premium: number | null; live_spot: number | null

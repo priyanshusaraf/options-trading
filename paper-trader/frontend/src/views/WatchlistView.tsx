@@ -3,12 +3,12 @@ import { useLive } from '../state/LiveContext'
 import {
   getSignals, toggleInstrument, getCandles, getOptionCandles, setLiveInterval, blockEntries,
   addToPortfolio, removeFromPortfolio, getStatus,
-  getStrategies, setProduct, setPriorityFlag, setOvertradeFlag, setInstrumentStrategy,
+  getStrategies, setProduct, setPriorityFlag, setOvertradeFlag, setInstrumentStrategy, getEarnings,
 } from '../lib/api'
 import { PriceChart, LineChart } from '../components/Charts'
 import SessionBanner from '../components/SessionBanner'
 import ModeChip from '../components/ModeChip'
-import type { InstrState, SignalRow, ProviderHealth, StrategyMeta } from '../lib/types'
+import type { InstrState, SignalRow, ProviderHealth, StrategyMeta, EarningsInfo } from '../lib/types'
 import { inr, num, signedInr, pnlColor, signalStyle } from '../lib/format'
 import { epochSeconds, mergeLiveCandle, mergeLivePoint } from '../lib/liveSeries'
 import { Badge, badgeVariants } from '@/components/ui/badge'
@@ -72,6 +72,28 @@ function ago(lastOk: string | null | undefined): string {
   return `${Math.round(secs / 3600)}h ago`
 }
 
+// Calendar-day distance to an ISO date (YYYY-MM-DD), local time, floor'd to
+// whole days so "today" reads 0 regardless of the current hour.
+function daysUntil(dateIso: string): number {
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const target = new Date(dateIso + 'T00:00:00')
+  return Math.round((target.getTime() - today.getTime()) / 86400000)
+}
+
+// Amber "E·Nd" badge, shown only in the 3-calendar-day window before results —
+// informational only, doesn't affect entries (owner still uses "blocked" for that).
+function EarningsBadge({ info }: { info: EarningsInfo | undefined }) {
+  if (!info) return null
+  const days = daysUntil(info.date)
+  if (days < 0 || days > 3) return null
+  return (
+    <Badge variant="chip" className="bg-amber-400/20 text-amber-300 ml-1"
+      title={`${info.purpose} · ${info.date}`}>
+      E·{days}d
+    </Badge>
+  )
+}
+
 function HealthPill({ health }: { health: ProviderHealth | null }) {
   if (!health) return null
   const q = health.quote, c = health.candle
@@ -102,6 +124,7 @@ export default function Watchlist() {
   const [busy, setBusy] = useState(false)
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [earnings, setEarnings] = useState<Record<string, EarningsInfo>>({})
 
   const load = () => getSignals().then((d) => setRows(d.instruments || [])).catch(() => {})
   useEffect(() => {
@@ -110,6 +133,11 @@ export default function Watchlist() {
     return () => clearInterval(t)
   }, [])
   useEffect(() => { getStrategies().then((d) => setStrategies(d.strategies || [])).catch(() => {}) }, [])
+  // the cache backing this is refreshed once/day server-side, so a slow poll is plenty
+  useEffect(() => {
+    const f = () => getEarnings().then((d) => setEarnings(d.earnings || {})).catch(() => {})
+    f(); const t = setInterval(f, 5 * 60 * 1000); return () => clearInterval(t)
+  }, [])
 
   // Poll auth so the session-expired banner shows on the DEFAULT landing page even
   // pre-market, when no candle scan has failed yet to set health.auth_error (KITE-1).
@@ -271,7 +299,8 @@ export default function Watchlist() {
                   </button>
                 </TableCell>
                 <TableCell className="font-semibold text-zinc-100">{r.name}
-                  <Badge variant="chip" className="bg-zinc-700/40 text-muted ml-1">{r.segment}</Badge></TableCell>
+                  <Badge variant="chip" className="bg-zinc-700/40 text-muted ml-1">{r.segment}</Badge>
+                  <EarningsBadge info={earnings[r.key]} /></TableCell>
                 <TableCell><IntervalSelect k={r.key} value={r.interval} /></TableCell>
                 <TableCell><Badge variant="chip" className={signalStyle(r.signal)}>{r.signal === 'NONE' ? '—' : r.signal.replace('_', ' ')}</Badge></TableCell>
                 <TableCell className="text-right">{num(r.z)}</TableCell>

@@ -602,4 +602,16 @@ class OrderJournal(Base):
     filled_qty: Mapped[int] = mapped_column(Integer, default=0)
     avg_price: Mapped[float] = mapped_column(Float, default=0.0)
     placed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class EarningsEvent(Base):
+    """Cached next-results date per NSE/BSE cash-equity symbol, refreshed once a
+    day by scripts/refresh_earnings.py from NSE's board-meetings feed. Purely
+    informational — the /api/earnings endpoint reads this cache; the engine never
+    touches it."""
+    __tablename__ = "earnings_events"
+    symbol: Mapped[str] = mapped_column(String(48), primary_key=True)
+    event_date: Mapped[dt.date] = mapped_column(Date)
+    purpose: Mapped[str] = mapped_column(String(128), default="")
+    fetched_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

@@ -23,6 +23,16 @@ Two processes: a FastAPI backend on **:8090** and a Vite/React frontend on **:51
 > equities, so the historic "backtests spot but trades options" validation gap does
 > not apply to the equity/index universe.
 
+## What to work on next — the agenda
+
+**`docs/ROADMAP.md` is the canonical, always-current agenda and progress tracker.** Read
+it at the start of every session and work the topmost unchecked item of the highest
+active workstream (Workstream A — switching on the research plane's autonomous loop —
+unless a safety item is on fire). Check boxes only with verified evidence (tests green +
+the phase's stated acceptance), and update the tracker in the same commit as the work.
+Research-plane work must respect the isolation rules listed there (read-only bridges
+only; `research/guards.py` stays fail-closed; both test suites + `dryrun.py 700` green).
+
 ## Commands
 
 Run everything from `backend/` or `frontend/` — never the repo root.

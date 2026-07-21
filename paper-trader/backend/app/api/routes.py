@@ -463,6 +463,19 @@ def signals(request: Request):
             "any_market_open": any_market_open}
 
 
+@router.get("/api/earnings")
+def earnings_calendar():
+    """Cached next-results date for every NSE/BSE cash-equity instrument in the
+    universe — index (NFO/BFO) and commodity (MCX/NCDEX) instruments have no
+    earnings concept and are excluded. Purely a read of the daily-refreshed cache
+    (see app/core/earnings.py + scripts/refresh_earnings.py); never fetches NSE
+    live, so this stays as cheap as /api/signals."""
+    from app.core import earnings as earnings_core
+    stocks = [i.key for i in all_instruments() if i.segment in ("NSE", "BSE")]
+    with SessionLocal() as s:
+        return {"earnings": earnings_core.earnings_map(s, stocks)}
+
+
 @router.get("/api/positions")
 async def positions(request: Request, segment: str | None = None):
     """Active-positions cockpit rows: marks, trailing stop, stale/health. Optional

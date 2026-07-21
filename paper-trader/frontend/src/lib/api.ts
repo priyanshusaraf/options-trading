@@ -35,6 +35,7 @@ export const armBot = (armed: boolean) => post('/api/execution/arm', { armed })
 export const killBot = () => post('/api/execution/kill', {})
 export const getInstruments = () => j('/api/instruments')
 export const getSignals = () => j('/api/signals')
+export const getEarnings = () => j('/api/earnings')
 export const getPositions = (segment?: string) =>
   j(`/api/positions${segment ? `?segment=${segment}` : ''}`)
 export const getProviderHealth = () => j('/api/provider-health')
