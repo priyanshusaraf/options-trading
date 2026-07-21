@@ -159,34 +159,38 @@ class Settings(BaseSettings):
 
     # ── intraday equity segment (MIS; separate from the options segment) ──
     # Opt-in. Live orders are sized against Kite `order_margins` (real per-share MIS
-    # margin, fix A 2026-07-14) so broker rejection is never a risk — but qty is then
-    # capped so notional never exceeds target_margin × `intraday_leverage` (Task 2,
-    # R2 2026-07-16): the 2026-07-15 autopsy found every position sized at Zerodha's
-    # real ~5x MIS multiplier while intraday_leverage=2.5 was set to HALVE risk, since
-    # the real-margin quote only floored qty against rejection and never capped it.
-    # `intraday_leverage` is ALSO still the pure fallback estimate for paper/mock or a
-    # failed margin quote. Concurrency is a HARD cap of 3 TOTAL (purple included).
+    # margin, fix A 2026-07-14) so broker rejection is never a risk: qty is sized to
+    # deploy the FULL target real margin (max_margin / purple_margin) and Zerodha's own
+    # MIS multiplier decides the resulting notional (owner, 2026-07-21 — "put in 7k as
+    # the margin and let the leverage aspect be figured out from their end; we're not
+    # holding securities, we just care about maxing return"). The earlier artificial
+    # `intraday_leverage` notional cap (Task 2, R2 2026-07-16) is REMOVED — it was
+    # throttling real margin to ~4.5k. `intraday_leverage` now serves ONLY as the pure
+    # fallback estimate for paper/mock or a failed margin quote (so keep it near
+    # Zerodha's real ~5x). Concurrency is a HARD cap of 3 TOTAL (purple included).
     # Purple = a watchlist priority flag: those names always win selection and size at
     # purple_margin; other names compete for leftover slots by the higher-quantity
-    # (cheaper-share) rule. The portfolio-wide 5k daily-loss halt (max_daily_loss,
-    # cost-inclusive) governs BOTH segments — there is no separate intraday loss cap.
+    # (cheaper-share) rule. When the cash left can't fund the full target, the trade is
+    # NOT skipped — it deploys whatever remains (down to the min_margin dust floor). The
+    # portfolio-wide 5k daily-loss halt (max_daily_loss, cost-inclusive) governs BOTH
+    # segments — there is no separate intraday loss cap.
     intraday_enabled: bool = False
     intraday_max_positions: int = 3            # hard cap on concurrent intraday trades (purple included)
-    intraday_min_margin: float = 5_000.0       # don't open an intraday trade with less REAL margin than this
-    intraday_max_margin: float = 8_000.0       # target REAL margin per (non-purple) intraday trade
-    intraday_purple_margin: float = 8_000.0    # target REAL margin for a purple-flagged priority name
+    intraday_min_margin: float = 2_500.0       # dust floor — kept low so a partial (leftover-cash) trade still opens
+    intraday_max_margin: float = 7_000.0       # target REAL margin per (non-purple) intraday trade
+    intraday_purple_margin: float = 10_000.0   # target REAL margin for a purple-flagged priority name
     # purple SL/TP tiering: purple names are higher-conviction and more volatile
     # than the rest of the watchlist (owner, 2026-07-17) — they get wider bands so
-    # normal intraday noise doesn't stop them out. Frozen onto Position.entry_sl_pct/
-    # entry_tp_pct AT ENTRY (see equity_entry.py/broker.py) so a mid-trade purple-flag
-    # toggle never reshapes an already-open position.
-    intraday_purple_stop_loss_pct: float = 0.015   # purple equity SL, fraction of entry price
-    intraday_purple_target_pct: float = 0.03       # purple equity TP, fraction of entry price
-    # BINDING notional cap (Task 2, R2 2026-07-16): live qty = min(real-margin qty,
-    # equity_qty(target_margin, this, price)) — Zerodha's real MIS multiplier (often
-    # 5x) only floors qty against broker rejection, it no longer decides notional.
-    # Also still the pure fallback estimate for paper/mock or a failed margin quote.
-    intraday_leverage: float = 2.5
+    # normal intraday noise doesn't stop them out. Kept STRICTLY wider than the normal
+    # bands below (owner, 2026-07-21). Frozen onto Position.entry_sl_pct/entry_tp_pct
+    # AT ENTRY (see equity_entry.py/broker.py) so a mid-trade purple-flag toggle never
+    # reshapes an already-open position.
+    intraday_purple_stop_loss_pct: float = 0.015   # purple equity SL, fraction of entry price (> normal 0.008)
+    intraday_purple_target_pct: float = 0.045      # purple equity TP, fraction of entry price (> normal 0.03)
+    # Pure fallback leverage estimate ONLY (the binding notional cap was removed
+    # 2026-07-21): used to size paper/mock entries and a failed live margin quote.
+    # Keep near Zerodha's real MIS multiplier (~5x) so the estimate is realistic.
+    intraday_leverage: float = 5.0
     intraday_square_off_buffer_minutes: float = 15.0  # force all intraday positions flat this long before close
     # don't OPEN a new intraday trade once we're this close to close — must exceed
     # the square-off buffer above, or a fresh entry can be force-flattened seconds
@@ -194,15 +198,20 @@ class Settings(BaseSettings):
     # charges/spread alone). Default = buffer + 10, so a new position always has
     # >=10 minutes to actually work before the force-flat fires.
     intraday_entry_cutoff_minutes: float = 25.0
-    intraday_stop_loss_pct: float = 0.01       # equity SL as a fraction of entry price (tight — not the option 35%)
-    intraday_target_pct: float = 0.02          # equity TP as a fraction of entry price
+    # exit geometry widened + the profit-lock loosened (owner, 2026-07-21 — PAYTM short
+    # @1321 was ratcheted out near break-even while price was still falling toward the
+    # real target; approved interim params from docs/ROADMAP.md Workstream C). Wider
+    # target lets winners run; a higher lock threshold + smaller lock fraction stop a
+    # normal pullback from surrendering a live position too early.
+    intraday_stop_loss_pct: float = 0.008      # equity SL as a fraction of entry price (tight — not the option 35%)
+    intraday_target_pct: float = 0.03          # equity TP as a fraction of entry price
     # lockstep band: once an equity position is in profit, slide BOTH the stop and
-    # target together by one step per `trigger_pct` of margin (default 2% = ₹200 on a
-    # ₹10k margin), ratchet-only, with a break-even floor. On by default.
+    # target together by one step per `trigger_pct` of margin, ratchet-only, with a
+    # break-even floor. On by default.
     intraday_lockstep_enabled: bool = True
-    intraday_lockstep_trigger_pct: float = 0.02  # profit per lockstep, as a fraction of deployed margin
-    intraday_profit_lock_threshold: float = 200.0  # #6: once unrealized profit clears this (₹), lock a positive buffer above costs
-    intraday_profit_lock_frac: float = 0.5         # #6: fraction of the favourable move to lock once past the threshold
+    intraday_lockstep_trigger_pct: float = 0.03  # profit per lockstep, as a fraction of deployed margin
+    intraday_profit_lock_threshold: float = 600.0  # #6: once unrealized profit clears this (₹), lock a positive buffer above costs
+    intraday_profit_lock_frac: float = 0.3         # #6: fraction of the favourable move to lock once past the threshold
 
     # overtrading guard (advisory red-flag suggestion — no engine effect)
     overtrade_today_threshold: int = 5      # suggest red when an instrument fires >= this many signals today

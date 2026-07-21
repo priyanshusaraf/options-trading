@@ -15,7 +15,7 @@ from app.engine.broker import PaperBroker
 def test_purple_sltp_defaults_exist_and_are_wider_than_normal():
     s = Settings()
     assert s.intraday_purple_stop_loss_pct == 0.015
-    assert s.intraday_purple_target_pct == 0.03
+    assert s.intraday_purple_target_pct == 0.045
     assert s.intraday_purple_stop_loss_pct > s.intraday_stop_loss_pct
     assert s.intraday_purple_target_pct > s.intraday_target_pct
 
@@ -48,8 +48,9 @@ def test_normal_entry_leaves_pcts_none_and_uses_global_defaults():
         charge_segment="NSE_INTRADAY", reason="test", now=_now())  # legacy call shape
     assert pos.entry_sl_pct is None
     assert pos.entry_tp_pct is None
-    assert pos.stop_price == pytest.approx(100.0 * 0.99, rel=1e-6)
-    assert pos.target_price == pytest.approx(100.0 * 1.02, rel=1e-6)
+    # global defaults: SL 0.008, TP 0.03 (widened 2026-07-21)
+    assert pos.stop_price == pytest.approx(100.0 * (1 - 0.008), rel=1e-6)
+    assert pos.target_price == pytest.approx(100.0 * (1 + 0.03), rel=1e-6)
 
 
 def test_purple_short_band_is_direction_aware():

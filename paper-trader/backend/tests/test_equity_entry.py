@@ -74,6 +74,31 @@ def test_cash_shortfall_skips_by_selection_order():
     assert sum(p.margin for p in res.selected) <= 10_000.0 + 1e-6
 
 
+def test_partial_fill_uses_leftover_cash():
+    # Owner rule (2026-07-21): a recommended trade that can't be fully funded deploys
+    # WHATEVER cash remains rather than being skipped. ₹15k funds one full 10k target;
+    # the 2nd name takes the leftover ₹5k.
+    cands = [_c("A", 100), _c("B", 100)]
+    res = select_intraday_entries(cands, **{**SEL, "min_margin": 2_500.0,
+                                            "available_cash": 15_000.0})
+    assert len(res.selected) == 2
+    margins = sorted(p.margin for p in res.selected)
+    assert margins[0] == pytest.approx(5_000.0)    # partial — the leftover cash
+    assert margins[1] == pytest.approx(10_000.0)   # full target
+    assert sum(p.margin for p in res.selected) <= 15_000.0 + 1e-6
+
+
+def test_partial_fill_below_dust_floor_is_skipped():
+    # But a leftover too small to clear the dust floor is skipped (charges would eat a
+    # micro-position). ₹12k funds one full 10k; the ₹2k left is below the 2.5k floor.
+    cands = [_c("A", 100), _c("B", 100)]
+    res = select_intraday_entries(cands, **{**SEL, "min_margin": 2_500.0,
+                                            "available_cash": 12_000.0})
+    assert len(res.selected) == 1
+    assert res.selected[0].instrument_key == "A"
+    assert any("floor" in reason.lower() for _, reason in res.skipped)
+
+
 def test_too_expensive_for_one_share_is_skipped():
     # at 10k margin × 5x = 50k buying power, a 60k share buys 0 shares
     res = select_intraday_entries([_c("RICH", 60_000)], **SEL)
