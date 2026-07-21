@@ -56,3 +56,6 @@ data/reports/
 .idea/
 .vscode/
 *.swp
+
+# Operational VPS data snapshots (large, not source)
+vps-snapshots/
