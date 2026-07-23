@@ -2,6 +2,38 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 2026-07-23 memory-leak outage — FIXED & DEPLOYED (same day)
+
+The live bot went down for ~24h on 2026-07-22/23. **Root cause (verified):** a process memory
+leak in the WS broadcast hub, NOT a DB bug — the QueuePool timeouts in the logs were a symptom.
+Chain: `WS broadcast leak → RSS 260MB→1.3GB in ~15min (only while a dashboard /ws client was
+connected, ~+100MB/min) → 1GB VPS OOM → swap thrash → SQLite disk-bound → 15-conn pool
+congestion-collapse → 30s timeouts everywhere`.
+
+**Fix shipped 2026-07-23 (commit `68c852e`):** `backend/app/ws/manager.py` rewritten — producers
+only enqueue (engine loops never await client I/O); `state`/`position_ticks` coalesce latest-wins;
+log lines in a bounded 200-deep per-client deque (oldest dropped); one sender task per client with
+a 10s send timeout that evicts stalled clients; `push()` is one `call_soon_threadsafe` callback per
+log line (no coroutine flood). TDD (`tests/test_ws_manager.py`), suite 830 passed, LEDGER OK.
+Deployed to the VPS + `MALLOC_ARENA_MAX=2` systemd drop-in
+(`/etc/systemd/system/paper-trader.service.d/malloc.conf`). **Verified on the VPS:** 16-min soak
+with a live `/ws` client — RSS 250.6→251.2MB, flat (old code +100MB/min). Dashboard may be open
+again. The `option_cache_enabled` runtime override was cleared post-fix. Caveat: soak ran
+off-market-hours; first market session with the dashboard open is the final confirmation.
+
+**Still open:**
+1. **Headroom:** the 1GB DO droplet is small — consider resize to 2GB (owner action, DO console).
+2. **Minor:** context-manage `_upsert_state` (runner.py) / broker's long-lived session; add
+   `pool_pre_ping`, lower `pool_timeout`.
+3. **Separate DB-bloat issue (owner wants a rethink):** `paper_trader.db` is ~45MB, +~5MB/day, from
+   unbounded append-only `option_data`(~154k)/`signal_events`(~86k)/`equity_snapshots`(~72k). Options:
+   retention/pruning, split telemetry to an archive DB, or move time-series off SQLite. NOT DECIDED.
+
+**Ops notes:** SSH = `ssh -i ~/.ssh/paper-trader-vps root@64.227.191.162` (public IP + that key; no
+ssh config; tailnet port 22 is Tailscale-SSH and hangs non-interactively). Deploy = rsync whole tree
+from Mac + `systemctl restart paper-trader` (VPS has NO git). Engine is DISARMED on every start. A
+DB snapshot from the outage is offloaded at `paper-trader/vps-snapshots/`.
+
 ## What this is
 
 A single-user, localhost autonomous **options paper-trading** platform on live Zerodha Kite
