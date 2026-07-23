@@ -10,16 +10,27 @@ Chain: `WS broadcast leak → RSS 260MB→1.3GB in ~15min (only while a dashboar
 connected, ~+100MB/min) → 1GB VPS OOM → swap thrash → SQLite disk-bound → 15-conn pool
 congestion-collapse → 30s timeouts everywhere`.
 
-**Fix shipped 2026-07-23 (commit `68c852e`):** `backend/app/ws/manager.py` rewritten — producers
-only enqueue (engine loops never await client I/O); `state`/`position_ticks` coalesce latest-wins;
-log lines in a bounded 200-deep per-client deque (oldest dropped); one sender task per client with
-a 10s send timeout that evicts stalled clients; `push()` is one `call_soon_threadsafe` callback per
-log line (no coroutine flood). TDD (`tests/test_ws_manager.py`), suite 830 passed, LEDGER OK.
-Deployed to the VPS + `MALLOC_ARENA_MAX=2` systemd drop-in
-(`/etc/systemd/system/paper-trader.service.d/malloc.conf`). **Verified on the VPS:** 16-min soak
-with a live `/ws` client — RSS 250.6→251.2MB, flat (old code +100MB/min). Dashboard may be open
-again. The `option_cache_enabled` runtime override was cleared post-fix. Caveat: soak ran
-off-market-hours; first market session with the dashboard open is the final confirmation.
+**It was TWO leaks, both fixed & deployed 2026-07-23:**
+1. **WS broadcast hub** (commit `68c852e`): `backend/app/ws/manager.py` rewritten — producers only
+   enqueue; `state`/`position_ticks` coalesce latest-wins; logs in a bounded 200-deep per-client
+   deque; per-client sender task with 10s send-timeout eviction; `push()` is one
+   `call_soon_threadsafe` callback per log line. TDD `tests/test_ws_manager.py`. This alone did NOT
+   stop the dashboard-open leak (a bare `/ws` soak was flat, the real dashboard still leaked) —
+   which is how leak 2 was found.
+2. **Analytics full-table ORM scans** (commit `6b28645`, found by per-endpoint RSS isolation on the
+   VPS): `/api/signals` (5s poll) ran `signal_counts()` materializing the whole 7-day
+   `signal_events` window (~73k ORM rows, ~4.2MB retained/req, +55MB/min); `/api/dashboard` (5s
+   poll) ran `equity_curve()` loading all ~72k `equity_snapshots` rows then slicing in Python
+   (+21MB/min). Churned pages are allocator-retained → RSS ratchets to OOM. Both now aggregate/
+   limit in SQL (`app/engine/analytics.py`); `/api/signals` latency 4.6s→0.23s. Tests:
+   `test_signal_counts.py`, `test_equity_curve_query.py`.
+
+Plus `MALLOC_ARENA_MAX=2` systemd drop-in (`paper-trader.service.d/malloc.conf`). **Verified:**
+15-min soak replaying the FULL dashboard mix (all 8 polled endpoints at real cadences + `/ws`
+client) — RSS 290→314MB with growth decelerating to flat (old code: +100MB/min → OOM ~7min).
+Dashboard is safe to open. `option_cache_enabled` override cleared. Lesson: validate against the
+real traffic mix, not the attributed trigger — the first "fixed" claim was wrong because the soak
+only exercised `/ws`.
 
 **Still open:**
 1. **Headroom:** the 1GB DO droplet is small — consider resize to 2GB (owner action, DO console).
