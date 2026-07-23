@@ -126,11 +126,15 @@ def open_positions(s: Session) -> list[Position]:
 
 
 def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = None) -> list[dict]:
-    snaps = list(s.scalars(select(EquitySnapshot).order_by(EquitySnapshot.time)))
+    # Filter + tail-limit in SQL: this feeds /api/dashboard's 5s poll, and the old
+    # version materialized the whole table (~72k rows on the live VPS) per call —
+    # the second allocator-churn leak of the 2026-07-23 outage (with signal_counts).
+    q = select(EquitySnapshot).order_by(EquitySnapshot.time.desc(), EquitySnapshot.id.desc())
     if since is not None:
         cut = since.replace(tzinfo=None) if since.tzinfo else since
-        snaps = [sn for sn in snaps if sn.time >= cut]
-    return [sn.to_dict() for sn in snaps[-limit:]]
+        q = q.where(EquitySnapshot.time >= cut)
+    snaps = list(s.scalars(q.limit(limit)))
+    return [sn.to_dict() for sn in reversed(snaps)]
 
 
 def per_instrument_curves(s: Session, segment: str | None = None,
@@ -246,10 +250,19 @@ def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7) -> dict[s
         now = now.replace(tzinfo=None)
     start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     start_roll = now - dt.timedelta(days=rolling_days)
-    out: dict[str, dict] = {}
-    for ev in s.scalars(select(SignalEvent).where(SignalEvent.time >= start_roll)):
-        d = out.setdefault(ev.instrument_key, {"today": 0, "rolling": 0})
-        d["rolling"] += 1
-        if ev.time >= start_today:
-            d["today"] += 1
-    return out
+    # Aggregate in SQL — this runs on every /api/signals poll (~5s), and the old
+    # per-row ORM loop materialized the whole 7-day window (~70k rows) each call:
+    # ~4.6s latency + allocator-retained heap that ratcheted RSS to OOM on the
+    # 1GB VPS (2026-07-23 outage, second leak after the WS hub).
+    from sqlalchemy import case, func
+    rows = s.execute(
+        select(
+            SignalEvent.instrument_key,
+            func.count().label("rolling"),
+            func.sum(case((SignalEvent.time >= start_today, 1), else_=0)).label("today"),
+        )
+        .where(SignalEvent.time >= start_roll)
+        .group_by(SignalEvent.instrument_key)
+    )
+    return {key: {"today": int(today or 0), "rolling": int(rolling)}
+            for key, rolling, today in rows}
