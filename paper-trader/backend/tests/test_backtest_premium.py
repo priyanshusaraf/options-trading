@@ -329,3 +329,68 @@ def test_premium_param_changes_signature():
     c = params_signature(50_000, window="", premium_spread_pct=0.05)
     d = params_signature(50_000, window="", entry_dte_days=7)
     assert len({a, b, c, d}) == 4
+
+
+# ── numpy scalars must never break result serialization (2026-07-23 sweep bug) ──
+# simulate_premium builds BTTrades from pandas/numpy values, so net_pnl can be an
+# np.float64 — making the `win` property an np.bool, which json.dumps rejects
+# ("Object of type bool is not JSON serializable" on NumPy 2.x). That killed the
+# whole sweep at the premium_trades_json dump in _store, defeating the "premium
+# must never kill the spot result" guard.
+
+def test_bttrade_to_dict_is_json_safe_with_numpy_values():
+    import json
+
+    import numpy as np
+
+    from app.backtest.metrics import BTTrade
+
+    t = BTTrade(direction="LONG", entry_time=1, entry_price=np.float64(100.5),
+                exit_time=2, exit_price=np.float64(101.5), qty=1,
+                gross_pnl=np.float64(1.0), charges=np.float64(0.1),
+                net_pnl=np.float64(0.9), reason="STRATEGY_EXIT", bars_held=3,
+                mae_pct=np.float64(0.2), notional=np.float64(100.5), lots=1)
+    d = t.to_dict()
+    json.dumps(d)  # must not raise
+    assert type(d["win"]) is bool
+    assert all(type(v).__module__ != "numpy" for v in d.values())
+
+
+def test_premium_json_failure_degrades_to_premium_error_not_sweep_abort():
+    """Even if premium trade serialization raises, the spot cell must be stored
+    and the failure surfaced as premium_error — never abort the whole sweep."""
+    from unittest.mock import patch
+
+    from sqlalchemy import select
+
+    from app.backtest import sweep
+    from app.backtest.metrics import BTTrade
+    from app.db.models import BacktestResult, BacktestRun
+    from app.db.session import SessionLocal, init_db
+    from app.providers.mock import MockProvider
+
+    class Unserializable:
+        pass
+
+    bad_trade = BTTrade(direction="LONG", entry_time=1, entry_price=100.0,
+                        exit_time=2, exit_price=101.0, qty=1, gross_pnl=1.0,
+                        charges=0.1, net_pnl=0.9, reason="STRATEGY_EXIT",
+                        bars_held=3)
+    bad_trade.to_dict = lambda: {"oops": Unserializable()}  # type: ignore[method-assign]
+
+    init_db(reset=True)
+    prov = MockProvider()
+    from app.backtest.metrics import BTMetrics
+    with patch("app.backtest.sweep.simulate_premium",
+               return_value=([bad_trade], BTMetrics(trades=1))):
+        rid = sweep.start_sweep(scope="liquid", intervals=["day"], capital=50_000,
+                                instruments=["NIFTY"], provider=prov)
+        sweep._join()
+    with SessionLocal() as s:
+        run = s.get(BacktestRun, rid)
+        row = s.scalars(select(BacktestResult).where(
+            BacktestResult.run_id == rid,
+            BacktestResult.instrument_key == "NIFTY")).first()
+    assert run.status == "done", f"sweep aborted: {run.note}"
+    assert row is not None and row.trades is not None   # spot result stored
+    assert row.premium_error != ""                      # failure surfaced

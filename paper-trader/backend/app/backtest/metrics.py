@@ -45,23 +45,27 @@ class BTTrade:
         return (self.net_pnl / notional) if notional else 0.0
 
     def to_dict(self) -> dict:
+        # Cast everything to NATIVE Python types: the premium engine builds trades
+        # from pandas/numpy values, and an np.bool in "win" is not JSON
+        # serializable (np.float64 subclasses float, np.bool does NOT subclass
+        # bool) — this killed whole sweeps at the premium_trades_json dump.
         return {
             "direction": self.direction,
-            "entry_time": self.entry_time,
-            "entry_price": round(self.entry_price, 2),
-            "exit_time": self.exit_time,
-            "exit_price": round(self.exit_price, 2),
-            "qty": self.qty,
-            "gross_pnl": round(self.gross_pnl, 2),
-            "charges": round(self.charges, 2),
-            "net_pnl": round(self.net_pnl, 2),
-            "return_pct": round(self.return_pct, 4),
-            "mae_pct": round(self.mae_pct, 2),
-            "notional": round(self.notional, 2),
-            "lots": self.lots,
+            "entry_time": int(self.entry_time),
+            "entry_price": round(float(self.entry_price), 2),
+            "exit_time": int(self.exit_time),
+            "exit_price": round(float(self.exit_price), 2),
+            "qty": int(self.qty),
+            "gross_pnl": round(float(self.gross_pnl), 2),
+            "charges": round(float(self.charges), 2),
+            "net_pnl": round(float(self.net_pnl), 2),
+            "return_pct": round(float(self.return_pct), 4),
+            "mae_pct": round(float(self.mae_pct), 2),
+            "notional": round(float(self.notional), 2),
+            "lots": int(self.lots),
             "reason": self.reason,
-            "bars_held": self.bars_held,
-            "win": self.win,
+            "bars_held": int(self.bars_held),
+            "win": bool(self.win),
         }
 
 

@@ -330,13 +330,21 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
                   computed_at=dt.datetime.now())
     pm = premium_metrics if premium_metrics is not None else BTMetrics()
     ptrades = premium_trades or []
+    # Serialization of premium trades must obey the same rule as the premium
+    # simulation itself: a premium-side failure NEVER kills the spot result
+    # (2026-07-23: an np.bool in a trade dict aborted whole sweeps here).
+    try:
+        ptrades_json = json.dumps([t.to_dict() for t in ptrades])
+    except Exception as e:
+        pm, ptrades_json = BTMetrics(), "[]"
+        premium_error = premium_error or f"premium trades not serializable: {e}"
     premium_common = dict(
         premium_trades=pm.trades, premium_win_rate=pm.win_rate,
         premium_net_pnl=pm.net_pnl, premium_return_pct=pm.return_pct,
         premium_profit_factor=pm.profit_factor,
         premium_max_drawdown_pct=pm.max_drawdown_pct,
         premium_expectancy=pm.expectancy, premium_charges=pm.charges,
-        premium_trades_json=json.dumps([t.to_dict() for t in ptrades]),
+        premium_trades_json=ptrades_json,
         premium_error=premium_error)
     with SessionLocal() as s:
         if m is None:
