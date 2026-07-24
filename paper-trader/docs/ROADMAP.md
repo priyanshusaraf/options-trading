@@ -278,6 +278,21 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
   the give-back floor and the day closes ≥ floor; guard off reproduces the full give-back. TDD.
 
 ### Phase E2 — Index-futures segment *(aligns with the index-first product direction)*
+
+> **SPEC WRITTEN + OPUS-REVIEWED, AWAITING OWNER/FABLE + A CONTRACT NOTE (2026-07-24).**
+> Full spec: `docs/2026-07-24-E2-index-futures-spec.md` (Sonnet-drafted, Opus-reviewed).
+> **The build is gated — not started — for two mandate reasons:** (1) the acceptance bullet
+> "margin+charges match a real F&O contract note within tolerance" is unverifiable in-repo
+> (the paper SPAN margin is a flagged **12%-of-notional estimate**; SENSEX **`BFO_FUT`
+> charges don't exist yet**); the owner must supply a real Zerodha index-futures contract
+> note (or a live `order_margins()` reading) to confirm those numbers. (2) the roadmap's own
+> "spec gate first (owner + Fable review)" — several defaults (margin %, position/margin
+> tiers, paper-only-first) need owner sign-off. Spec also surfaced a real build item: **futures
+> LTP isn't fetchable today** (marking to spot mis-prices by the basis → needs a new provider
+> method). Isolation, `NFO_FUT` charges, delivery-guard (no-op for cash-settled index +
+> stubbed commodity calendar), force-flat/no-rollover, and dryrun-exactness ARE all buildable
+> and verifiable now — the build plan (13 TDD steps) is in the spec, ready to execute once the
+> gate clears. E3 (MTF) is even more contract-note-dependent (carry/interest, haircut) and stays last.
 - [ ] New segment `index_futures`, on its own entry/mark/exit path (mirror how
       `equity_intraday` is isolated so the options path stays untouched). Lot sizes +
       SPAN+exposure margin sizing; futures charge legs in `charges.py` (already segment-aware);
