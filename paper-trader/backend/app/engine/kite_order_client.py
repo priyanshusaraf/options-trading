@@ -189,3 +189,33 @@ class KiteOrderClient:
         self._sync_token()
         return [{"order_id": o.get("order_id"), "tradingsymbol": o.get("tradingsymbol"),
                  "tag": o.get("tag")} for o in (self.kite.orders() or [])]
+
+    def find_fill(self, tradingsymbol: str, side: str = "SELL") -> dict | None:
+        """Find today's REAL fill for `tradingsymbol`/`side` (e.g. the SELL that
+        actually closed a long option) — used by reconcile_orphans (E0.1) so an
+        external/reconciled close is booked at the true fill, not the last mark.
+        Scans `kite.orders()` (today's order book) for the most-recent COMPLETE
+        order matching both the symbol and transaction_type with a real fill;
+        returns None if nothing matches. Defensive: a broker read failure here must
+        never crash reconcile, so any exception is swallowed and treated as 'no
+        fill found' (the caller falls back to the last mark)."""
+        try:
+            self._sync_token()
+            candidates = [
+                o for o in (self.kite.orders() or [])
+                if o.get("tradingsymbol") == tradingsymbol
+                and str(o.get("transaction_type", "")).upper() == side.upper()
+                and str(o.get("status", "")).upper() == "COMPLETE"
+                and int(o.get("filled_quantity", 0) or 0) > 0
+            ]
+            if not candidates:
+                return None
+            # kite.orders() is chronological; the most recent matching fill wins.
+            last = candidates[-1]
+            avg = float(last.get("average_price", 0.0) or 0.0)
+            filled = int(last.get("filled_quantity", 0) or 0)
+            if avg <= 0 or filled <= 0:
+                return None
+            return {"avg_price": avg, "filled_qty": filled}
+        except Exception:
+            return None

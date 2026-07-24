@@ -146,6 +146,7 @@ def _migrate_schema() -> None:
             ("mode", "VARCHAR(8) DEFAULT 'paper'"),
             ("segment", "VARCHAR(16) DEFAULT 'options'"),
             ("strategy_key", "VARCHAR(64)"),
+            ("exit_price_estimated", "BOOLEAN DEFAULT 0"),
         ],
         "equity_snapshots": [
             ("segment", "VARCHAR(16)"),

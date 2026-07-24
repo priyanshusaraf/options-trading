@@ -182,7 +182,17 @@ plane** — E is part of "make the software complete", A is now last. Within the
 in sequence. This whole workstream is the target of the eventual bulk "goal prompt".
 
 ### Phase E0 — P&L integrity *(FOUNDATION; real-money correctness — B-tier priority)*
-- [ ] **Exit booked at the TRUE fill, not the last mark.** `live_broker.reconcile_orphans`
+- [x] **Exit booked at the TRUE fill, not the last mark.** (2026-07-24, built by Sonnet 5,
+      reviewed by Opus.) `live_broker.reconcile_orphans` now asks the broker's order book for
+      the real SELL fill before booking an options external/reconciled close — new
+      `KiteOrderClient.find_fill(symbol, side)` scans today's COMPLETE orders; books at that
+      fill (not `last_premium`) when found, else falls back to the mark AND tags the trade
+      `exit_price_estimated=True`. The equity R3 fallbacks (stop-status read fail / stop still
+      resting) and the manual paper-close override are tagged estimates too. New `Trade.
+      exit_price_estimated` column (+ additive migration). Evidence: `test_live_broker.py`
+      proves a mock fill of 123.45 ≠ mark is booked at 123.45 with estimated=False, and the
+      no-fill path books the mark with estimated=True; equity R3 real-fill stays estimated=False.
+      Full suite green + `dryrun.py 700` LEDGER OK (diff +0.0000). ORIGINAL SPEC:
       books an options `RECONCILED_EXTERNAL_EXIT` at `pos.last_premium` (the last mark) —
       `live_broker.py:865,901` — so a manual/external close is mis-priced. The equity R3 path
       already fetches the resting SL-M's real avg fill (`live_broker.py:879-895`); generalize

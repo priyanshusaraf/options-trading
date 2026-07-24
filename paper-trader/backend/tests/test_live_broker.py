@@ -16,12 +16,16 @@ MKT = OrderPlan("MARKET", None, "tight", 0.005)
 
 class FakeClient:
     def __init__(self, fill_price=100.0, status="COMPLETE", filled_qty=None,
-                 status_seq=None):
+                 status_seq=None, found_fill=None):
         self.fill_price = fill_price
         self._status = status
         self._filled_qty = filled_qty       # None -> the full requested qty filled
         self._seq = status_seq              # optional [(status, filled_qty), ...]
         self._seq_i = 0
+        # found_fill: None -> find_fill() returns None (no matching order found);
+        # a dict {"avg_price": .., "filled_qty": ..} -> find_fill() returns it.
+        self._found_fill = found_fill
+        self.find_fill_calls = []
         self.placed = []
         self._req = None
         self.gtt_placed = []
@@ -72,6 +76,10 @@ class FakeClient:
     def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
         self.gtt_modified.append((trigger_id, trigger_price))
         self.log.append(("modify_gtt", trigger_id))
+
+    def find_fill(self, tradingsymbol, side="SELL"):
+        self.find_fill_calls.append((tradingsymbol, side))
+        return self._found_fill
 
     def delete_gtt(self, trigger_id):
         self.gtt_deleted.append(trigger_id)
@@ -203,6 +211,91 @@ def test_reconcile_equity_stop_status_read_failure_is_conservative_external():
     warns = [e for e in log.recent(50)
              if e["level"] == "WARNING" and "SLM-9" in e["msg"]]
     assert warns, "expected a warn log for the failed stop-status read"
+
+
+# ── E0.1: exits booked at the TRUE fill, not the last mark ──────────────────────
+def test_reconcile_equity_own_stop_complete_fill_is_not_estimated():
+    """The R3 happy path (own SL-M COMPLETE fill) is a REAL fill — must NOT be
+    flagged as an estimate."""
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=98.5, status="COMPLETE", filled_qty=10)
+    b = _broker(c, account=[])
+    _open_equity_orphan(b)
+    b.reconcile_orphans(b.provider.now())
+    b.reconcile_orphans(b.provider.now())
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert trades[0].exit_price_estimated is False
+
+
+def test_reconcile_equity_stop_fallback_paths_are_estimated():
+    """Both R3 fallback paths (stop still OPEN, and the status() read failing) book
+    a MARK, not a fill — both must be tagged exit_price_estimated=True."""
+    from app.db.session import SessionLocal
+
+    # fallback 1: stop order is still resting/OPEN (unfilled)
+    c = FakeClient(fill_price=98.5, status="OPEN", filled_qty=0)
+    b = _broker(c, account=[])
+    _open_equity_orphan(b)
+    b.reconcile_orphans(b.provider.now())
+    b.reconcile_orphans(b.provider.now())
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert trades[0].exit_price_estimated is True
+
+    # fallback 2: status() read itself fails
+    c2 = _RaisingStatusClient(fill_price=98.5)
+    b2 = _broker(c2, account=[])
+    _open_equity_orphan(b2)
+    b2.reconcile_orphans(b2.provider.now())
+    b2.reconcile_orphans(b2.provider.now())
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    assert trades[-1].exit_price_estimated is True
+
+
+def test_reconcile_options_external_close_uses_real_fill_when_found():
+    """An options position reconciled as an external exit: when the broker's own
+    order book has a matching real SELL fill for the contract, book THAT price
+    (not last_premium) and do NOT flag it as an estimate — the 2026-07-24 SENSEX
+    put mispricing (bot recorded ~₹1,000 at the mark; the real exit was +₹792)."""
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=100.0, found_fill={"avg_price": 123.45, "filled_qty": 50})
+    b = _broker(c, account=[])
+    pos, q, chain = _open(b, c)
+    _age_out(b, pos)
+    b.provider.account_positions = lambda: []                    # vanished from the account
+    b.reconcile_orphans(b.provider.now())
+    booked = b.reconcile_orphans(b.provider.now())
+    assert booked == [pos.instrument_key]
+    assert c.find_fill_calls and c.find_fill_calls[-1] == (q.tradingsymbol, "SELL")
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    tr = trades[0]
+    assert tr.exit_reason == "RECONCILED_EXTERNAL_EXIT"
+    assert tr.exit_premium == 123.45                    # the real fill, not last_premium
+    assert tr.exit_price_estimated is False
+
+
+def test_reconcile_options_external_close_falls_back_to_last_mark_when_no_fill_found():
+    """No matching real fill is found on the broker's order book (found_fill=None) —
+    fall back to last_premium (today's behavior) but flag it as an estimate."""
+    from app.db.session import SessionLocal
+    c = FakeClient(fill_price=100.0, found_fill=None)
+    b = _broker(c, account=[])
+    pos, q, chain = _open(b, c)
+    last_mark = pos.last_premium
+    _age_out(b, pos)
+    b.provider.account_positions = lambda: []
+    b.reconcile_orphans(b.provider.now())
+    booked = b.reconcile_orphans(b.provider.now())
+    assert booked == [pos.instrument_key]
+    with SessionLocal() as s:
+        trades = list(s.scalars(select(Trade)))
+    tr = trades[0]
+    assert tr.exit_reason == "RECONCILED_EXTERNAL_EXIT"
+    assert tr.exit_premium == last_mark                 # today's mark-based fallback
+    assert tr.exit_price_estimated is True
 
 
 def test_reconcile_paper_broker_unaffected():

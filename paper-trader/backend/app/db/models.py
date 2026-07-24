@@ -198,6 +198,11 @@ class Trade(Base):
     intraday_pnl: Mapped[float] = mapped_column(Float, default=0.0)    # net - overnight
     reinforcements: Mapped[int] = mapped_column(Integer, default=0)
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — broker that executed it
+    # E0.1: True when exit_premium is a MARK (last_premium / live LTP), not a real
+    # fill — reconcile fallbacks (no matching order found, stop-status read failed,
+    # stop still resting) and the manual-close paper override. False (default) means
+    # a genuine fill: a normal engine exit, a real SL-M/GTT fill, or a real order.
+    exit_price_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
 
     def to_dict(self) -> dict:
         return {
@@ -232,6 +237,7 @@ class Trade(Base):
             "mode": self.mode,
             "segment": self.segment or "options",
             "strategy_key": self.strategy_key,
+            "exit_price_estimated": bool(self.exit_price_estimated),
         }
 
 

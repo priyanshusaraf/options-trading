@@ -469,10 +469,17 @@ class LiveBroker(PaperBroker):
         self._place_equity_stop(pos, avg)   # SL-M backstop (GTT is not allowed for MIS)
         return pos
 
-    def close_equity_position(self, pos, exit_price, reason, now):
+    def close_equity_position(self, pos, exit_price, reason, now,
+                              exit_price_estimated: bool = False):
         """Flat an intraday-equity position with a REAL MIS order: a LONG sells, a
         SHORT buys to cover. Same ownership boundary + cancel-stop-then-send as options,
-        but the backstop is a resting SL-M order (not a GTT — GTT isn't allowed for MIS)."""
+        but the backstop is a resting SL-M order (not a GTT — GTT isn't allowed for MIS).
+
+        `exit_price_estimated` is accepted only for call-site signature compatibility
+        with PaperBroker (e.g. a manual-close route that doesn't know which broker it's
+        calling) and is otherwise IGNORED here: every booking below comes from a real
+        order fill (`avg`), so it is never an estimate regardless of what the caller
+        passed."""
         sym = pos.tradingsymbol
         if not self._ensure_no_inflight(sym):
             return None
@@ -567,7 +574,11 @@ class LiveBroker(PaperBroker):
                  instrument=pos.instrument_key, event="LIVE_CLOSE")
         return super().close_equity_position(pos, avg, reason, now)
 
-    def close_position(self, pos, exit_premium, reason, now, spot):
+    def close_position(self, pos, exit_premium, reason, now, spot,
+                       exit_price_estimated: bool = False):
+        # `exit_price_estimated` is accepted for call-site compatibility with
+        # PaperBroker (e.g. the manual-close route) and IGNORED here — every path
+        # below books a real order fill, never a mark.
         sym = pos.tradingsymbol
         # never two working bot orders on one contract — resolve any prior in-flight
         # SELL for this symbol first (cancel a stuck one; abort if one already filled,
@@ -876,6 +887,7 @@ class LiveBroker(PaperBroker):
                 # (already-dead) cancel is skipped, and it must NOT count as an external
                 # exit — the runner blocks re-entry only on what this method returns.
                 exit_price, reason, is_external = prem, "RECONCILED_EXTERNAL_EXIT", True
+                estimated = True   # both fallback paths below book a MARK, not a fill
                 if gid:
                     try:
                         st = self.client.status(gid)
@@ -889,19 +901,43 @@ class LiveBroker(PaperBroker):
                         avg = float(st.get("avg_price", 0.0) or 0.0)
                         if st_status == "COMPLETE" and filled > 0 and avg > 0:
                             exit_price, reason, is_external = avg, "STOP_LOSS", False
+                            estimated = False   # a real fill from the stop order itself
                             log.info(f"SL-M FILLED at exchange — booked STOP_LOSS "
                                      f"{sym} @ {avg:.2f} (order {gid})",
                                      instrument=pos.instrument_key,
                                      event="STOP_FILL_RECONCILED")
-                PaperBroker.close_equity_position(self, pos, exit_price, reason, now)
+                PaperBroker.close_equity_position(self, pos, exit_price, reason, now,
+                                                  exit_price_estimated=estimated)
                 if is_external:
                     self._cancel_equity_stop(gid, sym)   # pull the resting SL-M backstop
                 prem = exit_price
             else:
-                PaperBroker.close_position(self, pos, prem, "RECONCILED_EXTERNAL_EXIT",
-                                           now, pos.last_spot)
+                # E0.1: an external/reconciled options close was booked at last_premium
+                # (a MARK) even though the account has the real fill on record — the
+                # 2026-07-24 SENSEX put mispricing (bot recorded ~₹1,000, actual exit
+                # +₹792 pre-charges). Ask the broker for the real SELL fill first, same
+                # idea as R3 above; fall back to the mark only if none is found (or the
+                # lookup itself fails), and tag that fallback as an estimate.
+                exit_price, estimated = prem, True
+                fill = None
+                try:
+                    fill = self.client.find_fill(sym, side="SELL")
+                except Exception as e:
+                    log.warn(f"FILL LOOKUP {sym}: find_fill failed: {e} — "
+                             f"booking at last mark (conservative fallback)",
+                             instrument=pos.instrument_key, event="FILL_LOOKUP_FAIL")
+                    fill = None
+                if fill and float(fill.get("avg_price", 0.0) or 0.0) > 0 \
+                        and int(fill.get("filled_qty", 0) or 0) > 0:
+                    exit_price, estimated = float(fill["avg_price"]), False
+                    log.info(f"EXTERNAL CLOSE {sym} — real fill found @ {exit_price:.2f}, "
+                             f"booked at the true fill (not the last mark)",
+                             instrument=pos.instrument_key, event="EXTERNAL_FILL_RECONCILED")
+                PaperBroker.close_position(self, pos, exit_price, "RECONCILED_EXTERNAL_EXIT",
+                                           now, pos.last_spot, exit_price_estimated=estimated)
                 self._cancel_gtt(gid, sym)
                 is_external = True
+                prem = exit_price
             self._orphan_seen.pop(k, None)
             if is_external:
                 self._notify(f"ℹ️ {sym} is no longer in your account (GTT fired, manual "

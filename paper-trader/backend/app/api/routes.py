@@ -613,8 +613,12 @@ async def close_position(key: str, request: Request):
         if premium is None:
             premium = pos.last_premium or pos.entry_premium
         now = r.provider.now()
+        # this books at the live/paper LTP mark, not a real fill (in live mode
+        # LiveBroker's own close_position ignores this flag — it always books its
+        # own real order fill instead — so it only takes effect for PaperBroker).
         r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
-                                r.provider.get_ltp(inst) or pos.last_spot)
+                                r.provider.get_ltp(inst) or pos.last_spot,
+                                exit_price_estimated=True)
         from app.core.logging import log
         log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
                  event="MANUAL_CLOSE", manual=True)

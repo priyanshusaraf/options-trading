@@ -145,7 +145,8 @@ class PaperBroker:
         return pos
 
     def close_equity_position(self, pos: Position, exit_price: float, reason: str,
-                              now: dt.datetime) -> Trade:
+                              now: dt.datetime,
+                              exit_price_estimated: bool = False) -> Trade:
         """Close an intraday equity position. Releases the blocked margin and books
         direction-aware P&L (a SHORT profits when price falls), net of both legs'
         charges. proceeds = entry_cost + net, so the ledger invariant stays exact."""
@@ -176,7 +177,8 @@ class PaperBroker:
             return_pct=(net / margin * 100) if margin else 0.0,
             holding_minutes=(now - pos.entry_time).total_seconds() / 60,
             win=net > 0, held_overnight=False, overnight_pnl=0.0,
-            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE)
+            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE,
+            exit_price_estimated=exit_price_estimated)
         self.s.delete(pos)
         self.s.add(tr)
         self.s.commit()
@@ -247,7 +249,8 @@ class PaperBroker:
             pos.last_spot = spot
 
     def close_position(self, pos: Position, exit_premium: float, reason: str,
-                       now: dt.datetime, spot: float) -> Trade:
+                       now: dt.datetime, spot: float,
+                       exit_price_estimated: bool = False) -> Trade:
         qty = pos.qty
         charges = compute_charges(pos.exchange, "SELL", exit_premium, qty)["total"]
         proceeds = exit_premium * qty - charges
@@ -277,6 +280,7 @@ class PaperBroker:
             intraday_pnl=round(net - pos.overnight_pnl, 2),
             reinforcements=pos.reinforcement_count,
             mode=self.MODE,
+            exit_price_estimated=exit_price_estimated,
         )
         self.s.delete(pos)
         self.s.add(tr)
