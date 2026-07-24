@@ -27,7 +27,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
 from app.core.logging import log
-from app.db.models import InstrumentState, SignalEvent
+from app.db.models import CapitalState, InstrumentState, SignalEvent, Trade
 from app.db.session import SessionLocal
 from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
@@ -39,6 +39,7 @@ from app.engine.equity_entry import (
     IntradayCandidate, equity_exit, equity_qty, qty_for_margin,
     select_intraday_entries)
 from app.engine.execution_policy import plan_order
+from app.engine.ledger_reconcile import plan_reanchor
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
@@ -110,6 +111,7 @@ class EngineRunner:
         self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
         self._account_funds: dict | None = None  # cached live Kite funds {available, net}
         self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
+        self._reanchored = False               # E0.2: auto-reanchor fired once this process
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
@@ -1358,8 +1360,60 @@ class EngineRunner:
             if funds:
                 self._account_funds = funds
                 self._persist_daily_snapshot(funds)
+                self._maybe_auto_reanchor(funds)
         except Exception as e:
             log.warn(f"account funds refresh failed: {e}")
+
+    def _maybe_auto_reanchor(self, funds: dict) -> None:
+        """E0.2: the internal ledger starts at the synthetic ₹50k `initial_capital`
+        (config.py), so on live the equity curve (built from `cash + mtm`) opens at the
+        synthetic base instead of the real broker equity. Rather than touch the
+        snapshot formula, re-anchor `capital_state` ONCE — the first time this process
+        sees real funds on a FRESH, untouched, FLAT ledger — via the existing pure
+        planner `plan_reanchor` (initial=cash=baseline=real_equity, realized=0).
+
+        Fail-safe: every guard below must hold or this is a no-op. In particular, ANY
+        live trade history or nonzero realized P&L means the ledger is no longer
+        "fresh" and must NEVER be auto-reanchored (that would zero real P&L / rewrite
+        the curve) — a drifted existing ledger is the owner's job via
+        `scripts/reconcile_ledger.py`, not this auto-path."""
+        if self._reanchored:
+            return
+        net = float(funds.get("net", 0.0) or 0.0)
+        if net <= 0:
+            return
+        try:
+            open_entry_cost = sum(p.entry_cost for p in self.broker.open_positions())
+            if abs(open_entry_cost) > 0.01:
+                return  # book not flat — plan_reanchor would raise; never call it
+            cap = self.broker.capital()
+            if cap is None:
+                return
+            if cap.initial_capital != self.settings.initial_capital or cap.realized_pnl != 0.0:
+                return  # not a fresh synthetic base — already touched, leave it alone
+            with SessionLocal() as s:
+                if s.query(Trade).first() is not None:
+                    return  # any live trade history — never auto-reanchor
+            new_state, notes = plan_reanchor(
+                real_equity=net, cash=cap.cash, initial_capital=cap.initial_capital,
+                realized_pnl=cap.realized_pnl, account_baseline=cap.account_baseline,
+                open_entry_cost=0.0)
+            # Write THROUGH the broker's own long-lived session so its cached `cap`
+            # instance (identity-mapped, expire_on_commit=False) is updated in memory
+            # immediately. Committing via a separate session would update the DB row
+            # but leave broker.capital() stale — the next snapshot()/close_position()
+            # would read+re-commit the stale synthetic values, clobbering the reanchor.
+            cap.initial_capital = new_state["initial_capital"]
+            cap.cash = new_state["cash"]
+            cap.realized_pnl = new_state["realized_pnl"]
+            cap.account_baseline = new_state["account_baseline"]
+            self.broker.s.commit()
+            self._reanchored = True
+            log.info(f"RE-ANCHORED live ledger to real equity ₹{net:,.2f} "
+                     f"(fresh account, book flat): " + "; ".join(notes),
+                     event="LEDGER_AUTO_REANCHOR")
+        except Exception as e:
+            log.warn(f"auto-reanchor failed: {e}", event="LEDGER_AUTO_REANCHOR_FAIL")
 
     def _maybe_check_ledger(self) -> None:
         """H10: run the cash-invariant self-check in production (it was only ever run by

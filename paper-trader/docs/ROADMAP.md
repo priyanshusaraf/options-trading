@@ -200,7 +200,20 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
       / day's tradebook for that symbol and book at that price. Fall back to last mark only if
       unavailable, and TAG the trade as an estimate. **Owner evidence (2026-07-24):** SENSEX
       put exited at +₹792 pre-charges; bot recorded ~₹1,000. Overlaps safety E4 (phantom close).
-- [ ] **Equity curve anchored to the REAL account value, not the ₹50k synthetic base.**
+- [x] **Equity curve anchored to the REAL account value, not the ₹50k synthetic base.**
+      (2026-07-24, built by Sonnet 5, reviewed by Opus.) New `EngineRunner._maybe_auto_reanchor`
+      fires ONCE on a fresh live account — inside the live-only `_maybe_refresh_funds`, gated on
+      book FLAT + untouched synthetic base (`initial_capital==50k`, `realized_pnl==0`, zero
+      `trades` rows) — and re-anchors `capital_state` to the real broker equity (`funds["net"]`)
+      via the existing `ledger_reconcile.plan_reanchor`. `snapshot()`'s `cash+mtm` formula is
+      unchanged, so the curve then opens at real funds. Write goes THROUGH the broker's own
+      long-lived session (Opus review caught a first cut that wrote via a separate session:
+      `expire_on_commit=False` left `broker.capital()` stale at ₹50k → next `snapshot()`/close
+      would clobber the reanchor back to the synthetic base; regression test now asserts through
+      the broker session + a post-reanchor `snapshot().equity==real`). NEVER fires once any live
+      trade history / open position exists — that stays the owner's `scripts/reconcile_ledger.py`
+      path. Mock/paper is a no-op (dryrun still starts at ₹50k, LEDGER OK diff +0.0000).
+      Tests: `test_auto_reanchor.py` (6 cases). ORIGINAL SPEC:
       `analytics.equity_curve` + `initial_capital=50_000` (`config.py:49`) drive the curve off
       the seeded ledger. In live mode the baseline must be the real broker equity (drive it via
       the existing `ledger_reconcile.plan_reanchor` on live start / funds refresh) and each
