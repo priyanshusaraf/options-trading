@@ -240,7 +240,21 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
   populated. TDD in `tests/`; `dryrun.py 700` still ledger-exact.
 
 ### Phase E1 — Daily profit-lock (portfolio high-water give-back guard)
-- [ ] The symmetric twin of the existing `daily_loss_halt` (`risk_controls.py:165`): a
+- [x] DONE 2026-07-24 (built by Sonnet 5, reviewed by Opus). Pure `daily_profit_lock`
+      in `risk_controls.py` (twin of `daily_loss_halt`) + runner state (`_pl_high_water`,
+      `_pl_deployed_peak`, `_pl_halted_date`, reset each session) maintained every risk tick
+      in `_maybe_profit_lock`; on give-back breach it calls a new `_square_off_all` (factored
+      out of `kill()`, now the single flatten impl) and sets a sticky session halt that
+      `_entries_halted`/`halt_status` honour. **Denominator = PEAK CONCURRENT deployed capital
+      today** (max Σ open entry_cost; not cumulative, so re-entries don't inflate it — Opus
+      decision). Knobs `daily_profit_lock_pct` (fraction, 0=off) + `daily_profit_giveback_frac`
+      in config + runtime_config (live-editable, bounded). Default off → zero behavior change
+      (verified: full suite green, `dryrun.py 700` LEDGER OK across seeds 6/11/17/29). Tests:
+      `test_daily_profit_lock.py` (12: pure off-switches/arming/exact-floor/trailing +
+      runner climb→giveback flatten+block, guard-off reproduces give-back, high-water never
+      loosens, kill() still flattens post-refactor). **Owner tuning caveat (flagged by Opus):**
+      early-day, peak-concurrent-deployed can be small, so a low `lock_pct` may arm+halt the
+      whole session on a tiny peak; consider a future `min_deployed` floor knob. ORIGINAL SPEC:
       `daily_profit_lock` that tracks the day's realized+unrealized **high-water**; once daily
       P&L clears `daily_profit_lock_pct` of **daily deployed capital**, arm a floor at
       `daily_profit_giveback_frac` of the peak; if the day retraces to the floor →

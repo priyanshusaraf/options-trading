@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
     max_round_trips_per_day: int = 9           # halt NEW entries after this many completed round trips today (0 = off)
     max_open_drawdown: float = 2_500.0         # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off; H15, enabled 2026-07-17 — half the ₹5k daily-loss halt since open MTM bleeds faster than realized)
+    # daily profit-lock (E1) — give-back circuit breaker, the symmetric twin of the
+    # loss halt above but on the upside: arm a floor once the day's P&L clears
+    # `daily_profit_lock_pct` of the day's deployed capital, then if the day
+    # retraces down to `daily_profit_giveback_frac` of its peak -> square off ALL
+    # open positions and halt new entries for the rest of the session. 0 = off.
+    daily_profit_lock_pct: float = 0.0         # arm threshold as a fraction of daily deployed capital (e.g. 0.02 = 2%); 0 = off
+    daily_profit_giveback_frac: float = 0.5    # floor = this fraction of the peak day P&L once armed (e.g. 0.5 = give back at most half)
     gtt_stop_enabled: bool = True              # live: also place an exchange-side GTT stop (survives bot/laptop downtime)
     # market protection for every live MARKET order (entries + protective exits, all
     # segments incl. MCX). Mandatory since SEBI's 1-Apr-2026 rule: an unprotected

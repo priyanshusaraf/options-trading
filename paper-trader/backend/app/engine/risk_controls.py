@@ -190,3 +190,34 @@ def round_trip_cap_reached(round_trips_today: int, cap: int) -> bool:
     on NEW entries (the functional counterpart to the advisory overtrade flag). Open
     positions are still managed throughout. `cap <= 0` disables it."""
     return bool(cap and cap > 0 and round_trips_today >= cap)
+
+
+def daily_profit_lock(day_pnl: float, high_water: float, deployed_capital: float,
+                      lock_pct: float, giveback_frac: float) -> tuple[bool, float | None]:
+    """Give-back circuit breaker — the symmetric twin of `daily_loss_halt`, but on
+    the UPSIDE: once the day's P&L clears a profit threshold, ARM a floor under it
+    and if the day retraces back down to that floor, the caller must SQUARE OFF ALL
+    open positions and HALT new entries for the rest of the session (protects a good
+    day from round-tripping to flat or red).
+
+      • lock_pct        — arm threshold as a FRACTION of `deployed_capital` (e.g.
+        0.02 = 2%). Armed once `high_water >= lock_pct * deployed_capital`.
+        `lock_pct <= 0` disables the guard entirely.
+      • giveback_frac    — once armed, the floor is `giveback_frac * high_water`
+        (e.g. 0.5 = give back at most half the peak gain).
+      • high_water       — the running intraday PEAK of `day_pnl`; the caller
+        maintains this, trailing it up tick by tick — it never loosens.
+      • deployed_capital — the day's deployed capital (the denominator for
+        `lock_pct`), typically the day's peak concurrent open exposure.
+        `deployed_capital <= 0` disables the guard (no capital, no ratio).
+
+    Returns (breached, floor). Not yet armed (high_water below threshold, or the
+    guard is off) -> (False, None). Once armed, breached = day_pnl <= floor.
+    Pure — no state, no I/O; the caller owns high_water/armed persistence."""
+    if lock_pct <= 0 or deployed_capital <= 0 or high_water <= 0:
+        return False, None
+    armed = high_water >= lock_pct * deployed_capital
+    if not armed:
+        return False, None
+    floor = giveback_frac * high_water
+    return day_pnl <= floor, floor

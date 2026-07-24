@@ -47,10 +47,10 @@ from app.engine.health import HealthTracker, is_stale
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
-    before_entry_window, daily_loss_halt, expiry_too_close, gap_halt_active,
-    in_reentry_cooldown, intraday_blocked_for_expiry_day, outside_trading_session,
-    over_per_trade_cap, round_trip_cap_reached, signal_already_evaluated,
-    signal_too_old, slots_available)
+    before_entry_window, daily_loss_halt, daily_profit_lock, expiry_too_close,
+    gap_halt_active, in_reentry_cooldown, intraday_blocked_for_expiry_day,
+    outside_trading_session, over_per_trade_cap, round_trip_cap_reached,
+    signal_already_evaluated, signal_too_old, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
@@ -107,6 +107,12 @@ class EngineRunner:
         # each session), and the kill switch disarms it again.
         self.armed = False
         self._halt_notified_date = None        # de-dupe the daily-loss-halt alert
+        # E1 daily profit-lock (give-back guard) — symmetric twin of the loss halt,
+        # but on the upside: intraday state only, reset each new session.
+        self._pl_date = None                   # date the profit-lock state below belongs to
+        self._pl_high_water = 0.0              # running peak of day_pnl (₹), trails up only
+        self._pl_deployed_peak = 0.0           # peak concurrent Σ open entry_cost today (denominator)
+        self._pl_halted_date = None            # date the give-back flatten fired (sticky entry halt)
         self._next_reconcile_epoch = 0.0       # throttle live orphan reconciliation
         self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
         self._account_funds: dict | None = None  # cached live Kite funds {available, net}
@@ -463,6 +469,7 @@ class EngineRunner:
         opens = {p.instrument_key: p for p in self.broker.open_positions()}
         if not opens:
             self.position_ticks = {}
+            self._safe_maybe_profit_lock(now)
             return
         insts = [get_instrument(k) for k in opens]
         try:
@@ -529,6 +536,7 @@ class EngineRunner:
             }
         self.broker.commit()  # persist marks + ratcheted stops
         self.position_ticks = ticks
+        self._safe_maybe_profit_lock(now)
 
     def _apply_trailing(self, pos) -> None:
         """Ratchet the premium stop upward as profit thresholds are crossed."""
@@ -1164,6 +1172,81 @@ class EngineRunner:
                 total += (last - p.entry_premium) * p.qty
         return total
 
+    def _safe_maybe_profit_lock(self, now) -> None:
+        """Defensive wrapper — an exception inside the give-back guard must never
+        break the risk loop (matches the defensive style used elsewhere here)."""
+        try:
+            self._maybe_profit_lock(now)
+        except Exception as e:
+            log.error(f"daily profit-lock check failed: {e}", event="PROFIT_LOCK_ERROR")
+
+    def _maybe_profit_lock(self, now) -> None:
+        """E1 — daily profit-lock (give-back guard). Tracks the day's realized+
+        unrealized P&L high-water; once it clears `daily_profit_lock_pct` of the
+        day's deployed capital, ARMS a give-back floor at `daily_profit_giveback_frac`
+        of the peak. If the day retraces down to that floor -> SQUARE OFF every open
+        position and HALT new entries for the rest of the session (`_entries_halted`
+        consults `_pl_halted_date`). Symmetric twin of `daily_loss_halt`, but this one
+        protects a good day from round-tripping to flat/red. `daily_profit_lock_pct
+        <= 0` disables the feature entirely (default; zero behavior change)."""
+        lock_pct = self.params.get("daily_profit_lock_pct", 0.0)
+        if not lock_pct or lock_pct <= 0:
+            return  # feature off — do NOT reset _pl_halted_date; leave state untouched
+        today = now.date()
+        if self._pl_date != today:
+            # new session — the give-back state is intraday only.
+            self._pl_high_water = 0.0
+            self._pl_deployed_peak = 0.0
+            self._pl_date = today
+        day_pnl = float(self._today_net_realized(today)) + float(self._open_unrealized())
+        deployed_now = float(sum(p.entry_cost for p in self.broker.open_positions()))
+        # trail up only — peak concurrent deployed capital today (not cumulative,
+        # so re-entries cycling the same capital don't inflate the denominator).
+        self._pl_high_water = float(max(self._pl_high_water, day_pnl))
+        self._pl_deployed_peak = float(max(self._pl_deployed_peak, deployed_now))
+        if self._pl_halted_date == today:
+            return  # already fired today — entries stay blocked via _entries_halted
+        giveback_frac = self.params.get("daily_profit_giveback_frac", 0.5)
+        breached, floor = daily_profit_lock(day_pnl, self._pl_high_water,
+                                            self._pl_deployed_peak, lock_pct, giveback_frac)
+        if not breached:
+            return
+        self._pl_halted_date = today
+        closed = self._square_off_all("PROFIT_LOCK", now)
+        log.warn(f"DAILY PROFIT-LOCK — day P&L ₹{day_pnl:,.0f} gave back to floor "
+                 f"₹{floor:,.0f} (peak ₹{self._pl_high_water:,.0f}, deployed "
+                 f"₹{self._pl_deployed_peak:,.0f}); squared off {len(closed)}, no new "
+                 f"entries today", event="PROFIT_LOCK")
+        if self.params.get("notify_enabled", True):
+            self.notifier._emit(f"🔒 DAILY PROFIT-LOCK: day P&L ₹{day_pnl:,.0f} gave back "
+                                f"to the floor ₹{floor:,.0f} (peak ₹{self._pl_high_water:,.0f}) "
+                                f"— squared off {len(closed)} position(s), no new entries "
+                                f"for the rest of the session.")
+
+    def _square_off_all(self, reason: str, now) -> list[str]:
+        """Flatten every open position at its last mark, routing each segment
+        through its correct close. The ONE square-off implementation — used by
+        `kill()` and the daily profit-lock give-back guard. Does NOT disarm or
+        cancel working entry orders (callers that need that do it themselves)."""
+        closed: list[str] = []
+        for pos in list(self.broker.open_positions()):
+            prem = pos.last_premium or pos.entry_premium
+            # route each segment through its correct close (equity covers a short
+            # via BUY; the options close always SELLs) — same fix as reconcile.
+            if pos.segment == "equity_intraday":
+                tr = self.broker.close_equity_position(pos, prem, reason, now)
+            else:
+                tr = self.broker.close_position(pos, prem, reason, now, pos.last_spot)
+            if tr is None:
+                log.error(f"{reason} could not square off {pos.tradingsymbol} — left open",
+                          instrument=pos.instrument_key, event=f"{reason}_FAIL")
+                continue
+            self.notifier.clear(pos.instrument_key)
+            if pos.instrument_key in self.state:
+                self.state[pos.instrument_key]["position"] = None
+            closed.append(pos.instrument_key)
+        return closed
+
     def _entries_halted(self, now) -> bool:
         """Halt NEW entries for the day once a circuit breaker trips (open positions
         are still managed throughout). Three breakers, any trips:
@@ -1174,10 +1257,10 @@ class EngineRunner:
         max_loss = self.params.get("max_daily_loss", 0.0)
         max_dd = self.params.get("max_open_drawdown", 0.0)
         max_rt = self.params.get("max_round_trips_per_day", 0)
+        today = now.date()
         if ((not max_loss or max_loss <= 0) and (not max_dd or max_dd <= 0)
                 and (not max_rt or max_rt <= 0)):
-            return False
-        today = now.date()
+            return self._pl_halted_date == today
         realized = self._today_net_realized(today)
         unreal = self._open_unrealized() if (max_dd and max_dd > 0) else 0.0
         halted, why = daily_loss_halt(realized, unreal, max_loss, max_dd)
@@ -1200,6 +1283,10 @@ class EngineRunner:
                          f"-₹{max_loss:,.0f}; no new entries today")
                 if self.params.get("notify_enabled", True):
                     self.notifier.daily_halt(realized, max_loss)
+        # E1 profit-lock give-back — independent of the loss/drawdown breakers above
+        # (never fires the daily-loss alert, and vice-versa); own state, own reason.
+        if self._pl_halted_date == today:
+            return True
         return halted
 
     def halt_status(self, now) -> dict:
@@ -1208,28 +1295,33 @@ class EngineRunner:
         NOT log, notify, or mutate _halt_notified_date — safe to call on every WS
         push. _entries_halted stays the one place that fires the once-per-day alert.
 
-        Returns: {halted, reason ('', 'realized', 'open_drawdown', 'round_trips'),
-        realized, open_unrealized, max_daily_loss, max_open_drawdown, round_trips,
-        max_round_trips}."""
+        Returns: {halted, reason ('', 'realized', 'open_drawdown', 'round_trips',
+        'profit_lock'), realized, open_unrealized, max_daily_loss, max_open_drawdown,
+        round_trips, max_round_trips, profit_lock_halted}."""
+        today = now.date()
+        pl_halted = self._pl_halted_date == today
         max_loss = self.params.get("max_daily_loss", 0.0) or 0.0
         max_dd = self.params.get("max_open_drawdown", 0.0) or 0.0
         max_rt = self.params.get("max_round_trips_per_day", 0) or 0
         if max_loss <= 0 and max_dd <= 0 and max_rt <= 0:
-            return {"halted": False, "reason": "", "realized": 0.0,
-                    "open_unrealized": 0.0, "max_daily_loss": max_loss,
+            return {"halted": pl_halted, "reason": "profit_lock" if pl_halted else "",
+                    "realized": 0.0, "open_unrealized": 0.0, "max_daily_loss": max_loss,
                     "max_open_drawdown": max_dd, "round_trips": 0,
-                    "max_round_trips": max_rt}
-        realized = self._today_net_realized(now.date())
+                    "max_round_trips": max_rt, "profit_lock_halted": pl_halted}
+        realized = self._today_net_realized(today)
         unreal = self._open_unrealized() if max_dd > 0 else 0.0
         halted, reason = daily_loss_halt(realized, unreal, max_loss, max_dd)
-        rts = self._today_round_trips(now.date()) if max_rt > 0 else 0
+        rts = self._today_round_trips(today) if max_rt > 0 else 0
         if not halted and round_trip_cap_reached(rts, max_rt):
             halted, reason = True, "round_trips"
+        if not halted and pl_halted:
+            halted, reason = True, "profit_lock"
         return {
             "halted": halted, "reason": reason,
             "realized": round(realized, 2), "open_unrealized": round(unreal, 2),
             "max_daily_loss": max_loss, "max_open_drawdown": max_dd,
             "round_trips": rts, "max_round_trips": max_rt,
+            "profit_lock_halted": pl_halted,
         }
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
@@ -1666,22 +1758,7 @@ class EngineRunner:
         cancelled = self.broker.cancel_working_entries()
         closed: list[str] = []
         if square_off:
-            for pos in list(self.broker.open_positions()):
-                prem = pos.last_premium or pos.entry_premium
-                # route each segment through its correct close (equity covers a short
-                # via BUY; the options close always SELLs) — same fix as reconcile.
-                if pos.segment == "equity_intraday":
-                    tr = self.broker.close_equity_position(pos, prem, "KILL_SWITCH", now)
-                else:
-                    tr = self.broker.close_position(pos, prem, "KILL_SWITCH", now, pos.last_spot)
-                if tr is None:
-                    log.error(f"KILL could not square off {pos.tradingsymbol} — left open",
-                              instrument=pos.instrument_key, event="KILL_FAIL")
-                    continue
-                self.notifier.clear(pos.instrument_key)
-                if pos.instrument_key in self.state:
-                    self.state[pos.instrument_key]["position"] = None
-                closed.append(pos.instrument_key)
+            closed = self._square_off_all("KILL_SWITCH", now)
         log.info(f"KILL SWITCH — disarmed; cancelled {len(cancelled)} working order(s); "
                  f"squared off {len(closed)} position(s)", event="KILL")
         if self.params.get("notify_enabled", True):

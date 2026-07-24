@@ -34,6 +34,7 @@ OVERRIDABLE = (
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
     "max_open_drawdown", "max_round_trips_per_day",
+    "daily_profit_lock_pct", "daily_profit_giveback_frac",
     "bot_capital_cap", "capital_reserve", "gtt_stop_enabled",
     # intraday-equity segment (MIS) — also the channel by which these reach the
     # engine's self.params (effective() only surfaces OVERRIDABLE keys).
@@ -94,6 +95,8 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "exec_min_top_qty_lots": (0.0, 10000.0),
     "max_daily_loss": (0.0, 100000000.0),   # 0 disables the halt
     "max_open_drawdown": (0.0, 100000000.0),  # 0 disables the realized+unrealized halt
+    "daily_profit_lock_pct": (0.0, 1.0),        # 0 disables the give-back halt
+    "daily_profit_giveback_frac": (0.0, 1.0),
     "bot_capital_cap": (0.0, 100000000.0),  # 0 = no extra cap
     "capital_reserve": (0.0, 100000000.0),
     # intraday-equity segment
