@@ -70,11 +70,21 @@ Two processes: a FastAPI backend on **:8090** and a Vite/React frontend on **:51
 
 **`docs/ROADMAP.md` is the canonical, always-current agenda and progress tracker.** Read
 it at the start of every session and work the topmost unchecked item of the highest
-active workstream (Workstream A — switching on the research plane's autonomous loop —
-unless a safety item is on fire). Check boxes only with verified evidence (tests green +
-the phase's stated acceptance), and update the tracker in the same commit as the work.
-Research-plane work must respect the isolation rules listed there (read-only bridges
-only; `research/guards.py` stays fail-closed; both test suites + `dryrun.py 700` green).
+active workstream. Check boxes only with verified evidence (tests green + the phase's
+stated acceptance), and update the tracker in the same commit as the work. Research-plane
+work must respect the isolation rules listed there (read-only bridges only;
+`research/guards.py` stays fail-closed; both test suites + `dryrun.py 700` green).
+
+**Workstream priority (owner, 2026-07-24 — the mission is now "make the software COMPLETE",
+not research):** active order is **B (safety, on-fire items) → E (P&L integrity → daily
+profit-lock → index-futures → MTF) → C (exit tuning) → D (UI) → A (research plane, explicitly
+LAST)**. Workstream A is downgraded and deferred to the end; leave `PT_RESEARCH_ENABLED=0` and
+do not open it until B/E/C/D are done. **Workstream E (added 2026-07-24)** is the near-term
+body of work and the target of a single bulk "goal prompt": E0 = live P&L-misreporting bugs
+(exits booked at last mark not true fill; equity curve stuck on the ₹50k base); E1 = daily
+profit-lock measured against **daily deployed capital**, give-back → **flatten all + halt**;
+E2 = index-futures, **intraday-only, no rollovers, blocked inside any delivery window**; E3 =
+MTF, spec-gated, built last. Full specs + acceptance in `docs/ROADMAP.md`.
 
 ## Commands
 
