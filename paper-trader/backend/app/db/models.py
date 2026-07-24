@@ -90,6 +90,12 @@ class Position(Base):
     last_mark_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     # highest premium seen since entry — drives the trailing-stop ratchet
     high_water_premium: Mapped[float] = mapped_column(Float, default=0.0)
+    # peak-excursion telemetry (E0.3): best/worst unrealized P&L (₹) seen while open,
+    # from unrealized_pnl() so it is already segment/direction-aware (e.g. an equity
+    # SHORT profits on a spot fall). mfe >= 0, mae <= 0 by construction — both seeded
+    # at the 0 excursion at entry. Pure telemetry: never read by cash/P&L/exit logic.
+    mfe: Mapped[float] = mapped_column(Float, default=0.0)
+    mae: Mapped[float] = mapped_column(Float, default=0.0)
     # reinforcement + overnight management
     reinforcement_count: Mapped[int] = mapped_column(Integer, default=0)
     last_reinforce_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
@@ -149,6 +155,8 @@ class Position(Base):
             "last_spot": round(self.last_spot, 2),
             "last_mark_time": self.last_mark_time.isoformat() if self.last_mark_time else None,
             "high_water_premium": round(self.high_water_premium or self.entry_premium, 2),
+            "mfe": round(self.mfe or 0.0, 2),
+            "mae": round(self.mae or 0.0, 2),
             "reinforcement_count": self.reinforcement_count,
             "held_overnight": self.held_overnight,
             "manual_target": self.manual_target,
@@ -203,6 +211,11 @@ class Trade(Base):
     # stop still resting) and the manual-close paper override. False (default) means
     # a genuine fill: a normal engine exit, a real SL-M/GTT fill, or a real order.
     exit_price_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # peak-excursion telemetry (E0.3): the position's mfe/mae copied at close, so
+    # give-back (Workstream C-P2 / E1) is measurable from the trade log. See
+    # Position.mfe/mae for the definition.
+    mfe: Mapped[float] = mapped_column(Float, default=0.0)
+    mae: Mapped[float] = mapped_column(Float, default=0.0)
 
     def to_dict(self) -> dict:
         return {
@@ -238,6 +251,8 @@ class Trade(Base):
             "segment": self.segment or "options",
             "strategy_key": self.strategy_key,
             "exit_price_estimated": bool(self.exit_price_estimated),
+            "mfe": round(self.mfe or 0.0, 2),
+            "mae": round(self.mae or 0.0, 2),
         }
 
 

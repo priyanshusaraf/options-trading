@@ -137,6 +137,9 @@ def _migrate_schema() -> None:
             ("mode", "VARCHAR(8) DEFAULT 'paper'"),
             ("entry_sl_pct", "FLOAT"),
             ("entry_tp_pct", "FLOAT"),
+            # peak-excursion telemetry (E0.3)
+            ("mfe", "FLOAT DEFAULT 0.0"),
+            ("mae", "FLOAT DEFAULT 0.0"),
         ],
         "trades": [
             ("held_overnight", "BOOLEAN DEFAULT 0"),
@@ -147,6 +150,9 @@ def _migrate_schema() -> None:
             ("segment", "VARCHAR(16) DEFAULT 'options'"),
             ("strategy_key", "VARCHAR(64)"),
             ("exit_price_estimated", "BOOLEAN DEFAULT 0"),
+            # peak-excursion telemetry (E0.3)
+            ("mfe", "FLOAT DEFAULT 0.0"),
+            ("mae", "FLOAT DEFAULT 0.0"),
         ],
         "equity_snapshots": [
             ("segment", "VARCHAR(16)"),

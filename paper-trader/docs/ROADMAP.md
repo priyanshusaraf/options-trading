@@ -219,7 +219,18 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
       the existing `ledger_reconcile.plan_reanchor` on live start / funds refresh) and each
       point = cash + open-position MTM net of charges from actual account funds — not the
       synthetic 50k ledger. Frontend reads the corrected backend values, so this fixes the UI too.
-- [ ] **Peak-excursion telemetry** (carried over from the 2026-07-24 exit-tuning thread):
+- [x] **Peak-excursion telemetry** — DONE 2026-07-24 (built by Sonnet 5, reviewed by Opus).
+      New `Position.mfe`/`mae` + `Trade.mfe`/`mae` (₹ unrealized-P&L excursion, segment/
+      direction-aware via `unrealized_pnl()`), updated at the single `mark()` chokepoint and
+      copied onto every Trade at close (incl. both partial-close paths). Additive migrations.
+      **Opus review caught a hot-path regression:** the mock's `np.float64` premiums leaked
+      through into the `mfe/mae` ORM writes and intermittently corrupted SQLAlchemy's
+      unit-of-work bookkeeping → `StaleDataError` on the `mark_and_exit_positions` commit
+      (deterministic at `PYTHONHASHSEED=6`, clean on baseline). Fixed by casting to Python
+      `float`; guarded by two regression tests (`test_mark_stores_python_float_not_numpy` +
+      a seed-6 dryrun subprocess). Pure telemetry — ledger untouched: `dryrun.py 700` LEDGER OK
+      across seeds incl. the former failure seed. Tests: `test_excursion.py` (8 cases).
+      ORIGINAL SPEC:
       record MFE (high-water) + MAE per trade. Prerequisite for measuring give-back — feeds
       both Workstream C-P2 and Phase E1. (No high_water is stored today, so give-back is
       currently unmeasurable from the trade log.)

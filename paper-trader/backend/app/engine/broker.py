@@ -77,6 +77,7 @@ class PaperBroker:
             target_price=premium * (1 + target_pct),
             last_premium=premium, last_spot=spot,
             last_mark_time=now, high_water_premium=premium,
+            mfe=0.0, mae=0.0,   # seeded at the 0 excursion at entry (E0.3)
             mode=self.MODE,
         )
         self.s.add(pos)
@@ -132,7 +133,9 @@ class PaperBroker:
             entry_reason=reason, stop_price=stop, target_price=target,
             entry_sl_pct=sl_pct, entry_tp_pct=tp_pct,
             last_premium=price, last_spot=price, last_mark_time=now,
-            high_water_premium=price, mode=self.MODE)
+            high_water_premium=price,
+            mfe=0.0, mae=0.0,   # seeded at the 0 excursion at entry (E0.3)
+            mode=self.MODE)
         self.s.add(pos)
         self.s.commit()
         purple_note = f" — purple band SL {eff_sl_pct:.1%} / TP {eff_tp_pct:.1%}" if sl_pct is not None else ""
@@ -178,7 +181,8 @@ class PaperBroker:
             holding_minutes=(now - pos.entry_time).total_seconds() / 60,
             win=net > 0, held_overnight=False, overnight_pnl=0.0,
             intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE,
-            exit_price_estimated=exit_price_estimated)
+            exit_price_estimated=exit_price_estimated,
+            mfe=pos.mfe, mae=pos.mae)
         self.s.delete(pos)
         self.s.add(tr)
         self.s.commit()
@@ -245,6 +249,14 @@ class PaperBroker:
             pos.last_mark_time = now or dt.datetime.now()
             if premium > (pos.high_water_premium or 0.0):
                 pos.high_water_premium = premium
+            # peak-excursion telemetry (E0.3) — pure read of unrealized_pnl(), which
+            # is already segment/direction-aware; never feeds cash/P&L/exit logic.
+            # float() casts away any numpy scalar (mock premiums are np.float64):
+            # a numpy value written into the ORM column corrupts the unit-of-work's
+            # change bookkeeping and surfaces as a StaleDataError on the next commit.
+            u = float(pos.unrealized_pnl())
+            pos.mfe = float(max(pos.mfe or 0.0, u))
+            pos.mae = float(min(pos.mae or 0.0, u))
         if spot is not None:
             pos.last_spot = spot
 
@@ -281,6 +293,7 @@ class PaperBroker:
             reinforcements=pos.reinforcement_count,
             mode=self.MODE,
             exit_price_estimated=exit_price_estimated,
+            mfe=pos.mfe, mae=pos.mae,
         )
         self.s.delete(pos)
         self.s.add(tr)
@@ -333,6 +346,7 @@ class PaperBroker:
             overnight_pnl=0.0, intraday_pnl=round(net, 2),
             reinforcements=pos.reinforcement_count,
             mode=self.MODE,
+            mfe=pos.mfe, mae=pos.mae,
         )
         pos.qty -= qty
         pos.entry_cost = remaining_cost
@@ -384,7 +398,8 @@ class PaperBroker:
             return_pct=(net / margin_slice * 100) if margin_slice else 0.0,
             holding_minutes=(now - pos.entry_time).total_seconds() / 60,
             win=net > 0, held_overnight=False, overnight_pnl=0.0,
-            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE)
+            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE,
+            mfe=pos.mfe, mae=pos.mae)
         pos.qty -= qty
         pos.entry_cost = remaining_cost
         pos.entry_charges = remaining_entry_charges
