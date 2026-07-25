@@ -813,6 +813,26 @@ class LiveBroker(PaperBroker):
             return False
         return lp >= pos.stop_price if pos.direction == "SHORT" else lp <= pos.stop_price
 
+    def _gtt_fired(self, gid, sym: str) -> bool:
+        """Did this resting GTT already trigger? Conservative: no id, a client that
+        doesn't implement `gtt_status`, or any read failure all answer False — the caller
+        then treats the close as external, which keeps the (safe) re-entry block rather
+        than silently skipping it on a guess."""
+        if not gid:
+            return False
+        probe = getattr(self.client, "gtt_status", None)
+        if probe is None:
+            return False
+        try:
+            d = probe(gid) or {}
+            # accept either the normalized flag or a raw kite.get_gtt() status string
+            return bool(d.get("triggered")
+                        or str(d.get("status", "")).lower() == "triggered")
+        except Exception as e:
+            log.warn(f"GTT STATUS {sym}: gtt_status({gid}) read failed: {e} — treating as "
+                     f"external exit (conservative fallback)", event="GTT_STATUS_FAIL")
+            return False
+
     def _resync_option_gtt(self, pos, gid, last_price) -> None:
         """Cancel a stale options GTT and place a fresh one at `pos.stop_price` so the
         exchange backstop tracks the ratcheted internal stop. Mirrors
@@ -966,10 +986,23 @@ class LiveBroker(PaperBroker):
                     log.info(f"EXTERNAL CLOSE {sym} — real fill found @ {exit_price:.2f}, "
                              f"booked at the true fill (not the last mark)",
                              instrument=pos.instrument_key, event="EXTERNAL_FILL_RECONCILED")
-                PaperBroker.close_position(self, pos, exit_price, "RECONCILED_EXTERNAL_EXIT",
+                # E6: the equity branch asks its resting stop whether IT fired (R3); this
+                # branch booked external unconditionally, so the bot's own GTT stop firing
+                # was mislabelled RECONCILED_EXTERNAL_EXIT (corrupting the exit-reason
+                # analytics the backtest-vs-live comparison rests on) and earned the
+                # instrument a false same-day re-entry block. A trigger_id isn't an
+                # order_id, so this needs the GTT's own state.
+                fired = self._gtt_fired(gid, sym)
+                reason = "STOP_LOSS" if fired else "RECONCILED_EXTERNAL_EXIT"
+                PaperBroker.close_position(self, pos, exit_price, reason,
                                            now, pos.last_spot, exit_price_estimated=estimated)
-                self._cancel_gtt(gid, sym)
-                is_external = True
+                is_external = not fired
+                if is_external:
+                    self._cancel_gtt(gid, sym)      # a fired GTT is already dead
+                else:
+                    log.info(f"GTT FIRED at exchange — booked STOP_LOSS {sym} @ "
+                             f"{exit_price:.2f} (gtt {gid})", instrument=pos.instrument_key,
+                             event="GTT_FILL_RECONCILED")
                 prem = exit_price
             self._orphan_seen.pop(k, None)
             if is_external:

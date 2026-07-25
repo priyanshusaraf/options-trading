@@ -132,19 +132,46 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
 ## Workstream B — Safety backlog (from the 2026-07-18 review; full report in
 `docs/2026-07-18-safety-research-product-review.md`)
 
-- [ ] **E1 (worst, silent, still live):** poisoned open-position key aborts the risk
-      loop's mark/exit for the WHOLE book (`runner.py:465` unguarded
-      `get_instrument(k)`). Fix: per-position try/except + refuse instrument removal
-      while a position is open. **Operational rule until fixed: never remove/deactivate
-      an instrument that has an open position.**
+**All code items CLOSED 2026-07-25 (TDD, each defect reproduced RED before the fix).
+Committed, suite green, NOT yet deployed — the live VPS process runs the old code until
+an rsync + `systemctl restart paper-trader`.**
+
+- [x] **E1 (was the worst, silent, live):** poisoned open-position key aborted the risk
+      loop's mark/exit for the WHOLE book. `runner._resolve_or_skip()` now resolves
+      per-position and alerts once; `square_off_intraday` falls back to the NSE clock
+      rather than skipping (MIS cannot legally carry); `remove_instrument` refuses while
+      a position is open. **The operational rule "never remove an instrument with an open
+      position" is retired.** `tests/test_poisoned_position_key.py`
 - [x] E2 `PT_API_TOKEN` fail-open — verified CLOSED on VPS 2026-07-20 (64-char token set).
-- [ ] E3 options GTT stop divergence (modify-reject only logs; no cancel+replace).
-- [ ] E4 phantom close: `routes.py:603` returns `{closed:true}` on failed close.
-- [ ] E7 equity SHORT charge legs hardcoded BUY/SELL; E8 `account_pnl` LONG-only sign.
-- [ ] E9 options entry-LIMIT tick rounding; E10 overnight flatten has no segment filter.
-- [ ] VPS pending OS reboot (5 ESM security updates) — owner action, DO console,
+- [x] E3 options GTT stop divergence — `_resync_option_gtt` mirrors the equity
+      cancel+replace, refuses a second GTT if the cancel fails, and leaves the id None so
+      the self-heal retries. `tests/test_option_gtt_ratchet_sync.py`
+- [x] E4 phantom close — the route checks the broker return; a refused close answers
+      `{error, closed:false}` and keeps display state + re-entry intact. Frontend `act()`
+      surfaces the error (no frontend test harness exists — UI half is test-unverified).
+      `tests/test_phantom_close.py`
+- [x] E6 options orphan mislabelled the bot's OWN GTT fill as an external exit (corrupted
+      exit-reason analytics + false same-day re-entry block). New `client.gtt_status()`
+      (a trigger_id is not an order_id); conservative fallback keeps the block on any
+      failed read. `tests/test_option_gtt_fill_reconcile.py`
+- [x] E7 equity SHORT charge legs — new `charges.legs_for(direction)` used on all three
+      equity paths, so a SHORT is charged SELL-to-open / BUY-to-cover and `net_pnl`
+      reconciles against the contract note. `tests/test_equity_short_charge_legs.py`
+- [x] E8 `account_pnl` LONG-only sign — defers to `Position.unrealized_pnl()`.
+      `tests/test_account_pnl_short_sign.py`
+- [x] E9 options entry-LIMIT tick rounding — `place()` snaps `limit_price` to the real
+      per-instrument tick. `tests/test_limit_price_tick.py`
+- [x] E10 overnight flatten segment filter — `square_off_for_overnight` skips
+      `equity_intraday` (it was closing equity for "expiry too close (0d < 2d)");
+      `square_off_intraday` is the sole MIS authority.
+      `tests/test_overnight_segment_filter.py`
+- [x] `journal_days already exists` create_all race — `_get_sessionmaker()` was an
+      unlocked lazy singleton (reproduced 8/8 concurrent inits); now double-checked
+      locking, publishing the sessionmaker last. `tests/journal/test_init_race.py`
+- [ ] **VPS pending OS reboot (5 ESM security updates) — OWNER ACTION**, DO console,
       market-closed window.
-- [ ] One-off `journal_days already exists` create_all race at startup — make idempotent.
+- [ ] **Deploy these fixes** (rsync with `--exclude .env --exclude '*.db'` +
+      `systemctl restart paper-trader`, then curl `/` AND `/api/health`).
 
 ## Workstream C — Exit tuning (winners being cut; roadmap approved 2026-07-15)
 

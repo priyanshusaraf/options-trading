@@ -188,6 +188,16 @@ class KiteOrderClient:
             "reason": last.get("status_message") or "",
         }
 
+    def gtt_status(self, trigger_id) -> dict:
+        """State of a resting GTT, normalized to {status, triggered}. A GTT trigger_id is
+        NOT an order_id, so `status()`/order_history can't answer this — it needs
+        `kite.get_gtt`. Used by reconcile_orphans (E6) to tell the bot's OWN GTT stop
+        firing apart from a genuinely external exit."""
+        self._sync_token()
+        g = self.kite.get_gtt(trigger_id) or {}
+        status = str(g.get("status", "")).lower()
+        return {"status": status, "triggered": status == "triggered"}
+
     def orders(self) -> list[dict]:
         """Today's orders, normalized to {order_id, tradingsymbol, tag} — for the
         journal recovery tag-sweep (H13): find bot-tagged orders with no journal row."""
