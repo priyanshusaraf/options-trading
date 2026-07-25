@@ -797,8 +797,13 @@ class LiveBroker(PaperBroker):
             log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                      instrument=pos.instrument_key, event="GTT_MODIFY")
         except Exception as e:
-            log.error(f"stop modify failed {pos.tradingsymbol}: {e}",
-                      instrument=pos.instrument_key, event="GTT_FAIL")
+            # E3 (the SUZLON class, options edition): only logging here left the exchange
+            # GTT resting at the OLD, looser trigger while the internal stop ratcheted up
+            # — and because gtt_trigger_id stayed set, ensure_stop_protection's self-heal
+            # never retried. Cancel + replace so the backstop tracks the internal stop.
+            log.warn(f"GTT trigger modify rejected {pos.tradingsymbol}: {e} — cancel+replacing",
+                     instrument=pos.instrument_key, event="GTT_MODIFY_REJECT")
+            self._resync_option_gtt(pos, gid, lp)
 
     def _equity_stop_crossed(self, pos, lp) -> bool:
         """Is the intraday stop already triggering at the current mark? (SHORT stops
@@ -807,6 +812,34 @@ class LiveBroker(PaperBroker):
         if not lp or pos.stop_price <= 0:
             return False
         return lp >= pos.stop_price if pos.direction == "SHORT" else lp <= pos.stop_price
+
+    def _resync_option_gtt(self, pos, gid, last_price) -> None:
+        """Cancel a stale options GTT and place a fresh one at `pos.stop_price` so the
+        exchange backstop tracks the ratcheted internal stop. Mirrors
+        `_resync_equity_stop`: if the cancel is refused, DO NOT place a second GTT (it
+        could fire into the first → oversell) — leave the still-protective stale one and
+        alert. If the replace fails, `gtt_trigger_id` is left None so
+        `ensure_stop_protection` retries it on the next risk tick."""
+        if not self._cancel_gtt(gid, pos.tradingsymbol):
+            log.error(f"GTT resync ABORTED {pos.tradingsymbol} — cancel refused; stale GTT "
+                      f"still resting at the old trigger, internal stop is authoritative",
+                      instrument=pos.instrument_key, event="GTT_RESYNC_ABORT")
+            self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange GTT (cancel "
+                         f"refused) — verify on Zerodha; bot-managed stop still active")
+            return
+        pos.gtt_trigger_id = None
+        self.s.commit()
+        self._place_gtt(pos, last_price)          # places at pos.stop_price
+        if not pos.gtt_trigger_id:
+            log.error(f"GTT resync REPLACE failed {pos.tradingsymbol} — no exchange stop "
+                      f"resting; bot-managed stop only until retry",
+                      instrument=pos.instrument_key, event="GTT_RESYNC_FAIL")
+            self._notify(f"🚫 {pos.tradingsymbol}: exchange GTT NOT re-placed — bot-managed "
+                         f"stop only until it retries; verify on Zerodha")
+        else:
+            log.info(f"GTT resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
+                     f"(gtt {pos.gtt_trigger_id})", instrument=pos.instrument_key,
+                     event="GTT_RESYNC_RECOVERED")
 
     def _resync_equity_stop(self, pos, gid) -> None:
         """Cancel a stale resting SL-M and place a fresh one at `pos.stop_price` so the
