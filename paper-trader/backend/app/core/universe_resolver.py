@@ -12,7 +12,9 @@ from __future__ import annotations
 from app.core import instruments as reg
 from app.core.instruments import Instrument
 from app.core.logging import log
-from app.db.models import InstrumentState, UniverseInstrument
+from sqlalchemy import select
+
+from app.db.models import InstrumentState, Position, UniverseInstrument
 from app.db.session import SessionLocal
 
 # cache of {key: Instrument} resolved from the Kite-built universe, per day
@@ -118,6 +120,12 @@ def remove_instrument(key: str) -> dict:
         row = s.get(UniverseInstrument, key)
         if row is None:
             return {"error": f"unknown instrument '{key}'"}
+        # E1: deactivating an instrument the bot still holds pops it from the registry,
+        # poisoning the position's key. The risk loop now survives that, but refuse it
+        # at the source anyway — an open position must stay resolvable.
+        # (the Position table holds the OPEN book only — closes become Trade rows)
+        if s.scalar(select(Position.id).where(Position.instrument_key == key).limit(1)):
+            return {"error": f"'{key}' has an open position — close it before removing"}
         row.on_home = False
         if row.source == "user":
             row.active = False

@@ -95,6 +95,7 @@ class EngineRunner:
         self.last_scan_ok: dict[str, object] = {}   # key -> last successful candle scan time (per-instrument freshness)
         self._stopped_at: dict[str, object] = {}    # instrument -> last stop-out time (re-entry cooldown)
         self._next_scan: dict[str, float] = {}      # key -> earliest epoch to refetch candles
+        self._unresolvable_keys: set[str] = set()   # E1: alerted-once poisoned position keys
         # bad-token latch: once Kite rejects our token, every instrument's fetch would
         # fail identically (~3,800 lines/morning in the 2026-07-15 autopsy). Latch it and
         # probe with ONE instrument per loop until the owner re-auths.
@@ -462,16 +463,42 @@ class EngineRunner:
             "long_exit": bool(last["longExit"]), "short_exit": bool(last["shortExit"]),
         }
 
+    # ── E1: a position whose instrument left the universe must never take the book down ─
+    def _resolve_or_skip(self, key: str):
+        """Resolve an open position's instrument, or None if it has left the universe.
+
+        `load_universe` pops deactivated instruments, so `get_instrument` raises for a
+        position on an instrument the owner has since removed. Callers must skip THAT
+        position only — an unguarded lookup used to abort marking, trailing stops, SL/TP
+        and the MIS close-flatten for the entire book, silently, on every risk tick."""
+        try:
+            return get_instrument(key)
+        except KeyError:
+            if key not in self._unresolvable_keys:
+                self._unresolvable_keys.add(key)     # alert once, not every ~1s tick
+                log.error(
+                    f"open position on unresolvable instrument '{key}' — skipping it; "
+                    f"the rest of the book is still managed. Re-add the instrument or "
+                    f"close the position manually.",
+                    instrument=key, event="UNRESOLVABLE_INSTRUMENT")
+            return None
+
     # ── lane 2 (fast): mark open positions, trail stop, staleness guard, exit ─
     def mark_and_exit_positions(self) -> None:
         prov = self.provider
         now = prov.now()
         opens = {p.instrument_key: p for p in self.broker.open_positions()}
+        insts = []
+        for k in list(opens):
+            inst = self._resolve_or_skip(k)
+            if inst is None:
+                opens.pop(k, None)
+            else:
+                insts.append(inst)
         if not opens:
             self.position_ticks = {}
             self._safe_maybe_profit_lock(now)
             return
-        insts = [get_instrument(k) for k in opens]
         try:
             snap = prov.live_snapshot(insts, list(opens.values()))
             self.health.record_ok("quote", now)
@@ -1095,7 +1122,10 @@ class EngineRunner:
             from app.core import market_hours
             buf = self.params["square_off_buffer_minutes"]
             for pos in list(self.broker.open_positions()):
-                seg = get_instrument(pos.instrument_key).spot_exchange
+                inst = self._resolve_or_skip(pos.instrument_key)
+                if inst is None:
+                    continue
+                seg = inst.spot_exchange
                 mtc = market_hours.minutes_to_close(seg, now)
                 if mtc is not None and 0 <= mtc <= buf and pos.last_squareoff_date != now.date():
                     self.square_off_for_overnight(now)
@@ -1113,7 +1143,11 @@ class EngineRunner:
         for pos in list(self.broker.open_positions()):
             if pos.segment != "equity_intraday":
                 continue
-            seg = get_instrument(pos.instrument_key).spot_exchange
+            # MIS cannot legally carry overnight, so an unresolvable key must NOT exempt
+            # a position from the flatten — equity-intraday is always NSE cash, so fall
+            # back to that clock rather than skipping (and leaving it to carry).
+            inst = self._resolve_or_skip(pos.instrument_key)
+            seg = inst.spot_exchange if inst is not None else "NSE"
             mtc = market_hours.minutes_to_close(seg, now)
             if mtc is not None and 0 <= mtc <= buf:
                 price = pos.last_premium or pos.entry_premium
