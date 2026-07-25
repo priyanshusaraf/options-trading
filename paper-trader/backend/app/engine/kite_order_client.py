@@ -157,7 +157,12 @@ class KiteOrderClient:
                   tradingsymbol=req.tradingsymbol, transaction_type=req.side,
                   quantity=req.qty, product=product, order_type=req.order_type)
         if req.order_type == "LIMIT" and req.limit_price is not None:
-            kw["price"] = req.limit_price
+            # E9: every trigger path snaps to the real per-instrument tick, but the entry
+            # LIMIT price was forwarded untouched — and execution_policy computes it on a
+            # hardcoded 0.05 grid. On a coarser-grid contract the exchange rejects the
+            # order outright ("Tick size for this script is …") = a silently missed entry.
+            kw["price"] = round_to_tick(req.limit_price,
+                                        self._tick(req.tradingsymbol, req.exchange))
         if req.order_type == "MARKET":
             # never unprotected: a 0/falsy value would be rejected -> fall back to -1 (auto)
             kw["market_protection"] = self.market_protection or -1.0

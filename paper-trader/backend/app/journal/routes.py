@@ -5,6 +5,7 @@ it; there is no shared session with app.db.session.
 from __future__ import annotations
 
 import datetime as dt
+import threading
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
@@ -33,19 +34,31 @@ SEED_INSTRUMENTS = [
 
 _engine = None
 _SessionLocal = None
+_init_lock = threading.Lock()
 
 
 def _get_sessionmaker():
     """Lazy singleton so importing this module (e.g. at FastAPI startup
     collection time) never opens the DB file before the app actually runs —
-    matters for tests, which set PT_JOURNAL_DB_PATH before import."""
+    matters for tests, which set PT_JOURNAL_DB_PATH before import.
+
+    Locked + double-checked: unguarded, two concurrent first-touch requests both saw
+    None and both ran create_all. That check-then-CREATE is not atomic, so the loser
+    raised `table journal_days already exists` and 500'd — and the dashboard polls 8
+    endpoints every 5s, so first touch after a restart is exactly when they collide."""
     global _engine, _SessionLocal
-    if _SessionLocal is None:
-        _engine = make_engine(journal_db_path())
-        init_journal_db(_engine)
-        _seed_instruments(_engine)
-        _seed_bias(_engine)
-        _SessionLocal = make_sessionmaker(_engine)
+    if _SessionLocal is not None:
+        return _SessionLocal                    # fast path, no lock once warm
+    with _init_lock:
+        if _SessionLocal is None:               # re-check: a racer may have won
+            engine = make_engine(journal_db_path())
+            init_journal_db(engine)
+            _seed_instruments(engine)
+            _seed_bias(engine)
+            _engine = engine
+            # published LAST: no other thread may see a sessionmaker whose schema
+            # and seed rows aren't finished.
+            _SessionLocal = make_sessionmaker(engine)
     return _SessionLocal
 
 
