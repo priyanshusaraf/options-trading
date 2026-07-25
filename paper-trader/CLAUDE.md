@@ -239,3 +239,14 @@ all REST calls go through `lib/api.ts`. Tabs are wired in `App.tsx`; each tab is
   figures are **net** of the full stack. Rates are indicative — verify against contract notes.
 - Telegram notifications are optional (`notify/`); blank creds = silently off, engine unaffected.
 - Commit/push only when asked; the working branch here is a feature branch off `main`.
+
+## Subagent Rules
+
+Subagents must never run `git stash`, `git checkout -- .`, `git reset`, or any command that mutates
+the shared working tree. Commit or explicitly hand off work before dispatching. If a subagent
+produces no file writes after ~10 minutes, kill it and do the work directly.
+
+Never rsync to the VPS without `--exclude '.env' --exclude 'node_modules' --exclude '*.db'`.
+Production env files and databases are NOT in git and rsync will clobber them. After any deploy,
+curl the health endpoint and confirm 200 before reporting success. Note: macOS ships an old rsync —
+do not use flags like `--info=progress2`.

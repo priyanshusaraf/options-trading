@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper-Trader — Status Board</title>
+<style>
+  :root{
+    --ground:#f3f5f7; --panel:#ffffff; --sunk:#eef1f5;
+    --ink:#0f1318; --ink2:#58626f; --ink3:#8b95a3;
+    --line:#e3e7ec; --line2:#d3dae2;
+    --accent:#2f5fd0; --ok:#0f7a4d; --warn:#95651a; --bad:#b8342a;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0b0e13; --panel:#131821; --sunk:#0f141c;
+      --ink:#e6eaf1; --ink2:#8e99aa; --ink3:#6b7686;
+      --line:#212936; --line2:#2c3644;
+      --accent:#7ea2ff; --ok:#35b47c; --warn:#d99a2b; --bad:#ec6a5e;
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#f3f5f7; --panel:#ffffff; --sunk:#eef1f5;
+    --ink:#0f1318; --ink2:#58626f; --ink3:#8b95a3;
+    --line:#e3e7ec; --line2:#d3dae2;
+    --accent:#2f5fd0; --ok:#0f7a4d; --warn:#95651a; --bad:#b8342a;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0b0e13; --panel:#131821; --sunk:#0f141c;
+    --ink:#e6eaf1; --ink2:#8e99aa; --ink3:#6b7686;
+    --line:#212936; --line2:#2c3644;
+    --accent:#7ea2ff; --ok:#35b47c; --warn:#d99a2b; --bad:#ec6a5e;
+  }
+
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--ground);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono,code,.num,th,.lbl{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace}
+  .num{font-variant-numeric:tabular-nums}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px 96px}
+
+  /* ── masthead ─────────────────────────────────────────── */
+  .top{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:flex-end;justify-content:space-between;
+       padding:30px 0 18px;border-bottom:2px solid var(--ink)}
+  h1{font-size:21px;font-weight:650;letter-spacing:-.02em;margin:0}
+  .tagline{color:var(--ink2);font-size:13.5px;margin-top:5px;max-width:62ch}
+  .topright{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  .lamp{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;
+        letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .lamp::before{content:"";width:8px;height:8px;border-radius:2px;background:currentColor;flex:none}
+  .lamp.ok{color:var(--ok)} .lamp.bad{color:var(--bad)} .lamp.warn{color:var(--warn)}
+  .lamp.idle{color:var(--ink3)}
+
+  button.theme{font:inherit;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;
+    font-family:ui-monospace,Menlo,monospace;background:transparent;color:var(--ink2);
+    border:1px solid var(--line2);border-radius:4px;padding:5px 10px;cursor:pointer}
+  button.theme:hover{color:var(--ink);border-color:var(--ink3)}
+  button.theme:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ── KPI strip: ruled cells, no cards ─────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+        border-bottom:1px solid var(--line)}
+  .kpi{padding:16px 18px 15px;border-right:1px solid var(--line)}
+  .kpi:last-child{border-right:0}
+  .kpi .lbl{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;
+            color:var(--ink3);font-weight:600}
+  .kpi .val{display:block;font-size:24px;font-weight:640;letter-spacing:-.03em;margin-top:6px;
+            font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .kpi .val.sm{font-size:14px;font-weight:600;letter-spacing:-.01em;line-height:1.75}
+  .kpi .foot{display:block;font-size:11.5px;color:var(--ink2);margin-top:3px}
+
+  /* ── section headers ──────────────────────────────────── */
+  section{margin-top:38px}
+  .shead{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--ink);
+         padding-bottom:7px;margin-bottom:16px}
+  .shead h2{font-size:12px;text-transform:uppercase;letter-spacing:.12em;font-weight:700;margin:0;
+            font-family:ui-monospace,Menlo,monospace}
+  .shead .hint{font-size:12px;color:var(--ink3);margin-left:auto;text-align:right}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:17px 19px}
+  .stack{display:flex;flex-direction:column;gap:11px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  @media(max-width:820px){.cols{grid-template-columns:1fr}}
+
+  .lead{font-size:16.5px;font-weight:620;letter-spacing:-.015em;margin:0 0 8px;text-wrap:balance}
+  p{margin:0 0 10px;color:var(--ink2);font-size:14px}
+  p:last-child{margin-bottom:0}
+  strong{color:var(--ink);font-weight:620}
+  code{font-size:.86em;background:var(--sunk);border:1px solid var(--line);border-radius:3px;
+       padding:.5px 4px;color:var(--ink)}
+
+  /* ── finding / item lists ─────────────────────────────── */
+  ul.items{list-style:none;margin:0;padding:0}
+  ul.items > li{display:grid;grid-template-columns:18px 1fr;gap:10px;padding:8px 0;
+                font-size:13.5px;color:var(--ink2);border-top:1px solid var(--line)}
+  ul.items > li:first-child{border-top:0}
+  ul.items > li > .mk{font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:700;
+                      text-align:center;line-height:1.7;color:var(--ink3)}
+  li.done > .mk{color:var(--ok)} li.fire > .mk{color:var(--bad)} li.gate > .mk{color:var(--warn)}
+  li.done{opacity:.78}
+
+  /* ── workstream rows ──────────────────────────────────── */
+  .ws{border-top:1px solid var(--line);padding:16px 0}
+  .ws:first-child{border-top:0;padding-top:2px}
+  .wshead{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap}
+  .tag{font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;
+       border:1px solid var(--line2);border-radius:3px;padding:2px 7px;color:var(--ink2);flex:none}
+  .tag.b{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
+  .tag.e{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+  .tag.c{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+  .ws h3{font-size:15px;font-weight:620;letter-spacing:-.01em;margin:0}
+  .frac{margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:600;
+        color:var(--ink3);font-variant-numeric:tabular-nums}
+  .ws .why{color:var(--ink2);font-size:13px;margin-top:4px}
+  .track{height:3px;background:var(--sunk);border:1px solid var(--line);border-radius:2px;
+         margin-top:10px;overflow:hidden}
+  .track > i{display:block;height:100%;background:var(--accent)}
+  .track.crit > i{background:var(--bad)}
+  .track.good > i{background:var(--ok)}
+
+  /* ── tables ───────────────────────────────────────────── */
+  .scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink3);
+     font-weight:600;padding:0 12px 8px 0;border-bottom:1px solid var(--line2);white-space:nowrap}
+  td{padding:8px 12px 8px 0;border-bottom:1px solid var(--line);color:var(--ink2);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  td.k{color:var(--ink);font-weight:550}
+  td.m{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;white-space:nowrap;
+       font-variant-numeric:tabular-nums}
+  td.r{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  footer{margin-top:44px;padding-top:15px;border-top:1px solid var(--line);
+         color:var(--ink3);font-size:12.5px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="top">
+  <div>
+    <h1>Paper-Trader — Status Board</h1>
+    <div class="tagline">Autonomous options / equity-index trading engine. Single owner, real capital,
+      live on a Bangalore VPS since 2026-06-29.</div>
+  </div>
+  <div class="topright">
+    <span class="lamp ok">engine live</span>
+    <span class="lamp bad">2 tests red</span>
+    <button class="theme" id="t">theme</button>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><span class="lbl">Snapshot</span><span class="val sm">2026-07-25</span><span class="foot">13:15 IST</span></div>
+  <div class="kpi"><span class="lbl">Branch</span><span class="val sm">feat/exec-completeness</span><span class="foot">91 ahead of main · unpushed</span></div>
+  <div class="kpi"><span class="lbl">Suite</span><span class="val">935<span style="color:var(--ink3);font-size:15px">/940</span></span><span class="foot">134 files · 5 red pre-fix</span></div>
+  <div class="kpi"><span class="lbl">App LOC</span><span class="val">14.2k</span><span class="foot">13.3k in tests</span></div>
+  <div class="kpi"><span class="lbl">Active</span><span class="val">E</span><span class="foot">order B→E→C→D→A</span></div>
+  <div class="kpi"><span class="lbl">Ledger</span><span class="val sm" style="color:var(--ok)">EXACT</span><span class="foot">dryrun.py 700</span></div>
+</div>
+
+<section>
+  <div class="shead"><h2>Right now</h2><span class="hint">working session in flight</span></div>
+  <div class="stack">
+    <div class="panel">
+      <p class="lead">Debugging the uncommitted E2 index-futures build to green.</p>
+      <p>E0 (P&amp;L integrity) and E1 (daily profit-lock) are <strong>done and committed</strong>. The working
+        tree holds an <strong>uncommitted, partial E2 futures build</strong> — about 610 changed lines across
+        10 source files plus 10 new test files — started despite the spec's own owner-and-contract-note gate.
+        Three of five failures are fixed; two remain.</p>
+      <ul class="items">
+        <li class="done"><span class="mk">FIX</span><span><strong>Cause A — the cap could never fit a lot.</strong>
+          <code>index_futures_max_margin</code> defaulted to ₹200,000, annotated “≈ 1 NIFTY lot”, but one lot
+          is 75 × 24,143 × 12% = <strong>₹217,293</strong>. The cap sat <em>below</em> one lot, so the sizer
+          floored to zero lots and <strong>no futures entry could open for any account size</strong>. Raised to
+          ₹300,000 (purple ₹400,000); tests now fund the book, since ₹50k genuinely cannot margin a NIFTY lot.</span></li>
+        <li class="done"><span class="mk">FIX</span><span><strong>Cause B — tests priced against a drifting shared mock.</strong>
+          <code>test_futures_mark.py</code> hardcoded a 24,000 entry while marking against the process-wide mock
+          singleton's random walk, which earlier test files advance. Survival depended on test <em>order</em>.
+          Entry is now anchored to the live mock LTP, and a <code>fresh_mock_clock</code> fixture rewinds the
+          shared sim cursor for tests whose assertions depend on where the market sits.</span></li>
+        <li class="fire"><span class="mk">OPEN</span><span><strong>Two failures survive the fixture.</strong>
+          <code>test_options_and_equity_paths_unaffected_by_futures_dispatch</code> and
+          <code>test_index_futures_trades_end_to_end</code> still fail under a long suite prefix, so the shared
+          state is not only the clock. Verification run in progress — <strong>not yet diagnosed</strong>.</span></li>
+        <li class="gate"><span class="mk">GATE</span><span><strong>E2 must not ship regardless.</strong> The SPAN
+          margin is a flagged 12%-of-notional estimate and SENSEX <code>BFO_FUT</code> charges don't exist yet.
+          The owner must supply a real Zerodha F&amp;O contract note (or a live <code>order_margins()</code>
+          reading) before <code>index_futures_enabled</code> flips true outside tests.</span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <p class="lead" style="font-size:14px">Next move</p>
+      <ul class="items">
+        <li><span class="mk">1</span><span>Finish the last two failures, then commit the E2 work on its own branch.</span></li>
+        <li class="fire"><span class="mk">2</span><span><strong>Workstream B — safety.</strong> Top of the
+          roadmap's own ordering. <strong>B-E1 is a silent, still-live whole-book risk-loop abort</strong> on real money.</span></li>
+        <li><span class="mk">3</span><span>Add <code>--exclude .env</code> to the deploy rsync. This has taken the VPS down twice.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Workstreams</h2><span class="hint">work the topmost open item of the highest active stream</span></div>
+  <div class="panel">
+
+    <div class="ws">
+      <div class="wshead"><span class="tag b">B</span><h3>Safety backlog</h3>
+        <span class="lamp bad">on fire</span><span class="frac">1 / 8</span></div>
+      <div class="why">From the 2026-07-18 multi-agent review. These are live real-money defects.</div>
+      <div class="track crit"><i style="width:12.5%"></i></div>
+      <ul class="items">
+        <li class="fire"><span class="mk">!!</span><span><strong>E1 — worst, silent, still live.</strong> A poisoned
+          open-position key aborts the risk loop's mark/exit for the <em>whole book</em>
+          (<code>runner.py:465</code>, unguarded <code>get_instrument(k)</code>).
+          <em>Operational rule until fixed: never remove or deactivate an instrument that has an open position.</em></span></li>
+        <li class="done"><span class="mk">✓</span><span>E2 <code>PT_API_TOKEN</code> fail-open — closed on the VPS 2026-07-20.</span></li>
+        <li><span class="mk">·</span><span>E3 options GTT stop divergence — a modify-reject only logs; no cancel-and-replace.</span></li>
+        <li><span class="mk">·</span><span>E4 phantom close — <code>routes.py:603</code> returns <code>{closed:true}</code> on a failed close.</span></li>
+        <li><span class="mk">·</span><span>E7 equity SHORT charge legs hardcoded BUY/SELL · E8 <code>account_pnl</code> LONG-only sign.</span></li>
+        <li><span class="mk">·</span><span>E9 options entry-LIMIT tick rounding · E10 overnight flatten has no segment filter.</span></li>
+        <li><span class="mk">·</span><span>VPS pending OS reboot, 5 ESM security updates — owner action, market-closed window.</span></li>
+        <li><span class="mk">·</span><span><code>journal_days already exists</code> create_all race at startup — make idempotent.</span></li>
+      </ul>
+    </div>
+
+    <div class="ws">
+      <div class="wshead"><span class="tag e">E</span><h3>P&amp;L integrity → profit-lock → capital scaling</h3>
+        <span class="lamp warn">active</span><span class="frac">2 / 4</span></div>
+      <div class="why">Dependency-ordered deliberately: accurate P&amp;L is the foundation every later phase inherits.</div>
+      <div class="track"><i style="width:50%"></i></div>
+      <ul class="items">
+        <li class="done"><span class="mk">✓</span><span><strong>E0 — P&amp;L integrity.</strong> Exits book at the
+          true broker fill, not the last mark; the equity curve auto-anchors to real broker equity instead of the
+          ₹50k synthetic base; per-trade MFE/MAE excursion telemetry. All three Opus-reviewed, ledger paisa-exact.</span></li>
+        <li class="done"><span class="mk">✓</span><span><strong>E1 — daily profit-lock.</strong> Tracks the day's
+          high-water against <em>peak concurrent deployed capital</em>; on a give-back breach it flattens
+          everything and halts entries for the session. Default off. 12 tests.</span></li>
+        <li class="gate"><span class="mk">~</span><span><strong>E2 — index futures.</strong> Spec written and
+          Opus-reviewed; roughly 10 of 13 build steps done but <strong>uncommitted and 2 tests red</strong>.
+          Intraday-only, no rollovers, delivery-window guard. Gated on a real contract note.</span></li>
+        <li><span class="mk">·</span><span><strong>E3 — MTF.</strong> Pledged/funded delivery positions with
+          interest accrual. Even more contract-note-dependent. Built last.</span></li>
+      </ul>
+    </div>
+
+    <div class="ws">
+      <div class="wshead"><span class="tag c">C</span><h3>Exit tuning — winners are being cut</h3>
+        <span class="frac">2 / 3</span></div>
+      <div class="why">Live evidence: across 33 intraday trades <strong>not one</strong> closed on TARGET or a
+        managed profit-lock. Average net ₹12.6 per trade.</div>
+      <div class="track"><i style="width:66%"></i></div>
+      <ul class="items">
+        <li class="done"><span class="mk">✓</span><span>P1 exit autopsy on real VPS trades (2026-07-15).</span></li>
+        <li class="done"><span class="mk">✓</span><span>Interim exit params baked in as code defaults — sl .008,
+          target .03, lockstep .03, lock ₹600, frac .3; purple .015 / .045. <strong>Caveat:</strong> existing VPS
+          <code>runtime_config</code> overrides still shadow these — clear them in Settings after a deploy.</span></li>
+        <li><span class="mk">·</span><span>P2 offline exit-param sweep on replayed trades, walk-forward, plus a
+          break-even-arming knob. <em>Was blocked on MFE/MAE telemetry — E0.3 unblocked it.</em> Likely root cause:
+          the ₹600 profit-lock threshold sits above the typical winner, so the lock never arms in the ₹0–600 band.</span></li>
+      </ul>
+    </div>
+
+    <div class="ws">
+      <div class="wshead"><span class="tag">D</span><h3>UI typography &amp; palette</h3>
+        <span class="frac">0 / 4</span></div>
+      <div class="why">Fonts first, palette after. The shadcn cockpit itself already shipped.</div>
+      <div class="track"><i style="width:0%"></i></div>
+      <ul class="items">
+        <li><span class="mk">·</span><span>Extract fonts and colours from the owner's reference site (behind Vercel protection).</span></li>
+        <li><span class="mk">·</span><span>Apply fonts app-wide, self-hosted via <code>@fontsource/*</code> — the VPS serves a built dist, so no CDN.</span></li>
+        <li><span class="mk">·</span><span>Palette pass onto the existing shadcn CSS variables. <code>muted</code> is load-bearing — merge, don't replace.</span></li>
+        <li><span class="mk">·</span><span>Mobile 390px one-handed check — never verified on a real phone.</span></li>
+      </ul>
+    </div>
+
+    <div class="ws">
+      <div class="wshead"><span class="tag">A</span><h3>Research plane</h3>
+        <span class="lamp idle">deferred — do last</span><span class="frac">0 / 6</span></div>
+      <div class="why">The laboratory is production-grade; the scientist was never switched on. Real, but
+        explicitly not urgent. Leave <code>PT_RESEARCH_ENABLED=0</code> until B, E, C and D are done.</div>
+      <div class="track"><i style="width:0%"></i></div>
+      <ul class="items">
+        <li><span class="mk">·</span><span>Phase 0 honest statistics — <strong>deflation never engages today</strong>
+          (<code>var_sr</code> defaults to 0, so <code>expected_max_sharpe()</code> returns 0); PBO/CSCV
+          unimplemented; the optimizer objective is raw expectancy.</span></li>
+        <li><span class="mk">·</span><span>Phases 1–5 — nightly shadow loop, wider idea space including
+          formula-level indicator variants, closing the reinforcement loop, a shadow-paper stage before
+          approval, then regime conditioning.</span></li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Recent commits</h2><span class="hint">all 2026-07 · branch not pushed</span></div>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>Hash</th><th>Date</th><th>Subject</th></tr></thead>
+      <tbody>
+        <tr><td class="m">9e0d316</td><td class="m">07-24</td><td class="k">docs(E2): index-futures spec, Sonnet-drafted and Opus-reviewed, plus the gate note</td></tr>
+        <tr><td class="m">e20aef0</td><td class="m">07-24</td><td class="k">feat(risk): E1 daily profit-lock — portfolio give-back guard</td></tr>
+        <tr><td class="m">7de347a</td><td class="m">07-24</td><td class="k">feat(pnl): E0.3 per-trade peak-excursion telemetry (MFE/MAE)</td></tr>
+        <tr><td class="m">8abca46</td><td class="m">07-24</td><td class="k">fix(pnl): E0.2 auto-anchor the live equity curve to real broker equity, not ₹50k</td></tr>
+        <tr><td class="m">71e217c</td><td class="m">07-24</td><td class="k">fix(pnl): E0.1 book reconciled and external exits at the TRUE fill, not the last mark</td></tr>
+        <tr><td class="m">3527f7c</td><td class="m">07-24</td><td class="k">docs(roadmap): add Workstream E; downgrade the research plane to last</td></tr>
+        <tr><td class="m">7d7c672</td><td class="m">07-24</td><td class="k">fix(backtest): np.bool in premium trades aborted the whole sweep on JSON dump</td></tr>
+        <tr><td class="m">6b28645</td><td class="m">07-23</td><td class="k">fix(analytics): aggregate signal_counts and equity_curve in SQL — the outage's second leak</td></tr>
+        <tr><td class="m">68c852e</td><td class="m">07-23</td><td class="k">fix(ws): rewrite the broadcast hub — bounded queues, coalesced snapshots, slow-client eviction</td></tr>
+        <tr><td class="m">8ece290</td><td class="m">07-22</td><td class="k">feat(earnings): NSE board-meeting calendar cache and watchlist badge</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Uncommitted tree</h2><span class="hint">the E2 futures build · not on any branch</span></div>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>File</th><th>Δ</th><th>What it adds</th></tr></thead>
+      <tbody>
+        <tr><td class="m">engine/runner.py</td><td class="m">+259</td><td>futures mark/exit dispatch, margin sizer, entry block, selection</td></tr>
+        <tr><td class="m">engine/broker.py</td><td class="m">+102</td><td><code>open_futures_position</code> / <code>close_futures_position</code></td></tr>
+        <tr><td class="m">providers/kite.py</td><td class="m">+62</td><td>futures LTP and contract fetch</td></tr>
+        <tr><td class="m">providers/base+mock.py</td><td class="m">+57</td><td>new provider surface, mock cost-of-carry basis</td></tr>
+        <tr><td class="m">core/config.py</td><td class="m">+30</td><td>18 <code>index_futures_*</code> knobs, all default-inert</td></tr>
+        <tr><td class="m">core/runtime_config.py</td><td class="m">+23</td><td>live-editable futures knobs with bounds</td></tr>
+        <tr><td class="m">db/models.py</td><td class="m">+18</td><td>segment widening for <code>index_futures</code></td></tr>
+        <tr><td class="m">engine/charges.py</td><td class="m">+17</td><td><code>NFO_FUT</code> and <code>BFO_FUT</code> charge legs</td></tr>
+        <tr><td class="m">engine/delivery_calendar.py</td><td class="m">new</td><td>delivery-window guard — a no-op for cash-settled index futures</td></tr>
+        <tr><td class="m">tests/test_futures_*.py</td><td class="m">+1010</td><td>10 new test files</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Live &amp; ops</h2></div>
+  <div class="cols">
+    <div class="panel">
+      <p class="lead" style="font-size:14px">Runtime</p>
+      <ul class="items">
+        <li><span class="mk">·</span><span>DigitalOcean Bangalore VPS <code>64.227.191.162</code>, 1 GB. Engine runs 24/7 under systemd.</span></li>
+        <li><span class="mk">·</span><span>UI is tailnet-only at <code>paper-trader.taile25969.ts.net</code>. Keep the Mac engine off — one live engine only.</span></li>
+        <li><span class="mk">·</span><span>Daily routine: open the UI on the phone, connect Kite (the token expires ~06:00 IST), then ARM.</span></li>
+        <li><span class="mk">·</span><span>Deploy is a whole-tree rsync from the Mac plus <code>systemctl restart</code>. The VPS has no git.</span></li>
+        <li><span class="mk">·</span><span>The engine is <strong>disarmed on every process start</strong>, by design.</span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <p class="lead" style="font-size:14px">Standing risks</p>
+      <ul class="items">
+        <li class="fire"><span class="mk">!!</span><span><strong>Deploy clobbers the VPS <code>.env</code></strong> —
+          twice now. The rsync overwrites it with the Mac's copy, dropping <code>PT_SERVE_FRONTEND</code>, so every
+          <code>GET /</code> 404s while <code>/api/health</code> stays green. Fix is <code>--exclude .env</code>;
+          the post-deploy check must curl <code>/</code>, not just health.</span></li>
+        <li class="gate"><span class="mk">!</span><span><strong>DB bloat</strong> — <code>paper_trader.db</code> is
+          ~45 MB and grows ~5 MB/day from unbounded <code>option_data</code>, <code>signal_events</code> and
+          <code>equity_snapshots</code>. Redesign undecided.</span></li>
+        <li class="gate"><span class="mk">!</span><span><strong>1 GB droplet is tight</strong> — the 2026-07-23
+          outage was two memory leaks, both fixed and deployed. A resize to 2 GB is an owner action.</span></li>
+        <li class="gate"><span class="mk">!</span><span>The live order path has <strong>never placed a real
+          order</strong> outside mock tests.</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Metrics</h2><span class="hint">every figure below came from a command, not an estimate</span></div>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>Metric</th><th>Value</th><th>Provenance</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Suite, last full run</td><td class="r">935 passed · 5 failed</td><td><code>pytest tests -p no:randomly</code>, sequential, pre-fix</td></tr>
+        <tr><td class="k">Baseline at HEAD</td><td class="r">865 passed · 1 failed</td><td>clean worktree at <code>9e0d316</code>; the 1 is an unrelated backtest-window test</td></tr>
+        <tr><td class="k">Post-fix full run</td><td class="r" style="color:var(--warn)">pending</td><td>3 of 5 fixed and verified under the reproducing prefix; 2 still red</td></tr>
+        <tr><td class="k">Test files</td><td class="r">134</td><td>fully offline — mock provider, no network</td></tr>
+        <tr><td class="k">App LOC</td><td class="r">14,247</td><td><code>app/</code> only</td></tr>
+        <tr><td class="k">Test LOC</td><td class="r">13,319</td><td>0.94 : 1 test-to-source</td></tr>
+        <tr><td class="k">Commits ahead of main</td><td class="r">91</td><td>branch has never been pushed to origin</td></tr>
+        <tr><td class="k">Frontend views</td><td class="r">13</td><td>React, TypeScript, Tailwind, shadcn</td></tr>
+        <tr><td class="k">Ledger invariant</td><td class="r" style="color:var(--ok)">exact</td><td><code>dryrun.py 700</code> — cash = initial + realized − Σ open entry_cost</td></tr>
+        <tr><td class="k">Live since</td><td class="r">2026-06-29</td><td>real money; ledger reset at go-live</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Ground rules</h2></div>
+  <div class="panel">
+    <ul class="items">
+      <li><span class="mk">·</span><span><strong>Order of work</strong> — B → E → C → D → A. Take the topmost open item of the highest active stream.</span></li>
+      <li><span class="mk">·</span><span><strong>Done means</strong> TDD, both suites green, and <code>dryrun.py 700</code> ledger-exact. A ticked box means verified evidence.</span></li>
+      <li><span class="mk">·</span><span><strong>Every claim carries its command.</strong> Any statement about system state, test results, or whether a fix worked is followed by the exact command and its raw output; anything unrun is labelled unverified; the original failing reproduction is re-run before calling something fixed.</span></li>
+      <li><span class="mk">·</span><span><strong>Never run two pytest sessions at once</strong> against this repo — they share the same SQLite files and corrupt each other's results.</span></li>
+      <li><span class="mk">·</span><span><strong>Product direction</strong> — equity and index on the underlying. Options stay supported but drop to index-only, lowest priority.</span></li>
+      <li><span class="mk">·</span><span><strong>Parked deliberately</strong> — the UI-to-Python codegen bridge, stock-specific options, and the product avenues from the 07-18 review.</span></li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  Built from <code>docs/ROADMAP.md</code>, git history and a full test run — refreshed at the end of each
+  working session. The roadmap stays the canonical tracker; this page is the readable view over it.
+</footer>
+
+</div>
+<script>
+  (function(){
+    var root=document.documentElement, btn=document.getElementById('t');
+    btn.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(!cur){cur=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+      root.setAttribute('data-theme',cur==='dark'?'light':'dark');
+    });
+  })();
+</script>
+</body>
+</html>
