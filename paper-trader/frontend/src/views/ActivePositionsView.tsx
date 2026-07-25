@@ -77,7 +77,15 @@ function PositionCard({ p, onChanged }: { p: PositionRow; onChanged: () => void 
   const [busy, setBusy] = useState(false)
   const [tpMsg, setTpMsg] = useState<string | null>(null)
   const prem = p.live_premium ?? p.last_premium
-  const act = async (fn: () => Promise<any>) => { setBusy(true); await fn(); setBusy(false); onChanged() }
+  // E4: a refused close comes back as {error}. Surface it instead of silently
+  // refreshing as if it worked — the backend no longer lies, so neither should the UI.
+  const act = async (fn: () => Promise<any>) => {
+    setBusy(true); setTpMsg(null)
+    const res = await fn()
+    setBusy(false)
+    if (res?.error) setTpMsg(res.error)
+    else onChanged()
+  }
   const toggleNoTP = async () => {
     setBusy(true); setTpMsg(null)
     const res = await setNoTakeProfit(p.instrument_key, !p.no_take_profit)

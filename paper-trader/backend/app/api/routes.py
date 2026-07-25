@@ -616,10 +616,19 @@ async def close_position(key: str, request: Request):
         # this books at the live/paper LTP mark, not a real fill (in live mode
         # LiveBroker's own close_position ignores this flag — it always books its
         # own real order fill instead — so it only takes effect for PaperBroker).
-        r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
-                                r.provider.get_ltp(inst) or pos.last_spot,
-                                exit_price_estimated=True)
+        trade = r.broker.close_position(pos, premium, "MANUAL_CLOSE", now,
+                                        r.provider.get_ltp(inst) or pos.last_spot,
+                                        exit_price_estimated=True)
         from app.core.logging import log
+        # E4: LiveBroker returns None when the close did NOT go through (ownership
+        # guard, SL-M-cancel abort, account re-check). Reporting that as success gave
+        # the owner a lying cockpit — position still live at the exchange, display
+        # state wiped, re-entry blocked for no reason. Surface it instead.
+        if trade is None:
+            log.error(f"MANUAL CLOSE FAILED {pos.tradingsymbol} — still open",
+                      instrument=key, event="MANUAL_CLOSE_FAILED", manual=True)
+            return {"error": "close failed — the position is still open",
+                    "closed": False, "key": key}
         log.info(f"MANUAL CLOSE {pos.tradingsymbol} @ {premium:.2f}", instrument=key,
                  event="MANUAL_CLOSE", manual=True)
         # #2: a manual close blocks same-day re-entry for this symbol — the bot must not
