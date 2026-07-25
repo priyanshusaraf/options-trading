@@ -18,7 +18,7 @@ from app.core.logging import log
 from app.db.models import CapitalState, EquitySnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.core.runtime_config import effective
-from app.engine.charges import compute_charges
+from app.engine.charges import compute_charges, legs_for
 from app.engine.equity_entry import equity_stop_target
 from app.providers.base import MarketDataProvider, OptionQuote
 
@@ -116,7 +116,10 @@ class PaperBroker:
         eff_tp_pct = tp_pct if tp_pct is not None else p.get("intraday_target_pct", 0.02)
         notional = price * qty
         margin = margin if (margin is not None and margin > 0) else notional / leverage
-        charges = compute_charges(charge_segment, "BUY", price, qty)["total"]
+        # E7: a SHORT opens by SELLING — direction-aware legs, or STT/stamp land on the
+        # wrong leg and Trade.net_pnl can't reconcile against the contract note.
+        entry_side, _ = legs_for(direction)
+        charges = compute_charges(charge_segment, entry_side, price, qty)["total"]
         cost = margin + charges
         stop, target = equity_stop_target(direction, price, eff_sl_pct, eff_tp_pct)
 
@@ -154,7 +157,8 @@ class PaperBroker:
         direction-aware P&L (a SHORT profits when price falls), net of both legs'
         charges. proceeds = entry_cost + net, so the ledger invariant stays exact."""
         qty = pos.qty
-        charges = compute_charges(pos.exchange, "SELL", exit_price, qty)["total"]
+        _, exit_side = legs_for(pos.direction)      # E7: a SHORT closes by BUYING to cover
+        charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
         gross = ((exit_price - pos.entry_premium) * qty if pos.direction == "LONG"
                  else (pos.entry_premium - exit_price) * qty)
         total_charges = pos.entry_charges + charges
@@ -369,7 +373,8 @@ class PaperBroker:
         remaining entry_cost sum to the original). The position stays open at the
         reduced qty so the remainder can be re-stopped and exited later."""
         qty = min(int(qty), pos.qty)
-        exit_charges = compute_charges(pos.exchange, "SELL", exit_price, qty)["total"]
+        _, exit_side = legs_for(pos.direction)      # E7: a SHORT covers with a BUY
+        exit_charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
         gross = ((exit_price - pos.entry_premium) * qty if pos.direction == "LONG"
                  else (pos.entry_premium - exit_price) * qty)
         remaining_cost = pos.entry_cost * (pos.qty - qty) / pos.qty

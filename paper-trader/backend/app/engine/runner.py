@@ -1073,6 +1073,12 @@ class EngineRunner:
         equity = self.capital_dict()["equity"]
         out = []
         for pos in list(self.broker.open_positions()):
+            # E10: MIS cannot legally carry overnight, so the overnight HOLD decision
+            # (an options/expiry notion) must never be applied to it — it was tagging
+            # equity_intraday positions `held_overnight` and closing them for reasons
+            # like "expiry too close". square_off_intraday is the sole MIS authority.
+            if pos.segment == "equity_intraday":
+                continue
             if pos.last_squareoff_date == now.date():
                 continue  # already decided this session — don't re-snapshot/re-close
             dte = (pos.expiry - now.date()).days if pos.expiry else None

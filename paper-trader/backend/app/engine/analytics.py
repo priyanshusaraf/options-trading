@@ -100,8 +100,10 @@ def account_pnl(s: Session, provider) -> dict:
         cap.account_baseline = eq
         s.commit()
     opens = list(s.scalars(select(Position)))
-    bot_unrealized = sum(((p.last_premium or p.entry_premium) - p.entry_premium) * p.qty
-                         for p in opens)
+    # E8: defer to the direction-aware Position.unrealized_pnl() — the inlined
+    # (last - entry) * qty formula inverted the sign of an open equity SHORT, showing a
+    # winning short as a loss and mis-attributing the gap to the owner's own trades.
+    bot_unrealized = sum(p.unrealized_pnl() for p in opens)
     return bot_vs_you(eq, cap.account_baseline, cap.realized_pnl, bot_unrealized)
 
 

@@ -81,6 +81,14 @@ CHARGE_SCHEDULE: dict[str, dict] = {
 }
 
 
+def legs_for(direction: str) -> tuple[str, str]:
+    """(entry_side, exit_side) for a position's real order sequence. A LONG buys to open
+    and sells to close; a SHORT sells to open and buys to cover. Charges are side-
+    dependent (STT is sell-side, stamp duty buy-side), so a hardcoded BUY/SELL pair puts
+    both on the wrong leg of a short and the ledger can't match the contract note."""
+    return ("SELL", "BUY") if direction == "SHORT" else ("BUY", "SELL")
+
+
 def compute_charges(segment: str, side: str, premium: float, qty: int) -> dict:
     """Charges for a single leg. `side` is 'BUY' or 'SELL'; `qty` is total units
     (lot_size, since we trade 1 lot); `premium` is the per-unit price (option
