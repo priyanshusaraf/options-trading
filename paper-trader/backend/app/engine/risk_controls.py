@@ -127,8 +127,10 @@ def gap_halt_active(now: dt.datetime, index_open: float | None,
 
 
 def intraday_blocked_for_expiry_day(today: dt.date, override_iso: str | None,
-                                    block_weekday: int = 1) -> bool:
-    """True if NEW entries are blocked today (the owner's "no trades on Tuesday").
+                                    block_weekday: int = 1,
+                                    key: str | None = None,
+                                    block_keys: str = "*") -> bool:
+    """True if a NEW entry in `key` is blocked today (the owner's "no trades on Tuesday").
 
     By default this sits out **Tuesdays** — NIFTY-50 weekly expiry day, whose erratic
     moves the owner wants to avoid. Originally intraday(MIS)-only; since 2026-07-04 it
@@ -137,14 +139,29 @@ def intraday_blocked_for_expiry_day(today: dt.date, override_iso: str | None,
     for this exact date: `override_iso` is a 'YYYY-MM-DD' string that lifts the block
     when it equals `today` — a per-day, self-expiring switch (last Tuesday's opt-in
     never carries forward). `block_weekday`: Mon=0 … Sun=6 (1 = Tuesday);
-    `block_weekday < 0` disables the guard."""
+    `block_weekday < 0` disables the guard.
+
+    `block_keys` scopes WHICH instruments sit out on that weekday (owner, 2026-07-28 —
+    a NIFTY expiry says nothing about SUZLON, so the equity-intraday book kept trading
+    for no reason). "*" blocks the whole book (the pre-2026-07-28 behaviour); otherwise
+    it is a comma-separated list of instrument keys and only those sit out. A blank
+    list fails SAFE (treated as "*") so clearing the field can never silently remove a
+    safety guard, and an unresolved `key` is blocked for the same reason."""
     if block_weekday < 0 or today.weekday() != block_weekday:
         return False
     try:
         override = dt.date.fromisoformat((override_iso or "").strip())
     except ValueError:
         override = None
-    return override != today
+    if override == today:               # the owner opted in for this exact date
+        return False
+    scope = (block_keys or "").strip()
+    if scope in ("", "*"):              # whole book (blank = fail safe)
+        return True
+    if key is None:                     # unresolved key — never sneak past the guard
+        return True
+    wanted = {k.strip().upper() for k in scope.split(",") if k.strip()}
+    return key.strip().upper() in wanted
 
 
 def outside_trading_session(segment: str, now: dt.datetime) -> bool:

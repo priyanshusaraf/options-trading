@@ -856,12 +856,13 @@ class EngineRunner:
                 continue
             if gap_active:      # fix D: index gapped at the open — sit out (logged once above)
                 continue
-            # #9 (extended): sit out the weekly-expiry weekday (default Tuesday) for
-            # ALL entries unless the owner opted in for today
-            # (intraday_override_date == today).
+            # #9 (extended): sit out the weekly-expiry weekday (default Tuesday) unless
+            # the owner opted in for today (intraday_override_date == today). Scoped by
+            # expiry_day_block_keys — default NIFTY only, '*' for the whole book.
             if intraday_blocked_for_expiry_day(
                     now.date(), self.params.get("intraday_override_date", ""),
-                    self.params.get("intraday_block_weekday", 1)):
+                    self.params.get("intraday_block_weekday", 1), key,
+                    self.params.get("expiry_day_block_keys", "NIFTY")):
                 log.info(f"ENTRIES blocked today (expiry-day guard) — not taking {key}; "
                          f"set intraday_override_date to opt in",
                          instrument=key, event="EXPIRY_DAY_SKIP")

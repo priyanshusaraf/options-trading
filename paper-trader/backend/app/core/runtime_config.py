@@ -49,9 +49,9 @@ OVERRIDABLE = (
     "overtrade_today_threshold", "overtrade_rolling_threshold", "overtrade_rolling_days",
     # entry guards (theta-cliff / expiry)
     "entry_min_days_to_expiry",
-    # day-shape guards: no-entries weekday (NIFTY-expiry Tuesdays, ALL entries),
-    # stale-crossover age cap, start-of-day entry window
-    "intraday_block_weekday", "intraday_override_date",
+    # day-shape guards: no-entries weekday (NIFTY-expiry Tuesdays) + which keys it
+    # scopes to, stale-crossover age cap, start-of-day entry window
+    "intraday_block_weekday", "expiry_day_block_keys", "intraday_override_date",
     "max_signal_age_minutes", "entry_window_start",
     # fix D: Nifty opening-gap guard
     "gap_guard_enabled", "gap_guard_pct", "gap_guard_resume", "gap_guard_index",
