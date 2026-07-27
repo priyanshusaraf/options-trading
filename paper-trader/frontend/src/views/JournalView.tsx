@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   getJournalFeed, getJournalInstruments, upsertJournalDay,
   addJournalNote, deleteJournalNote, putJournalBias, addJournalTrade,
+  getJournalBooks, addJournalBook,
 } from '../lib/api'
 import type {
   JournalFeedDTO, JournalFeedDayDTO, JournalBiasDTO, JournalInstrumentDTO,
@@ -90,8 +91,8 @@ function NoteComposer({ instruments, onAdd }: {
   )
 }
 
-function TradeComposer({ instruments, onAdd }: {
-  instruments: JournalInstrumentDTO[]; onAdd: () => void
+function TradeComposer({ instruments, onAdd, bookId }: {
+  instruments: JournalInstrumentDTO[]; onAdd: () => void; bookId?: number
 }) {
   const [open, setOpen] = useState(false)
   const [symbol, setSymbol] = useState(instruments[0]?.symbol ?? '')
@@ -103,7 +104,7 @@ function TradeComposer({ instruments, onAdd }: {
   const submit = async () => {
     if (!symbol || !price) return
     await addJournalTrade({ symbol, direction, lots: parseInt(lots, 10) || 1,
-      entry_price: parseFloat(price), setup_tag: tag || undefined })
+      entry_price: parseFloat(price), setup_tag: tag || undefined, book_id: bookId })
     setPrice(''); setTag(''); setOpen(false); onAdd()
   }
   if (!open) {
@@ -141,8 +142,9 @@ function TradeComposer({ instruments, onAdd }: {
   )
 }
 
-function DayCard({ day, instruments, isToday, reload }: {
-  day: JournalFeedDayDTO; instruments: JournalInstrumentDTO[]; isToday: boolean; reload: () => void
+function DayCard({ day, instruments, isToday, reload, bookId }: {
+  day: JournalFeedDayDTO; instruments: JournalInstrumentDTO[]; isToday: boolean
+  reload: () => void; bookId?: number
 }) {
   return (
     <Card className="p-3 flex flex-col gap-2.5">
@@ -155,7 +157,7 @@ function DayCard({ day, instruments, isToday, reload }: {
       </div>
 
       <AutoText value={day.market_view} placeholder="what am I feeling about the market today…"
-        rows={3} onSave={(v) => upsertJournalDay({ entry_date: day.date, market_view: v }).then(reload)} />
+        rows={3} onSave={(v) => upsertJournalDay({ entry_date: day.date, market_view: v, book_id: bookId }).then(reload)} />
 
       {day.notes.length > 0 && (
         <div className="flex flex-col gap-1">
@@ -171,7 +173,7 @@ function DayCard({ day, instruments, isToday, reload }: {
         </div>
       )}
       {isToday && <NoteComposer instruments={instruments}
-        onAdd={(body, sym) => addJournalNote({ body, instrument_symbol: sym }).then(reload)} />}
+        onAdd={(body, sym) => addJournalNote({ body, instrument_symbol: sym, book_id: bookId }).then(reload)} />}
 
       {day.trades.length > 0 && (
         <div className="flex flex-col gap-1 border-t border-edge/60 pt-2">
@@ -187,7 +189,7 @@ function DayCard({ day, instruments, isToday, reload }: {
           ))}
         </div>
       )}
-      {isToday && <TradeComposer instruments={instruments} onAdd={reload} />}
+      {isToday && <TradeComposer instruments={instruments} onAdd={reload} bookId={bookId} />}
 
       {day.missed.length > 0 && (
         <div className="flex flex-col gap-1 border-t border-edge/60 pt-2">
@@ -204,21 +206,75 @@ function DayCard({ day, instruments, isToday, reload }: {
       <div className="border-t border-edge/60 pt-2">
         <div className="text-[11px] uppercase tracking-wide text-muted mb-1">Result</div>
         <AutoText value={day.result} placeholder="how did it go…" rows={2}
-          onSave={(v) => upsertJournalDay({ entry_date: day.date, result: v }).then(reload)} />
+          onSave={(v) => upsertJournalDay({ entry_date: day.date, result: v, book_id: bookId }).then(reload)} />
       </div>
     </Card>
+  )
+}
+
+type BookDTO = { id: number; name: string; is_default: boolean }
+
+/** Journal switcher — each book is a separate log (a NIFTY book beside the
+ *  commodities one). Creating one switches to it immediately. */
+function BookBar({ books, bookId, onPick, onCreated }: {
+  books: BookDTO[]; bookId?: number; onPick: (id: number) => void; onCreated: () => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const create = async () => {
+    const clean = name.trim()
+    if (!clean) return
+    try {
+      const b = await addJournalBook({ name: clean })
+      setName(''); setAdding(false); onCreated(); if (b?.id) onPick(b.id)
+    } catch { /* duplicate name — leave the field up so it can be corrected */ }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {books.map((b) => (
+        <Button key={b.id} variant="toolbar" size="toolbar"
+          onClick={() => onPick(b.id)}
+          className={b.id === bookId
+            ? 'bg-panel2 text-zinc-100 border border-edge'
+            : 'text-muted hover:text-zinc-200'}>
+          {b.name}
+        </Button>
+      ))}
+      {adding ? (
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') create(); if (e.key === 'Escape') setAdding(false) }}
+          onBlur={create} placeholder="journal name…"
+          className="bg-panel2 border border-edge rounded px-2 py-1 text-sm w-36" />
+      ) : (
+        <Button variant="toolbar" size="toolbar" onClick={() => setAdding(true)}
+          className="text-muted hover:text-zinc-200">＋ journal</Button>
+      )}
+    </div>
   )
 }
 
 export default function JournalView() {
   const [feed, setFeed] = useState<JournalFeedDTO | null>(null)
   const [instruments, setInstruments] = useState<JournalInstrumentDTO[]>([])
+  const [books, setBooks] = useState<BookDTO[]>([])
+  const [bookId, setBookId] = useState<number | undefined>(undefined)
+
+  const loadBooks = () => getJournalBooks()
+    .then((d) => {
+      const list: BookDTO[] = d.books || []
+      setBooks(list)
+      // settle on the default book until the owner picks another
+      setBookId((cur) => cur ?? list.find((b) => b.is_default)?.id ?? list[0]?.id)
+    })
+    .catch(() => {})
 
   const reload = () => {
-    getJournalFeed().then(setFeed).catch(() => {})
+    getJournalFeed(60, bookId).then(setFeed).catch(() => {})
     getJournalInstruments().then((d) => setInstruments(d.instruments || [])).catch(() => {})
   }
-  useEffect(() => { reload(); const t = setInterval(reload, 15000); return () => clearInterval(t) }, [])
+  useEffect(() => { loadBooks() }, [])
+  // refetch whenever the journal changes, and keep polling that one
+  useEffect(() => { reload(); const t = setInterval(reload, 15000); return () => clearInterval(t) }, [bookId])
 
   // Pin "today" at the top, creating a synthetic empty day if none exists yet.
   const days = useMemo(() => {
@@ -232,6 +288,8 @@ export default function JournalView() {
   return (
     <div className="flex flex-col gap-3">
       <Card className="p-3 flex flex-wrap items-center gap-3">
+        <BookBar books={books} bookId={bookId} onPick={setBookId} onCreated={loadBooks} />
+        <span className="h-4 w-px bg-edge" />
         {(feed?.bias ?? []).map((b) => (
           <BiasChip key={b.horizon} bias={b}
             onSave={(stance, note) => putJournalBias(b.horizon, { stance, note }).then(reload)} />
@@ -246,7 +304,8 @@ export default function JournalView() {
       </Card>
 
       {days.map((d) => (
-        <DayCard key={d.date} day={d} instruments={instruments} isToday={d.date === todayISO()} reload={reload} />
+        <DayCard key={d.date} day={d} instruments={instruments} isToday={d.date === todayISO()}
+          reload={reload} bookId={bookId} />
       ))}
     </div>
   )

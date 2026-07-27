@@ -178,13 +178,23 @@ export const setArchiveStatus = (strategyKey: string, status: string) =>
   post(`/api/portfolio/archive/${encodeURIComponent(strategyKey)}/status`, { status })
 
 // ── Trade journal (backend/app/journal — isolated from the engine) ─────────
+// Books = separate journals (one per instrument/theme). Every dated call carries
+// an optional book_id; omitting it falls back to the default book server-side.
+const bq = (bookId?: number, sep: '?' | '&' = '?') =>
+  bookId == null ? '' : `${sep}book_id=${bookId}`
+export const getJournalBooks = (includeArchived = false) =>
+  j(`/api/journal/books${includeArchived ? '?include_archived=true' : ''}`)
+export const addJournalBook = (body: { name: string; description?: string }) =>
+  post('/api/journal/books', body)
+export const archiveJournalBook = (id: number) =>
+  post(`/api/journal/books/${id}/archive`, {})
 export const getJournalInstruments = () => j('/api/journal/instruments')
 export const getJournalTrades = (openOnly?: boolean) =>
   j(`/api/journal/trades${openOnly ? '?open_only=true' : ''}`)
 export const getJournalOpenTradesMtm = () => j('/api/journal/trades/open-mtm')
 export const addJournalTrade = (body: {
   symbol: string; direction: 'LONG' | 'SHORT'; lots: number; entry_price: number
-  setup_tag?: string; notes?: string; view_id?: number
+  setup_tag?: string; notes?: string; view_id?: number; book_id?: number
 }) => post('/api/journal/trades', body)
 export const closeJournalTrade = (
   id: number,
@@ -193,17 +203,18 @@ export const closeJournalTrade = (
 export const addJournalMissed = (body: {
   symbol: string; direction: 'LONG' | 'SHORT'; skip_reason: string
   setup_tag?: string; hypothetical_entry?: number; hypothetical_exit?: number
+  book_id?: number
 }) => post('/api/journal/missed', body)
 export const getJournalMissed = () => j('/api/journal/missed')
-export const getJournalStats = () => j('/api/journal/stats')
+export const getJournalStats = (bookId?: number) => j(`/api/journal/stats${bq(bookId)}`)
 export const getJournalViews = () => j('/api/journal/views')
 export const addJournalView = (body: { name: string; thesis?: string }) =>
   post('/api/journal/views', body)
-export const getJournalFeed = (limit = 60): Promise<import('./types').JournalFeedDTO> =>
-  j(`/api/journal/feed?limit=${limit}`)
-export const upsertJournalDay = (body: { entry_date: string; market_view?: string; result?: string }) =>
+export const getJournalFeed = (limit = 60, bookId?: number): Promise<import('./types').JournalFeedDTO> =>
+  j(`/api/journal/feed?limit=${limit}${bq(bookId, '&')}`)
+export const upsertJournalDay = (body: { entry_date: string; market_view?: string; result?: string; book_id?: number }) =>
   post('/api/journal/days', body)
-export const addJournalNote = (body: { body: string; instrument_symbol?: string }) =>
+export const addJournalNote = (body: { body: string; instrument_symbol?: string; book_id?: number }) =>
   post('/api/journal/notes', body)
 export const deleteJournalNote = (id: number) => del(`/api/journal/notes/${id}`)
 export const getJournalBias = () => j('/api/journal/bias')
