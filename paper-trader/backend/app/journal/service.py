@@ -8,14 +8,65 @@ import datetime as dt
 
 from sqlalchemy import select
 
+from app.journal.db import DEFAULT_BOOK_NAME
 from app.journal.models import (
-    JournalBias, JournalDay, JournalInstrument, JournalMissed, JournalNote,
-    JournalTag, JournalTrade, JournalView,
+    JournalBias, JournalBook, JournalDay, JournalInstrument, JournalMissed,
+    JournalNote, JournalTag, JournalTrade, JournalView,
 )
 from app.journal.pnl import net_pnl, unrealized_pnl
 
 CURRENT_VIEW_NAME = "current"
 BIAS_HORIZONS = ("6M", "1M")
+
+
+# ── books (workbooks) ────────────────────────────────────────────────────
+def default_book(s) -> JournalBook:
+    """The fallback book every un-booked write lands in. Created on demand so a
+    session opened against a DB that predates books still resolves one."""
+    row = s.execute(select(JournalBook).where(JournalBook.is_default.is_(True))).scalar()
+    if row is None:
+        row = JournalBook(name=DEFAULT_BOOK_NAME, is_default=True,
+                          created_at=dt.datetime.now())
+        s.add(row)
+        s.commit()
+    return row
+
+
+def resolve_book_id(s, book_id: int | None) -> int:
+    """Caller-supplied book, or the default when omitted. Every write path goes
+    through this so a row can never be created without a book."""
+    if book_id is None:
+        return default_book(s).id
+    if s.get(JournalBook, book_id) is None:
+        raise ValueError(f"unknown journal book {book_id}")
+    return book_id
+
+
+def create_book(s, *, name: str, description: str | None = None) -> JournalBook:
+    b = JournalBook(name=name, description=description, created_at=dt.datetime.now())
+    s.add(b)
+    s.commit()
+    return b
+
+
+def list_books(s, *, include_archived: bool = False) -> list[JournalBook]:
+    q = select(JournalBook).order_by(JournalBook.is_default.desc(), JournalBook.name)
+    if not include_archived:
+        q = q.where(JournalBook.archived_at.is_(None))
+    return list(s.execute(q).scalars().all())
+
+
+def archive_book(s, book_id: int) -> JournalBook:
+    """Hide a book without deleting its entries. The default book is refused —
+    it is where un-booked writes land, so archiving it would orphan them."""
+    b = s.get(JournalBook, book_id)
+    if b is None:
+        raise ValueError(f"unknown journal book {book_id}")
+    if b.is_default:
+        raise ValueError("the default journal cannot be archived")
+    b.archived_at = dt.datetime.now()
+    s.commit()
+    return b
 
 
 def ensure_current_view(s) -> JournalView:
@@ -48,9 +99,11 @@ def _upsert_tag(s, tag: str | None) -> None:
 
 def add_trade(s, *, symbol: str, direction: str, lots: int, entry_price: float,
               entry_time: dt.datetime, setup_tag: str | None = None,
-              notes: str | None = None, view_id: int | None = None) -> JournalTrade:
+              notes: str | None = None, view_id: int | None = None,
+              book_id: int | None = None) -> JournalTrade:
     vid = view_id if view_id is not None else ensure_current_view(s).id
-    t = JournalTrade(instrument_symbol=symbol, direction=direction, lots=lots,
+    t = JournalTrade(book_id=resolve_book_id(s, book_id),
+                      instrument_symbol=symbol, direction=direction, lots=lots,
                       entry_price=entry_price, entry_time=entry_time, view_id=vid,
                       setup_tag=setup_tag, notes=notes)
     s.add(t)
@@ -74,8 +127,10 @@ def add_missed(s, *, symbol: str, direction: str, seen_at: dt.datetime,
                skip_reason: str, setup_tag: str | None = None,
                hypothetical_entry: float | None = None,
                hypothetical_exit: float | None = None,
-               notes: str | None = None) -> JournalMissed:
-    m = JournalMissed(instrument_symbol=symbol, direction=direction, seen_at=seen_at,
+               notes: str | None = None,
+               book_id: int | None = None) -> JournalMissed:
+    m = JournalMissed(book_id=resolve_book_id(s, book_id),
+                       instrument_symbol=symbol, direction=direction, seen_at=seen_at,
                        skip_reason=skip_reason, setup_tag=setup_tag,
                        hypothetical_entry=hypothetical_entry,
                        hypothetical_exit=hypothetical_exit, notes=notes)
@@ -85,15 +140,22 @@ def add_missed(s, *, symbol: str, direction: str, seen_at: dt.datetime,
     return m
 
 
-def list_trades(s, *, open_only: bool = False) -> list[JournalTrade]:
-    q = select(JournalTrade).order_by(JournalTrade.entry_time.desc())
+def list_trades(s, *, open_only: bool = False,
+                book_id: int | None = None) -> list[JournalTrade]:
+    """Trades in ONE book. `book_id=None` means the default book, matching the
+    write paths — never 'every book', so a caller can't accidentally mix journals."""
+    q = (select(JournalTrade).where(JournalTrade.book_id == resolve_book_id(s, book_id))
+         .order_by(JournalTrade.entry_time.desc()))
     if open_only:
         q = q.where(JournalTrade.exit_time.is_(None))
     return list(s.execute(q).scalars().all())
 
 
-def list_missed(s) -> list[JournalMissed]:
-    return list(s.execute(select(JournalMissed).order_by(JournalMissed.seen_at.desc())).scalars().all())
+def list_missed(s, *, book_id: int | None = None) -> list[JournalMissed]:
+    return list(s.execute(
+        select(JournalMissed)
+        .where(JournalMissed.book_id == resolve_book_id(s, book_id))
+        .order_by(JournalMissed.seen_at.desc())).scalars().all())
 
 
 def trade_unrealized(trade: JournalTrade, inst: JournalInstrument, last_price: float) -> float:
@@ -109,8 +171,8 @@ def _trade_net(t: JournalTrade, inst: JournalInstrument) -> float | None:
                     manual_net_pnl=t.manual_net_pnl)
 
 
-def stats(s) -> dict:
-    trades = list_trades(s)
+def stats(s, *, book_id: int | None = None) -> dict:
+    trades = list_trades(s, book_id=book_id)
     insts = {r.symbol: r for r in s.execute(select(JournalInstrument)).scalars().all()}
     views = {r.id: r.name for r in s.execute(select(JournalView)).scalars().all()}
 
@@ -131,7 +193,7 @@ def stats(s) -> dict:
         vrow["trades"] += 1
         vrow["net_pnl"] += net
 
-    missed = list_missed(s)
+    missed = list_missed(s, book_id=book_id)
     hyp_total = 0.0
     for m in missed:
         if m.hypothetical_entry is None or m.hypothetical_exit is None:
@@ -149,13 +211,16 @@ def stats(s) -> dict:
     }
 
 
-def upsert_day(s, *, entry_date, market_view=None, result=None) -> JournalDay:
-    """Create or update the day row. Only non-None fields overwrite, so saving
-    the narrative never wipes the result and vice versa."""
+def upsert_day(s, *, entry_date, market_view=None, result=None,
+               book_id: int | None = None) -> JournalDay:
+    """Create or update the day row for ONE book. Only non-None fields overwrite,
+    so saving the narrative never wipes the result and vice versa. Keyed on
+    (book, date): two journals can each hold their own view of the same day."""
     now = dt.datetime.now()
-    row = s.get(JournalDay, entry_date)
+    bid = resolve_book_id(s, book_id)
+    row = s.get(JournalDay, (bid, entry_date))
     if row is None:
-        row = JournalDay(entry_date=entry_date, market_view=market_view,
+        row = JournalDay(book_id=bid, entry_date=entry_date, market_view=market_view,
                          result=result, created_at=now, updated_at=now)
         s.add(row)
     else:
@@ -168,8 +233,10 @@ def upsert_day(s, *, entry_date, market_view=None, result=None) -> JournalDay:
     return row
 
 
-def add_note(s, *, body, noted_at, instrument_symbol=None) -> JournalNote:
-    note = JournalNote(body=body, noted_at=noted_at, instrument_symbol=instrument_symbol)
+def add_note(s, *, body, noted_at, instrument_symbol=None,
+             book_id: int | None = None) -> JournalNote:
+    note = JournalNote(book_id=resolve_book_id(s, book_id), body=body,
+                       noted_at=noted_at, instrument_symbol=instrument_symbol)
     s.add(note)
     s.commit()
     return note
@@ -184,9 +251,10 @@ def delete_note(s, note_id) -> bool:
     return True
 
 
-def list_notes(s) -> list[JournalNote]:
+def list_notes(s, *, book_id: int | None = None) -> list[JournalNote]:
     return list(s.execute(
-        select(JournalNote).order_by(JournalNote.noted_at.desc())).scalars().all())
+        select(JournalNote).where(JournalNote.book_id == resolve_book_id(s, book_id))
+        .order_by(JournalNote.noted_at.desc())).scalars().all())
 
 
 def seed_bias(s) -> None:
@@ -235,12 +303,15 @@ def _missed_row(m: JournalMissed) -> dict:
             "setup_tag": m.setup_tag, "skip_reason": m.skip_reason}
 
 
-def feed(s, *, limit: int = 60) -> dict:
+def feed(s, *, limit: int = 60, book_id: int | None = None) -> dict:
+    """The day-grouped feed for ONE book (default book when unspecified)."""
+    bid = resolve_book_id(s, book_id)
     insts = {r.symbol: r for r in s.execute(select(JournalInstrument)).scalars().all()}
-    trades = list_trades(s)
-    notes = list_notes(s)
-    missed = list_missed(s)
-    day_rows = {d.entry_date: d for d in s.execute(select(JournalDay)).scalars().all()}
+    trades = list_trades(s, book_id=bid)
+    notes = list_notes(s, book_id=bid)
+    missed = list_missed(s, book_id=bid)
+    day_rows = {d.entry_date: d for d in s.execute(
+        select(JournalDay).where(JournalDay.book_id == bid)).scalars().all()}
 
     dates = set(day_rows)
     dates.update(t.entry_time.date() for t in trades)

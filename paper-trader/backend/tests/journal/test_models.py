@@ -5,6 +5,12 @@ import pytest
 from app.journal.db import make_engine, make_sessionmaker, init_journal_db
 from app.journal.models import (
     JournalInstrument, JournalView, JournalTrade, JournalMissed, JournalTag)
+from app.journal.service import default_book
+
+
+def _book_id(s) -> int:
+    """Every dated row belongs to a book — the default one unless stated."""
+    return default_book(s).id
 
 
 def _session(tmp_path):
@@ -51,6 +57,7 @@ def test_trade_roundtrip_open_and_closed(tmp_path):
     s.add_all([inst, view])
     s.commit()
     t = JournalTrade(
+        book_id=_book_id(s),
         instrument_symbol="GOLDM", direction="LONG", lots=1,
         entry_price=72000.0, entry_time=dt.datetime.now(), view_id=view.id,
         setup_tag="breakout", notes="test entry")
@@ -71,6 +78,7 @@ def test_missed_roundtrip(tmp_path):
     s.add(inst)
     s.commit()
     m = JournalMissed(
+        book_id=_book_id(s),
         instrument_symbol="SILVERM", direction="SHORT", seen_at=dt.datetime.now(),
         setup_tag="reversal", skip_reason="was away from desk",
         hypothetical_entry=90000.0, hypothetical_exit=89500.0)
@@ -90,19 +98,21 @@ from app.journal.models import JournalBias, JournalDay, JournalNote
 
 
 def test_journal_day_roundtrip(session):
-    session.add(JournalDay(entry_date=dt.date(2026, 7, 17),
+    bid = _book_id(session)
+    session.add(JournalDay(book_id=bid, entry_date=dt.date(2026, 7, 17),
                            market_view="nifty broke 24200",
                            result="waiting for monday",
                            created_at=dt.datetime(2026, 7, 17, 9),
                            updated_at=dt.datetime(2026, 7, 17, 9)))
     session.commit()
-    row = session.get(JournalDay, dt.date(2026, 7, 17))
+    row = session.get(JournalDay, (bid, dt.date(2026, 7, 17)))
     assert row.market_view == "nifty broke 24200"
     assert row.result == "waiting for monday"
 
 
 def test_journal_note_roundtrip(session):
-    note = JournalNote(noted_at=dt.datetime(2026, 7, 17, 14, 32),
+    note = JournalNote(book_id=_book_id(session),
+                       noted_at=dt.datetime(2026, 7, 17, 14, 32),
                        body="exited +900 too early", instrument_symbol=None)
     session.add(note)
     session.commit()

@@ -12,6 +12,24 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.journal.db import JournalBase
 
 
+class JournalBook(JournalBase):
+    """One workbook — the owner keeps a separate journal per instrument or theme
+    (a NIFTY book, a commodities book) rather than one undifferentiated log.
+
+    Every DATED artefact (day, trade, missed setup, note) belongs to exactly one
+    book. Instruments, views, tags and bias stay global: they are reference data
+    shared across books, not entries. The default book (`archivable=False`) is the
+    fallback every un-booked write lands in and can never be archived away."""
+    __tablename__ = "journal_books"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # the fallback book — protected from archiving so no row can be orphaned
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    archived_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class JournalInstrument(JournalBase):
     """The journal's own instrument list — separate from the bot's universe
     because the bot trades full-size CRUDEOIL/NATURALGAS while the owner
@@ -47,6 +65,7 @@ class JournalTrade(JournalBase):
     have net computed from entry/exit price + app.engine.charges."""
     __tablename__ = "journal_trades"
     id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(Integer, ForeignKey("journal_books.id"))
     instrument_symbol: Mapped[str] = mapped_column(
         String(32), ForeignKey("journal_instruments.symbol"))
     direction: Mapped[str] = mapped_column(String(8))  # LONG | SHORT
@@ -68,6 +87,7 @@ class JournalMissed(JournalBase):
     real P&L)."""
     __tablename__ = "journal_missed"
     id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(Integer, ForeignKey("journal_books.id"))
     instrument_symbol: Mapped[str] = mapped_column(
         String(32), ForeignKey("journal_instruments.symbol"))
     direction: Mapped[str] = mapped_column(String(8))
@@ -90,8 +110,11 @@ class JournalTag(JournalBase):
 class JournalDay(JournalBase):
     """One row per calendar date — the day-feed backbone. `market_view` is the
     free-text 'what I'm feeling' narrative; `result` is the end-of-day summary.
-    Upserted by date; a date with only notes/trades needs no row here."""
+    Upserted by (book, date); a date with only notes/trades needs no row here.
+    Keyed per BOOK — each journal carries its own view of the same calendar day."""
     __tablename__ = "journal_days"
+    book_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("journal_books.id"), primary_key=True)
     entry_date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
     market_view: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -104,6 +127,7 @@ class JournalNote(JournalBase):
     the day feed by `noted_at.date()`. Optional instrument tag; no mood field."""
     __tablename__ = "journal_notes"
     id: Mapped[int] = mapped_column(primary_key=True)
+    book_id: Mapped[int] = mapped_column(Integer, ForeignKey("journal_books.id"))
     noted_at: Mapped[dt.datetime] = mapped_column(DateTime)
     body: Mapped[str] = mapped_column(Text)
     instrument_symbol: Mapped[str | None] = mapped_column(

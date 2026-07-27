@@ -6,7 +6,13 @@ import datetime as dt
 from pydantic import BaseModel
 
 
+class AddBookRequest(BaseModel):
+    name: str
+    description: str | None = None
+
+
 class AddTradeRequest(BaseModel):
+    book_id: int | None = None
     symbol: str
     direction: str          # LONG | SHORT
     lots: int
@@ -24,6 +30,7 @@ class CloseTradeRequest(BaseModel):
 
 
 class AddMissedRequest(BaseModel):
+    book_id: int | None = None
     symbol: str
     direction: str
     seen_at: dt.datetime | None = None
@@ -40,12 +47,14 @@ class AddViewRequest(BaseModel):
 
 
 class UpsertDayRequest(BaseModel):
+    book_id: int | None = None
     entry_date: dt.date
     market_view: str | None = None
     result: str | None = None
 
 
 class AddNoteRequest(BaseModel):
+    book_id: int | None = None
     body: str
     noted_at: dt.datetime | None = None
     instrument_symbol: str | None = None

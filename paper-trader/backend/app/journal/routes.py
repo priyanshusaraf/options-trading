@@ -13,10 +13,11 @@ from sqlalchemy import select
 from app.journal import service
 from app.journal.config import journal_db_path
 from app.journal.db import init_journal_db, make_engine, make_sessionmaker
-from app.journal.models import JournalInstrument, JournalTrade, JournalView
+from app.journal.models import (
+    JournalBook, JournalInstrument, JournalTrade, JournalView)
 from app.journal.schemas import (
-    AddMissedRequest, AddNoteRequest, AddTradeRequest, AddViewRequest,
-    CloseTradeRequest, UpsertBiasRequest, UpsertDayRequest,
+    AddBookRequest, AddMissedRequest, AddNoteRequest, AddTradeRequest,
+    AddViewRequest, CloseTradeRequest, UpsertBiasRequest, UpsertDayRequest,
 )
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
@@ -92,6 +93,49 @@ def _trade_dict(t: JournalTrade) -> dict:
     }
 
 
+def _book_dict(b: JournalBook) -> dict:
+    return {"id": b.id, "name": b.name, "description": b.description,
+            "is_default": b.is_default, "created_at": b.created_at.isoformat(),
+            "archived_at": b.archived_at.isoformat() if b.archived_at else None}
+
+
+def _resolved_book(s, book_id: int | None) -> int:
+    """Book for this request, 400ing on an unknown id. Silently falling back to the
+    default would file the entry in the WRONG journal, which is worse than an error."""
+    try:
+        return service.resolve_book_id(s, book_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/books")
+def list_books(include_archived: bool = False):
+    with _session() as s:
+        service.default_book(s)          # guarantee one exists on a cold DB
+        return {"books": [_book_dict(b) for b in
+                          service.list_books(s, include_archived=include_archived)]}
+
+
+@router.post("/books")
+def add_book(req: AddBookRequest):
+    with _session() as s:
+        if s.execute(select(JournalBook).where(JournalBook.name == req.name)).scalar():
+            raise HTTPException(400, f"a journal named '{req.name}' already exists")
+        return _book_dict(service.create_book(s, name=req.name,
+                                              description=req.description))
+
+
+@router.post("/books/{book_id}/archive")
+def archive_book(book_id: int):
+    with _session() as s:
+        if s.get(JournalBook, book_id) is None:
+            raise HTTPException(404, "journal not found")
+        try:
+            return _book_dict(service.archive_book(s, book_id))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+
 @router.get("/instruments")
 def list_instruments():
     with _session() as s:
@@ -105,19 +149,22 @@ def list_instruments():
 @router.post("/trades")
 def add_trade(req: AddTradeRequest):
     with _session() as s:
+        book_id = _resolved_book(s, req.book_id)
         if s.get(JournalInstrument, req.symbol) is None:
             raise HTTPException(400, f"unknown journal instrument {req.symbol}")
         t = service.add_trade(
             s, symbol=req.symbol, direction=req.direction, lots=req.lots,
             entry_price=req.entry_price, entry_time=req.entry_time or dt.datetime.now(),
-            setup_tag=req.setup_tag, notes=req.notes, view_id=req.view_id)
+            setup_tag=req.setup_tag, notes=req.notes, view_id=req.view_id,
+            book_id=book_id)
         return _trade_dict(t)
 
 
 @router.get("/trades")
-def list_trades(open_only: bool = False):
+def list_trades(open_only: bool = False, book_id: int | None = None):
     with _session() as s:
-        return {"trades": [_trade_dict(t) for t in service.list_trades(s, open_only=open_only)]}
+        return {"trades": [_trade_dict(t) for t in service.list_trades(
+            s, open_only=open_only, book_id=_resolved_book(s, book_id))]}
 
 
 @router.post("/trades/{trade_id}/close")
@@ -132,7 +179,7 @@ def close_trade(trade_id: int, req: CloseTradeRequest):
 
 
 @router.get("/trades/open-mtm")
-def open_trades_with_mtm():
+def open_trades_with_mtm(book_id: int | None = None):
     """Open trades with live unrealized P&L via the shared market-data provider
     (read-only quote lookup). A quote failure degrades that row's `unrealized`
     to null rather than failing the whole list."""
@@ -142,7 +189,8 @@ def open_trades_with_mtm():
     with _session() as s:
         insts = {r.symbol: r for r in s.execute(select(JournalInstrument)).scalars().all()}
         out = []
-        for t in service.list_trades(s, open_only=True):
+        for t in service.list_trades(s, open_only=True,
+                                     book_id=_resolved_book(s, book_id)):
             inst = insts.get(t.instrument_symbol)
             row = _trade_dict(t)
             row["unrealized"] = None
@@ -171,14 +219,15 @@ def add_missed(req: AddMissedRequest):
             s, symbol=req.symbol, direction=req.direction,
             seen_at=req.seen_at or dt.datetime.now(), skip_reason=req.skip_reason,
             setup_tag=req.setup_tag, hypothetical_entry=req.hypothetical_entry,
-            hypothetical_exit=req.hypothetical_exit, notes=req.notes)
+            hypothetical_exit=req.hypothetical_exit, notes=req.notes,
+            book_id=_resolved_book(s, req.book_id))
         return {"id": m.id}
 
 
 @router.get("/missed")
-def list_missed():
+def list_missed(book_id: int | None = None):
     with _session() as s:
-        rows = service.list_missed(s)
+        rows = service.list_missed(s, book_id=_resolved_book(s, book_id))
         return {"missed": [
             {"id": m.id, "instrument_symbol": m.instrument_symbol, "direction": m.direction,
              "seen_at": m.seen_at.isoformat(), "setup_tag": m.setup_tag,
@@ -188,9 +237,9 @@ def list_missed():
 
 
 @router.get("/stats")
-def get_stats():
+def get_stats(book_id: int | None = None):
     with _session() as s:
-        return service.stats(s)
+        return service.stats(s, book_id=_resolved_book(s, book_id))
 
 
 @router.post("/views")
@@ -214,16 +263,17 @@ def list_views():
 
 
 @router.get("/feed")
-def get_feed(limit: int = 60):
+def get_feed(limit: int = 60, book_id: int | None = None):
     with _session() as s:
-        return service.feed(s, limit=limit)
+        return service.feed(s, limit=limit, book_id=_resolved_book(s, book_id))
 
 
 @router.post("/days")
 def upsert_day(req: UpsertDayRequest):
     with _session() as s:
         d = service.upsert_day(s, entry_date=req.entry_date,
-                               market_view=req.market_view, result=req.result)
+                               market_view=req.market_view, result=req.result,
+                               book_id=_resolved_book(s, req.book_id))
         return {"entry_date": d.entry_date.isoformat(),
                 "market_view": d.market_view, "result": d.result}
 
@@ -235,7 +285,8 @@ def add_note(req: AddNoteRequest):
             raise HTTPException(400, f"unknown journal instrument {req.instrument_symbol}")
         note = service.add_note(s, body=req.body,
                                 noted_at=req.noted_at or dt.datetime.now(),
-                                instrument_symbol=req.instrument_symbol)
+                                instrument_symbol=req.instrument_symbol,
+                                book_id=_resolved_book(s, req.book_id))
         return {"id": note.id, "noted_at": note.noted_at.isoformat(),
                 "body": note.body, "instrument_symbol": note.instrument_symbol}
 
