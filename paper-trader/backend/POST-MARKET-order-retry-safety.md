@@ -42,7 +42,9 @@ Root memory: `live-execution-enabled.md`.
 - **No transient-vs-permanent distinction.** A timeout (retry sensible) and `IP not allowed` / invalid token / no-permission (retry is **futile — can never succeed**) are treated identically → a permanent config error becomes an *infinite* retry loop at scan cadence.
 
 ### Why it exists
-The whole live-order path (`LiveBroker`/`KiteOrderClient`/`LiveExecutionKite`) was only ever exercised against a **mock order client that always fills** (per `live-execution-enabled.md`: the live path had never placed a real order). The "broker says **no**, repeatedly" branch had never run.
+When this was written, the whole live-order path (`LiveBroker`/`KiteOrderClient`/`LiveExecutionKite`) had only ever been exercised against a **mock order client that always fills**. The "broker says **no**, repeatedly" branch had never run.
+
+> **Update 2026-07-28:** the live path itself is no longer untested — 50 real orders and 34 real trades were placed 2026-07-13 → 2026-07-22. But the production `order_journal` shows 8 `NEVER_PLACED` entry rows against 49 fills, so the rejection branch has been *reached* without ever being properly handled. The gap this document describes is still open.
 
 ### Fix
 1. **Classify the failure.** Add a small classifier for Kite `place_order` errors:

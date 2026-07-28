@@ -202,7 +202,7 @@
         <li><span class="mk">1</span><span>Finish the last two failures, then commit the E2 work on its own branch.</span></li>
         <li class="fire"><span class="mk">2</span><span><strong>Workstream B — safety.</strong> Top of the
           roadmap's own ordering. <strong>B-E1 is a silent, still-live whole-book risk-loop abort</strong> on real money.</span></li>
-        <li><span class="mk">3</span><span>Add <code>--exclude .env</code> to the deploy rsync. This has taken the VPS down twice.</span></li>
+        <li><span class="mk">3</span><span><s>Add <code>--exclude .env</code> to the deploy rsync.</s> <strong>DONE 2026-07-28</strong> — <code>scripts/deploy.sh</code> is now the only sanctioned deploy path: exclusion list enforced by a preflight guard, refuses dirty trees and market-hours runs, never deletes without typed confirmation, and verifies <code>.env</code> + built SPA + <code>GET /</code> + the reported build SHA after restart.</span></li>
       </ul>
     </div>
   </div>
@@ -368,8 +368,14 @@
           <code>equity_snapshots</code>. Redesign undecided.</span></li>
         <li class="gate"><span class="mk">!</span><span><strong>1 GB droplet is tight</strong> — the 2026-07-23
           outage was two memory leaks, both fixed and deployed. A resize to 2 GB is an owner action.</span></li>
-        <li class="gate"><span class="mk">!</span><span>The live order path has <strong>never placed a real
-          order</strong> outside mock tests.</span></li>
+        <li class="gate"><span class="mk">!</span><span><strong>Thin live sample</strong> — the live order path
+          <em>is</em> proven (50 real orders, 34 real trades, 2026-07-13 → 2026-07-22), but 34 trades over
+          10 days says nothing about edge. Corrected 2026-07-28; this line previously claimed the path had
+          never fired.</span></li>
+        <li class="fire"><span class="mk">!!</span><span><strong>Equity curve overstates real equity ~2×</strong> —
+          the ledger is pinned to the synthetic &#8377;50,000 base and the auto-reanchor cannot fire on an
+          account that has already traded. Reported &#8377;50,744 vs. a real account net of
+          &#8377;14,236&ndash;&#8377;27,441.</span></li>
       </ul>
     </div>
   </div>

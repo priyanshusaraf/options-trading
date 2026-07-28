@@ -39,11 +39,12 @@ equity curve, and backtest figure is reported after a segment-aware Indian broke
 tax, and fee schedule, reconciled to the paisa.
 
 **What it is not, yet.** The platform has not established a verified, positive,
-net-of-cost edge on the instrument it actually trades (options), and its live
-order-placement path has never executed a real order. These are stated plainly
-throughout this document. The engineering is mature; the *proof of edge* is not. A
-sophisticated buyer should read this as a rigorously engineered execution and
-research platform whose economic thesis still requires live validation.
+net-of-cost edge. It **has** traded real money since 2026-07-13 (50 orders, 34 trades),
+so the live order path is proven — but the sample is far too thin to say anything about
+edge, and the reported equity curve is known to overstate real account equity (§6).
+These are stated plainly throughout this document. The engineering is mature; the *proof
+of edge* is not. A sophisticated buyer should read this as a rigorously engineered
+execution and research platform whose economic thesis still requires validation.
 
 ---
 
@@ -330,24 +331,34 @@ net-of-cost edge **on options** is unresolved. The historical work to date is on
 *underlying*, which cannot by itself confirm the option-level result. The platform's
 own documentation names this the single biggest hole in the edge story.
 
+**The live order path is proven; the edge is not.** *(Corrected 2026-07-28 against
+`docs/audit/ground-truth-2026-07-28.md` §3 — this section previously claimed the live
+path had never fired.)* The real-execution chain has been exercised against the
+exchange: **50 real orders placed and 34 real trades booked between 2026-07-13 and
+2026-07-22**, evidenced by `mode='live'` on every `Trade` row in the production database
+and 19-digit Zerodha order IDs in `order_journal`. Every trade in production is live;
+there are zero paper rows. What remains unproven is the *economics*, not the plumbing.
+
 **Requires validation before it can be relied upon.**
-- **The live order path has never placed a real order.** The entire real-execution
-  chain has been exercised only against a simulated order client in tests. The first
-  real order will be its own first real-world test.
+- **No verified edge on the traded instrument.** 34 trades over 10 calendar days is a
+  statistically meaningless sample. Realized P&L on it was +₹744.
+- **The reported equity curve overstates real equity.** The ledger is anchored to a
+  synthetic ₹50,000 base that the auto-reanchor cannot correct on any account that has
+  already traded. Over the same period the platform reported ₹50,744 while the real
+  Zerodha account net sat between ₹14,236 and ₹27,441 — roughly a 2× overstatement.
+  This is an open code bug, not a reporting nuance.
 - **Execution-cost (slippage) telemetry is not yet built.** The platform models
   charges rigorously but does not yet measure its own realized slippage — which, for
   options, is the dominant and least-known cost.
-- **The current code is committed but not yet deployed to the running process.** The
-  hardening work lives on a feature branch; the live process must be restarted onto
-  it before those fixes are actually in force.
 - **Regulatory registration** (broker-level algo registration / order tagging under
   the applicable Indian retail-algo framework) is flagged as a to-confirm item, not a
   completed one.
 
-**Honest bottom line on state.** The platform is a mature, well-tested *paper* system
-with a serious safety and accounting backbone, sitting one deployment step and one
-unproven-edge question away from being a live system — and several validation steps
-away from being a system with a *demonstrated* edge.
+**Honest bottom line on state.** The platform is a mature, well-tested system with a
+serious safety and accounting backbone that **has been trading real money since
+2026-07-13**. It is not pre-production. What it lacks is a demonstrated edge, trustworthy
+equity reporting, and slippage measurement — and its live sample is far too thin to
+settle any of those.
 
 ---
 
@@ -362,9 +373,11 @@ A sophisticated buyer should weigh all of the following:
 - **No verified edge on the traded instrument.** There is currently no
   statistically-established, net-of-cost positive edge on options. This is the
   central open question, and everything commercial depends on it.
-- **The live path is unfired.** Real order placement, token-refresh-in-flight, and the
-  live circuit breakers have not been exercised against a real exchange. This is an
-  operational risk until a controlled first live order proves the path.
+- **A thin live sample, not an unfired path.** *(Corrected 2026-07-28.)* Real order
+  placement has been exercised against the exchange 50 times across 34 trades. What has
+  *not* been proven under real conditions is the long tail: token-refresh-in-flight,
+  the circuit breakers, and the repeated-broker-rejection branch have still never run
+  for real.
 - **Unmodeled slippage.** Option bid-ask spread and slippage — the dominant real cost —
   are gated at entry but not yet *measured and fed back* into the backtest, so
   simulated equity still assumes near-mid fills.

@@ -36,7 +36,8 @@ protection is that the UI is Tailscale-only — the API itself doesn't enforce t
 - **Why it matters:** if the token isn't set in the VPS `.env`, anything that can reach
   `127.0.0.1:8090` on the box (any process, a future misconfigured bind/firewall rule) can arm,
   kill, open, or deploy with zero credentials. Could not verify prod `.env` from this checkout
-  (deploys are rsync'd and exclude `.env`).
+  (deploys exclude `.env` — enforced by `scripts/deploy.sh` since 2026-07-28; at the time of
+  this review it was prose only and had already failed once).
 - **Next action:** SSH the VPS and `grep PT_API_TOKEN backend/.env`. If absent → set it now.
   Then harden the code: in `main.py` lifespan, refuse-to-arm (or hard-fail startup) when
   `provider == "kite"` and `api_token == ""`, so a misconfigured live deploy can't run wide open.

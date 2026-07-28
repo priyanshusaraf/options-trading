@@ -20,3 +20,9 @@ backend/*-ledger-*.sql
 frontend/node_modules/
 frontend/dist/
 .playwright-mcp/
+
+# build stamp — generated per-deploy by scripts/deploy.sh, read at boot by
+# app/core/version.py, and stamped onto trades.build_sha. Never committed:
+# it describes a deployment, not a revision.
+backend/VERSION
+*.db.lock

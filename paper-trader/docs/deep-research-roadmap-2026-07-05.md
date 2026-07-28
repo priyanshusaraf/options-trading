@@ -1,5 +1,13 @@
 # Making a solo autonomous options/equity-intraday platform genuinely excellent — a decision-ready review
 
+> **Superseded in part, 2026-07-28.** This review was written **2026-07-05, before the
+> platform went live.** Its repeated premise that "the live path has never fired a real
+> order" (§1 item 4, §4.1) was true when written and is **false now** — the first real
+> order was placed **2026-07-13 09:30 IST**, and 50 orders / 34 trades followed through
+> 2026-07-22. Read those items as history, not as a to-do list. Note that the *sub*-items
+> they raise are still open: token-refresh-in-flight and the circuit breakers have still
+> never been exercised for real. Current state: `docs/audit/ground-truth-2026-07-28.md`.
+
 **Scope note on evidence quality.** This pipeline surfaced only 4 verified claims, and every one carried a strong, well-reasoned applicability dissent specific to your setup. Most of the statistically-flavored claims (Deflated Sharpe magnitudes, walk-forward-guarantees, the "25% cost drag," NSE price-band mechanics, SEBI feature lists) were **killed** in verification — usually because they were true in the abstract but wrong or inapplicable to a ₹22.5k solo 1-lot options bot that backtests underlyings. I have not smuggled killed claims back in. Where a recommendation rests on my own domain knowledge rather than a verified citation, I mark it **(evidence thin)** and you should treat it as a hypothesis to test, not a finding.
 
 ---

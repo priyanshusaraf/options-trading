@@ -9,13 +9,21 @@ exits → analytics) happens on its own.
 Starting capital is **₹50,000**. It now runs on **live Zerodha Kite Connect**
 market data.
 
-> ## 🔒 No real capital, ever
-> This platform places **no real orders**. The Kite client is `SafePaperKite`,
-> a subclass that **hard-disables every order-placement endpoint** (`place_order`,
-> `modify_order`, `cancel_order`, `exit_order`, all GTT/MF/convert methods) — any
-> such call raises immediately. Kite is used for **market data only** (quotes,
-> historical candles, instrument dumps). Fills are simulated internally against
-> the live LTP. There is no code path to the exchange's order book.
+> ## 🔴 This platform trades real money
+> *(Corrected 2026-07-28 — this box previously read "No real capital, ever" and claimed
+> there was no code path to the exchange's order book. That is false.)*
+>
+> The shipped `backend/.env` sets `PT_EXECUTION=live` and
+> `PT_LIVE_ACK=I_UNDERSTAND_REAL_MONEY`, which selects `LiveBroker`. The live path has
+> placed **50 real orders** and booked **34 real trades** (2026-07-13 → 2026-07-22).
+>
+> The `SafePaperKite` client is real and does what it says — it subclasses `KiteConnect`,
+> hard-disables every order-placement endpoint, and enforces a fail-closed route
+> allowlist — but it is the **market-data** provider. Order placement goes through a
+> separate client (`LiveExecutionKite`), which `SafePaperKite` does not gate.
+>
+> Paper mode still exists and is the fallback whenever either live flag is absent or the
+> provider is `mock`. See `docs/architecture.md` § Safety model.
 
 ---
 

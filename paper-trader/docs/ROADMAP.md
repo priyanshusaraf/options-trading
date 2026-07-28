@@ -170,8 +170,9 @@ an rsync + `systemctl restart paper-trader`.**
       locking, publishing the sessionmaker last. `tests/journal/test_init_race.py`
 - [ ] **VPS pending OS reboot (5 ESM security updates) — OWNER ACTION**, DO console,
       market-closed window.
-- [ ] **Deploy these fixes** (rsync with `--exclude .env --exclude '*.db'` +
-      `systemctl restart paper-trader`, then curl `/` AND `/api/health`).
+- [ ] **Deploy these fixes** — `scripts/deploy.sh` (it runs both suites + dryrun,
+      restarts, and verifies `.env`, the built SPA, `GET /`, `/api/health`, and the
+      reported build SHA). Never hand-roll the rsync.
 
 ## Workstream C — Exit tuning (winners being cut; roadmap approved 2026-07-15)
 
@@ -367,6 +368,37 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 - [ ] Mobile 390px one-handed check (never verified; extension can't reflow viewport —
       check on the actual phone).
 
+## Workstream F — Infrastructure, persistence & deploy safety (unscheduled)
+
+Carried forward 2026-07-28 from the
+[2026-07-23 memory-leak post-mortem](incidents/2026-07-23-memory-leak.md) when it was moved
+out of `CLAUDE.md`. Operational detail in `docs/operations.md`. None of these are scheduled
+against B/E/C/D — pick them up when one becomes urgent.
+
+- [ ] **Resize the droplet 1GB → 2GB — OWNER ACTION** (DO console). The 2026-07-23 OOM was
+      caused by two memory leaks, both fixed and deployed, but 1GB leaves no headroom.
+- [ ] **Decide the DB-bloat approach — OWNER DECISION, then build.** `paper_trader.db` is
+      ~45MB, +~5MB/day, from unbounded append-only `option_data` (~154k), `signal_events`
+      (~86k), `equity_snapshots` (~72k). Candidates: retention/pruning, a split archive DB,
+      or moving the time-series off SQLite. Owner wants a rethink, not a patch. NOT DECIDED.
+- [ ] **DB session hygiene (minor).** Context-manage `_upsert_state` (`runner.py`) and the
+      broker's long-lived session; add `pool_pre_ping`; lower `pool_timeout`.
+- [ ] **Write `deploy.sh`** so the `--exclude .env --exclude '*.db*' --exclude
+      access_token.json` + `--no-o --no-g` guards are mechanical instead of prose, and the
+      post-deploy `curl /` + `curl /api/health` check is part of the script. Two outages so
+      far have come from a human forgetting a flag.
+- [ ] **VPS pending OS reboot** (5 ESM security updates) — owner action, market-closed window.
+- [x] Removed the copy-pasteable rsync at `docs/superpowers/plans/2026-07-10-vps-deployment.md`
+      that omitted `--exclude .env`; it now points at `scripts/deploy.sh` (2026-07-28).
+- [ ] **Make `/api/health` a real readiness probe.** It is currently `{"ok": True}` plus the
+      build stamp — a liveness stub that returned 200 throughout *both* 2026-07 outages, which
+      is why the deploy script has to curl `GET /` separately to detect a broken deploy. It
+      should report DB reachability, the heartbeat age of **both** engine loops, provider
+      status, and armed state — and return **non-200 when the fast lane is stale**, since a
+      stalled risk loop means stops are not firing on real money. The engine already collects
+      all of this (`HealthTracker`, `engine/health.py`, the runner's loop timestamps); it just
+      is not exposed. Raised during the 2026-07-28 deploy-hardening review.
+
 ## Parked / deprioritized (deliberate — don't burn sessions here)
 
 - UI→deployed-Python codegen bridge (owner, 2026-07-20: handcoding approved strategies
@@ -382,8 +414,11 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
    active workstream** (A unless something in B is on fire).
 2. TDD; both test suites + `dryrun.py 700` green before any "done" claim.
 3. Update this tracker in the same commit as the work (checked box = verified evidence).
-4. Deploys to the VPS are whole-tree rsync + restart — see the deploy mechanics note in
-   the session memory; never deploy with an un-armed-safe book assumption; `.env`, DBs,
-   and `access_token.json` are excluded by the rsync filter.
+4. Deploys to the VPS are whole-tree rsync + restart — full mechanics, flags, and
+   post-deploy checks in `docs/operations.md`. Never deploy with an un-armed-safe book
+   assumption. **There is no rsync filter and no deploy script** — excluding `.env`, the
+   DBs, and `access_token.json` is a rule a human has to remember on every deploy, and
+   forgetting it has taken the VPS down twice (corrected 2026-07-28; this line previously
+   asserted the filter existed).
 5. Model split (owner directive): Fable = advisor/architect/review, Sonnet = build,
    Opus = optimization judgment.

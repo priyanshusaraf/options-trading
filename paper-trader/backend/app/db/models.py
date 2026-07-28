@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from app.core.version import get_build_sha
 from sqlalchemy import (
     Boolean,
     Date,
@@ -216,6 +217,19 @@ class Trade(Base):
     # Position.mfe/mae for the definition.
     mfe: Mapped[float] = mapped_column(Float, default=0.0)
     mae: Mapped[float] = mapped_column(Float, default=0.0)
+    # Build provenance: the commit this row was executed by. Defaulted at insert
+    # from backend/VERSION (written by scripts/deploy.sh) so all four Trade
+    # construction sites in broker.py are covered without touching any of them.
+    #
+    # Three distinguishable states, and the distinction is the point:
+    #   <sha>     — executed by an identified build
+    #   'unknown' — executed by a process that could not read its VERSION
+    #   NULL      — row predates this column (booked before 2026-07-28)
+    # Nullable only so the migration can leave historic rows alone; every row
+    # written from here on gets a non-NULL value.
+    build_sha: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, default=lambda: get_build_sha()
+    )
 
     def to_dict(self) -> dict:
         return {

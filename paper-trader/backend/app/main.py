@@ -22,6 +22,7 @@ from app.api.auth import extract_token, token_ok
 from app.core.instruments import get_instrument
 from app.core.config import get_settings
 from app.core.logging import log
+from app.core.version import get_build_info, log_build_banner
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.journal import routes as journal_routes
@@ -34,6 +35,9 @@ async def lifespan(app: FastAPI):
     # run: its synthetic clock restarts each process, so a persisted mock position
     # would be mispriced against a different sim-time on the next launch.
     settings = get_settings()
+    # First thing in the log: which commit is this. Everything below — and every
+    # trade this process books — is attributable to it.
+    log_build_banner()
     # C7: refuse to start a second backend against the same persistent (non-mock) DB
     # — two instances would trade the same real account with independent in-flight
     # state. Mock (tests, dry-run) skips this so multiple TestClients can coexist.
@@ -159,7 +163,12 @@ app.include_router(journal_routes.router)
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    # NOTE: this is a liveness stub — it reports the process is up and which
+    # build it is, nothing more. It returned 200 throughout both 2026-07 outages.
+    # Making it a real readiness probe (DB reachability, both loop heartbeat ages,
+    # provider status, armed state, non-200 when the fast lane is stale) is
+    # tracked in docs/ROADMAP.md, Workstream F.
+    return {"ok": True, "build": get_build_info()}
 
 
 # ── production: serve the built React SPA from the same origin ──────────────

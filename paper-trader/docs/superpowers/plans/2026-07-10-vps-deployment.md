@@ -303,11 +303,21 @@ Option A (git, if the repo is reachable): as `deploy`,
 ```bash
 ssh deploy@<DROPLET_IP> 'cd /opt/paper-trader && git clone <YOUR_REPO_URL> . && git checkout main'
 ```
-Option B (no remote): from the Mac, copy the two app dirs over the tailnet (excludes big/ignored files):
+Option B (no remote): from the Mac.
+
+> ⚠️ **The rsync command that used to be here has been removed (2026-07-28).** It omitted
+> `--exclude .env`, so copy-pasting it reproduced the two production outages exactly:
+> the clobbered `.env` (SPA unmounted → every `GET /` 404 while `/api/health` stayed 200)
+> and, via `-a`, the uid-501 ownership stamp that locked the `deploy` user out.
+>
+> **Use `scripts/deploy.sh`.** It is the only sanctioned deploy path. It carries the
+> exclusion list, refuses to run during market hours or on a dirty tree, never deletes
+> remote files unless you pass `--prune` and confirm, and verifies `.env`, the built SPA,
+> `GET /`, and the reported build SHA after restarting. See `docs/operations.md`.
+
 ```bash
-rsync -av --exclude .venv --exclude node_modules --exclude '*.db*' --exclude 'access_token.json' \
-  paper-trader/backend paper-trader/frontend paper-trader/strategies \
-  deploy@paper-trader.<TAILNET>:/opt/paper-trader/
+scripts/deploy.sh --dry-run   # inspect first
+scripts/deploy.sh
 ```
 Expected: `backend/`, `frontend/` present under `<DEPLOY_DIR>`.
 

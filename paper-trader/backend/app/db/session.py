@@ -153,6 +153,10 @@ def _migrate_schema() -> None:
             # peak-excursion telemetry (E0.3)
             ("mfe", "FLOAT DEFAULT 0.0"),
             ("mae", "FLOAT DEFAULT 0.0"),
+            # build provenance — NO DEFAULT on purpose: existing production rows
+            # must stay NULL. Backfilling them with the current SHA would assert
+            # a build they were not executed by.
+            ("build_sha", "VARCHAR(64)"),
         ],
         "equity_snapshots": [
             ("segment", "VARCHAR(16)"),
