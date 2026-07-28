@@ -55,6 +55,31 @@ commit (`trades.build_sha`); a `-dirty` SHA is untraceable by construction, whic
 the column. Untracked files count as dirty because rsync ships them even though they are
 not in the SHA.
 
+### Rolling back
+
+Before anything overwrites the remote `backend/VERSION`, the script reads it, prints it, and
+stashes it in `~/.paper-trader/deploy-history/` (override with `PT_DEPLOY_HISTORY`):
+
+- `previous-VERSION` — the build this deploy replaced
+- `<utc-timestamp>-replaced-by-<sha>.VERSION` — append-only history
+
+This exists because **the VPS has no git** and `VERSION` is written per-host: the instant the
+new file lands, the identity of what was running is gone. Rolling back then means an
+investigation instead of:
+
+```bash
+git checkout <sha> && scripts/deploy.sh
+```
+
+The script prints that exact command. If the captured SHA is not reachable from your local
+repo it says so loudly rather than offering a command that will fail. If the remote `VERSION`
+cannot be read at all, the deploy **aborts** — shipping without a rollback point is the thing
+this is meant to prevent. A remote with no `VERSION` yet (first deploy through this script)
+is not an error, but is called out: that one build is unrecoverable.
+
+Stored outside `REPO_ROOT` deliberately — anything under it would be rsynced into production
+and would trip the dirty-tree guard on the next run.
+
 ### What it verifies after restarting
 
 1. `backend/.env` is still present and non-empty — **checked before the restart**, so a

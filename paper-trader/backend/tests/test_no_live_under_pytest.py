@@ -13,13 +13,57 @@ subverted from inside a test.
 from __future__ import annotations
 
 import os
+import sys
 import types
+from unittest import mock
 
 import pytest
 
 import app.engine.broker_factory as bf
 from app.engine.broker import PaperBroker
 from app.providers.mock import MockProvider
+
+
+# ── .env is out of the resolution chain entirely ────────────────────────────
+
+def test_dotenv_is_not_read_at_all_during_a_test_run():
+    """The primary control. Forcing four PT_* vars was a denylist: KITE_API_KEY and
+    KITE_API_SECRET went on resolving from .env — real credentials for a real
+    account — and every setting added later would have inherited that exposure
+    silently. With env_file=None the only sources are defaults and what a test sets."""
+    from app.core.config import Settings
+
+    assert Settings.model_config.get("env_file") is None
+
+
+def test_production_credentials_do_not_resolve_under_pytest():
+    from app.core.config import get_settings
+
+    s = get_settings()
+    assert s.kite_api_key == ""
+    assert s.kite_api_secret == ""
+    assert s.telegram_bot_token == ""
+
+
+def test_a_real_process_still_reads_dotenv():
+    """The isolation must not follow the code into production, where .env is the
+    entire configuration mechanism."""
+    from app.core.config import _env_file_for_this_process
+
+    assert _env_file_for_this_process() is None          # here: pytest is imported
+    with mock.patch.dict(sys.modules):
+        del sys.modules["pytest"]
+        assert _env_file_for_this_process() == ".env"    # a real process
+
+
+def test_dotenv_can_be_disabled_outside_pytest_too(monkeypatch):
+    """PT_DISABLE_DOTENV=1 gives the same isolation to anything that needs it."""
+    from app.core.config import _env_file_for_this_process
+
+    monkeypatch.setenv("PT_DISABLE_DOTENV", "1")
+    with mock.patch.dict(sys.modules):
+        del sys.modules["pytest"]
+        assert _env_file_for_this_process() is None
 
 
 # ── the environment every test runs in ──────────────────────────────────────
@@ -112,6 +156,48 @@ def test_the_raise_names_the_offending_test(monkeypatch):
         bf.make_broker(_kite_looking_provider())
     assert "test_the_raise_names_the_offending_test" in str(e.value)
     assert "REAL orders" in str(e.value)
+
+
+def test_the_guard_targets_the_real_class_and_a_rename_breaks_the_build():
+    """A string-matching guard can look correct while matching nothing.
+
+    `_refuse_live_broker_under_pytest` identifies LiveBroker by module + qualname,
+    so moving or renaming the class silently turns it into a comparison that can
+    never be true — the guard would still be there, still read fine, and never
+    fire again. This pins the constants to the class's actual identity so that
+    change fails here instead.
+
+    (Two other guards this week had the same shape: deploy.sh Guard 0, and the
+    `*.db-*` exclude that matched none of the files its comment claimed.)
+    """
+    from app.engine.live_broker import LiveBroker
+
+    assert LiveBroker.__module__ == bf._LIVE_BROKER_MODULE, \
+        "LiveBroker moved — update _LIVE_BROKER_MODULE or the pytest guard is dead"
+    assert LiveBroker.__name__ == bf._LIVE_BROKER_NAME, \
+        "LiveBroker was renamed — update _LIVE_BROKER_NAME or the pytest guard is dead"
+
+    # And the constants actually make the guard fire on a genuine instance.
+    with pytest.raises(RuntimeError):
+        bf._refuse_live_broker_under_pytest(LiveBroker.__new__(LiveBroker))
+
+
+def test_make_broker_really_does_construct_a_genuine_live_broker(monkeypatch):
+    """Proves the raise-test above is not passing vacuously.
+
+    With the guard neutralised, this exact wiring returns a REAL LiveBroker — the
+    object that holds a real KiteOrderClient against the owner's account. So when
+    the guard is active and that call raises, it is raising on the genuine class,
+    not on a stub or a near-miss."""
+    from app.engine.live_broker import LiveBroker
+
+    monkeypatch.setattr(bf, "get_settings", lambda: _live_settings())
+    _stub_the_kite_plumbing(monkeypatch)
+    monkeypatch.setattr(bf, "_refuse_live_broker_under_pytest", lambda b: None)
+
+    broker = bf.make_broker(_kite_looking_provider())
+    assert type(broker) is LiveBroker
+    assert type(broker).__module__ == bf._LIVE_BROKER_MODULE
 
 
 def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):

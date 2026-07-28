@@ -21,6 +21,14 @@ from app.engine.broker import PaperBroker
 
 _ACK = "I_UNDERSTAND_REAL_MONEY"
 
+# The real order-placing class, identified by name rather than by import — see
+# _refuse_live_broker_under_pytest for why. Hoisted into constants so the identity
+# is assertable: tests/test_no_live_under_pytest.py pins these against the actual
+# class, so moving or renaming LiveBroker fails the build instead of quietly
+# turning the guard into a comparison that can never match.
+_LIVE_BROKER_MODULE = "app.engine.live_broker"
+_LIVE_BROKER_NAME = "LiveBroker"
+
 
 def _refuse_live_broker_under_pytest(broker):
     """Last line of defence: a test run must be INCAPABLE of resolving to live.
@@ -41,7 +49,7 @@ def _refuse_live_broker_under_pytest(broker):
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         return
     t = type(broker)
-    if t.__module__ == "app.engine.live_broker" and t.__name__ == "LiveBroker":
+    if t.__module__ == _LIVE_BROKER_MODULE and t.__name__ == _LIVE_BROKER_NAME:
         raise RuntimeError(
             "make_broker() resolved a real LiveBroker inside a pytest run "
             f"({os.environ['PYTEST_CURRENT_TEST']}). This broker places REAL orders "

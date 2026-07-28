@@ -11,12 +11,44 @@ The defaults encode every product decision the owner made:
 """
 from __future__ import annotations
 
+import os
+import sys
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ALLOWED_INTERVALS = ("15minute", "30minute")
+
+
+def _env_file_for_this_process() -> str | None:
+    """`.env` for a real process; None under pytest.
+
+    A test run must not be able to READ production configuration at all. Forcing
+    individual variables in conftest is a denylist: it covered PT_PROVIDER,
+    PT_EXECUTION, PT_LIVE_ACK and PT_DB_PATH, while `KITE_API_KEY` and
+    `KITE_API_SECRET` kept resolving straight from `.env` — which is how the
+    2026-07-28 incident could have made authenticated calls against the owner's
+    real Kite account. Worse, a denylist is silently wrong for every setting added
+    afterwards: a new secret inherits the exposure and nothing says so.
+
+    Detaching the file makes it an allowlist. Under pytest the ONLY sources are
+    process defaults and whatever a test sets explicitly, so a leak requires
+    someone to write the leak.
+
+    `"pytest" in sys.modules` is the signal deliberately, rather than a marker our
+    own conftest sets: it holds for any test root, including one added later with
+    no conftest of ours — which is exactly the failure mode that caused the
+    incident. It is evaluated once, at class-definition time, so the decision is
+    made before any Settings instance exists. The app never imports pytest, so
+    this cannot fire in production; `PT_DISABLE_DOTENV=1` forces it for anything
+    that needs the same isolation outside pytest.
+    """
+    if os.environ.get("PT_DISABLE_DOTENV") == "1":
+        return None
+    if "pytest" in sys.modules:
+        return None
+    return ".env"
 LIVE_INTERVALS = ("5minute", "15minute", "30minute", "60minute")
 DEFAULT_LIVE_INTERVAL = "15minute"
 
@@ -27,8 +59,11 @@ def normalize_live_interval(iv: str) -> str:
 
 
 class Settings(BaseSettings):
+    # env_file is None under pytest — see _env_file_for_this_process(). Resolved once
+    # here, at class-definition time, so every Settings() in the process agrees.
     model_config = SettingsConfigDict(
-        env_prefix="PT_", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="PT_", env_file=_env_file_for_this_process(),
+        env_file_encoding="utf-8", extra="ignore",
     )
 
     # provider selection

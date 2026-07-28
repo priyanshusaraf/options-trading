@@ -99,14 +99,22 @@ Never dump a full run into context; write to a file and read the failures.
 explicitly when you need full coverage. `scripts/deploy.sh` runs both.
 Both headless scripts force the mock provider — no Kite, no network.
 
-**Test-env safety lives in `backend/conftest.py` (the rootdir conftest), never deeper.**
-It forces `PT_PROVIDER=mock`, `PT_EXECUTION=paper`, empty `PT_LIVE_ACK` and a per-run temp
-`PT_DB_PATH` before any `app.*` import, and a session fixture verifies the *resolved* Settings.
-It has to be at the root: the shipped `.env` satisfies all three live gates and points at the
-real ledger, so any suite root without the guard resolves to live execution against production.
-Note `PT_LIVE_ACK` is set **empty, not deleted** — pydantic-settings falls back to `.env` when
-an OS var is absent. `make_broker()` additionally raises if it ever resolves a real `LiveBroker`
-while `PYTEST_CURRENT_TEST` is set. Do not add env forcing to a subdirectory conftest.
+**`.env` is not read at all during a test run.** `Settings.model_config` sets `env_file=None`
+whenever `pytest` is in `sys.modules` (`config.py:_env_file_for_this_process`). This is the
+primary isolation control and it is an *allowlist*: under pytest the only config sources are
+defaults and what a test sets explicitly. Forcing individual vars was a denylist that left
+`KITE_API_KEY`/`KITE_API_SECRET` resolving from `.env`, and would have silently exposed every
+setting added later. `PT_DISABLE_DOTENV=1` gets the same isolation outside pytest.
+
+**Test-env safety otherwise lives in `backend/conftest.py` (the rootdir conftest), never
+deeper.** It forces `PT_PROVIDER=mock`, `PT_EXECUTION=paper`, empty `PT_LIVE_ACK` and a
+per-run temp `PT_DB_PATH` before any `app.*` import; a session fixture verifies the *resolved*
+Settings. It has to be at the root: the shipped `.env` satisfies all three live gates and
+points at the real ledger, so any suite root without the guard resolved to live execution
+against production. `PT_LIVE_ACK` is set **empty, not deleted** — pydantic-settings falls back
+to `.env` when an OS var is absent. `make_broker()` additionally raises if it ever resolves a
+real `LiveBroker` while `PYTEST_CURRENT_TEST` is set. Do not add env forcing to a subdirectory
+conftest, and keep the denylist as backup rather than deleting it.
 
 **Deploy** (from `paper-trader/`) — see `docs/operations.md`
 ```bash

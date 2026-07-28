@@ -45,6 +45,19 @@ added a third test root, or pytest changed its collection order.
 
 Structural, not behavioural — the fix is placement, so no one has to remember it.
 
+0. **`.env` is removed from the resolution chain entirely.**
+   `Settings.model_config` sets `env_file=None` whenever `pytest` is in `sys.modules`
+   (`app/core/config.py:_env_file_for_this_process`). Forcing four variables was a
+   **denylist**: `KITE_API_KEY` and `KITE_API_SECRET` kept resolving from `.env`
+   throughout — real credentials for the owner's real account, which is how a test
+   run could have made authenticated Kite calls — and every setting added later
+   would have inherited the same exposure with nothing to signal it. With the file
+   detached, the only config sources under pytest are defaults and what a test sets,
+   so a leak has to be written deliberately. The four forced variables are kept as
+   backup. `"pytest" in sys.modules` is the signal rather than a marker our conftest
+   sets, so it holds for a test root added later with no conftest of ours — the exact
+   failure mode that caused this incident.
+
 1. **`backend/conftest.py`** (rootdir). Forces `PT_PROVIDER=mock`, `PT_EXECUTION=paper`,
    empty `PT_LIVE_ACK`, and a per-run temp `PT_DB_PATH` at module import — which pytest
    performs before any test module, therefore before any `app.*` import. That ordering

@@ -204,6 +204,68 @@ deployed_by=$(whoami)@$(hostname -s)
 EOF
 }
 
+# ------------------------------------------------------ rollback capture ----
+# Read the OUTGOING build off the box and keep it, before anything overwrites it.
+#
+# The VPS has no git and backend/VERSION is written per-host, so the moment the
+# new VERSION lands the identity of what was running is gone — leaving only an
+# investigation. Captured here so a bad deploy is answered with:
+#     git checkout <sha> && scripts/deploy.sh
+#
+# Stored OUTSIDE $REPO_ROOT on purpose: anything under it would be rsynced to
+# production and would trip the dirty-tree guard on the next run.
+DEPLOY_HISTORY="${PT_DEPLOY_HISTORY:-$HOME/.paper-trader/deploy-history}"
+ROLLBACK_SHA=""
+
+capture_rollback_point() {
+  local remote
+  # `|| echo __ABSENT__` keeps a missing file from looking like a failed ssh —
+  # the two need different responses, and only one of them is normal.
+  if ! remote="$(ssh -i "$VPS_KEY" -o StrictHostKeyChecking=accept-new "$VPS_HOST" \
+        "cat $VPS_PATH/backend/VERSION 2>/dev/null || echo __ABSENT__" 2>/dev/null)"; then
+    fail "cannot read the current build from $VPS_HOST — refusing to deploy without
+      capturing a rollback point. Check the host, the key, and the network."
+  fi
+
+  if [[ "$remote" == "__ABSENT__" || -z "$remote" ]]; then
+    printf '\033[1;33m==> no VERSION on the remote\033[0m — first deploy through this script,\n'
+    printf '    or the box predates build stamping. NO ROLLBACK TARGET is recoverable\n'
+    printf '    for the build being replaced. Every deploy after this one will have one.\n'
+    return 0
+  fi
+
+  ROLLBACK_SHA="$(printf '%s\n' "$remote" | sed -n 's/^commit=//p' | head -1)"
+
+  echo
+  printf '\033[1;36m==> ROLLBACK POINT — the build being replaced\033[0m\n'
+  printf '%s\n' "$remote" | sed 's/^/    /'
+  echo
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log "dry run: not writing to $DEPLOY_HISTORY"
+  else
+    mkdir -p "$DEPLOY_HISTORY"
+    # Append-only log, plus a fixed filename for "the one you want right now".
+    printf '%s\n' "$remote" > "$DEPLOY_HISTORY/$(date -u '+%Y%m%dT%H%M%SZ')-replaced-by-$SHA.VERSION"
+    printf '%s\n' "$remote" > "$DEPLOY_HISTORY/previous-VERSION"
+  fi
+
+  if [[ -n "$ROLLBACK_SHA" ]]; then
+    if git cat-file -e "${ROLLBACK_SHA}^{commit}" 2>/dev/null; then
+      printf '    To roll back:  \033[1mgit checkout %s && scripts/deploy.sh\033[0m\n\n' "$ROLLBACK_SHA"
+    else
+      # Worth saying out loud: the SHA is captured but not reachable from here,
+      # so `git checkout` will fail until the branch holding it is fetched.
+      printf '\033[1;33m    WARNING: %s is not in this repo\033[0m — fetch the branch that\n' "$ROLLBACK_SHA"
+      printf '    contains it before relying on this as a rollback target.\n\n'
+    fi
+  else
+    printf '\033[1;33m    WARNING: remote VERSION has no commit= line\033[0m — no rollback SHA.\n\n'
+  fi
+}
+
+capture_rollback_point
+
 if [[ $PRUNE -eq 1 ]]; then
   log "PRUNE: computing what would be DELETED on the remote"
   # --delete respects --exclude (excluded files are protected, not removed), so
@@ -221,13 +283,24 @@ if [[ $PRUNE -eq 1 ]]; then
     echo "$prune_list" | sed 's/^deleting /  - /'
     echo
     printf 'Count: %s\n\n' "$(echo "$prune_list" | wc -l | tr -d ' ')"
-    read -r -p "Type 'delete' to confirm, anything else to abort: " confirm
-    [[ "$confirm" == "delete" ]] || fail "prune aborted — nothing was changed"
-    RSYNC_FLAGS+=(--delete)
+    if [[ $DRY_RUN -eq 1 ]]; then
+      # `--prune --dry-run` exists to be READ before --prune is ever run for real.
+      # No prompt: a confirmation here would be answering a question that changes
+      # nothing, and training yourself to type 'delete' at this screen is precisely
+      # the habit that makes the real prompt dangerous.
+      log "dry run: the list above is what --prune WOULD delete. Nothing was changed."
+    else
+      read -r -p "Type 'delete' to confirm, anything else to abort: " confirm
+      [[ "$confirm" == "delete" ]] || fail "prune aborted — nothing was changed"
+      RSYNC_FLAGS+=(--delete)
+    fi
   fi
 fi
 
-write_version
+# Not on a dry run: --dry-run promises to change nothing, and that has to include
+# the local tree. VERSION is excluded from the sync below and placed explicitly
+# afterwards, so a dry run has no use for it anyway.
+[[ $DRY_RUN -eq 0 ]] && write_version
 
 log "syncing $BRANCH@$SHA -> $VPS_HOST:$VPS_PATH"
 rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" \

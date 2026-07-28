@@ -27,6 +27,13 @@ resolves to `'I_UNDERSTAND_REAL_MONEY'` (verified). Only a present-but-empty OS 
 shadows `.env`. Empty is how the app spells "unset"; `live_execution_enabled()` reads
 it as falsy.
 
+The variables below are a DENYLIST and are kept only as backup. The primary control
+is in `app/core/config.py`: `Settings.model_config` sets `env_file=None` whenever
+pytest is in `sys.modules`, so `.env` is not read at all during a test run. That
+matters because forcing four variables left `KITE_API_KEY`/`KITE_API_SECRET`
+resolving from `.env` — real credentials for the owner's real account — and would
+have left every setting added later exposed by default, silently.
+
 Defence in depth, since env alone is a soft guarantee:
   - `_forbid_live_execution` re-asserts and *verifies* the resolved Settings each
     session, failing the run rather than proceeding on a bad config
@@ -72,10 +79,19 @@ def _forbid_live_execution():
             f"safety env was overwritten after conftest import"
         )
 
-    from app.core.config import get_settings
+    from app.core.config import Settings, get_settings
     from app.engine.broker_factory import live_execution_enabled
 
+    # PRIMARY control: .env must not be in the resolution chain at all. Checked
+    # first because everything below is only a backstop for this.
+    assert Settings.model_config.get("env_file") is None, (
+        "Settings is still reading .env during a test run — production "
+        "credentials are resolvable. See _env_file_for_this_process()."
+    )
     s = get_settings()
+    assert not s.kite_api_key, "KITE_API_KEY leaked from .env into the test run"
+    assert not s.kite_api_secret, "KITE_API_SECRET leaked from .env into the test run"
+
     assert s.provider == "mock", f"resolved provider is {s.provider!r}, not mock"
     assert s.execution != "live", f"resolved execution is {s.execution!r}"
     assert not s.live_ack, f"resolved live_ack is {s.live_ack!r} — .env is bleeding through"
