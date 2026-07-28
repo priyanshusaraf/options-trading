@@ -270,9 +270,26 @@ if [[ $PRUNE -eq 1 ]]; then
   log "PRUNE: computing what would be DELETED on the remote"
   # --delete respects --exclude (excluded files are protected, not removed), so
   # this lists only genuinely untracked-and-unprotected remote paths.
-  prune_list="$(rsync "${RSYNC_FLAGS[@]}" --delete --dry-run "${EXCLUDES[@]}" \
+  #
+  # The raw output is kept and checked BEFORE grepping. On any IO error rsync
+  # prints "IO error encountered -- skipping file deletion" and computes no
+  # deletions at all — which greps to an empty list and reads as "nothing to
+  # prune", i.e. a failed computation is indistinguishable from a clean one.
+  # Observed for real: a malformed exclude array made rsync treat a pattern as a
+  # positional argument, and the empty list looked like reassurance.
+  prune_raw="$(rsync "${RSYNC_FLAGS[@]}" --delete --dry-run "${EXCLUDES[@]}" \
     -e "ssh -i $VPS_KEY -o StrictHostKeyChecking=accept-new" \
-    "$REPO_ROOT/" "$VPS_HOST:$VPS_PATH/" 2>&1 | grep '^deleting ' || true)"
+    "$REPO_ROOT/" "$VPS_HOST:$VPS_PATH/" 2>&1)" || {
+      printf '%s\n' "$prune_raw" | head -5 >&2
+      fail "prune computation failed — refusing to guess. Nothing was changed."; }
+
+  if printf '%s\n' "$prune_raw" | grep -q 'IO error'; then
+    printf '%s\n' "$prune_raw" | grep -iE '^rsync.*error' | head -5 >&2
+    fail "rsync hit an IO error and SKIPPED deletion — an empty prune list here would
+      be meaningless, not safe. Fix the error and re-run."
+  fi
+
+  prune_list="$(printf '%s\n' "$prune_raw" | grep '^deleting ' || true)"
 
   if [[ -z "$prune_list" ]]; then
     log "nothing to prune — proceeding as a normal deploy"
