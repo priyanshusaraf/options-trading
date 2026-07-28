@@ -22,6 +22,34 @@ from app.engine.broker import PaperBroker
 _ACK = "I_UNDERSTAND_REAL_MONEY"
 
 
+def _refuse_live_broker_under_pytest(broker):
+    """Last line of defence: a test run must be INCAPABLE of resolving to live.
+
+    The env guards in backend/conftest.py are the primary mechanism, but they are a
+    soft guarantee — a stray monkeypatch.setenv, a new test root without the rootdir
+    conftest, or a direct make_broker() call can undo them. This one cannot be
+    undone from a test, because it fires on the object that was actually built.
+
+    Identified by module + qualname rather than isinstance: the legitimate wiring
+    tests in tests/test_broker_factory.py monkeypatch
+    `app.engine.live_broker.LiveBroker` to a stub, so the name bound inside
+    make_broker() IS the stub and `isinstance(broker, LiveBroker)` would compare
+    against it. Matching the real class by name lets those tests keep asserting the
+    live wiring with a harmless fake, while a genuine LiveBroker — one holding a real
+    KiteOrderClient pointed at the owner's account — always trips.
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    t = type(broker)
+    if t.__module__ == "app.engine.live_broker" and t.__name__ == "LiveBroker":
+        raise RuntimeError(
+            "make_broker() resolved a real LiveBroker inside a pytest run "
+            f"({os.environ['PYTEST_CURRENT_TEST']}). This broker places REAL orders "
+            "on the owner's Zerodha account. The test environment leaked live "
+            "credentials or flags — check backend/conftest.py. Refusing to return it."
+        )
+
+
 def live_execution_enabled() -> bool:
     """True only if execution=live AND the exact ack phrase are set. Prefers the
     .env-backed Settings (the single source of truth) and falls back to a real
@@ -55,7 +83,9 @@ def make_broker(provider, notifier=None):
         client = KiteOrderClient(kite, token_source=lambda: getattr(provider, "access_token", None),
                                  market_protection=s.market_protection_pct,
                                  tick_source=getattr(provider, "tick_size", None))
-        return LiveBroker(provider, client, notifier=notifier,
-                          poll_seconds=s.order_poll_seconds,
-                          timeout_seconds=s.order_timeout_seconds)
+        broker = LiveBroker(provider, client, notifier=notifier,
+                            poll_seconds=s.order_poll_seconds,
+                            timeout_seconds=s.order_timeout_seconds)
+        _refuse_live_broker_under_pytest(broker)
+        return broker
     return PaperBroker(provider)

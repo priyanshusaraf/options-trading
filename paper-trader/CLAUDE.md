@@ -99,6 +99,15 @@ Never dump a full run into context; write to a file and read the failures.
 explicitly when you need full coverage. `scripts/deploy.sh` runs both.
 Both headless scripts force the mock provider — no Kite, no network.
 
+**Test-env safety lives in `backend/conftest.py` (the rootdir conftest), never deeper.**
+It forces `PT_PROVIDER=mock`, `PT_EXECUTION=paper`, empty `PT_LIVE_ACK` and a per-run temp
+`PT_DB_PATH` before any `app.*` import, and a session fixture verifies the *resolved* Settings.
+It has to be at the root: the shipped `.env` satisfies all three live gates and points at the
+real ledger, so any suite root without the guard resolves to live execution against production.
+Note `PT_LIVE_ACK` is set **empty, not deleted** — pydantic-settings falls back to `.env` when
+an OS var is absent. `make_broker()` additionally raises if it ever resolves a real `LiveBroker`
+while `PYTEST_CURRENT_TEST` is set. Do not add env forcing to a subdirectory conftest.
+
 **Deploy** (from `paper-trader/`) — see `docs/operations.md`
 ```bash
 scripts/deploy.sh                       # normal deploy

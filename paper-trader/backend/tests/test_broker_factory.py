@@ -1,9 +1,30 @@
 """You cannot reach the order-placing broker by accident: it needs BOTH live flags
 AND the live Kite provider. Default and mock always give the paper broker."""
+from app.core.config import get_settings
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import live_execution_enabled, make_broker
 from app.providers.mock import MockProvider
+
+
+def _open_the_live_gate(monkeypatch, *, execution="live", ack="I_UNDERSTAND_REAL_MONEY"):
+    """Open the live gate at the SETTINGS layer, which is how production is
+    configured (.env -> Settings).
+
+    These tests used to `monkeypatch.setenv` instead, which worked only by
+    accident: the old test guard set PT_EXECUTION="", making `s.execution` falsy so
+    `live_execution_enabled()` fell through to its `or os.environ.get(...)` branch.
+    The rootdir conftest now sets PT_EXECUTION="paper" — a real value, which
+    correctly wins over the env fallback (the fallback exists for when Settings has
+    nothing, not to override it). Setting Settings directly is both the repo
+    convention and the stronger test: it exercises the path production actually uses.
+    """
+    s = get_settings()                       # lru_cached: one shared instance
+    monkeypatch.setattr(s, "execution", execution)
+    monkeypatch.setattr(s, "live_ack", ack)
+    # The env fallback must not be able to reopen the gate behind our back.
+    monkeypatch.setenv("PT_EXECUTION", execution)
+    monkeypatch.setenv("PT_LIVE_ACK", ack)
 
 
 def test_paper_broker_by_default(monkeypatch):
@@ -15,16 +36,28 @@ def test_paper_broker_by_default(monkeypatch):
 
 
 def test_both_flags_required(monkeypatch):
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.delenv("PT_LIVE_ACK", raising=False)
+    _open_the_live_gate(monkeypatch, ack="")
     assert live_execution_enabled() is False          # ack flag missing
+    _open_the_live_gate(monkeypatch, execution="paper")
+    assert live_execution_enabled() is False          # execution not live
+    _open_the_live_gate(monkeypatch)
+    assert live_execution_enabled() is True
+
+
+def test_the_env_var_fallback_still_works_when_settings_is_empty(monkeypatch):
+    """The `or os.environ.get(...)` fallback exists so a bare `export PT_EXECUTION=live`
+    works without a .env. Pinned separately now that the main tests drive Settings,
+    so removing the fallback cannot pass unnoticed."""
+    s = get_settings()
+    monkeypatch.setattr(s, "execution", "")
+    monkeypatch.setattr(s, "live_ack", "")
+    monkeypatch.setenv("PT_EXECUTION", "live")
     monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
     assert live_execution_enabled() is True
 
 
 def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     # even with both flags, the mock provider can never place a real order
     assert isinstance(make_broker(MockProvider()), PaperBroker)
@@ -34,8 +67,7 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
     """L5: the live order poll timeout must be configurable AND bounded well under
     the old 30s, so a stuck poll can't hold the engine lock for half a minute."""
     import types
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"            # look like the live provider
@@ -64,8 +96,7 @@ def test_make_broker_passes_configured_market_protection_to_order_client(monkeyp
     every live MARKET order is compliant (unprotected market orders are rejected by
     the exchange since 1-Apr-2026)."""
     import types
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
@@ -93,8 +124,7 @@ def test_make_broker_wires_the_provider_tick_size_as_the_tick_source(monkeypatch
     fix to production: make_broker must pass the provider's tick_size method
     through as KiteOrderClient's tick_source."""
     import types
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
@@ -120,8 +150,7 @@ def test_make_broker_tick_source_is_none_when_the_provider_has_no_tick_size(monk
     KiteProvider, but keep the wiring defensive) must not blow up make_broker —
     KiteOrderClient's own fallback then covers every trigger with 0.05."""
     import types
-    monkeypatch.setenv("PT_EXECUTION", "live")
-    monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
+    _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
