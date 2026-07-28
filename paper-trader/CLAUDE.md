@@ -26,13 +26,22 @@ for the equity/index universe. Borne out by the book: 33 of 34 real trades are `
 
 ## Production divergence — read before assuming
 
-The working branch contains completed work that is **not running in production**: Workstream B
-(10 safety fixes, closed 2026-07-25) and E0/E1 (P&L integrity + daily profit-lock). The VPS runs
-the previous code until `scripts/deploy.sh` is run. **Repo state != live state.** When reasoning
-about live behaviour, check whether the relevant fix has actually shipped.
+**Corrected 2026-07-28.** This section previously claimed Workstream B (10 safety fixes) and
+E0/E1 (P&L integrity + daily profit-lock) were *not* running in production. That was **false**
+and it drove a week of decisions. Verified by md5 against the VPS: `runner.py`,
+`risk_controls.py`, `charges.py`, `broker.py`, `equity_entry.py` and `analytics.py` are
+byte-identical to the branch, and the live process (up since 07:00:28 IST) is running them.
 
-Since 2026-07-28 you can check this instead of guessing: `curl /api/health` reports the deployed
-commit, and every `trades` row carries `build_sha`. Do not assert deployment state from prose.
+What genuinely is **not** deployed is the build-provenance + test-isolation work of 2026-07-25→28:
+`main.py`, `core/config.py`, `core/version.py`, `db/models.py`, `db/session.py`,
+`engine/broker_factory.py`, `conftest.py`. So **`/api/health` does NOT yet report a commit** — it
+returns bare `{"ok":true}`, there is no `VERSION` on the box, and `build_sha` is not being
+stamped. Until that ships, deployment state must be established by checksum or symbol grep
+against the VPS. **Never assert deployment state from prose in this file or any doc** — that is
+exactly how this error persisted. Verify, then write down what you verified.
+
+Do not date a deploy from remote file mtimes: the deploy rsyncs with `-t`, so VPS timestamps are
+the *Mac's* edit times, identical to the second. They say nothing about when a file landed.
 
 **Known live-state gap:** the equity curve is anchored to the synthetic ₹50,000 seed and the E0.2
 auto-reanchor cannot fire on a ledger that has ever traded (its guards require zero `Trade` rows).

@@ -125,7 +125,22 @@ Order style adapts to live book conditions: tight and deep → market order; mod
 
 ✅ 24/7 VPS engine, real-money armed daily · ✅ options + equity-intraday segments · ✅ full safety architecture · ✅ paisa-exact ledger · ✅ segment-aware charge model · ✅ backtest sweep + cache + promotion · ✅ shadcn cockpit, 13 views · ✅ trade journal v2 with multi-book support · ✅ three completed audit rounds' fixes · ✅ two production memory leaks root-caused and fixed (2026-07-23)
 
-### 15. Just completed, awaiting deployment
+### 15. Completed AND deployed (corrected 2026-07-28)
+
+> **Correction.** This section previously read "Just completed, awaiting deployment" and closed
+> with "these fixes are committed but NOT deployed." **Both claims were wrong.** Verified by
+> direct checksum against the VPS on 2026-07-28: `runner.py`, `risk_controls.py`, `charges.py`,
+> `broker.py`, `equity_entry.py` and `analytics.py` are byte-identical to the working branch
+> (matching md5s), and the E1 (`_resolve_or_skip`, `UNRESOLVABLE_INSTRUMENT`), E0.1
+> (`find_fill`, `exit_price_estimated`), E0.2 (`_maybe_auto_reanchor`) and daily-profit-lock
+> (`_safe_maybe_profit_lock`) symbols are all physically present in `/opt/paper-trader`.
+> The live process (started 2026-07-28 07:00:28 IST) is running them — proven at runtime, not
+> from file dates: at 09:30 ABB reached the theta-cliff check, which sits *after* the
+> expiry-day weekday gate. On a Tuesday with `intraday_block_weekday=1` and an inert override,
+> only the post-`9eecf38` `expiry_day_block_keys="NIFTY"` scoping lets a non-NIFTY name through.
+>
+> Do not date deploys from remote mtimes: rsync preserves source mtimes, so the VPS timestamps
+> are *local edit* times and are identical to the Mac's to the second.
 
 **Workstream B — safety backlog (all 10 code items closed 2026-07-25, TDD, each defect reproduced RED first):**
 
@@ -140,7 +155,12 @@ Order style adapts to live book conditions: tight and deep → market order; mod
 
 **Workstream E Phase 0–1 — P&L integrity (complete):** exits now book at the **true broker fill** rather than the last mark (owner evidence: a SENSEX put exited at +₹792 but recorded ~₹1,000); the equity curve auto-anchors to real broker equity instead of the synthetic ₹50k base; per-trade MFE/MAE telemetry landed; and a **daily profit-lock** now trails a high-water floor against peak deployed capital and flattens-plus-halts on give-back.
 
-> ⚠️ **These fixes are committed but NOT deployed.** The live VPS process runs the old code until an rsync + `systemctl restart`. This is the single highest-value action available right now.
+> ✅ **These fixes are deployed and running** (verified 2026-07-28 — see the correction above).
+> What is *not* yet on the box is the 2026-07-25→28 build-provenance and test-isolation work:
+> `main.py`, `core/config.py`, `core/version.py`, `db/models.py`, `db/session.py`,
+> `engine/broker_factory.py` and `conftest.py`. Confirmed by `/api/health` returning
+> `{"ok":true}` with **no `build` field** — the running `main.py` predates `c3e1ac0`. That is
+> why there is no `VERSION` file on the VPS and why the live build is unidentifiable.
 
 ### 16. Queued — the forward roadmap
 

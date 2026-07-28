@@ -129,6 +129,12 @@ artifact on the box, add it to `EXCLUDES` in the same change.
   Do not "simplify" `-rlptD` back to `-a`, and do not add modern flags like
   `--info=progress2`.
 - The engine is **DISARMED on every process start**. Re-arm from the cockpit after a deploy.
+- **Verify code-vs-production, not just code-vs-docs.** A week of planning ran on a status doc
+  claiming Workstream B and E0/E1 were undeployed when they had been on the box for days,
+  because nobody thought to ask the box. Checksum the files (`md5 -r` local vs `md5sum` remote),
+  grep the remote for a symbol unique to the fix, and find a log line only the new code can
+  emit — on-disk is not the same as loaded. Never date a deploy from remote mtimes: the sync
+  preserves source mtimes, so VPS timestamps are the Mac's edit times, identical to the second.
 
 ## Daily routine ("run the bot")
 
