@@ -337,3 +337,84 @@ def get_settings() -> Settings:
         # strategy is only valid on 15m/30m — clamp anything else.
         s.interval = "15minute"
     return s
+
+
+class BootConfigError(RuntimeError):
+    """The resolved configuration is not one a real process may run on."""
+
+
+_UNSET = object()
+
+
+def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET,
+                       warn=None) -> None:
+    """Refuse to start on a configuration that only LOOKS healthy.
+
+    `_env_file_for_this_process()` detaches `.env` whenever `"pytest" in
+    sys.modules`. That is the correct isolation control — but pytest lives in the
+    same venv production runs from, so any stray import detaches `.env` from a
+    REAL process. Settings then fall back to their defaults, `provider` becomes
+    "mock", and the engine trades a synthetic market while `/api/health` returns
+    200 and the dashboard renders. Nothing anywhere says the market is fake.
+
+    So the boot path asserts POSITIVELY: the config it needs must be present and
+    identifiable, not merely un-refused.
+
+    `"pytest" in sys.modules` cannot be the discriminator — it is the signal under
+    suspicion. `PYTEST_CURRENT_TEST` is set by pytest only while a test is
+    actually running; importing pytest does not set it. It is the independent
+    signal, and `broker_factory.make_broker()` already relies on it for the same
+    reason.
+
+    Args are injectable so the guard can be tested in both directions from inside
+    a test run — where the ambient values are, necessarily, the passing ones.
+    """
+    if env_file is _UNSET:
+        env_file = type(settings).model_config.get("env_file")
+    if under_test is _UNSET:
+        under_test = "PYTEST_CURRENT_TEST" in os.environ
+    if warn is None:
+        from app.core.logging import log
+        warn = lambda m: log.warn(m, event="BOOT_CONFIG")  # noqa: E731
+
+    # 1. Config must be attached. An explicit PT_DISABLE_DOTENV=1 is an
+    #    operator-typed opt-out and takes its own path; the heuristic misfiring
+    #    on its own is the failure this exists to catch.
+    explicit_optout = os.environ.get("PT_DISABLE_DOTENV") == "1"
+    if not under_test and env_file is None and not explicit_optout:
+        raise BootConfigError(
+            "REFUSING TO START: env_file resolved to None outside a test run.\n"
+            "  `pytest` is in sys.modules, so config.py detached `.env` — but "
+            "PYTEST_CURRENT_TEST is not set, so this is NOT a test run.\n"
+            "  This process has NO configuration: PT_PROVIDER has fallen back to "
+            "its default and the engine would trade a SYNTHETIC market while every "
+            "health check stayed green.\n"
+            "  Find what imported pytest (pytest lives in the same venv as the "
+            "app), or set PT_DISABLE_DOTENV=1 if config-less boot is genuinely "
+            "intended."
+        )
+
+    # 2. Selecting the real broker means the real credentials must actually be
+    #    there. Enforced even under test: a suite that resolves half a credential
+    #    set is a suite reaching for the owner's account.
+    if settings.provider == "kite":
+        missing = [n for n, v in (("KITE_API_KEY", settings.kite_api_key),
+                                  ("KITE_API_SECRET", settings.kite_api_secret))
+                   if not (v or "").strip()]
+        if missing:
+            raise BootConfigError(
+                f"REFUSING TO START: PT_PROVIDER=kite but {' and '.join(missing)} "
+                f"is empty.\n"
+                f"  Empty credentials do not fail loudly at boot — they fail at the "
+                f"first authenticated call, mid-session, with positions open.\n"
+                f"  env_file={env_file!r}. If that is None, `.env` was detached and "
+                f"the credentials were never read at all."
+            )
+
+    # 3. A real process on the synthetic market is legitimate (dryrun.py,
+    #    backtest_smoke.py) but must never be quiet about it — a silent mock
+    #    provider in production is indistinguishable from a working engine.
+    if not under_test and settings.provider != "kite":
+        warn(f"PT_PROVIDER={settings.provider!r} outside a test run — this engine is "
+             f"running against a SYNTHETIC market. No quote, fill, or P&L figure it "
+             f"reports is real.")

@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api import backtest_routes, portfolio_routes, routes
 from app.api.auth import extract_token, token_ok
 from app.core.instruments import get_instrument
-from app.core.config import get_settings
+from app.core.config import assert_boot_config, get_settings
 from app.core.logging import log
 from app.core.version import get_build_info, log_build_banner
 from app.db.session import init_db
@@ -38,6 +38,12 @@ async def lifespan(app: FastAPI):
     # First thing in the log: which commit is this. Everything below — and every
     # trade this process books — is attributable to it.
     log_build_banner()
+    # Before ANY of it: prove this process actually read its configuration. A
+    # stray `import pytest` anywhere in the venv detaches `.env`, at which point
+    # PT_PROVIDER falls back to "mock" and the engine trades a synthetic market
+    # with /api/health returning 200 the whole time. Raising here is the point —
+    # a config-less boot must be a dead process, not a healthy-looking one.
+    assert_boot_config(settings)
     # C7: refuse to start a second backend against the same persistent (non-mock) DB
     # — two instances would trade the same real account with independent in-flight
     # state. Mock (tests, dry-run) skips this so multiple TestClients can coexist.
