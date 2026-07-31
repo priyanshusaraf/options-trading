@@ -9,6 +9,7 @@
  *   · no-thesis tagging                                (§1.2)
  */
 
+import { deleteArtifactBytes } from './idb'
 import { getDB, mutate } from './store'
 import { uid } from '../domain/ids'
 import { AUTO_MISTAKES } from '../domain/taxonomy'
@@ -727,9 +728,12 @@ export function setRegime(instrumentId: ID, state: RegimeState, note: string): v
 // ── Artifacts ─────────────────────────────────────────────────────────────
 
 export function addArtifact(
-  a: Omit<Artifact, 'id' | 'at'> & { at?: number },
+  // `id` is optional so the caller can mint it FIRST, upload the bytes under
+  // it, and only then record the artifact — see Vault.onFiles. The bytes live
+  // in their own table rather than inside the snapshot blob (design spec §3.2).
+  a: Omit<Artifact, 'id' | 'at'> & { at?: number; id?: ID },
 ): ID {
-  const id = uid('af')
+  const id = a.id ?? uid('af')
   const at = a.at ?? Date.now()
   mutate('add screenshot', (d) => {
     d.artifacts.push({ ...a, id, at })
@@ -780,6 +784,12 @@ export function deleteArtifact(artifactId: ID): void {
       t.artifactIds = t.artifactIds.filter((x) => x !== artifactId)
     }
   })
+  // Fire-and-forget, deliberately NOT awaited and NOT inside the mutate
+  // closure: mutate() is synchronous and the record change must stay undoable.
+  // ⌘Z restores the record; if the bytes were already deleted the thumbnail
+  // will not resolve. An orphaned blob is cheap and its id is never reused, so
+  // leaving them is the lesser failure.
+  void deleteArtifactBytes(artifactId)
 }
 
 // ── Saved queries ─────────────────────────────────────────────────────────

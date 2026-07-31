@@ -10,6 +10,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useArtifacts, useDB, useInstrument } from '../data/hooks'
 import { navigate, peek, setCursor, setUI, toast, useUI } from '../app/uiState'
+import { uploadArtifact } from '../data/idb'
+import { uid } from '../domain/ids'
 import {
   addArtifact,
   deleteArtifact,
@@ -93,28 +95,39 @@ export function Vault() {
   function onFiles(files: FileList | null) {
     if (!files || !inst) return
     for (const file of Array.from(files)) {
-      const reader = new FileReader()
-      reader.onload = () => {
-        addArtifact({
-          instrumentId: inst.id,
-          sessionId: sessionKey(inst.id, ui.route.date || today()),
-          // §2.3 If a trade is open, it auto-associates with that trade.
-          tradeId:
-            db.trades.find(
-              (t) => t.instrumentId === inst.id && t.closedAt == null,
-            )?.id ?? null,
-          kind: 'screenshot',
-          name: file.name,
-          data: String(reader.result ?? ''),
-          // §2.3 OCR'd in the background so it's searchable. Without an OCR
-          // engine the field stays empty rather than being faked — the filter
-          // then honestly matches on name and tags only.
-          ocrText: '',
-          tags: [],
+      // Upload the bytes FIRST, under an id we mint here, then record the
+      // artifact pointing at the URL. The source read the file into a base64
+      // data URL and stored it inside the snapshot, which meant every debounced
+      // save rewrote every screenshot — untenable now that the snapshot goes
+      // over the network. See the design spec §3.2.
+      const id = uid('af')
+      void uploadArtifact(id, file)
+        .then((url) => {
+          addArtifact({
+            id,
+            instrumentId: inst.id,
+            sessionId: sessionKey(inst.id, ui.route.date || today()),
+            // §2.3 If a trade is open, it auto-associates with that trade.
+            tradeId:
+              db.trades.find(
+                (t) => t.instrumentId === inst.id && t.closedAt == null,
+              )?.id ?? null,
+            kind: 'screenshot',
+            name: file.name,
+            data: url,
+            // §2.3 OCR'd in the background so it's searchable. Without an OCR
+            // engine the field stays empty rather than being faked — the filter
+            // then honestly matches on name and tags only.
+            ocrText: '',
+            tags: [],
+          })
+          toast('Screenshot added', true)
         })
-        toast('Screenshot added', true)
-      }
-      reader.readAsDataURL(file)
+        .catch(() => {
+          // No record is written if the bytes did not land, so the Vault never
+          // shows a thumbnail that resolves to nothing.
+          toast(`Could not upload ${file.name}`)
+        })
     }
   }
 
