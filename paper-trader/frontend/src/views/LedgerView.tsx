@@ -41,7 +41,7 @@ function useIsDesktop() {
  * a fixed frame with its own internal scroll panes, and letting it flow inside
  * `<main className="flex-1 p-3">` would fight that.
  */
-export default function LedgerView() {
+export default function LedgerView({ onExit }: { onExit: () => void }) {
   const isDesktop = useIsDesktop()
   // On desktop, LedgerApp owns boot(). The mobile shell does not mount
   // LedgerApp, so it has to boot the store itself or every surface reads an
@@ -63,6 +63,12 @@ export default function LedgerView() {
       data-density="compact"
       style={{ position: 'fixed', inset: 0, zIndex: 40 }}
     >
+      {/* The journal covers the whole viewport, including paper-trader's tab
+          bar, so without this there is NO way back to any other view. Found by
+          rendering it — the code looked fine. */}
+      <button className="ledger-exit" onClick={onExit} title="Back to the cockpit">
+        ← Cockpit
+      </button>
       {isDesktop ? <LedgerApp /> : booted ? <MobileLedger /> : null}
     </div>
   )

@@ -77,7 +77,7 @@ function Shell() {
           inside the padded main column would fight its layout. Mounting it only
           while its tab is active is also what keeps its global keydown listener
           from swallowing bare letters on every other view. */}
-      {tab === 'journal' && <LedgerView />}
+      {tab === 'journal' && <LedgerView onExit={() => setTab('watchlist')} />}
     </div>
   )
 }

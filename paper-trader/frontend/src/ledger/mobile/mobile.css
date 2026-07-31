@@ -208,3 +208,36 @@
   font-size: var(--t-12);
   line-height: 1.5;
 }
+
+/* Escape hatch. The journal is a full-bleed fixed overlay covering the host
+   app's tab bar, so this is the ONLY way back to the cockpit on desktop.
+   Deliberately quiet but always present — a trapdoor you can't find is a bug. */
+.ledger-exit {
+  position: absolute;
+  /* Top bar, clearing the ⌘K badge on the right. The status bar along the
+     bottom is fully occupied (sync dot + n= on the left, risk on the right),
+     so anchoring there overlapped the risk readout. */
+  top: 6px;
+  right: 56px;
+  z-index: 60;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.ledger-exit:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+/* On a phone the bottom bar owns that corner, so it moves into the header. */
+@media (max-width: 767px) {
+  .ledger-exit {
+    top: var(--s-3);
+    right: var(--s-4);
+    min-height: 32px;
+  }
+}

@@ -76,7 +76,7 @@ function Chapter({
 }
 
 const CHAPTERS = [
-  { id: 'open', title: 'There is no login screen after this one' },
+  { id: 'open', title: 'Where this journal lives' },
   { id: 'frame', title: 'The frame you never leave' },
   { id: 'modes', title: 'The app knows what time it is' },
   { id: 'morning', title: 'The morning, and the lock' },
@@ -165,32 +165,34 @@ export function Guide() {
             </p>
           </header>
 
-          <Chapter id="open" n={1} title="There is no login screen after this one">
+          <Chapter id="open" n={1} title="Where this journal lives">
             <p>
-              The gate you just passed records that you meant to open this
-              workspace. Behind it there is no account, no server and no network
-              call. The journal lives in this browser’s IndexedDB and never
-              leaves the machine.
+              This journal is part of the trading cockpit, not a separate app.
+              It is stored on the backend rather than in this browser, so the
+              same record is there on your Mac and on your phone. There is no
+              second password: the cockpit’s own token guards it.
             </p>
             <p>
-              Which is why this device did not start empty. A journal with no
-              history cannot demonstrate the one thing this product is built to
-              do — refuse to show you a number it has too little evidence for.
-              So a working journal was seeded: five instrument workspaces,{' '}
+              It started nearly empty on purpose. It ships your instruments and
+              a playbook —{' '}
               <strong>{setupCount} playbook setups</strong> and{' '}
-              <strong>{tradeCount} trades</strong> of history
-              {inst ? <>, opened on {inst.name}</> : null}.
+              <strong>{tradeCount} trades</strong> so far
+              {inst ? <>, opened on {inst.name}</> : null} — but no invented
+              history, because a statistic computed over fabricated trades is
+              worse than no statistic.
             </p>
             <p>
-              The sample sizes in that playbook are uneven on purpose. Two of
-              the setups sit at n=14 and n=9, below the evidence threshold, and
-              the app will show you <code className="mono">░░░ n=9</code> and no
-              number at all. You are meant to hit that wall in the first two
-              minutes. <Run id="go-playbook">g p</Run>
+              Which means the Research Bench will show you{' '}
+              <code className="mono">░░░ n=0</code> and no number at all until
+              you have traded enough for it to mean something. That is the one
+              thing this product is built to do: refuse to show you a number it
+              has too little evidence for. You are meant to meet that wall
+              early. <Run id="go-playbook">g p</Run>
             </p>
             <p className="guide__aside">
-              When you have your own history, replace the seed from Settings →
-              Danger. Everything here is yours to delete.
+              Trades you place yourself on Kite are detected automatically and
+              appear in the Inbox asking why you took them. Trades the bot
+              places are never journalled here.
             </p>
           </Chapter>
 
