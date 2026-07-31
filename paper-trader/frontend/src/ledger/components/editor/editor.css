@@ -1,0 +1,362 @@
+/* §6.3 editor components. Paper material: warm-shifted, serif, 68ch measure,
+   1.6 leading, no borders — text simply sits on it. §7.1 */
+
+.editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.editor__input {
+  width: 100%;
+  max-width: var(--measure);
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  padding: var(--s-2) 0;
+  background: transparent;
+  color: var(--text-prose);
+  font-family: var(--font-prose);
+  font-size: var(--t-15);
+  line-height: 1.6;
+}
+.editor__input::placeholder {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.editor__input:focus-visible {
+  outline: 0;
+}
+
+.editor__saved {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  padding-top: var(--s-1);
+}
+
+/* Locked belief carries a hairline left rule and a timestamp — you can see at
+   a glance which parts were written before the market answered. §3.2 */
+.editor--locked .prose,
+.locked-block {
+  border-left: 1px solid var(--border-strong);
+  padding-left: var(--s-3);
+}
+
+.lock-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+/* §7.6 Thesis lock: 200ms, the block's left rule draws downward and the
+   timestamp fades in. It should feel like a seal. */
+.locked-block.is-sealing {
+  animation: seal var(--m-lock) var(--ease);
+}
+@keyframes seal {
+  from {
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+.lock-stamp.is-sealing {
+  animation: fade-in var(--m-lock) var(--ease);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── Prose ────────────────────────────────────────────────────────────── */
+
+.prose {
+  font-family: var(--font-prose);
+  font-size: var(--t-15);
+  line-height: 1.6;
+  color: var(--text-prose);
+}
+.prose p {
+  margin: 0 0 0.8em;
+}
+.prose h3,
+.prose h4,
+.prose h5 {
+  font-family: var(--font-ui);
+  font-size: var(--t-13);
+  font-weight: 600;
+  color: var(--text);
+  margin: 1.4em 0 0.5em;
+  letter-spacing: var(--tracking-ui);
+}
+.prose ul {
+  margin: 0 0 0.8em;
+  padding-left: 1.2em;
+}
+.prose li {
+  margin-bottom: 0.25em;
+}
+.prose li.task {
+  list-style: none;
+  margin-left: -1.2em;
+  display: flex;
+  gap: var(--s-2);
+}
+.prose blockquote {
+  margin: 0 0 0.8em;
+  padding-left: var(--s-3);
+  border-left: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.prose pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  padding: var(--s-2);
+  font-size: var(--t-12);
+  overflow-x: auto;
+}
+.prose code {
+  font-size: 0.92em;
+  color: var(--text);
+}
+
+/* §6.3 inline entity chips */
+.entity-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--interactive);
+  font-size: var(--t-11);
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+/* ── SlashMenu ────────────────────────────────────────────────────────── */
+
+.slash {
+  position: absolute;
+  z-index: 40;
+  top: 100%;
+  left: 0;
+  width: 300px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--overlay-shadow);
+  padding: var(--s-1);
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+.slash__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 4px var(--s-2);
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.slash__item.is-active {
+  background: color-mix(in srgb, var(--interactive) 16%, transparent);
+  color: var(--text);
+}
+.slash__label {
+  font-size: var(--t-12);
+}
+.slash__hint {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  margin-left: auto;
+}
+
+/* ── ScenarioBlock ────────────────────────────────────────────────────── */
+
+.scenario {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.scenario:last-child {
+  border-bottom: 0;
+}
+.scenario__letter {
+  font-family: var(--font-data);
+  font-size: var(--t-13);
+  color: var(--text-muted);
+}
+.scenario__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.scenario__name {
+  font-size: var(--t-13);
+  color: var(--text);
+}
+.scenario__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-3);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  padding-top: 3px;
+}
+.scenario__field b {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.scenario__prob {
+  margin-left: auto;
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+.scenario__input {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 2px 0;
+  color: var(--text);
+  font-size: var(--t-12);
+  min-width: 60px;
+}
+.scenario__input:focus {
+  border-bottom-color: var(--interactive);
+  outline: 0;
+}
+.scenario__input--wide {
+  flex: 1;
+  min-width: 160px;
+}
+
+/* ── LevelLadder ──────────────────────────────────────────────────────── */
+
+.ladder {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+}
+.ladder th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  padding: 0 var(--s-2) 3px 0;
+}
+.ladder td {
+  padding: 2px var(--s-2) 2px 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.ladder td.price {
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ladder tr:hover td {
+  color: var(--text);
+}
+.ladder__actions {
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+}
+.ladder tr:hover .ladder__actions {
+  opacity: 1;
+}
+.ladder__tiny {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-faint);
+  font-size: var(--t-11);
+  font-family: var(--font-data);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 14px;
+}
+.ladder__tiny:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* ── LockBar / ConfirmRail ────────────────────────────────────────────── */
+/* §6.5 ConfirmRail — used exactly once, for thesis lock. */
+
+.lockbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+}
+.lockbar__what {
+  font-size: var(--t-12);
+  color: var(--text-muted);
+  flex: 1;
+}
+.lockbar--blocked {
+  border-color: color-mix(in srgb, var(--attention) 50%, var(--border));
+}
+/* §8 Errors are directions, with the cursor jumping to the field. */
+.lockbar__error {
+  color: var(--attention);
+  font-size: var(--t-12);
+  cursor: pointer;
+}
+.lockbar__error:hover {
+  text-decoration: underline;
+}
+
+.confirm-rail {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--border-strong);
+  border-left: 2px solid var(--attention);
+  border-radius: var(--radius-input);
+  background: var(--surface-raised);
+}
+.confirm-rail__body {
+  flex: 1;
+  font-size: var(--t-12);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.confirm-rail__title {
+  color: var(--text);
+  font-size: var(--t-13);
+  display: block;
+  margin-bottom: 2px;
+}

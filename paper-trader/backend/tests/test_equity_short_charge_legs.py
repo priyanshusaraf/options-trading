@@ -4,8 +4,8 @@ An equity-intraday SHORT is SELL-to-open / BUY-to-cover, but the broker charged 
 entry as a BUY and the exit as a SELL regardless of direction. On NSE_INTRADAY that
 puts STT (0.025%, sell-side) on the wrong leg and stamp duty (0.003%, buy-side) on the
 wrong leg, so `Trade.net_pnl` can't reconcile against the real contract note on shorts.
-It is self-consistent, so `reconcile()` never flagged it. `journal/pnl.py` and
-`live_broker.py` already get this right — the paper broker is the outlier.
+It is self-consistent, so `reconcile()` never flagged it. `live_broker.py` already
+gets this right — the paper broker is the outlier.
 """
 
 import pytest

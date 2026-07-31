@@ -1,0 +1,113 @@
+/* Design tokens — §7 of trading-journal-design.md
+   Every value here traces to a line in the design document. Do not add a token
+   without a line to point at. */
+
+:root {
+  /* ── §7.2 Palette (dark, primary) ─────────────────────────────────── */
+  --base: #0c0d10;
+  --surface: #131519;
+  --surface-raised: #191c22;
+  --paper: #15161a;
+  --paper-raised: #1b1d20;
+  --border: #23262d;
+  --border-strong: #30343c;
+
+  --text: #e7e9ec;
+  --text-muted: #9ca3ac;
+  --text-faint: #676e78;
+  --text-prose: #dfdcd6;
+
+  --long: #3e9e74;
+  --short: #c75450;
+  --attention: #d99a3c;
+  --interactive: #6e86d8;
+  --neutral-fill: #2a2e36;
+
+  /* Overlay scrim */
+  --scrim: rgba(6, 7, 9, 0.62);
+  --overlay-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* ── §7.3 Typography ──────────────────────────────────────────────── */
+  --font-ui: 'Söhne', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    system-ui, sans-serif;
+  --font-data: 'Berkeley Mono', 'IBM Plex Mono', ui-monospace, 'SF Mono',
+    Menlo, monospace;
+  --font-prose: 'Lyon Text', 'Newsreader', Georgia, 'Times New Roman', serif;
+
+  /* Seven sizes. No exceptions. */
+  --t-11: 11px;
+  --t-12: 12px;
+  --t-13: 13px;
+  --t-15: 15px;
+  --t-18: 18px;
+  --t-24: 24px;
+  --t-32: 32px;
+
+  --tracking-ui: -0.006em;
+  --tracking-label: 0.04em;
+
+  /* ── §7.4 Spacing, grid, density ──────────────────────────────────── */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-6: 24px;
+  --s-8: 32px;
+
+  --radius-input: 4px;
+  --radius-overlay: 6px;
+
+  --rail-w: 48px;
+  --sidebar-w: 216px;
+  --inspector-w: 380px;
+  --measure: 68ch;
+
+  /* Density — compact is the default and what Live mode forces */
+  --row-h: 28px;
+  --data-size: var(--t-12);
+
+  /* ── §7.6 Motion. Total budget 160ms. ─────────────────────────────── */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --m-overlay: 120ms;
+  --m-panel: 140ms;
+  --m-commit: 160ms;
+  --m-lock: 200ms; /* the one deliberate exception */
+}
+
+:root[data-density='comfortable'] {
+  --row-h: 34px;
+  --data-size: var(--t-13);
+}
+
+/* ── §7.2 Light mode: a first-class citizen, because reviews are often done
+   in daylight and reading long prose on dark is fatiguing. ───────────── */
+:root[data-theme='light'] {
+  --base: #eceef1;
+  --surface: #f4f5f7;
+  --surface-raised: #ffffff;
+  --paper: #faf9f6;
+  --paper-raised: #ffffff;
+  --border: #dcdfe4;
+  --border-strong: #c2c7cf;
+
+  --text: #16181c;
+  --text-muted: #565d67;
+  --text-faint: #838a94;
+  --text-prose: #26241f;
+
+  --long: #1f7a52;
+  --short: #a83a36;
+  --attention: #a5701d;
+  --interactive: #4058b0;
+  --neutral-fill: #dfe2e7;
+
+  --scrim: rgba(120, 124, 132, 0.32);
+  --overlay-shadow: 0 16px 48px rgba(30, 34, 40, 0.18);
+}
+
+/* ── §7.2 Colourblind-safe alternate: long/short map to periwinkle/amber.
+   Direction is *always* also carried by a glyph, never by hue alone. ─── */
+:root[data-cvd='on'] {
+  --long: #6e86d8;
+  --short: #d99a3c;
+}

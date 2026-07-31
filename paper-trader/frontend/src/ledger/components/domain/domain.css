@@ -1,0 +1,390 @@
+/* §6.4 domain components */
+
+/* §7.2 Direction is always carried by a glyph as well as hue, so the product
+   stays readable with --cvd on and for anyone who cannot separate the two. */
+.dirglyph {
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+}
+
+/* ── ConfidenceMeter ──────────────────────────────────────────────────── */
+
+.confmeter {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.confmeter__mark {
+  width: 6px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 1px;
+  background: transparent;
+  cursor: pointer;
+}
+.confmeter__mark.is-on {
+  background: var(--text-muted);
+  border-color: var(--text-muted);
+}
+.confmeter__mark:disabled {
+  cursor: default;
+}
+/* Locked after commit and rendered thereafter with a lock hairline. §6.4 */
+.confmeter.is-locked {
+  padding-left: 5px;
+  border-left: 1px solid var(--border-strong);
+}
+
+/* ── GradePill ────────────────────────────────────────────────────────── */
+/* Monochrome. Colour here would encourage grade inflation. §6.4 */
+
+.gradepill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-muted);
+}
+.gradepill--empty {
+  border-color: transparent;
+  color: var(--text-faint);
+}
+.gradeset {
+  display: inline-flex;
+  gap: 2px;
+}
+.gradepill--btn {
+  cursor: pointer;
+  background: transparent;
+}
+.gradepill--btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.gradepill--btn.is-on {
+  background: var(--neutral-fill);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.mistakedots {
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+
+/* ── RiskEnvelope ─────────────────────────────────────────────────────── */
+
+.risk {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding: var(--s-2) 0;
+  font-size: var(--t-11);
+}
+.risk__terms {
+  color: var(--text-faint);
+}
+.risk__used {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+/* §2.2.4 When breached, the Cockpit turns amber. Amber appears only on
+   unresolved state — this is one of the few places it is allowed. */
+.risk.is-breached .risk__terms,
+.risk.is-breached .label {
+  color: var(--attention);
+}
+
+/* ── Events ───────────────────────────────────────────────────────────── */
+
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--t-11);
+}
+.events__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  color: var(--text-muted);
+}
+.events__time {
+  color: var(--text-faint);
+}
+.events__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Positions ────────────────────────────────────────────────────────── */
+
+.positions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--t-11);
+}
+.positions__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.positions__row:hover {
+  color: var(--text);
+}
+
+/* ── Stream ───────────────────────────────────────────────────────────── */
+/* §2.3 A single reverse-chronological column. */
+
+.streamrow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-height: var(--row-h);
+  padding: 4px 0;
+  border-bottom: 1px solid transparent;
+  font-size: var(--t-12);
+  color: var(--text-muted);
+}
+.streamrow:hover {
+  background: color-mix(in srgb, var(--surface-raised) 50%, transparent);
+}
+.streamrow__time {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  flex: none;
+  width: 62px;
+}
+.streamrow__glyph {
+  flex: none;
+  width: 26px;
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+.streamrow__text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.streamrow--trade .streamrow__text,
+.streamrow--thesis-lock .streamrow__text {
+  color: var(--text);
+}
+.streamrow--limit-breach .streamrow__text {
+  color: var(--attention);
+}
+.streamrow__x {
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 4px;
+}
+.streamrow:hover .streamrow__x {
+  opacity: 1;
+}
+.streamrow__x:hover {
+  color: var(--text);
+}
+
+/* ── ThesisDiff ───────────────────────────────────────────────────────── */
+
+.thesisdiff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-8);
+}
+.thesisdiff__col {
+  min-width: 0;
+}
+.thesisdiff__scenarios {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+.thesisdiff__sc {
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border);
+}
+.thesisdiff__schead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: var(--t-13);
+  color: var(--text);
+}
+.thesisdiff__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+}
+.thesisdiff__btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  padding: 2px 6px;
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.thesisdiff__btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.thesisdiff__btn.is-on {
+  color: var(--text);
+  background: var(--neutral-fill);
+  border-color: var(--border-strong);
+}
+.thesisdiff__paid {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+/* ── PlaybookRow ──────────────────────────────────────────────────────── */
+
+.pbrow {
+  border-bottom: 1px solid var(--border);
+}
+.pbrow__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 var(--s-2);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--data-size);
+}
+.pbrow__head:hover {
+  background: var(--surface-raised);
+}
+.pbrow__name {
+  color: var(--text);
+  min-width: 200px;
+}
+.pbrow__code {
+  font-size: var(--t-11);
+}
+.pbrow__stat {
+  font-size: var(--t-11);
+  min-width: 74px;
+}
+.pbrow__spark {
+  margin-left: auto;
+}
+/* §5.6 Greyed rows are explicitly *not yet evidence*. */
+.pbrow.is-insufficient .pbrow__name,
+.pbrow.is-insufficient .pbrow__stat {
+  color: var(--text-faint);
+}
+.pbrow__body {
+  padding: var(--s-3) var(--s-2) var(--s-4) var(--s-2);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* ── ScreenshotTile ───────────────────────────────────────────────────── */
+
+.shot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  overflow: hidden;
+}
+.shot:hover {
+  border-color: var(--border-strong);
+}
+.shot.is-untagged {
+  border-color: color-mix(in srgb, var(--attention) 45%, var(--border));
+}
+.shot img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  display: block;
+}
+.shot__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+  color: var(--text-faint);
+  font-size: var(--t-24);
+  background: var(--neutral-fill);
+}
+.shot__name {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  padding: 0 4px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── TradeTicket ──────────────────────────────────────────────────────── */
+/* §8 Creation never destroys context — the ticket is inline, never a modal. */
+
+.ticket {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0 var(--s-2);
+  height: 30px;
+  background: var(--surface-raised);
+  border: 1px solid var(--interactive);
+  border-radius: var(--radius-input);
+}
+.ticket__inst {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+}
+.ticket__input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font-size: var(--t-13);
+}
+.ticket__input::placeholder {
+  color: var(--text-faint);
+}
+.ticket__preview {
+  font-size: var(--t-11);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}

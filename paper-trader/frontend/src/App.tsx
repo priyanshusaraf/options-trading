@@ -6,7 +6,7 @@ import MobileTopBar from './components/MobileTopBar'
 import Watchlist from './views/WatchlistView'
 import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
-import JournalView from './views/JournalView'
+import LedgerView from './views/LedgerView'
 import OptionsCalcView from './views/OptionsCalcView'
 import BacktestsView from './views/BacktestsView'
 import PortfolioView from './views/PortfolioView'
@@ -61,7 +61,6 @@ function Shell() {
       <main className="flex-1 p-3">
         {tab === 'watchlist' && <Watchlist />}
         {tab === 'positions' && <ActivePositionsView />}
-        {tab === 'journal' && <JournalView />}
         {tab === 'engine' && <EngineView />}
         {tab === 'options' && <OptionsCalcView />}
         {tab === 'backtests' && (isDesktop
@@ -73,6 +72,12 @@ function Shell() {
         {tab === 'dashboard' && <DashboardView />}
         {tab === 'settings' && <SettingsView />}
       </main>
+      {/* The journal renders OUTSIDE <main>: it is a full-bleed fixed sub-app
+          with its own shell and its own internal scroll panes, so flowing it
+          inside the padded main column would fight its layout. Mounting it only
+          while its tab is active is also what keeps its global keydown listener
+          from swallowing bare letters on every other view. */}
+      {tab === 'journal' && <LedgerView />}
     </div>
   )
 }

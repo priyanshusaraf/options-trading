@@ -1,0 +1,329 @@
+/* Guide — paper material, 68ch, chapter rail. The Review frame (§5.8) reused,
+   because this is prose to be read rather than data to be scanned. */
+
+/* `.pane` is a flex column with overflow:hidden, so the surface claims the
+   remaining height as a flex child and scrolls internally. `height: 100%`
+   here would overflow the viewport and hand scrolling to the window. */
+.guide {
+  display: grid;
+  grid-template-columns: 216px 1fr; /* the sidebar width — no fifth width */
+  flex: 1;
+  min-height: 0;
+  background: var(--paper);
+}
+
+/* ── Chapter rail ─────────────────────────────────────────────────────── */
+
+.guide__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-8) var(--s-3);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.guide__railitem {
+  display: flex;
+  gap: var(--s-2);
+  align-items: baseline;
+  text-align: left;
+  padding: var(--s-1) var(--s-2);
+  background: none;
+  border: none;
+  border-radius: var(--radius-input);
+  color: var(--text-faint);
+  font-size: var(--t-12);
+  line-height: 1.35;
+  cursor: pointer;
+  transition: color var(--m-commit) var(--ease);
+}
+
+.guide__railitem:hover {
+  color: var(--text-muted);
+}
+
+.guide__railitem.is-active {
+  color: var(--text);
+  background: var(--paper-raised);
+}
+
+.guide__railn {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+
+.guide__railitem.is-active .guide__railn {
+  color: var(--interactive);
+}
+
+.guide__railtitle {
+  flex: 1;
+}
+
+/* ── Column ───────────────────────────────────────────────────────────── */
+
+/* No smooth scroll: a chapter jump is navigation, and §7.6's budget is 160ms
+   — the browser's smooth behaviour runs well past it. */
+.guide__scroll {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.guide__col {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--s-8) var(--s-6) 40vh; /* tail space so the last chapter can reach the top */
+  font-family: var(--font-prose);
+  color: var(--text-prose);
+  font-size: var(--t-15);
+  line-height: 1.62;
+}
+
+.guide__head {
+  padding-bottom: var(--s-6);
+  margin-bottom: var(--s-8);
+  border-bottom: 1px solid var(--border);
+}
+
+.guide__h1 {
+  font-family: var(--font-data);
+  font-size: var(--t-24);
+  letter-spacing: var(--tracking-label);
+  color: var(--text);
+  margin: 0 0 var(--s-4);
+}
+
+.guide__lede {
+  font-size: var(--t-18);
+  line-height: 1.55;
+  margin: 0 0 var(--s-4);
+}
+
+.guide__meta {
+  font-size: var(--t-12);
+  line-height: 1.7;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+.guide__chapter {
+  margin-bottom: var(--s-8);
+  scroll-margin-top: var(--s-6);
+}
+
+.guide__h2 {
+  display: flex;
+  gap: var(--s-3);
+  align-items: baseline;
+  font-family: var(--font-ui);
+  font-size: var(--t-18);
+  letter-spacing: var(--tracking-ui);
+  color: var(--text);
+  margin: var(--s-8) 0 var(--s-4);
+}
+
+.guide__n {
+  font-size: var(--t-12);
+  color: var(--text-faint);
+}
+
+.guide__col p {
+  margin: 0 0 var(--s-4);
+}
+
+.guide__col strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.guide__col code.mono {
+  font-family: var(--font-data);
+  font-size: var(--t-12);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--text);
+}
+
+.guide__aside {
+  font-size: var(--t-13);
+  color: var(--text-faint);
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--s-3);
+}
+
+/* ── Live key caps ────────────────────────────────────────────────────── */
+
+.guide__run {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+.guide__run .kbd {
+  transition:
+    border-color var(--m-commit) var(--ease),
+    color var(--m-commit) var(--ease);
+}
+
+.guide__run:hover .kbd,
+.guide__run:focus-visible .kbd {
+  border-color: var(--interactive);
+  color: var(--interactive);
+  outline: none;
+}
+
+/* ── Blocks ───────────────────────────────────────────────────────────── */
+
+.guide__ascii {
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  padding: var(--s-3);
+  margin: 0 0 var(--s-4);
+  overflow-x: auto;
+}
+
+.guide__modes,
+.guide__rules,
+.guide__steps,
+.guide__try,
+.guide__blockers {
+  margin: 0 0 var(--s-4);
+  padding-left: var(--s-6);
+}
+
+.guide__modes li,
+.guide__rules li,
+.guide__steps li,
+.guide__try li {
+  margin-bottom: var(--s-2);
+}
+
+.guide__modes {
+  list-style: none;
+  padding-left: 0;
+}
+
+/* The lock is the centre of the product; it gets the one framed block. */
+.guide__lock {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  padding: var(--s-4);
+  background: var(--paper-raised);
+  margin-bottom: var(--s-4);
+}
+
+.guide__lock > .rule {
+  margin-bottom: var(--s-3);
+}
+
+.guide__lock p:last-child {
+  margin-bottom: 0;
+}
+
+/* Amber: unmet preconditions, which is exactly what these are. */
+.guide__blockers {
+  list-style: none;
+  padding-left: 0;
+  font-family: var(--font-data);
+  font-size: var(--t-12);
+}
+
+.guide__blockers li {
+  color: var(--attention);
+  padding: var(--s-1) 0 var(--s-1) var(--s-3);
+  border-left: 2px solid var(--attention);
+  margin-bottom: var(--s-1);
+}
+
+.guide__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 var(--s-4);
+  font-size: var(--t-13);
+}
+
+.guide__table td {
+  padding: var(--s-2) var(--s-2) var(--s-2) 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.guide__table td.mono {
+  font-family: var(--font-data);
+  font-size: var(--t-12);
+  color: var(--text);
+  white-space: nowrap;
+  padding-right: var(--s-4);
+}
+
+.guide__steps li.is-reveal {
+  color: var(--text);
+}
+
+.guide__pointer {
+  font-size: var(--t-12);
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+}
+
+.guide__surfaces {
+  margin: 0;
+}
+
+.guide__surfaces dt {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-family: var(--font-ui);
+  font-size: var(--t-13);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text);
+  margin-top: var(--s-6);
+  padding-bottom: var(--s-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.guide__surfaces dd {
+  margin: var(--s-3) 0 0;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+
+.guide__foot {
+  margin-top: var(--s-8);
+  padding-top: var(--s-6);
+  border-top: 1px solid var(--border);
+}
+
+.guide__begin {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  justify-content: center;
+  padding: var(--s-3);
+  font-family: var(--font-ui);
+  font-size: var(--t-13);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+  transition: border-color var(--m-commit) var(--ease);
+}
+
+.guide__begin:hover {
+  border-color: var(--interactive);
+}

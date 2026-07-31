@@ -25,7 +25,7 @@ from app.core.logging import log
 from app.core.version import get_build_info, log_build_banner
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
-from app.journal import routes as journal_routes
+from app.ledger import routes as ledger_routes
 from app.ws.manager import manager
 
 
@@ -104,6 +104,17 @@ async def lifespan(app: FastAPI):
         log.error(f"order journal recovery failed at startup: {e}")
     signal_task = asyncio.create_task(runner.run_signal_loop())
     risk_task = asyncio.create_task(runner.run_risk_loop())
+    # Journal: detect trades the OWNER placed by hand on the Kite account and
+    # file them for reasoning. A third lane on purpose — it reads the orderbook
+    # and writes only to ledger.db, never to positions/trades, and it never
+    # takes runner._lock (see the 2026-07-13 risk_loop_stalled incident). If it
+    # dies, trading is entirely unaffected.
+    from app.db.session import SessionLocal
+    from app.ledger.db import get_sessionmaker as ledger_sessionmaker
+    from app.ledger.lane import run_manual_detect_loop
+    detect_task = asyncio.create_task(run_manual_detect_loop(
+        runner.provider, SessionLocal, ledger_sessionmaker(),
+        get_settings(), runner.provider.now))
     log.info("backend ready — open the dashboard")
     try:
         yield
@@ -111,6 +122,7 @@ async def lifespan(app: FastAPI):
         runner.stop()
         signal_task.cancel()
         risk_task.cancel()
+        detect_task.cancel()
 
 
 class _PollingRouteFilter(logging.Filter):
@@ -164,7 +176,7 @@ app.add_middleware(
 app.include_router(routes.router)
 app.include_router(backtest_routes.router)
 app.include_router(portfolio_routes.router)
-app.include_router(journal_routes.router)
+app.include_router(ledger_routes.router)
 
 
 @app.get("/api/health")

@@ -1,0 +1,154 @@
+/* Base + material system — §7.1 glass and paper */
+
+/* Scoped reset. The source shipped these at document level; inside a host app
+   `body { overflow: hidden }` would kill page scrolling everywhere and the bare
+   `*` would fight Tailwind's preflight. The frame properties move onto the
+   scope element, which LedgerView renders at full viewport. The `*` selector is
+   left for the PostCSS pass to prefix into `.ledger-root *`. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--base);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--t-13);
+  letter-spacing: var(--tracking-ui);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+/* Focus is periwinkle and nothing else is. §7.2 */
+:focus-visible {
+  outline: 1px solid var(--interactive);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--interactive) 34%, transparent);
+}
+
+/* ── Materials ─────────────────────────────────────────────────────────
+   Glass: data. Cool graphite, hairline borders, monospace numerals, tight
+   leading, no radius above 4px. Everything measured lives here.
+   Paper: prose. Warmer, serif, 68ch measure, no borders — text simply sits
+   on it. Everything believed or judged lives here. */
+
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+}
+
+.paper {
+  background: var(--paper);
+  color: var(--text-prose);
+  font-family: var(--font-prose);
+  font-size: var(--t-15);
+  line-height: 1.6;
+  border: 0;
+}
+
+.paper--raised {
+  background: var(--paper-raised);
+}
+
+.measure {
+  max-width: var(--measure);
+}
+
+/* Numerals: tabular by definition, right-aligned, never truncated. §6.2 */
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+}
+
+.num {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 11px exists only for column labels and timestamps, always TEXT-FAINT with
+   +0.04em tracking and uppercase. §7.3 */
+.label {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+.faint {
+  color: var(--text-faint);
+}
+
+/* Signed numbers are the only place green and red appear, alongside
+   direction glyphs and R meters. Never backgrounds, never buttons. §7.2 */
+.pos {
+  color: var(--long);
+}
+.neg {
+  color: var(--short);
+}
+.flat {
+  color: var(--text-muted);
+}
+.attn {
+  color: var(--attention);
+}
+
+/* Hairline. 1px, never coloured. §6.1 */
+.hr {
+  height: 1px;
+  background: var(--border);
+  border: 0;
+  margin: 0;
+}
+
+.scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 8px;
+}
+.scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* §7.6 prefers-reduced-motion removes all transform-based motion and keeps
+   opacity only. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-property: opacity !important;
+    transition-duration: 90ms !important;
+  }
+}

@@ -1,0 +1,249 @@
+/* §6.2 data components. Glass material throughout: hairlines, tabular
+   numerals, 4px grid, no gridlines on charts. */
+
+/* ── StatCell ─────────────────────────────────────────────────────────── */
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.stat--compact {
+  gap: 1px;
+}
+.stat__label {
+  line-height: 1;
+}
+.stat__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  color: var(--text-muted);
+}
+.stat__value {
+  font-size: var(--t-18);
+  font-family: var(--font-data);
+  line-height: 1.1;
+}
+.stat--compact .stat__value {
+  font-size: var(--t-13);
+}
+.stat__n,
+.stat__ci {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+.stat__blocks {
+  font-size: var(--t-18);
+  color: var(--text-faint);
+  letter-spacing: 1px;
+}
+.stat--compact .stat__blocks {
+  font-size: var(--t-13);
+}
+.stat__notyet {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+/* §5.7 each analysis states, in plain language, what it would change. */
+.stat__hint {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  line-height: 1.4;
+  max-width: 44ch;
+}
+/* Insufficient stats recede rather than shout. */
+.stat--insufficient .stat__row {
+  opacity: 0.75;
+}
+
+.spark {
+  color: var(--text-faint);
+  overflow: visible;
+}
+
+/* ── Distribution ─────────────────────────────────────────────────────── */
+
+.dist {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dist__bars {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+}
+.dist__col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  min-width: 2px;
+}
+.dist__bar {
+  width: 100%;
+  position: relative;
+  background: var(--neutral-fill);
+  min-height: 0;
+}
+/* Sign carries the hue — the only thing colour is allowed to mean here. */
+.dist__bar.pos {
+  background: color-mix(in srgb, var(--long) 34%, var(--neutral-fill));
+}
+.dist__bar.neg {
+  background: color-mix(in srgb, var(--short) 34%, var(--neutral-fill));
+}
+/* §5.7 "your last 20 highlighted" */
+.dist__hl {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--interactive);
+  opacity: 0.85;
+}
+/* Baseline only. No gridlines. §6.2 */
+.dist__baseline {
+  height: 1px;
+  background: var(--border-strong);
+}
+.dist__axis {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 3px;
+  font-size: var(--t-11);
+}
+
+/* ── Heatmap ──────────────────────────────────────────────────────────── */
+
+.heat {
+  display: grid;
+  justify-content: start;
+}
+.heat__cell {
+  border: 1px solid transparent;
+  border-radius: 1px;
+  padding: 0;
+  cursor: pointer;
+  transition: outline-color var(--m-overlay) var(--ease);
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+.heat__cell:hover {
+  outline-color: var(--interactive);
+}
+/* §5.5 cell border = amber if unreviewed */
+.heat__cell.is-flagged {
+  border-color: var(--attention) !important;
+}
+.heat__cell.is-insufficient {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--neutral-fill),
+    var(--neutral-fill) 2px,
+    transparent 2px,
+    transparent 4px
+  ) !important;
+}
+
+/* ── Charts ───────────────────────────────────────────────────────────── */
+
+.axis-text {
+  fill: var(--text-faint);
+  font-size: 9px;
+  font-family: var(--font-data);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.equity {
+  display: block;
+  width: 100%;
+}
+
+/* ── RMeter ───────────────────────────────────────────────────────────── */
+
+.rmeter {
+  position: relative;
+  height: 10px;
+  display: inline-block;
+}
+.rmeter__track {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--neutral-fill);
+}
+.rmeter__zero {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 10px;
+  background: var(--border-strong);
+}
+.rmeter__mae {
+  position: absolute;
+  top: 4px;
+  height: 2px;
+  background: color-mix(in srgb, var(--short) 55%, transparent);
+}
+.rmeter__mfe {
+  position: absolute;
+  top: 4px;
+  height: 2px;
+  background: color-mix(in srgb, var(--long) 45%, transparent);
+}
+.rmeter__exit {
+  position: absolute;
+  top: 1px;
+  width: 2px;
+  height: 8px;
+  background: currentColor;
+}
+.rmeter__exit.pos {
+  color: var(--long);
+}
+.rmeter__exit.neg {
+  color: var(--short);
+}
+.rmeter__exit.flat {
+  color: var(--text-muted);
+}
+
+/* ── Peek ─────────────────────────────────────────────────────────────── */
+/* §6.5 space-triggered, dismisses on any nav. A true overlay, so it is the
+   one place a shadow is allowed. §7.4 */
+
+.peek {
+  position: fixed;
+  right: var(--s-6);
+  bottom: var(--s-6);
+  width: 420px;
+  max-height: 60vh;
+  overflow: auto;
+  z-index: 70;
+  padding: var(--s-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--overlay-shadow);
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

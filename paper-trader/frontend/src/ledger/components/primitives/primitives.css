@@ -1,0 +1,316 @@
+/* §6.1 primitives. Elevation is border + one background step, never a shadow.
+   Radius 4px on inputs and chips; nothing is a pill except tags. §7.4 */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 24px;
+  padding: 0 var(--s-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  color: var(--text-muted);
+  font-size: var(--t-12);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--m-overlay) var(--ease),
+    border-color var(--m-overlay) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn--quiet {
+  border-color: transparent;
+}
+.btn--quiet:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+/* Primary appears at most once per screen. It is a border, not a fill —
+   §7.2 forbids coloured buttons. */
+.btn--primary {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+.btn--primary:hover:not(:disabled) {
+  border-color: var(--interactive);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text-faint);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  line-height: 1;
+  justify-content: center;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--t-11);
+  font-family: var(--font-data);
+  white-space: nowrap;
+}
+.chip--clickable {
+  cursor: pointer;
+}
+.chip--clickable:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.chip--attention {
+  color: var(--attention);
+  border-color: color-mix(in srgb, var(--attention) 40%, var(--border));
+}
+.chip--interactive {
+  color: var(--interactive);
+  border-color: color-mix(in srgb, var(--interactive) 40%, var(--border));
+}
+.chip--long {
+  color: var(--long);
+}
+.chip--short {
+  color: var(--short);
+}
+
+.chip__x {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-right: -2px;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: var(--t-12);
+  line-height: 1;
+}
+.chip__x:hover {
+  color: var(--text);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px; /* the only pill in the product */
+  color: var(--text-muted);
+  font-size: var(--t-11);
+  white-space: nowrap;
+}
+.tag--clickable {
+  cursor: pointer;
+}
+.tag--clickable:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--neutral-fill);
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+}
+.badge--attention {
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 16%, transparent);
+}
+.badge--interactive {
+  color: var(--interactive);
+  background: color-mix(in srgb, var(--interactive) 16%, transparent);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--t-12);
+}
+.toggle__track {
+  width: 26px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  position: relative;
+  transition: border-color var(--m-overlay) var(--ease);
+}
+.toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: transform var(--m-overlay) var(--ease),
+    background var(--m-overlay) var(--ease);
+}
+.toggle--on .toggle__thumb {
+  transform: translateX(12px);
+  background: var(--interactive);
+}
+.toggle--on .toggle__track {
+  border-color: var(--interactive);
+}
+
+.segment {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  overflow: hidden;
+}
+.segment__item {
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border);
+  padding: 0 var(--s-2);
+  height: 22px;
+  color: var(--text-faint);
+  font-size: var(--t-11);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.segment__item:last-child {
+  border-right: 0;
+}
+.segment__item.is-active {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+
+.tooltip-host {
+  position: relative;
+  display: inline-flex;
+}
+.tooltip {
+  position: absolute;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px var(--s-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  color: var(--text-muted);
+  font-size: var(--t-11);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: tip var(--m-overlay) var(--ease);
+}
+.tooltip--top {
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tooltip--bottom {
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.tooltip--right {
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+@keyframes tip {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.rule {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) 0 var(--s-2);
+}
+.rule__line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.rule__right {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  padding: var(--s-8);
+  color: var(--text-faint);
+  font-size: var(--t-13);
+  text-align: center;
+}
+.empty__kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-12);
+}
+
+/* §7.6 No skeleton shimmer — a hairline progress line at the top of the pane. */
+.progress {
+  height: 1px;
+  background: transparent;
+  overflow: hidden;
+}
+.progress.is-active::after {
+  content: '';
+  display: block;
+  height: 1px;
+  width: 30%;
+  background: var(--interactive);
+  animation: slide 900ms linear infinite;
+}
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}

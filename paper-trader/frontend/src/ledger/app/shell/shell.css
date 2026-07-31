@@ -1,0 +1,345 @@
+/* §4.1 The frame. Fixed widths throughout — §7.4. */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--sidebar-w) 1fr;
+  height: 100%;
+  background: var(--base);
+}
+.shell--nosidebar {
+  grid-template-columns: var(--rail-w) 1fr;
+}
+.shell--inspector {
+  grid-template-columns: var(--rail-w) var(--sidebar-w) 1fr var(--inspector-w);
+}
+.shell--nosidebar.shell--inspector {
+  grid-template-columns: var(--rail-w) 1fr var(--inspector-w);
+}
+
+/* ── Instrument rail ──────────────────────────────────────────────────── */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+.rail::-webkit-scrollbar {
+  display: none;
+}
+
+.rail__tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  flex: none;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.rail__tile:hover {
+  color: var(--text-muted);
+}
+.rail__tile.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.rail__code {
+  font-size: var(--t-11);
+  letter-spacing: 0;
+}
+
+/* §4.1 a 3px state bar — grey (flat), tinted (position open), amber (limit
+   breached or unreviewed session). */
+.rail__state {
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+}
+.rail__state--flat {
+  background: var(--neutral-fill);
+}
+.rail__state--position {
+  background: var(--interactive);
+}
+.rail__state--attention {
+  background: var(--attention);
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────── */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar__sections {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-2) 0;
+  flex: none;
+}
+
+.sidebar__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  height: 24px;
+  padding: 0 var(--s-3);
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: var(--t-13);
+  cursor: pointer;
+  text-align: left;
+}
+.sidebar__item:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.sidebar__item.is-active {
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--interactive);
+}
+.sidebar__kbd {
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  opacity: 0;
+}
+.sidebar__item:hover .sidebar__kbd {
+  opacity: 1;
+}
+.sidebar__count {
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--attention);
+}
+
+.sidebar__pinned {
+  flex: 1;
+  min-height: 0;
+  padding: 0 0 var(--s-3);
+  border-top: 1px solid var(--border);
+  margin-top: var(--s-2);
+}
+.sidebar__grouphead {
+  padding: var(--s-3) var(--s-3) var(--s-1);
+}
+.sidebar__query {
+  display: block;
+  width: 100%;
+  padding: 3px var(--s-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--t-12);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar__query:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.sidebar__levels {
+  padding: 0 var(--s-3);
+}
+
+/* ── Main + breadcrumb ────────────────────────────────────────────────── */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 30px;
+  flex: none;
+  padding: 0 var(--s-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--t-12);
+  color: var(--text-muted);
+}
+.crumb__inst {
+  color: var(--text);
+}
+.crumb__sep {
+  color: var(--text-faint);
+}
+.crumb__part {
+  color: var(--text-muted);
+  font-size: var(--t-12);
+}
+.crumb__date {
+  width: 120px;
+  height: 12px;
+  accent-color: var(--interactive);
+  background: transparent;
+  cursor: pointer;
+}
+.crumb__palette {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ── Panes ────────────────────────────────────────────────────────────── */
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+.panes--split {
+  grid-template-columns: 1fr 1fr;
+}
+.pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.pane--split {
+  border-left: 1px solid var(--border);
+}
+/* The focused pane is marked with a hairline, not a glow. */
+.panes--split .pane.is-focused {
+  box-shadow: inset 0 1px 0 var(--interactive);
+}
+
+/* ── Status bar ───────────────────────────────────────────────────────── */
+/* §4.1 Four things. Nothing blinks. */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 22px;
+  flex: none;
+  padding: 0 var(--s-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+.status__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.status__dot--synced {
+  background: var(--long);
+}
+.status__dot--saving {
+  background: var(--text-muted);
+}
+.status__dot--offline {
+  background: var(--text-faint);
+}
+.status__dot--error {
+  background: var(--short);
+}
+/* Another device wrote first, so this client's base version is stale and its
+   next push would clobber. Amber, because amber already means exactly one thing
+   here: unresolved / breached / invalidated. */
+.status__dot--stale {
+  background: var(--attention);
+}
+.status__mode {
+  color: var(--text-muted);
+}
+.status__risk {
+  margin-left: auto;
+}
+.status__nag {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-size: var(--t-11);
+  font-family: var(--font-data);
+  padding: 0;
+}
+.status__nag:hover {
+  text-decoration: underline;
+}
+
+/* ── Inspector ────────────────────────────────────────────────────────── */
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border);
+}
+.inspector__body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-3);
+}
+
+/* ── Shared surface chrome ────────────────────────────────────────────── */
+
+.surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.surface__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: none;
+  min-height: 30px;
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.surface__title {
+  font-size: var(--t-13);
+  color: var(--text);
+}
+.surface__spacer {
+  flex: 1;
+}
+.surface__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s-3);
+}
+.surface__body--flush {
+  padding: 0;
+}
+/* Review and Monthly are read, not scanned — they get the paper treatment. */
+.surface__body--prose {
+  padding: var(--s-6) var(--s-8);
+  background: var(--paper);
+}

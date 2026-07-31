@@ -36,7 +36,10 @@ TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.j
 
 # Kite documented rate limits: quote/ltp/ohlc = 1 req/s, historical = 3 req/s.
 # We keep a small safety margin under each.
-_MIN_INTERVAL = {"quote": 1.05, "historical": 0.40}
+# "orders" covers the order/portfolio reads used by the manual-trade detector.
+# No limit for these is documented anywhere in this repo, so it takes the same
+# 1.05s floor as quote — far under the 30s cadence the lane actually polls at.
+_MIN_INTERVAL = {"quote": 1.05, "historical": 0.40, "orders": 1.05}
 
 
 class _Throttle:
@@ -185,6 +188,41 @@ class KiteProvider(MarketDataProvider):
                  "exchange": r.get("exchange"),
                  "product": r.get("product")}
                 for r in net]
+
+    def account_orders(self) -> list[dict] | None:
+        """Today's full orderbook, unnormalised — for the manual-trade detector.
+
+        Returns None on a read failure, NOT an empty list. An empty list here
+        would assert "you placed no manual trades today", which is exactly the
+        false statement the detector must never make. Same reasoning as
+        account_positions (audit C4)."""
+        try:
+            self._throttle.wait("orders")
+            rows = self.kite.orders()
+        except Exception as e:
+            self._warn.fail("account_orders", f"orders() failed: {e} — suppressing "
+                                              f"repeats until it recovers")
+            return None
+        if rows is None:
+            return None
+        self._warn.ok("account_orders", "orders() recovered")
+        return list(rows)
+
+    def account_trades(self) -> list[dict] | None:
+        """Today's fill-level tradebook. A single order can fill in tranches and
+        this is the only place tranche detail lives (fill_timestamp, per-tranche
+        average_price). Returns None on a read failure, never []."""
+        try:
+            self._throttle.wait("orders")
+            rows = self.kite.trades()
+        except Exception as e:
+            self._warn.fail("account_trades", f"trades() failed: {e} — suppressing "
+                                              f"repeats until it recovers")
+            return None
+        if rows is None:
+            return None
+        self._warn.ok("account_trades", "trades() recovered")
+        return list(rows)
 
     def is_authenticated(self) -> bool:
         if not self.access_token:

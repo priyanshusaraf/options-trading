@@ -1,4 +1,5 @@
 fastapi>=0.110
+python-multipart>=0.0.9   # UploadFile/Form support for /api/ledger/artifacts
 uvicorn[standard]>=0.27
 sqlalchemy>=2.0
 pandas>=2.0

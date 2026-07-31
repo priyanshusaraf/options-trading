@@ -1,0 +1,175 @@
+/* §6.2 DataGrid. Glass material: 4px grid, hairlines, 0 radius on cells. */
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.grid__head {
+  display: grid;
+  align-items: center;
+  height: 24px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+}
+
+.grid__headcell {
+  position: relative;
+  padding: 0 var(--s-2);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  cursor: grab;
+}
+.grid__headcell.is-right {
+  justify-content: flex-end;
+}
+.grid__headcell.is-center {
+  justify-content: center;
+}
+
+.grid__sortbtn {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.grid__sortbtn:disabled {
+  cursor: default;
+}
+.grid__sortbtn:hover:not(:disabled) {
+  color: var(--text-muted);
+}
+.grid__sortmark {
+  color: var(--interactive);
+}
+
+.grid__resize {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+}
+.grid__resize:hover {
+  background: var(--interactive);
+  opacity: 0.4;
+}
+
+.grid__viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Virtualised rows are absolutely predictable in height; telling the
+     browser so keeps 10k-row scrolling at 60fps. §3.4 */
+  contain: strict;
+}
+
+.grid__row {
+  display: grid;
+  align-items: center;
+  border-bottom: 1px solid transparent;
+  cursor: default;
+  /* §7.6 Row selection is 0ms — instant, always. No transition here. */
+}
+.grid__row:hover {
+  background: color-mix(in srgb, var(--surface-raised) 60%, transparent);
+}
+.grid__row.is-cursor {
+  background: var(--surface-raised);
+  box-shadow: inset 2px 0 0 var(--interactive);
+}
+.grid__row.is-selected {
+  background: color-mix(in srgb, var(--interactive) 10%, transparent);
+}
+
+/* §7.6 Trade committed: 160ms, row inserts with a single hairline sweep,
+   then settles. */
+.grid__row.is-fresh {
+  animation: commit-sweep var(--m-commit) var(--ease);
+}
+@keyframes commit-sweep {
+  from {
+    background: color-mix(in srgb, var(--interactive) 22%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.grid__cell {
+  padding: 0 var(--s-2);
+  min-width: 0;
+  font-size: var(--data-size);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Numeric columns are monospaced and right-aligned with tabular figures,
+   and never truncated. §5.3, §6.2 */
+.grid__cell--num {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow: visible;
+}
+.grid__cell--glyph {
+  text-align: center;
+  font-family: var(--font-data);
+}
+.grid__cell.is-right {
+  text-align: right;
+}
+.grid__cell.is-center {
+  text-align: center;
+}
+
+.grid__grouphead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 0 var(--s-2);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+}
+.grid__groupsummary {
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+
+.grid__summary {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 26px;
+  padding: 0 var(--s-2);
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border-strong);
+  font-family: var(--font-data);
+  font-size: var(--t-11);
+  color: var(--text-muted);
+  overflow-x: auto;
+  white-space: nowrap;
+}

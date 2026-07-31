@@ -1,0 +1,322 @@
+/* §6.5 overlays. Shadows exist only here — on a dark background a shadow alone
+   is invisible, so every overlay is shadow + 1px border. §7.4 */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  /* §7.6 120ms, opacity only on the scrim. */
+  animation: scrim var(--m-overlay) var(--ease);
+}
+@keyframes scrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.overlay--capture {
+  padding-top: 28vh;
+}
+
+/* ── CommandPalette ───────────────────────────────────────────────────── */
+/* §3.4 performance budget: palette open < 80ms. */
+
+.palette {
+  width: 620px;
+  max-width: calc(100vw - var(--s-8));
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--overlay-shadow);
+  overflow: hidden;
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+
+.palette__input {
+  height: 42px;
+  padding: 0 var(--s-3);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  outline: 0;
+  color: var(--text);
+  font-size: var(--t-15);
+}
+.palette__input::placeholder {
+  color: var(--text-faint);
+  font-size: var(--t-12);
+}
+
+.palette__results {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-1) 0 var(--s-2);
+}
+
+.palette__group {
+  padding: var(--s-2) var(--s-3) 3px;
+}
+
+.palette__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 4px var(--s-3);
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--t-13);
+}
+.palette__item.is-active {
+  background: color-mix(in srgb, var(--interactive) 16%, transparent);
+  color: var(--text);
+}
+.palette__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette__hint {
+  margin-left: auto;
+  font-size: var(--t-11);
+  color: var(--text-faint);
+  font-family: var(--font-data);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+.palette__none {
+  padding: var(--s-4) var(--s-3);
+  font-size: var(--t-12);
+}
+
+.palette__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  height: 26px;
+  padding: 0 var(--s-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--t-11);
+  color: var(--text-faint);
+}
+.palette__footkeys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+/* ── QuickCapture ─────────────────────────────────────────────────────── */
+/* §4.4 A single 640px field over a dimmed shell. Type, ⏎, gone. */
+
+.capture {
+  width: 640px;
+  max-width: calc(100vw - var(--s-8));
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--overlay-shadow);
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+.capture__input {
+  width: 100%;
+  height: 46px;
+  padding: 0 var(--s-4);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font-size: var(--t-15);
+}
+.capture__input::placeholder {
+  color: var(--text-faint);
+  font-size: var(--t-13);
+}
+.capture__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 24px;
+  padding: 0 var(--s-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--t-11);
+  color: var(--text-muted);
+}
+.capture__keys {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  color: var(--text-faint);
+}
+
+/* ── Drawer ───────────────────────────────────────────────────────────── */
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 100vw;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--overlay-shadow);
+  animation: drawer-in var(--m-panel) var(--ease);
+}
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.drawer__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 32px;
+  padding: 0 var(--s-3);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.drawer__x {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  font-size: var(--t-15);
+  cursor: pointer;
+  line-height: 1;
+}
+.drawer__x:hover {
+  color: var(--text);
+}
+.drawer__body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-3);
+}
+
+/* ── Toasts ───────────────────────────────────────────────────────────── */
+/* §6.5 bottom-left, 4s, always undoable. */
+
+.toasts {
+  position: fixed;
+  left: calc(var(--rail-w) + var(--s-3));
+  bottom: var(--s-6);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  font-size: var(--t-12);
+  color: var(--text-muted);
+  box-shadow: var(--overlay-shadow);
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+.toast__undo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  background: none;
+  border: 0;
+  color: var(--interactive);
+  cursor: pointer;
+  font-size: var(--t-12);
+}
+
+/* ── ShortcutSheet ────────────────────────────────────────────────────── */
+
+.sheet {
+  width: 860px;
+  max-width: calc(100vw - var(--s-8));
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-overlay);
+  box-shadow: var(--overlay-shadow);
+  animation: overlay-in var(--m-overlay) var(--ease);
+}
+.sheet__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 34px;
+  padding: 0 var(--s-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--t-11);
+  flex: none;
+}
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--s-3);
+  columns: 2;
+  column-gap: var(--s-8);
+}
+.sheet__section {
+  break-inside: avoid;
+  margin-bottom: var(--s-4);
+}
+.sheet__sectionhead {
+  padding-bottom: var(--s-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--s-1);
+}
+.sheet__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 2px 0;
+  font-size: var(--t-12);
+  color: var(--text-muted);
+}
+.sheet__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet__grammar {
+  font-size: var(--t-11);
+  line-height: 1.5;
+  color: var(--text-faint);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  padding: var(--s-2);
+  overflow-x: auto;
+  white-space: pre;
+}

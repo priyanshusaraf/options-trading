@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     # split-loop cadences (live mode)
     position_loop_seconds: float = 1.0   # fast risk lane target (Kite quote throttle bounds it ~2s)
     signal_loop_seconds: float = 2.5     # signal-scan scheduler tick
+
+    # Manual-trade detection (journal). Read-only: polls the Kite orderbook for
+    # trades the OWNER placed by hand and files them for reasoning. It never
+    # places, modifies or cancels anything, and never writes the execution ledger.
+    manual_detect_enabled: bool = True
+    manual_detect_seconds: float = 30.0  # matches the proven positions() cadence
     max_stale_seconds: float = 30.0      # a mark older than this is stale -> no SL/TP fires on it
 
     # trailing stop-loss (ratchets the premium stop UP as profit thresholds are crossed)
