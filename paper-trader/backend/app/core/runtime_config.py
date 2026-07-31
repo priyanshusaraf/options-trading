@@ -47,6 +47,9 @@ OVERRIDABLE = (
     "intraday_profit_lock_threshold", "intraday_profit_lock_frac",
     # overtrading guard (advisory)
     "overtrade_today_threshold", "overtrade_rolling_threshold", "overtrade_rolling_days",
+    # journal — manual-trade detection. Read-only against the broker: it polls
+    # the orderbook for trades the OWNER placed and never writes the ledger.
+    "manual_detect_enabled", "manual_detect_seconds",
     # entry guards (theta-cliff / expiry)
     "entry_min_days_to_expiry",
     # day-shape guards: no-entries weekday (NIFTY-expiry Tuesdays) + which keys it
@@ -196,9 +199,17 @@ def effective(settings: Settings | None = None) -> dict:
 
 
 def schema() -> list[dict]:
-    """Per-field metadata for the Settings UI: key, type, default, current value."""
+    """Per-field metadata for the Settings UI: key, type, default, current value.
+
+    `overridden` reports whether a DB override row exists — it is NOT inferable
+    from `value != default`. A stored override equal to the code default shadows
+    that default forever while looking untouched, so shipping a new default
+    would silently have no effect. That has already cost this project time; the
+    UI must be able to show it.
+    """
     s = get_settings()
     eff = effective(s)
+    stored = get_overrides()
     rows = []
     for k in OVERRIDABLE:
         default = getattr(s, k)
@@ -209,5 +220,6 @@ def schema() -> list[dict]:
                      "float" if isinstance(default, float) else "str"),
             "default": default,
             "value": eff[k],
+            "overridden": k in stored,
         })
     return rows

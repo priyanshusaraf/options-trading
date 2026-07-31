@@ -181,7 +181,16 @@ export interface BTTradeDTO {
   mae_pct?: number; notional?: number; lots?: number
 }
 
-export interface SettingRow { key: string; type: 'bool' | 'int' | 'float' | 'str'; default: any; value: any }
+export interface SettingRow {
+  key: string
+  type: 'bool' | 'int' | 'float' | 'str'
+  default: any
+  value: any
+  /** A DB override row exists. NOT the same as `value !== default`: an override
+   *  stored equal to the code default shadows it forever while looking
+   *  untouched, so a newly shipped default would silently have no effect. */
+  overridden?: boolean
+}
 
 export interface AnalyticsAgg { trades: number; wins: number; win_rate: number; net_pnl: number; charges?: number }
 export interface AnalyticsSplit {

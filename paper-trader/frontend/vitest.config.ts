@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config'
 // none.
 export default defineConfig({
   test: {
-    include: ['src/ledger/**/*.test.ts'],
+    include: ['src/ledger/**/*.test.ts', 'src/lib/**/*.test.ts', 'src/views/**/*.test.ts'],
     environment: 'node',
   },
 })
