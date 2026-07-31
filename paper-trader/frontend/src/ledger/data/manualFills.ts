@@ -82,3 +82,25 @@ export function optionTypeFromSymbol(symbol: string): 'CE' | 'PE' | undefined {
   const m = OPTION_SUFFIX.exec((symbol || '').toUpperCase())
   return m ? (m[1] as 'CE' | 'PE') : undefined
 }
+
+/** The open journal trade this fill CLOSES, if any.
+ *
+ *  A fill is an exit when it is the opposite side of a position already open on
+ *  the same instrument: a SELL closes a long, a BUY closes a short. That is the
+ *  difference between "why did you take this?" and "why did you get out?" —
+ *  two different questions, and the second is the one most journals never ask.
+ *
+ *  FIFO: the oldest open trade closes first, which is how a discretionary
+ *  trader thinks about "the position I've been holding".
+ */
+export function findClosableTrade<
+  T extends { id: string; instrumentId: string; direction: string; closedAt: number | null; openedAt: number },
+>(fill: { side: 'BUY' | 'SELL' }, instrumentId: string, trades: T[]): T | null {
+  const closes = fill.side === 'SELL' ? 'long' : 'short'
+  const open = trades
+    .filter((t) => t.instrumentId === instrumentId
+      && t.closedAt === null
+      && t.direction === closes)
+    .sort((a, b) => a.openedAt - b.openedAt)
+  return open[0] ?? null
+}

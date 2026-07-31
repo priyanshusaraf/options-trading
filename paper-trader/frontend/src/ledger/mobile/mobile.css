@@ -200,3 +200,11 @@
   width: auto;
   padding: 0 var(--s-5);
 }
+
+/* An exit reads differently from an entry: the position already exists and its
+   thesis is locked, so the card says so rather than re-offering setup fields. */
+.pfill__closing {
+  margin: 0;
+  font-size: var(--t-12);
+  line-height: 1.5;
+}

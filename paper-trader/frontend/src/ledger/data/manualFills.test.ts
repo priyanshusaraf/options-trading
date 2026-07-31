@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  contractFromSymbol, instrumentForSymbol, optionTypeFromSymbol,
+  contractFromSymbol, findClosableTrade, instrumentForSymbol, optionTypeFromSymbol,
 } from './manualFills'
 
 const INSTRUMENTS = [
@@ -57,5 +57,43 @@ describe('reading the contract kind off the symbol', () => {
     // an option; the strike digit is what actually distinguishes them.
     expect(contractFromSymbol('RELIANCE')).toBe('EQ')
     expect(optionTypeFromSymbol('RELIANCE')).toBeUndefined()
+  })
+})
+
+describe('deciding whether a fill is an entry or an exit', () => {
+  const t = (id: string, direction: string, openedAt: number, closedAt: number | null = null) =>
+    ({ id, instrumentId: 'nifty', direction, openedAt, closedAt })
+
+  it('a SELL closes an open long', () => {
+    const got = findClosableTrade({ side: 'SELL' }, 'nifty', [t('a', 'long', 1)])
+    expect(got?.id).toBe('a')
+  })
+
+  it('a BUY closes an open short', () => {
+    const got = findClosableTrade({ side: 'BUY' }, 'nifty', [t('a', 'short', 1)])
+    expect(got?.id).toBe('a')
+  })
+
+  it('a BUY with no open short is an entry, not an exit', () => {
+    expect(findClosableTrade({ side: 'BUY' }, 'nifty', [t('a', 'long', 1)])).toBeNull()
+  })
+
+  it('never closes an already-closed trade', () => {
+    expect(findClosableTrade({ side: 'SELL' }, 'nifty', [t('a', 'long', 1, 99)])).toBeNull()
+  })
+
+  it('never reaches across instruments', () => {
+    const other = { ...t('a', 'long', 1), instrumentId: 'bnf' }
+    expect(findClosableTrade({ side: 'SELL' }, 'nifty', [other])).toBeNull()
+  })
+
+  it('closes the oldest open position first', () => {
+    const got = findClosableTrade({ side: 'SELL' }, 'nifty',
+      [t('newer', 'long', 20), t('older', 'long', 10)])
+    expect(got?.id).toBe('older')
+  })
+
+  it('returns null when nothing is open at all', () => {
+    expect(findClosableTrade({ side: 'SELL' }, 'nifty', [])).toBeNull()
   })
 })

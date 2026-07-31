@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 
 import {
-  claimManualFill, contractFromSymbol, instrumentForSymbol, listManualFills,
-  optionTypeFromSymbol, type ManualFill,
+  claimManualFill, contractFromSymbol, findClosableTrade, instrumentForSymbol,
+  listManualFills, optionTypeFromSymbol, type ManualFill,
 } from '../../data/manualFills'
-import { addTrade } from '../../data/actions'
+import { addTrade, closeTrade, updateTradeJudgement } from '../../data/actions'
 import { useDB } from '../../data/hooks'
 import { today } from '../../domain/dates'
 
@@ -47,6 +47,7 @@ export function PendingReasons({ compact = false }: { compact?: boolean }) {
           key={f.order_id}
           fill={f}
           instruments={db.instruments}
+          trades={db.trades}
           playbook={db.playbook.filter((p) => !p.archived)}
           busy={busy === f.order_id}
           onDone={() => { setBusy(null); reload() }}
@@ -58,10 +59,14 @@ export function PendingReasons({ compact = false }: { compact?: boolean }) {
 }
 
 function FillCard({
-  fill, instruments, playbook, busy, onBusy, onDone,
+  fill, instruments, trades, playbook, busy, onBusy, onDone,
 }: {
   fill: ManualFill
   instruments: { id: string; code: string }[]
+  trades: {
+    id: string; instrumentId: string; direction: string
+    closedAt: number | null; openedAt: number
+  }[]
   playbook: { id: string; name: string }[]
   busy: boolean
   onBusy: () => void
@@ -77,27 +82,48 @@ function FillCard({
   const dir = fill.side === 'BUY' ? 'long' : 'short'
   const glyph = fill.side === 'BUY' ? '▲' : '▼'
 
+  // Is this fill getting OUT of something? A SELL against an open long, or a
+  // BUY against an open short. Entry and exit are different questions and the
+  // exit one is the one most journals never ask.
+  const closing = instrumentId
+    ? findClosableTrade(fill, instrumentId, trades)
+    : null
+
   async function save() {
     if (!instrumentId) { setError('Which instrument is this?'); return }
-    if (!why.trim()) { setError('A reason is the only thing this asks of you.'); return }
+    if (!why.trim()) {
+      setError(closing
+        ? 'Why did you get out? That is the only thing this asks.'
+        : 'A reason is the only thing this asks of you.')
+      return
+    }
     setError(null)
     onBusy()
     try {
-      const tradeId = addTrade({
-        instrumentId,
-        date: today(),
-        direction: dir,
-        contract: contractFromSymbol(fill.tradingsymbol),
-        optionType: optionTypeFromSymbol(fill.tradingsymbol),
-        qty: fill.qty,
-        price: fill.avg_price ?? 0,
-        setupId: setupId || null,
-        // Setup attribution is mandatory: no setup means off-book, which the
-        // Playbook tracks as its own population with its own expectancy.
-        offBook: !setupId,
-        confidence,
-        entryNote: why.trim(),
-      })
+      let tradeId: string
+      if (closing) {
+        // Exit: the fill closes a position already in the journal. Price comes
+        // off the broker; the exit note is JUDGEMENT and stays editable.
+        closeTrade(closing.id, fill.avg_price ?? 0)
+        updateTradeJudgement(closing.id, { exitNote: why.trim() })
+        tradeId = closing.id
+      } else {
+        tradeId = addTrade({
+          instrumentId,
+          date: today(),
+          direction: dir,
+          contract: contractFromSymbol(fill.tradingsymbol),
+          optionType: optionTypeFromSymbol(fill.tradingsymbol),
+          qty: fill.qty,
+          price: fill.avg_price ?? 0,
+          setupId: setupId || null,
+          // Setup attribution is mandatory: no setup means off-book, which the
+          // Playbook tracks as its own population with its own expectancy.
+          offBook: !setupId,
+          confidence,
+          entryNote: why.trim(),
+        })
+      }
       await claimManualFill(fill.order_id, tradeId)
       onDone()
     } catch (e) {
@@ -150,36 +176,50 @@ function FillCard({
           </label>
         )}
 
+        {closing && (
+          <p className="pfill__closing faint">
+            This closes a position already in the journal. Its entry thesis is
+            locked and stays as written — this is the exit.
+          </p>
+        )}
+
         <textarea
           className="pfill__why"
           rows={2}
-          placeholder="Why did you take this?"
+          placeholder={closing
+            ? 'Why did you get out here?'
+            : 'Why did you take this?'}
           value={why}
           onChange={(e) => setWhy(e.target.value)}
         />
 
-        <div className="pfill__row">
-          <select value={setupId} onChange={(e) => setSetupId(e.target.value)}>
-            <option value="">off-book</option>
-            {playbook.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <label className="pfill__conf">
-            <span className="label">conf</span>
-            <input
-              type="range" min={1} max={5} value={confidence}
-              onChange={(e) => setConfidence(Number(e.target.value))}
-            />
-            <span className="mono num">{confidence}</span>
-          </label>
-        </div>
+        {/* Setup and confidence belong to the ENTRY. On an exit they are
+            already recorded on the trade being closed, and re-asking would
+            invite revising a belief after the market answered. */}
+        {!closing && (
+          <div className="pfill__row">
+            <select value={setupId} onChange={(e) => setSetupId(e.target.value)}>
+              <option value="">off-book</option>
+              {playbook.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <label className="pfill__conf">
+              <span className="label">conf</span>
+              <input
+                type="range" min={1} max={5} value={confidence}
+                onChange={(e) => setConfidence(Number(e.target.value))}
+              />
+              <span className="mono num">{confidence}</span>
+            </label>
+          </div>
+        )}
 
         {error && <p className="pfill__err neg">{error}</p>}
 
         <div className="pfill__actions">
           <button className="pfill__save" disabled={busy} onClick={() => void save()}>
-            {busy ? 'saving…' : 'Save reason'}
+            {busy ? 'saving…' : closing ? 'Save exit reason' : 'Save reason'}
           </button>
           <button className="pfill__dismiss" disabled={busy} onClick={() => void dismiss()}>
             Not mine
