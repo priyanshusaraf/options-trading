@@ -1,6 +1,26 @@
+import { useEffect, useState } from 'react'
+
 import { App as LedgerApp } from '../ledger/app/App'
+import MobileLedger from '../ledger/mobile/MobileLedger'
+import { boot } from '../ledger/data/store'
 import '../ledger/styles/tokens.css'
 import '../ledger/styles/base.css'
+
+// The same 768px breakpoint the rest of the app uses (App.tsx), so the phone
+// header and the phone journal agree about what "mobile" means.
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== 'undefined'
+      && window.matchMedia('(min-width: 768px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const onChange = () => setIsDesktop(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return isDesktop
+}
 
 /**
  * THE LEDGER, mounted full-bleed inside paper-trader.
@@ -22,6 +42,18 @@ import '../ledger/styles/base.css'
  * `<main className="flex-1 p-3">` would fight that.
  */
 export default function LedgerView() {
+  const isDesktop = useIsDesktop()
+  // On desktop, LedgerApp owns boot(). The mobile shell does not mount
+  // LedgerApp, so it has to boot the store itself or every surface reads an
+  // empty seed.
+  const [booted, setBooted] = useState(isDesktop)
+  useEffect(() => {
+    if (isDesktop) return
+    let live = true
+    void boot().then(() => { if (live) setBooted(true) })
+    return () => { live = false }
+  }, [isDesktop])
+
   // Theme/density/cvd are stamped onto this element by useAppearance inside
   // LedgerApp, not here — the defaults below just avoid an unstyled first paint.
   return (
@@ -31,7 +63,7 @@ export default function LedgerView() {
       data-density="compact"
       style={{ position: 'fixed', inset: 0, zIndex: 40 }}
     >
-      <LedgerApp />
+      {isDesktop ? <LedgerApp /> : booted ? <MobileLedger /> : null}
     </div>
   )
 }

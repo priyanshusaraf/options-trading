@@ -10,6 +10,8 @@ import {
   useTrades,
 } from '../data/hooks'
 import { navigate, toast, useUI } from '../app/uiState'
+import { PendingReasons } from '../components/domain/PendingReasons'
+import '../mobile/mobile.css'
 import {
   addTaxonomyItem,
   deleteQuery,
@@ -61,6 +63,9 @@ export function Inbox() {
           Captured away from the desk. Triage is the first act of Prep.
         </span>
       </div>
+      {/* Kite fills the bot did not place. Same component the phone uses, so
+          the two can never drift into asking for different things. */}
+      <PendingReasons />
       <div className="surface__body">
         {items.length === 0 ? (
           <Empty kbd="⌘⇧Space">

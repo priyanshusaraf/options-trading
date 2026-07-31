@@ -1,0 +1,202 @@
+/* The phone capture shell. Scoped under .ledger-root by the PostCSS pass, same
+   as every other stylesheet in this tree.
+
+   Tap targets are 44px minimum throughout — this surface exists to be used one
+   handed, standing up, right after a trade. */
+
+.ml {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.ml__head {
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.ml__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--s-4);
+}
+
+.ml__tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--border);
+  /* Keep the bar clear of the home indicator on notched phones. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.ml__tabs button {
+  min-height: 44px;
+  background: none;
+  border: 0;
+  color: var(--text-faint);
+  font-size: var(--t-12);
+  text-transform: capitalize;
+  letter-spacing: var(--tracking-ui);
+}
+
+.ml__tabs button.is-active {
+  color: var(--interactive);
+}
+
+.ml__empty {
+  padding: var(--s-6) 0;
+  font-size: var(--t-13);
+  line-height: 1.6;
+}
+
+.ml__capture textarea,
+.pfill__why {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: var(--s-3);
+  color: var(--text);
+  /* 16px minimum, or iOS Safari zooms the viewport on focus. */
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.ml__hint {
+  font-size: var(--t-12);
+  margin: var(--s-2) 0 var(--s-4);
+}
+
+.ml__primary,
+.pfill__save {
+  width: 100%;
+  min-height: 44px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: var(--t-13);
+}
+
+.ml__primary:disabled,
+.pfill__save:disabled {
+  opacity: 0.4;
+}
+
+.ml__scenrow {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--t-13);
+}
+
+/* ── Pending reasons ─────────────────────────────────────────────────── */
+
+.pending__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--s-3);
+}
+
+.pfill {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: var(--s-4);
+  overflow: hidden;
+}
+
+/* Amber means exactly one thing in this system: unresolved, breached or
+   invalidated. An unconfirmed attribution is unresolved. */
+.pfill.is-review {
+  border-color: var(--attention);
+}
+
+.pfill__fact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  align-items: baseline;
+  padding: var(--s-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--t-12);
+}
+
+.pfill__sym {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pfill__warn {
+  margin: 0;
+  padding: var(--s-3);
+  font-size: var(--t-12);
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border);
+}
+
+.pfill__ask {
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.pfill__row {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pfill__row select {
+  flex: 1 1 auto;
+  min-height: 44px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.pfill__conf {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.pfill__actions {
+  display: flex;
+  gap: var(--s-3);
+}
+
+.pfill__dismiss {
+  min-height: 44px;
+  padding: 0 var(--s-4);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: var(--t-12);
+  white-space: nowrap;
+}
+
+.pfill__err {
+  margin: 0;
+  font-size: var(--t-12);
+}
+
+/* On the desktop Inbox the same component sits inside a normal surface, so it
+   does not need the phone's full-width buttons. */
+.pending:not(.is-compact) .pfill__save {
+  width: auto;
+  padding: 0 var(--s-5);
+}
