@@ -26,10 +26,32 @@ from app.providers.mock import MockProvider
 EXPIRY = dt.date(2026, 8, 27)
 
 
+def _close(obj):
+    """Close the broker's long-lived session.
+
+    PaperBroker holds `self.s = SessionLocal()` for its lifetime by design. A
+    test that builds one and walks away leaks an open SQLite connection, and the
+    NEXT test's `init_db(reset=True)` — which drops and recreates tables — then
+    fails with "database is locked". It passes in isolation and fails in the
+    suite, which is the worst way to find out.
+
+    (This is the same long-lived session whose refactor is deliberately deferred
+    in the roadmap. Until then, tests close it explicitly.)
+    """
+    try:
+        s = getattr(obj, "s", None) or getattr(getattr(obj, "broker", None), "s", None)
+        if s is not None:
+            s.close()
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def broker():
     init_db(reset=True)
-    return PaperBroker(MockProvider())
+    obj = PaperBroker(MockProvider())
+    yield obj
+    _close(obj)
 
 
 def _reconciles(b) -> float:

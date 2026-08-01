@@ -564,6 +564,9 @@ class EngineRunner:
             if pos.segment == "equity_intraday":
                 self._mark_exit_equity(pos, key, spot, now, ticks, opens)
                 continue
+            if pos.segment == "index_futures":
+                self._mark_exit_futures(pos, key, now, ticks, opens)
+                continue
             if premium is not None:
                 self.broker.mark(pos, premium, spot, now=now)
                 self._apply_trailing(pos)
@@ -703,6 +706,82 @@ class EngineRunner:
         ticks[key] = {
             "instrument": key, "tradingsymbol": pos.tradingsymbol,
             "option_premium": None, "spot": round(spot, 2) if spot else None,
+            "unrealized_pnl": d["unrealized_pnl"],
+            "stop_price": d["stop_price"], "target_price": d["target_price"],
+            "high_water_premium": d["high_water_premium"], "stale": pos_stale,
+            "stale_age": None if pos.last_mark_time is None
+                         else round((now - pos.last_mark_time).total_seconds(), 1),
+            "last_mark_time": pos.last_mark_time.isoformat() if pos.last_mark_time else None,
+        }
+
+    def _mark_exit_futures(self, pos, key, now, ticks, opens) -> None:
+        """Mark + exit an index-futures position against the FUTURES price.
+
+        Marks on `get_futures_ltp`, NOT on spot. A future trades at a basis to its
+        underlying — tens of points on an index — so marking to spot mis-prices
+        the position on every tick and corrupts both unrealized P&L and the
+        distance to the stop. If the provider cannot price the contract the mark
+        is skipped and the position goes STALE, which suppresses the exit check
+        rather than acting on a wrong price.
+
+        The delivery guard runs FIRST and outranks everything else. A contract
+        inside its delivery window must be closed regardless of P&L, stop, target
+        or staleness — holding it is an obligation to deliver, not a trade. Index
+        futures are cash-settled so this never fires today; it exists so a
+        commodity extension inherits the protection instead of having to
+        remember it.
+        """
+        inst = get_instrument(key)
+        # 1) Delivery guard — higher priority than any normal exit.
+        if self.params.get("index_futures_delivery_guard", True):
+            from app.engine.delivery_calendar import (CashSettledCalendar,
+                                                      no_delivery_window)
+            try:
+                safe = no_delivery_window(key, now.date(), pos.expiry,
+                                          CashSettledCalendar())
+            except Exception:
+                safe = False        # unknown means unsafe
+            if not safe:
+                px = self.provider.get_futures_ltp(inst, pos.expiry) or pos.last_premium
+                trade = self.broker.close_futures_position(
+                    pos, px, "DELIVERY_WINDOW", now)
+                if trade is not None:
+                    self._alert_infra(
+                        f"delivery_{key}",
+                        f"{key} force-closed: inside its delivery window. A futures "
+                        f"position held through delivery is an obligation, not a trade.")
+                    opens.pop(key, None)
+                    if key in self.state:
+                        self.state[key]["position"] = None
+                return
+
+        fut = self.provider.get_futures_ltp(inst, pos.expiry)
+        if fut is not None:
+            self.broker.mark(pos, fut, fut, now=now)
+        pos_stale = fut is None or is_stale(pos.last_mark_time, now,
+                                            self.settings.max_stale_seconds)
+        st = self.state.get(key, {})
+        if not pos_stale:
+            self._apply_lockstep(pos)
+            should, reason = equity_exit(
+                pos.direction, fut, pos.stop_price, pos.target_price,
+                st.get("long_exit", False), st.get("short_exit", False),
+                target_disabled=pos.no_take_profit)
+            if should:
+                trade = self.broker.close_futures_position(pos, fut, reason, now)
+                if trade is not None:
+                    if reason == "STOP_LOSS":
+                        self._stopped_at[key] = now
+                    if self.params.get("notify_enabled", True):
+                        self.notifier.closed(trade)
+                    opens.pop(key, None)
+                    if key in self.state:
+                        self.state[key]["position"] = None
+                    return
+        d = pos.to_dict()
+        ticks[key] = {
+            "instrument": key, "tradingsymbol": pos.tradingsymbol,
+            "option_premium": None, "spot": round(fut, 2) if fut else None,
             "unrealized_pnl": d["unrealized_pnl"],
             "stop_price": d["stop_price"], "target_price": d["target_price"],
             "high_water_premium": d["high_water_premium"], "stale": pos_stale,
