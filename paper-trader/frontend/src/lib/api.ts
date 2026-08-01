@@ -30,6 +30,11 @@ export const del = (path: string) =>
   })
 
 export const getStatus = () => j('/api/status')
+/** DB size + growth. Null on failure so the UI shows "unknown", never a stale size. */
+export const getStorage = () =>
+  fetch('/api/storage', { headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} })
+    .then((r) => r.json())
+    .catch(() => null)
 /**
  * The readiness probe. Deliberately tolerant in BOTH directions:
  *

@@ -4,6 +4,7 @@ import { getStatus } from '../lib/api'
 import LogStream from '../components/LogStream'
 import SessionBanner from '../components/SessionBanner'
 import SystemHealth from '../components/SystemHealth'
+import StoragePanel from '../components/StoragePanel'
 import ModeChip from '../components/ModeChip'
 import { num, signalStyle, signedInr, pnlColor, inr, epochTime } from '../lib/format'
 import { prio } from '../lib/constants'
@@ -68,6 +69,8 @@ export default function EngineView() {
 
       {/* Engine status header — is the bot ALIVE, ARMED, PAPER/LIVE, HALTED? */}
       <SystemHealth />
+
+      <StoragePanel />
 
       <Card className="p-3 flex items-center gap-6 flex-wrap">
         <div className="flex items-center gap-2">
