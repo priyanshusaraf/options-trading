@@ -67,7 +67,11 @@ class Settings(BaseSettings):
     )
 
     # provider selection
-    provider: str = "mock"  # "mock" | "kite"
+    provider: str = "mock"  # "mock" | "kite" | "replay"
+    # Replay mode: a recorded session re-run bar by bar (see providers/replay.py).
+    # Diagnostic only — the provider reports is_authenticated() False, so the
+    # live-order path is structurally unreachable from a replay.
+    replay_path: str = "replay_session.json"
 
     # Kite credentials — note the explicit aliases: these env vars are NOT
     # PT_-prefixed (they're the names Kite/most examples use), so we bypass the

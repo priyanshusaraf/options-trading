@@ -765,7 +765,23 @@ against B/E/C/D — pick them up when one becomes urgent.
       19,800s, and the mark-staleness guard compares them — a just-taken mark would read as
       stale, and `is_stale` suppresses SL/TP. A stop silently not firing on real money,
       triggered by nothing more than rebuilding the droplet. The fallback is now IST.
-      **Untouched in this area:** replay mode.
+- [x] **Replay mode — DONE 2026-08-01.** `app/providers/replay.py` +
+      `PT_PROVIDER=replay`. Re-runs a recorded session bar by bar against the real engine:
+      when the bot does something surprising on a live day, the only honest way to understand
+      it is to feed it that day again, identically, as many times as needed — and a mock
+      market cannot reproduce a real Monday.
+      **The property the whole thing rests on is NO LOOK-AHEAD:** `get_candles` returns
+      history up to and including the cursor and not one bar further. A replay that leaked
+      future bars would make the engine appear to make decisions it could never have made
+      live, and would look like a perfectly successful replay while doing it. `now()` returns
+      the RECORDED bar's timestamp, so market hours, the square-off deadline and every
+      staleness check behave as they did on the day.
+      **It structurally cannot trade:** `is_authenticated()` is always False, and
+      `make_broker()` refuses a real `LiveBroker` without an authenticated kite provider. It
+      also refuses to price futures rather than inventing a basis — fabricated data in a tool
+      whose entire purpose is fidelity would defeat the point.
+      Format is deliberately boring JSON so a day can be captured from a Kite dump, a CSV
+      export or a hand-written regression case without a schema migration. 13 tests.
 - [x] **Backtester audit — DONE + DEPLOYED 2026-08-01 (`c7e5217`).** All ten Phase-1
       dimensions, verdicts cited to file and line:
       `docs/2026-08-01-backtester-audit.md`. Came out well — **no look-ahead** (next-bar-open

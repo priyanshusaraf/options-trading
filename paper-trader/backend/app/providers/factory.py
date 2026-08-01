@@ -14,6 +14,12 @@ def get_provider() -> MarketDataProvider:
     if _provider is not None:
         return _provider
     s = get_settings()
+    if s.provider == "replay":
+        from app.providers.replay import ReplayProvider
+        _provider = ReplayProvider(s.replay_path)
+        log.info(f"provider: REPLAY ({s.replay_path}) — recorded session, "
+                 f"cannot authenticate, cannot trade")
+        return _provider
     if s.provider == "kite":
         from app.providers.kite import KiteProvider
         _provider = KiteProvider()
