@@ -30,6 +30,21 @@ export const del = (path: string) =>
   })
 
 export const getStatus = () => j('/api/status')
+/**
+ * The readiness probe. Deliberately tolerant in BOTH directions:
+ *
+ * - a 503 body is the interesting case, not an error — that is the probe doing
+ *   its job, and `j()` would happily parse it, but being explicit here stops
+ *   someone "fixing" this later by adding an r.ok check that throws away the
+ *   only response that matters;
+ * - a network/parse failure resolves to null so the UI can render "Unknown"
+ *   rather than silently keeping the last good verdict on screen. A stale green
+ *   badge is worse than an honest question mark.
+ */
+export const getHealth = () =>
+  fetch('/api/health', { headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} })
+    .then((r) => r.json())
+    .catch(() => null)
 export const getExecState = () => j('/api/execution/state')
 export const armBot = (armed: boolean) => post('/api/execution/arm', { armed })
 export const killBot = () => post('/api/execution/kill', {})

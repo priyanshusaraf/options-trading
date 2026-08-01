@@ -3,6 +3,7 @@ import { useLive } from '../state/LiveContext'
 import { getStatus } from '../lib/api'
 import LogStream from '../components/LogStream'
 import SessionBanner from '../components/SessionBanner'
+import SystemHealth from '../components/SystemHealth'
 import ModeChip from '../components/ModeChip'
 import { num, signalStyle, signedInr, pnlColor, inr, epochTime } from '../lib/format'
 import { prio } from '../lib/constants'
@@ -66,6 +67,8 @@ export default function EngineView() {
       <SessionBanner authenticated={authed} />
 
       {/* Engine status header — is the bot ALIVE, ARMED, PAPER/LIVE, HALTED? */}
+      <SystemHealth />
+
       <Card className="p-3 flex items-center gap-6 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="text-zinc-100 font-semibold">Engine</span>

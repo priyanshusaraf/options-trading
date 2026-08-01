@@ -584,7 +584,24 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 - **Acceptance:** a multi-day MTF position accrues the correct daily interest cost in the
   ledger; P&L net of carry matches a hand-computed example. TDD.
 
-## Workstream D — UI typography & palette
+## Workstream D — UI
+
+- [x] **System health panel — DONE 2026-08-01.** The backend has reported DB reachability,
+      both loop heartbeat ages, provider auth and candle-feed anomalies since the readiness
+      probe landed, and **none of it was visible in the app** — answering "is it working right
+      now?" meant ssh + curl. `components/SystemHealth.tsx` + `lib/health.ts` (pure, 14 tests)
+      put it on the Engine view.
+      Three judgement calls, all pinned by test because they are the parts that can mislead:
+      a lane that has NEVER beaten renders "never", not "0s" (which would read as "just now" —
+      the exact inversion); an unreadable probe renders **Unknown**, never the last good
+      verdict, because a stale green badge is worse than an honest question mark; and a stale
+      lane is red only when it is the lane that matters for money (risk = stops not firing),
+      amber otherwise. It polls on its own timer rather than riding the WS state — a health
+      panel that only updates while the engine is well tells you nothing on the day it matters.
+
+### Typography & palette
+
+
 
 - [ ] Extract font + color scheme from the owner's reference site
       (`ag-website-git-main-match-up.vercel.app` — behind Vercel deployment protection;
