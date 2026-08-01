@@ -272,6 +272,112 @@ class PaperBroker:
         if spot is not None:
             pos.last_spot = spot
 
+    # ── index futures (E2) ────────────────────────────────────────────────
+    def open_futures_position(self, inst: Instrument, direction: str, price: float,
+                              qty: int, charge_segment: str, reason: str,
+                              now: dt.datetime, expiry: dt.date,
+                              margin: float, params: dict | None = None,
+                              strategy_key: str | None = None) -> Position:
+        """Open an index-futures position of `qty` units at the FUTURES price.
+
+        Deliberately a near-copy of `open_equity_position` rather than a shared
+        generic: both are margined, but they differ in charge segment, expiry
+        handling and SL/TP knobs, and collapsing them into one parameterised
+        method would put the equity path — which trades real money today — one
+        refactor away from every futures change.
+
+        `margin` is REQUIRED and has no fallback. Equity can fall back to
+        notional/leverage because MIS leverage is roughly knowable; SPAN is
+        portfolio-scanned and instrument-specific, so a guessed futures margin
+        would be a fabricated number sitting directly in the ledger. The caller
+        obtains it from a broker quote (live) or the flagged paper estimate.
+
+        entry_cost = margin + entry charges — the actual cash out — so the
+        reconciliation invariant `cash == initial + realized − Σ(open entry_cost)`
+        holds exactly, the same as every other segment.
+        """
+        if margin is None or margin <= 0:
+            raise ValueError("open_futures_position requires a positive margin: "
+                             "SPAN is instrument-specific and must never be guessed")
+        p = params if params is not None else effective(self.settings)
+        sl_pct = p.get("index_futures_stop_loss_pct",
+                       self.settings.index_futures_stop_loss_pct)
+        tp_pct = p.get("index_futures_target_pct",
+                       self.settings.index_futures_target_pct)
+        entry_side, _ = legs_for(direction)
+        charges = compute_charges(charge_segment, entry_side, price, qty)["total"]
+        cost = margin + charges
+        stop, target = equity_stop_target(direction, price, sl_pct, tp_pct)
+
+        cap = self.capital()
+        cap.cash -= cost
+        cap.updated_at = now
+
+        pos = Position(
+            instrument_key=inst.key, direction=direction, option_type="FUT",
+            tradingsymbol=getattr(inst, "option_name", "") or inst.key,
+            exchange=charge_segment, segment="index_futures", strategy_key=strategy_key,
+            strike=0.0, expiry=expiry, lot_size=qty, qty=qty, entry_premium=price,
+            entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
+            entry_reason=reason, stop_price=stop, target_price=target,
+            last_premium=price, last_spot=price, last_mark_time=now,
+            high_water_premium=price, mfe=0.0, mae=0.0, mode=self.MODE)
+        self.s.add(pos)
+        self.s.commit()
+        log.trade(
+            f"OPEN FUTURES {direction} {pos.tradingsymbol} {qty}@{price:.2f} "
+            f"— margin ₹{margin:,.0f} (chg ₹{charges:.0f}); SL {stop:.2f} / TP {target:.2f}",
+            instrument=inst.key, event="OPEN_FUTURES", tradingsymbol=pos.tradingsymbol,
+            premium=price, cost=round(cost, 2))
+        return pos
+
+    def close_futures_position(self, pos: Position, exit_price: float, reason: str,
+                               now: dt.datetime,
+                               exit_price_estimated: bool = False) -> Trade:
+        """Close an index-futures position. Releases the blocked margin and books
+        direction-aware P&L net of both legs' charges, so
+        `proceeds = entry_cost + net` and the ledger invariant stays exact."""
+        qty = pos.qty
+        _, exit_side = legs_for(pos.direction)
+        charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
+        gross = ((exit_price - pos.entry_premium) * qty if pos.direction == "LONG"
+                 else (pos.entry_premium - exit_price) * qty)
+        total_charges = pos.entry_charges + charges
+        net = gross - total_charges
+        proceeds = pos.entry_cost + net
+        margin = pos.entry_cost - pos.entry_charges
+
+        cap = self.capital()
+        cap.cash += proceeds
+        cap.realized_pnl += net
+        cap.updated_at = now
+
+        tr = Trade(
+            instrument_key=pos.instrument_key, direction=pos.direction,
+            option_type="FUT", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
+            segment="index_futures", strategy_key=pos.strategy_key,
+            strike=0.0, expiry=pos.expiry, qty=qty,
+            entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
+            entry_spot=pos.entry_spot, entry_time=pos.entry_time,
+            exit_premium=exit_price, exit_charges=charges, exit_spot=exit_price,
+            exit_time=now, exit_reason=reason, gross_pnl=gross,
+            charges_total=total_charges, net_pnl=net,
+            return_pct=(net / margin * 100) if margin else 0.0,
+            holding_minutes=(now - pos.entry_time).total_seconds() / 60,
+            win=net > 0, held_overnight=False, overnight_pnl=0.0,
+            intraday_pnl=round(net, 2), reinforcements=0, mode=self.MODE,
+            exit_price_estimated=exit_price_estimated,
+            mfe=pos.mfe, mae=pos.mae)
+        self.s.delete(pos)
+        self.s.add(tr)
+        self.s.commit()
+        log.trade(
+            f"CLOSE FUTURES {pos.tradingsymbol} @ {exit_price:.2f} [{reason}] "
+            f"— net ₹{net:,.0f} ({tr.return_pct:+.1f}% on margin)",
+            instrument=pos.instrument_key, event="CLOSE_FUTURES", reason=reason,
+            net_pnl=round(net, 2))
+        return tr
+
     def close_position(self, pos: Position, exit_premium: float, reason: str,
                        now: dt.datetime, spot: float,
                        exit_price_estimated: bool = False) -> Trade:
