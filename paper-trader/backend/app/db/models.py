@@ -27,6 +27,18 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
+# Segments whose positions are MARGINED rather than fully paid for: only the
+# margin left cash, so the position contributes margin + unrealized P&L to equity
+# — never its full notional, which would double-count the leverage. They can also
+# be genuinely SHORT, unlike the long-premium options path.
+#
+# A named set rather than a repeated string literal because the two methods below
+# must never disagree about which segments are leveraged: one saying "futures are
+# margined" while the other says "futures are fully paid" would inflate portfolio
+# equity by the notional on every futures tick.
+MARGIN_SEGMENTS = frozenset({"equity_intraday", "index_futures"})
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -118,10 +130,10 @@ class Position(Base):
     mode: Mapped[str] = mapped_column(String(8), default="paper")  # "paper" | "live" — which broker opened it; never mixed in the UI
 
     def unrealized_pnl(self) -> float:
-        """Mark-to-market P&L. Equity intraday can be a real SHORT (profits as price
-        falls); the options path is always long-premium."""
+        """Mark-to-market P&L. Equity intraday and index futures can be real SHORTS
+        (profits as price falls); the options path is always long-premium."""
         last = self.last_premium or self.entry_premium
-        if self.segment == "equity_intraday" and self.direction == "SHORT":
+        if self.segment in MARGIN_SEGMENTS and self.direction == "SHORT":
             return (self.entry_premium - last) * self.qty
         return (last - self.entry_premium) * self.qty
 
@@ -131,7 +143,7 @@ class Position(Base):
         the MARGIN left cash, so the position returns its margin (entry_cost) plus its
         unrealized P&L — NOT the full notional (last × qty), which double-counts the
         leverage and inflates equity."""
-        if self.segment == "equity_intraday":
+        if self.segment in MARGIN_SEGMENTS:
             return self.entry_cost + self.unrealized_pnl()
         return (self.last_premium or self.entry_premium) * self.qty
 
