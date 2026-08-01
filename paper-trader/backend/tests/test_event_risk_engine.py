@@ -137,3 +137,27 @@ def test_a_flatten_failure_never_breaks_the_risk_loop(monkeypatch):
 
     monkeypatch.setattr(r, "flatten_before_events", boom)
     r._safe_flatten_before_events(dt.datetime(2026, 8, 6, 19, 29))   # must not raise
+
+
+def test_earnings_lookup_matches_the_key_format_the_universe_actually_stores():
+    """REGRESSION (found 2026-08-01 by inspecting production, not by a failing test):
+    `earnings_events.symbol` holds the FULL instrument key — production rows read
+    'NSE:HEG', 'NSE:NCC', 'NSE:IRCTC'. The lookup queried normalized names ('HEG'), so
+    `symbol IN (...)` matched nothing and the earnings blackout could never have fired on
+    a real symbol. It would have tested green forever while doing nothing at all."""
+    import datetime as _dt
+
+    from app.core.earnings import EarningsEvent
+    r = _runner()
+    when = r.provider.now().date() + _dt.timedelta(days=2)
+    with SessionLocal() as s:
+        s.add(EarningsEvent(symbol="NSE:HEG", event_date=when,
+                            purpose="Financial Results",
+                            fetched_at=_dt.datetime.now()))
+        s.commit()
+
+    r.enabled = {"NSE:HEG"}
+    r._earnings_cache_date = None      # force a rebuild
+    assert r._earnings_date_for("NSE:HEG") == when
+    # ... and the normalized form resolves to the same date, since the engine sees both.
+    assert r._earnings_date_for("HEG") == when

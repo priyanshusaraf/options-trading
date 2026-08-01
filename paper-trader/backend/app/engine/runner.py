@@ -1125,9 +1125,13 @@ class EngineRunner:
             self._earnings_cache = {}
             try:
                 from app.core.earnings import earnings_map
-                syms = [normalize_key(k) for k in self.enabled]
+                # Query with the RAW instrument keys. `earnings_events.symbol` is the
+                # full instrument key as the universe stores it — production rows read
+                # 'NSE:HEG', not 'HEG' — so querying normalized names matched nothing and
+                # the earnings blackout could never have fired on a real symbol. Index
+                # the RESULT by the normalized name so lookups work in either form.
                 with SessionLocal() as s:
-                    for sym, rec in earnings_map(s, syms, today).items():
+                    for sym, rec in earnings_map(s, list(self.enabled), today).items():
                         self._earnings_cache[normalize_key(sym)] = dt.date.fromisoformat(
                             rec["date"])
             except Exception as e:
