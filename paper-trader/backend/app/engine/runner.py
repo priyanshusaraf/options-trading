@@ -61,7 +61,7 @@ from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
 from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
-from app.strategy.signals import to_payload
+from app.strategy.signals import latest_state, to_payload
 
 
 def _to_df(candles) -> pd.DataFrame:
@@ -406,7 +406,10 @@ class EngineRunner:
                 sig = strat.signals(frame_from(candles), ema_length=s.ema_length,
                                     z_length=s.z_length, entry_z=s.entry_z,
                                     slope_lookback=s.slope_lookback)
-                latest = to_payload(sig, entry_z=s.entry_z)["latest"]
+                # latest_state, NOT to_payload: the payload walks every bar to
+                # build chart arrays this path immediately discards. See
+                # strategy/signals.py — it was 76% of the scan's runtime.
+                latest = latest_state(sig, entry_z=s.entry_z)
             else:
                 sig = strat.signals(frame_from(candles))
                 latest = self._generic_latest(sig)

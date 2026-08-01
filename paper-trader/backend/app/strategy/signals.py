@@ -46,6 +46,50 @@ def _epoch(t) -> int:
     return ist_epoch(t)
 
 
+def latest_state(sig: pd.DataFrame, entry_z: float = 1.0) -> dict | None:
+    """Just the LATEST bar's state — the only part the engine actually reads.
+
+    `to_payload` walks every bar with `iterrows()` to build the chart's candle,
+    EMA, z-score and marker arrays. The live scan called it and kept ONLY
+    `["latest"]`, discarding all of that — on every signal tick, for every
+    instrument. Profiling put it at 76% of a representative test's runtime, and
+    on the box it is thousands of dicts built and thrown away every 2.5 seconds,
+    on a 1 GB droplet that has OOM'd twice.
+
+    `latest` depends solely on the last row (plus the previous row's z), so none
+    of that work was ever needed for it.
+
+    `to_payload` now delegates here rather than duplicating the logic. Two copies
+    of "what the engine believes right now" would be exactly the kind of drift
+    that produces a chart disagreeing with the trades.
+    """
+    sig = sig.dropna(subset=["ema", "z", "slope"]).reset_index(drop=True)
+    if sig.empty:
+        return None
+    last = sig.iloc[-1]
+    trend = "bull" if last["slope"] > 0 else ("bear" if last["slope"] < 0 else "flat")
+    if bool(last["longEntry"]):
+        signal = "LONG_ENTRY"
+    elif bool(last["shortEntry"]):
+        signal = "SHORT_ENTRY"
+    else:
+        signal = "NONE"
+    return {
+        "time": _epoch(last["date"]),
+        "close": round(float(last["close"]), 2),
+        "ema": round(float(last["ema"]), 2),
+        "ema_5_ago": round(float(last["ema_prev"]), 2) if pd.notna(last["ema_prev"]) else None,
+        "slope": round(float(last["slope"]), 3),
+        "z": round(float(last["z"]), 4),
+        "z_prev": round(float(sig.iloc[-2]["z"]), 4) if len(sig) >= 2 else None,
+        "std": round(float(last["std"]), 4),
+        "trend": trend,
+        "signal": signal,
+        "long_exit": bool(last["longExit"]),
+        "short_exit": bool(last["shortExit"]),
+    }
+
+
 def to_payload(sig: pd.DataFrame, entry_z=1.0) -> dict:
     """Serialize candles + indicators + entry markers + the latest bar's state
     into the JSON shape the frontend chart expects."""
@@ -68,28 +112,9 @@ def to_payload(sig: pd.DataFrame, entry_z=1.0) -> dict:
             markers.append({"time": t, "position": "aboveBar", "color": "#F6465D",
                             "shape": "arrowDown", "text": "SHORT"})
 
-    last = sig.iloc[-1]
-    trend = "bull" if last["slope"] > 0 else ("bear" if last["slope"] < 0 else "flat")
-    if bool(last["longEntry"]):
-        signal = "LONG_ENTRY"
-    elif bool(last["shortEntry"]):
-        signal = "SHORT_ENTRY"
-    else:
-        signal = "NONE"
-
-    latest = {
-        "time": _epoch(last["date"]),
-        "close": round(float(last["close"]), 2),
-        "ema": round(float(last["ema"]), 2),
-        "ema_5_ago": round(float(last["ema_prev"]), 2) if pd.notna(last["ema_prev"]) else None,
-        "slope": round(float(last["slope"]), 3),
-        "z": round(float(last["z"]), 4),
-        "z_prev": round(float(sig.iloc[-2]["z"]), 4) if len(sig) >= 2 else None,
-        "std": round(float(last["std"]), 4),
-        "trend": trend,
-        "signal": signal,
-        "long_exit": bool(last["longExit"]),
-        "short_exit": bool(last["shortExit"]),
-    }
+    # Delegate rather than duplicate: two copies of "what the engine believes
+    # right now" would drift, and the symptom would be a chart disagreeing with
+    # the trades.
+    latest = latest_state(sig, entry_z)
     return {"candles": candles, "ema": ema, "zscore": zscore,
             "markers": markers, "latest": latest, "entry_z": entry_z}

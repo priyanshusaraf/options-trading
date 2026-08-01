@@ -41,9 +41,19 @@ def test_closing_twice_is_safe():
 def test_close_never_raises_even_on_a_broken_session(monkeypatch):
     init_db(reset=True)
     b = PaperBroker(MockProvider())
+    real_close = b.s.close
     monkeypatch.setattr(b.s, "close",
                         lambda: (_ for _ in ()).throw(RuntimeError("already gone")))
-    b.close()      # must not raise
+    try:
+        b.close()      # must not raise
+    finally:
+        # Actually close it. Patching close() to throw means the session would
+        # otherwise leak out of this test — and a leaked SQLite connection makes
+        # a LATER test's init_db(reset=True) fail with "database is locked",
+        # which is precisely the bug this file exists to prevent. Writing the
+        # test for it while committing it would have been a poor joke.
+        monkeypatch.undo()
+        real_close()
 
 
 def test_a_reset_after_close_is_not_locked():
