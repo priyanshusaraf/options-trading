@@ -20,3 +20,31 @@ describe('settings coverage', () => {
     expect(bogus, `DANGER_KEYS not in OVERRIDABLE: ${bogus.join(', ')}`).toEqual([])
   })
 })
+
+describe('settings are explained, not merely named', () => {
+  // A definition without a consequence still leaves you guessing, and these knobs move
+  // real money. Every knob must say what happens when you change it, in the direction
+  // you would change it.
+  it('every knob explains what changes if you move it', () => {
+    const noDetail = OVERRIDABLE.filter((k) => !META[k]?.detail)
+    expect(noDetail, `knobs with no consequence note: ${noDetail.join(', ')}`).toEqual([])
+  })
+
+  it('help and detail say different things', () => {
+    const lazy = OVERRIDABLE.filter((k) => {
+      const m = META[k]
+      return m?.detail && m.detail.trim() === m.help.trim()
+    })
+    expect(lazy, `detail merely repeats help: ${lazy.join(', ')}`).toEqual([])
+  })
+
+  it('descriptions are substantive', () => {
+    const thin = OVERRIDABLE.filter((k) => (META[k]?.detail ?? '').length < 40)
+    expect(thin, `too thin to be useful: ${thin.join(', ')}`).toEqual([])
+  })
+
+  it('a label never falls back to the raw key', () => {
+    const raw = OVERRIDABLE.filter((k) => META[k]?.label === k)
+    expect(raw, `label is just the key: ${raw.join(', ')}`).toEqual([])
+  })
+})

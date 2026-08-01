@@ -1,95 +1,120 @@
-/* Human label + one-line explanation for every runtime-overridable knob.
+/* Human label, one-line explanation, and consequence note for every runtime-overridable
+ * knob.
  *
- * A key missing from here renders with its raw name and an 'undocumented'
- * badge, so the gap is visible rather than silent.
+ * `help`   — what the setting IS, in one line.
+ * `detail` — what actually happens if you change it, in the direction you'd change it.
+ *            This is the part that was missing: a number with a definition but no
+ *            consequence still leaves you guessing, and these knobs move real money.
+ *
+ * A key missing from here renders with its raw name and an 'undocumented' badge, so the
+ * gap is visible rather than silent. settingsMeta.test.ts fails the build if any
+ * overridable key is undocumented or any documented key no longer exists.
  */
-export const META: Record<string, { label: string; help: string }> = {
-  reinforce_enabled: { label: 'Reinforcement enabled', help: 'Same-direction signal on a held winner strengthens management (no added qty).' },
-  reinforce_min_profit_pct: { label: 'Min profit to reinforce', help: 'Position must be at least this far in profit before a reinforcement counts. Recommended 0.10.' },
-  reinforce_lock_pct: { label: 'SL lock per reinforcement', help: 'Each reinforcement locks the stop to entry×(1+count×this). 0.05 ⇒ entry 300→SL 315.' },
-  reinforce_extend_tp: { label: 'Extend target on reinforce', help: 'Push the take-profit out as confirmations stack (safe: stop is already locked in profit).' },
-  reinforce_tp_extend_pct: { label: 'TP extension per reinforce', help: 'Fraction of entry added to the target each reinforcement. Recommended 0.20.' },
-  reinforce_tp_max_pct: { label: 'TP extension cap', help: 'Target never extends beyond entry×(1+this). Recommended 1.50 (theta limits the upside of waiting).' },
-  reinforce_cooldown_minutes: { label: 'Reinforcement cooldown (min)', help: 'Minimum gap between counted reinforcements. Recommended 15.' },
-  max_reinforcements: { label: 'Max reinforcements', help: 'Cap on confirmations per trade. Recommended 3.' },
-  overnight_enabled: { label: 'Overnight holding enabled', help: 'Allow eligible positions to carry past session close.' },
-  overnight_auto_pct: { label: 'Auto-overnight ≤ % capital', help: 'Positions this small auto-hold overnight. Recommended 0.10.' },
-  overnight_max_pct: { label: 'Never overnight > % capital', help: 'Hard cap — bigger positions never carry, even reinforced. Recommended 0.25.' },
-  overnight_min_reinforcements: { label: 'Reinforcements for mid-size', help: 'Positions between the two thresholds need this many reinforcements to carry. Recommended 1.' },
-  overnight_min_days_to_expiry: { label: 'Min days to expiry', help: 'Force square-off if expiry is closer than this — avoids the theta cliff. Recommended 2.' },
-  block_overnight_into_weekend: { label: 'Block weekend carry', help: 'Square off on Fridays (3 days of theta over a weekend). Default off.' },
-  max_holding_days: { label: 'Max holding period (days)', help: 'Hard cap — long options bleed; close dead-money trades. Recommended 5.' },
-  square_off_buffer_minutes: { label: 'Square-off buffer (min)', help: 'Decide hold-vs-close this long before session close. Recommended 15.' },
-  trail_enabled: { label: 'Trailing stop enabled', help: 'Continuously ratchet the stop up as profit thresholds are crossed.' },
-  trail_trigger_pct: { label: 'Trail trigger step', help: 'Profit per ratchet step (fraction of entry).' },
-  trail_first_step_lock_pct: { label: 'Trail first-step lock', help: 'Gentle stop lock at the first +10% profit step (fraction of entry). Recommended 0.025.' },
-  trail_step_lock_pct: { label: 'Trail step lock', help: 'From the 2nd step on, the stop trails this fraction of entry behind each step — no upper cap. Recommended 0.10.' },
-  option_cache_enabled: { label: 'Option-data cache', help: 'Persist every downloaded chain into a growing local research dataset.' },
-  option_cache_snapshot_minutes: { label: 'Cache snapshot cadence (min)', help: 'At most one chain snapshot per instrument per this many minutes.' },
-  stop_loss_pct: { label: 'Initial stop (−%)', help: 'Initial premium stop below entry, as a fraction (0.30 = −30%).' },
-  target_pct: { label: 'Initial target (+%)', help: 'Initial premium target above entry, as a fraction (0.60 = +60%).' },
-  max_open_positions: { label: 'Max concurrent positions', help: 'Cap how many positions the bot holds at once — stops a single trending day becoming many correlated bets. 0 = unlimited.' },
-  reentry_cooldown_minutes: { label: 'Re-entry cooldown (min)', help: 'After a stop-out on an instrument, block new entries on it for this long — avoids the chop re-entry trap. 0 = off.' },
-  max_capital_per_trade: { label: 'Max capital per trade (₹)', help: 'Skip a signal whose 1-lot cost exceeds this — bounds single-trade exposure. 0 = no cap.' },
-  max_stale_seconds: { label: 'Max stale (sec)', help: 'A mark older than this is stale — no SL/TP fires on it.' },
-  position_loop_seconds: { label: 'Risk loop cadence (sec)', help: 'Fast lane: mark + trail + SL/TP.' },
-  signal_loop_seconds: { label: 'Signal loop cadence (sec)', help: 'Slow lane: scan candles + entries.' },
-  notify_enabled: { label: 'Notifications enabled', help: 'Master switch for Telegram alerts. No-op unless TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set in .env.' },
-  notify_on_signal: { label: 'Alert on every signal', help: 'Also ping on each fresh entry signal — can be noisy. Default off.' },
-  alert_proximity_pct: { label: 'Near-SL/TP alert threshold', help: 'Warn when the premium comes within this fraction of the stop or target level. Recommended 0.10 (10%).' },
-  exec_market_max_spread_pct: { label: 'Market-order max spread', help: 'Send a MARKET order only when the bid-ask spread is at/under this fraction; wider routes a capped limit instead. Recommended 0.01 (1%).' },
-  exec_limit_max_spread_pct: { label: 'Skip-entry spread', help: 'Above this spread an entry is SKIPPED — too illiquid to enter safely (e.g. some commodity options). Recommended 0.05 (5%).' },
-  exec_max_slippage_pct: { label: 'Limit slippage cap', help: 'A marketable-limit order is capped this far off the mid price. Recommended 0.01 (1%).' },
-  exec_min_top_qty_lots: { label: 'Min top-of-book (lots)', help: 'Require this many lots on the touch to send a MARKET order; a thinner book routes a capped limit. Recommended 1.' },
-  max_daily_loss: { label: 'Daily loss halt (₹)', help: 'Stop opening new trades for the rest of the day once realized net loss reaches this. 0 = off. Recommended 5000.' },
-  max_open_drawdown: { label: 'Open drawdown halt (₹)', help: 'Stop opening new trades once today\'s realized + unrealized (open MTM) loss reaches this. 0 = off. Recommended 2500 — half the daily loss halt, since open MTM bleeds faster than realized.' },
-  bot_capital_cap: { label: 'Bot capital cap (₹)', help: 'Hard ceiling on what the bot may ever deploy. 0 = no extra cap. Protects your capital even if Kite briefly mis-reports margin.' },
-  capital_reserve: { label: 'Capital reserve (₹)', help: 'Live: account margin kept free for your own trades — the bot never dips into it.' },
-  gtt_stop_enabled: { label: 'Exchange-side GTT stop', help: 'Live only: also place a Good-Till-Triggered stop on Zerodha so the position is protected even if the bot/laptop/internet goes down. Trails with the bot stop; cancelled when the bot exits.' },
-  intraday_enabled: { label: 'Intraday equity enabled', help: 'Master switch for the MIS intraday-equity segment. Off = only options trade. Flag instruments as INTRA on the Watchlist to route them here.' },
-  intraday_max_positions: { label: 'Max concurrent intraday trades', help: 'Hard cap on simultaneous MIS positions (purple-priority names included). Recommended 3 — keeps costs down.' },
-  intraday_min_margin: { label: 'Min margin / trade (₹)', help: 'Dust floor only — a trade smaller than this (e.g. a partial funded by leftover cash) is skipped so charges don’t eat it. Keep LOW so partial fills still open. Recommended 2500.' },
-  intraday_max_margin: { label: 'Max margin / trade (₹)', help: 'Target REAL margin deployed per (non-purple) intraday trade — qty sized so Zerodha blocks about this much; the broker’s own MIS multiplier sets the notional. Recommended 7000.' },
-  intraday_purple_margin: { label: 'Purple margin / trade (₹)', help: 'Target REAL margin for a purple-flagged priority name — always taken, sized larger than normal names. Recommended 10000.' },
-  intraday_leverage: { label: 'Intraday leverage (×)', help: 'Fallback estimate ONLY (no longer caps live sizing) — used for paper/mock and if a live margin quote fails. Keep near Zerodha’s real ~5×. Recommended 5.' },
-  intraday_square_off_buffer_minutes: { label: 'Intraday square-off (min before close)', help: 'Force every MIS position flat this long before the session close — MIS cannot carry overnight. Recommended 15.' },
-  intraday_stop_loss_pct: { label: 'Intraday stop (−%)', help: 'Stop as a fraction of entry price (0.01 = −1%). Tight, unlike the option-premium stop.' },
-  intraday_target_pct: { label: 'Intraday target (+%)', help: 'Target as a fraction of entry price (0.02 = +2%). The starting top of the lockstep band.' },
-  intraday_lockstep_enabled: { label: 'Lockstep band', help: 'Once an equity position is in profit, ratchet the stop AND target together (break-even floored), so winners lock in and keep room to run. On by default.' },
-  intraday_lockstep_trigger_pct: { label: 'Lockstep step (% of margin)', help: 'Each step of this much margin-profit slides the SL+TP one notch in your favour (0.02 = every +2% of margin, e.g. +₹200 on ₹10k). Recommended 0.02.' },
-  overtrade_today_threshold: { label: 'Overtrade suggest — today (signals)', help: 'Suggest the red overtrading flag when an instrument fires at least this many entry signals today. 0 disables. Advisory only — never blocks trading.' },
-  overtrade_rolling_threshold: { label: 'Overtrade suggest — rolling (signals)', help: 'Suggest red when signals over the rolling window reach this many. 0 disables.' },
-  overtrade_rolling_days: { label: 'Overtrade rolling window (days)', help: 'Length of the rolling window for the signal-count suggestion.' },
+export type SettingMeta = { label: string; help: string; detail?: string }
 
-  // ── Intraday knobs that rendered as RAW KEYS with no explanation ────────
-  // These matched a group so they were visible, but had no label or help.
-  // intraday_entry_cutoff_minutes is one of production's live overrides.
-  intraday_entry_cutoff_minutes: { label: 'Entry cutoff (min after open)', help: 'Stop opening new intraday positions this many minutes into the session — late entries have less room to work before the square-off. Production runs 60.' },
-  intraday_block_weekday: { label: 'Blocked weekday', help: 'Skip intraday equity on this weekday (0 = Monday). Use when a particular day has shown no edge. Empty or -1 = never block.' },
-  intraday_override_date: { label: 'Override date', help: 'Force intraday trading on for a single date (YYYY-MM-DD) that a rule would otherwise block. Blank = no override.' },
-  intraday_profit_lock_threshold: { label: 'Intraday profit lock trigger', help: 'Rupee profit at which an intraday position starts protecting its gain rather than chasing more. Default ₹600.' },
-  intraday_profit_lock_frac: { label: 'Intraday profit lock fraction', help: 'Once the lock triggers, the fraction of the peak gain that is protected. 0.30 keeps 30% of the best level reached.' },
-  intraday_purple_stop_loss_pct: { label: 'Purple stop (−%)', help: 'Stop for a purple-flagged priority name, as a fraction of entry. Sized separately because purple names carry more margin.' },
-  intraday_purple_target_pct: { label: 'Purple target (+%)', help: 'Target for a purple-flagged priority name, as a fraction of entry.' },
+export const META: Record<string, SettingMeta> = {
+  reinforce_enabled: { label: 'Reinforcement enabled', help: 'Same-direction signal on a held winner strengthens management (no added qty).', detail: 'Off means repeat signals on an open winner are ignored entirely. It never adds quantity either way — this only tightens stops and extends targets.' },
+  reinforce_min_profit_pct: { label: 'Min profit to reinforce', help: 'Position must be at least this far in profit before a reinforcement counts. Recommended 0.10.', detail: 'Raise it and only strong winners get reinforced; lower it and noise near break-even starts ratcheting your stop up into the spread.' },
+  reinforce_lock_pct: { label: 'SL lock per reinforcement', help: 'Each reinforcement locks the stop to entry×(1+count×this). 0.05 ⇒ entry 300→SL 315.', detail: 'Higher locks profit faster but stops you out on ordinary pullbacks; lower leaves more room and gives more back.' },
+  reinforce_extend_tp: { label: 'Extend target on reinforce', help: 'Push the take-profit out as confirmations stack (safe: stop is already locked in profit).', detail: 'Off caps a trend trade at its original target. On lets it run, at the cost of round-tripping to the locked stop instead of banking the first target.' },
+  reinforce_tp_extend_pct: { label: 'TP extension per reinforce', help: 'Fraction of entry added to the target each reinforcement. Recommended 0.20.', detail: 'Bigger extensions ask for a much larger move before booking; theta works against you while you wait.' },
+  reinforce_tp_max_pct: { label: 'TP extension cap', help: 'Target never extends beyond entry×(1+this). Recommended 1.50 (theta limits the upside of waiting).', detail: 'This is the backstop that stops an extending target from becoming unreachable — the exact failure the exit sweep found on the intraday target.' },
+  reinforce_cooldown_minutes: { label: 'Reinforcement cooldown (min)', help: 'Minimum gap between counted reinforcements. Recommended 15.', detail: 'Too short and one choppy hour counts as several confirmations, ratcheting the stop far too fast.' },
+  max_reinforcements: { label: 'Max reinforcements', help: 'Cap on confirmations per trade. Recommended 3.', detail: 'Each one tightens the stop, so a high cap eventually strangles the trade it was meant to protect.' },
 
-  // ── Previously INVISIBLE ────────────────────────────────────────────────
-  // These are live, overridable and read by the engine, but matched no group
-  // in the old Settings view — so they rendered nowhere at all. Several can
-  // halt trading. Documented here and claimed by a group so that cannot recur.
-  gap_guard_enabled: { label: 'Overnight gap guard', help: 'Skip new entries after a large overnight gap in the index — the open is not a normal session and the strategy has no edge in it.' },
-  gap_guard_index: { label: 'Gap guard index', help: 'Which index the gap is measured on. Usually NIFTY 50.' },
-  gap_guard_pct: { label: 'Gap size that trips the guard', help: 'How far the open must sit from the previous close to count as a gap, IN PERCENT — 0.6 means 0.6%, not 60%. Range 0-10.' },
-  gap_guard_resume: { label: 'Gap guard resume time', help: 'Clock time (HH:MM) after which entries are allowed again once the open has settled.' },
-  order_failure_disarm_count: { label: 'Order failures before auto-disarm', help: 'Consecutive order failures that force the engine to disarm itself. A broker or margin problem repeating is a reason to stop, not to retry. 0 = never auto-disarm.' },
-  max_round_trips_per_day: { label: 'Max round trips per day', help: 'Hard cap on completed trades in a session — the blunt overtrading brake. 0 = unlimited.' },
-  max_signal_age_minutes: { label: 'Max signal age (min)', help: 'A signal older than this is stale and will not be acted on — protects against acting on a backlog after a restart.' },
-  entry_window_start: { label: 'Entry window opens (HH:MM)', help: 'No entries before this time. The first minutes of the session are the noisiest.' },
-  entry_min_days_to_expiry: { label: 'Min days to expiry for entry', help: 'Refuse new option entries closer to expiry than this — theta and gamma both turn hostile.' },
-  expiry_day_block_keys: { label: 'Instruments blocked on expiry day', help: 'Comma-separated instrument keys that are never traded on their expiry day.' },
-  daily_profit_lock_pct: { label: 'Daily profit lock', help: 'Once the day is this far up (fraction of capital), protect it — the engine stops giving the gain back. 0 = off.' },
-  daily_profit_giveback_frac: { label: 'Profit giveback allowed', help: 'After the daily lock arms, the fraction of peak day profit you are willing to give back before trading stops. Recommended 0.30.' },
+  overnight_enabled: { label: 'Overnight holding enabled', help: 'Allow eligible positions to carry past session close.', detail: 'Off flattens everything daily — no gap risk, no gap reward. Options only: MIS equity can never carry regardless of this setting.' },
+  overnight_auto_pct: { label: 'Auto-overnight ≤ % capital', help: 'Positions this small auto-hold overnight. Recommended 0.10.', detail: 'Raising it carries bigger positions through the gap, which is the single largest overnight risk you take.' },
+  overnight_max_pct: { label: 'Never overnight > % capital', help: 'Hard cap — bigger positions never carry, even reinforced. Recommended 0.25.', detail: 'The last line against a gap wiping a quarter of the account. Raise it only deliberately.' },
+  overnight_min_reinforcements: { label: 'Reinforcements for mid-size', help: 'Positions between the two thresholds need this many reinforcements to carry. Recommended 1.', detail: 'Higher means mid-size positions almost always square off at the close.' },
+  overnight_min_days_to_expiry: { label: 'Min days to expiry', help: 'Force square-off if expiry is closer than this — avoids the theta cliff. Recommended 2.', detail: 'Holding a 1-DTE long option overnight is the fastest way to lose the premium to time decay alone.' },
+  block_overnight_into_weekend: { label: 'Block weekend carry', help: 'Square off on Fridays (3 days of theta over a weekend). Default off.', detail: 'On costs you Monday gap upside but removes three days of decay and weekend headline risk.' },
+  max_holding_days: { label: 'Max holding period (days)', help: 'Hard cap — long options bleed; close dead-money trades. Recommended 5.', detail: 'Forces capital out of positions that stopped working, whatever the chart says.' },
+  square_off_buffer_minutes: { label: 'Square-off buffer (min)', help: 'Decide hold-vs-close this long before session close. Recommended 15.', detail: 'Too small and the closing auction thins the book you have to exit into.' },
 
-  // ── Journal ─────────────────────────────────────────────────────────────
-  manual_detect_enabled: { label: 'Detect my manual Kite trades', help: 'Poll the Kite orderbook and journal any trade you placed yourself. Read-only: it never places, modifies or cancels an order, and never writes the bot ledger.' },
-  manual_detect_seconds: { label: 'Manual-trade poll (sec)', help: 'How often to check for your own trades. Recommended 30 — it matches the positions() cadence already proven in production.' },
+  trail_enabled: { label: 'Trailing stop enabled', help: 'Continuously ratchet the stop up as profit thresholds are crossed.', detail: 'Off leaves the initial stop where it started — a full winner can round-trip to a loss.' },
+  trail_trigger_pct: { label: 'Trail trigger step', help: 'Profit per ratchet step (fraction of entry).', detail: 'Smaller steps trail tighter and stop out sooner; larger steps let more of the move breathe.' },
+  trail_first_step_lock_pct: { label: 'Trail first-step lock', help: 'Gentle stop lock at the first +10% profit step (fraction of entry). Recommended 0.025.', detail: 'Deliberately gentle: locking hard at the first step is what turns small winners into scratches.' },
+  trail_step_lock_pct: { label: 'Trail step lock', help: 'From the 2nd step on, the stop trails this fraction of entry behind each step — no upper cap. Recommended 0.10.', detail: 'This governs how much of a big move you keep versus how early you are taken out of it.' },
+
+  option_cache_enabled: { label: 'Option-data cache', help: 'Persist every downloaded chain into a growing local research dataset.', detail: 'This is the single largest writer to the database (~17k rows/day). Kite sells no historical chains, so a day not captured is gone forever — but see Storage for what it costs on a 1 GB box.' },
+  option_cache_snapshot_minutes: { label: 'Cache snapshot cadence (min)', help: 'At most one chain snapshot per instrument per this many minutes.', detail: 'Halving it roughly doubles the row growth. Raising it is the cheapest way to slow database growth without losing the dataset entirely.' },
+
+  stop_loss_pct: { label: 'Initial stop (−%)', help: 'Initial premium stop below entry, as a fraction (0.30 = −30%).', detail: 'Options premium is volatile: a stop tighter than ~25% is hit by ordinary intraday noise on most contracts.' },
+  target_pct: { label: 'Initial target (+%)', help: 'Initial premium target above entry, as a fraction (0.60 = +60%).', detail: 'A target the premium never reaches is the same as having no target — check the trade history before raising it.' },
+  max_open_positions: { label: 'Max concurrent positions', help: 'Cap how many positions the bot holds at once — stops a single trending day becoming many correlated bets. 0 = unlimited.', detail: 'On a trending day every instrument fires the same direction, so this is really a cap on correlated exposure, not on trade count. Production runs 0 here, which disables the OPTIONS segment entirely.' },
+  reentry_cooldown_minutes: { label: 'Re-entry cooldown (min)', help: 'After a stop-out on an instrument, block new entries on it for this long — avoids the chop re-entry trap. 0 = off.', detail: 'Without it, a choppy range can stop you out and re-enter repeatedly, paying charges each round.' },
+  max_capital_per_trade: { label: 'Max capital per trade (₹)', help: 'Skip a signal whose 1-lot cost exceeds this — bounds single-trade exposure. 0 = no cap.', detail: 'Applies to the 1-lot cost, so it effectively filters out the most expensive contracts entirely.' },
+  max_stale_seconds: { label: 'Max stale (sec)', help: 'A mark older than this is stale — no SL/TP fires on it.', detail: 'Protects against exiting on a frozen quote. Too high and a dead feed can leave a position unmanaged; too low and brief feed hiccups suspend stop management.' },
+  position_loop_seconds: { label: 'Risk loop cadence (sec)', help: 'Fast lane: mark + trail + SL/TP.', detail: 'This is how quickly a stop can fire. Raising it directly increases how far past your stop price a fast move can travel before you are out.' },
+  signal_loop_seconds: { label: 'Signal loop cadence (sec)', help: 'Slow lane: scan candles + entries.', detail: 'Signals only fire on completed candles, so lowering this below a few seconds buys nothing and burns Kite rate limit.' },
+
+  notify_enabled: { label: 'Notifications enabled', help: 'Master switch for Telegram alerts. No-op unless TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID are set in .env.', detail: 'Off silences fills, exits, halts AND safety alarms — including the ones about positions the bot has lost track of.' },
+  notify_on_signal: { label: 'Alert on every signal', help: 'Also ping on each fresh entry signal — can be noisy. Default off.', detail: 'On a trending day this is dozens of messages, which trains you to ignore the channel that also carries real alarms.' },
+  alert_proximity_pct: { label: 'Near-SL/TP alert threshold', help: 'Warn when the premium comes within this fraction of the stop or target level. Recommended 0.10 (10%).', detail: 'Advisory only — it never moves a stop or blocks a trade.' },
+
+  exec_market_max_spread_pct: { label: 'Market-order max spread', help: 'Send a MARKET order only when the bid-ask spread is at/under this fraction; wider routes a capped limit instead. Recommended 0.01 (1%).', detail: 'For options, execution cost — not brokerage — is the dominant friction. Raising this pays the spread on every entry.' },
+  exec_limit_max_spread_pct: { label: 'Skip-entry spread', help: 'Above this spread an entry is SKIPPED — too illiquid to enter safely (e.g. some commodity options). Recommended 0.05 (5%).', detail: 'Raising it lets the bot into books it cannot exit cheaply, which shows up as slippage on the way out, not the way in.' },
+  exec_max_slippage_pct: { label: 'Limit slippage cap', help: 'A marketable-limit order is capped this far off the mid price. Recommended 0.01 (1%).', detail: 'Too tight and entries silently do not fill; too loose and the limit stops protecting you at all.' },
+  exec_min_top_qty_lots: { label: 'Min top-of-book (lots)', help: 'Require this many lots on the touch to send a MARKET order; a thinner book routes a capped limit. Recommended 1.', detail: 'Guards against a market order walking a thin book several ticks.' },
+
+  max_daily_loss: { label: 'Daily loss halt (₹)', help: 'Stop opening new trades for the rest of the day once realized net loss reaches this. 0 = off.', detail: 'Entries only — open positions are still managed and exited. Setting 0 removes the day\'s hard floor entirely.' },
+  max_open_drawdown: { label: 'Open drawdown halt (₹)', help: 'Stop opening new trades once today\'s realized + unrealized (open MTM) loss reaches this. 0 = off.', detail: 'Catches the day where nothing is booked yet but everything is deep red. Recommended around half the daily loss halt, since open MTM bleeds faster than realized.' },
+  bot_capital_cap: { label: 'Bot capital cap (₹)', help: 'Hard ceiling on what the bot may ever deploy. 0 = no extra cap.', detail: 'Protects your capital even if Kite briefly mis-reports available margin — a real failure mode, not a hypothetical.' },
+  capital_reserve: { label: 'Capital reserve (₹)', help: 'Live: account margin kept free for your own trades — the bot never dips into it.', detail: 'Raise it and the bot sizes smaller; it does not stop trading, it just has less to work with.' },
+  gtt_stop_enabled: { label: 'Exchange-side protective stop', help: 'Live only: also rest a stop order at Zerodha so the position is protected even if the bot, laptop or internet dies.', detail: 'Turning this off leaves the software stop as the ONLY protection — if the process dies with a position open, nothing exits it. Keep it on.' },
+
+  intraday_enabled: { label: 'Intraday equity enabled', help: 'Master switch for the MIS intraday-equity segment. Off = only options trade.', detail: 'This is the segment that has taken 70 of the last 72 real trades. Flag instruments as INTRA on the Watchlist to route them here.' },
+  intraday_max_positions: { label: 'Max concurrent intraday trades', help: 'Hard cap on simultaneous MIS positions (purple-priority names included).', detail: 'Each position carries its own charges and its own margin block; more positions on a trending day means more correlated risk, not more diversification.' },
+  intraday_min_margin: { label: 'Min margin / trade (₹)', help: 'Dust floor — a trade smaller than this is skipped so charges don\'t eat it.', detail: 'Keep it LOW so partial fills funded by leftover cash still open. Raising it silently drops the smaller opportunities.' },
+  intraday_max_margin: { label: 'Max margin / trade (₹)', help: 'Target REAL margin deployed per (non-purple) intraday trade.', detail: 'Quantity is sized so Zerodha blocks about this much; the broker\'s own MIS multiplier sets the notional. This is the main position-size dial.' },
+  intraday_purple_margin: { label: 'Purple margin / trade (₹)', help: 'Target REAL margin for a purple-flagged priority name — always taken, sized larger.', detail: 'Purple names bypass the ranking and are taken first, so this multiplies both conviction and concentration.' },
+  intraday_leverage: { label: 'Intraday leverage (×)', help: 'Fallback estimate ONLY — no longer caps live sizing.', detail: 'Used for paper/mock and if a live margin quote fails. The real cap is the broker\'s margin quote; keep this near Zerodha\'s actual ~5× so the fallback is not wildly wrong.' },
+  intraday_square_off_buffer_minutes: { label: 'Intraday square-off (min before close)', help: 'Force every MIS position flat this long before the close — MIS cannot carry overnight.', detail: 'Too small and you are exiting into the closing auction; leave it alone unless you have a reason.' },
+  intraday_stop_loss_pct: { label: 'Intraday stop (−%)', help: 'Stop as a fraction of entry price (0.008 = −0.8%).', detail: 'The 2026-08-01 sweep measured the median adverse excursion at 0.427% of notional and p75 at 0.616%: a stop tighter than ~0.6% converts ordinary noise into realised losses.' },
+  intraday_target_pct: { label: 'Intraday target (+%)', help: 'Target as a fraction of entry price. The starting top of the lockstep band.', detail: 'The largest favourable excursion ever recorded on this book is 1.216% of notional, so a target above ~1% essentially never fires — TARGET has fired zero times in 72 real trades. The profit lock below is what actually banks these trades.' },
+  intraday_lockstep_enabled: { label: 'Lockstep band', help: 'Once in profit, ratchet the stop AND target together (break-even floored).', detail: 'Off means the stop stays where it started and a winner can give everything back.' },
+  intraday_lockstep_trigger_pct: { label: 'Lockstep step (% of margin)', help: 'Each step of this much margin-profit slides the SL+TP one notch in your favour.', detail: '0.02 = every +2% of margin, e.g. +₹200 on ₹10k. Smaller steps trail tighter and cut winners earlier.' },
+  intraday_entry_cutoff_minutes: { label: 'Entry cutoff (min after open)', help: 'Stop opening new intraday positions this many minutes into the session.', detail: 'Late entries have less room to work before the forced square-off, so they are structurally worse. Production runs 60.' },
+  intraday_block_weekday: { label: 'Blocked weekday', help: 'Skip entries on this weekday (0 = Monday). −1 = never block.', detail: 'Scoped by "Instruments blocked on expiry day" below — on its own it would sit out the whole book. Largely superseded by the Event risk rules.' },
+  intraday_override_date: { label: 'Override date (one day only)', help: 'Force trading on for a single date (YYYY-MM-DD) that a weekday rule would block.', detail: 'Self-expiring by design: yesterday\'s opt-in never carries forward. Also lifts weekday EVENT blackouts for that date.' },
+  intraday_profit_lock_threshold: { label: 'Profit lock arms at (₹)', help: 'Unrealised profit at which a position starts protecting its gain instead of chasing more.', detail: 'This is the most consequential exit knob on the book. The median peak on real trades is only ₹164, so a threshold of ₹450+ almost never arms — it fired on 1 of 22 trades. Lowering it to ₹150 turned those same trades from −₹913 to +₹268 in replay.' },
+  intraday_profit_lock_frac: { label: 'Profit lock keeps (fraction of peak)', help: 'Once armed, the fraction of the best level reached that is protected.', detail: '0.7 keeps 70% of the peak. Higher banks more of a small move but exits on shallower pullbacks; lower gives the trade room and gives more back.' },
+  intraday_purple_stop_loss_pct: { label: 'Purple stop (−%)', help: 'Stop for a purple-flagged priority name, as a fraction of entry.', detail: 'Separate from the normal stop because purple names carry more margin — the same percentage is a larger rupee loss.' },
+  intraday_purple_target_pct: { label: 'Purple target (+%)', help: 'Target for a purple-flagged priority name, as a fraction of entry.', detail: 'Same reachability caveat as the normal target: check it against actual excursions before raising it.' },
+
+  overtrade_today_threshold: { label: 'Overtrade suggest — today (signals)', help: 'Suggest the red overtrading flag when an instrument fires this many entry signals today. 0 disables.', detail: 'Advisory only — it never blocks a trade. It marks names that are whipsawing.' },
+  overtrade_rolling_threshold: { label: 'Overtrade suggest — rolling (signals)', help: 'Suggest red when signals over the rolling window reach this many. 0 disables.', detail: 'Catches the instrument that fires constantly without ever going anywhere.' },
+  overtrade_rolling_days: { label: 'Overtrade rolling window (days)', help: 'Length of the rolling window for the signal-count suggestion.', detail: 'Longer windows are steadier but slower to flag a name that has just turned choppy.' },
+
+  gap_guard_enabled: { label: 'Overnight gap guard', help: 'Skip new entries after a large overnight gap in the index.', detail: 'A gap open is not a normal session and the strategy has no measured edge in it. Off means the bot trades the most erratic prints of the day.' },
+  gap_guard_index: { label: 'Gap guard index', help: 'Which index the gap is measured on. Usually NIFTY 50.', detail: 'The whole book is judged by this one index, so pick the broadest one.' },
+  gap_guard_pct: { label: 'Gap size that trips the guard', help: 'How far the open must sit from the previous close to count as a gap, IN PERCENT — 0.6 means 0.6%, not 60%.', detail: 'Lower trips more often and sits out more mornings; 0 disables the guard completely.' },
+  gap_guard_resume: { label: 'Gap guard resume time', help: 'Clock time (HH:MM) after which entries are allowed again once the open has settled.', detail: 'Later is more conservative and costs you the morning trend on gap days.' },
+  order_failure_disarm_count: { label: 'Order failures before auto-disarm', help: 'Consecutive order failures that force the engine to disarm itself.', detail: 'A broker or margin problem repeating is a reason to stop, not to retry — this is what stopped the 2026-07-13 margin bug from looping. 0 = never auto-disarm.' },
+  max_round_trips_per_day: { label: 'Max round trips per day', help: 'Hard cap on completed trades in a session. 0 = unlimited.', detail: 'The blunt overtrading brake — it caps charges as much as risk. Production hit this cap on 2026-07-30.' },
+  max_signal_age_minutes: { label: 'Max signal age (min)', help: 'A signal older than this is stale and will not be acted on.', detail: 'After a restart the latest completed candle can be hours old; acting on it enters a move that already happened. 0 disables the guard.' },
+  entry_window_start: { label: 'Entry window opens (HH:MM)', help: 'No entries before this time.', detail: 'The 09:15–09:30 window is erratic and a protected order placed pre-open can rest and miss the uncross. Blank = off.' },
+  entry_min_days_to_expiry: { label: 'Min days to expiry for entry', help: 'Refuse new option entries closer to expiry than this.', detail: 'Theta and gamma both turn hostile: 0/1/2-DTE premium can evaporate on a small adverse move. 0 = off.' },
+  expiry_day_block_keys: { label: 'Instruments blocked on the weekday above', help: 'Comma-separated instrument keys the weekday block applies to. "*" = the whole book.', detail: 'A NIFTY expiry says nothing about a mid-cap stock, which is why this scoping exists. BLANK FAILS SAFE to "*" — clearing it blocks everything rather than nothing.' },
+  daily_profit_lock_pct: { label: 'Daily profit lock arms at', help: 'Once the day is this far up (fraction of deployed capital), protect it. 0 = off.', detail: 'Portfolio-level, unlike the per-position lock. When it trips it flattens the book and halts for the day.' },
+  daily_profit_giveback_frac: { label: 'Daily profit giveback allowed', help: 'After the daily lock arms, the fraction of peak day profit you will give back before trading stops.', detail: 'Lower stops the day sooner and more often; higher risks handing back a good day.' },
+
+  manual_detect_enabled: { label: 'Detect my manual Kite trades', help: 'Poll the Kite orderbook and journal any trade you placed yourself.', detail: 'Read-only: it never places, modifies or cancels an order, and never writes the bot ledger. It exists so your own trades appear in the journal alongside the bot\'s.' },
+  manual_detect_seconds: { label: 'Manual-trade poll (sec)', help: 'How often to check for your own trades.', detail: 'Recommended 30 — it matches the positions() cadence already proven in production. Lower burns Kite rate limit for no benefit.' },
+
+  // ── Scheduled-event risk ────────────────────────────────────────────────
+  event_risk_enabled: { label: 'Event-risk blackouts', help: 'No new position in an instrument with a known scheduled event on the clock.', detail: 'Covers the EIA gas (Thu) and crude (Wed) releases — timed off the US Eastern clock so they follow American daylight saving — plus the index weekday sit-outs, bullion options into expiry, and any stock on its results date. Turning this OFF means the bot trades straight through those releases. See "Sitting out today" on the dashboard for what is in force.' },
+  event_risk_flatten: { label: 'Square off before a release', help: 'Also close an OPEN position before a timed release, not just block new ones.', detail: 'Blocking entries alone leaves a position opened an hour earlier fully exposed to the print, which is the risk the rules exist to avoid. Off keeps positions through EIA releases.' },
+  event_risk_flatten_lead_minutes: { label: 'Be flat this early (min)', help: 'How many minutes before the release window the position is closed.', detail: 'Larger gives the exit more room in a thinning book but gives up more of the pre-release move.' },
+
+  // ── Ledger honesty ──────────────────────────────────────────────────────
+  ledger_auto_reanchor: { label: 'Re-anchor ledger to broker daily', help: 'Once a day, before the first trade and with a flat book, reset the internal ledger to your real broker equity.', detail: 'Without this the reported equity is "starting capital ± realised" forever — production showed ₹49,833 against a far smaller real account for three weeks, and every %-return and drawdown figure inherited that error. Off only if you want the internal paper ledger to stand on its own.' },
+  ledger_reanchor_tolerance: { label: 'Ledger drift tolerated (₹)', help: 'How far the internal ledger may drift from the broker before the daily re-anchor corrects it.', detail: 'Too tight and the ledger churns on rounding; too loose and the equity curve quietly drifts away from reality. The header shows a warning badge whenever the gap exceeds ₹500.' },
+
+  // ── Telemetry retention ─────────────────────────────────────────────────
+  retention_enabled: { label: 'Telemetry retention', help: 'Age out old telemetry so the database stays bounded.', detail: 'Trades, positions, the order journal and capital state are NEVER pruned — only regenerable telemetry. Off means the file grows about 5 MB/day forever, on a 1 GB server.' },
+  retention_option_data_days: { label: 'Keep option-chain data (days)', help: 'Option-chain snapshots older than this are deleted. 0 = keep forever.', detail: 'This is the biggest table. Kite sells no historical chains, so anything deleted here is unrecoverable — shorten it only if disk pressure is real.' },
+  retention_signal_events_days: { label: 'Keep signal events (days)', help: 'Signal history older than this is deleted. 0 = keep forever.', detail: 'Used by the overtrading guard\'s rolling window and by after-the-fact "why did it trade?" review, so keep it comfortably longer than that window.' },
+  retention_equity_full_days: { label: 'Full-resolution equity (days)', help: 'The equity curve keeps every snapshot for this many days. 0 = keep everything forever.', detail: 'Beyond this window the curve is DOWNSAMPLED, never deleted — the shape of your history survives at every age.' },
+  retention_equity_downsample_minutes: { label: 'Older equity kept every (min)', help: 'Beyond the full-resolution window, roughly one snapshot per this many minutes is kept.', detail: 'Larger means a coarser long-run chart and a much smaller database — 15 minutes removes about 99% of the rows while leaving the curve readable.' },
 }

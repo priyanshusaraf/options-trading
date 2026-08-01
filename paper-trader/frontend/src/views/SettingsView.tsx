@@ -27,6 +27,9 @@ const GROUPS: [string, (k: string) => boolean][] = [
   ['Notifications', (k) => k.startsWith('notify_') || k === 'alert_proximity_pct'],
   ['Execution', (k) => k.startsWith('exec_')],
   ['Journal', (k) => k.startsWith('manual_detect_')],
+  ['Event risk', (k) => k.startsWith('event_risk_')],
+  ['Ledger accuracy', (k) => k.startsWith('ledger_')],
+  ['Storage & retention', (k) => k.startsWith('retention_')],
   // Catch-all. Never remove it — an unclaimed key is an invisible key.
   ['Other', () => true],
 ]
@@ -34,6 +37,7 @@ const GROUPS: [string, (k: string) => boolean][] = [
 function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
   const [v, setV] = useState(r.value)
   const [err, setErr] = useState<string | null>(null)
+  const [showDetail, setShowDetail] = useState(false)
   useEffect(() => { setV(r.value); setErr(null) }, [r.value])
 
   const m = META[r.key]
@@ -42,6 +46,9 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
   const gloss = explainValue(r.key, v)
   const defaultGloss = explainValue(r.key, r.default)
   const danger = DANGER_KEYS.has(r.key)
+  // A stored override whose value differs from the shipped default. Not merely
+  // "customised" — it means any newer default for this knob is having no effect.
+  const diverged = r.overridden && String(r.value) !== String(r.default)
 
   const save = (val: any) =>
     setSetting(r.key, val).then((res: any) => {
@@ -55,7 +62,12 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
     })
 
   return (
-    <div className={cn('flex items-start gap-3 py-2 border-t border-edge/50',
+    // Mobile-first: one column that stacks under 640px, two columns from `sm` up.
+    // The old row was a single flex line with four fixed-width columns (w-24 + w-16 +
+    // w-24 + a button) alongside the label — at 390px that overflowed the viewport and
+    // pushed the value out of reach, which is precisely the width this is operated at.
+    <div className={cn('flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3 py-2.5',
+                       'border-t border-edge/50',
                        danger && 'border-l-2 border-l-down/40 pl-2')}>
       <div className="flex-1 min-w-0">
         <div className="text-sm text-zinc-200">
@@ -66,22 +78,51 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
               undocumented
             </Badge>
           )}
-          {r.overridden && (
+          {r.overridden && !diverged && (
             <Badge variant="chip" className="bg-blue-500/15 text-blue-300 ml-2"
                    title="A stored override is shadowing the code default. Reset to follow the default again.">
               overridden
             </Badge>
           )}
+          {/* An override whose VALUE differs from the shipped default is the trap that
+              has cost this project repeatedly: a new default is deployed, the stored
+              override keeps shadowing it, and the change silently does nothing. The
+              two shipped exit defaults are inert in production for exactly this
+              reason. Show it louder than a plain "overridden". */}
+          {diverged && (
+            <Badge variant="chip" className="bg-amber-500/15 text-amber-300 ml-2"
+                   title={`Your stored value (${String(v)}) is shadowing a DIFFERENT shipped default (${String(r.default)}). `
+                     + `If the default changed in a recent update, that update is having no effect here until you reset this.`}>
+              shadowing default {defaultGloss ?? String(r.default)}
+            </Badge>
+          )}
         </div>
         {help
-          ? <div className="text-[11px] text-muted">{help}</div>
+          ? <div className="text-[11px] text-muted leading-relaxed">{help}</div>
           : <div className="text-[11px] text-muted italic">
               No description yet — key <span className="font-mono">{r.key}</span>.
             </div>}
+        {/* What actually happens if you change it. Collapsed by default so the list
+            stays scannable, because the consequence is usually longer than the
+            definition — and a knob you cannot reason about is one you will not touch. */}
+        {m?.detail && (
+          <button onClick={() => setShowDetail((s) => !s)}
+                  className="text-[11px] text-blue-300/80 hover:text-blue-300 mt-0.5">
+            {showDetail ? 'less' : 'what changes if I move this?'}
+          </button>
+        )}
+        {showDetail && m?.detail && (
+          <div className="text-[11px] text-zinc-400 leading-relaxed mt-1 pl-2
+                          border-l border-blue-400/30">
+            {m.detail}
+          </div>
+        )}
+        <div className="text-[10px] text-muted/70 font-mono mt-0.5">{r.key}</div>
         {err && <div className="text-[11px] text-down mt-1">{err}</div>}
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
+      {/* Controls: wrap freely on a phone, stay on one line from `sm` up. */}
+      <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:shrink-0">
         {r.type === 'bool' ? (
           <button onClick={() => { setV(!v); save(!v) }}
             className={cn(badgeVariants({ variant: 'chip' }),
@@ -93,21 +134,23 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
             onChange={(e) => setV(e.target.value)}
             onBlur={() => save(v)}
             onKeyDown={(e) => e.key === 'Enter' && save(v)}
-            className="w-40 bg-panel2 border border-edge rounded px-2 py-1 text-xs" />
+            className="flex-1 min-w-[8rem] sm:flex-none sm:w-40 bg-panel2 border border-edge
+                       rounded px-2 py-2 sm:py-1 text-sm sm:text-xs" />
         ) : (
           <input type="number" value={v} step={r.type === 'int' ? 1 : 'any'}
             onChange={(e) => setV(r.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value))}
             onBlur={() => save(v)}
             onKeyDown={(e) => e.key === 'Enter' && save(v)}
-            className="w-24 bg-panel2 border border-edge rounded px-2 py-1 text-xs tabular-nums" />
+            className="flex-1 min-w-[6rem] sm:flex-none sm:w-24 bg-panel2 border border-edge
+                       rounded px-2 py-2 sm:py-1 text-sm sm:text-xs tabular-nums" />
         )}
 
         {/* The unit gloss: 0.30 does not tell you it is a 30% stop. */}
-        <span className="text-[11px] text-zinc-400 w-16 text-right tabular-nums">
+        <span className="text-[11px] text-zinc-400 sm:w-16 sm:text-right tabular-nums">
           {gloss ?? ''}
         </span>
 
-        <span className="text-[10px] text-muted w-24 text-right">
+        <span className="text-[10px] text-muted sm:w-24 sm:text-right">
           default {defaultGloss ?? String(r.default)}
         </span>
 
