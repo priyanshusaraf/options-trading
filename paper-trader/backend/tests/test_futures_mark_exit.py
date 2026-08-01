@@ -146,3 +146,49 @@ def test_the_dispatch_routes_futures_to_its_own_path():
     src = inspect.getsource(EngineRunner.mark_and_exit_positions)
     assert '_mark_exit_futures' in src
     assert 'index_futures' in src
+
+
+# ── force-flat: no rollovers, ever ──────────────────────────────────────────
+
+def test_a_futures_position_is_force_flattened_at_the_close(runner, monkeypatch):
+    """Intraday only. A futures position surviving the close is a carried
+    leveraged overnight position nobody chose to hold."""
+    from app.core import market_hours
+    pos = _open(runner)
+    monkeypatch.setattr(market_hours, "minutes_to_close", lambda seg, now: 5)
+    runner.square_off_intraday(NOW)
+    assert runner.broker.open_positions() == []
+
+
+def test_expiry_day_gets_no_carve_out(runner, monkeypatch):
+    """No 'it is expiry day, let it settle'. Settling is a decision the engine is
+    not allowed to make, and there is no rollover code anywhere in engine/ — an
+    invariant to preserve, not a gap to fill."""
+    from app.core import market_hours
+    pos = runner.broker.open_futures_position(
+        get_instrument("NIFTY"), "LONG", 24_000.0, 50, "NFO_FUT", "TEST",
+        dt.datetime(2026, 8, 27, 10, 0), dt.date(2026, 8, 27), margin=25_000.0)
+    monkeypatch.setattr(market_hours, "minutes_to_close", lambda seg, now: 2)
+    runner.square_off_intraday(dt.datetime(2026, 8, 27, 15, 28))
+    assert runner.broker.open_positions() == [], "held a contract into settlement"
+
+
+def test_the_squareoff_books_a_futures_trade_not_an_equity_one(runner, monkeypatch):
+    """Closing via the equity path would tag the segment wrong and compute
+    charges on the equity schedule."""
+    from app.db.models import Trade
+    from app.core import market_hours
+    _open(runner)
+    monkeypatch.setattr(market_hours, "minutes_to_close", lambda seg, now: 5)
+    runner.square_off_intraday(NOW)
+    tr = runner.broker.s.query(Trade).all()[-1]
+    assert tr.segment == "index_futures"
+    assert tr.exit_reason == "INTRADAY_SQUAREOFF"
+
+
+def test_far_from_the_close_nothing_is_flattened(runner, monkeypatch):
+    from app.core import market_hours
+    _open(runner)
+    monkeypatch.setattr(market_hours, "minutes_to_close", lambda seg, now: 180)
+    runner.square_off_intraday(NOW)
+    assert runner.broker.open_positions(), "flattened hours before the close"

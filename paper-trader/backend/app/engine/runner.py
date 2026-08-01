@@ -1363,13 +1363,25 @@ class EngineRunner:
             log.error(f"overnight handler error: {e}")
 
     def square_off_intraday(self, now) -> None:
-        """Force every intraday-equity (MIS) position flat near its segment's close —
-        MIS cannot carry overnight. Marks to the last spot and books the close."""
+        """Force every MIS-equity AND index-futures position flat near its segment's
+        close. Marks to the last price and books the close.
+
+        Futures are included because the owner's directive is explicit: intraday
+        only, **no rollovers, ever**. There is deliberately no "it is expiry day,
+        let it settle" carve-out — settling is a decision the engine is not
+        allowed to make, and the absence of rollover code anywhere in `engine/`
+        is an invariant to preserve rather than a gap to fill. Futures get their
+        own buffer knob because close-auction dynamics differ from cash equity.
+        """
         from app.core import market_hours
-        buf = self.params.get("intraday_square_off_buffer_minutes", 15.0)
+        eq_buf = self.params.get("intraday_square_off_buffer_minutes", 15.0)
+        fut_buf = self.params.get("index_futures_square_off_buffer_minutes",
+                                  self.settings.index_futures_square_off_buffer_minutes)
         for pos in list(self.broker.open_positions()):
-            if pos.segment != "equity_intraday":
+            if pos.segment not in ("equity_intraday", "index_futures"):
                 continue
+            is_fut = pos.segment == "index_futures"
+            buf = fut_buf if is_fut else eq_buf
             # MIS cannot legally carry overnight, so an unresolvable key must NOT exempt
             # a position from the flatten — equity-intraday is always NSE cash, so fall
             # back to that clock rather than skipping (and leaving it to carry).
@@ -1378,7 +1390,12 @@ class EngineRunner:
             mtc = market_hours.minutes_to_close(seg, now)
             if mtc is not None and 0 <= mtc <= buf:
                 price = pos.last_premium or pos.entry_premium
-                self.broker.close_equity_position(pos, price, "INTRADAY_SQUAREOFF", now)
+                if is_fut:
+                    self.broker.close_futures_position(
+                        pos, price, "INTRADAY_SQUAREOFF", now)
+                else:
+                    self.broker.close_equity_position(
+                        pos, price, "INTRADAY_SQUAREOFF", now)
                 if pos.instrument_key in self.state:
                     self.state[pos.instrument_key]["position"] = None
                 log.info(f"INTRADAY SQUAREOFF {pos.tradingsymbol} @ {price:.2f}",
