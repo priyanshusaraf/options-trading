@@ -30,10 +30,16 @@ _MIN_IS_TRADES = 5
 class Trial:
     fold_index: int
     params: dict           # the searched overrides for this trial
-    is_objective: float    # in-sample objective (expectancy)
+    is_objective: float    # in-sample objective (trade-count-aware t-stat, see _objective)
     is_trades: int
     oos_trades: int        # OOS trade count (only for the selected trial; else 0)
     selected: bool
+    # Per-trade Sharpe of this trial (metrics.consistency), or None when the trial
+    # produced no usable dispersion (below the trade floor / a single trade).
+    # Recorded rather than back-derived from is_objective: the objective is -inf for
+    # those trials, and dividing a sentinel by sqrt(n) yields a number that would
+    # silently poison var_sr.
+    is_sharpe: float | None = None
 
 
 @dataclasses.dataclass
@@ -44,6 +50,26 @@ class OptimizationResult:
     oos_trades: list          # pooled BTTrade across folds under the selected params
     oos_metrics: object       # BTMetrics of the pooled OOS record
     n_trials: int             # folds x candidates — the DSR deflation count
+
+    @property
+    def var_sr(self) -> float:
+        """Variance of the trial Sharpes — the OTHER half of DSR deflation.
+
+        `expected_max_sharpe` returns 0 whenever this is 0, which is how the
+        deflation benchmark sat at zero on every candidate the lab ever scored:
+        n_trials was threaded through, var_sr never was, and a benchmark of zero
+        turns the DSR back into a PSR against zero. Widening the search then had
+        no effect on the bar at all, while search.py's docstring claimed it did.
+
+        Population (not sample) variance: these trials ARE the search, not a draw
+        from a larger pool of them. Trials with no usable dispersion contribute
+        nothing rather than a sentinel."""
+        vals = [t.is_sharpe for t in self.trials
+                if t.is_sharpe is not None and math.isfinite(t.is_sharpe)]
+        if len(vals) < 2:
+            return 0.0
+        mean = sum(vals) / len(vals)
+        return sum((v - mean) ** 2 for v in vals) / len(vals)
 
 
 def _objective(metrics) -> float:
@@ -97,7 +123,9 @@ def optimize(candles, inst, strategy, *, space=None, n_folds: int = 3,
                 sigs[_key(c)].iloc[:is_end].reset_index(drop=True), inst, seg, capital, rm)
             m = kernels.compute_metrics(is_trades, capital)
             obj = _objective(m)
-            fold_records.append((c, obj, m.trades))
+            # metrics.consistency IS the per-trade Sharpe (_objective is it x sqrt(n)).
+            sharpe = m.consistency if m.trades >= _MIN_IS_TRADES else None
+            fold_records.append((c, obj, m.trades, sharpe))
             if obj > best_obj:
                 best, best_key, best_obj = c, _key(c), obj
         oos = kernels.run_trades(
@@ -105,9 +133,10 @@ def optimize(candles, inst, strategy, *, space=None, n_folds: int = 3,
         pooled_oos.extend(oos)
         per_fold_oos.append(oos)
         per_fold_selected.append(best)
-        for c, obj, is_n in fold_records:
+        for c, obj, is_n, sharpe in fold_records:
             sel = _key(c) == best_key
-            trials.append(Trial(k, c, obj, is_n, len(oos) if sel else 0, sel))
+            trials.append(Trial(k, c, obj, is_n, len(oos) if sel else 0, sel,
+                                is_sharpe=sharpe))
 
     return OptimizationResult(
         trials=trials, per_fold_selected=per_fold_selected, per_fold_oos=per_fold_oos,

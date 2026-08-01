@@ -7,9 +7,21 @@ sensible pairings are enumerated — the generator never bolts arbitrary blocks 
 
 Every composition is constructed through `Composition.from_dict`, so it is grammar-valid
 by the time it is returned, and `build_strategy` (emit → AST-validate → sandbox) is the
-final proof it is safe to run. The trial count (compositions × folds) feeds the Deflated
-Sharpe deflation downstream, so a wider search *raises* the significance bar rather than
-manufacturing a winner.
+final proof it is safe to run.
+
+DEFLATION — corrected 2026-08-01. This paragraph used to claim that the trial count
+(compositions × folds) "feeds the Deflated Sharpe deflation downstream, so a wider search
+*raises* the significance bar rather than manufacturing a winner." That was FALSE for as
+long as it was written. `n_trials` was threaded through, but `var_sr` — the dispersion of
+the trial Sharpes — never was, and `expected_max_sharpe()` returns exactly 0 whenever
+var_sr is 0. The benchmark sat at zero on every candidate the lab ever scored, the DSR
+degraded to a PSR against zero, and widening the search moved the bar not at all.
+
+`OptimizationResult.var_sr` now computes it and the orchestrator passes it, so the claim
+above is true as of `research/pipeline/optimize.py`. Note it holds only for the OPTIMIZE
+path: single-pass validation searches nothing, so n_trials=1 and there is no selection to
+deflate. If you widen this search, check the logged `var_sr` and `SR0` actually move —
+a claim in a docstring is not a mechanism.
 """
 from __future__ import annotations
 

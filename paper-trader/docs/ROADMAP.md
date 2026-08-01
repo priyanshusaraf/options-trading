@@ -108,17 +108,32 @@ strategies get handcoded into `app/strategy/registry/` (drop a module with `STRA
 auto-discovered). Composition *generation* stays core — only the auto-deploy leg is parked.
 
 ### Phase 0 — Honest statistics *(do first; everything downstream inherits its trust)*
-- [ ] Thread real trial counts: one search session = one trial family; `n_trials` =
-      compositions × param draws × folds actually evaluated, passed into `build_scorecard`
-      (today `run_generated` scores each composition with `n_trials=1`).
-- [ ] Compute `var_sr` across the session's trial Sharpes and pass it through (today it
-      defaults to `0.0`, which makes `expected_max_sharpe()` return 0 → **deflation never
-      engages anywhere**). Fix the false claim in `builder/search.py`'s docstring.
+- [x] **Thread real trial counts — DONE 2026-08-01.** `run_generated` enumerates N
+      compositions and keeps the best, but each is scored by its own `run_experiment`, which
+      can only see its own parameter grid — so every composition was priced as though it were
+      the only thing ever tried, understating the selection bias by exactly N. New
+      `sibling_trials` parameter (default 1, so single-strategy runs are untouched) multiplies
+      the deflation count; `run_generated` passes `len(compositions)`. `n_trials` is now
+      compositions × candidates × folds.
+- [x] **Compute `var_sr` and pass it through — DONE 2026-08-01.** This was the item that
+      made the whole lab dishonest: `expected_max_sharpe()` returns exactly 0 whenever
+      `var_sr` is 0, so the DSR degraded to a PSR against zero on **every candidate ever
+      scored**, and widening the search moved the bar not at all. The DSR *math* was correct
+      all along (its unit tests passed untouched) — only the wiring was missing, which is
+      why it survived so long. `OptimizationResult.var_sr` now computes the population
+      variance of the trial Sharpes (recorded on each `Trial` as `is_sharpe`, not
+      back-derived from the objective, which is `-inf` for sub-floor trials and would poison
+      the variance), and `orchestrator/run.py` passes it. The `search.py` docstring that
+      claimed "a wider search *raises* the significance bar" is corrected in place, with the
+      note that it was false for as long as it was written.
 - [ ] Implement PBO via CSCV over the existing walk-forward folds (`research/stats/`);
       gate promotion candidates on PBO ≤ threshold.
 - [ ] Wire `stats/neff.py` (correlated-universe effective-N) into the evidence gate.
-- [ ] Fix the known optimizer objective bug: `pipeline/optimize.py::_objective` = raw
-      expectancy; replace with trade-count-aware objective (t-stat or bootstrap-LB).
+- [x] **Optimizer objective — ALREADY DONE (`1ec5188`), verified by reading the code
+      2026-08-01, not by trusting this file.** `_objective` is `metrics.consistency ×
+      √n` — a trade-count-aware t-statistic, not raw expectancy. This box sat unchecked long
+      after the work landed. (The `Trial.is_objective` comment still said "expectancy"; also
+      corrected.)
 - **Acceptance:** a synthetic no-edge universe swept with a wide search produces **zero**
   promotion candidates; the same sweep with deflation stubbed off produces several.
   TDD in `research_tests/`.

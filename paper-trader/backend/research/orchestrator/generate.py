@@ -58,6 +58,10 @@ def run_generated(session, source, instruments, interval, *, limit=24,
             hypothesis_statement=f"generated composition {strat.key} has edge",
             datasets=datasets, params={}, git_commit=git_commit,
             min_trades=min_trades, n_folds=n_folds,
-            min_positive_fold_frac=min_positive_fold_frac)
+            min_positive_fold_frac=min_positive_fold_frac,
+            # Every composition in this session is a trial for every other one: we
+            # keep the best of `len(compositions)`, so scoring each as if it were
+            # the only attempt understates the selection bias by exactly that factor.
+            sibling_trials=len(compositions))
         reports.append(report)
     return reports

@@ -35,6 +35,7 @@ from research.orchestrator.report import write_report
 from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
+from research.stats.dsr import expected_max_sharpe
 from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
 from research.strategy.builder.describe import explanation_for
@@ -76,8 +77,17 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                    params=None, git_commit="unknown", seed=0, min_trades=20, n_folds=4,
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
                    qualifier_version="q1", optimizer_version="none",
-                   validator_version="v1", scoring_version="s1") -> dict:
-    """`datasets` = list of (instrument, Dataset). Returns a report dict."""
+                   validator_version="v1", scoring_version="s1",
+                   sibling_trials: int = 1) -> dict:
+    """`datasets` = list of (instrument, Dataset). Returns a report dict.
+
+    `sibling_trials` — how many OTHER candidates were searched alongside this one in
+    the same session, outside this call. A single `run_experiment` can only see its
+    own parameter grid, so when `run_generated` enumerates 24 compositions and keeps
+    the best, each is scored as though it were the only thing ever tried. That is
+    selection bias the DSR exists to price in, and it is invisible from in here.
+    Multiplying the trial count by the sibling count is the correction; 1 (the
+    default) leaves single-strategy runs exactly as they were."""
     params = params if params is not None else dict(strategy.default_params)
     program = _get_or_create_program(session, program_name)
     hyp = _get_or_create_hypothesis(session, program.id, hypothesis_statement)
@@ -148,12 +158,21 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             gates = gates_from_folds(opt.per_fold_oos, min_oos_trades=min_trades,
                                      min_positive_fold_frac=min_positive_fold_frac, seed=seed)
             passed = gates_passed(gates)
-            score_metrics, n_trials = opt.oos_metrics, opt.n_trials
+            # var_sr is the OTHER half of DSR deflation: expected_max_sharpe()
+            # returns 0 whenever it is 0, so passing n_trials alone left the
+            # deflation benchmark at zero on every candidate ever scored.
+            score_metrics, n_trials = opt.oos_metrics, opt.n_trials * max(1, sibling_trials)
+            var_sr = opt.var_sr
         else:
             v = validate(ds.candles, inst, strategy, params, n_folds=n_folds, capital=capital,
                          min_oos_trades=min_trades, min_positive_fold_frac=min_positive_fold_frac,
                          seed=seed)
-            gates, passed, score_metrics, n_trials = v.gates, v.passed, ie.metrics, 1
+            # Single-pass validation searches nothing, so there is no selection
+            # to deflate: n_trials=1 makes the DSR reduce to a PSR against zero,
+            # which is correct here rather than a gap.
+            gates, passed, score_metrics = v.gates, v.passed, ie.metrics
+            n_trials = max(1, sibling_trials)
+            var_sr = 0.0
 
         gate_summary = " ".join(
             f"{g}={'✓' if r['passed'] else '✗'}({r['value']})" for g, r in gates.items())
@@ -169,9 +188,12 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                           f"{ie.instrument_key}: {', '.join(failed)}"))
             continue
         logger.info("[validate] %-10s PASS   — %s", ie.instrument_key, gate_summary)
-        sc = build_scorecard(ie.instrument_key, score_metrics, n_trials=n_trials)
-        logger.info("[score] %-10s DSR=%.4f (per-trade Sharpe %.3f, %d trials deflated)",
-                    ie.instrument_key, sc.dsr, sc.components["per_trade_sharpe"], n_trials)
+        sc = build_scorecard(ie.instrument_key, score_metrics,
+                             n_trials=n_trials, var_sr=var_sr)
+        logger.info("[score] %-10s DSR=%.4f (per-trade Sharpe %.3f, %d trials, "
+                    "var_sr=%.4f, benchmark SR0=%.4f)",
+                    ie.instrument_key, sc.dsr, sc.components["per_trade_sharpe"],
+                    n_trials, var_sr, expected_max_sharpe(var_sr, n_trials))
         validated.append({"instrument": ie.instrument_key, "dsr": sc.dsr,
                           "gates": gates, "scorecard": sc.components})
         session.add(Finding(

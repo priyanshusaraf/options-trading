@@ -4,7 +4,10 @@ the OOS record is never contaminated by selection. Every trial is recorded (the 
 deflation ledger). Optimization runs only after qualification (the orchestrator gates
 it); here we test the mechanics directly.
 """
+import math
 from collections import defaultdict
+
+import pytest
 
 from research.evaluation import kernels
 from research.pipeline.optimize import OptimizationResult, _objective, optimize
@@ -75,3 +78,38 @@ def test_optimize_insufficient_data_is_safe(fake_inst, candles_factory):
     res = optimize(candles_factory(40), fake_inst, _strat(), n_folds=8)
     assert isinstance(res, OptimizationResult)
     assert res.oos_metrics is not None
+
+
+# ── var_sr: the deflation input that was never computed (Phase 0, 2026-08-01) ──
+
+def test_optimize_populates_a_real_var_sr_from_its_trials(fake_inst, candles_factory):
+    """End-to-end proof, not a dataclass unit test.
+
+    `expected_max_sharpe()` returns exactly 0 whenever var_sr is 0, so for as long
+    as nothing computed it the DSR degraded to a PSR against zero and a wider search
+    could not raise the bar. Asserting the dataclass arithmetic alone would not have
+    caught that — the gap was that the real search never filled the field in."""
+    res = optimize(candles_factory(500), fake_inst, _strat(), n_folds=3)
+    assert res.n_trials > 1
+    assert res.var_sr > 0.0, "the search ran many trials but reported no dispersion"
+
+
+def test_trials_carry_their_per_trade_sharpe(fake_inst, candles_factory):
+    res = optimize(candles_factory(500), fake_inst, _strat(), n_folds=3)
+    scored = [t for t in res.trials if t.is_sharpe is not None]
+    assert scored, "no trial recorded a Sharpe"
+    for t in scored:
+        # _objective is per-trade Sharpe x sqrt(n); the two must stay consistent or
+        # var_sr and the ranking would be describing different quantities.
+        assert t.is_objective == pytest.approx(t.is_sharpe * math.sqrt(t.is_trades))
+
+
+def test_var_sr_makes_the_deflation_benchmark_bite(fake_inst, candles_factory):
+    """The consequence, stated as a number: with the measured var_sr the benchmark
+    is strictly positive, so an identical result scores lower than it used to."""
+    from research.stats.dsr import deflated_sharpe, expected_max_sharpe
+    res = optimize(candles_factory(500), fake_inst, _strat(), n_folds=3)
+    assert expected_max_sharpe(res.var_sr, res.n_trials) > 0.0
+    kw = dict(sr=0.15, n=200)
+    assert deflated_sharpe(**kw, n_trials=res.n_trials, var_sr=res.var_sr) < \
+        deflated_sharpe(**kw, n_trials=1, var_sr=0.0)
