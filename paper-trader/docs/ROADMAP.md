@@ -5,8 +5,8 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`4e9f125`**,
-deployed 2026-08-01 06:59:50 UTC via `scripts/deploy.sh`, exit 0 — confirmed by
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`eb88d4e`**,
+deployed 2026-08-01 07:35 UTC via `scripts/deploy.sh`, exit 0, 1,307 tests passed in-deploy — confirmed by
 `curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
 `research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
 
@@ -449,6 +449,26 @@ against B/E/C/D — pick them up when one becomes urgent.
       a connection in 10s just holds a worker thread while the pool is already exhausted).
       Tests: `tests/test_db_session_hygiene.py` (9, incl. leak accounting, rollback, and
       "in-memory state must not advance past a failed write").
+- [x] **Market-data validation at the Data seam — DONE + DEPLOYED 2026-08-01 (`eb88d4e`).**
+      Candles reached `strat.signals` completely unchecked, through **two byte-identical
+      converters** (`runner._to_df`, `backtest.engine._candles_to_df`) — nothing sorted them,
+      de-duplicated them, or rejected a NaN close or an inverted high/low. Both are now thin
+      aliases over `app/market_data/candles.py`, so a data fix cannot land in one plane and
+      miss the other. **No-op on clean data, pinned by a test** asserting the frame is
+      byte-identical to the old converter's — anything else would be a silent re-tuning of a
+      live strategy. Repairs limited to the unambiguous: sort, de-dupe (last copy wins, since
+      Kite revises the newest bar), and widen high/low to contain the bar's own open/close.
+      Only missing/NaN/infinite or non-positive prices are dropped. The envelope repair was
+      argued into existence by this repo's OWN fixtures —
+      `test_backtest_ratchet_overlay.py` builds `(o=100.0, h=100.5, lo=98.5, c=97.9)`, a close
+      below its own low; dropping it deleted the bar the test exists to exercise, and those
+      two tests now pass **unchanged** under the repair. 31 tests.
+      **Not yet done in this area:** no evidence has been gathered on whether REAL Kite
+      history actually contains duplicates/gaps/inverted bars — the validator reports
+      anomalies but nothing yet surfaces the report, so today it is a silent safety net.
+      Wiring the report to the log/`/api/health` and measuring a week of live data is the
+      obvious follow-up, and is what would turn "we are protected" into "here is how dirty
+      the feed actually is". Replay mode and timezone auditing also remain untouched.
 - [ ] **DB session hygiene — the broker's long-lived session (DELIBERATELY DEFERRED).**
       The other half of the item above, split out rather than silently dropped.
       `broker.s` is long-lived **by design** and it is load-bearing: E0.2's auto-reanchor had

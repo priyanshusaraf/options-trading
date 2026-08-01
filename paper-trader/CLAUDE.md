@@ -188,6 +188,7 @@ engine running, and a Vite build there can take live positions down with it.
 | `backend/app/engine/event_risk.py` | scheduled-event blackout table (EIA releases, index weekdays, bullion expiry, earnings) — shared by engine, backtester and `/api/event-risk` |
 | `backend/app/engine/retention.py` | telemetry retention; the money record is never pruned |
 | `backend/app/backtest/exit_sweep.py` | replays real trades against candidate exit parameters (`scripts/exit_sweep.py`) |
+| `backend/app/market_data/candles.py` | **THE** candle→signal-frame converter + validation (sort, de-dupe, envelope repair). `runner._to_df` and `backtest._candles_to_df` are thin aliases over it — they used to be byte-identical copies, so a data fix could land in one plane and miss the other |
 | `backend/app/providers/` | `MarketDataProvider` seam; `safe_kite.py`, `factory.py` (process-wide singleton) |
 | `backend/app/options/` | `picker.py` (OI ≥ 500, spread ≤ 3%, delta ≈ 0.50), `pricing.py` (local Black-Scholes) |
 | `backend/app/strategy/registry/` | drop-in strategies; auto-discovered by module-level `STRATEGY`; default `trend_impulse_v3` |
