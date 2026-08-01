@@ -86,6 +86,17 @@ class Settings(BaseSettings):
     # day, before the day's first entry, when the book is flat and the two have drifted
     # beyond the tolerance. Without this the cockpit reports `initial_capital ± realized`
     # forever — production reported ₹49,833 against a real account worth a fraction of it.
+    # ── telemetry retention (the DB grows ~5 MB/day on a 1 GB box) ────────────
+    # The money record — trades, positions, order journal, capital state — is NEVER
+    # pruned. Only regenerable telemetry ages out, and the equity curve is downsampled
+    # rather than deleted so its shape survives at every age. A window of 0 means KEEP
+    # FOREVER, never "delete everything".
+    retention_enabled: bool = True
+    retention_option_data_days: int = 90        # local option history (Kite sells no replacement)
+    retention_signal_events_days: int = 90
+    retention_equity_full_days: int = 7         # full-resolution equity-curve window
+    retention_equity_downsample_minutes: int = 15   # older than that: ~1 row per N minutes
+
     ledger_auto_reanchor: bool = True
     ledger_reanchor_tolerance: float = 250.0   # ₹ drift below which the ledger is left alone
     stop_loss_pct: float = 0.30

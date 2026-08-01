@@ -123,6 +123,7 @@ class EngineRunner:
         self._reanchor_reason = ""             # WHY the ledger is/isn't anchored to the broker
         self._earnings_cache: dict[str, dt.date] = {}   # symbol -> next results date
         self._earnings_cache_date: dt.date | None = None  # calendar day the cache was built
+        self._pruned_date: dt.date | None = None       # last day telemetry retention ran
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
@@ -1722,6 +1723,38 @@ class EngineRunner:
         except Exception:
             return 1   # fail closed: unknown trade count must never allow a re-anchor
 
+    def _maybe_prune_telemetry(self) -> None:
+        """Once a day, with the book FLAT, age out the telemetry tables.
+
+        Runs from the signal lane rather than a cron because the VPS has no scheduler the
+        deploy owns, and an un-run prune is invisible until the disk fills. Gated on a
+        flat book so a large DELETE can never contend with position management on a
+        1 GB box — the same box two memory leaks have already OOM'd."""
+        if not self.params.get("retention_enabled", True):
+            return
+        today = self.provider.now().date()
+        if self._pruned_date == today:
+            return
+        if self.broker.open_positions():
+            return                       # never prune while managing money
+        self._pruned_date = today
+        try:
+            from app.engine.retention import RetentionPolicy, prune
+            report = prune(self.provider.now(), RetentionPolicy(
+                enabled=True,
+                option_data_days=int(self.params.get("retention_option_data_days", 90)),
+                signal_events_days=int(self.params.get("retention_signal_events_days", 90)),
+                equity_full_days=int(self.params.get("retention_equity_full_days", 7)),
+                equity_downsample_minutes=int(self.params.get(
+                    "retention_equity_downsample_minutes", 15)),
+            ))
+            if any(report.values()):
+                log.info("RETENTION pruned " + ", ".join(
+                    f"{k} −{v:,}" for k, v in report.items() if v),
+                    event="RETENTION")
+        except Exception as e:
+            log.error(f"retention prune failed: {e}", event="RETENTION_FAIL")
+
     def _maybe_check_ledger(self) -> None:
         """H10: run the cash-invariant self-check in production (it was only ever run by
         the offline dry-run). A nonzero diff means the ledger drifted from
@@ -1852,6 +1885,7 @@ class EngineRunner:
         self.handle_overnight(self.provider.now())   # no-op for mock
         self.broker.snapshot(self.provider.now())
         self._maybe_check_ledger()     # H10: periodic cash-invariant drift alarm
+        self._maybe_prune_telemetry()  # bounded DB growth on a 1GB box (once a day, flat)
         self.tick_count += 1
 
     async def _signal_iteration(self) -> None:

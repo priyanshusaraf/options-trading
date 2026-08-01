@@ -60,6 +60,9 @@ OVERRIDABLE = (
     "gap_guard_enabled", "gap_guard_pct", "gap_guard_resume", "gap_guard_index",
     # #14 live order-failure circuit breaker
     "order_failure_disarm_count",
+    # telemetry retention — bounded DB growth on a 1GB box (money record never pruned)
+    "retention_enabled", "retention_option_data_days", "retention_signal_events_days",
+    "retention_equity_full_days", "retention_equity_downsample_minutes",
     # ledger honesty — daily re-anchor of the internal ledger to real broker equity
     "ledger_auto_reanchor", "ledger_reanchor_tolerance",
     # scheduled-event risk (EIA releases, index weekdays, bullion expiry, earnings)
@@ -134,6 +137,11 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # tight and the ledger churns on rounding; too loose and the equity curve drifts.
     "ledger_reanchor_tolerance": (0.0, 1000000.0),
     "event_risk_flatten_lead_minutes": (0.0, 120.0),
+    # 0 = keep forever (never "delete everything" — see engine/retention.py)
+    "retention_option_data_days": (0, 3650),
+    "retention_signal_events_days": (0, 3650),
+    "retention_equity_full_days": (0, 3650),
+    "retention_equity_downsample_minutes": (0, 1440),
 }
 
 

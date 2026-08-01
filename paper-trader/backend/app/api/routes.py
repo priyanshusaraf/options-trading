@@ -14,7 +14,7 @@ import datetime as dt
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
@@ -474,6 +474,64 @@ def earnings_calendar():
     stocks = [i.key for i in all_instruments() if i.segment in ("NSE", "BSE")]
     with SessionLocal() as s:
         return {"earnings": earnings_core.earnings_map(s, stocks)}
+
+
+@router.get("/api/storage")
+def storage_stats(request: Request):
+    """Database size, what is growing, and what retention will do about it.
+
+    The DB reached 108 MB on a 1 GB droplet before anyone noticed, because nothing in the
+    product ever reported its size — the growth was only ever visible by SSH-ing in. The
+    option-chain sweep in particular is a DELIBERATE cost (Kite sells no historical chains,
+    so an unsnapshotted day is gone forever); the point of this endpoint is that the owner
+    can see what that decision costs and switch it off knowingly, rather than discover it
+    from an OOM."""
+    import os
+
+    from app.db.models import EquitySnapshot, OptionData, OrderJournal, SignalEvent, Trade
+    r = _runner(request)
+    s_ = get_settings()
+
+    path = s_.db_path
+    size_mb = 0.0
+    for sfx in ("", "-wal", "-shm"):
+        try:
+            size_mb += os.path.getsize(path + sfx) / 1e6
+        except OSError:
+            pass
+
+    now = r.provider.now()
+    day_ago = now - dt.timedelta(days=1)
+    with SessionLocal() as s:
+        tables = {
+            "option_data": (s.query(func.count(OptionData.id)).scalar() or 0,
+                            s.query(func.count(OptionData.id)).filter(
+                                OptionData.ts >= day_ago).scalar() or 0),
+            "signal_events": (s.query(func.count(SignalEvent.id)).scalar() or 0,
+                              s.query(func.count(SignalEvent.id)).filter(
+                                  SignalEvent.time >= day_ago).scalar() or 0),
+            "equity_snapshots": (s.query(func.count(EquitySnapshot.id)).scalar() or 0,
+                                 s.query(func.count(EquitySnapshot.id)).filter(
+                                     EquitySnapshot.time >= day_ago).scalar() or 0),
+            "trades": (s.query(func.count(Trade.id)).scalar() or 0, None),
+            "order_journal": (s.query(func.count(OrderJournal.id)).scalar() or 0, None),
+        }
+
+    return {
+        "db_path": path,
+        "size_mb": round(size_mb, 1),
+        "tables": [{"name": k, "rows": v[0], "rows_last_24h": v[1],
+                    "pruned": v[1] is not None} for k, v in tables.items()],
+        "retention": {
+            "enabled": bool(r.params.get("retention_enabled", True)),
+            "option_data_days": r.params.get("retention_option_data_days"),
+            "signal_events_days": r.params.get("retention_signal_events_days"),
+            "equity_full_days": r.params.get("retention_equity_full_days"),
+            "equity_downsample_minutes": r.params.get("retention_equity_downsample_minutes"),
+            "last_run": r._pruned_date.isoformat() if r._pruned_date else None,
+        },
+        "option_cache_enabled": bool(r.params.get("option_cache_enabled", True)),
+    }
 
 
 @router.get("/api/event-risk")
