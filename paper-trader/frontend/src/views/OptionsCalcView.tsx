@@ -47,7 +47,11 @@ export default function OptionsCalcView() {
           {calc?.chosen ? '✓ ' : '⊘ '}{calc?.reason || 'no signal evaluated yet — the picker runs when a fresh entry fires'}
         </div>
 
-        <table className="w-full text-xs">
+        {/* Horizontal scroll container: this is a 6-column table and at 390px it
+            would otherwise push the whole page body sideways. Wide content must
+            scroll inside itself — guarded by views/mobileLayout.test.ts. */}
+        <div className="overflow-x-auto">
+        <table className="w-full text-xs min-w-[520px]">
           <thead className="text-muted text-left">
             <tr className="[&>th]:py-1 [&>th]:pr-3 [&>th]:font-medium">
               <th>Contract</th><th>Strike</th><th>Type</th><th>LTP</th><th>OI</th>
@@ -77,6 +81,7 @@ export default function OptionsCalcView() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   )
