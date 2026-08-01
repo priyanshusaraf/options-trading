@@ -208,9 +208,20 @@ No defects found. No action.
 
 ## What is left, in priority order
 
-1. **Backtest/live sizing parity (§8)** — not a bug, but the most misleading thing here.
-   Worth a `live_equivalent` projection in the backtest payload: given the live margin model
-   and concurrency, what would this edge have produced? That turns a caveat into a number.
+1. ~~**Backtest/live sizing parity (§8)**~~ — **DONE 2026-08-01**,
+   `app/backtest/live_equivalent.py`. `project()` converts a backtest's per-share edge into
+   what the live margin model would have sized, with concurrency, and returns the scale
+   factor between the two models.
+   It takes per-share MIS margin as an **input and refuses to guess it** — that number comes
+   from a real `order_margins()` probe, and inventing a leverage figure here would
+   manufacture exactly the false precision this audit exists to remove. No margin, no
+   number. The linearity caveat (no market impact modelled) is a FIELD on the result rather
+   than a docstring, so a projection cannot be separated from its assumptions on the way
+   into a report and quietly become a fact. 9 tests, including that a losing edge projects a
+   LARGER loss when levered — a projection that only scaled winners would be a marketing
+   tool, not a model.
+   Still to do: call it from the backtest payload once a live margin quote is available
+   there.
 2. **Intrabar stop modelling (§3)** — an option to fill the ratchet stop at the trigger price
    intrabar rather than confirming on close, so backtest exits can be compared like-for-like
    with the live SL-M.
