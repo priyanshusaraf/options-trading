@@ -535,7 +535,7 @@ log "waiting for health"
 # out of this loop produced the same "did not become healthy" line, whether the
 # app was returning 503, the host was unreachable, or the probe itself was broken —
 # three very different incidents, one message.
-health_code=""; ssh_failures=0; probes=0
+health_code=""; health_status=""; ssh_failures=0; probes=0
 for i in $(seq 1 30); do
   probes=$((probes + 1))
   set +e
@@ -547,7 +547,28 @@ for i in $(seq 1 30); do
   if [[ $ssh_rc -eq 255 ]]; then
     ssh_failures=$((ssh_failures + 1)); sleep 2; continue
   fi
+  # /api/health is a readiness probe now (app/engine/readiness.py): 503 while the
+  # DB is unreachable, the engine loops are stopped, or the fast risk lane has
+  # gone stale. Keep waiting through those — the restart may still be settling —
+  # and let the timeout below report the last verdict we saw.
   if [[ "$health_code" != "200" ]]; then
+    sleep 2; continue
+  fi
+
+  # Read the body BEFORE the GET / probe: a 200 can still mean "starting", i.e.
+  # up and serving but with lanes that have not beaten yet. Accepting that would
+  # verify nothing — the old loop exited on the first 200, which a process whose
+  # risk loop died at startup produces just as readily as a healthy one.
+  set +e
+  health_body="$(ssh -i "$VPS_KEY" "$VPS_HOST" "curl -fsS $APP_BASE/api/health" 2>/dev/null)"
+  body_rc=$?
+  set -e
+  [[ $body_rc -eq 0 && -n "$health_body" ]] \
+    || fail "could not READ /api/health to confirm the deployed commit (exit $body_rc).
+      The build identity is unverified — this is not the same as a mismatch, and not
+      the same as a pass. Check the box directly."
+  health_status="$(printf '%s' "$health_body" | sed -n 's/.*"status":"\([a-z]*\)".*/\1/p')"
+  if [[ "$health_status" == "starting" ]]; then
     sleep 2; continue
   fi
 
@@ -565,15 +586,8 @@ for i in $(seq 1 30); do
     || fail "health 200 but GET / returned ${root_code:-<no response>} — frontend serve is broken"
 
   # Confirm the process is actually running the build we just shipped, rather
-  # than an old one that survived a failed restart.
-  set +e
-  health_body="$(ssh -i "$VPS_KEY" "$VPS_HOST" "curl -fsS $APP_BASE/api/health" 2>/dev/null)"
-  body_rc=$?
-  set -e
-  [[ $body_rc -eq 0 && -n "$health_body" ]] \
-    || fail "could not READ /api/health to confirm the deployed commit (exit $body_rc).
-      The build identity is unverified — this is not the same as a mismatch, and not
-      the same as a pass. Check the box directly."
+  # than an old one that survived a failed restart. (The body was already read
+  # above, where the starting/ready verdict is checked.)
   live_sha="$(printf '%s' "$health_body" | sed -n 's/.*"commit":"\([^"]*\)".*/\1/p')"
   [[ -n "$live_sha" ]] \
     || fail "/api/health responded but carries NO \"commit\" field, so the running build
@@ -582,7 +596,13 @@ for i in $(seq 1 30); do
   [[ "$live_sha" == "$SHA" ]] \
     || fail "deployed $SHA but /api/health reports '$live_sha' — restart did not take"
 
-  log "deployed $BRANCH@$SHA — healthy, GET / is 200, and /api/health confirms $live_sha"
+  log "deployed $BRANCH@$SHA — /api/health is ${health_status:-ready} (DB reachable, both
+      engine lanes beating), GET / is 200, and the running build is $live_sha"
+  if [[ "$health_status" == "degraded" ]]; then
+    log "NOTE: health reports DEGRADED — the deploy is good but something non-fatal is
+      wrong (usually an expired Kite token, or the signal lane quiet during market
+      hours). Open the cockpit: curl -s $APP_BASE/api/health"
+  fi
   log "REMINDER: the engine is DISARMED on every start. ARM from the cockpit when ready."
   exit 0
 done
@@ -598,7 +618,9 @@ elif [[ $ssh_failures -gt 0 ]]; then
       part of the picture. Check: journalctl -u $SERVICE -n 100"
 else
   fail "service did not become healthy within 60s — the host was reachable for all
-      $probes probes and /api/health last returned ${health_code:-<no response>}. This is
-      the app failing to start, not a network problem.
-      Check: journalctl -u $SERVICE -n 100"
+      $probes probes and /api/health last returned ${health_code:-<no response>}
+      (readiness verdict: ${health_status:-<none read>}). This is the app failing to
+      start, not a network problem. A 503 here names the failed checks in its body —
+      read them first: ssh $VPS_HOST 'curl -sS $APP_BASE/api/health'
+      Then: journalctl -u $SERVICE -n 100"
 fi

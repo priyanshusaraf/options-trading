@@ -136,6 +136,19 @@ class Settings(BaseSettings):
     position_loop_seconds: float = 1.0   # fast risk lane target (Kite quote throttle bounds it ~2s)
     signal_loop_seconds: float = 2.5     # signal-scan scheduler tick
 
+    # /api/health readiness budgets. Deliberately NOT in runtime_config.OVERRIDABLE:
+    # these gate a safety probe, and a DB override that silences it is a footgun
+    # with no upside. See app/engine/readiness.py.
+    #   risk: fatal (non-200) — a stalled fast lane means SL/TP is not firing on
+    #     real money. Much larger than the runner's 30s watchdog ALERT on purpose:
+    #     one risk iteration can legitimately block for the live order-poll window,
+    #     so the Telegram alert should be twitchy and the HTTP verdict should not.
+    #   signal: degraded only, and only while a market is open — the lane
+    #     legitimately stops beating overnight.
+    health_risk_stale_seconds: float = 90.0
+    health_signal_stale_seconds: float = 600.0
+    health_startup_grace_seconds: float = 45.0   # before a never-beaten lane reads as dead
+
     # Manual-trade detection (journal). Read-only: polls the Kite orderbook for
     # trades the OWNER placed by hand and files them for reasoning. It never
     # places, modifies or cancels anything, and never writes the execution ledger.

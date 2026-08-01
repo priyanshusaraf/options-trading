@@ -147,7 +147,10 @@ _AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/session"}
 async def auth_gate(request: Request, call_next):
     """SEC-1: gate every /api/* call behind PT_API_TOKEN. Empty token (the
     default) disables auth entirely — dev/mock/tests are unaffected. Exempt
-    even with a token configured: /api/health (uptime probe) and the Kite
+    even with a token configured: /api/health (the readiness probe — deploy.sh
+    and any uptime monitor must be able to read it before anything is trusted,
+    and neither can hold a token; it answers operational state only — lane ages,
+    armed flag, provider name, DB error text — on a tailnet-only box) and the Kite
     OAuth redirect endpoints (/api/login, /api/session — the browser hits
     these directly and can't attach a header), plus CORS preflight (OPTIONS)
     and anything outside /api."""
@@ -179,14 +182,91 @@ app.include_router(portfolio_routes.router)
 app.include_router(ledger_routes.router)
 
 
+def _probe_db() -> tuple[bool, str]:
+    """Cheapest possible round-trip to the ledger DB. The 2026-07-23 outage ended
+    in DB-pool collapse while /api/health kept answering 200 — the probe has to
+    actually touch the pool to see that."""
+    try:
+        from sqlalchemy import text
+
+        from app.db.session import SessionLocal
+        with SessionLocal() as s:
+            s.execute(text("SELECT 1"))
+        return True, ""
+    except Exception as e:                       # noqa: BLE001 — any failure is a failure
+        return False, f"{type(e).__name__}: {e}"[:200]
+
+
+def _readiness_payload() -> dict:
+    """Measure; `engine.readiness` decides. Every read here is defensive: a probe
+    that 500s on its own bug is strictly worse than the stub it replaced."""
+    from app.engine import readiness
+
+    settings = get_settings()
+    thresholds = readiness.Thresholds(
+        risk_stale_seconds=settings.health_risk_stale_seconds,
+        signal_stale_seconds=settings.health_signal_stale_seconds,
+        startup_grace_seconds=settings.health_startup_grace_seconds,
+    )
+    db_ok, db_error = _probe_db()
+    runner = getattr(app.state, "runner", None)
+
+    if runner is None:
+        # Lifespan has not finished (or failed). The process is serving HTTP with
+        # no engine behind it — exactly the "up but not working" state the stub
+        # could not express.
+        return readiness.evaluate(
+            uptime_seconds=0.0, db_ok=db_ok, db_error=db_error,
+            engine_running=False, lane_ages={}, markets_open=None,
+            thresholds=thresholds,
+        ) | {"engine": {"present": False}}
+
+    try:
+        provider_health = runner.health.as_dict()
+        auth_error = any(c.get("auth_error") for c in provider_health.values())
+    except Exception:
+        provider_health, auth_error = {}, False
+
+    payload = readiness.evaluate(
+        uptime_seconds=runner.uptime_seconds(),
+        db_ok=db_ok,
+        db_error=db_error,
+        engine_running=bool(getattr(runner, "running", False)),
+        lane_ages=runner.lane_ages(),
+        markets_open=runner.markets_open(),
+        provider_auth_error=auth_error,
+        thresholds=thresholds,
+    )
+    # Descriptive context — reported, never part of the verdict. Disarmed is a
+    # normal resting state (it is the default on every boot), not an unhealthy one.
+    payload["engine"] = {
+        "present": True,
+        "armed": bool(getattr(runner, "armed", False)),
+        "provider": getattr(getattr(runner, "provider", None), "name", "unknown"),
+    }
+    payload["provider_health"] = provider_health
+    return payload
+
+
 @app.get("/api/health")
 def health():
-    # NOTE: this is a liveness stub — it reports the process is up and which
-    # build it is, nothing more. It returned 200 throughout both 2026-07 outages.
-    # Making it a real readiness probe (DB reachability, both loop heartbeat ages,
-    # provider status, armed state, non-200 when the fast lane is stale) is
-    # tracked in docs/ROADMAP.md, Workstream F.
-    return {"ok": True, "build": get_build_info()}
+    """Readiness probe. 200 when this process is fit to manage real money, 503
+    when it is not — the whole point being that it CAN say no. It answered 200
+    through both 2026-07 outages, which is why deploy.sh still checks `GET /`
+    separately; that stays true, since a broken SPA mount is invisible from here.
+
+    `ok` and `build` keep their old shape and meaning for existing consumers
+    (deploy.sh parses `build.commit`), except that `ok` now tracks the verdict.
+    """
+    try:
+        payload = _readiness_payload()
+    except Exception as e:                       # noqa: BLE001
+        log.error(f"readiness probe itself failed: {e}")
+        payload = {"ready": False, "status": "unready", "failed_checks": ["probe"],
+                   "checks": [{"name": "probe", "ok": False, "fatal": True,
+                               "detail": f"the readiness probe raised: {e}"}]}
+    body = {"ok": payload["ready"], "build": get_build_info(), **payload}
+    return JSONResponse(body, status_code=200 if payload["ready"] else 503)
 
 
 # ── production: serve the built React SPA from the same origin ──────────────

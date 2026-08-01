@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import time
+from contextlib import contextmanager
 
 import pandas as pd
 from sqlalchemy import func, select
@@ -45,6 +47,7 @@ from app.engine.kite_order_client import exchange_for_segment, product_for_segme
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
+from app.engine import readiness
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
@@ -127,6 +130,15 @@ class EngineRunner:
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
+        # A SECOND heartbeat, on a monotonic wall clock, for the /api/health
+        # readiness probe. `_beat` above is stamped from `provider.now()`, which
+        # under the mock provider is SIMULATED time that jumps a whole candle per
+        # tick — a staleness budget measured against it reports a perfectly
+        # healthy dev engine as stale. Monotonic also survives an NTP step, which
+        # `time.time()` would not. The watchdog keeps using `_beat` (it reasons in
+        # market time); readiness uses this one.
+        self._beat_wall: dict[str, float] = {}
+        self._boot_wall = time.monotonic()      # process start, same clock as above
         self._infra_alert_epoch: dict[str, float] = {}  # throttle infra alerts per key (M1)
         self._gap_cache: tuple | None = None   # (date, open, prev_close) — index gap, once/day (fix D)
         self._gap_logged_day = None            # de-dupe the daily gap-guard alert
@@ -236,15 +248,30 @@ class EngineRunner:
         self.entry_blocks.add(key) if blocked else self.entry_blocks.discard(key)
         log.info(f"{'BLOCKED' if blocked else 'UNBLOCKED'} new entries", instrument=key)
 
+    @contextmanager
     def _upsert_state(self, key: str):
-        """Get the InstrumentState row for `key`, creating it if missing (a freshly
-        added instrument may not have a row yet)."""
-        s = SessionLocal()
-        r = s.get(InstrumentState, key)
-        if r is None:
-            r = InstrumentState(instrument_key=key)
-            s.add(r)
-        return s, r
+        """Yield the InstrumentState row for `key`, creating it if missing (a freshly
+        added instrument may not have a row yet), and commit on a clean exit.
+
+        A context manager rather than a `(session, row)` pair on purpose. The old
+        shape handed an OPEN session back to four callers that each ended with
+        `s.commit(); s.close()` — so any raise in between (a failed commit, a bug
+        in the lines that follow) skipped the close and leaked the session's
+        pooled connection. SQLAlchemy reclaims those on GC, which is why it never
+        surfaced as a clean error: it surfaces as pool pressure under load, with
+        /api/health answering 200 throughout. Closing is now structural, and the
+        caller cannot forget it.
+
+        The commit lives INSIDE the block, so a caller's in-memory bookkeeping
+        after the `with` only runs if the write actually landed.
+        """
+        with SessionLocal() as s:
+            r = s.get(InstrumentState, key)
+            if r is None:
+                r = InstrumentState(instrument_key=key)
+                s.add(r)
+            yield r
+            s.commit()
 
     def set_product(self, key: str, product: str) -> str:
         """Assign an instrument to the options or equity_intraday segment (live-applied).
@@ -253,18 +280,16 @@ class EngineRunner:
         if product == "equity_intraday" and is_mis_blocked(key):
             raise ValueError(f"{key} is not MIS-eligible (no/low intraday leverage) — "
                              f"can't add it to the intraday portfolio")
-        s, r = self._upsert_state(key)
-        r.product = product
-        s.commit(); s.close()
+        with self._upsert_state(key) as r:
+            r.product = product
         self.products[key] = product
         log.info(f"PRODUCT set to {product}", instrument=key)
         return product
 
     def set_priority_flag(self, key: str, flag: bool) -> None:
         """Toggle the watchlist 'purple' priority flag (intraday selection always wins)."""
-        s, r = self._upsert_state(key)
-        r.priority_flag = bool(flag)
-        s.commit(); s.close()
+        with self._upsert_state(key) as r:
+            r.priority_flag = bool(flag)
         if flag:
             self.priority_flags[key] = True
         else:
@@ -274,9 +299,8 @@ class EngineRunner:
     def set_overtrade_flag(self, key: str, flag: bool) -> None:
         """Toggle the watchlist 'red' overtrading flag. Advisory only — the engine
         does NOT change behavior based on it."""
-        s, r = self._upsert_state(key)
-        r.overtrade_flag = bool(flag)
-        s.commit(); s.close()
+        with self._upsert_state(key) as r:
+            r.overtrade_flag = bool(flag)
         if flag:
             self.overtrade_flags[key] = True
         else:
@@ -287,9 +311,8 @@ class EngineRunner:
         """Assign which registered strategy trades this instrument (None = default v3)."""
         from app.strategy.registry import strategy_keys as _keys
         sk = strategy_key if (strategy_key and strategy_key in _keys()) else None
-        s, r = self._upsert_state(key)
-        r.strategy_key = sk
-        s.commit(); s.close()
+        with self._upsert_state(key) as r:
+            r.strategy_key = sk
         if sk:
             self.strategy_keys[key] = sk
         else:
@@ -1517,8 +1540,39 @@ class EngineRunner:
         return True
 
     def _beat_now(self, lane: str, now: float | None = None) -> None:
-        """P3: record a heartbeat for a loop lane at the end of each iteration."""
+        """P3: record a heartbeat for a loop lane at the end of each iteration.
+
+        Two clocks on purpose — see `_beat_wall` in __init__. `now` overrides only
+        the market-time beat (that is what tests drive the watchdog with); the
+        wall-clock beat is always real, because its whole job is to be.
+        """
         self._beat[lane] = self.provider.now().timestamp() if now is None else now
+        self._beat_wall[lane] = time.monotonic()
+
+    def lane_ages(self) -> dict[str, float | None]:
+        """Seconds since each lane last beat, on the wall clock, for the readiness
+        probe. `None` = this lane has never beaten (never started, or died before
+        its first iteration) — which is NOT the same as "beat a long time ago" and
+        must not collapse to a large number."""
+        now = time.monotonic()
+        return {lane: (None if lane not in self._beat_wall
+                       else now - self._beat_wall[lane])
+                for lane in (readiness.LANE_RISK, readiness.LANE_SIGNAL)}
+
+    def uptime_seconds(self) -> float:
+        """Wall-clock seconds since this runner was constructed (≈ process boot)."""
+        return time.monotonic() - self._boot_wall
+
+    def markets_open(self) -> bool | None:
+        """True if ANY enabled instrument is tradable right now; None if we could
+        not tell. The probe needs this to know whether a silent signal lane is a
+        stall or just a closed market — and a failed read must stay `None` rather
+        than guess, or it invents a nightly false alarm."""
+        try:
+            return any(self.provider.is_tradable_now(get_instrument(k))
+                       for k in self.enabled)
+        except Exception:
+            return None
 
     def _lane_stale(self, lane: str, max_age: float, now: float | None = None) -> bool:
         """P3: True if a lane hasn't beaten within max_age seconds (dead/stuck loop)."""

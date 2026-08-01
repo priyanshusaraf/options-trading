@@ -85,12 +85,34 @@ and would trip the dirty-tree guard on the next run.
 1. `backend/.env` is still present and non-empty — **checked before the restart**, so a
    clobber aborts the deploy instead of taking the site down.
 2. `frontend/dist/index.html` still exists (see the `dist/` note below).
-3. `/api/health` returns 200.
-4. `GET /` returns 200. Health alone is not sufficient — a green `/api/health` coexisted
-   with 404s on every page during the `.env` outage.
+3. `/api/health` returns 200 **and its readiness verdict is not `starting`**. Since
+   2026-08-01 this is a real readiness probe, not a liveness stub: it answers **503**
+   when the DB is unreachable, the engine loops are stopped, or the **fast risk lane**
+   has gone stale. The deploy loop keeps polling through a 503 or a `starting` verdict
+   and reports the last one it saw if it times out — so "the app came up but its risk
+   loop died at startup" now fails the deploy instead of passing on the first 200.
+4. `GET /` returns 200. Health alone is **still** not sufficient — the SPA mount is
+   invisible from the health probe, and a green `/api/health` coexisted with 404s on
+   every page during the `.env` outage. Both checks stay.
 5. `/api/health` reports the SHA that was just shipped, proving the restart actually took.
    A process that could not read its `VERSION` reports `"unknown"`, which fails this
    comparison rather than passing silently.
+
+A `degraded` verdict does **not** fail the deploy — it is logged as a note. Degraded means
+something non-fatal is wrong (an expired Kite token; the signal lane quiet during market
+hours). Only the risk lane, the DB, and a stopped engine are fatal, because only they mean
+open positions are unmanaged.
+
+### Reading the probe by hand
+
+```bash
+curl -s localhost:8090/api/health | python3 -m json.tool
+```
+`status` is one of `ok` / `starting` / `degraded` / `unready`; `failed_checks` names what is
+fatally wrong and `checks[].detail` says why in a sentence. `loops.risk.age_seconds` is the
+number to look at first — if it is climbing, stops are not firing. Note the lane ages are
+measured on a **monotonic wall clock**, not the provider clock, so they mean the same thing
+under the mock provider as in production.
 
 ### Why the exclusion list looks the way it does
 

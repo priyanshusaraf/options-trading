@@ -242,8 +242,15 @@ out of sync with reality before.
   2026-07-28, genuinely unattributable). Never collapse the last two. The ORM cannot write a
   NULL — passing `build_sha=None` still stamps `'unknown'` — so NULLs only ever come from the
   migration.
-- **`/api/health` is a liveness stub, not a readiness probe.** It returned 200 through both
-  2026-07 outages. Never treat it as proof a deploy worked — check `GET /` too.
+- **`/api/health` is a readiness probe as of 2026-08-01** — it used to be a liveness stub
+  that returned 200 through both 2026-07 outages. It now answers **503** when the DB is
+  unreachable, the engine loops are stopped, or the **fast risk lane** is stale (stops not
+  firing = unmanaged real money). The signal lane is reported but never fatal: it
+  legitimately stops beating overnight, and deploys run out of hours. Verdict logic is pure
+  in `app/engine/readiness.py`; budgets are static `Settings` (`health_*_seconds`),
+  deliberately NOT `runtime_config`-overridable, so no DB row can silence the probe.
+  **Still check `GET /` too** — a broken SPA mount is invisible from here, which is exactly
+  how the `.env` outage hid.
 - `KITE_*` and `TELEGRAM_*` are deliberately **not** `PT_`-prefixed (`validation_alias`).
 - When adding a tunable knob: add it to `Settings` *and* wire it through `runtime_config` if it
   should be live-editable.

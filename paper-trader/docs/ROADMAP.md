@@ -419,24 +419,62 @@ against B/E/C/D — pick them up when one becomes urgent.
       says so. Runs daily from the signal lane with a flat book; `scripts/prune_db.py`
       does the one-off catch-up and the VACUUM. `/api/storage` makes the growth visible
       in-app, which is what was actually missing.
-- [ ] **DB session hygiene (minor).** Context-manage `_upsert_state` (`runner.py`) and the
-      broker's long-lived session; add `pool_pre_ping`; lower `pool_timeout`.
-- [ ] **Write `deploy.sh`** so the `--exclude .env --exclude '*.db*' --exclude
-      access_token.json` + `--no-o --no-g` guards are mechanical instead of prose, and the
-      post-deploy `curl /` + `curl /api/health` check is part of the script. Two outages so
-      far have come from a human forgetting a flag.
+- [x] **DB session hygiene — DONE 2026-08-01, TDD, NOT yet deployed.** It was not "minor":
+      `_upsert_state` handed an OPEN session back to four callers that each ended with
+      `s.commit(); s.close()`, so any raise in between skipped the close and **leaked the
+      pooled connection**. Reproduced before fixing — a failed watchlist write left
+      `engine.pool.checkedout()` at 1 instead of 0. It is now a `@contextmanager` that
+      commits inside the block and closes structurally, so the four call sites cannot forget;
+      committing inside also means a caller's in-memory bookkeeping only runs if the write
+      landed. Added `pool_pre_ping=True` (a pooled handle can outlive its file — predeploy
+      restore, `prune_db.py` VACUUM) and `pool_timeout=10` (from 30: a request that cannot get
+      a connection in 10s just holds a worker thread while the pool is already exhausted).
+      Tests: `tests/test_db_session_hygiene.py` (9, incl. leak accounting, rollback, and
+      "in-memory state must not advance past a failed write").
+- [ ] **DB session hygiene — the broker's long-lived session (DELIBERATELY DEFERRED).**
+      The other half of the item above, split out rather than silently dropped.
+      `broker.s` is long-lived **by design** and it is load-bearing: E0.2's auto-reanchor had
+      exactly one correct implementation because the write must go through the broker's own
+      session (an Opus review caught a first cut that used a separate session —
+      `expire_on_commit=False` left `broker.capital()` stale at ₹50k, so the next
+      `snapshot()` clobbered the re-anchor back to the synthetic base). Context-managing it
+      is a real refactor of the ledger's identity map, not a hygiene tweak, and it should be
+      done deliberately with the reanchor/snapshot regression tests in front of it — not
+      bundled into a session about connection counts.
+- [x] **`deploy.sh` makes the rsync guards mechanical — DONE (`c3e1ac0`), verified
+      2026-08-01 by reading the script, not by trusting this line.** Every guard this item
+      asked for is in it: `--exclude '.env'` (:42), `access_token.json` (:44), BOTH DB globs
+      `*.db` / `*.db-*` / `*.db.*` (:45-47), `--no-owner --no-group` in `RSYNC_FLAGS` (:317),
+      and the post-deploy `curl /api/health` + a SEPARATE `curl /` (:578-586) that catches the
+      broken-SPA signature health alone cannot see. Two outages came from a human forgetting a
+      flag; none of these are prose any more. This box was left unchecked long after the work
+      landed — the same drift CLAUDE.md warns about, in the file that is supposed to be the
+      cure.
 - [ ] **VPS pending OS reboot** (5 ESM security updates) — owner action, market-closed window.
 - [x] Removed the copy-pasteable rsync at `docs/superpowers/plans/2026-07-10-vps-deployment.md`
       that omitted `--exclude .env`; it now points at `scripts/deploy.sh` (2026-07-28).
-- [ ] **Make `/api/health` a real readiness probe** (build stamp now deployed and verified
-      2026-08-01). It is currently `{"ok": True}` plus the
-      build stamp — a liveness stub that returned 200 throughout *both* 2026-07 outages, which
-      is why the deploy script has to curl `GET /` separately to detect a broken deploy. It
-      should report DB reachability, the heartbeat age of **both** engine loops, provider
-      status, and armed state — and return **non-200 when the fast lane is stale**, since a
-      stalled risk loop means stops are not firing on real money. The engine already collects
-      all of this (`HealthTracker`, `engine/health.py`, the runner's loop timestamps); it just
-      is not exposed. Raised during the 2026-07-28 deploy-hardening review.
+- [x] **`/api/health` is a real readiness probe — DONE 2026-08-01, TDD, NOT yet deployed.**
+      It reports DB reachability, the heartbeat age of **both** engine loops, provider auth
+      status and armed state, and returns **503** when the DB is unreachable, the engine
+      loops are stopped, or the fast risk lane is stale. Verdict logic is pure
+      (`app/engine/readiness.py`, 22 unit tests); wiring is `tests/test_health_endpoint.py`
+      (10 tests). Two findings from the build, both load-bearing:
+      **(a)** the signal lane is reported but is deliberately **never fatal** — it
+      legitimately stops beating overnight (`run_signal_loop` takes the `any_open`-false
+      branch and never reaches `_beat_now`), and `deploy.sh` refuses to run *during* market
+      hours, so a fatal signal lane would have 503'd on every legitimate deploy.
+      **(b)** `_beat_now` stamps `provider.now()`, which under the mock is *simulated* time
+      jumping a candle per tick; a budget measured against it reports a healthy dev engine as
+      stale. The runner now keeps a parallel monotonic beat (`_beat_wall`) that readiness
+      reads, so lane ages mean the same thing in every provider mode.
+      Budgets are static `Settings` (`health_risk_stale_seconds` 90 /
+      `health_signal_stale_seconds` 600 / `health_startup_grace_seconds` 45), deliberately
+      **not** `runtime_config`-overridable so no DB row can silence a safety probe.
+      `deploy.sh` now waits out a `starting` verdict instead of exiting on the first 200 —
+      previously a process whose risk loop died at startup passed the deploy check.
+      **`GET /` stays a separate check**: a broken SPA mount is invisible from this probe.
+      **Acceptance still open:** the 503 path has never been exercised against the live VPS
+      (verified only in-process). Confirm on the next deploy.
 
 ## Parked / deprioritized (deliberate — don't burn sessions here)
 

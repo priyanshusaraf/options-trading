@@ -14,6 +14,17 @@ engine = create_engine(
     f"sqlite:///{_settings.db_path}",
     future=True,
     connect_args={"check_same_thread": False},  # engine task + API threads
+    # A pooled connection can outlive the file it points at: deploy.sh restores a
+    # `.db.predeploy-*`, prune_db.py VACUUMs, a restore swaps the file. Without a
+    # pre-ping the stale handle is handed to whichever request draws it next, and
+    # the error surfaces far from its cause. The ping is one `SELECT 1` on a local
+    # SQLite file — cheaper than the debugging it prevents.
+    pool_pre_ping=True,
+    # Default is 30s. A request that cannot get a connection for 10s is not going
+    # to be saved by waiting 20 more — it is going to hold a worker thread while
+    # the pool is already exhausted, which is how a slow lane becomes an outage.
+    # Fail fast and let it surface (the readiness probe now reports it).
+    pool_timeout=10,
 )
 
 

@@ -69,7 +69,14 @@ def test_auth_disabled_when_token_empty(monkeypatch):
 
 
 def test_health_route_exempt_even_with_token(monkeypatch):
+    """The claim here is EXEMPTION, not health: /api/health must never answer 401.
+
+    It is a readiness probe now (app/engine/readiness.py) and answers 503 unless
+    the engine loops are actually running — this harness constructs a runner but
+    never starts them, so 200 is not the right assertion. Asserting `!= 401` says
+    exactly what this test is for and stays true regardless of the verdict."""
     monkeypatch.setattr(get_settings(), "api_token", "secret-token")
     c, _ = _client()
     res = c.get("/api/health")
-    assert res.status_code == 200
+    assert res.status_code != 401
+    assert res.json()["build"], "the probe answers with a body, not an auth challenge"
