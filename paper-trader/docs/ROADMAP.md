@@ -126,8 +126,23 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
       the variance), and `orchestrator/run.py` passes it. The `search.py` docstring that
       claimed "a wider search *raises* the significance bar" is corrected in place, with the
       note that it was false for as long as it was written.
-- [ ] Implement PBO via CSCV over the existing walk-forward folds (`research/stats/`);
-      gate promotion candidates on PBO ≤ threshold.
+- [x] **PBO via CSCV — DONE 2026-08-01.** `research/stats/pbo.py`, pure and deterministic.
+      PBO answers what the DSR cannot: not "is this Sharpe big enough given N tries" but
+      "does the IN-SAMPLE ranking carry any out-of-sample information at all, or does picking
+      the winner just pick noise?" A search can clear every other gate and still be pure
+      overfit if the ranking scrambles.
+      Computed over CONTIGUOUS equal blocks of the series (default 8) rather than the
+      walk-forward folds, deliberately: CSCV needs 8-16 sub-periods for the combination count
+      to mean anything, while `n_folds` is 3-4. `optimize()` now retains the
+      (sub-period × candidate) `perf_matrix`; the orchestrator gates on `pbo ≤ 0.30` and
+      **fails CLOSED** — a matrix that cannot be evaluated (single candidate, too little
+      data) does not pass, same discipline as `research/guards.py`.
+      **Two properties pinned by test, both measured rather than assumed:** pure noise
+      averages **PBO 0.453 over 40 draws** (a statistic that reported "clean" on randomness
+      would launder noise into confidence), and a selection driven purely by local noise —
+      each strategy spiking in one distinct block — scores **1.000**. Note the per-draw
+      spread on noise is 0.09-0.89, so the null is asserted on the MEAN across draws; a
+      per-seed assertion would be asserting something false. 16 tests.
 - [ ] Wire `stats/neff.py` (correlated-universe effective-N) into the evidence gate.
 - [x] **Optimizer objective — ALREADY DONE (`1ec5188`), verified by reading the code
       2026-08-01, not by trusting this file.** `_objective` is `metrics.consistency ×

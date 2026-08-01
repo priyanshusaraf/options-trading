@@ -36,6 +36,7 @@ from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
 from research.stats.dsr import expected_max_sharpe
+from research.stats.pbo import pbo
 from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
 from research.strategy.builder.describe import explanation_for
@@ -78,7 +79,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
                    qualifier_version="q1", optimizer_version="none",
                    validator_version="v1", scoring_version="s1",
-                   sibling_trials: int = 1) -> dict:
+                   sibling_trials: int = 1, pbo_threshold: float = 0.30) -> dict:
     """`datasets` = list of (instrument, Dataset). Returns a report dict.
 
     `sibling_trials` — how many OTHER candidates were searched alongside this one in
@@ -157,6 +158,18 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                         ie.instrument_key, len(opt.trials), n_folds, len(opt.oos_trades))
             gates = gates_from_folds(opt.per_fold_oos, min_oos_trades=min_trades,
                                      min_positive_fold_frac=min_positive_fold_frac, seed=seed)
+            # PBO asks what the DSR cannot: does the IN-SAMPLE ranking carry any
+            # out-of-sample information at all, or does picking the winner just
+            # pick noise? A search can clear every gate above and still be pure
+            # overfit if the ranking scrambles. Fails CLOSED — a matrix that
+            # cannot be evaluated does not pass.
+            if opt.perf_matrix:
+                res = pbo(opt.perf_matrix, n_splits=len(opt.perf_matrix))
+                gates["pbo"] = {"passed": res.pbo <= pbo_threshold,
+                                "value": round(res.pbo, 3)}
+            else:
+                gates["pbo"] = {"passed": False,
+                                "value": "not computable (single candidate / too little data)"}
             passed = gates_passed(gates)
             # var_sr is the OTHER half of DSR deflation: expected_max_sharpe()
             # returns 0 whenever it is 0, so passing n_trials alone left the

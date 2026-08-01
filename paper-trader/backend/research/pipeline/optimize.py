@@ -50,6 +50,10 @@ class OptimizationResult:
     oos_trades: list          # pooled BTTrade across folds under the selected params
     oos_metrics: object       # BTMetrics of the pooled OOS record
     n_trials: int             # folds x candidates — the DSR deflation count
+    # (sub-period x candidate) net P&L, the input CSCV/PBO needs. Empty when there
+    # was too little data or only one candidate — PBO is a statement about
+    # SELECTION, so it is undefined with nothing to select between.
+    perf_matrix: list = dataclasses.field(default_factory=list)
 
     @property
     def var_sr(self) -> float:
@@ -92,8 +96,32 @@ def _key(params: dict):
     return tuple(sorted(params.items()))
 
 
+def _performance_matrix(sigs, candidates, inst, seg, capital, rm, n_blocks: int) -> list:
+    """(sub-period x candidate) net P&L — the CSCV input for PBO.
+
+    Deliberately computed over CONTIGUOUS equal blocks of the whole series rather
+    than reusing the walk-forward folds: CSCV wants many sub-periods (8-16) to have
+    enough combinations to be meaningful, while n_folds is 3-4. Costs n_blocks x
+    n_candidates extra replays, which is why it is bounded and skipped when there is
+    nothing to select between."""
+    n = min((len(s) for s in sigs.values()), default=0)
+    block = n // n_blocks
+    if block < 1 or len(candidates) < 2:
+        return []
+    matrix = []
+    for b in range(n_blocks):
+        row = []
+        for c in candidates:
+            sl = sigs[_key(c)].iloc[b * block:(b + 1) * block].reset_index(drop=True)
+            trades = kernels.run_trades(sl, inst, seg, capital, rm)
+            row.append(float(sum(t.net_pnl for t in trades)))
+        matrix.append(row)
+    return matrix
+
+
 def optimize(candles, inst, strategy, *, space=None, n_folds: int = 3,
-             capital: float = 50_000.0, base_params=None) -> OptimizationResult:
+             capital: float = 50_000.0, base_params=None,
+             pbo_blocks: int = 8) -> OptimizationResult:
     base = dict(base_params if base_params is not None else strategy.default_params)
     space = space if space is not None else param_space(strategy.key)
     candidates = [c for c in grid(space) if is_valid(strategy.key, {**base, **c})] or [{}]
@@ -141,4 +169,6 @@ def optimize(candles, inst, strategy, *, space=None, n_folds: int = 3,
     return OptimizationResult(
         trials=trials, per_fold_selected=per_fold_selected, per_fold_oos=per_fold_oos,
         oos_trades=pooled_oos, oos_metrics=kernels.compute_metrics(pooled_oos, capital),
-        n_trials=n_folds * len(candidates))
+        n_trials=n_folds * len(candidates),
+        perf_matrix=_performance_matrix(sigs, candidates, inst, seg, capital, rm,
+                                        pbo_blocks))
