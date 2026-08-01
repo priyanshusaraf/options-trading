@@ -1546,14 +1546,53 @@ class EngineRunner:
         booked = {p.tradingsymbol for p in self.broker.open_positions()}
         untracked = [p["tradingsymbol"] for p in acct
                      if int(p.get("quantity", 0) or 0) != 0 and p.get("tradingsymbol") not in booked]
-        if untracked:
-            log.warn(f"STARTUP: {len(untracked)} account position(s) NOT in the bot book: "
-                     f"{untracked} — may be yours (discretionary) or a lost bot fill; the bot "
-                     f"will NOT touch them. Verify on Zerodha.", event="STARTUP_UNTRACKED")
+        if not untracked:
+            return []
+
+        # Classify rather than dump. `positions()` carries no bot tag, so ownership can't
+        # be proven — but the ORDER JOURNAL can distinguish the two cases that matter, and
+        # they have opposite urgency:
+        #   • the symbol appears in the bot's own journal → a fill the bot LOST. That is a
+        #     phantom-book risk (invariant #2) and deserves a real alert every time.
+        #   • it does not → almost certainly the owner's discretionary trade. Informational.
+        # Before this, both raised the same ERROR + Telegram on every single restart, so
+        # NETWEB and DIXON — the owner's own positions — cried wolf indefinitely and would
+        # have buried a genuine lost fill arriving in the same channel.
+        bot_symbols = self._journaled_symbols_today()
+        lost = [s for s in untracked if s in bot_symbols]
+        yours = [s for s in untracked if s not in bot_symbols]
+
+        if yours:
+            log.info(f"STARTUP: {len(yours)} account position(s) not in the bot book and not "
+                     f"in its order journal: {yours} — treated as YOUR discretionary "
+                     f"positions; the bot will not touch them.", event="STARTUP_UNTRACKED_YOURS")
+        if lost:
+            log.error(f"STARTUP: {len(lost)} account position(s) NOT in the bot book but "
+                      f"PRESENT in the bot's order journal: {lost} — a fill the bot lost. "
+                      f"The book and the account disagree; reconcile before arming.",
+                      event="STARTUP_UNTRACKED")
             self._alert_infra("startup_untracked",
-                              f"{len(untracked)} account position(s) not tracked by the bot at "
-                              f"startup: {untracked} — verify on Zerodha (the bot won't touch them).")
+                              f"{len(lost)} position(s) the bot ORDERED but is not tracking: "
+                              f"{lost} — the book and your account disagree. Reconcile before "
+                              f"arming; the bot won't touch them.")
         return untracked
+
+    def _journaled_symbols_today(self) -> set[str]:
+        """Symbols the bot itself placed orders for today, from the order journal.
+
+        Fails CLOSED — on any error every untracked position is treated as a possible lost
+        bot fill and alerted, because under-alerting here risks a phantom book."""
+        try:
+            from app.db.models import OrderJournal
+            today = self.provider.now().date()
+            with SessionLocal() as s:
+                rows = s.query(OrderJournal.tradingsymbol, OrderJournal.placed_at).all()
+            return {sym for sym, placed in rows
+                    if placed is not None and placed.date() == today}
+        except Exception as e:
+            log.warn(f"order-journal read failed during startup reconcile: {e}",
+                     event="STARTUP_UNTRACKED")
+            return {p["tradingsymbol"] for p in (self.provider.account_positions() or [])}
 
     def _rollback_session(self) -> None:
         """H3: discard any half-applied dirty state after a mid-iteration exception, so

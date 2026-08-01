@@ -245,18 +245,46 @@ class LiveBroker(PaperBroker):
         return recovered
 
     def _recover_tag_sweep(self) -> None:
-        """Surface any tag=pt-bot exchange order with NO journal row (a crash between the
-        journal write and the placement ack). Never auto-books — alerts to verify."""
+        """Surface any tag=pt-bot exchange order the bot cannot account for (a crash
+        between the journal write and the placement ack). Never auto-books — alerts to
+        verify.
+
+        "Cannot account for" means: not in `order_journal` AND not a resting protective
+        stop recorded on a position. The protective SL-M is placed with the same tag but
+        is tracked in `positions.gtt_trigger_id`, so a journal-only check reported every
+        one of the bot's own stops as an orphan — nine false alarms and nine Telegram
+        messages on EVERY restart through July. That is worse than useless: this is the
+        alert that guards against a real position the bot has lost track of, and an alert
+        that cries wolf nine times a day is one nobody reads.
+
+        Order ids are compared as strings: Kite has returned them as both ints and
+        strings, and a type mismatch would make every bot order look untracked."""
         try:
             orders = self.client.orders()
-        except Exception:
+        except Exception as e:
+            # "Failed to look" must never read as "found nothing".
+            log.error(f"RECOVER: could not read the order book ({e}) — orphaned-order "
+                      f"check DID NOT RUN this start", event="RECOVER_SWEEP_FAIL")
+            self._notify(f"⚠️ could not read the Zerodha order book ({e}) — the bot could "
+                         f"not check for orphaned orders this start; verify manually.")
             return
-        known = {r.order_id for r in self.s.scalars(select(OrderJournal)).all() if r.order_id}
+
+        def sid(v) -> str:
+            return "" if v is None else str(v)
+
+        known = {sid(r.order_id) for r in self.s.scalars(select(OrderJournal)).all()
+                 if r.order_id}
+        # Resting protective stops of positions still open …
+        known |= {sid(p.gtt_trigger_id) for p in self.s.scalars(select(Position)).all()
+                  if p.gtt_trigger_id}
+        known.discard("")
+
         for o in orders or []:
-            if o.get("tag") == TAG and o.get("order_id") not in known:
-                log.error(f"RECOVER: tagged order {o.get('order_id')} ({o.get('tradingsymbol')}) "
+            oid = sid(o.get("order_id"))
+            if o.get("tag") == TAG and oid not in known:
+                log.error(f"RECOVER: tagged order {oid} ({o.get('tradingsymbol')}) "
                           f"has no journal row — verify on Zerodha", event="RECOVER_UNTRACKED")
-                self._notify(f"⚠️ a bot-tagged order ({o.get('order_id')}) has no journal record "
+                self._notify(f"⚠️ a bot-tagged order ({oid}) has no journal record "
                              f"— verify on Zerodha; the bot won't touch it.")
 
     @staticmethod
@@ -700,6 +728,7 @@ class LiveBroker(PaperBroker):
                                                pos.stop_price, side=side, tag=TAG)
             pos.gtt_trigger_id = oid
             self.s.commit()
+            self._journal_stop(pos, oid, side)
             log.info(f"SL-M stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (order {oid})",
                      instrument=pos.instrument_key, event="STOP_PLACE")
         except Exception as e:
@@ -710,6 +739,31 @@ class LiveBroker(PaperBroker):
                                   instrument=pos.instrument_key)
             self._notify(f"⚠️ SL-M stop NOT placed for {pos.tradingsymbol} — "
                          f"bot-managed stop only ({e})")
+
+    def _journal_stop(self, pos, order_id, side: str) -> None:
+        """Record a resting protective stop in the order journal.
+
+        The journal's contract is "every real order the bot places", and the SL-M was the
+        one exception — tracked only on the position, which meant that once the position
+        closed, its (cancelled or filled) stop still sitting in the day's order book
+        became unattributable and was reported as an orphan on every restart until
+        midnight. Rows are written TERMINAL/RESTING deliberately: `recover_journal()`
+        replays WORKING rows through the ENTRY/EXIT state machine, and a protective stop
+        belongs to neither — its lifecycle is owned by `ensure_stop_protection` and the
+        external-fill reconciliation. This row exists to make the order ACCOUNTABLE, not
+        to hand it a second owner."""
+        try:
+            self.s.add(OrderJournal(
+                order_id=str(order_id), tradingsymbol=pos.tradingsymbol,
+                instrument_key=pos.instrument_key, side=side, kind="equity",
+                intent="STOP", qty=pos.qty,
+                context_json=json.dumps({"position_id": pos.id,
+                                         "stop_price": pos.stop_price}),
+                status="TERMINAL", resolution="RESTING",
+                placed_at=self.provider.now()))
+            self.s.commit()
+        except Exception as e:
+            log.error(f"journal stop record failed: {e}", event="JOURNAL_FAIL")
 
     def _cancel_equity_stop(self, oid, sym: str = "") -> bool:
         """Cancel a resting SL-M protective stop. Returns True on success (or nothing to
