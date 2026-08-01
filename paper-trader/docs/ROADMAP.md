@@ -5,10 +5,37 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`d4dfd86`+**,
-deployed 2026-08-01 via `scripts/deploy.sh`, exit 0, 1,3xx tests passed in-deploy — confirmed by
-`curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
-`research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
+**Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS running **`8cee4e9`**,
+deployed via `scripts/deploy.sh` (exit 0) and confirmed by `curl /api/health` on the box.
+Suites: **1,618** backend (`tests` + `research_tests`) + **143** frontend, `dryrun.py 700`
+LEDGER OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
+
+> **2026-08-01/02 — a long autonomous session. 52 commits, every one deployed and verified.**
+> What changed, and what did NOT:
+>
+> **Phase 1 (stabilization) is fully verified**, not merely read: readiness probe
+> (`/api/health` can now say no), a real connection leak in `_upsert_state`, the candle
+> validation seam, feed-quality reporting, the backtester audit (slippage was entirely
+> unmodelled on the spot path), a timezone audit, replay mode, and the deterministic-execution
+> audit — which found the **kill switch** could abort halfway and leave positions open while
+> looking like success.
+>
+> **Workstream A (research plane) is complete, Phases 0–5.** The headline finding: DSR
+> deflation had **never engaged** — `var_sr` was computed nowhere, so the lab silently
+> overstated every finding it made while a docstring claimed otherwise. **Treat any Finding
+> in `research.db` predating 2026-08-01 as unvalidated, not as a baseline.**
+>
+> **Workstream E2 (index futures) is complete and OFF.** All twelve build steps, ledger
+> paisa-exact through profit/loss/short/force-flat round trips with the flag ON in test.
+> Step 13 (owner review) is the only thing between it and live. **E3's carry model** is built
+> and off; its lifecycle semantics need owner intent, not more code.
+>
+> **The pattern worth carrying forward:** seven mechanisms were found built, correct, and
+> wired to NOTHING (`var_sr`, `neff`, `retest_priority`, new blocks the sampler couldn't
+> reach, `/api/health` + `/api/storage` data no screen showed, `PaperBroker.close()`, and
+> `edge_weights()` — the last one committed during this very session, hours after the pattern
+> was named). Unit tests pass happily on code with no callers.
+> `tests/test_no_unconsumed_mechanisms.py` now fails the build on the eighth.
 
 Live probe at deploy time (Saturday, markets shut) — worth keeping, because it is the
 scenario that would have broken a naive readiness probe:
@@ -56,7 +83,21 @@ correctly reads `idle`, not `stale`. A fatal signal lane would have 503'd this d
 > real trades and 45 of those exits were the owner closing by hand; until the bot's own exits
 > are allowed to run and be measured, "autonomous" is not a claim this project can make. No
 > amount of engineering substitutes for this, and it is owner-only: it costs five sessions of
-> not intervening. `TARGET` has fired zero
+> not intervening.
+>
+> **What to check on the next trading session, in order** (all three were built during the
+> 2026-08-01/02 session and NONE could be observed on a closed Saturday market — absence of
+> evidence, not evidence of absence):
+> 1. **Connect Kite**, then `curl /api/status` → `ledger_drift` should appear and sit near
+>    zero. The ledger-honesty fix is deployed but its effect has never been seen: the
+>    re-anchor reads live Kite funds, so with no valid token `_account_funds` was `None` and
+>    the field was simply absent.
+> 2. `curl /api/health` → `provider_feed`, and grep the log for `FEED_QUALITY`. This is the
+>    first real answer to "is Kite's candle history actually dirty?" — the validator has been
+>    repairing silently and nobody has ever seen the report.
+> 3. The retuned **150 / 0.7** give-back lock takes its first live session.
+>
+> `TARGET` has fired zero
 > times in 72 real trades and 45 of those exits were the owner closing by hand — until the
 > bot's own exits are allowed to run and measured, "autonomous" is not a claim this
 > project can make.
