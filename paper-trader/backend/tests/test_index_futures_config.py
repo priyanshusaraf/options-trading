@@ -72,3 +72,17 @@ def test_an_unknown_segment_does_not_silently_cost_zero():
     """A typo'd segment name must not read as a free trade."""
     known = compute_charges("NFO_FUT", "BUY", 24_000.0, 50)["total"]
     assert known > 0
+
+
+def test_the_margin_target_can_actually_buy_one_lot():
+    """A default too small for a single lot would make the segment look BROKEN
+    rather than off — it would silently never trade, which is a worse failure
+    than either state. One NIFTY lot is ~₹18 lakh of notional, so at the 12%
+    estimate it blocks ~₹2.1 lakh."""
+    s = _defaults()
+    one_lot_margin = 24_000.0 * 75 * s.index_futures_margin_pct
+    assert s.index_futures_max_margin >= one_lot_margin, (
+        f"₹{s.index_futures_max_margin:,.0f} target cannot fund one lot "
+        f"(~₹{one_lot_margin:,.0f})")
+    assert s.index_futures_max_margin < 2 * one_lot_margin, \
+        "the default should reach one lot, not two"

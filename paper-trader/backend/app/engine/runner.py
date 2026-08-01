@@ -1279,6 +1279,102 @@ class EngineRunner:
                         self.state[pickk.instrument_key]["position"] = p.to_dict() if p else None
                 for c, reason in sel.skipped:
                     log.info(f"intraday signal dropped — {reason}", instrument=c.instrument_key)
+        self._process_futures_entries(now)
+
+    def _process_futures_entries(self, now) -> None:
+        """Open index-futures entries. A separate method, called last, so the
+        equity and options paths above are untouched by it.
+
+        Returns immediately unless `index_futures_enabled` — which is False by
+        default and gated on owner review. Every guard the equity path applies is
+        applied here too, plus two that are specific to futures: the delivery
+        window, and a margin sizer that REFUSES rather than estimates.
+        """
+        if not self.params.get("index_futures_enabled",
+                               self.settings.index_futures_enabled):
+            return
+        from app.core import market_hours
+        from app.engine.delivery_calendar import (CashSettledCalendar,
+                                                  no_delivery_window)
+
+        open_futs = [p for p in self.broker.open_positions()
+                     if p.segment == "index_futures"]
+        cap = int(self.params.get("index_futures_max_positions",
+                                  self.settings.index_futures_max_positions))
+        slots = cap - len(open_futs)
+        if slots <= 0:
+            return
+        if self._entries_halted(now):
+            return
+        held = {p.instrument_key for p in open_futs}
+        sizer = self._futures_margin_sizer()
+        target = float(self.params.get("index_futures_max_margin",
+                                       self.settings.index_futures_max_margin))
+        floor = float(self.params.get("index_futures_min_margin",
+                                      self.settings.index_futures_min_margin))
+        buf = float(self.params.get("index_futures_square_off_buffer_minutes",
+                                    self.settings.index_futures_square_off_buffer_minutes))
+
+        for key, st in list(self.state.items()):
+            if slots <= 0:
+                break
+            if key in held:
+                continue
+            direction = ("LONG" if st.get("long_entry") else
+                         "SHORT" if st.get("short_entry") else None)
+            if direction is None:
+                continue
+            inst = self._resolve_or_skip(key)
+            if inst is None or not getattr(inst, "has_options", False):
+                continue      # index futures exist only for derivative-eligible names
+            if not self.armed:
+                log.info(f"DISARMED — futures signal ready, not taking {key}",
+                         instrument=key, event="DISARMED_SKIP")
+                continue
+            expiry = getattr(inst, "expiry", None) or now.date()
+            # Delivery guard BEFORE anything else: never OPEN into a window we
+            # would immediately have to force-close out of.
+            if self.params.get("index_futures_delivery_guard", True):
+                try:
+                    safe = no_delivery_window(key, now.date(), expiry,
+                                              CashSettledCalendar())
+                except Exception:
+                    safe = False
+                if not safe:
+                    log.warn(f"FUTURES skip — {key} is inside its delivery window",
+                             instrument=key, event="DELIVERY_SKIP")
+                    continue
+            # Never open inside the force-flat window — the position would be
+            # closed minutes later, paying both legs' charges for nothing.
+            mtc = market_hours.minutes_to_close(inst.spot_exchange, now)
+            if mtc is not None and mtc <= buf:
+                continue
+            price = self.provider.get_futures_ltp(inst, expiry)
+            if not price or price <= 0:
+                log.info(f"FUTURES skip — no futures price for {key}",
+                         instrument=key, event="FUTURES_NO_PRICE")
+                continue
+            sized = sizer(inst, direction, float(price),
+                          int(getattr(inst, "lot_size", 1) or 1), target)
+            if sized is None:
+                log.info(f"FUTURES skip — no real margin quote for {key}",
+                         instrument=key, event="FUTURES_NO_MARGIN")
+                continue
+            qty, margin = sized
+            if margin < floor or margin > self.deployable_cash():
+                continue
+            pos = self.broker.open_futures_position(
+                inst, direction, float(price), qty, "NFO_FUT",
+                f"FUTURES {direction}", now, expiry, margin=margin,
+                params=self.params,
+                strategy_key=self.strategy_keys.get(key))
+            if pos is None:
+                continue
+            slots -= 1
+            if self.params.get("notify_enabled", True):
+                self.notifier.opened(pos)
+            if key in self.state:
+                self.state[key]["position"] = pos.to_dict()
 
     # ── overnight holding (option buying) ─────────────────────────────────
     # ── scheduled-event risk ─────────────────────────────────────────────────

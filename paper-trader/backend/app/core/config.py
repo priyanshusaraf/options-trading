@@ -224,8 +224,13 @@ class Settings(BaseSettings):
     # review first), not something a deploy should be able to do by accident.
     index_futures_enabled: bool = False
     index_futures_max_positions: int = 1
-    index_futures_max_margin: float = 25_000.0   # target SPAN+exposure per position
-    index_futures_min_margin: float = 5_000.0    # dust floor
+    # ONE NIFTY lot is ~₹18 lakh of notional, so at the 12% estimate below it
+    # blocks roughly ₹2.1 lakh of margin. An earlier ₹25,000 default could not
+    # have bought a single lot — the segment would have looked BROKEN rather than
+    # off, which is a worse failure than either. Sized so one lot is reachable
+    # and a second is not; the flag still gates everything.
+    index_futures_max_margin: float = 250_000.0  # target SPAN+exposure per position
+    index_futures_min_margin: float = 50_000.0   # dust floor — below one lot, don't bother
     # Paper-mode SPAN+exposure ESTIMATE as a fraction of notional. A flagged
     # approximation: real SPAN is portfolio-scanned and instrument-specific, so
     # live sizing must use a broker order_margins() quote and this value is only
