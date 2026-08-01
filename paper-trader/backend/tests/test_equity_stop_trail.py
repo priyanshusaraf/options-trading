@@ -25,10 +25,26 @@ def _runner_with_long_equity():
 
 def test_lockstep_ratchet_syncs_the_exchange_stop():
     r, pos, calls = _runner_with_long_equity()
+    # Isolate the LOCKSTEP ratchet: with the give-back lock off, the stop level is the
+    # ratchet's alone. (The two floors interact — see the next test — and this one is
+    # about the exchange-sync wiring, not about which floor wins.)
+    r.params["intraday_profit_lock_threshold"] = 0.0
     pos.last_premium = 102.0            # +₹1000 = 5 steps → stop ratchets 99 → 101
     r._apply_lockstep(pos)
     assert pos.stop_price == 101.0      # the software stop tightened
     assert calls == [101.0]             # ...and was pushed to the exchange backstop
+
+
+def test_profit_lock_floor_wins_when_it_is_tighter_than_the_ratchet():
+    """C-P2 (2026-08-01) retuned the give-back lock to ₹150 × 0.7, which on the worked
+    example floors the stop at 100 + 0.7×2 = 101.40 — ABOVE the lockstep's 101.00. The
+    tighter of the two floors must win, and it must reach the exchange backstop too: a
+    software stop the resting SL-M doesn't know about protects nothing."""
+    r, pos, calls = _runner_with_long_equity()
+    pos.last_premium = 102.0
+    r._apply_lockstep(pos)
+    assert pos.stop_price == 101.4
+    assert calls == [101.4]
 
 
 def test_lockstep_flat_does_not_touch_the_exchange_stop():
