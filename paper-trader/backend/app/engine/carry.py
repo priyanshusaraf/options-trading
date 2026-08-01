@@ -91,3 +91,20 @@ def accrued_to_date(*, position_value: float, margin_paid: float,
     """
     return carry_cost(position_value=position_value, margin_paid=margin_paid,
                       entry=entry, exit_=today, annual_rate=annual_rate)
+
+
+def holding_expired(entry: dt.date, today: dt.date, max_days: int) -> bool:
+    """True if a funded position has outlived its cap and must be closed.
+
+    A funded position is not a forever position. Interest accrues every calendar
+    day regardless of whether anyone is paying attention, so an MTF position that
+    nobody closes bleeds money indefinitely — the only segment here with that
+    property. The cap is the backstop against a position that is simply forgotten.
+
+    `max_days <= 0` disables the cap. That is deliberate rather than an oversight:
+    the owner may want an indefinite hold, and a hard-coded ceiling would be this
+    module deciding a lifecycle question it has no business deciding.
+    """
+    if max_days is None or max_days <= 0:
+        return False
+    return days_held(entry, today) > int(max_days)

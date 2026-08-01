@@ -120,3 +120,25 @@ def test_funded_and_margined_are_different_ideas():
 def test_the_segment_is_off_by_default():
     from app.core.config import Settings
     assert Settings(_env_file=None).mtf_enabled is False
+
+
+# ── MTF must never be caught by the intraday force-flat ─────────────────────
+
+def test_mtf_is_excluded_from_the_intraday_squareoff():
+    """The invariant that makes MTF possible at all.
+
+    `square_off_intraday` flattens equity_intraday and index_futures near the
+    close. If MTF were ever caught by it, every funded position would be
+    liquidated the day it was opened — destroying the entire point of a
+    multi-day segment, while looking like normal end-of-day housekeeping.
+
+    Asserted against the source because it is an ABSENCE, and absences are what
+    refactors delete: someone widening that filter to 'all leveraged segments'
+    would break this without touching anything named mtf."""
+    import inspect
+    from app.engine.runner import EngineRunner
+    src = inspect.getsource(EngineRunner.square_off_intraday)
+    assert '"equity_intraday", "index_futures"' in src
+    assert "mtf" not in src, (
+        "MTF reached the intraday force-flat — funded positions would be "
+        "liquidated the day they are opened")

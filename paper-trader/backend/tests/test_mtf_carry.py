@@ -113,3 +113,35 @@ def test_a_realistic_hold_costs_a_real_amount():
     cost = carry_cost(position_value=100_000.0, margin_paid=25_000.0,
                       entry=MON, exit_=MON + dt.timedelta(days=29))
     assert 800 < cost < 1_100, f"got ₹{cost}"
+
+
+# ── a funded position is not a forever position ─────────────────────────────
+
+def test_a_position_within_its_cap_is_not_expired():
+    from app.engine.carry import holding_expired
+    assert holding_expired(MON, MON + dt.timedelta(days=10), 30) is False
+
+
+def test_a_position_past_its_cap_is_expired():
+    """Interest accrues every calendar day whether or not anyone is watching.
+    MTF is the only segment where a forgotten position bleeds money indefinitely,
+    so the cap is the backstop against simply not noticing."""
+    from app.engine.carry import holding_expired
+    assert holding_expired(MON, MON + dt.timedelta(days=31), 30) is True
+
+
+def test_the_cap_uses_the_same_inclusive_day_count_as_the_billing():
+    """If the cap and the interest disagreed about what a day is, a position
+    could be billed for a day it was not allowed to be held."""
+    from app.engine.carry import days_held, holding_expired
+    assert days_held(MON, MON + dt.timedelta(days=29)) == 30
+    assert holding_expired(MON, MON + dt.timedelta(days=29), 30) is False
+    assert holding_expired(MON, MON + dt.timedelta(days=30), 30) is True
+
+
+def test_a_zero_cap_means_no_cap():
+    """Deliberate, not an oversight: the owner may want an indefinite hold, and
+    a hard-coded ceiling would be this module deciding a lifecycle question it
+    has no business deciding."""
+    from app.engine.carry import holding_expired
+    assert holding_expired(MON, MON + dt.timedelta(days=9999), 0) is False
