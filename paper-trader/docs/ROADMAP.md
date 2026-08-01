@@ -334,12 +334,22 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
       regime distribution per instrument. Real output: COPPERM 64 `trend_hi` vs CRUDEOIL 81
       `chop_hi` on the same window — the instruments are in visibly different markets, which
       no aggregate statistic shows.
-- [ ] **Let the generator CONDITION on regime — NOT DONE, and deliberately separated.**
-      Reporting a regime breakdown is diagnostic; *selecting* per regime is a search over N
-      regimes and therefore N more chances to be lucky. `regime.regime_trial_multiplier` is
-      built and tested ready for it, but until generation actually conditions, feeding it
-      into `sibling_trials` would tell the DSR a larger search happened than did. Wire them
-      together in the same change, never separately.
+- [x] **Generator CONDITIONS on regime — DONE 2026-08-01, wired together with the
+      deflation as promised.** New `regime_is(code)` block lets a composition say "only trade
+      this idea in high-volatility trends", and the sampler draws it. Choosing WHICH of four
+      regimes is itself a selection, so `run_generated` multiplies `sibling_trials` by 4 —
+      but **only for compositions that actually use the block**, because inflating every
+      candidate merely because the feature exists would deflate ideas that never made that
+      choice.
+      This is why Phase 5 was gated behind Phase 0: before deflation genuinely engaged (it
+      did not until today), regime conditioning would have been a machine for manufacturing
+      regime-specific mirages.
+      Safety property pinned by test: a frame the labeller cannot read yields **no signal**,
+      never an unconditional one. A broken filter must narrow the strategy to nothing rather
+      than silently deleting the condition it was added to impose. The four blocks are also
+      proven to partition the labelled bars exactly — mutually exclusive, jointly covering
+      everything that is not `unknown`.
+      **Workstream A is now complete: Phases 0 through 5.**
 
 ### Isolation rules for ALL research-plane work (verified holding 2026-07-20)
 1. `app/` may import `research/` **only** via the read-only bridge

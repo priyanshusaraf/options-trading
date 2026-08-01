@@ -39,6 +39,20 @@ def _persist_record(session, strat) -> None:
     session.flush()
 
 
+def _regime_multiplier(comp) -> int:
+    """4 if this composition conditions on a regime, else 1.
+
+    Deliberately keyed on the composition ACTUALLY USING the block, not on the
+    feature being available: inflating every candidate's trial count because
+    regime blocks exist would deflate ideas that never made that choice."""
+    try:
+        from research.regime import REGIMES
+        blob = str(comp.to_dict() if hasattr(comp, "to_dict") else comp)
+        return len(REGIMES) if "regime_is(" in blob else 1
+    except Exception:
+        return 1
+
+
 def run_generated(session, source, instruments, interval, *, limit=24,
                   git_commit="unknown", program="Generated strategies",
                   min_trades=20, n_folds=4, min_positive_fold_frac=0.6,
@@ -94,7 +108,12 @@ def run_generated(session, source, instruments, interval, *, limit=24,
             # Every composition in this session is a trial for every other one: we
             # keep the best of `len(compositions)`, so scoring each as if it were
             # the only attempt understates the selection bias by exactly that factor.
-            sibling_trials=len(compositions))
+            # Choosing WHICH regime to condition on is a selection over the four
+            # regimes, on top of the composition search. Phase 5 was gated behind
+            # Phase 0 precisely so this could be counted: before deflation
+            # actually engaged, regime conditioning would have been a machine for
+            # manufacturing regime-specific mirages.
+            sibling_trials=len(compositions) * _regime_multiplier(comp))
         # Attach the knowledge state so the report explains WHY this run searched
         # what it did — see report.render_markdown.
         try:

@@ -241,6 +241,31 @@ def body_frac_gt(df, frac):
     return _b((rng > 0) & ((body / rng.where(rng > 0)) > float(frac)))
 
 
+# ── regime conditioning (Phase 5) ────────────────────────────────────────────
+def regime_is(df, code):
+    """True on bars sitting in the selected market regime.
+
+    `code` indexes `research.regime.REGIMES` (trend_hi | trend_lo | chop_hi |
+    chop_lo) and clamps like every other choice parameter, so a generated
+    composition can say "only trade this idea in high-volatility trends".
+
+    The labels are computed from backward-looking windows only (see
+    `research/regime.py`), so conditioning on regime cannot leak the future. That
+    property is what makes this block admissible at all — a regime label built
+    with hindsight would leak invisibly, since the leak would live in the
+    labelling rather than in any strategy.
+    """
+    from research.regime import REGIMES, label_regimes
+    kind = REGIMES[_clamp_code(code, len(REGIMES))]
+    try:
+        return _b(label_regimes(df) == kind)
+    except Exception:
+        # A frame this labeller cannot read means NO signal, never an
+        # unconditional one: a broken filter must narrow the strategy to nothing
+        # rather than silently removing the condition it was added to impose.
+        return pd.Series(False, index=df.index)
+
+
 @dataclasses.dataclass(frozen=True)
 class BlockSpec:
     fn: Callable
@@ -301,6 +326,9 @@ BLOCKS: dict[str, BlockSpec] = {
                                   lambda a: 2, (0.5,), "momentum"),
     "body_frac_gt":     BlockSpec(body_frac_gt, (("frac", "pct"),),
                                   lambda a: 2, (0.5,), "confirmation"),
+    # Phase 5 — regime conditioning. Warmup mirrors the labeller's own windows.
+    "regime_is":        BlockSpec(regime_is, (("code", "choice"),),
+                                  lambda a: 220, (0,), "confirmation"),
 }
 
 

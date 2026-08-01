@@ -116,7 +116,15 @@ def _mirror_momentum(rng) -> tuple:
 
 def _filter(rng) -> tuple:
     pick = rng.random()
-    if pick < 0.45:
+    if pick < 0.15:
+        # Regime conditioning: "only trade this idea in THIS kind of market".
+        # Drawing it here means the composition count already reflects it, and
+        # `run_generated` additionally inflates the deflation count because
+        # choosing WHICH regime is itself a selection over four.
+        from research.regime import REGIMES
+        code = rng.randrange(len(REGIMES))
+        return f"regime_is({code})", f"rg{code}"
+    if pick < 0.5:
         return None, ""
     if pick < 0.7:
         return "range_atr_lt(14, 2.5)", "quiet"

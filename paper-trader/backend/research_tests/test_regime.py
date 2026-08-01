@@ -158,3 +158,62 @@ def test_an_unresolvable_trade_lands_in_unknown_rather_than_being_dropped():
 
     out = split_trades_by_regime([T()], labels, lambda t: t.i)
     assert len(out[UNKNOWN]) == 1
+
+
+# ── conditioning: the generator can now say "only in this market" ───────────
+
+def test_the_regime_block_selects_only_its_own_regime():
+    from research.strategy.builder.blocks import regime_is
+    df = _choppy(400, seed=4)
+    labels = label_regimes(df)
+    for code, name in enumerate(REGIMES):
+        out = regime_is(df, code)
+        assert out.dtype == bool
+        assert (out == (labels == name)).all(), f"{name} block disagrees with the labeller"
+
+
+def test_the_regime_blocks_partition_the_known_bars():
+    """Every labelled bar belongs to exactly one regime, so the four blocks must
+    be mutually exclusive and together cover everything that is not unknown."""
+    from research.strategy.builder.blocks import regime_is
+    df = _choppy(400, seed=6)
+    labels = label_regimes(df)
+    masks = [regime_is(df, c) for c in range(len(REGIMES))]
+    total = sum(int(m.sum()) for m in masks)
+    assert total == int((labels != UNKNOWN).sum())
+    for i in range(len(masks)):
+        for j in range(i + 1, len(masks)):
+            assert not (masks[i] & masks[j]).any(), "regimes overlap"
+
+
+def test_an_unreadable_frame_narrows_to_nothing_rather_than_removing_the_filter():
+    """A broken filter must make the strategy trade LESS, never more. Returning
+    all-True would silently delete the condition it was added to impose."""
+    from research.strategy.builder.blocks import regime_is
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0]})     # no high/low columns
+    out = regime_is(df, 0)
+    assert out.dtype == bool and not out.any()
+
+
+def test_the_sampler_reaches_regime_conditioning():
+    from research.strategy.builder.search import sample_compositions
+    found = [c for s in range(20) for c in sample_compositions(limit=8, seed=s)
+             if "regime_is(" in str(c.to_dict())]
+    assert found, "the generator never conditions on regime"
+
+
+def test_choosing_a_regime_inflates_the_deflation_count():
+    """The Phase-0 dependency, now wired. Picking WHICH of four regimes to
+    condition on is a selection, and the DSR has to be told."""
+    from research.orchestrator.generate import _regime_multiplier
+    plain = {"longEntry": {"all": ["rsi_gt(14, 55.0, 0, 2)"]}}
+    conditioned = {"longEntry": {"all": ["rsi_gt(14, 55.0, 0, 2)", "regime_is(0)"]}}
+    assert _regime_multiplier(plain) == 1
+    assert _regime_multiplier(conditioned) == len(REGIMES)
+
+
+def test_the_multiplier_keys_on_USE_not_availability():
+    """Inflating every candidate because regime blocks exist would deflate ideas
+    that never made that choice."""
+    from research.orchestrator.generate import _regime_multiplier
+    assert _regime_multiplier({"longEntry": {"all": ["roc_gt(10, 0.0)"]}}) == 1
