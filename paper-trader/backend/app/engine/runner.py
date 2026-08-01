@@ -48,7 +48,8 @@ from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
 from app.engine import readiness
-from app.market_data.candles import candles_to_df
+from app.market_data.candles import candles_to_df, frame_from, validate_candles
+from app.market_data.quality import FeedQuality
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
@@ -141,6 +142,7 @@ class EngineRunner:
         # healthy dev engine as stale. Monotonic also survives an NTP step, which
         # `time.time()` would not. The watchdog keeps using `_beat` (it reasons in
         # market time); readiness uses this one.
+        self.feed_quality = FeedQuality()   # per-instrument candle anomalies (visible, non-fatal)
         self._beat_wall: dict[str, float] = {}
         self._boot_wall = time.monotonic()      # process start, same clock as above
         self._infra_alert_epoch: dict[str, float] = {}  # throttle infra alerts per key (M1)
@@ -387,18 +389,26 @@ class EngineRunner:
                 if self._is_token_probably_bad(prov.now()):
                     break
                 continue
+            # Validate ONCE here and build the frame from the result, so the
+            # report is available to surface rather than being discarded inside
+            # the converter. A repaired feed is corrected silently otherwise, and
+            # "we handle bad data" is not the same claim as "the data is fine".
+            candles, feed_report = validate_candles(candles)
+            if self.feed_quality.record(key, feed_report, prov.now()):
+                log.warn(f"candle feed anomaly: {feed_report.summary()}",
+                         instrument=key, event="FEED_QUALITY")
             if len(candles) < s.ema_length + 5:
                 continue
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
             strat = get_strategy(self.strategy_keys.get(key))
             if strat.key == DEFAULT_STRATEGY_KEY:
-                sig = strat.signals(_to_df(candles), ema_length=s.ema_length,
+                sig = strat.signals(frame_from(candles), ema_length=s.ema_length,
                                     z_length=s.z_length, entry_z=s.entry_z,
                                     slope_lookback=s.slope_lookback)
                 latest = to_payload(sig, entry_z=s.entry_z)["latest"]
             else:
-                sig = strat.signals(_to_df(candles))
+                sig = strat.signals(frame_from(candles))
                 latest = self._generic_latest(sig)
             if not latest:
                 continue

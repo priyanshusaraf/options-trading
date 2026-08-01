@@ -217,8 +217,38 @@ Incident post-mortems: `docs/incidents/`.
 - **exits (equity_intraday), retuned 2026-08-01 from real excursion data:** stop 0.8%,
   target 1.5% — and the target is effectively INERT (see "Read the book" above). The lever
   that works is the give-back lock: `intraday_profit_lock_threshold` **150** (was 600) and
-  `intraday_profit_lock_frac` **0.7** (was 0.3). Production still overrides both (450/0.3),
-  which makes the new defaults inert until those overrides are cleared.
+  `intraday_profit_lock_frac` **0.7** (was 0.3). **Both production overrides (450/0.3) were
+  CLEARED 2026-08-01 on the owner's instruction, so the retuned lock is now live** — verified
+  via `/api/settings`: `value=150.0/0.7, overridden=false`. This was gate (a) in the roadmap.
+
+### Code default vs what production actually runs (measured 2026-08-01)
+
+Do not read the defaults above as what the bot is doing. **Ten `runtime_config` overrides
+diverge from code defaults** — this file previously named three. Measured from
+`/api/settings` on the VPS, not from prose:
+
+| key | code default | LIVE |
+|---|---|---|
+| `intraday_enabled` | `False` | **1** |
+| `intraday_max_margin` | 7,000 | **10,000** |
+| `intraday_purple_margin` | 10,000 | **14,000** |
+| `intraday_max_positions` | 3 | **4** |
+| `intraday_target_pct` | 0.03 | **0.015** |
+| `intraday_purple_stop_loss_pct` | 0.015 | **0.01** |
+| `intraday_purple_target_pct` | 0.045 | **0.025** |
+| `intraday_lockstep_trigger_pct` | 0.03 | **0.015** |
+| `intraday_entry_cutoff_minutes` | 25 | **60** |
+| `max_daily_loss` | 5,000 | **2,000** |
+
+Two consequences worth internalising. **`intraday_enabled` is `False` in code and true only
+by DB row** — clearing that override would silently stop the segment that booked 70 of the
+72 real trades. It is the single most load-bearing row in `runtime_config`. And **the
+retuned 1.5% target lives only in the override**; the code default is still 0.03, so the
+"retuned defaults" language above describes the stop and the lock, not the target.
+
+Production also sizes ~40% larger than the documented defaults (10k/14k vs 7k/10k). That is
+the owner's choice, not drift — but any reasoning about position size from `config.py`
+alone will be wrong.
 - **options: 1 lot, −30% / +60%** premium stop/target with a ratcheting stop that never
   loosens. The widely-copied "−35%" is stale everywhere it appears — `config.py:50` is
   `stop_loss_pct = 0.30`. Exception: positions with `entry_atr` set (i.e. `expanding_z_v4`)
@@ -242,9 +272,11 @@ out of sync with reality before.
 - Signals fire only on **completed candles** during market hours. Strategy is valid on 15m/30m
   only; per-instrument *live* interval may be 5/15/30/60m.
 - **`runtime_config` DB overrides shadow code defaults.** Shipping a new default requires
-  clearing the corresponding VPS override, or it silently has no effect. Production currently
-  overrides `intraday_max_positions` (4), `intraday_entry_cutoff_minutes` (60), and
-  `max_daily_loss` (2000).
+  clearing the corresponding VPS override, or it silently has no effect. **There are ten of
+  them, not the three this line used to name — the full measured table is in "Sizing rules"
+  above.** Clear one with `POST /api/settings/reset {"key": ...}`, which also calls
+  `refresh_params()` so the running engine picks it up without a restart. Never hand-edit the
+  `runtime_config` table: the route is what keeps the live process in step with the row.
 - **`backend/VERSION` is generated per-deploy and gitignored.** It is read once at boot
   (`app/core/version.py`), logged, exposed on `/api/health`, and stamped onto every `trades`
   row as `build_sha`. Absent in dev/test — that's normal. `build_sha` has **three**

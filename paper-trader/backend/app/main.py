@@ -227,6 +227,11 @@ def _readiness_payload() -> dict:
     except Exception:
         provider_health, auth_error = {}, False
 
+    try:
+        feed = runner.feed_quality.as_dict()
+    except Exception:
+        feed = {}
+
     payload = readiness.evaluate(
         uptime_seconds=runner.uptime_seconds(),
         db_ok=db_ok,
@@ -235,8 +240,10 @@ def _readiness_payload() -> dict:
         lane_ages=runner.lane_ages(),
         markets_open=runner.markets_open(),
         provider_auth_error=auth_error,
+        feed_anomalies=len(feed),
         thresholds=thresholds,
     )
+    payload["provider_feed"] = feed
     # Descriptive context — reported, never part of the verdict. Disarmed is a
     # normal resting state (it is the default on every boot), not an unhealthy one.
     payload["engine"] = {

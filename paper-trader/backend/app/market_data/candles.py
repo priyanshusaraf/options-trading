@@ -203,7 +203,17 @@ def candles_to_df(candles) -> pd.DataFrame:
     on the live path, where an anomaly is worth a line in the log.
     """
     clean, _ = validate_candles(candles)
-    if not clean:
+    return frame_from(clean)
+
+
+def frame_from(candles) -> pd.DataFrame:
+    """Build the signal frame from ALREADY-VALIDATED candles.
+
+    Split out so a caller that needs the report (the live scan, which surfaces
+    feed anomalies) can validate once and build the frame from the result,
+    instead of validating twice per instrument per scan tick.
+    """
+    if not candles:
         return pd.DataFrame(columns=FRAME_COLUMNS)
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in clean])
+                          "low": c.low, "close": c.close} for c in candles])

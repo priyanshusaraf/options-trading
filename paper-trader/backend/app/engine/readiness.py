@@ -102,6 +102,7 @@ def evaluate(
     lane_ages: dict[str, float | None],
     markets_open: bool | None,
     provider_auth_error: bool = False,
+    feed_anomalies: int = 0,
     thresholds: Thresholds,
 ) -> dict:
     """Decide whether this process is fit to be managing real money right now.
@@ -159,6 +160,15 @@ def evaluate(
     check("provider_auth", not provider_auth_error, fatal=False,
           detail="" if not provider_auth_error else
                  "broker session/token rejected — re-authenticate (Connect Kite)")
+
+    # Deliberately NOT fatal: these bars were successfully de-duplicated, sorted
+    # or repaired before any strategy saw them. The engine handled it; a human
+    # should still know the feed is misbehaving.
+    check("feed_quality", not feed_anomalies, fatal=False,
+          detail="" if not feed_anomalies else
+                 f"{feed_anomalies} instrument(s) returning anomalous candles "
+                 f"(duplicated, out-of-order or self-inconsistent bars) — repaired "
+                 f"before use; see provider_feed in this payload")
 
     failed = [c["name"] for c in checks if not c["ok"] and c["fatal"]]
     degraded = [c["name"] for c in checks if not c["ok"] and not c["fatal"]]
