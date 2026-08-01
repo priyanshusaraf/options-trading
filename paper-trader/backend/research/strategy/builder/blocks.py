@@ -45,6 +45,91 @@ def _atr(df: pd.DataFrame, length: int) -> pd.Series:
     return tr.ewm(alpha=1.0 / length, adjust=False).mean()
 
 
+# ── formula-level variation (Phase 2) ────────────────────────────────────────
+# Price source and smoothing kind as PARAMETERS rather than hard-coded choices —
+# the owner's "modified-RSI" ask generalised into a family of lawful variants.
+#
+# Encoded as bounded INTEGER codes, not strings, and that is load-bearing: the
+# emitted `compute` is AST-validated against numeric literals only
+# (`validate.py:53-54` rejects anything that is not an int/float). A string
+# parameter would have meant opening that perimeter. A small integer keeps the
+# whole safety argument intact.
+#
+# Code 0 is the pre-existing behaviour in both families (close, sma) so adding a
+# parameter never silently re-tunes a composition that already exists.
+PRICE_SOURCES = ("close", "hl2", "hlc3", "ohlc4")
+SMOOTHINGS = ("sma", "ema", "wilder", "hull")
+
+
+def _clamp_code(code, n: int) -> int:
+    """Codes CLAMP rather than raise. A generated composition must never be able
+    to crash the nightly on an arithmetic accident; out of range simply means the
+    nearest lawful variant."""
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return 0
+    return 0 if c < 0 else (n - 1 if c >= n else c)
+
+
+def _source(df, code) -> pd.Series:
+    """The price series a block measures: close | hl2 | hlc3 | ohlc4."""
+    kind = PRICE_SOURCES[_clamp_code(code, len(PRICE_SOURCES))]
+    if kind == "hl2":
+        return (df["high"] + df["low"]) / 2.0
+    if kind == "hlc3":
+        return (df["high"] + df["low"] + df["close"]) / 3.0
+    if kind == "ohlc4":
+        return (df["open"] + df["high"] + df["low"] + df["close"]) / 4.0
+    return df["close"]
+
+
+def _smooth(s: pd.Series, length: int, code) -> pd.Series:
+    """Smoothing kind: sma | ema | wilder | hull.
+
+    `ema` deliberately routes through `_ema` so the generated family agrees with
+    the hand-written strategies' convention (ewm adjust=False) instead of
+    inventing a second one.
+    """
+    kind = SMOOTHINGS[_clamp_code(code, len(SMOOTHINGS))]
+    n = max(2, int(length))
+    if kind == "ema":
+        return _ema(s, n)
+    if kind == "wilder":
+        return s.ewm(alpha=1.0 / n, adjust=False).mean()
+    if kind == "hull":
+        half = max(1, n // 2)
+        root = max(1, int(round(n ** 0.5)))
+        raw = 2.0 * s.rolling(half).mean() - s.rolling(n).mean()
+        return raw.rolling(root).mean()
+    return s.rolling(n).mean()
+
+
+def _rsi(df, length, source, smooth) -> pd.Series:
+    """RSI over a chosen price source, with a chosen averaging kind.
+
+    Wilder's RSI is the `smooth=wilder` member of this family; the others are the
+    same formula with a different average, which is exactly the generalisation
+    asked for."""
+    src = _source(df, source)
+    n = max(2, int(length))
+    delta = src.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    # Floor the averages at zero. Gains and losses are non-negative BY
+    # DEFINITION, so their average must be — but Hull smoothing
+    # (2*MA(n/2) - MA(n)) can overshoot below zero, which drove RSI to -22 in
+    # testing. That is an artifact of the smoother, not a reading, and an RSI
+    # outside [0,100] would silently corrupt every threshold comparison built on
+    # it. Clamping restores the domain rather than excluding hull from the family.
+    avg_gain = _smooth(gain, n, smooth).clip(lower=0.0)
+    avg_loss = _smooth(loss, n, smooth).clip(lower=0.0)
+    rs = avg_gain / avg_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    # avg_loss == 0 with real gains is a maximal-strength reading, not a NaN.
+    return rsi.where(~((avg_loss == 0) & (avg_gain > 0)), 100.0)
+
+
 def _b(series) -> pd.Series:
     """Coerce a comparison result to a clean df-indexed bool Series (NaN → False)."""
     return pd.Series(series).fillna(False).astype(bool)
@@ -115,6 +200,47 @@ def still_expanding_z(df, length):
 
 
 # ── registry ─────────────────────────────────────────────────────────────────
+# ── RSI family (formula-level variants) ──────────────────────────────────────
+def rsi_gt(df, length, thr, source, smooth):
+    return _b(_rsi(df, length, source, smooth) > thr)
+
+
+def rsi_lt(df, length, thr, source, smooth):
+    return _b(_rsi(df, length, source, smooth) < thr)
+
+
+# ── volume ───────────────────────────────────────────────────────────────────
+def volume_surge(df, length, mult):
+    """Volume above `mult` x its rolling mean.
+
+    A feed with no volume column reads as NO SURGE. Absent data must never
+    manufacture an entry — the failure has to be silence, not a signal."""
+    if "volume" not in df.columns:
+        return pd.Series(False, index=df.index)
+    vol = pd.to_numeric(df["volume"], errors="coerce")
+    return _b(vol > (vol.rolling(max(2, int(length))).mean() * float(mult)))
+
+
+# ── gaps ─────────────────────────────────────────────────────────────────────
+def gap_up_pct(df, min_pct):
+    prev = df["close"].shift(1)
+    return _b(((df["open"] - prev) / prev * 100.0) > float(min_pct))
+
+
+def gap_down_pct(df, min_pct):
+    prev = df["close"].shift(1)
+    return _b(((prev - df["open"]) / prev * 100.0) > float(min_pct))
+
+
+# ── candle structure ─────────────────────────────────────────────────────────
+def body_frac_gt(df, frac):
+    """Body as a fraction of the bar's full range — a decisiveness filter. A
+    zero-range bar has no body fraction and reads False."""
+    rng = (df["high"] - df["low"])
+    body = (df["close"] - df["open"]).abs()
+    return _b((rng > 0) & ((body / rng.where(rng > 0)) > float(frac)))
+
+
 @dataclasses.dataclass(frozen=True)
 class BlockSpec:
     fn: Callable
@@ -155,6 +281,26 @@ BLOCKS: dict[str, BlockSpec] = {
                                   _len_plus(), (14, 2.5), "volatility"),
     "still_expanding_z": BlockSpec(still_expanding_z, (("length", "length"),),
                                    _len_plus(1), (50,), "confirmation"),
+    # Phase 2 — formula-level variants. `source`/`smooth` are bounded integer
+    # CHOICE codes (see PRICE_SOURCES / SMOOTHINGS); code 0 is the conventional
+    # reading, so the sample args describe a plain close-based Wilder-ish RSI.
+    # NB: the RSI threshold is a "pct", not a "thr". `thr` is bounded to |x|<=10
+    # because it was built for z-scores; RSI reads 0-100, so a 70 threshold is
+    # perfectly lawful and would have been rejected by the wrong bound.
+    "rsi_gt":           BlockSpec(rsi_gt, (("length", "length"), ("thr", "pct"),
+                                           ("source", "choice"), ("smooth", "choice")),
+                                  _len_plus(1), (14, 55.0, 0, 2), "momentum"),
+    "rsi_lt":           BlockSpec(rsi_lt, (("length", "length"), ("thr", "pct"),
+                                           ("source", "choice"), ("smooth", "choice")),
+                                  _len_plus(1), (14, 45.0, 0, 2), "momentum"),
+    "volume_surge":     BlockSpec(volume_surge, (("length", "length"), ("mult", "mult")),
+                                  _len_plus(), (20, 1.5), "confirmation"),
+    "gap_up_pct":       BlockSpec(gap_up_pct, (("min_pct", "pct"),),
+                                  lambda a: 2, (0.5,), "momentum"),
+    "gap_down_pct":     BlockSpec(gap_down_pct, (("min_pct", "pct"),),
+                                  lambda a: 2, (0.5,), "momentum"),
+    "body_frac_gt":     BlockSpec(body_frac_gt, (("frac", "pct"),),
+                                  lambda a: 2, (0.5,), "confirmation"),
 }
 
 

@@ -23,6 +23,11 @@ _LENGTH_MIN, _LENGTH_MAX = 2, 400
 _THR_ABS_MAX = 10.0
 _PCT_MIN, _PCT_MAX = 0.0, 100.0
 _MULT_MIN, _MULT_MAX = 0.0, 20.0
+# Categorical block parameters (price source, smoothing kind) travel as small
+# bounded INTEGER codes so the emitted code stays numeric-literals-only and the
+# AST validator's perimeter is untouched. Blocks clamp out-of-range codes, so the
+# bound here is a grammar-level sanity check rather than the safety mechanism.
+_CHOICE_MIN, _CHOICE_MAX = 0, 15
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +99,10 @@ def _check_kind(block: str, pname: str, kind: str, val) -> None:
     elif kind == "pct":
         if not (_PCT_MIN < val <= _PCT_MAX):
             raise ValueError(f"{block}.{pname}: pct must be in ({_PCT_MIN},{_PCT_MAX}]")
+    elif kind == "choice":
+        if not isinstance(val, int) or not (_CHOICE_MIN <= val <= _CHOICE_MAX):
+            raise ValueError(f"{block}.{pname}: choice must be an int in "
+                             f"[{_CHOICE_MIN},{_CHOICE_MAX}], got {val!r}")
     elif kind == "mult":
         if not (_MULT_MIN < val <= _MULT_MAX):
             raise ValueError(f"{block}.{pname}: mult must be in ({_MULT_MIN},{_MULT_MAX}]")

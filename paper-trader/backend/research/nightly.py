@@ -16,8 +16,8 @@ import subprocess
 import sys
 
 from research.config import (nightly_generate_limit, nightly_interval,
-                             nightly_strategy_key, research_db_path,
-                             watchlist_snapshot_path)
+                             nightly_search_seed, nightly_strategy_key,
+                             research_db_path, watchlist_snapshot_path)
 from research.plan import build_plan
 from research.universe import eligible_for_research, read_watchlist_snapshot
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
@@ -116,9 +116,11 @@ def _run_generation(session, source, plan, report_dir) -> list:
     instruments = plan[0]["instruments"]
     interval = plan[0]["interval"]
     print(f"generation: exploring up to {limit} composition(s) on "
-          f"{len(instruments)} instrument(s) @ {interval}")
+          f"{len(instruments)} instrument(s) @ {interval}"
+          f"{f' (sampled, seed={nightly_search_seed()})' if nightly_search_seed() is not None else ' (fixed grid)'}")
+    seed = nightly_search_seed()
     reports = run_generated(session, source, instruments, interval, limit=limit,
-                            git_commit=_git_commit())
+                            git_commit=_git_commit(), seed=seed)
     for i, report in enumerate(reports, 1):
         path = os.path.join(report_dir, f"report_generated_{report.get('run_id', i)}.md")
         write_report(report, path)

@@ -21,7 +21,8 @@ from research.domain.models import GeneratedStrategyRecord
 from research.data.store import materialize
 from research.orchestrator.run import run_experiment
 from research.strategy.builder.load import build_strategy
-from research.strategy.builder.search import enumerate_compositions
+from research.strategy.builder.search import (enumerate_compositions,
+                                              sample_compositions)
 
 logger = logging.getLogger("research.orchestrator")
 
@@ -40,10 +41,17 @@ def _persist_record(session, strat) -> None:
 
 def run_generated(session, source, instruments, interval, *, limit=24,
                   git_commit="unknown", program="Generated strategies",
-                  min_trades=20, n_folds=4, min_positive_fold_frac=0.6) -> list:
+                  min_trades=20, n_folds=4, min_positive_fold_frac=0.6,
+                  seed: int | None = None) -> list:
     """Enumerate up to `limit` compositions, persist + evaluate each on `instruments`.
     Returns the per-strategy report dicts."""
-    compositions = enumerate_compositions(limit=limit)
+    # `seed=None` keeps the deterministic hand-picked grid — a stable control the
+    # sampler can be compared against. A seed draws from the BLOCK REGISTRY
+    # instead, which is what makes a newly registered block reachable at all: the
+    # fixed grid names its blocks as literal strings, so widening BLOCKS widened
+    # the whitelist and the search not at all.
+    compositions = (enumerate_compositions(limit=limit) if seed is None
+                    else sample_compositions(limit=limit, seed=seed))
     logger.info("generate: enumerated %d composition(s) to evaluate on %d instrument(s) @ %s",
                 len(compositions), len(instruments), interval)
     datasets = [(inst, materialize(source, inst, interval)) for inst in instruments]

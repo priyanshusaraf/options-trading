@@ -72,3 +72,21 @@ def nightly_generate_limit(env: Mapping | None = None) -> int:
         return max(0, int(e.get("PT_RESEARCH_GENERATE_LIMIT", DEFAULT_GENERATE_LIMIT)))
     except (TypeError, ValueError):
         return DEFAULT_GENERATE_LIMIT
+
+
+def nightly_search_seed(env: Mapping | None = None) -> int | None:
+    """Seed for composition SAMPLING (``PT_RESEARCH_SEARCH_SEED``).
+
+    Unset -> None -> the deterministic hand-picked grid (a stable control).
+    Set -> draw from the block registry, which is the only way a newly
+    registered block is ever reached. Deterministic per seed so any composition
+    can be regenerated from the run that produced it.
+    """
+    e = os.environ if env is None else env
+    raw = e.get("PT_RESEARCH_SEARCH_SEED")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None

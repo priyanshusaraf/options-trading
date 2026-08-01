@@ -210,14 +210,47 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
   runs; reports land in `PT_RESEARCH_REPORT_DIR`.
 
 ### Phase 2 — Widen the idea space (incl. formula-level variation)
-- [ ] New blocks (each a pure, tested function in `builder/blocks.py`): RSI, volume/OBV,
-      opening-range breakout, gap, time-of-day window, candle structure.
-- [ ] **Price-source as a block parameter** (`close | hl2 | hlc3 | ohlc4`) and
-      **smoothing-kind as a parameter** (`sma | ema | wilder | hull`) — this is the
-      owner's "modified-RSI" ask generalized: hundreds of lawful indicator variants,
-      still whitelisted, still auditable.
-- [ ] Replace the fixed 18-combo enumerate grid with seeded random sampling within
-      grammar bounds (deterministic per seed; breadth feeds Phase-0 deflation).
+- [x] **New blocks — MOSTLY DONE 2026-08-01.** Added RSI (as a whole family, see below),
+      `volume_surge`, `gap_up_pct`/`gap_down_pct`, `body_frac_gt`. The library went 13 → 19
+      blocks. All pure, warmup-safe (a comparison against NaN yields False, never a phantom
+      True), and registered with sample args that are themselves tested.
+      Two subtleties worth keeping: `volume_surge` reads FALSE when the feed carries no
+      volume column — absent data must never manufacture an entry — and the RSI threshold is
+      declared `pct`, not `thr`, because `thr` is bounded to |x|≤10 for z-scores while RSI
+      reads 0-100 (a 70 threshold would have been rejected by the wrong bound).
+      **Still missing: opening-range breakout and time-of-day window.** Both need session
+      awareness (IST open, per-segment hours) rather than pure bar math, so they are a
+      different shape of change and are deliberately left.
+- [ ] Opening-range breakout + time-of-day window blocks (need session/timezone awareness,
+      not just bar math — see above).
+- [x] **Price-source + smoothing-kind as parameters — DONE 2026-08-01.** The owner's
+      "modified-RSI" ask generalised: `close|hl2|hlc3|ohlc4` × `sma|ema|wilder|hull` = 16
+      lawful variants of a single block, still whitelisted, still auditable in `blocks.py`.
+      **Encoded as bounded INTEGER codes, not strings, and that is load-bearing:** the
+      emitted `compute` is AST-validated against numeric literals only
+      (`validate.py:53-54`), so a string parameter would have meant opening that perimeter.
+      Codes clamp rather than raise — a generated composition must never crash the nightly on
+      an arithmetic accident — and code 0 is the conventional reading in both families, so
+      adding the parameter never silently re-tunes an existing composition.
+      **A real bug this surfaced:** Hull smoothing (`2·MA(n/2) − MA(n)`) can overshoot below
+      zero, which drove RSI to **−22** in testing. Gains and losses are non-negative by
+      definition, so the averages are now floored at zero — the overshoot is an artifact of
+      the smoother, and an RSI outside [0,100] would have silently corrupted every threshold
+      built on it.
+- [x] **Seeded random sampling — DONE 2026-08-01.** `sample_compositions(limit, seed)` draws
+      from the BLOCK REGISTRY rather than a fixed list of hand-written strings. This was not
+      optional: the old 3×3×2 grid names its blocks as literal strings, so adding the Phase-2
+      vocabulary widened the whitelist and **changed the search not at all** — the RSI family
+      was registered and never sampled. Same shape as the `var_sr` bug: present, correct,
+      unreachable.
+      Deterministic per seed (a composition that cannot be regenerated from its seed cannot be
+      reproduced, which is the premise the whole plane rests on), duplicate keys skipped (they
+      would collide in `research_generated_strategy` and silently overwrite each other), and
+      bounded attempts so an unlucky seed cannot spin. `PT_RESEARCH_SEARCH_SEED` unset keeps
+      the deterministic grid as a stable control.
+      Verified end-to-end: seed 11 produced 6 distinct compositions spanning RSI variants
+      across three price sources and four smoothings, plus volume and body filters — all
+      emitted → AST-validated → sandboxed → evaluated.
 - **Acceptance:** nightly explores new compositions each night; DSR bar visibly rises
   with search breadth (log the deflation benchmark per session).
 
