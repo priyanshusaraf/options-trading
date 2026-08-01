@@ -2328,19 +2328,46 @@ class EngineRunner:
     def kill(self, now=None, square_off: bool = True) -> list[str]:
         """Emergency stop: disarm immediately and (by default) square off every
         open position at its last mark. Used when things go south."""
-        now = now or self.provider.now()
+        # BEST-EFFORT, NEVER ALL-OR-NOTHING. The kill switch is the control you
+        # reach for when things are already going wrong, which is exactly when a
+        # broker call is most likely to throw. Every step is isolated so one
+        # failure cannot cancel the others, and the whole thing never raises at
+        # the caller — it is wired to an API route and a UI button, and an
+        # exception there tells the operator nothing about what was stopped
+        # while leaving them believing they stopped it.
+        try:
+            now = now or self.provider.now()
+        except Exception:
+            now = dt.datetime.now()
+        # Disarm FIRST and unconditionally: it is the one step that must not be
+        # allowed to fail, because it is what stops the engine opening MORE
+        # positions while the operator is trying to stop it.
         self.armed = False
+
         # H8: a hard stop must also cancel working/timed-out ENTRY orders — otherwise one
         # still resting at the exchange can fill AFTER the kill and leave an untracked,
         # stopless position. (No-op on paper.)
-        cancelled = self.broker.cancel_working_entries()
+        cancelled: list = []
+        try:
+            cancelled = self.broker.cancel_working_entries() or []
+        except Exception as e:            # noqa: BLE001
+            log.error(f"KILL: cancelling working entries failed: {e} — continuing "
+                      f"to the square-off anyway", event="KILL_PARTIAL")
         closed: list[str] = []
         if square_off:
-            closed = self._square_off_all("KILL_SWITCH", now)
+            try:
+                closed = self._square_off_all("KILL_SWITCH", now)
+            except Exception as e:        # noqa: BLE001
+                log.error(f"KILL: square-off failed: {e} — the engine is DISARMED but "
+                          f"positions may still be open. Check the book.",
+                          event="KILL_PARTIAL")
         log.info(f"KILL SWITCH — disarmed; cancelled {len(cancelled)} working order(s); "
                  f"squared off {len(closed)} position(s)", event="KILL")
-        if self.params.get("notify_enabled", True):
-            self.notifier.killed(closed)
+        try:
+            if self.params.get("notify_enabled", True):
+                self.notifier.killed(closed)
+        except Exception:
+            pass          # a failed Telegram notify must never mask a kill
         return closed
 
     # ── snapshots for API/WS ──────────────────────────────────────────────
