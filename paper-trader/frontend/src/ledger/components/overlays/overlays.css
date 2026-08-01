@@ -320,3 +320,92 @@
   overflow-x: auto;
   white-space: pre;
 }
+
+/* ── Walkthrough ──────────────────────────────────────────────────────────
+ * The short path from "I opened this" to "I know what it's for". Deliberately
+ * plain: one column, one idea per screen, no coach marks pointing at chrome
+ * that moves. Sized to read comfortably at 390px, because the phone is where
+ * this is opened before the market does. */
+.walk__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-4);
+  background: rgb(0 0 0 / 55%);
+}
+.walk {
+  width: min(34rem, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--surface-raised, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel, 8px);
+  padding: var(--s-5, 20px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3, 12px);
+}
+.walk__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3, 12px);
+}
+.walk__count { font-size: var(--t-11); color: var(--text-faint); }
+.walk__skip {
+  font-size: var(--t-11);
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.walk__title {
+  font-size: var(--t-18, 1.125rem);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.walk__why {
+  font-size: var(--t-13, 0.8125rem);
+  line-height: 1.65;
+  color: var(--text-muted);
+  margin: 0;
+}
+.walk__action {
+  font-size: var(--t-13, 0.8125rem);
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+  padding-left: var(--s-3, 12px);
+  border-left: 2px solid var(--accent, #6ea8fe);
+}
+.walk__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2, 8px);
+  flex-wrap: wrap;
+  margin-top: var(--s-2, 8px);
+}
+.walk__foot button {
+  padding: 10px 14px;          /* a real touch target, not a desktop chip */
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input, 6px);
+  font-size: var(--t-12);
+}
+.walk__back { color: var(--text-muted); }
+.walk__back:disabled { opacity: 0.35; }
+.walk__show { color: var(--text); }
+.walk__next {
+  margin-left: auto;
+  background: var(--accent, #6ea8fe);
+  color: #0b0b0c;
+  font-weight: 600;
+}
+.walk__dots { display: flex; gap: 6px; }
+.walk__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border);
+}
+.walk__dot.is-on { background: var(--accent, #6ea8fe); }

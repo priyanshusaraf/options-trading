@@ -4,6 +4,7 @@ import { PendingReasons } from '../components/domain/PendingReasons'
 import { ensureSession, observe, sessionKey } from '../data/actions'
 import { useDB } from '../data/hooks'
 import { today } from '../domain/dates'
+import { WALKTHROUGH, loadProgress, saveProgress } from '../app/walkthrough'
 import './mobile.css'
 
 type Screen = 'pending' | 'capture' | 'today'
@@ -19,11 +20,17 @@ type Screen = 'pending' | 'capture' | 'today'
  */
 export default function MobileLedger() {
   const [screen, setScreen] = useState<Screen>('pending')
+  const [walk, setWalk] = useState(() => !loadProgress().done)
   return (
     <div className="ml">
       <header className="ml__head">
         <span className="label">Journal</span>
+        {/* Always reachable, not a card that vanishes after the first morning. */}
+        <button className="ml__help" onClick={() => setWalk(true)}>
+          what is this?
+        </button>
       </header>
+      {walk && <MobileWalkthrough onClose={() => setWalk(false)} />}
       <div className="ml__body">
         {screen === 'pending' && <PendingScreen />}
         {screen === 'capture' && <CaptureScreen />}
@@ -41,6 +48,52 @@ export default function MobileLedger() {
         ))}
       </nav>
     </div>
+  )
+}
+
+/**
+ * The same walkthrough content as the desktop overlay, laid out for a thumb.
+ *
+ * The phone is where this journal is actually opened — before the market, one-handed —
+ * and it was the one place with no explanation of what any of it was for. Six short
+ * screens, resumable, dismissible, and reopenable from the header. The desktop Guide
+ * remains the full reference for anyone who wants it.
+ */
+function MobileWalkthrough({ onClose }: { onClose: () => void }) {
+  const [i, setI] = useState(() => loadProgress().step)
+  const step = WALKTHROUGH[i]
+  const last = i >= WALKTHROUGH.length - 1
+  if (!step) return null
+
+  function done() {
+    saveProgress({ step: last ? 0 : i, done: true })
+    onClose()
+  }
+
+  return (
+    <section className="ml__walk">
+      <div className="ml__walkhead">
+        <span className="mono faint">{i + 1} / {WALKTHROUGH.length}</span>
+        <button onClick={done}>skip</button>
+      </div>
+      <h2>{step.title}</h2>
+      <p className="ml__walkwhy">{step.why}</p>
+      <p className="ml__walkdo">{step.action}</p>
+      <div className="ml__walkfoot">
+        <button disabled={i === 0} onClick={() => setI((n) => Math.max(0, n - 1))}>
+          back
+        </button>
+        <button className="ml__primary"
+                onClick={() => {
+                  if (last) return done()
+                  const n = i + 1
+                  setI(n)
+                  saveProgress({ step: n, done: false })
+                }}>
+          {last ? 'got it' : 'next'}
+        </button>
+      </div>
+    </section>
   )
 }
 

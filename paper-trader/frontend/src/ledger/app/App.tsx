@@ -6,12 +6,14 @@ import {
   closeOverlay,
   getUI,
   navigate,
+  openOverlay,
   peek,
   setMode,
   useUI,
   type Route,
 } from './uiState'
 import { boot, wasFirstRun } from '../data/store'
+import { loadProgress } from './walkthrough'
 import { useDB, useInstrument, useStore, useTrades } from '../data/hooks'
 import { useAppearance, useKeymap } from '../keys/useKeymap'
 import { suggestedMode } from '../domain/dates'
@@ -35,6 +37,7 @@ import {
   QuickCapture,
   ShortcutSheet,
   Toasts,
+  Walkthrough,
 } from '../components/overlays'
 import { Peek } from '../components/data'
 import { ProgressLine } from '../components/primitives'
@@ -148,6 +151,7 @@ function Workspace() {
       {/* ── Overlays — §6.5 ─────────────────────────────────────────── */}
       {ui.overlay === 'palette' && <CommandPalette commands={commands} />}
       {ui.overlay === 'capture' && <QuickCapture />}
+      {ui.overlay === 'walkthrough' && <Walkthrough />}
       {ui.overlay === 'shortcuts' && (
         <ShortcutSheet commands={commands} onClose={closeOverlay} />
       )}
@@ -181,11 +185,19 @@ export function App() {
   // Bearer PT_API_TOKEN, which is real.
   useEffect(() => {
     void boot().then(() => {
-      // A device with no journal lands on the Guide rather than on a Cockpit
-      // whose every element is unexplained. This is a landing choice made once
-      // — not a tour: the Guide is the same permanent surface either way, and
-      // nothing about it is dismissed or hidden afterwards.
-      if (wasFirstRun()) navigate({ surface: 'guide' }, { replace: true })
+      // A device with no journal opens the walkthrough: six screens that say what
+      // this is FOR and have you do the three things that make it worth keeping.
+      // It previously landed on the Guide — 644 lines of reference, correct and
+      // unread. Production ran for a month with one row in it.
+      //
+      // The walkthrough never blocks (Escape leaves), persists its progress, and
+      // stays reopenable from the sidebar, so it is not the fire-once tour the
+      // original no-tour principle was guarding against. Anyone who has already
+      // finished or dismissed it is never shown it again.
+      if (wasFirstRun() && !loadProgress().done) {
+        navigate({ surface: 'cockpit' }, { replace: true })
+        openOverlay('walkthrough')
+      }
     })
   }, [])
 

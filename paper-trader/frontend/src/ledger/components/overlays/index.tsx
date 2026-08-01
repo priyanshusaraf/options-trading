@@ -13,6 +13,7 @@ import './overlays.css'
 
 export { CommandPalette } from './CommandPalette'
 export { QuickCapture } from './QuickCapture'
+export { Walkthrough } from './Walkthrough'
 
 /** §6.5 Drawer — right, 480px, for creation flows.
  *  §8 "No modal ever covers the thing you are writing about." */

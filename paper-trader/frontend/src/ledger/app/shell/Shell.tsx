@@ -14,9 +14,10 @@
  * layout consistency."
  */
 
-import { type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   navigate,
+  openOverlay,
   reorderRail,
   setUI,
   useUI,
@@ -81,18 +82,32 @@ function InstrumentRail() {
 // §7.5 Icons never appear next to text labels in the sidebar — the labels are
 // enough and icons there are noise.
 
-const SECTIONS: { surface: Parameters<typeof navigate>[0]['surface']; label: string; kbd: string }[] = [
-  { surface: 'cockpit', label: 'Today', kbd: 'gd' },
-  { surface: 'notebook', label: 'Notebook', kbd: 'gn' },
-  { surface: 'blotter', label: 'Trades', kbd: 'gt' },
+// `core: true` marks the three surfaces the daily habit actually needs. The rest are
+// genuinely useful and genuinely optional — but presenting all fourteen at equal weight
+// is what made this feel like a system to be learned rather than a notebook to be used,
+// and the production journal sat at one row for a month as a result. Everything is one
+// click away behind "Show every section"; nothing was removed.
+const SECTIONS: {
+  surface: Parameters<typeof navigate>[0]['surface']; label: string; kbd: string
+  core?: boolean
+}[] = [
+  { surface: 'cockpit', label: 'Today', kbd: 'gd', core: true },
+  { surface: 'blotter', label: 'Trades', kbd: 'gt', core: true },
+  { surface: 'notebook', label: 'Notebook', kbd: 'gn', core: true },
+  { surface: 'review', label: 'Review', kbd: 'gr' },
   { surface: 'playbook', label: 'Playbook', kbd: 'gp' },
   { surface: 'timeline', label: 'Timeline', kbd: 'gl' },
   { surface: 'stats', label: 'Stats', kbd: 'gs' },
   { surface: 'vault', label: 'Vault', kbd: 'gv' },
 ]
 
+const SECTIONS_KEY = 'pt.ledger.showAllSections'
+
 function Sidebar() {
   const ui = useUI()
+  const [showAll, setShowAll] = useState(() => {
+    try { return localStorage.getItem(SECTIONS_KEY) === '1' } catch { return false }
+  })
   const db = useDB()
   const levels = useLevels(ui.route.instrumentId)
   const inbox = useInbox(ui.route.instrumentId)
@@ -101,7 +116,8 @@ function Sidebar() {
   return (
     <aside className="sidebar" aria-label="Context">
       <div className="sidebar__sections">
-        {SECTIONS.map((s) => (
+        {SECTIONS.filter((s) => showAll || s.core || ui.route.surface === s.surface)
+          .map((s) => (
           <button
             key={s.surface}
             className={`sidebar__item ${
@@ -113,6 +129,15 @@ function Sidebar() {
             <span className="sidebar__kbd mono">{s.kbd}</span>
           </button>
         ))}
+        <button className="sidebar__item sidebar__more"
+                onClick={() => {
+                  const next = !showAll
+                  setShowAll(next)
+                  try { localStorage.setItem(SECTIONS_KEY, next ? '1' : '0') } catch { /* private mode */ }
+                }}>
+          <span>{showAll ? 'Show less' : 'Show every section'}</span>
+          <span className="sidebar__kbd mono">{showAll ? '−' : '+'}</span>
+        </button>
         <button
           className={`sidebar__item ${ui.route.surface === 'inbox' ? 'is-active' : ''}`}
           onClick={() => navigate({ surface: 'inbox' })}
@@ -124,7 +149,14 @@ function Sidebar() {
             <span className="sidebar__kbd mono">gi</span>
           )}
         </button>
-        {/* The Guide is a permanent destination, not a tour that fires once. */}
+        {/* The walkthrough is permanently reachable — it is resumable, not a thing
+            that fired once on your first morning and can never be seen again. The
+            Guide stays alongside it as the full reference. */}
+        <button className="sidebar__item"
+                onClick={() => openOverlay('walkthrough')}>
+          <span>Walkthrough</span>
+          <span className="sidebar__kbd mono">?</span>
+        </button>
         <button
           className={`sidebar__item ${ui.route.surface === 'guide' ? 'is-active' : ''}`}
           onClick={() => navigate({ surface: 'guide' })}

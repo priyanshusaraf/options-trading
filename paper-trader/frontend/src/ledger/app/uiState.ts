@@ -49,6 +49,7 @@ export type OverlayKind =
   | 'peek'
   | 'ticket'
   | 'drawer'
+  | 'walkthrough'
 
 export interface Toast {
   id: number

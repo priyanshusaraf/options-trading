@@ -241,3 +241,45 @@
     min-height: 32px;
   }
 }
+
+/* ── Walkthrough (phone) ──────────────────────────────────────────────────
+ * The phone is where this journal is actually opened, and it was the one place
+ * with no explanation of what any of it was for. */
+.ml__help {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ml__walk {
+  margin: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ml__walkhead { display: flex; align-items: baseline; justify-content: space-between; }
+.ml__walkhead button { font-size: 12px; color: var(--text-muted); text-decoration: underline; }
+.ml__walk h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.ml__walkwhy { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-muted); }
+.ml__walkdo {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent, #6ea8fe);
+}
+.ml__walkfoot { display: flex; gap: 8px; align-items: center; }
+.ml__walkfoot button {
+  min-height: 44px;              /* thumb-sized, per the phone-first brief */
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.ml__walkfoot button:disabled { opacity: 0.35; }
+.ml__walkfoot .ml__primary { margin-left: auto; }
