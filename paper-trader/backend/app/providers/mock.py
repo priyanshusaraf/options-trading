@@ -101,6 +101,24 @@ class MockProvider(MarketDataProvider):
     def get_ltp(self, inst: Instrument) -> float | None:
         return self._spot(inst)
 
+    def get_futures_ltp(self, inst, expiry) -> float | None:
+        """Synthetic futures price: spot plus a deterministic, shrinking basis.
+
+        The basis DECAYS toward zero as expiry approaches, because that is the
+        one property of a real future that a test must be able to rely on —
+        convergence at settlement. A flat offset would let a bug that ignores
+        expiry pass unnoticed.
+        """
+        spot = self._spot(inst)
+        if spot is None:
+            return None
+        try:
+            days = max(0, (expiry - self.now().date()).days)
+        except Exception:
+            days = 30
+        # ~0.5% annualised carry, straight-line to zero at expiry.
+        return round(float(spot) * (1.0 + 0.005 * days / 365.0), 2)
+
     def get_live_price(self, inst: Instrument) -> float:
         # display-only jitter for the expanded live view; does NOT affect P&L
         spot = self._spot(inst)

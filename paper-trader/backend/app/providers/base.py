@@ -158,6 +158,24 @@ class MarketDataProvider(ABC):
     def get_ltp(self, inst: Instrument) -> float | None:
         """Latest traded price of the underlying (index spot / near future)."""
 
+    def get_futures_ltp(self, inst: Instrument, expiry) -> float | None:
+        """Last traded price of the FUTURES contract, not the underlying spot.
+
+        Futures trade at a basis to spot — carry, dividends, sentiment — and the
+        gap is not small: an index future can sit tens of points from its cash
+        index and converges only at expiry. Marking a futures position to spot
+        mis-prices it on entry, on every risk tick and at exit, corrupting
+        unrealized P&L and every stop distance derived from it.
+
+        Deliberately CONCRETE and returning None, not abstract. Making it
+        abstract would force every existing provider to implement a method none
+        of them need yet — and an earlier cut of this change did exactly that by
+        accident, breaking provider construction everywhere. None means "I
+        cannot price a future", so the caller refuses the trade; falling back to
+        spot here would be the mis-pricing wearing a working provider's clothes.
+        """
+        return None
+
     def get_live_price(self, inst: Instrument) -> float | None:
         """Underlying price for the expanded per-instrument live view. Defaults to
         the LTP; the mock overrides it with display-only jitter. (Live providers
