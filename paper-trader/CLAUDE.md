@@ -224,8 +224,15 @@ Incident post-mortems: `docs/incidents/`.
 ### Code default vs what production actually runs (measured 2026-08-01)
 
 Do not read the defaults above as what the bot is doing. **Ten `runtime_config` overrides
-diverge from code defaults** — this file previously named three. Measured from
-`/api/settings` on the VPS, not from prose:
+differ from code defaults** — this file previously named three. Measured from
+`/api/settings` on the VPS, not from prose.
+
+**These are the owner's deliberate operating decisions, not drift, and not a defect list.
+Leave them alone.** They are hand-set from live trading experience, and the code defaults
+are the weaker information — several were chosen precisely because the default was wrong for
+this account. When this table and `config.py` disagree, **the correct response is to update
+the doc, never to "reconcile" the box.** Do not clear an override to make a shipped default
+take effect without the owner explicitly asking for that specific key.
 
 | key | code default | LIVE |
 |---|---|---|
@@ -246,9 +253,9 @@ by DB row** — clearing that override would silently stop the segment that book
 retuned 1.5% target lives only in the override**; the code default is still 0.03, so the
 "retuned defaults" language above describes the stop and the lock, not the target.
 
-Production also sizes ~40% larger than the documented defaults (10k/14k vs 7k/10k). That is
-the owner's choice, not drift — but any reasoning about position size from `config.py`
-alone will be wrong.
+Production also sizes ~40% larger than the documented defaults (10k/14k vs 7k/10k) — a
+deliberate sizing decision. Any reasoning about position size from `config.py` alone will be
+wrong; read the live value.
 - **options: 1 lot, −30% / +60%** premium stop/target with a ratcheting stop that never
   loosens. The widely-copied "−35%" is stale everywhere it appears — `config.py:50` is
   `stop_loss_pct = 0.30`. Exception: positions with `entry_atr` set (i.e. `expanding_z_v4`)
