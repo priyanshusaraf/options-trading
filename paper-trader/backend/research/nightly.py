@@ -15,12 +15,14 @@ import os
 import subprocess
 import sys
 
-from research.config import (nightly_interval, nightly_strategy_key,
-                             research_db_path, watchlist_snapshot_path)
+from research.config import (nightly_generate_limit, nightly_interval,
+                             nightly_strategy_key, research_db_path,
+                             watchlist_snapshot_path)
 from research.plan import build_plan
 from research.universe import eligible_for_research, read_watchlist_snapshot
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.guards import enforce
+from research.orchestrator.report import write_report
 from research.orchestrator.run import run_nightly
 
 
@@ -92,6 +94,38 @@ def _make_source():
     return KiteDataSource(get_provider())
 
 
+def _run_generation(session, source, plan, report_dir) -> list:
+    """Explore generated COMPOSITIONS, not just the handwritten strategy.
+
+    This is what makes the loop actually search rather than re-measure one idea
+    every night. It reuses the plan's instrument set so generation and the
+    handwritten baseline are evaluated on exactly the same universe — otherwise a
+    difference in results could just be a difference in what they were run on.
+
+    Note this is genuinely expensive: each composition is a full
+    qualify -> optimize -> validate -> score pass over every instrument, and since
+    2026-08-01 the composition count also inflates the DSR deflation via
+    `sibling_trials`, so a wider search raises the bar it has to clear. That is the
+    intended trade and the reason the limit is bounded and configurable.
+    """
+    limit = nightly_generate_limit()
+    if not limit or not plan:
+        return []
+    from research.orchestrator.generate import run_generated
+
+    instruments = plan[0]["instruments"]
+    interval = plan[0]["interval"]
+    print(f"generation: exploring up to {limit} composition(s) on "
+          f"{len(instruments)} instrument(s) @ {interval}")
+    reports = run_generated(session, source, instruments, interval, limit=limit,
+                            git_commit=_git_commit())
+    for i, report in enumerate(reports, 1):
+        path = os.path.join(report_dir, f"report_generated_{report.get('run_id', i)}.md")
+        write_report(report, path)
+        report["report_path"] = path
+    return reports
+
+
 def main() -> int:
     research_db = research_db_path()
     # Fail closed BEFORE any research work: distinct DB, no capital-moving imports,
@@ -109,9 +143,12 @@ def main() -> int:
     init_research_db(engine)
     Session = make_sessionmaker(engine)
     with Session() as session:
-        reports = run_nightly(session, source=_make_source(), plan=_load_plan(session),
-                              git_commit=_git_commit(),
-                              report_dir=os.environ.get("PT_RESEARCH_REPORT_DIR", "."))
+        src = _make_source()
+        plan = _load_plan(session)
+        report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
+        reports = run_nightly(session, source=src, plan=plan,
+                              git_commit=_git_commit(), report_dir=report_dir)
+        reports += _run_generation(session, src, plan, report_dir)
     print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
     return 0
 

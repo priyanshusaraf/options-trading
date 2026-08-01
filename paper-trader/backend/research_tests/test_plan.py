@@ -179,3 +179,56 @@ def test_the_freeze_flag_still_gates_the_whole_run():
     src = inspect.getsource(nightly.main)
     assert "research_enabled" in src
     assert "enforce(" in src
+
+
+# ── generation: the loop must EXPLORE, not re-measure one idea ──────────────
+
+def test_nightly_runs_generated_compositions_too():
+    """Running only the handwritten strategy every night is not research, it is
+    monitoring. Generation is what makes this a search."""
+    import inspect
+    from research import nightly
+    assert "run_generated" in inspect.getsource(nightly._run_generation)
+    assert "_run_generation" in inspect.getsource(nightly.main)
+
+
+def test_generation_reuses_the_plan_universe():
+    """Generation and the handwritten baseline must be evaluated on the SAME
+    instruments, or a difference in results could just be a difference in what
+    they were run on."""
+    import inspect
+    src = __import__("research.nightly", fromlist=["x"])
+    body = inspect.getsource(src._run_generation)
+    assert 'plan[0]["instruments"]' in body
+    assert 'plan[0]["interval"]' in body
+
+
+def test_generation_can_be_switched_off():
+    """It is the expensive half — each composition is a full pipeline pass over
+    every instrument. A limit of 0 must leave a plain baseline run."""
+    from research.config import nightly_generate_limit
+    assert nightly_generate_limit({"PT_RESEARCH_GENERATE_LIMIT": "0"}) == 0
+    assert nightly_generate_limit({}) > 0
+
+
+def test_a_bad_generate_limit_falls_back_rather_than_crashing_the_cron():
+    from research.config import DEFAULT_GENERATE_LIMIT, nightly_generate_limit
+    assert nightly_generate_limit({"PT_RESEARCH_GENERATE_LIMIT": "banana"}) == \
+        DEFAULT_GENERATE_LIMIT
+    assert nightly_generate_limit({"PT_RESEARCH_GENERATE_LIMIT": "-5"}) == 0
+
+
+def test_the_nightly_test_harness_never_writes_reports_into_the_repo():
+    """Regression guard for a self-inflicted deploy outage.
+
+    `test_nightly` runs the cron one-shot as a subprocess with cwd = backend/.
+    While `_load_plan()` returned [] that wrote nothing. The moment the plan
+    became real (2026-08-01) it started dropping report_*.md into the working
+    tree — and `deploy.sh` refuses a dirty tree with NO override, so a passing
+    test suite would have blocked every deploy. It failed a real deploy before
+    it was caught."""
+    import inspect
+    from research_tests import test_nightly
+    src = inspect.getsource(test_nightly._run)
+    assert "PT_RESEARCH_REPORT_DIR" in src, \
+        "the nightly harness must redirect reports away from the repo"

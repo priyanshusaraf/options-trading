@@ -2,3 +2,9 @@
 *.sql.gz
 *.bak-*
 ledger-backup-*.sql
+
+# Research artifacts. The nightly writes a markdown report per run and defaults
+# to cwd; a stray one dirties the tree, and deploy.sh refuses a dirty tree with
+# no override — so an untracked report here would block every future deploy.
+report_run_*.md
+report_generated_*.md

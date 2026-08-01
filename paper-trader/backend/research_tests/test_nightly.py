@@ -7,8 +7,22 @@ import subprocess
 import sys
 
 
-def _run(env_extra):
+def _run(env_extra, tmp_path=None):
+    """Run the cron one-shot in a fresh interpreter.
+
+    ALWAYS redirect the report directory. Until 2026-08-01 `_load_plan()` returned
+    [] so a nightly run wrote nothing, and this harness could safely inherit cwd.
+    Now that the plan is real, an unredirected run drops report_*.md into the repo
+    working tree — which dirties it, and `deploy.sh` refuses to ship a dirty tree
+    with no override. A test that silently breaks every future deploy is a worse
+    bug than the one it was written to catch.
+    """
     env = {**os.environ, "PYTHONPATH": "."}
+    if tmp_path is not None:
+        env.setdefault("PT_RESEARCH_REPORT_DIR", str(tmp_path))
+        # Generation is the expensive half and this harness only asserts the
+        # entry point wires up; keep the subprocess quick.
+        env.setdefault("PT_RESEARCH_GENERATE_LIMIT", "0")
     env.update(env_extra)
     return subprocess.run([sys.executable, "-m", "research.nightly"],
                           capture_output=True, text=True, env=env)
@@ -19,7 +33,7 @@ def test_nightly_initialises_research_db(tmp_path):
     r = _run({"PT_RESEARCH_DB_PATH": research_db,
               "PT_DB_PATH": str(tmp_path / "paper_trader.db"),
               "PT_EXECUTION": "paper",
-              "PT_RESEARCH_ENABLED": "1"})
+              "PT_RESEARCH_ENABLED": "1"}, tmp_path)
     assert r.returncode == 0, r.stderr
     assert os.path.exists(research_db)
 

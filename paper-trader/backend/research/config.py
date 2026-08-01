@@ -55,3 +55,20 @@ def nightly_interval(env: Mapping | None = None) -> str:
     """Candle interval for the nightly plan (``PT_RESEARCH_INTERVAL``)."""
     e = os.environ if env is None else env
     return e.get("PT_RESEARCH_INTERVAL", DEFAULT_NIGHTLY_INTERVAL)
+
+
+# How many generated compositions the nightly explores. Bounded because each one
+# is a full qualify -> optimize -> validate -> score pass over every instrument in
+# the plan, and because the composition count now inflates the DSR deflation
+# (sibling_trials): a wider search genuinely raises the bar it must clear.
+DEFAULT_GENERATE_LIMIT = 8
+
+
+def nightly_generate_limit(env: Mapping | None = None) -> int:
+    """Compositions to explore per night (``PT_RESEARCH_GENERATE_LIMIT``).
+    0 disables generation — the nightly then only runs the handwritten strategy."""
+    e = os.environ if env is None else env
+    try:
+        return max(0, int(e.get("PT_RESEARCH_GENERATE_LIMIT", DEFAULT_GENERATE_LIMIT)))
+    except (TypeError, ValueError):
+        return DEFAULT_GENERATE_LIMIT
