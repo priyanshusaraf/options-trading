@@ -133,8 +133,33 @@ def _filter(rng) -> tuple:
     return f"body_frac_gt({rng.choice((0.4, 0.5, 0.6))})", "body"
 
 
+def _accepts(refs, weights: dict, rng) -> bool:
+    """Rejection-sample a drawn composition against the edge map's weights.
+
+    Suppression only ever says NO. This is the other half: a family that has
+    actually worked on this universe gets drawn more often. Without it the loop
+    can avoid what fails but never pursue what succeeds, which is half a
+    reinforcement loop.
+
+    The acceptance floor is the exploration guarantee — no composition is ever
+    impossible, however poor its history, because a search that can only revisit
+    past winners stops being a search. Same principle as the suppression cap.
+    """
+    if not weights:
+        return True
+    ws = [weights.get(r.split("(")[0], 1.0) for r in refs]
+    if not ws:
+        return True
+    mean = sum(ws) / len(ws)
+    # weights are bounded [0.25, 2.0] by edge_weights(); map to an acceptance
+    # probability that never drops below the floor.
+    p = max(0.25, min(1.0, mean / 1.5))
+    return rng.random() < p
+
+
 def sample_compositions(limit: int = 12, seed: int = 0,
-                        suppressed: set | None = None) -> list:
+                        suppressed: set | None = None,
+                        weights: dict | None = None) -> list:
     """`limit` grammar-valid compositions drawn from the block registry.
 
     Duplicate keys are skipped rather than emitted: two records with the same key
@@ -164,6 +189,9 @@ def sample_compositions(limit: int = 12, seed: int = 0,
         refs = [t_up, t_dn, m_up, m_dn] + ([gate] if gate else [])
         if blocked and any(r.split("(")[0] in blocked for r in refs):
             continue
+        # Favour families with a positive record here (see _accepts).
+        if not _accepts(refs, weights or {}, rng):
+            continue
         seen.add(key)
         out.append(Composition.from_dict({
             "key": key,
@@ -176,6 +204,9 @@ def sample_compositions(limit: int = 12, seed: int = 0,
     # has blocked every draw the grammar can make, explore anyway rather than
     # returning nothing. A night that searches nothing learns nothing, and the
     # loop would never escape the state that silenced it.
-    if not out and blocked:
-        return sample_compositions(limit=limit, seed=seed, suppressed=None)
+    if not out and (blocked or weights):
+        # Same last-resort floor as suppression: if knowledge has blocked or
+        # down-weighted every lawful draw, explore anyway. A night that searches
+        # nothing learns nothing.
+        return sample_compositions(limit=limit, seed=seed, suppressed=None, weights=None)
     return out

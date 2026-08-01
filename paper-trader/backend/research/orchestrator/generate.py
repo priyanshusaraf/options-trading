@@ -68,17 +68,25 @@ def run_generated(session, source, instruments, interval, *, limit=24,
     # tonight draws. Without this the sampler re-rolls the same distribution
     # forever and the Findings corpus is write-only.
     suppressed = set()
+    weights: dict = {}
     if seed is not None:
-        from research.knowledge import suppressed_blocks
+        from research.knowledge import edge_weights, suppressed_blocks
         for inst in instruments:
-            suppressed |= suppressed_blocks(session, getattr(inst, "key", str(inst)))
+            k = getattr(inst, "key", str(inst))
+            suppressed |= suppressed_blocks(session, k)
+            # Average each family's weight across the universe: a block is
+            # favoured for THIS plan if it has worked across these instruments,
+            # not because it shone on one of them.
+            for block, w in edge_weights(session, k).items():
+                prev = weights.get(block)
+                weights[block] = w if prev is None else (prev + w) / 2.0
         if suppressed:
             logger.info("knowledge: suppressing %d block family/families with a "
                         "well-powered negative record: %s",
                         len(suppressed), ", ".join(sorted(suppressed)))
     compositions = (enumerate_compositions(limit=limit) if seed is None
                     else sample_compositions(limit=limit, seed=seed,
-                                             suppressed=suppressed))
+                                             suppressed=suppressed, weights=weights))
     # The exploration floor is allowed to override suppression entirely (a night
     # that searches nothing learns nothing). Say so when it does — a silent
     # override makes the next person unable to explain why a suppressed family

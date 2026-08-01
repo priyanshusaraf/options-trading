@@ -262,3 +262,60 @@ def test_the_sampler_explores_anyway_rather_than_returning_nothing():
     everything = set(BLOCKS)
     out = sample_compositions(limit=4, seed=1, suppressed=everything)
     assert out, "the sampler returned nothing when all families were suppressed"
+
+
+# ── the other half of the loop: FAVOUR what works ───────────────────────────
+
+def test_edge_weights_favour_winners_and_disfavour_losers(session):
+    """Suppression only ever says NO. Without weights the loop can avoid what
+    fails but never pursue what succeeds — half a reinforcement loop."""
+    from research.knowledge import edge_weights
+    winner = {"key": "w", "longEntry": {"all": ["rsi_gt(14, 55.0, 0, 2)"]},
+              "shortEntry": {"all": ["rsi_lt(14, 45.0, 0, 2)"]},
+              "longExit": {"any": ["zscore_lt(50, 0.0)"]},
+              "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
+    loser = {"key": "l", "longEntry": {"all": ["roc_gt(10, 0.0)"]},
+             "shortEntry": {"all": ["roc_lt(10, 0.0)"]},
+             "longExit": {"any": ["zscore_lt(50, 0.0)"]},
+             "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
+    for _ in range(10):
+        record_outcome(session, winner, "GOLDM", validated=True)
+        record_outcome(session, loser, "GOLDM", validated=False)
+    w = edge_weights(session, "GOLDM")
+    assert w["rsi_gt"] > w["roc_gt"]
+
+
+def test_weights_are_bounded_so_the_search_cannot_collapse(session):
+    """Bounded on BOTH sides: knowledge tilts the search, it does not converge it
+    onto the first thing that worked."""
+    from research.knowledge import edge_weights
+    comp = {"key": "c", "longEntry": {"all": ["rsi_gt(14, 55.0, 0, 2)"]},
+            "shortEntry": {"all": ["rsi_lt(14, 45.0, 0, 2)"]},
+            "longExit": {"any": ["zscore_lt(50, 0.0)"]},
+            "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
+    for _ in range(50):
+        record_outcome(session, comp, "GOLDM", validated=True)
+    for w in edge_weights(session, "GOLDM").values():
+        assert 0.25 <= w <= 2.0
+
+
+def test_the_sampler_consumes_the_weights():
+    """edge_weights() was built and left with NO CALLER — the exact
+    'present, correct, consuming nothing' pattern this codebase keeps producing,
+    committed by me on the same day I wrote three commits criticising it. Found
+    by an unreferenced-callable sweep."""
+    import inspect
+    from research.orchestrator import generate
+    from research.strategy.builder import search
+    assert "weights=weights" in inspect.getsource(generate.run_generated)
+    assert "weights" in inspect.signature(search.sample_compositions).parameters
+
+
+def test_weighting_never_makes_a_draw_impossible():
+    """The exploration floor. A search that can only revisit past winners has
+    stopped being a search."""
+    from research.strategy.builder.blocks import BLOCKS
+    from research.strategy.builder.search import sample_compositions
+    crushing = {name: 0.25 for name in BLOCKS}
+    assert sample_compositions(limit=4, seed=2, weights=crushing), \
+        "weighting eliminated every possible composition"
