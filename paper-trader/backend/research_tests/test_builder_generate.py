@@ -51,7 +51,15 @@ def test_run_generated_evaluates_and_persists_compositions(
 
     # any candidate that cleared validation is human-gated, never auto-deployed
     for cand in research_session.query(PromotionCandidate).all():
-        assert cand.status == "pending"
+        # Phase 4 (2026-08-01): candidates are born SHADOW, not "pending". These
+        # tests' stated intent — never auto-deployed, always human-gated — is
+        # strengthened by that, not weakened: a shadow candidate is not even in
+        # the approval queue yet, and cannot enter it without surviving sessions
+        # it has never seen. Asserting the intent rather than the old literal.
+        from research.shadow import STATUS_SHADOW, approval_queue
+        assert cand.status == STATUS_SHADOW
+        assert cand.approved_git_sha is None
+        assert cand.id not in [c.id for c in approval_queue(research_session)]
 
 
 def test_run_generated_respects_the_limit(research_session, inst_factory, candles_factory):

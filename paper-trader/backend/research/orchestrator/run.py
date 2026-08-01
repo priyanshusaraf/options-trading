@@ -37,6 +37,7 @@ from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
 from research.stats.dsr import deflated_sharpe, expected_max_sharpe
 from research.stats.neff import effective_sample_size, mean_pairwise_correlation
+from research.shadow import STATUS_SHADOW
 from research.stats.pbo import pbo
 from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
@@ -293,6 +294,12 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             run_id=run.id,
             parameterization_hash=spec_hash({"strategy": strategy.key, "params": params}),
             qualifying_universe_json=json.dumps(qualified),
+            # STATUS_SHADOW, not "pending". A validated candidate has cleared a
+            # retrospective bar: every parameter was chosen with the whole series
+            # visible, and deflation/PBO can only discount that, never remove it.
+            # It must survive sessions it has never seen before a human is asked
+            # to look — see research/shadow.py.
+            status=STATUS_SHADOW,
             scorecard_json=json.dumps({
                 "best": best, "validated": validated_universe,
                 # Recorded so a human reviewing the queue can see that "validated on
@@ -300,7 +307,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 "breadth": {"n_validated": len(validated), "mean_correlation": round(rho, 4),
                             "n_effective": round(n_eff, 3),
                             "var_sr_across_instruments": round(breadth_var_sr, 6)}}),
-            status="pending"))
+            ))
         promotion = best
         logger.info("[promotion] queued %s (DSR=%.4f) for human review — NOT auto-deployed",
                     best["instrument"], best["dsr"])

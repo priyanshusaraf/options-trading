@@ -288,14 +288,33 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
   (test: seed a poisoned family, watch it get suppressed; seed a survivor, watch mutants).
 
 ### Phase 4 — Shadow-paper stage before approval
-- [ ] New candidate state between "validated" and "pending approval": auto-run on a
-      research-side paper book against live candles for N sessions (research plane only —
-      never the live engine's book).
-- [ ] Surface to owner only with a shadow-vs-backtest scorecard: hit rate, avg R,
-      expectancy vs confidence bands ("did reality match the promise").
+- [x] **Shadow state between validated and pending — DONE 2026-08-01.** `research/shadow.py`
+      + `research_shadow_session`. Candidates are now born `shadow`, not `pending`: a
+      validated candidate has only cleared a RETROSPECTIVE bar (every parameter chosen with
+      the whole series visible; deflation and PBO discount that, they cannot remove it). It
+      must survive sessions it has never seen before a human is asked.
+      Never touches the execution plane — no order, no position, no row in
+      `paper_trader.db`. Fails closed: too few sessions, no trades, or an unreadable record
+      all mean NOT ready.
+      **Two details that decide whether the gate is real:** sessions count DISTINCT DATES,
+      not rows (a candidate run on six instruments for one day has seen one session, not six
+      — counting rows would let a wide universe fake persistence in an afternoon), and
+      recording is idempotent per (candidate, date, instrument) so replaying a day cannot
+      inflate the evidence.
+- [x] **Shadow-vs-backtest comparison — DONE 2026-08-01.** `comparison()` puts expected next
+      to realised (hit rate, avg per trade, deltas, net P&L) and is attached to the candidate
+      on promotion, preserving the original scorecard. Deliberately REPORTED, not judged:
+      inventing a pass mark for how closely a small shadow sample must track a backtest would
+      be false precision. It carries an explicit `underpowered` flag so nobody reads a
+      3-session agreement as confirmation.
 - [ ] Reuse `strategy/explain.py` for the plain-language "what it does" at approval time.
-- **Acceptance:** no candidate reaches the approval queue without ≥N shadow sessions and
-  an expected-vs-realized comparison attached.
+      (Already rendered into every run report by `report._render_explanation`; what remains
+      is surfacing it on the approval queue itself.)
+- **Acceptance: MET.** `approval_queue()` returns only `pending`, and the only path from
+  `shadow` to `pending` is `promote_if_ready`, which requires ≥`MIN_SHADOW_SESSIONS` distinct
+  sessions with real trades and attaches the comparison. Pinned by a negative test — a fresh
+  validated candidate is ABSENT from the queue — which is the only kind of assertion that
+  means anything here.
 
 ### Phase 5 — Regime conditioning *(only after 0–3 produce trustworthy data)*
 - [ ] Label bars into regimes (trend/chop × vol buckets); evaluate blocks per regime;

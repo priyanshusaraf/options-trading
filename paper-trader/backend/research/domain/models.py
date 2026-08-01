@@ -19,6 +19,7 @@ import datetime as dt
 from sqlalchemy import (
     DDL,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -194,3 +195,26 @@ class BlockEdge(ResearchBase):
     negative: Mapped[int] = mapped_column(Integer, default=0)
     last_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class ShadowSession(ResearchBase):
+    """One session of a candidate traded on the RESEARCH-side paper book.
+
+    The stage between "validated" and "pending approval". A backtest is a promise;
+    this is the record of whether reality matched it, session by session, against
+    live candles the strategy has never seen.
+
+    It never touches the execution plane: no order, no position, no row in
+    paper_trader.db. The research plane owning its own paper book is the whole
+    point — a shadow trade must be incapable of becoming a real one by accident.
+    """
+    __tablename__ = "research_shadow_session"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(
+        ForeignKey("research_promotion_candidate.id"), index=True)
+    session_date: Mapped[dt.date] = mapped_column(Date)
+    instrument_key: Mapped[str] = mapped_column(String(32))
+    trades: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
