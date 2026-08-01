@@ -38,6 +38,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 # equity by the notional on every futures tick.
 MARGIN_SEGMENTS = frozenset({"equity_intraday", "index_futures"})
 
+# FUNDED segments: the broker lends part of the position and charges interest for
+# every day it is held. Their P&L is TIME-DEPENDENT — it worsens while you do
+# nothing — which no other segment here is. `mtf` is the only member today.
+#
+# Separate from MARGIN_SEGMENTS on purpose: both are leveraged, but "only the
+# margin left cash" and "interest accrues daily" are different facts, and a
+# single set conflating them would silently give futures a carry cost or MTF an
+# intraday square-off.
+FUNDED_SEGMENTS = frozenset({"mtf"})
+
 
 class Base(DeclarativeBase):
     pass
@@ -131,11 +141,44 @@ class Position(Base):
 
     def unrealized_pnl(self) -> float:
         """Mark-to-market P&L. Equity intraday and index futures can be real SHORTS
-        (profits as price falls); the options path is always long-premium."""
+        (profits as price falls); the options path is always long-premium.
+
+        FUNDED (MTF) positions subtract accrued interest. Without it a held
+        position looks better every day it is held — the exact opposite of the
+        truth — and the error compounds silently for as long as it stays open,
+        which for MTF can be weeks. It is the one segment whose P&L moves while
+        nothing happens.
+        """
         last = self.last_premium or self.entry_premium
         if self.segment in MARGIN_SEGMENTS and self.direction == "SHORT":
-            return (self.entry_premium - last) * self.qty
-        return (last - self.entry_premium) * self.qty
+            gross = (self.entry_premium - last) * self.qty
+        else:
+            gross = (last - self.entry_premium) * self.qty
+        if self.segment in FUNDED_SEGMENTS:
+            gross -= self.accrued_carry()
+        return gross
+
+    def accrued_carry(self) -> float:
+        """Interest owed so far on a funded position; 0.0 for every other segment.
+
+        Never raises: a carry figure that cannot be computed must not take down
+        the mark loop, and 0.0 is the conservative direction here only because
+        the alternative is no P&L at all — it is logged as a gap, not treated as
+        free money, by the caller that reports it.
+        """
+        if self.segment not in FUNDED_SEGMENTS:
+            return 0.0
+        try:
+            from app.engine.carry import accrued_to_date
+            import datetime as _dt
+            entry = self.entry_time.date() if self.entry_time else _dt.date.today()
+            today = (self.last_mark_time or self.entry_time or _dt.datetime.now()).date()
+            margin = (self.entry_cost or 0.0) - (self.entry_charges or 0.0)
+            return accrued_to_date(
+                position_value=self.entry_premium * self.qty,
+                margin_paid=margin, entry=entry, today=today)
+        except Exception:
+            return 0.0
 
     def mtm_value(self) -> float:
         """Contribution to portfolio equity. Options: the contract's liquidation value

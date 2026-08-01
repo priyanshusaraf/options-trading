@@ -220,6 +220,17 @@ class Settings(BaseSettings):
     # Don't market into a wide book (illiquid commodity options): route MARKET only
     # when tight + deep, a capped marketable-limit when moderate, and skip entries
     # uglier than this. SELL exits always go market (getting out beats slippage).
+    # ── MTF (funded delivery) segment (E3) — EVERY KNOB DEFAULTS INERT ──────
+    # Multi-day, funded, interest-bearing. `mtf_enabled=False` means no candidate
+    # is ever generated, so nothing below is reachable. Enabling it is an owner
+    # decision that also requires deciding the LIFECYCLE questions this build
+    # deliberately does not answer: how a funded position interacts with the
+    # daily profit-lock, and whether it may ever be force-closed. The carry model
+    # and the P&L are built and correct; the lifecycle is not assumed.
+    mtf_enabled: bool = False
+    mtf_annual_rate: float = 0.1499     # broker funding rate; verify vs a statement
+    mtf_max_holding_days: int = 30      # a funded position is not a forever position
+
     # ── index-futures segment (E2) — EVERY KNOB DEFAULTS INERT ──────────────
     # The segment is fully built and switched OFF. `index_futures_enabled=False`
     # means no candidate is ever generated, so the entry/mark/exit paths are
