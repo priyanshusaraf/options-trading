@@ -317,9 +317,29 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
   means anything here.
 
 ### Phase 5 — Regime conditioning *(only after 0–3 produce trustworthy data)*
-- [ ] Label bars into regimes (trend/chop × vol buckets); evaluate blocks per regime;
-      let the generator condition on current regime. (Regime labels multiply trial count —
-      which is why Phase 0 must exist first.)
+- [x] **Label bars into regimes — DONE 2026-08-01.** `research/regime.py`: trend/chop ×
+      volatility, per bar, pure and deterministic. Trend uses Kaufman's efficiency ratio
+      (net displacement ÷ path walked) rather than ADX — a single bounded number with no
+      smoothing constants, so labels are reproducible instead of parameter-sensitive. The
+      volatility split is RELATIVE to the instrument's own history: an absolute ATR%
+      threshold would label every commodity "high" and every index "low", and the map would
+      describe the universe rather than the market state.
+      **No look-ahead, pinned by test:** the volatility median is EXPANDING, not a
+      full-series quantile — a quantile would make bar 10's label depend on bar 900's
+      volatility, leaking the future into every conditional result invisibly, because the
+      leak would live in the labelling rather than the strategy. The test truncates the
+      series and asserts surviving labels are unchanged. Warmup bars are `unknown`, never
+      "chop". 15 tests.
+- [x] **Per-regime context reported — DONE 2026-08-01.** Every run report now carries the
+      regime distribution per instrument. Real output: COPPERM 64 `trend_hi` vs CRUDEOIL 81
+      `chop_hi` on the same window — the instruments are in visibly different markets, which
+      no aggregate statistic shows.
+- [ ] **Let the generator CONDITION on regime — NOT DONE, and deliberately separated.**
+      Reporting a regime breakdown is diagnostic; *selecting* per regime is a search over N
+      regimes and therefore N more chances to be lucky. `regime.regime_trial_multiplier` is
+      built and tested ready for it, but until generation actually conditions, feeding it
+      into `sibling_trials` would tell the DSR a larger search happened than did. Wire them
+      together in the same change, never separately.
 
 ### Isolation rules for ALL research-plane work (verified holding 2026-07-20)
 1. `app/` may import `research/` **only** via the read-only bridge

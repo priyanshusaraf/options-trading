@@ -73,6 +73,23 @@ def render_markdown(report: dict) -> str:
     # Rendered here because a reinforcement loop nobody can read is a reinforcement
     # loop nobody can debug: this is the table that explains why tonight's search
     # avoided something last night tried.
+    regimes = report.get("regimes") or {}
+    if regimes:
+        lines.append("## Market regimes in this sample")
+        lines.append("Which conditions the result was measured in. An edge that lives "
+                     "in one regime is invisible in an aggregate statistic — and is a "
+                     "good strategy with a missing filter, not a mediocre one.")
+        lines.append("")
+        lines.append("| instrument | " + " | ".join(
+            ["trend_hi", "trend_lo", "chop_hi", "chop_lo", "unknown"]) + " |")
+        lines.append("|---|---|---|---|---|---|")
+        for key in sorted(regimes):
+            d = regimes[key]
+            lines.append(f"| {key} | " + " | ".join(
+                str(d.get(r, 0)) for r in
+                ("trend_hi", "trend_lo", "chop_hi", "chop_lo", "unknown")) + " |")
+        lines.append("")
+
     edge = report.get("edge_map", "")
     if edge:
         lines.append("## Block edge map — which idea works where")

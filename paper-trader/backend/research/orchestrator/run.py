@@ -349,7 +349,35 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         "qualified": qualified, "rejected": rejected, "validated": validated,
         "promotion": promotion, "decision": run.decision, "total_bars": total_bars,
         "explanation": explanation,
+        "regimes": _regime_context(datasets),
     }
+
+
+def _regime_context(datasets) -> dict:
+    """What market conditions this experiment was actually measured in.
+
+    DIAGNOSTIC ONLY, and the distinction matters. Nothing selects on regime yet —
+    the generator does not condition on it — so this does NOT inflate the trial
+    count. The moment generation starts choosing per regime, that becomes a
+    selection over N regimes and `regime.regime_trial_multiplier` has to feed
+    `sibling_trials`, or the DSR will be told a smaller search happened than did.
+
+    Reported because "the edge only appeared in high-vol trend" is the single most
+    useful thing to know about a result that looks mediocre in aggregate — and it
+    is invisible in any aggregate statistic.
+    """
+    from research.regime import label_regimes, regime_distribution
+    out = {}
+    for inst, ds in datasets or []:
+        try:
+            frame = kernels.compute_signals(ds.candles, kernels.get_strategy(None), {})
+            if frame is None or len(frame) == 0:
+                continue
+            out[getattr(inst, "key", "?")] = regime_distribution(label_regimes(frame))
+        except Exception as e:            # noqa: BLE001
+            logger.warning("regime labelling failed for %s: %s",
+                           getattr(inst, "key", "?"), e)
+    return out
 
 
 def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") -> list:
