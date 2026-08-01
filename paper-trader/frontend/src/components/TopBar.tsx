@@ -2,10 +2,31 @@ import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
 import { getStatus, getExecState, armBot, killBot } from '../lib/api'
 import { inr, signedInr, pnlColor } from '../lib/format'
+import type { Capital } from '../lib/types'
 
 function Stat({ label, v, cls = '', title }: { label: string; v: string; cls?: string; title?: string }) {
   return <div className="text-right" title={title}><div className="stat-label">{label}</div>
     <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
+}
+
+// The bot's internal ledger vs the broker's own number. These must agree, because the
+// equity curve, every %-return and every drawdown figure are computed off the internal
+// ledger. Production ran ~₹27,000 adrift for three weeks and the UI said nothing, so this
+// badge exists to make "the numbers on this screen are not real" impossible to miss.
+// It self-hides once the daily re-anchor brings the two back together.
+export function LedgerDriftBadge({ cap }: { cap?: Capital }) {
+  const drift = cap?.ledger_drift
+  if (drift == null || Math.abs(drift) < 500) return null
+  return (
+    <span className="badge bg-amber-500/15 text-amber-300 border border-amber-500/40 cursor-help"
+      title={`The bot's internal ledger says ₹${(cap?.equity ?? 0).toLocaleString('en-IN')} but your broker says ₹${(cap?.account_net ?? 0).toLocaleString('en-IN')}.`
+        + ` Equity-curve and %-return figures come from the internal ledger, so treat them as approximate until this clears.`
+        + `\n\nWhy it hasn't re-anchored: ${cap?.ledger_anchor_note || 'unknown'}`
+        + `\nLast anchored: ${cap?.ledger_anchored_at ? new Date(cap.ledger_anchored_at).toLocaleString('en-IN') : 'never'}`
+        + `\n\nIt re-anchors automatically once a day, before the first trade, with a flat book.`}>
+      ⚠ Ledger off by ₹{Math.round(Math.abs(drift)).toLocaleString('en-IN')}
+    </span>
+  )
 }
 
 export function ExecutionControls({ compact = false }: { compact?: boolean }) {
@@ -91,6 +112,7 @@ export default function TopBar({ tab, setTab, tabs }:
           </span>
           {status && !status.authenticated && status.login_url &&
             <a className="btn" href="/api/login">Connect Kite</a>}
+          <LedgerDriftBadge cap={cap} />
           <ExecutionControls />
         </div>
         <div className="flex items-center gap-5">

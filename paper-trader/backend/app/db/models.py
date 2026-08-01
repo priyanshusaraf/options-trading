@@ -38,6 +38,7 @@ class CapitalState(Base):
     cash: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     account_baseline: Mapped[float | None] = mapped_column(Float, nullable=True)  # live account equity when bot-vs-you tracking started
+    anchored_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)  # last re-anchor to real broker equity (NULL = never)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 

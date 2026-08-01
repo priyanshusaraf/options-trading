@@ -82,6 +82,12 @@ class Settings(BaseSettings):
 
     # capital & risk
     initial_capital: float = 50_000.0
+    # LIVE ledger honesty: re-anchor the internal ledger to the REAL broker equity once a
+    # day, before the day's first entry, when the book is flat and the two have drifted
+    # beyond the tolerance. Without this the cockpit reports `initial_capital ± realized`
+    # forever — production reported ₹49,833 against a real account worth a fraction of it.
+    ledger_auto_reanchor: bool = True
+    ledger_reanchor_tolerance: float = 250.0   # ₹ drift below which the ledger is left alone
     stop_loss_pct: float = 0.30
     target_pct: float = 0.60
 

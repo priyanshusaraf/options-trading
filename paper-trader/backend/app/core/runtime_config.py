@@ -60,6 +60,8 @@ OVERRIDABLE = (
     "gap_guard_enabled", "gap_guard_pct", "gap_guard_resume", "gap_guard_index",
     # #14 live order-failure circuit breaker
     "order_failure_disarm_count",
+    # ledger honesty — daily re-anchor of the internal ledger to real broker equity
+    "ledger_auto_reanchor", "ledger_reanchor_tolerance",
 )
 
 
@@ -126,6 +128,9 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "gap_guard_pct": (0.0, 10.0),              # 0 disables the opening-gap guard
     "order_failure_disarm_count": (0, 100),    # 0 disables the order circuit breaker
     "max_round_trips_per_day": (0, 100),
+    # ₹ of ledger-vs-broker drift tolerated before the daily re-anchor corrects it. Too
+    # tight and the ledger churns on rounding; too loose and the equity curve drifts.
+    "ledger_reanchor_tolerance": (0.0, 1000000.0),
 }
 
 

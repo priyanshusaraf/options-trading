@@ -106,6 +106,7 @@ def _migrate_schema() -> None:
     additions = {
         "capital_state": [
             ("account_baseline", "FLOAT"),
+            ("anchored_at", "DATETIME"),
         ],
         "instrument_state": [
             ("live_interval", "VARCHAR(12) DEFAULT '15minute'"),

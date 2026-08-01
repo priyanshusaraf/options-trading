@@ -22,7 +22,7 @@ import asyncio
 import datetime as dt
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
@@ -39,7 +39,7 @@ from app.engine.equity_entry import (
     IntradayCandidate, equity_exit, equity_qty, qty_for_margin,
     select_intraday_entries)
 from app.engine.execution_policy import plan_order
-from app.engine.ledger_reconcile import plan_reanchor
+from app.engine.ledger_reconcile import plan_reanchor, should_reanchor
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
@@ -118,7 +118,8 @@ class EngineRunner:
         self._next_cache_sweep_epoch = 0.0     # throttle the watchlist option-chain research cache
         self._account_funds: dict | None = None  # cached live Kite funds {available, net}
         self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
-        self._reanchored = False               # E0.2: auto-reanchor fired once this process
+        self._reanchored = False               # a re-anchor fired at least once this process
+        self._reanchor_reason = ""             # WHY the ledger is/isn't anchored to the broker
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
@@ -1498,35 +1499,51 @@ class EngineRunner:
             log.warn(f"account funds refresh failed: {e}")
 
     def _maybe_auto_reanchor(self, funds: dict) -> None:
-        """E0.2: the internal ledger starts at the synthetic ₹50k `initial_capital`
-        (config.py), so on live the equity curve (built from `cash + mtm`) opens at the
-        synthetic base instead of the real broker equity. Rather than touch the
-        snapshot formula, re-anchor `capital_state` ONCE — the first time this process
-        sees real funds on a FRESH, untouched, FLAT ledger — via the existing pure
-        planner `plan_reanchor` (initial=cash=baseline=real_equity, realized=0).
+        """Keep the reported equity equal to the REAL account equity.
 
-        Fail-safe: every guard below must hold or this is a no-op. In particular, ANY
-        live trade history or nonzero realized P&L means the ledger is no longer
-        "fresh" and must NEVER be auto-reanchored (that would zero real P&L / rewrite
-        the curve) — a drifted existing ledger is the owner's job via
-        `scripts/reconcile_ledger.py`, not this auto-path."""
-        if self._reanchored:
-            return
-        net = float(funds.get("net", 0.0) or 0.0)
-        if net <= 0:
-            return
+        The internal ledger starts at the synthetic ₹50k `initial_capital` (config.py) and
+        the equity curve is built from it (`cash + mtm`). The original E0.2 auto-reanchor
+        only fired on a ledger that had NEVER traded — so on the production book (trading
+        since 2026-07-13) it was unreachable, and the cockpit reported ₹49,833 (= 50,000 −
+        realized) for three weeks against a far smaller real account. Every %-return,
+        drawdown and curve figure inherited that lie.
+
+        Now: re-anchor at most ONCE PER DAY, before the day's first entry, only when the
+        book is flat and the ledger has actually drifted past `ledger_reanchor_tolerance`.
+        That is the one window where moving the anchor cannot change the meaning of an
+        in-flight session — today's realized P&L, the daily-loss halt and the profit-lock
+        all read from `trades`/session state, never from `capital_state`, so a pre-session
+        re-anchor leaves those semantics untouched.
+
+        Every guard fails closed and the refusal reason is recorded on
+        `self._reanchor_reason` so the cockpit can show WHY the ledger is adrift instead of
+        quietly reporting a fiction."""
+        net = float(funds.get("net", 0.0) or 0.0) if funds else 0.0
         try:
+            now = self.provider.now()
+            today = now.date()
             open_entry_cost = sum(p.entry_cost for p in self.broker.open_positions())
-            if abs(open_entry_cost) > 0.01:
-                return  # book not flat — plan_reanchor would raise; never call it
             cap = self.broker.capital()
             if cap is None:
                 return
-            if cap.initial_capital != self.settings.initial_capital or cap.realized_pnl != 0.0:
-                return  # not a fresh synthetic base — already touched, leave it alone
-            with SessionLocal() as s:
-                if s.query(Trade).first() is not None:
-                    return  # any live trade history — never auto-reanchor
+            internal_equity = cap.cash + sum(p.mtm_value() for p in self.broker.open_positions())
+            anchored = getattr(cap, "anchored_at", None)
+            ok, why = should_reanchor(
+                is_live=(getattr(self.broker, "MODE", "paper") == "live"),
+                real_equity=net or None,
+                internal_equity=internal_equity,
+                open_entry_cost=open_entry_cost,
+                trades_today=self._today_trade_count(today),
+                last_anchor_date=anchored.date() if anchored else None,
+                today=today,
+                tolerance=float(self.params.get("ledger_reanchor_tolerance",
+                                                self.settings.ledger_reanchor_tolerance)),
+                enabled=bool(self.params.get("ledger_auto_reanchor",
+                                             self.settings.ledger_auto_reanchor)),
+            )
+            self._reanchor_reason = why
+            if not ok:
+                return
             new_state, notes = plan_reanchor(
                 real_equity=net, cash=cap.cash, initial_capital=cap.initial_capital,
                 realized_pnl=cap.realized_pnl, account_baseline=cap.account_baseline,
@@ -1540,13 +1557,25 @@ class EngineRunner:
             cap.cash = new_state["cash"]
             cap.realized_pnl = new_state["realized_pnl"]
             cap.account_baseline = new_state["account_baseline"]
+            cap.anchored_at = now
             self.broker.s.commit()
             self._reanchored = True
             log.info(f"RE-ANCHORED live ledger to real equity ₹{net:,.2f} "
-                     f"(fresh account, book flat): " + "; ".join(notes),
+                     f"(book flat, no trades today; {why}): " + "; ".join(notes),
                      event="LEDGER_AUTO_REANCHOR")
         except Exception as e:
+            self._reanchor_reason = f"re-anchor failed: {e}"
             log.warn(f"auto-reanchor failed: {e}", event="LEDGER_AUTO_REANCHOR_FAIL")
+
+    def _today_trade_count(self, today) -> int:
+        """Trades CLOSED today — the gate that stops the anchor moving mid-session."""
+        try:
+            with SessionLocal() as s:
+                return int(s.query(func.count(Trade.id)).filter(
+                    Trade.exit_time >= dt.datetime.combine(today, dt.time.min),
+                    Trade.exit_time < dt.datetime.combine(today, dt.time.max)).scalar() or 0)
+        except Exception:
+            return 1   # fail closed: unknown trade count must never allow a re-anchor
 
     def _maybe_check_ledger(self) -> None:
         """H10: run the cash-invariant self-check in production (it was only ever run by
@@ -1829,6 +1858,14 @@ class EngineRunner:
         if self.provider.name == "kite" and f:
             d["account_available"] = round(f.get("available", 0.0), 2)
             d["account_net"] = round(f.get("net", 0.0), 2)
+            # Ledger honesty: the difference between what the bot BELIEVES it is worth and
+            # what the broker says the account is worth. Production ran ~₹27k adrift for
+            # three weeks with nothing on screen saying so. Never hide this again — the UI
+            # renders it as a warning whenever it exceeds the re-anchor tolerance.
+            d["ledger_drift"] = round(d["equity"] - d["account_net"], 2)
+            d["ledger_anchor_note"] = self._reanchor_reason
+            cap_anchor = getattr(cap, "anchored_at", None)
+            d["ledger_anchored_at"] = cap_anchor.isoformat() if cap_anchor else None
         return d
 
     def _market_open_by_segment(self) -> dict[str, bool]:

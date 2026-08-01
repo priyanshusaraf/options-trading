@@ -4,6 +4,10 @@ export interface Capital {
   // live mode only: the REAL Kite account balance (cached margins). available =
   // free cash not locked in your securities; net = total account equity.
   account_available?: number; account_net?: number
+  // How far the bot's internal ledger has drifted from the broker's own number, plus why
+  // it is or isn't anchored. Production ran ~₹27k adrift for three weeks with nothing on
+  // screen saying so — this makes an untrustworthy equity curve impossible to miss.
+  ledger_drift?: number; ledger_anchor_note?: string; ledger_anchored_at?: string | null
 }
 
 export interface PositionDTO {
