@@ -573,12 +573,19 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 > and verifiable now — the build plan (13 TDD steps) is in the spec, ready to execute once the
 > gate clears. E3 (MTF) is even more contract-note-dependent (carry/interest, haircut) and stays last.
 - [~] **New segment `index_futures` — FOUNDATION BUILT 2026-08-01, SEGMENT OFF.**
-      Build-plan steps **1, 2, 3, 4, 5, 6 and 11** are done and deployed with
-      `index_futures_enabled=False`, so none of it is reachable in production.
-      **Remaining: 7, 8, 9, 10, 12** — `_mark_exit_futures` + dispatch, the margin sizer,
-      the `process_entries` futures block, `square_off_intraday` widening, and the
-      flag-flipped-on scenario run. Those five are what actually connect the segment to the
-      engine; everything below it is built and proven in isolation.
+      **ALL TWELVE BUILD STEPS DONE 2026-08-01, deployed, `index_futures_enabled=False`.**
+      Step 13 — owner + Fable review before the flag flips — is the ONLY thing left, and it
+      is deliberately not mine to do.
+      Step 12's proof runs with the flag **ON**: open → mark → exit, with the ledger
+      invariant asserted at every stage, across profit, loss, SHORT and force-flat round
+      trips. That is the test that catches what no unit test can — a segment whose parts are
+      each correct and which together lose a rupee.
+      **Two real defects the build surfaced, both about defaults rather than logic:**
+      `index_futures_max_margin` defaulted to ₹25,000 when one NIFTY lot blocks ~₹216,000 —
+      enabled, the segment would have silently never traded and looked BROKEN rather than
+      off. And the same arithmetic says plainly that **a ₹50,000 account cannot trade index
+      futures at all**; it is refused on affordability, which is the concrete reason this was
+      always scoped as a bigger-capital feature.
       - **Step 1 — delivery-window guard (`engine/delivery_calendar.py`).** Built FIRST
         because the failure it prevents is not a losing trade: an MCX contract held through
         its compulsory tender period is an obligation to deliver physical metal. A no-op for
