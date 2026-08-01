@@ -573,10 +573,12 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 > and verifiable now — the build plan (13 TDD steps) is in the spec, ready to execute once the
 > gate clears. E3 (MTF) is even more contract-note-dependent (carry/interest, haircut) and stays last.
 - [~] **New segment `index_futures` — FOUNDATION BUILT 2026-08-01, SEGMENT OFF.**
-      Build-plan steps 1, 2 and 4 are done and deployed with `index_futures_enabled=False`,
-      so none of it is reachable in production. Remaining: steps 3, 5-12 (futures LTP fetch,
-      broker open/close, `unrealized_pnl` widening, `_mark_exit_futures`, margin sizer,
-      `process_entries` block, square-off widening, ledger-invariant proof).
+      Build-plan steps **1, 2, 3, 4, 5, 6 and 11** are done and deployed with
+      `index_futures_enabled=False`, so none of it is reachable in production.
+      **Remaining: 7, 8, 9, 10, 12** — `_mark_exit_futures` + dispatch, the margin sizer,
+      the `process_entries` futures block, `square_off_intraday` widening, and the
+      flag-flipped-on scenario run. Those five are what actually connect the segment to the
+      engine; everything below it is built and proven in isolation.
       - **Step 1 — delivery-window guard (`engine/delivery_calendar.py`).** Built FIRST
         because the failure it prevents is not a losing trade: an MCX contract held through
         its compulsory tender period is an obligation to deliver physical metal. A no-op for
@@ -590,6 +592,25 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
         unverified against a contract note, so it is set equal to NSE's — the model must never
         UNDER-charge, since an optimistic cost model flatters everything built on it, and a
         test pins `BFO >= NFO`.
+      - **Step 3 — futures LTP seam.** `get_futures_ltp` on the provider interface, concrete
+        and returning `None` (not abstract — an earlier cut made it abstract by accident and
+        broke provider construction everywhere, nine tests at once; there is now a test
+        pinning that a new optional seam cannot do that). `None` means "I cannot price a
+        future", so the caller refuses; falling back to spot would be the mis-pricing wearing
+        a working provider's clothes. The mock's synthetic basis DECAYS to zero at expiry,
+        because convergence at settlement is the one property a test must rely on.
+      - **Steps 5 + 11 — broker open/close, ledger paisa-exact.** A near-copy of the equity
+        pair rather than a shared generic, so the live equity path is never one refactor away
+        from a futures change. **Margin is REQUIRED with no fallback** — SPAN is
+        portfolio-scanned and instrument-specific, so a guessed figure would be a fabricated
+        number sitting in the ledger. The invariant is asserted before open, after open,
+        after a mark and after close; and separately, that only the MARGIN leaves cash —
+        ₹1.2 crore of notional against ₹25k of margin would take the account deeply negative
+        on the first contract if it leaked.
+      - **Step 6 — margin-based P&L.** `MARGIN_SEGMENTS` is a named set, not a repeated
+        literal: one method calling futures margined while the other called them fully paid
+        would inflate equity by the notional on every tick. Half that test file proves the
+        options and equity paths did not move.
       - **Step 4 — config knobs, every one inert.** Concurrency starts at **1**: a new
         leveraged segment earns its width, and inheriting 4 from the equity segment would not
         be a decision. `index_futures_margin_pct` is a flagged paper-only SPAN estimate; live
