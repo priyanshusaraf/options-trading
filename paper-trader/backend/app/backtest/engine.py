@@ -44,6 +44,7 @@ import pandas as pd
 
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.backtest.ratchet import RatchetState, wilder_atr
+from app.core.config import get_settings
 from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
 from app.market_data.candles import candles_to_df
@@ -136,7 +137,8 @@ def estimate_option_cost(inst, candles, r: float = 0.065) -> float:
 def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
              strategy=None, params: dict | None = None,
              ema_length: int = 50, z_length: int = 50, entry_z: float = 1.0,
-             slope_lookback: int = 5) -> tuple[list[BTTrade], BTMetrics]:
+             slope_lookback: int = 5,
+             slippage_pct: float | None = None) -> tuple[list[BTTrade], BTMetrics]:
     """Run a strategy over `candles` and return (trades, metrics).
 
     `strategy` is a registry Strategy (None → the default trend_impulse_v3); `params`
@@ -177,7 +179,7 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
         m.option_cost = option_cost
         return [], m
 
-    trades = run_trades(sig, inst, seg, capital, rm)
+    trades = run_trades(sig, inst, seg, capital, rm, slippage_pct=slippage_pct)
     m = compute_metrics(trades, capital)
     m.bh_return_pct = bh_return_pct
     m.bh_curve = bh_curve
@@ -229,13 +231,38 @@ def _event_blocked_bar(inst, row, product: str) -> bool:
     return active_blackout(getattr(inst, "key", ""), product, when) is not None
 
 
+def slipped(price: float, side: str, half_spread: float) -> float:
+    """Apply ADVERSE execution cost to a fill.
+
+    You buy above the mid and sell below it, always — so this is direction-aware
+    on both legs of a trade. A SHORT pays it inverted (sells lower to open, buys
+    higher to cover), which a symmetric implementation would get wrong and quietly
+    bias the model toward one side.
+
+    `half_spread` is half the round-trip cost, mirroring how `premium.py` has
+    modelled the option spread since it was written — the spot path simply never
+    had an equivalent.
+    """
+    if half_spread <= 0:
+        return price
+    return price * (1.0 + half_spread) if side == "BUY" else price * (1.0 - half_spread)
+
+
 def run_trades(sig, inst, seg: str, capital: float, rm,
-               event_risk: bool = True) -> list[BTTrade]:
+               event_risk: bool = True,
+               slippage_pct: float | None = None) -> list[BTTrade]:
     """Replay the fill-next-bar-open trade state machine over a 0-indexed signal
     (sub)frame and return the closed trades. This is the seam walk-forward slices
     per fold; pure over its inputs. `sig` must carry the canonical flag columns
     (+ `_ratchet_atr` when `rm` is set). Extracted verbatim from `simulate`."""
     trades: list[BTTrade] = []
+    # Half the round-trip cost, applied adversely to EVERY fill. Resolved here so
+    # the whole replay uses one budget; `slippage_pct=0.0` reproduces the
+    # pre-2026-08-01 zero-cost fills exactly, which is the escape hatch that keeps
+    # every stored backtest number falsifiable.
+    if slippage_pct is None:
+        slippage_pct = float(get_settings().backtest_slippage_pct)
+    half = float(slippage_pct) / 2.0
     # The backtester trades the UNDERLYING, so the product for rule-matching is the
     # instrument itself, never "options" — the options-only rules (NIFTY Tuesday,
     # bullion-into-expiry) correctly do not apply to a spot backtest.
@@ -256,13 +283,15 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
             kind, arg = pending
             pending = None
             if kind == "ENTER" and pos is None:
-                qty, notional, lots = _position(inst, open_px, capital)
+                # A LONG opens with a BUY, a SHORT opens with a SELL.
+                fill_px = slipped(open_px, "BUY" if arg == "LONG" else "SELL", half)
+                qty, notional, lots = _position(inst, fill_px, capital)
                 # Same blackout table as live: a fill that would land inside a scheduled
                 # event is not taken here either. Exits are never gated (below).
                 if event_risk and _event_blocked_bar(inst, r, product):
                     qty = 0
                 if qty > 0:
-                    pos = {"direction": arg, "entry_price": open_px,
+                    pos = {"direction": arg, "entry_price": fill_px,
                            "entry_time": t, "entry_idx": i, "qty": qty,
                            "notional": notional, "lots": lots,
                            "mae_pct": 0.0}
@@ -272,10 +301,13 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
                         if entry_atr is not None and math.isfinite(entry_atr) \
                                 and entry_atr > 0:
                             # risk units freeze at the FILL bar (pine:212)
-                            ratchet = RatchetState(arg, open_px,
+                            ratchet = RatchetState(arg, fill_px,
                                                    float(entry_atr), rm)
             elif kind == "EXIT" and pos is not None:
-                trades.append(_close(pos, open_px, t, i, seg, arg))
+                # Closing a LONG is a SELL; covering a SHORT is a BUY.
+                exit_px = slipped(open_px,
+                                  "SELL" if pos["direction"] == "LONG" else "BUY", half)
+                trades.append(_close(pos, exit_px, t, i, seg, arg))
                 pos = None
                 ratchet = None
 
@@ -303,7 +335,9 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
     # has no next open to fill at.
     if pos is not None:
         last = rows[-1]
-        trades.append(_close(pos, float(last["close"]),
+        end_px = slipped(float(last["close"]),
+                         "SELL" if pos["direction"] == "LONG" else "BUY", half)
+        trades.append(_close(pos, end_px,
                              ist_epoch(last["date"]),
                              len(rows) - 1, seg, "OPEN_AT_END"))
     return trades

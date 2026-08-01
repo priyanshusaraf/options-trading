@@ -10,6 +10,13 @@ import pytest
 from app.backtest.engine import simulate
 from app.strategy.registry.base import Strategy
 
+# Execution cost is pinned to ZERO throughout this file. These tests identify WHICH
+# BAR a fill landed on by its price ("bar 5 OPEN, not bar 4 close"), so the shipped
+# slippage default (Settings.backtest_slippage_pct, added 2026-08-01) would confound
+# the very assertion being made. Cost has its own coverage in test_backtest_slippage.py;
+# here the subject is timing.
+
+
 
 @dataclass
 class C:
@@ -66,7 +73,7 @@ def test_ratchet_stop_fires_close_confirmed_and_fills_next_open():
     bars[8] = (97.0, 98.0, 96.0, 97.5)     # exit fills at bar 8 OPEN = 97.0
     strat = StubRatchet(entries={4})
     trades, m = simulate(mk_candles(bars), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1
     assert trades[0].reason == "RATCHET_STOP"
     assert trades[0].entry_price == pytest.approx(100.0)
@@ -78,7 +85,7 @@ def test_wick_through_stop_does_not_exit():
     bars[7] = (100.0, 100.5, 96.0, 100.0)  # low 96 pierces 98; close 100 survives
     strat = StubRatchet(entries={4})
     trades, m = simulate(mk_candles(bars), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1 and trades[0].reason == "OPEN_AT_END"
 
 
@@ -87,7 +94,7 @@ def test_same_bar_tie_labels_ratchet_stop():
     bars[7] = (100.0, 100.5, 98.5, 97.9)   # stop confirms bar 7 …
     strat = StubRatchet(entries={4}, exits={7})   # … and flag also fires bar 7
     trades, m = simulate(mk_candles(bars), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert trades[0].reason == "RATCHET_STOP"     # protective label wins the tie
 
 
@@ -96,7 +103,7 @@ def test_zero_atr_disables_ratchet_for_that_trade():
     bars = [(100.0, 100.0, 100.0, 100.0)] * 12
     strat = StubRatchet(entries={4}, exits={8})
     trades, m = simulate(mk_candles(bars), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1
     assert trades[0].reason == "STRATEGY_EXIT"    # not RATCHET_STOP, no crash
 

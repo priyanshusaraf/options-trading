@@ -216,6 +216,14 @@ class Settings(BaseSettings):
     # Don't market into a wide book (illiquid commodity options): route MARKET only
     # when tight + deep, a capped marketable-limit when moderate, and skip entries
     # uglier than this. SELL exits always go market (getting out beats slippage).
+    # Backtest execution cost. The SPOT backtester filled at the exact bar open
+    # with ZERO cost until 2026-08-01, while premium.py had modelled a spread since
+    # it was written. Against a 0.8% stop / 1.5% target — and a largest-ever
+    # favourable excursion of 1.216% of notional — an unmodelled round trip is the
+    # same order of magnitude as the edge being measured. Applied adversely to every
+    # fill, half per side. Set to 0.0 to reproduce pre-2026-08-01 numbers exactly.
+    backtest_slippage_pct: float = 0.0005      # 5 bps round trip (liquid NSE cash intraday)
+
     exec_market_max_spread_pct: float = 0.01   # spread <= this -> MARKET order ok
     exec_limit_max_spread_pct: float = 0.05    # above market_max..this -> capped LIMIT; beyond -> SKIP
     exec_max_slippage_pct: float = 0.01        # cap a marketable-limit this far off the mid

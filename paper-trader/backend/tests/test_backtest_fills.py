@@ -10,6 +10,13 @@ import pytest
 from app.backtest.engine import simulate
 from app.strategy.registry.base import Strategy
 
+# Execution cost is pinned to ZERO throughout this file. These tests identify WHICH
+# BAR a fill landed on by its price ("bar 5 OPEN, not bar 4 close"), so the shipped
+# slippage default (Settings.backtest_slippage_pct, added 2026-08-01) would confound
+# the very assertion being made. Cost has its own coverage in test_backtest_slippage.py;
+# here the subject is timing.
+
+
 
 @dataclass
 class C:
@@ -61,7 +68,7 @@ def test_entry_and_exit_fill_at_next_bar_open():
     bars[8] = (108.0, 109, 107, 108.5)   # bar 8 open — exit fill expected here
     candles = mk_candles(bars)
     strat = StubFlags(entries={4}, exits={7})
-    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST)
+    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1
     t = trades[0]
     assert t.entry_price == pytest.approx(105.0)      # bar 5 OPEN, not bar 4 close
@@ -73,14 +80,14 @@ def test_entry_and_exit_fill_at_next_bar_open():
 def test_last_bar_entry_signal_goes_unfilled():
     strat = StubFlags(entries={11})
     trades, m = simulate(mk_candles(list(BARS)), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert trades == []
 
 
 def test_last_bar_exit_flag_becomes_open_at_end_at_last_close():
     strat = StubFlags(entries={4}, exits={11})
     trades, m = simulate(mk_candles(list(BARS)), Inst(), "15minute",
-                         strategy=strat, params=FAST)
+                         strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1
     assert trades[0].reason == "OPEN_AT_END"
     assert trades[0].exit_price == pytest.approx(100.5)   # LAST CLOSE
@@ -94,7 +101,7 @@ def test_exit_flag_on_fill_bar_is_ignored_until_next_bar():
     bars[7] = (103.0, 104, 102, 103.5)
     candles = mk_candles(bars)
     strat = StubFlags(entries={4}, exits={5, 6})
-    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST)
+    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1
     assert trades[0].exit_price == pytest.approx(103.0)   # bar 7 open
     assert trades[0].bars_held == 2
@@ -105,6 +112,6 @@ def test_short_side_fills_mirror():
     bars[5] = (95.0, 96, 94, 95.5)
     candles = mk_candles(bars)
     strat = StubFlags(entries={4}, exits={8}, shorts=True)
-    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST)
+    trades, m = simulate(candles, Inst(), "15minute", strategy=strat, params=FAST, slippage_pct=0.0)
     assert len(trades) == 1 and trades[0].direction == "SHORT"
     assert trades[0].entry_price == pytest.approx(95.0)
