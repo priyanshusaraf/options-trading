@@ -48,6 +48,7 @@ from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
 from app.engine import readiness
+from app.market_data.candles import candles_to_df
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
@@ -63,8 +64,11 @@ from app.strategy.signals import to_payload
 
 
 def _to_df(candles) -> pd.DataFrame:
-    return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+    """Live signal frame. Thin alias for the shared, VALIDATED converter — this
+    was a byte-identical twin of `backtest.engine._candles_to_df`, so a data fix
+    could land in one plane and miss the other. Kept as a name because callers
+    and tests refer to it."""
+    return candles_to_df(candles)
 
 
 def _equity_charge_segment(inst) -> str:

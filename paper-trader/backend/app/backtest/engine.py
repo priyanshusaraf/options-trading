@@ -46,6 +46,7 @@ from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
+from app.market_data.candles import candles_to_df
 from app.strategy.registry import get_strategy
 
 # Map an instrument's live segment to the charge schedule for its UNDERLYING.
@@ -77,8 +78,10 @@ def backtest_qty(inst, price: float, capital: float) -> int:
 
 
 def _candles_to_df(candles) -> pd.DataFrame:
-    return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+    """Backtest signal frame. Thin alias for the shared, VALIDATED converter —
+    this and `runner._to_df` were byte-identical copies, which is how a live and
+    a backtest plane quietly stop agreeing about what the data even is."""
+    return candles_to_df(candles)
 
 
 def _position(inst, price: float, capital: float) -> tuple[int, float, int]:
