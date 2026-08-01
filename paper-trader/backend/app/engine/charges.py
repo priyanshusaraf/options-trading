@@ -58,6 +58,15 @@ CHARGE_SCHEDULE: dict[str, dict] = {
     "NFO_FUT": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.0000173,
                 "tax_sell_pct": 0.0002, "stamp_buy_pct": 0.00002, "sebi_pct": 1e-6,
                 "gst_pct": 0.18},
+    # BSE index FUTURES (SENSEX/BANKEX). Mirrors NFO_FUT except the exchange
+    # transaction charge: BSE has run its derivatives txn charge at or near zero
+    # to buy liquidity, and has changed it more than once. RATE UNVERIFIED
+    # against a contract note — it is set equal to NSE's here so the model is
+    # CONSERVATIVE (never under-charges) rather than optimistic. Verify before
+    # trusting a BFO_FUT P&L to the paisa.
+    "BFO_FUT": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.0000173,
+                "tax_sell_pct": 0.0002, "stamp_buy_pct": 0.00002, "sebi_pct": 1e-6,
+                "gst_pct": 0.18},
     # MCX commodity FUTURES: brokerage min(₹20, 0.03%); CTT 0.01% sell.
     "MCX_FUT": {"brokerage_pct": 0.0003, "brokerage_cap": 20.0, "txn_pct": 0.000021,
                 "tax_sell_pct": 0.0001, "stamp_buy_pct": 0.00002, "sebi_pct": 1e-6,

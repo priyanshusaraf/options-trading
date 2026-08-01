@@ -216,6 +216,28 @@ class Settings(BaseSettings):
     # Don't market into a wide book (illiquid commodity options): route MARKET only
     # when tight + deep, a capped marketable-limit when moderate, and skip entries
     # uglier than this. SELL exits always go market (getting out beats slippage).
+    # ── index-futures segment (E2) — EVERY KNOB DEFAULTS INERT ──────────────
+    # The segment is fully built and switched OFF. `index_futures_enabled=False`
+    # means no candidate is ever generated, so the entry/mark/exit paths are
+    # unreachable in production regardless of the rest of these values.
+    # Turning it on is an owner decision (roadmap E2 step 13: owner + Fable
+    # review first), not something a deploy should be able to do by accident.
+    index_futures_enabled: bool = False
+    index_futures_max_positions: int = 1
+    index_futures_max_margin: float = 25_000.0   # target SPAN+exposure per position
+    index_futures_min_margin: float = 5_000.0    # dust floor
+    # Paper-mode SPAN+exposure ESTIMATE as a fraction of notional. A flagged
+    # approximation: real SPAN is portfolio-scanned and instrument-specific, so
+    # live sizing must use a broker order_margins() quote and this value is only
+    # ever a paper/backtest stand-in.
+    index_futures_margin_pct: float = 0.12
+    index_futures_stop_loss_pct: float = 0.004   # tighter than cash: leverage is higher
+    index_futures_target_pct: float = 0.008
+    index_futures_square_off_buffer_minutes: float = 15.0
+    # Delivery guard. Index futures are cash-settled so this is a no-op today;
+    # it exists so a later commodity extension cannot trade through delivery.
+    index_futures_delivery_guard: bool = True
+
     # Backtest execution cost. The SPOT backtester filled at the exact bar open
     # with ZERO cost until 2026-08-01, while premium.py had modelled a spread since
     # it was written. Against a 0.8% stop / 1.5% target — and a largest-ever

@@ -572,12 +572,30 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 > stubbed commodity calendar), force-flat/no-rollover, and dryrun-exactness ARE all buildable
 > and verifiable now — the build plan (13 TDD steps) is in the spec, ready to execute once the
 > gate clears. E3 (MTF) is even more contract-note-dependent (carry/interest, haircut) and stays last.
-- [ ] New segment `index_futures`, on its own entry/mark/exit path (mirror how
-      `equity_intraday` is isolated so the options path stays untouched). Lot sizes +
-      SPAN+exposure margin sizing; futures charge legs in `charges.py` (already segment-aware);
-      MTM on the futures LTP; direction-aware SL/TP + lockstep reuse. **Spec gate first**
-      (owner + Fable review) before any build. Index ranks above stock futures per the
-      CLAUDE.md index-first direction.
+- [~] **New segment `index_futures` — FOUNDATION BUILT 2026-08-01, SEGMENT OFF.**
+      Build-plan steps 1, 2 and 4 are done and deployed with `index_futures_enabled=False`,
+      so none of it is reachable in production. Remaining: steps 3, 5-12 (futures LTP fetch,
+      broker open/close, `unrealized_pnl` widening, `_mark_exit_futures`, margin sizer,
+      `process_entries` block, square-off widening, ledger-invariant proof).
+      - **Step 1 — delivery-window guard (`engine/delivery_calendar.py`).** Built FIRST
+        because the failure it prevents is not a losing trade: an MCX contract held through
+        its compulsory tender period is an obligation to deliver physical metal. A no-op for
+        cash-settled index futures, but tested against a calendar that actually bites — a
+        guard only ever exercised against the always-None calendar is a guard nobody has
+        tested. **Unknown means UNSAFE** (a calendar that raises or returns junk = refuse),
+        and the polarity is deliberate: `True` means safe, so a caller who forgets to negate
+        gets a refusal rather than an unguarded position. 9 tests.
+      - **Step 2 — `BFO_FUT` charge schedule.** SENSEX futures had NO schedule, so a P&L
+        computed for one would have booked the trade as free. BSE's derivatives txn charge is
+        unverified against a contract note, so it is set equal to NSE's — the model must never
+        UNDER-charge, since an optimistic cost model flatters everything built on it, and a
+        test pins `BFO >= NFO`.
+      - **Step 4 — config knobs, every one inert.** Concurrency starts at **1**: a new
+        leveraged segment earns its width, and inheriting 4 from the equity segment would not
+        be a decision. `index_futures_margin_pct` is a flagged paper-only SPAN estimate; live
+        sizing must use a broker `order_margins()` quote.
+      **Step 13 (owner + Fable review) still gates the flag ever flipping true.** The build
+      landing does not change that.
 - [ ] **INTRADAY-ONLY, NO ROLLOVERS, NEVER HOLD TO DELIVERY (owner, 2026-07-24).** The
       strategy is still primarily intraday: futures positions are force-flat before close like
       equity_intraday; the engine performs **no rollover** to the next series, ever. **Hard
