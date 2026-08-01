@@ -172,3 +172,25 @@ class PromotionCandidate(ResearchBase):
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|approved|rejected
     approved_git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class BlockEdge(ResearchBase):
+    """"Which idea works where" — the block-family x instrument edge map.
+
+    The reinforcement loop's memory. Findings are free-text and cannot be queried
+    by block, so a night's generation had no way to learn that (say) `roc_gt`
+    keeps dying on bullion while `zscore_cross_up` survives there. This table is
+    that knowledge in structured form: one row per (block, instrument), counting
+    how often a composition containing that block validated versus was rejected.
+
+    Deliberately counts BLOCKS, not whole compositions. A composition is a
+    one-off; a block is a reusable family, and the family is the level at which a
+    lesson generalises to the next night's draw.
+    """
+    __tablename__ = "research_block_edge"
+    block_name: Mapped[str] = mapped_column(String(48), primary_key=True)
+    instrument_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    positive: Mapped[int] = mapped_column(Integer, default=0)
+    negative: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)

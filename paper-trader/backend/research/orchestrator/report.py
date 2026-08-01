@@ -68,6 +68,23 @@ def render_markdown(report: dict) -> str:
     lines.append(f"## Qualifying universe ({len(report.get('qualified', []))})")
     lines.append(", ".join(report.get("qualified", [])) or "- none")
     lines.append("")
+
+    # "Which idea works where" — the accumulated block-family x instrument record.
+    # Rendered here because a reinforcement loop nobody can read is a reinforcement
+    # loop nobody can debug: this is the table that explains why tonight's search
+    # avoided something last night tried.
+    edge = report.get("edge_map", "")
+    if edge:
+        lines.append("## Block edge map — which idea works where")
+        lines.append(edge)
+        lines.append("")
+    suppressed = report.get("suppressed_blocks") or []
+    if suppressed:
+        lines.append(f"## Suppressed this run ({len(suppressed)})")
+        lines.append("Families with a well-powered negative record on this "
+                     "universe. Skipped, never banned — later evidence lets them back in.")
+        lines.append(", ".join(sorted(suppressed)))
+        lines.append("")
     return "\n".join(lines)
 
 

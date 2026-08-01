@@ -125,7 +125,8 @@ def _filter(rng) -> tuple:
     return f"body_frac_gt({rng.choice((0.4, 0.5, 0.6))})", "body"
 
 
-def sample_compositions(limit: int = 12, seed: int = 0) -> list:
+def sample_compositions(limit: int = 12, seed: int = 0,
+                        suppressed: set | None = None) -> list:
     """`limit` grammar-valid compositions drawn from the block registry.
 
     Duplicate keys are skipped rather than emitted: two records with the same key
@@ -135,6 +136,7 @@ def sample_compositions(limit: int = 12, seed: int = 0) -> list:
     if limit <= 0:
         return []
     rng = random.Random(seed)
+    blocked = set(suppressed or ())
     out, seen = [], set()
     # Bounded attempts so an unlucky seed cannot spin: the draw space is far
     # larger than any realistic limit, but a cap makes that a guarantee.
@@ -147,6 +149,13 @@ def sample_compositions(limit: int = 12, seed: int = 0) -> list:
         key = f"gen_{tcode}_{mcode}" + (f"_{gcode}" if gcode else "")
         if key in seen:
             continue
+        # Knowledge from previous nights: a family with a well-powered negative
+        # record on this universe is skipped. Skipped, not banned — the draw is
+        # simply retried, and `suppressed_blocks` recomputes from the full record
+        # every night, so later evidence lets a family back in.
+        refs = [t_up, t_dn, m_up, m_dn] + ([gate] if gate else [])
+        if blocked and any(r.split("(")[0] in blocked for r in refs):
+            continue
         seen.add(key)
         out.append(Composition.from_dict({
             "key": key,
@@ -155,4 +164,10 @@ def sample_compositions(limit: int = 12, seed: int = 0) -> list:
             "longExit": {"any": list(_LONG_EXIT)},
             "shortExit": {"any": list(_SHORT_EXIT)},
         }))
+    # Last-resort floor. Suppression is a PREFERENCE, never a cage: if knowledge
+    # has blocked every draw the grammar can make, explore anyway rather than
+    # returning nothing. A night that searches nothing learns nothing, and the
+    # loop would never escape the state that silenced it.
+    if not out and blocked:
+        return sample_compositions(limit=limit, seed=seed, suppressed=None)
     return out

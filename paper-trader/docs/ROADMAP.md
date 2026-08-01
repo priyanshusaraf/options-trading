@@ -255,11 +255,35 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
   with search breadth (log the deflation benchmark per session).
 
 ### Phase 3 — Close the reinforcement loop (make it *learn*)
-- [ ] Generation READS knowledge: mutate surviving compositions (param nudges, single
-      block swaps); suppress block-families that repeatedly die on an instrument cluster.
-- [ ] `retest_priority` finally gets its consumer (today: written, never read).
-- [ ] Maintain a `block-family × instrument` edge map table — "which idea works where" —
-      used as sampling weights and rendered in the research report.
+- [x] **Generation READS knowledge — DONE 2026-08-01.** `research/knowledge.py` +
+      `research_block_edge`. Counts BLOCK FAMILIES rather than compositions (a composition is
+      a one-off; a family is the level at which a lesson generalises), suppresses families
+      with a well-powered negative record on an instrument, and mutates survivors with small
+      nudges (a mutation that rewrites everything is just a fresh random draw). Qualification
+      failures are recorded too, not only validation failures — otherwise the map is blind to
+      every idea that never produced enough trades to be judged, which on real data is most
+      of them.
+      **THE BUG THIS SHIPPED WITH, CAUGHT BY RUNNING IT:** the obvious implementation
+      destroys the search. On a universe where nothing works yet, every family accumulates a
+      losing record — suppression took **all four trend families at once**, and since every
+      composition structurally requires a trend block, the sampler could draw NOTHING. Night
+      4 ran 1 experiment instead of 6 while reporting success. Two guards now: a
+      `MAX_SUPPRESSED_FRACTION` exploration floor (worst-ranked first, so the cap keeps the
+      strongest negative records), and a last-resort fallback where the sampler explores
+      anyway if suppression has blocked every lawful draw — logged loudly, because a silent
+      override makes the next person unable to explain why a suppressed family reappeared.
+      Suppression is a preference, never a cage.
+- [x] **`retest_priority` has its consumer** — landed in Phase 1's `build_plan`, which orders
+      open hypotheses by it. Written on every run since M0 and read by nothing until then.
+- [x] **`block-family × instrument` edge map — DONE 2026-08-01.** `research_block_edge`,
+      rendered into every generated run's report as "which idea works where", alongside the
+      families suppressed for that run. A reinforcement loop nobody can read is one nobody can
+      debug: this table is what explains why tonight's search avoided something last night
+      tried. `edge_weights()` exposes Laplace-smoothed per-family weights bounded to
+      [0.25, 2.0] — a deliberate exploration floor so knowledge tilts the search without
+      collapsing it onto the first success.
+      Verified across four consecutive nightly runs on the same DB: 90 edge rows accumulated,
+      and night 4's behaviour provably differed from night 1's.
 - **Acceptance:** night N's plan is provably a function of nights 1..N−1's Findings
   (test: seed a poisoned family, watch it get suppressed; seed a survivor, watch mutants).
 

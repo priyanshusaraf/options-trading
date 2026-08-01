@@ -75,6 +75,29 @@ def _confidence(trades: int) -> float:
     return round(min(0.95, trades / (trades + 30.0)), 3) if trades else 0.1
 
 
+def _record_edge(session, strategy, instrument_key: str, validated: bool,
+                 run_id: int | None) -> None:
+    """Feed the block-family x instrument edge map.
+
+    Only GENERATED strategies carry a composition; a handwritten one has no block
+    decomposition to learn from, so it contributes nothing here rather than
+    contributing something wrong. Never fatal: the reinforcement loop is an
+    optimisation, and a bookkeeping failure must not lose an experiment's real
+    result.
+    """
+    comp = getattr(strategy, "composition", None)
+    if comp is None:
+        return
+    try:
+        from research.knowledge import record_outcome
+        payload = comp.to_dict() if hasattr(comp, "to_dict") else comp
+        record_outcome(session, payload, instrument_key,
+                       validated=validated, run_id=run_id)
+    except Exception as e:            # noqa: BLE001
+        logger.warning("edge-map update failed for %s/%s: %s",
+                       getattr(strategy, "key", "?"), instrument_key, e)
+
+
 def run_experiment(session, *, program_name, hypothesis_statement, strategy, datasets,
                    params=None, git_commit="unknown", seed=0, min_trades=20, n_folds=4,
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
@@ -141,6 +164,11 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} did not qualify on {ie.instrument_key} "
                           f"({interval}): {ie.reason}"))
+            # A qualification failure is negative evidence about these blocks on
+            # this instrument too — arguably the most common kind. Recording only
+            # validation failures would leave the edge map blind to every idea
+            # that never even produced enough trades to be judged.
+            _record_edge(session, strategy, ie.instrument_key, False, run.id)
             continue
         logger.info("[qualify] %-10s PASS   — %d trades clear the min-evidence bar",
                     ie.instrument_key, ie.trades)
@@ -200,6 +228,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} qualified but failed validation on "
                           f"{ie.instrument_key}: {', '.join(failed)}"))
+            _record_edge(session, strategy, ie.instrument_key, False, run.id)
             continue
         logger.info("[validate] %-10s PASS   — %s", ie.instrument_key, gate_summary)
         sc = build_scorecard(ie.instrument_key, score_metrics,
@@ -210,6 +239,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                     n_trials, var_sr, expected_max_sharpe(var_sr, n_trials))
         validated.append({"instrument": ie.instrument_key, "dsr": sc.dsr,
                           "gates": gates, "scorecard": sc.components})
+        _record_edge(session, strategy, ie.instrument_key, True, run.id)
         session.add(Finding(
             hypothesis_id=hyp.id, polarity="positive", confidence=_confidence(ie.trades),
             evidence_run_id=run.id,
