@@ -696,7 +696,20 @@ against B/E/C/D — pick them up when one becomes urgent.
       question this was built to answer — does real Kite history contain duplicates, gaps or
       inverted bars — needs a week of live sessions. Check `/api/health` `provider_feed` and
       grep the log for `FEED_QUALITY`.
-      **Untouched in this area:** replay mode, and a deliberate timezone audit.
+- [x] **Timezone audit — DONE 2026-08-01.** Measured, not assumed: the production droplet
+      is set to **IST**, while DigitalOcean droplets default to **UTC**. So a rebuild,
+      restore or replacement of that box would come up 5.5 hours off and nothing in the
+      codebase would notice — correctness rested partly on a machine setting.
+      The core is genuinely host-independent (`market_hours` uses an explicit `+05:30`
+      tzinfo, `now_ist()` is tz-aware, `ist_epoch` localises naive candle stamps as IST) and
+      `tests/test_timezone_independence.py` now runs that logic under `TZ=UTC`,
+      `Asia/Kolkata` and `America/New_York` to keep it that way.
+      **One real hazard found and fixed:** `broker.mark()` stamped `last_mark_time` from the
+      provider's IST clock but FELL BACK to naive host-local. On a UTC host those differ by
+      19,800s, and the mark-staleness guard compares them — a just-taken mark would read as
+      stale, and `is_stale` suppresses SL/TP. A stop silently not firing on real money,
+      triggered by nothing more than rebuilding the droplet. The fallback is now IST.
+      **Untouched in this area:** replay mode.
 - [x] **Backtester audit — DONE + DEPLOYED 2026-08-01 (`c7e5217`).** All ten Phase-1
       dimensions, verdicts cited to file and line:
       `docs/2026-08-01-backtester-audit.md`. Came out well — **no look-ahead** (next-bar-open

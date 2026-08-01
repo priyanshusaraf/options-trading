@@ -13,6 +13,7 @@ import datetime as dt
 from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.market_hours import now_ist
 from app.core.instruments import Instrument
 from app.core.logging import log
 from app.db.models import CapitalState, EquitySnapshot, Position, Trade
@@ -250,7 +251,14 @@ class PaperBroker:
         # the staleness guard would suppress the stop at the worst possible time.
         if premium is not None:
             pos.last_premium = premium
-            pos.last_mark_time = now or dt.datetime.now()
+            # Fall back to IST wall-clock, NOT naive host-local. Everything in
+            # this app speaks IST — including the value this is compared against
+            # by the mark-staleness guard. The production box happens to be set
+            # to IST today, but DO droplets default to UTC, so a rebuild would
+            # make a just-taken mark look 19,800s old and `is_stale` would
+            # suppress SL/TP on live money. Correctness must not rest on a
+            # machine setting. See tests/test_timezone_independence.py.
+            pos.last_mark_time = now or now_ist().replace(tzinfo=None)
             if premium > (pos.high_water_premium or 0.0):
                 pos.high_water_premium = premium
             # peak-excursion telemetry (E0.3) — pure read of unrealized_pnl(), which
