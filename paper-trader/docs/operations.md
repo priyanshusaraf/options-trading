@@ -208,3 +208,44 @@ all three are tracked as work items in [`ROADMAP.md`](ROADMAP.md), Workstream F.
 3. **DB session hygiene — minor, unscheduled.** Context-manage `_upsert_state` (`runner.py`) and
    the broker's long-lived session; add `pool_pre_ping`; lower `pool_timeout`.
 4. **VPS pending OS reboot** (5 ESM security updates) — owner action, market-closed window.
+
+## Nightly research cron — where it runs, and why not the VPS
+
+**Decision (2026-08-01): the nightly research run does NOT go on the production VPS.**
+
+`research/nightly.py` is a cron one-shot (`python -m research.nightly`). The original design
+note said "VPS at ~19:00 IST". That is now the wrong answer, and the reason is measured
+rather than cautious:
+
+- The droplet is **1 GB and has OOM'd twice** (2026-07-23). The resize to 2 GB is off the
+  table (no budget) — which is why DB retention was built instead.
+- A **Vite build on that box can take live positions down with it**, which is why
+  `deploy.sh` builds the SPA on the Mac. A nightly research sweep is far heavier than a Vite
+  build: `optimize()` runs `n_folds × n_candidates` backtests, and since 2026-08-01 it also
+  computes the PBO performance matrix, which is another `n_blocks × n_candidates` replays.
+- The live engine's risk lane must beat every second. Anything that can starve it is a
+  real-money risk, and research has no deadline that justifies that trade.
+
+**So: run it on the Mac (or any box that is not the trading box).** `PT_RESEARCH_ENABLED`
+stays `0` on the VPS. The research plane is isolated by design — own DB, own config, no
+capital-moving imports — so running it elsewhere costs nothing architecturally.
+
+```bash
+# Mac, offline and deterministic (no Kite, no network):
+PT_PROVIDER=mock PT_RESEARCH_ENABLED=1 \
+PT_RESEARCH_DB_PATH=~/research/research.db \
+PT_RESEARCH_REPORT_DIR=~/research/reports \
+PT_RESEARCH_WATCHLIST_SNAPSHOT=~/research/watchlist.json \
+  .venv/bin/python -m research.nightly
+```
+
+**Feed it the watchlist snapshot.** With no snapshot the run treats every instrument as
+research-eligible and prints a WARNING saying so. That fallback is safe in the *permissive*
+direction — "nothing is committed" and "I could not read what is committed" look identical
+downstream, and only one of them is true. Export the snapshot
+(`app.core.watchlists.write_research_snapshot`) so the plane genuinely cannot develop
+strategies on instruments that are already earning.
+
+**Shadow mode means shadow mode.** The nightly writes `research.db` and a markdown report
+per run. It queues `PromotionCandidate` rows with `status="pending"` and deploys nothing —
+promotion to the live engine remains a human action.

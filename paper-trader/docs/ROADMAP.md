@@ -169,13 +169,43 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
   TDD in `research_tests/`.
 
 ### Phase 1 — Turn the nightly loop on (shadow mode)
-- [ ] Implement `nightly._load_plan()`: open hypotheses ordered by `retest_priority` ×
-      research-eligible universe (permanent commodity sandbox + instruments not committed
-      to a live watchlist; seed from the sector edge map — bullion, capital-markets,
-      PSU-financials first).
-- [ ] Nightly invokes `run_generated` (not just handwritten strategies) on that plan.
-- [ ] Decide + document where the cron runs (VPS 19:00 IST as designed, or Mac against
-      cached candles). Flag on **in shadow**: reports + research.db only, nothing deployed.
+- [x] **`nightly._load_plan()` — DONE 2026-08-01.** It returned `[]` from M0 until today, so
+      every guardrail, gate and statistic in this package sat behind a scheduler that
+      scheduled nothing: the cron one-shot was a well-tested no-op. New `research/plan.py`
+      orders OPEN hypotheses by `retest_priority` — **which finally gives that field its
+      first consumer** (written on every run since M0, read by nothing, which is why a killed
+      idea was never actually revisited). Eligibility is a HARD filter with deliberately no
+      fallback to "everything": an empty eligible universe yields an empty plan, because a
+      fallback there would point research at live positions. Cold start seeds one hypothesis
+      on the sandbox so the loop can start itself. Bounded per night (3 experiments × 6
+      instruments) and deterministic (sorted, sandbox-first) so a result is reproducible from
+      the plan that produced it. 14 tests.
+      **Sector seeding deliberately NOT implemented:** the roadmap asks to seed from the
+      sector edge map, but no sector metadata exists on `Instrument` and no map exists as
+      data — it lives only as prose in this file. Inventing classifications would fabricate
+      the very input the ordering claims to use. The cold-start seed prefers the commodity
+      sandbox (which IS the bullion set); the rest waits for real sector data.
+- [x] **The nightly loop RUNS end to end — first time, 2026-08-01.** Verified by execution,
+      not by test: a real invocation produced `research.db` with 1 program, 1 hypothesis and
+      **6 Findings**, plus `report_run_1.md`. `_make_source()` builds a `KiteDataSource` over
+      the same provider seam the engine uses, so `PT_PROVIDER=mock` is a fully offline,
+      deterministic run. Promotion was correctly **none** — the synthetic market has no
+      exploitable edge for this strategy, which is the right answer and a useful sanity
+      signal (no false promotion on noise).
+      Note the mock returns a fixed 966-bar series regardless of interval, so every
+      instrument was rejected for insufficient trades (1-5 vs a 20 floor). That is a property
+      of the synthetic data, not of the strategy — a real signal needs Kite candles.
+- [ ] Nightly invokes `run_generated` (composition search) on that plan, not just the
+      handwritten strategy. `build_plan` currently schedules one registered `strategy_key`;
+      wiring the generator in is what makes the loop actually *explore*.
+- [x] **Where the cron runs — DECIDED 2026-08-01: NOT the production VPS.** Full reasoning in
+      `docs/operations.md`. The droplet is 1 GB and has OOM'd twice; the resize is off the
+      table; a Vite build there can already take live positions down, and a research sweep is
+      far heavier (`n_folds × n_candidates` backtests, plus `n_blocks × n_candidates` more
+      for the PBO matrix since today). The live risk lane must beat every second and research
+      has no deadline that justifies risking it. Runs on the Mac; `PT_RESEARCH_ENABLED` stays
+      `0` on the VPS. Shadow mode confirmed: writes `research.db` + a report per run, queues
+      `PromotionCandidate` as `pending`, deploys nothing.
 - **Acceptance:** after one week, research.db holds a real Findings corpus from unattended
   runs; reports land in `PT_RESEARCH_REPORT_DIR`.
 

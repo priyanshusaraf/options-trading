@@ -15,7 +15,10 @@ import os
 import subprocess
 import sys
 
-from research.config import research_db_path
+from research.config import (nightly_interval, nightly_strategy_key,
+                             research_db_path, watchlist_snapshot_path)
+from research.plan import build_plan
+from research.universe import eligible_for_research, read_watchlist_snapshot
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.guards import enforce
 from research.orchestrator.run import run_nightly
@@ -38,11 +41,55 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _load_plan() -> list:
-    """The research plan (which programs/hypotheses/instruments to run tonight).
-    Empty until the M3 scheduler + config supplies one; a configured autonomous run
-    would resolve the qualifying universe by Hypothesis.retest_priority."""
-    return []
+def _load_plan(session) -> list:
+    """Tonight's plan: open hypotheses by retest_priority over the research-eligible
+    universe. See research/plan.py for the two rules that govern it.
+
+    Eligibility is resolved HERE rather than inside `build_plan` because it needs
+    the execution side's instrument list and watchlist snapshot, and keeping that
+    at the edge leaves `build_plan` pure over its inputs.
+    """
+    from app.core.instruments import all_instruments
+
+    snapshot_path = watchlist_snapshot_path()
+    committed = read_watchlist_snapshot(snapshot_path)
+    if not committed:
+        # Permissive fallback — say so. "Nothing is committed" and "I could not
+        # read what is committed" look identical downstream, and only one of them
+        # is safe to assume.
+        print(f"WARNING: no watchlist snapshot at {snapshot_path!r} — treating every "
+              f"instrument as research-eligible. If the execution side should have "
+              f"exported one, this run may develop strategies on LIVE instruments.")
+    by_key = {i.key: i for i in all_instruments()}
+    eligible = eligible_for_research(set(by_key), committed)
+    plan = build_plan(session, eligible=eligible, strategy_key=nightly_strategy_key(),
+                      interval=nightly_interval())
+    # `build_plan` deals in instrument KEYS so it stays pure over its inputs and
+    # testable without the execution-side registry; `run_nightly` needs the
+    # Instrument objects to fetch candles. Resolve at the edge, here.
+    for item in plan:
+        item["instruments"] = [by_key[k] for k in item["instruments"] if k in by_key]
+    print(f"plan: {len(plan)} experiment(s) over {len(eligible)} eligible instrument(s)"
+          f"{' (cold start)' if plan and not committed else ''}")
+    return plan
+
+
+def _make_source():
+    """The candle source for tonight's collection phase.
+
+    Built from the SAME provider seam the execution side uses, so research reads
+    the same bars the engine would — with `PT_PROVIDER=mock` (the default) that is
+    a deterministic offline series and no network is touched at all.
+
+    Only the orchestrator's collection phase calls this; the pipeline itself reads
+    frozen, content-hashed Datasets. Note the isolation guard has already run by
+    this point: it is a BOOT-time assertion about what was imported before research
+    started, not a continuous one.
+    """
+    from app.providers.factory import get_provider
+    from research.data.store import KiteDataSource
+
+    return KiteDataSource(get_provider())
 
 
 def main() -> int:
@@ -62,7 +109,7 @@ def main() -> int:
     init_research_db(engine)
     Session = make_sessionmaker(engine)
     with Session() as session:
-        reports = run_nightly(session, source=None, plan=_load_plan(),
+        reports = run_nightly(session, source=_make_source(), plan=_load_plan(session),
                               git_commit=_git_commit(),
                               report_dir=os.environ.get("PT_RESEARCH_REPORT_DIR", "."))
     print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
