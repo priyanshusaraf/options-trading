@@ -5,8 +5,8 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`2a8fcc8`**,
-deployed 2026-08-01 08:15 UTC via `scripts/deploy.sh`, exit 0, 1,318 tests passed in-deploy — confirmed by
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`c7e5217`**,
+deployed 2026-08-01 08:55 UTC via `scripts/deploy.sh`, exit 0, 1,328 tests passed in-deploy — confirmed by
 `curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
 `research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
 
@@ -75,16 +75,28 @@ LAST piece of work** — the laboratory is production-grade but the scientist wa
 on; that is real but no longer urgent. Do not spend sessions on Workstream A until B, E, C,
 and D are done.
 
-**Active order (highest first): B (safety, on-fire items) → E (P&L integrity, profit-lock,
-futures, MTF) → C (exit tuning) → D (UI) → A (research plane, last).**
+**Active order REVISED by the owner 2026-08-01** ("research plan is the biggest feature that
+we havent done anything for, work towards it please"; "exit tuning is fine we can get back to
+it"; "ui is still left to be done"):
+
+**A (research plane — now a PRIORITY, no longer last) → D (UI) → E (futures/MTF) → C (exit
+tuning, parked by the owner).**
+
+The previous order (B → E → C → D → A) came from the owner's 2026-07-24 directive and is
+superseded. B is closed apart from the OS reboot. Workstream A's Phase 0 is the correct entry
+point and is not optional: `var_sr` defaults to 0.0, so `expected_max_sharpe()` returns 0 and
+**deflation never engages anywhere** — the lab currently overstates every finding it makes.
+Switching the scientist on before fixing that would generate confident nonsense at scale.
 
 ---
 
-## Workstream A — Research plane: switch on the scientist  ← **DOWNGRADED: DO LAST (owner, 2026-07-24)**
+## Workstream A — Research plane: switch on the scientist  ← **PRIORITY (owner, 2026-08-01)**
 
-> **Deferred to the end.** Not urgent; the primary objective is now execution-plane
-> completeness (B → E → C → D). Leave `PT_RESEARCH_ENABLED=0`; do not open this workstream
-> until everything above it is done. The phases below are preserved as-is for when we get here.
+> **Re-prioritised 2026-08-01**, superseding the 2026-07-24 "do last" directive. The owner:
+> "research plan is the biggest feature that we havent done anything for, work towards it
+> please." Phase 0 (honest statistics) first — everything downstream inherits its trust, and
+> today deflation never engages, so the lab overstates its own findings. `PT_RESEARCH_ENABLED`
+> stays 0 until Phase 1 shadow mode is deliberately switched on.
 
 **Vision (owner, 2026-07-20):** a reiterative, reinforcing research loop — generate its own
 strategy ideas (including *formula-level* indicator variants, not just parameter tweaks),
@@ -367,7 +379,15 @@ in sequence. This whole workstream is the target of the eventual bulk "goal prom
 
 ### Phase E2 — Index-futures segment *(aligns with the index-first product direction)*
 
-> **SPEC WRITTEN + OPUS-REVIEWED, AWAITING OWNER/FABLE + A CONTRACT NOTE (2026-07-24).**
+> **CONTRACT-NOTE GATE LIFTED 2026-08-01.** The owner pushed back — "why do you need the
+> contract note from me anyways, i feel you should be able to get it from a couple of web
+> queries" — and is right. Zerodha publishes its F&O rate card and margin figures, and NSE
+> publishes SPAN+exposure; those are a legitimate basis for building and verifying the charge
+> and margin model. What a personal contract note would add is confirmation against one real
+> account's fills, which is a nice-to-have, not a prerequisite. Source the published rates,
+> build the model, and state the source and date in the code.
+>
+> **SPEC WRITTEN + OPUS-REVIEWED (2026-07-24).**
 > Full spec: `docs/2026-07-24-E2-index-futures-spec.md` (Sonnet-drafted, Opus-reviewed).
 > **The build is gated — not started — for two mandate reasons:** (1) the acceptance bullet
 > "margin+charges match a real F&O contract note within tolerance" is unverifiable in-repo
@@ -489,6 +509,25 @@ against B/E/C/D — pick them up when one becomes urgent.
       inverted bars — needs a week of live sessions. Check `/api/health` `provider_feed` and
       grep the log for `FEED_QUALITY`.
       **Untouched in this area:** replay mode, and a deliberate timezone audit.
+- [x] **Backtester audit — DONE + DEPLOYED 2026-08-01 (`c7e5217`).** All ten Phase-1
+      dimensions, verdicts cited to file and line:
+      `docs/2026-08-01-backtester-audit.md`. Came out well — **no look-ahead** (next-bar-open
+      fills, exit decisions start the bar after the fill, every strategy shift backward, no
+      `shift(-1)`/`center=True`/backfill anywhere), full direction-aware charge stack on both
+      legs, and statistics that label their own limits (drawdown explicitly close-to-close
+      with `worst_mae_pct` alongside; `consistency` explicitly not-a-Sharpe).
+      **One real defect, fixed:** the SPOT backtester filled at the exact bar open with ZERO
+      execution cost, while `premium.py` had modelled a spread since it was written — so every
+      equity_intraday backtest was optimistic. Against a 0.8% stop / 1.5% target and a
+      largest-ever favourable excursion of 1.216%, an unmodelled round trip is the same order
+      as the edge. `Settings.backtest_slippage_pct` defaults to 5 bps; `0.0` reproduces all
+      prior numbers exactly. 10 tests.
+      **Documented, not fixed (divergences, not bugs):** backtest sizing has no relationship
+      to live sizing (one unleveraged full-capital position vs up to four MIS-margin ones), so
+      a backtest `return_pct` is NOT a live account-return prediction — the biggest
+      interpretive trap in the system; no intrabar stop (live uses an exchange SL-M that fires
+      mid-bar); no partial fills; no pyramiding; structural survivorship in the curated
+      universe.
 - [ ] **DB session hygiene — the broker's long-lived session (DELIBERATELY DEFERRED).**
       The other half of the item above, split out rather than silently dropped.
       `broker.s` is long-lived **by design** and it is load-bearing: E0.2's auto-reanchor had
