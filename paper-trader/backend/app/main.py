@@ -123,6 +123,14 @@ async def lifespan(app: FastAPI):
         signal_task.cancel()
         risk_task.cancel()
         detect_task.cancel()
+        # Close the broker's long-lived session AFTER the lanes are cancelled,
+        # never before: closing it out from under a mid-iteration lane would turn
+        # a clean shutdown into an exception in the risk loop. Best-effort — a
+        # failure here must not stop the process exiting.
+        try:
+            runner.broker.close()
+        except Exception as e:
+            log.warn(f"broker session close failed at shutdown: {e}")
 
 
 class _PollingRouteFilter(logging.Filter):

@@ -584,4 +584,24 @@ class PaperBroker:
                 "realized_pnl": round(cap.realized_pnl, 2), "open": len(opens)}
 
     def close(self) -> None:
-        self.s.close()
+        """Release the long-lived session and its pooled connection.
+
+        `self.s` is held for the broker's lifetime BY DESIGN — the identity map
+        is load-bearing (E0.2's ledger re-anchor only works because the write
+        goes through this session), which is why context-managing it is a
+        separate, deliberate refactor rather than something to do casually.
+
+        But "long-lived" is not "never closed", and this existed while nothing
+        called it. Without it the connection outlives the engine: at shutdown
+        that is untidy, and in a test process it is a real failure — the next
+        `init_db(reset=True)` drops and recreates tables while a connection is
+        still open and fails with "database is locked", passing in isolation and
+        failing in the suite. It bit twice while building the futures segment.
+
+        Best-effort: safe to call twice, and never raises. A shutdown path is the
+        worst place to introduce a new way to fail.
+        """
+        try:
+            self.s.close()
+        except Exception:
+            pass
