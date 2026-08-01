@@ -5,8 +5,8 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`c7e5217`**,
-deployed 2026-08-01 08:55 UTC via `scripts/deploy.sh`, exit 0, 1,328 tests passed in-deploy — confirmed by
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`d4dfd86`+**,
+deployed 2026-08-01 via `scripts/deploy.sh`, exit 0, 1,3xx tests passed in-deploy — confirmed by
 `curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
 `research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
 
@@ -143,7 +143,22 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
       each strategy spiking in one distinct block — scores **1.000**. Note the per-draw
       spread on noise is 0.09-0.89, so the null is asserted on the MEAN across draws; a
       per-seed assertion would be asserting something false. 16 tests.
-- [ ] Wire `stats/neff.py` (correlated-universe effective-N) into the evidence gate.
+- [x] **Wire `stats/neff.py` — DONE 2026-08-01.** It had existed since M0 with NO consumer.
+      The place it belongs turned out to be the promotion step: `run_experiment` validates
+      per instrument and then does `max(validated, key=dsr)` — picking the best of N, which
+      is a selection exactly like picking the best of N parameter draws, and it was entirely
+      unaccounted. Deflating by raw N would overstate the fix because these names move
+      together, so N_eff is the honest count (rho ~ 0.4 turns 200 large-caps into ~2.5
+      independent bets). New `mean_pairwise_correlation` (aligns series on their common
+      RECENT tail — different history depths would otherwise compare different calendar
+      periods) feeds `effective_sample_size`; the promotion record now carries
+      `breadth: {n_validated, mean_correlation, n_effective}` so a reviewer can see that
+      "validated on 12 instruments" was really ~N_eff independent bets. 9 tests.
+      **A bug caught in review of this change:** the first cut reused the loop variable
+      `var_sr` for the cross-instrument deflation, which would have applied whichever
+      instrument was iterated LAST — its parameter-search dispersion — to a decision about
+      instruments. The pool the winner came from is the instruments, so the dispersion is now
+      measured across them (`breadth_var_sr`), pinned by test.
 - [x] **Optimizer objective — ALREADY DONE (`1ec5188`), verified by reading the code
       2026-08-01, not by trusting this file.** `_objective` is `metrics.consistency ×
       √n` — a trade-count-aware t-statistic, not raw expectancy. This box sat unchecked long

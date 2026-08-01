@@ -35,7 +35,8 @@ from research.orchestrator.report import write_report
 from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
 from research.pipeline.score import build_scorecard
-from research.stats.dsr import expected_max_sharpe
+from research.stats.dsr import deflated_sharpe, expected_max_sharpe
+from research.stats.neff import effective_sample_size, mean_pairwise_correlation
 from research.stats.pbo import pbo
 from research.pipeline.validate import gates_from_folds, gates_passed, validate
 from research.stats.retest import retest_priority
@@ -217,6 +218,39 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
 
     promotion = None
     if validated:
+        # Picking the best of N validated instruments is ITSELF a selection, and it
+        # was unaccounted: each instrument's DSR was deflated for its own parameter
+        # search, then the winner of a cross-instrument beauty contest was promoted
+        # as though that contest never happened. Deflating by raw N would overstate
+        # the fix, because these names move together — N_eff is the honest count
+        # (rho ~ 0.4 turns 200 large-caps into ~2.5 independent bets).
+        val_keys = {v["instrument"] for v in validated}
+        returns = []
+        for inst_obj, ds in datasets:
+            if getattr(inst_obj, "key", None) in val_keys:
+                closes = [float(c.close) for c in ds.candles]
+                returns.append([b / a - 1.0 for a, b in zip(closes, closes[1:]) if a])
+        rho = mean_pairwise_correlation(returns)
+        n_eff = effective_sample_size(rho, len(validated))
+        breadth_trials = max(1, int(round(n_eff)))
+        # var_sr for THIS selection is the dispersion of Sharpes ACROSS INSTRUMENTS —
+        # that is the pool the winner was chosen from. Reusing the loop variable
+        # `var_sr` here would silently apply the LAST instrument's parameter-search
+        # dispersion to a cross-instrument decision: a different quantity entirely,
+        # and whichever instrument happened to be iterated last.
+        inst_sharpes = [v["scorecard"]["per_trade_sharpe"] for v in validated]
+        if len(inst_sharpes) >= 2:
+            _m = sum(inst_sharpes) / len(inst_sharpes)
+            breadth_var_sr = sum((x - _m) ** 2 for x in inst_sharpes) / len(inst_sharpes)
+        else:
+            breadth_var_sr = 0.0
+        for v in validated:
+            v["dsr_breadth_deflated"] = round(deflated_sharpe(
+                v["scorecard"]["per_trade_sharpe"], max(2, v["scorecard"]["trades"]),
+                n_trials=breadth_trials, var_sr=breadth_var_sr), 4)
+        logger.info("[breadth] %d validated instrument(s), mean rho=%.3f -> N_eff=%.2f "
+                    "(deflating the cross-instrument pick by %d)",
+                    len(validated), rho, n_eff, breadth_trials)
         best = max(validated, key=lambda x: x["dsr"])
         # The candidate must carry the VALIDATED universe (what earned promotion) with a
         # per-instrument score, so the human review — and the deploy that follows — act on
@@ -229,7 +263,13 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             run_id=run.id,
             parameterization_hash=spec_hash({"strategy": strategy.key, "params": params}),
             qualifying_universe_json=json.dumps(qualified),
-            scorecard_json=json.dumps({"best": best, "validated": validated_universe}),
+            scorecard_json=json.dumps({
+                "best": best, "validated": validated_universe,
+                # Recorded so a human reviewing the queue can see that "validated on
+                # 12 instruments" was really ~N_eff independent bets.
+                "breadth": {"n_validated": len(validated), "mean_correlation": round(rho, 4),
+                            "n_effective": round(n_eff, 3),
+                            "var_sr_across_instruments": round(breadth_var_sr, 6)}}),
             status="pending"))
         promotion = best
         logger.info("[promotion] queued %s (DSR=%.4f) for human review — NOT auto-deployed",
