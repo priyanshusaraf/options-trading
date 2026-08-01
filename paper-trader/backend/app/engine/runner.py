@@ -841,6 +841,71 @@ class EngineRunner:
 
         return sizer
 
+    def _futures_margin_sizer(self):
+        """Size an index-futures position to REAL SPAN+exposure margin.
+
+        Two branches, and the difference between them is the whole point:
+
+        - **Live (Kite, authenticated):** quote `order_margin` for a 1-lot probe
+          and size from the answer. SPAN is portfolio-scanned and
+          instrument-specific — it is not price × a leverage constant — so the
+          broker is the only source of truth for it.
+        - **Paper/mock:** fall back to `index_futures_margin_pct` of notional,
+          which is a FLAGGED APPROXIMATION and labelled as one everywhere it
+          appears. It exists so paper and backtests can size something plausible;
+          it must never be what a live position is booked against.
+
+        Returns whole LOTS, never a share count: a futures position that is not a
+        multiple of the lot size is not a position the exchange will accept, and
+        rounding it silently at order time would mean the sizing that was risk-
+        checked is not the sizing that gets sent.
+
+        Returns `None` when it cannot obtain a real quote in live mode. The
+        caller must then refuse the entry — `open_futures_position` rejects a
+        missing margin outright, so a fabricated SPAN figure cannot reach the
+        ledger through this path.
+        """
+        prov = self.provider
+        pct = float(self.params.get("index_futures_margin_pct",
+                                    self.settings.index_futures_margin_pct))
+        is_live = (prov.name == "kite"
+                   and getattr(prov, "is_authenticated", lambda: False)())
+        cache: dict[tuple, float] = {}
+
+        def sizer(inst, direction: str, price: float, lot_size: int,
+                  target_margin: float) -> tuple[int, float] | None:
+            lot_size = max(1, int(lot_size))
+            if price <= 0 or target_margin <= 0:
+                return None
+            if not is_live:
+                per_lot = price * lot_size * pct
+                if per_lot <= 0:
+                    return None
+                lots = int(target_margin // per_lot)
+                return (lots * lot_size, lots * per_lot) if lots > 0 else None
+
+            tsym = getattr(inst, "option_name", None) or inst.key
+            side = "BUY" if direction == "LONG" else "SELL"
+            ckey = (tsym, side)
+            per_lot = cache.get(ckey)
+            if per_lot is None:
+                total = prov.order_margin([{
+                    "exchange": "NFO", "tradingsymbol": tsym,
+                    "transaction_type": side, "variety": "regular",
+                    "product": "NRML", "order_type": "MARKET",
+                    "quantity": lot_size, "price": 0}])
+                if not total or total <= 0:
+                    # No real quote, no trade. Unlike equity there is NO leverage
+                    # fallback here: guessing SPAN would put a fabricated number
+                    # straight into the ledger.
+                    return None
+                per_lot = float(total)
+                cache[ckey] = per_lot
+            lots = int(target_margin // per_lot)
+            return (lots * lot_size, lots * per_lot) if lots > 0 else None
+
+        return sizer
+
     def _index_open_prevclose(self, now) -> tuple[float | None, float | None]:
         """Today's index open + prior-session close, from daily candles — cached once
         per calendar day (both are fixed after 09:15). None,None on any read failure
