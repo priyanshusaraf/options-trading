@@ -5,9 +5,21 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running `8f06fb4`,
-deployed 2026-07-31 10:01 UTC — confirmed by `curl /api/health`) · Suites: `tests` +
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`4e9f125`**,
+deployed 2026-08-01 06:59:50 UTC via `scripts/deploy.sh`, exit 0 — confirmed by
+`curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
 `research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
+
+Live probe at deploy time (Saturday, markets shut) — worth keeping, because it is the
+scenario that would have broken a naive readiness probe:
+```
+health_code=200  {"status":"ok","markets_open":false,
+ "loops":{"risk":{"age_seconds":0.41,"state":"ok","fatal":true},
+          "signal":{"age_seconds":null,"state":"idle","fatal":false}},
+ "failed_checks":[],"engine":{"armed":false,"provider":"kite"}}
+```
+The risk lane beats every tick with the market closed; the signal lane is silent and
+correctly reads `idle`, not `stale`. A fatal signal lane would have 503'd this deploy.
 
 > **2026-08-01 — a week of trust work landed** ahead of the E2/E3 queue, on the owner's
 > instruction. What shipped, all TDD, all verified:
@@ -195,9 +207,15 @@ an rsync + `systemctl restart paper-trader`.**
       locking, publishing the sessionmaker last. `tests/journal/test_init_race.py`
 - [ ] **VPS pending OS reboot (5 ESM security updates) — OWNER ACTION**, DO console,
       market-closed window.
-- [ ] **Deploy these fixes** — `scripts/deploy.sh` (it runs both suites + dryrun,
-      restarts, and verifies `.env`, the built SPA, `GET /`, `/api/health`, and the
-      reported build SHA). Never hand-roll the rsync.
+- [x] **Deploy these fixes — DONE 2026-08-01 06:59:50 UTC** (owner instruction, Saturday,
+      markets shut). `scripts/deploy.sh` exit 0: guards 0-2 passed (42 exclude tokens/8
+      required present; IST 1222 day 6 outside session; clean tree), both suites + dryrun
+      green, SPA built on the Mac and shipped separately, `.env` verified present
+      post-transfer, `GET /` 200, and `/api/health` reports the shipped SHA `4e9f125`.
+      **This was the item gating the whole B workstream.** Everything committed on this
+      branch since 2026-07-25 — the ten Workstream-B safety fixes, E0/E1, the week of trust
+      work, and the two reliability fixes above — is now live. The engine is DISARMED, as it
+      is on every start.
 
 ## Workstream C — Exit tuning (winners being cut; roadmap approved 2026-07-15)
 
@@ -419,7 +437,7 @@ against B/E/C/D — pick them up when one becomes urgent.
       says so. Runs daily from the signal lane with a flat book; `scripts/prune_db.py`
       does the one-off catch-up and the VACUUM. `/api/storage` makes the growth visible
       in-app, which is what was actually missing.
-- [x] **DB session hygiene — DONE 2026-08-01, TDD, NOT yet deployed.** It was not "minor":
+- [x] **DB session hygiene — DONE + DEPLOYED 2026-08-01 (`4e9f125`), TDD.** It was not "minor":
       `_upsert_state` handed an OPEN session back to four callers that each ended with
       `s.commit(); s.close()`, so any raise in between skipped the close and **leaked the
       pooled connection**. Reproduced before fixing — a failed watchlist write left
@@ -453,7 +471,7 @@ against B/E/C/D — pick them up when one becomes urgent.
 - [ ] **VPS pending OS reboot** (5 ESM security updates) — owner action, market-closed window.
 - [x] Removed the copy-pasteable rsync at `docs/superpowers/plans/2026-07-10-vps-deployment.md`
       that omitted `--exclude .env`; it now points at `scripts/deploy.sh` (2026-07-28).
-- [x] **`/api/health` is a real readiness probe — DONE 2026-08-01, TDD, NOT yet deployed.**
+- [x] **`/api/health` is a real readiness probe — DONE + DEPLOYED 2026-08-01, TDD.**
       It reports DB reachability, the heartbeat age of **both** engine loops, provider auth
       status and armed state, and returns **503** when the DB is unreachable, the engine
       loops are stopped, or the fast risk lane is stale. Verdict logic is pure
@@ -473,8 +491,13 @@ against B/E/C/D — pick them up when one becomes urgent.
       `deploy.sh` now waits out a `starting` verdict instead of exiting on the first 200 —
       previously a process whose risk loop died at startup passed the deploy check.
       **`GET /` stays a separate check**: a broken SPA mount is invisible from this probe.
-      **Acceptance still open:** the 503 path has never been exercised against the live VPS
-      (verified only in-process). Confirm on the next deploy.
+      **Acceptance, measured 2026-08-01 on the live VPS:** the healthy path is confirmed in
+      production (200 / `status:"ok"`, both lanes correctly classified with the market shut —
+      payload quoted at the top of this file), and `deploy.sh` consumed the verdict for the
+      first time on that same deploy. **Still unexercised live: the 503 path.** It is proven
+      in-process only; confirming it in production means deliberately stalling the risk lane
+      on a real-money box, which is not worth doing on purpose. Treat the next genuine
+      incident as the test and check the probe went red.
 
 ## Parked / deprioritized (deliberate — don't burn sessions here)
 

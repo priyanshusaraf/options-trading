@@ -46,9 +46,13 @@ stale and has been removed. Verified by measurement, not by prose:
 
 ```
 $ curl -s localhost:8090/api/health
-{"ok":true,"build":{"commit":"8f06fb4","branch":"feat/exec-completeness",
- "deployed_at":"2026-07-31T10:01:40Z","deployed_by":"priyanshusaraf@…"}}
+{"ok":true,"build":{"commit":"4e9f125","branch":"feat/exec-completeness",
+ "deployed_at":"2026-08-01T06:59:50Z","deployed_by":"priyanshusaraf@…"},
+ "status":"ok","loops":{"risk":{"age_seconds":0.41,"state":"ok"},
+ "signal":{"age_seconds":null,"state":"idle"}},"markets_open":false}
 ```
+Since `4e9f125` that command answers a second question too — not just *which* build is
+running but *whether it is working* (see the readiness note under Conventions).
 
 **So deployment state is now answerable in one command: `curl /api/health` and compare the
 commit.** That is the intended workflow; checksum/symbol grepping is the fallback for a box
@@ -64,15 +68,22 @@ differs from the shipped default is now flagged amber.
 Do not date a deploy from remote file mtimes: the deploy rsyncs with `-t`, so VPS timestamps are
 the *Mac's* edit times, identical to the second. They say nothing about when a file landed.
 
-**Live-state gap — FIXED 2026-08-01 (`4c91e05`), not yet deployed as of writing.** The equity
+**Live-state gap — FIXED `4c91e05`, DEPLOYED 2026-08-01 (`4e9f125`), effect NOT yet
+observed.** Read that last clause literally. The fix is on the box, but its output could not
+be checked on deploy day: the re-anchor only runs in live mode off cached Kite funds, and the
+deploy was a Saturday with no valid token — so `_account_funds` was `None`, `capital_dict`
+omitted `ledger_drift` entirely, and `/api/status` still reported the old
+`equity = 49,833.63`. That is the expected shape of "could not measure", not evidence the fix
+works or that it doesn't. **Verify on the next trading session, after Connect Kite:**
+`ledger_drift` should appear in `/api/status` and sit near zero. The equity
 curve was anchored to the synthetic ₹50,000 seed because the E0.2 auto-reanchor could only
 fire on a ledger that had never traded, which production has done since 2026-07-13 — so the
 path was unreachable from the day it shipped and the cockpit reported ₹49,833 against a much
 smaller real account for three weeks. It now re-anchors **once a day, before the day's first
 entry, with a flat book, only when actually adrift** (`should_reanchor` in
 `engine/ledger_reconcile.py`), and `capital_dict` publishes `ledger_drift` so a lying ledger
-shows a warning badge instead of being silent. Verify after the next deploy: the badge should
-be absent and `ledger_drift` near zero.
+shows a warning badge instead of being silent. (The verification is the one stated above —
+next trading session, token valid.)
 
 ## Hard invariants
 
