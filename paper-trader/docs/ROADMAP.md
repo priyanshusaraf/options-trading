@@ -5,8 +5,8 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`eb88d4e`**,
-deployed 2026-08-01 07:35 UTC via `scripts/deploy.sh`, exit 0, 1,307 tests passed in-deploy — confirmed by
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running **`2a8fcc8`**,
+deployed 2026-08-01 08:15 UTC via `scripts/deploy.sh`, exit 0, 1,318 tests passed in-deploy — confirmed by
 `curl /api/health` on the box, which now also reports readiness) · Suites: `tests` +
 `research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
 
@@ -44,10 +44,19 @@ correctly reads `idle`, not `stale`. A fatal signal lane would have 503'd this d
 >    after a month at one row of production data. (`0d643cd`)
 > 8. **Feature review** — `docs/2026-08-01-feature-review.md`.
 
-> **The two things that gate everything else** (from the feature review):
-> **(a)** deploy the above and CLEAR the `runtime_config` overrides
-> `intraday_profit_lock_threshold=450` / `intraday_profit_lock_frac=0.3`, or the retuned
-> exits are inert; **(b)** run the five-session no-touch trial. `TARGET` has fired zero
+> **Gate (a) is CLOSED as of 2026-08-01** (owner: "go for all of it"). Deployed, and both
+> `runtime_config` overrides cleared via `POST /api/settings/reset` — which also calls
+> `refresh_params()`, so the running engine took them without a restart. Verified on the box
+> via `/api/settings`: `intraday_profit_lock_threshold value=150.0 overridden=false`,
+> `intraday_profit_lock_frac value=0.7 overridden=false`. **The retuned give-back lock is now
+> live and will act on Monday's session** — this is the first change to how the bot takes
+> profit since the sweep, and it is running on a 22-trade sample, so watch it.
+>
+> **(b) STILL OPEN — the five-session no-touch trial.** `TARGET` has fired zero times in 72
+> real trades and 45 of those exits were the owner closing by hand; until the bot's own exits
+> are allowed to run and be measured, "autonomous" is not a claim this project can make. No
+> amount of engineering substitutes for this, and it is owner-only: it costs five sessions of
+> not intervening. `TARGET` has fired zero
 > times in 72 real trades and 45 of those exits were the owner closing by hand — until the
 > bot's own exits are allowed to run and measured, "autonomous" is not a claim this
 > project can make.
@@ -463,12 +472,23 @@ against B/E/C/D — pick them up when one becomes urgent.
       `test_backtest_ratchet_overlay.py` builds `(o=100.0, h=100.5, lo=98.5, c=97.9)`, a close
       below its own low; dropping it deleted the bar the test exists to exercise, and those
       two tests now pass **unchanged** under the repair. 31 tests.
-      **Not yet done in this area:** no evidence has been gathered on whether REAL Kite
-      history actually contains duplicates/gaps/inverted bars — the validator reports
-      anomalies but nothing yet surfaces the report, so today it is a silent safety net.
-      Wiring the report to the log/`/api/health` and measuring a week of live data is the
-      obvious follow-up, and is what would turn "we are protected" into "here is how dirty
-      the feed actually is". Replay mode and timezone auditing also remain untouched.
+- [x] **Feed quality is VISIBLE — DONE + DEPLOYED 2026-08-01 (`2a8fcc8`).** The validator
+      above returned a report that nothing consumed, so a broken feed would have been
+      corrected silently every 2.5s forever. The live scan now validates once, builds the
+      frame from the result (`frame_from`, so the hot path does not validate twice per
+      instrument per tick), and records per-instrument anomalies in `FeedQuality`. They
+      surface as `provider_feed` in `/api/health` and mark the probe **degraded, never
+      unready** — the bars were repaired before any strategy saw them, so it is a reason to
+      look, not to 503 and fail a deploy. Logging is throttled by anomaly SIGNATURE: a
+      repeating problem logs once, a changed one logs again, and a recovered feed drops out
+      of the report (a stale alarm that never clears is how a warning light stops being
+      believed). 13 tests.
+      **Still open — the actual measurement.** As of deploy, `provider_feed` is `{}`, but
+      markets were shut, so that is "the scan has not run", NOT "the feed is clean". The
+      question this was built to answer — does real Kite history contain duplicates, gaps or
+      inverted bars — needs a week of live sessions. Check `/api/health` `provider_feed` and
+      grep the log for `FEED_QUALITY`.
+      **Untouched in this area:** replay mode, and a deliberate timezone audit.
 - [ ] **DB session hygiene — the broker's long-lived session (DELIBERATELY DEFERRED).**
       The other half of the item above, split out rather than silently dropped.
       `broker.s` is long-lived **by design** and it is load-bearing: E0.2's auto-reanchor had
