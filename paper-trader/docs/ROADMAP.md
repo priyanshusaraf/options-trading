@@ -5,15 +5,40 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-07-20** · Branch: `feat/exits-journal` (deployed whole-tree to VPS
-2026-07-18 04:45 IST) · Suite: 800+ backend tests green · VPS: healthy, 0 engine errors
-since restart, `PT_API_TOKEN` set, `PT_RESEARCH_ENABLED=0` (research dormant in prod).
+**Last verified: 2026-08-01** · Branch: `feat/exec-completeness` (VPS running `8f06fb4`,
+deployed 2026-07-31 10:01 UTC — confirmed by `curl /api/health`) · Suites: `tests` +
+`research_tests` exit 0, 116 frontend tests · `PT_RESEARCH_ENABLED=0` (research dormant).
 
-> **2026-07-24 — Workstream E added** (P&L integrity → daily profit-lock → futures/MTF
-> capital scaling). Two of its Phase-0 items are **live real-money P&L-misreporting bugs**;
-> see the priority note in that workstream. Since 07-20 the only landed work has been the
-> 07-22/23 memory-leak outage fixes (WS hub + analytics ORM scans) — no roadmap-item
-> progress; the checkboxes below are still accurate.
+> **2026-08-01 — a week of trust work landed** ahead of the E2/E3 queue, on the owner's
+> instruction. What shipped, all TDD, all verified:
+>
+> 1. **Ledger honesty** — the cockpit reported ₹49,833 against a far smaller real account
+>    for three weeks; E0.2's auto-reanchor was unreachable on a traded ledger. Now a daily,
+>    flat-book, pre-first-trade re-anchor plus a visible drift badge. (`4c91e05`)
+> 2. **Event-risk blackouts** — the owner's rules (EIA gas Thu / crude Wed with US DST,
+>    NIFTY Tue options, SENSEX Thu, BANKNIFTY Wed, bullion options into expiry, stock
+>    earnings days), one table shared by engine + backtester + UI. (`d1011c1`, `c1dd9f1`)
+> 3. **C-P2 exit sweep** — replays real trades against candidate exit parameters. Found
+>    the target is unreachable by construction and retuned the give-back lock.
+>    (`eafd7bc`, `docs/2026-08-01-exit-sweep.md`)
+> 4. **Reconciliation noise** — eleven false alarms per restart were the bot's own SL-M
+>    orders and the owner's own positions; a real orphan would have been invisible in the
+>    noise. (`ea500f0`)
+> 5. **DB retention + `/api/storage`** — 108 MB and +5 MB/day on a 1 GB box with no resize
+>    coming. Money record never pruned. (`1e8b64f`)
+> 6. **Settings** — all 87 knobs documented with consequences, usable at 390px, and an
+>    override that shadows a *changed* default is now flagged. (`a5239a1`)
+> 7. **Journal** — a real walkthrough and three default sections instead of fourteen,
+>    after a month at one row of production data. (`0d643cd`)
+> 8. **Feature review** — `docs/2026-08-01-feature-review.md`.
+
+> **The two things that gate everything else** (from the feature review):
+> **(a)** deploy the above and CLEAR the `runtime_config` overrides
+> `intraday_profit_lock_threshold=450` / `intraday_profit_lock_frac=0.3`, or the retuned
+> exits are inert; **(b)** run the five-session no-touch trial. `TARGET` has fired zero
+> times in 72 real trades and 45 of those exits were the owner closing by hand — until the
+> bot's own exits are allowed to run and measured, "autonomous" is not a claim this
+> project can make.
 
 ---
 
@@ -183,7 +208,15 @@ an rsync + `systemctl restart paper-trader`.**
       new normal band: purple sl 0.015 / target 0.045. **NOTE:** any existing VPS
       `runtime_config` overrides for these keys still SHADOW the new defaults — clear
       them in Settings (or they must be re-set) after the next deploy+restart.
-- [ ] P2 offline exit-param sweep on replayed VPS trades, walk-forward; add a
+- [x] **P2 offline exit-param sweep — DONE 2026-08-01** (`eafd7bc`,
+      `docs/2026-08-01-exit-sweep.md`). `scripts/exit_sweep.py` replays real trades against
+      candidate parameters off the MFE/MAE telemetry. Answer: the target was UNREACHABLE
+      (max favourable excursion ever = 1.216% of notional vs a 1.5% target), so zero TARGET
+      exits was structural, not tuning. The give-back lock is the only lever that works —
+      shipped 600→150 / 0.3→0.7, which turns those 22 replayable trades from −₹913 to +₹268.
+      Ambiguous stop-vs-target orderings are reported as a band, never guessed. Sample is 22
+      trades: a direction to test, NOT a proven setting.
+- [ ] ~~P2 offline exit-param sweep on replayed VPS trades~~, walk-forward; add a
       BE-arming-threshold knob; finer `exit_reason` tags. (Opus-tier judgment task.)
       **Blocked on Workstream E-Phase-0 peak-excursion (MFE/MAE) telemetry** — give-back is
       unmeasurable from the trade log until that lands. Live evidence (07-24): the managed
@@ -377,10 +410,15 @@ against B/E/C/D — pick them up when one becomes urgent.
 
 - [ ] **Resize the droplet 1GB → 2GB — OWNER ACTION** (DO console). The 2026-07-23 OOM was
       caused by two memory leaks, both fixed and deployed, but 1GB leaves no headroom.
-- [ ] **Decide the DB-bloat approach — OWNER DECISION, then build.** `paper_trader.db` is
-      ~45MB, +~5MB/day, from unbounded append-only `option_data` (~154k), `signal_events`
-      (~86k), `equity_snapshots` (~72k). Candidates: retention/pruning, a split archive DB,
-      or moving the time-series off SQLite. Owner wants a rethink, not a patch. NOT DECIDED.
+- [x] **DB-bloat — DECIDED AND BUILT 2026-08-01** (`1e8b64f`). It had reached **108 MB**
+      (option_data 319k, signal_events 169k, equity_snapshots 133k) and the 2 GB resize is
+      off the table (no budget), which settled the decision: retention, not migration.
+      `engine/retention.py` ages telemetry out (90d) and DOWNSAMPLES the equity curve
+      (7d full, then 1 row/15 min) rather than truncating history; the money record —
+      trades, positions, order_journal, capital_state — is never pruned, with a test that
+      says so. Runs daily from the signal lane with a flat book; `scripts/prune_db.py`
+      does the one-off catch-up and the VACUUM. `/api/storage` makes the growth visible
+      in-app, which is what was actually missing.
 - [ ] **DB session hygiene (minor).** Context-manage `_upsert_state` (`runner.py`) and the
       broker's long-lived session; add `pool_pre_ping`; lower `pool_timeout`.
 - [ ] **Write `deploy.sh`** so the `--exclude .env --exclude '*.db*' --exclude
@@ -390,7 +428,8 @@ against B/E/C/D — pick them up when one becomes urgent.
 - [ ] **VPS pending OS reboot** (5 ESM security updates) — owner action, market-closed window.
 - [x] Removed the copy-pasteable rsync at `docs/superpowers/plans/2026-07-10-vps-deployment.md`
       that omitted `--exclude .env`; it now points at `scripts/deploy.sh` (2026-07-28).
-- [ ] **Make `/api/health` a real readiness probe.** It is currently `{"ok": True}` plus the
+- [ ] **Make `/api/health` a real readiness probe** (build stamp now deployed and verified
+      2026-08-01). It is currently `{"ok": True}` plus the
       build stamp — a liveness stub that returned 200 throughout *both* 2026-07 outages, which
       is why the deploy script has to curl `GET /` separately to detect a broken deploy. It
       should report DB reachability, the heartbeat age of **both** engine loops, provider

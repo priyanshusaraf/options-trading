@@ -10,8 +10,8 @@ every qualifying signal, autonomously picks the contract, sizes the position, ro
 manages it to exit, and books P&L net of the full Indian charge stack.
 
 **This trades real money.** Live execution was enabled 2026-06-29 and the **first real order was
-placed 2026-07-13 09:30 IST**; running 24/7 on a Bangalore VPS since 2026-07-10; **50 real orders
-and 34 real trades** booked as of the 2026-07-23 snapshot, every one of them `mode='live'` —
+placed 2026-07-13 09:30 IST**; running 24/7 on a Bangalore VPS since 2026-07-10; **72 real
+trades** booked as of 2026-08-01 (net **−₹166.37**), every one of them `mode='live'` —
 there are zero paper rows in production. The live order path (`LiveBroker`, `KiteOrderClient`,
 `LiveExecutionKite`) is in production use — it is **not** untested and the next order is **not**
 its first. Treat any change touching execution, sizing, or exits as a production change.
@@ -22,7 +22,15 @@ deliberately left free for an unrelated analyst app in the parent repo.
 **Product direction (2026-07):** near-term focus is equity + index on the **underlying**, not
 stock-specific options. Options stay fully supported but drop to lowest priority and are treated
 as index-only. This means the mature spot backtester now tests the actually-traded instrument
-for the equity/index universe. Borne out by the book: 33 of 34 real trades are `equity_intraday`.
+for the equity/index universe. Borne out by the book: 70 of 72 real trades are
+`equity_intraday`, and production runs `max_open_positions=0`, which disables options entirely.
+
+**Read the book before changing an exit.** Across all 72 trades, `TARGET` has fired **zero**
+times: 45 exits were the owner closing manually (`RECONCILED_EXTERNAL_EXIT`, net +₹2,761) and
+the bot's own exits net **−₹2,927**. The 2026-08-01 excursion sweep
+(`docs/2026-08-01-exit-sweep.md`) shows why — the largest favourable excursion ever recorded
+is 1.216% of notional against a 1.5% target. This is an entry-quality problem as much as an
+exit one: the median trade travels further against you (0.427%) than for you (0.286%).
 
 ## Production divergence — read before assuming
 
@@ -32,21 +40,39 @@ and it drove a week of decisions. Verified by md5 against the VPS: `runner.py`,
 `risk_controls.py`, `charges.py`, `broker.py`, `equity_entry.py` and `analytics.py` are
 byte-identical to the branch, and the live process (up since 07:00:28 IST) is running them.
 
-What genuinely is **not** deployed is the build-provenance + test-isolation work of 2026-07-25→28:
-`main.py`, `core/config.py`, `core/version.py`, `db/models.py`, `db/session.py`,
-`engine/broker_factory.py`, `conftest.py`. So **`/api/health` does NOT yet report a commit** — it
-returns bare `{"ok":true}`, there is no `VERSION` on the box, and `build_sha` is not being
-stamped. Until that ships, deployment state must be established by checksum or symbol grep
-against the VPS. **Never assert deployment state from prose in this file or any doc** — that is
-exactly how this error persisted. Verify, then write down what you verified.
+**Updated 2026-08-01.** The build-provenance work of 2026-07-25→28 **is now deployed**, so the
+paragraph that used to sit here — "`/api/health` does NOT yet report a commit" — is itself
+stale and has been removed. Verified by measurement, not by prose:
+
+```
+$ curl -s localhost:8090/api/health
+{"ok":true,"build":{"commit":"8f06fb4","branch":"feat/exec-completeness",
+ "deployed_at":"2026-07-31T10:01:40Z","deployed_by":"priyanshusaraf@…"}}
+```
+
+**So deployment state is now answerable in one command: `curl /api/health` and compare the
+commit.** That is the intended workflow; checksum/symbol grepping is the fallback for a box
+that predates provenance. **Never assert deployment state from prose in this file or any
+doc** — that is exactly how the earlier error persisted for a week. Verify, then write down
+what you verified, with the command and its output.
+
+Note what the reported commit does *not* tell you: `runtime_config` overrides in the DB
+shadow code defaults, so a deployed commit can be running with materially different
+parameters than its source implies. Check the Settings screen — an override whose value
+differs from the shipped default is now flagged amber.
 
 Do not date a deploy from remote file mtimes: the deploy rsyncs with `-t`, so VPS timestamps are
 the *Mac's* edit times, identical to the second. They say nothing about when a file landed.
 
-**Known live-state gap:** the equity curve is anchored to the synthetic ₹50,000 seed and the E0.2
-auto-reanchor cannot fire on a ledger that has ever traded (its guards require zero `Trade` rows).
-Production reported ₹50,744 while the real Zerodha account net was ₹14,236–₹27,441 — roughly a 2×
-overstatement. Treat reported equity as untrustworthy until that is fixed.
+**Live-state gap — FIXED 2026-08-01 (`4c91e05`), not yet deployed as of writing.** The equity
+curve was anchored to the synthetic ₹50,000 seed because the E0.2 auto-reanchor could only
+fire on a ledger that had never traded, which production has done since 2026-07-13 — so the
+path was unreachable from the day it shipped and the cockpit reported ₹49,833 against a much
+smaller real account for three weeks. It now re-anchors **once a day, before the day's first
+entry, with a flat book, only when actually adrift** (`should_reanchor` in
+`engine/ledger_reconcile.py`), and `capital_dict` publishes `ledger_drift` so a lying ledger
+shows a warning badge instead of being silent. Verify after the next deploy: the badge should
+be absent and `ledger_drift` near zero.
 
 ## Hard invariants
 
@@ -90,7 +116,8 @@ cp .env.example .env                          # set PT_PROVIDER, KITE_API_KEY, K
 ```bash
 npm install
 npm run dev          # :5173, proxies /api + /ws to :8090
-npm run typecheck    # tsc --noEmit — there is NO test suite or linter on the frontend
+npm run typecheck    # tsc --noEmit
+npm test             # vitest — 116 tests (settings docs, journal walkthrough, ledger domain)
 npm run build
 ```
 
@@ -147,6 +174,9 @@ engine running, and a Vite build there can take live positions down with it.
 | `backend/app/engine/equity_entry.py` | equity_intraday entry + `_mark_exit_equity`, deliberately separate from options |
 | `backend/app/engine/charges.py` | Zerodha segment-aware charge model — rates indicative, verify vs contract notes |
 | `backend/app/engine/analytics.py` | equity curve, signal counts — must aggregate in SQL, never load full tables |
+| `backend/app/engine/event_risk.py` | scheduled-event blackout table (EIA releases, index weekdays, bullion expiry, earnings) — shared by engine, backtester and `/api/event-risk` |
+| `backend/app/engine/retention.py` | telemetry retention; the money record is never pruned |
+| `backend/app/backtest/exit_sweep.py` | replays real trades against candidate exit parameters (`scripts/exit_sweep.py`) |
 | `backend/app/providers/` | `MarketDataProvider` seam; `safe_kite.py`, `factory.py` (process-wide singleton) |
 | `backend/app/options/` | `picker.py` (OI ≥ 500, spread ≤ 3%, delta ≈ 0.50), `pricing.py` (local Black-Scholes) |
 | `backend/app/strategy/registry/` | drop-in strategies; auto-discovered by module-level `STRATEGY`; default `trend_impulse_v3` |
@@ -172,6 +202,11 @@ Incident post-mortems: `docs/incidents/`.
   `intraday_purple_margin = 10,000`) → quantity from a real `kite.order_margins()` MARKET/MIS
   probe → skip below the `intraday_min_margin = 2,500` dust floor → leftover cash flows to the
   next name. Concurrency cap is **3 by default but 4 in production** (`runtime_config`).
+- **exits (equity_intraday), retuned 2026-08-01 from real excursion data:** stop 0.8%,
+  target 1.5% — and the target is effectively INERT (see "Read the book" above). The lever
+  that works is the give-back lock: `intraday_profit_lock_threshold` **150** (was 600) and
+  `intraday_profit_lock_frac` **0.7** (was 0.3). Production still overrides both (450/0.3),
+  which makes the new defaults inert until those overrides are cleared.
 - **options: 1 lot, −30% / +60%** premium stop/target with a ratcheting stop that never
   loosens. The widely-copied "−35%" is stale everywhere it appears — `config.py:50` is
   `stop_loss_pct = 0.30`. Exception: positions with `entry_atr` set (i.e. `expanding_z_v4`)
