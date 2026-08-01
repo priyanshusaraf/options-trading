@@ -39,6 +39,7 @@ from app.engine.equity_entry import (
     IntradayCandidate, equity_exit, equity_qty, qty_for_margin,
     select_intraday_entries)
 from app.engine.execution_policy import plan_order
+from app.engine.event_risk import active_blackout, normalize_key, pending_flatten
 from app.engine.ledger_reconcile import plan_reanchor, should_reanchor
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.backtest.ratchet import RatchetState, wilder_atr
@@ -120,6 +121,8 @@ class EngineRunner:
         self._next_funds_epoch = 0.0           # throttle margins() polling (live balance)
         self._reanchored = False               # a re-anchor fired at least once this process
         self._reanchor_reason = ""             # WHY the ledger is/isn't anchored to the broker
+        self._earnings_cache: dict[str, dt.date] = {}   # symbol -> next results date
+        self._earnings_cache_date: dt.date | None = None  # calendar day the cache was built
         self._next_ledger_epoch = 0.0          # throttle the cash-invariant self-check (H10)
         self._ledger_drift_alerted = False     # de-dupe the ledger-drift alert per episode
         self._beat: dict[str, float] = {}      # per-lane heartbeat epoch (P3 liveness)
@@ -488,6 +491,10 @@ class EngineRunner:
     def mark_and_exit_positions(self) -> None:
         prov = self.provider
         now = prov.now()
+        # Scheduled-release flatten runs in the EXIT lane, before marking: a position
+        # must be out before the window opens, and exits are never gated by arm state,
+        # halts or blackouts.
+        self._safe_flatten_before_events(now)
         opens = {p.instrument_key: p for p in self.broker.open_positions()}
         insts = []
         for k in list(opens):
@@ -868,6 +875,21 @@ class EngineRunner:
                          f"set intraday_override_date to opt in",
                          instrument=key, event="EXPIRY_DAY_SKIP")
                 continue
+            # ── scheduled-event risk (owner, 2026-08-01) ──────────────────────────
+            # Known event → no new position. Covers the EIA gas (Thu) / petroleum (Wed)
+            # windows, index weekday sit-outs, and any stock on its results date. The
+            # bullion-into-expiry rule needs the contract's expiry and so is applied
+            # further down, once the chain is known. ENTRIES ONLY — nothing here can
+            # ever gate an exit.
+            product = self.products.get(key, "options")
+            eb = active_blackout(
+                key, product, now,
+                earnings_date=self._earnings_date_for(key),
+                enabled=bool(self.params.get("event_risk_enabled", True)))
+            if eb is not None and not self._event_override_today(now):
+                log.info(f"EVENT RISK — not taking {key}: {eb.label} ({eb.detail})",
+                         instrument=key, event="EVENT_RISK_SKIP")
+                continue
             # ── intraday-equity branch (MIS): collect a candidate; the cap-3 /
             # purple / qty-max selection runs after the loop. Guarded by the
             # opt-in flag so the default options behaviour is unchanged. ──
@@ -927,6 +949,15 @@ class EngineRunner:
                 dte = (chain.expiry - now.date()).days
                 log.warn(f"signal skipped — option expiry too close ({dte}d < {min_dte}d, "
                          f"theta cliff)", instrument=key, event="DTE_SKIP")
+                continue
+            # Per-contract event risk — the bullion (GOLDM/SILVERM) "no options within 2
+            # days of expiry" rule, which can only be judged once the chain's expiry is
+            # known. Same table, same reasons, same log event as the pre-branch gate.
+            eb = active_blackout(key, "options", now, expiry=chain.expiry,
+                                 enabled=bool(self.params.get("event_risk_enabled", True)))
+            if eb is not None and not self._event_override_today(now):
+                log.info(f"EVENT RISK — not taking {key}: {eb.label} ({eb.detail})",
+                         instrument=key, event="EVENT_RISK_SKIP")
                 continue
             pick = pick_option(chain, direction, s, now)
             if self.params.get("option_cache_enabled", True):
@@ -1068,6 +1099,73 @@ class EngineRunner:
                     log.info(f"intraday signal dropped — {reason}", instrument=c.instrument_key)
 
     # ── overnight holding (option buying) ─────────────────────────────────
+    # ── scheduled-event risk ─────────────────────────────────────────────────
+    def _event_override_today(self, now) -> bool:
+        """The owner's per-day, self-expiring opt-in (`intraday_override_date`), reused
+        for event blackouts: yesterday's opt-in never carries forward."""
+        try:
+            return dt.date.fromisoformat(
+                str(self.params.get("intraday_override_date", "")).strip()) == now.date()
+        except (ValueError, TypeError):
+            return False
+
+    def _earnings_date_for(self, key: str) -> dt.date | None:
+        """Next results date for an equity symbol, from the `earnings_events` cache that
+        `scripts/refresh_earnings.py` fills daily. Cached in-process per calendar day —
+        this is consulted on every signal and must never become a per-tick query.
+
+        Returns None when the calendar is unknown, which means NO block: an unrefreshed
+        cache must not silently freeze the whole equity book. The staleness of the cache
+        is surfaced by /api/event-risk instead, so a stale calendar is visible rather
+        than either dangerous or paralysing."""
+        today = self.provider.now().date()
+        if self._earnings_cache_date != today:
+            self._earnings_cache_date = today
+            self._earnings_cache = {}
+            try:
+                from app.core.earnings import earnings_map
+                syms = [normalize_key(k) for k in self.enabled]
+                with SessionLocal() as s:
+                    for sym, rec in earnings_map(s, syms, today).items():
+                        self._earnings_cache[normalize_key(sym)] = dt.date.fromisoformat(
+                            rec["date"])
+            except Exception as e:
+                log.warn(f"earnings calendar unavailable: {e}", event="EARNINGS_CACHE_FAIL")
+        return self._earnings_cache.get(normalize_key(key))
+
+    def flatten_before_events(self, now) -> list[str]:
+        """Square off open positions in an instrument whose release window is about to
+        open (EIA gas / crude). Blocking entries alone would leave a position opened an
+        hour earlier fully exposed to the print — the exact risk the owner is avoiding.
+
+        This is an EXIT, so it runs regardless of arm state and is never itself gated by
+        a blackout (hard invariant #2)."""
+        if not self.params.get("event_risk_flatten", True):
+            return []
+        closed: list[str] = []
+        for pos in list(self.broker.open_positions()):
+            key = pos.instrument_key
+            b = pending_flatten(key, pos.segment or "options", now,
+                                lead_minutes=float(self.params.get(
+                                    "event_risk_flatten_lead_minutes", 2.0)),
+                                enabled=bool(self.params.get("event_risk_enabled", True)))
+            if b is None:
+                continue
+            prem = pos.last_premium or pos.entry_premium
+            try:
+                self.broker.close_position(pos, prem, "EVENT_RISK_FLATTEN", now, pos.last_spot)
+            except Exception as e:
+                log.error(f"event-risk flatten failed for {pos.tradingsymbol}: {e}",
+                          instrument=key, event="EVENT_RISK_FLATTEN_FAIL")
+                continue
+            if key in self.state:
+                self.state[key]["position"] = None
+            closed.append(pos.tradingsymbol)
+            log.warn(f"EVENT RISK FLATTEN {pos.tradingsymbol} — {b.label} window opens "
+                     f"{b.window[0]:%H:%M}; not carrying a position into the release",
+                     instrument=key, event="EVENT_RISK_FLATTEN")
+        return closed
+
     def square_off_for_overnight(self, now) -> list[dict]:
         """At session close: keep eligible positions overnight (tag + snapshot the
         close mark), paper-close the rest. Returns the per-position decisions."""
@@ -1213,6 +1311,14 @@ class EngineRunner:
             else:
                 total += (last - p.entry_premium) * p.qty
         return total
+
+    def _safe_flatten_before_events(self, now) -> None:
+        """Defensive wrapper — a failure inside the event flatten must never stop the
+        risk loop from marking and exiting the rest of the book."""
+        try:
+            self.flatten_before_events(now)
+        except Exception as e:
+            log.error(f"event-risk flatten check failed: {e}", event="EVENT_RISK_ERROR")
 
     def _safe_maybe_profit_lock(self, now) -> None:
         """Defensive wrapper — an exception inside the give-back guard must never

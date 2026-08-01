@@ -36,6 +36,10 @@ export const killBot = () => post('/api/execution/kill', {})
 export const getInstruments = () => j('/api/instruments')
 export const getSignals = () => j('/api/signals')
 export const getEarnings = () => j('/api/earnings')
+// Scheduled-event blackouts in force today (EIA releases, index weekdays, bullion into
+// expiry, results days). Lets the cockpit explain a sit-out BEFORE the bot skips a signal.
+export const getEventRisk = (day?: string) =>
+  j(`/api/event-risk${day ? `?day=${day}` : ''}`)
 export const getPositions = (segment?: string) =>
   j(`/api/positions${segment ? `?segment=${segment}` : ''}`)
 export const getProviderHealth = () => j('/api/provider-health')

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLive } from '../state/LiveContext'
-import { getDashboard, getAccountPnl, getStrategies } from '../lib/api'
+import { getDashboard, getAccountPnl, getStrategies, getEventRisk } from '../lib/api'
 import InstrumentDetailModal from './InstrumentDetailModal'
 import { LineChart, MultiLineChart } from '../components/Charts'
 import { inr, signedInr, pnlColor, num, dt } from '../lib/format'
@@ -36,6 +36,57 @@ function Card({ label, v, cls = '', sub }: { label: string; v: string; cls?: str
       <div className="stat-label">{label}</div>
       <div className={`stat-value ${cls}`}>{v}</div>
       {sub && <div className="text-[11px] text-muted mt-0.5">{sub}</div>}
+    </Panel>
+  )
+}
+
+// "Sitting out today" — the scheduled events that will make the bot decline signals.
+// Without this the cockpit shows an idle bot with no explanation, which looks exactly
+// like a broken one. Shown BEFORE the skip happens, not discovered afterwards in a log.
+function EventRiskPanel() {
+  const [d, setD] = useState<any>(null)
+  useEffect(() => {
+    const f = () => getEventRisk().then(setD).catch(() => {})
+    f(); const t = setInterval(f, 60_000); return () => clearInterval(t)
+  }, [])
+  if (!d) return null
+  if (!d.enabled) return (
+    <Panel className="p-3 text-xs text-amber-300">
+      ⚠ Event-risk blackouts are switched OFF — the bot will trade through EIA releases,
+      index expiry days and results days. Re-enable in Settings → <code>event_risk_enabled</code>.
+    </Panel>
+  )
+  if (!d.instruments?.length) return null
+  return (
+    <Panel className="p-3">
+      <div className="stat-label mb-2">
+        Sitting out today — scheduled event risk
+        {d.override_today && <span className="ml-2 text-amber-300">(you opted in for today, so these are lifted)</span>}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {d.instruments.map((i: any) => (
+          <div key={i.key} className="flex flex-wrap items-baseline gap-2 text-xs">
+            <span className="font-semibold text-zinc-200 w-24 shrink-0">{i.key}</span>
+            {i.blackouts.map((b: any, n: number) => (
+              <span key={n} className="text-muted">
+                <span className={cn(badgeVariants({ variant: 'chip' }),
+                  b.all_day ? 'bg-down/15 text-down border border-down/30'
+                            : 'bg-amber-500/15 text-amber-300 border border-amber-500/30')}>
+                  {b.all_day ? 'all day' : `${(b.from || '').slice(11, 16)}–${(b.to || '').slice(11, 16)}`}
+                </span>
+                <span className="ml-2">{b.label} — {b.detail}</span>
+                {b.flatten_before && <span className="ml-1 text-amber-300">(open positions squared off first)</span>}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+      {d.earnings_calendar && d.earnings_calendar.known === 0 && d.earnings_calendar.of_stocks > 0 && (
+        <div className="mt-2 text-[11px] text-amber-300">
+          ⚠ No results dates cached for any of your {d.earnings_calendar.of_stocks} stocks — the
+          earnings blackout cannot fire. Run <code>scripts/refresh_earnings.py</code>.
+        </div>
+      )}
     </Panel>
   )
 }
@@ -100,6 +151,7 @@ export default function DashboardView() {
 
   return (
     <div className="flex flex-col gap-3">
+      <EventRiskPanel />
       <BotVsYou />
       {/* segment + strategy selector — slice the whole dashboard */}
       <Panel className="p-3 flex items-center gap-2 flex-wrap">

@@ -37,6 +37,7 @@ engine/charges.py.
 """
 from __future__ import annotations
 
+import datetime as dt
 import math
 
 import pandas as pd
@@ -201,12 +202,41 @@ def compute_signals(candles, strat, params) -> pd.DataFrame:
     return sig.dropna(subset=warm_cols).reset_index(drop=True)
 
 
-def run_trades(sig, inst, seg: str, capital: float, rm) -> list[BTTrade]:
+def _event_blocked_bar(inst, row, product: str) -> bool:
+    """True if a fill on this bar would land inside a scheduled-event blackout.
+
+    The backtest MUST apply the same table as the live engine. If it didn't, every
+    backtest would be measured on bars the live bot refuses to trade — flattering the
+    result with exactly the event bars the rules exist to avoid, and making the two
+    planes disagree about what the strategy even is. Only the calendar-derivable rules
+    apply here (weekday sit-outs, the DST-correct US release windows); earnings needs a
+    historical calendar the backtester does not have, so it is live-only and documented
+    as such."""
+    from app.engine.event_risk import active_blackout
+    try:
+        when = row["date"]
+        if not isinstance(when, dt.datetime):
+            when = dt.datetime.fromisoformat(str(when))
+        if when.tzinfo is not None:
+            when = when.replace(tzinfo=None)
+    except Exception:
+        return False
+    # An instrument with no key can match no rule — in a backtest that means "trade it"
+    # (unknown history, not unknown danger); the live engine always has a real key.
+    return active_blackout(getattr(inst, "key", ""), product, when) is not None
+
+
+def run_trades(sig, inst, seg: str, capital: float, rm,
+               event_risk: bool = True) -> list[BTTrade]:
     """Replay the fill-next-bar-open trade state machine over a 0-indexed signal
     (sub)frame and return the closed trades. This is the seam walk-forward slices
     per fold; pure over its inputs. `sig` must carry the canonical flag columns
     (+ `_ratchet_atr` when `rm` is set). Extracted verbatim from `simulate`."""
     trades: list[BTTrade] = []
+    # The backtester trades the UNDERLYING, so the product for rule-matching is the
+    # instrument itself, never "options" — the options-only rules (NIFTY Tuesday,
+    # bullion-into-expiry) correctly do not apply to a spot backtest.
+    product = "equity_intraday" if seg in ("NSE", "BSE") else "futures"
     pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
     pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
     ratchet = None  # RatchetState for the open position, iff strat declares risk_model
@@ -224,6 +254,10 @@ def run_trades(sig, inst, seg: str, capital: float, rm) -> list[BTTrade]:
             pending = None
             if kind == "ENTER" and pos is None:
                 qty, notional, lots = _position(inst, open_px, capital)
+                # Same blackout table as live: a fill that would land inside a scheduled
+                # event is not taken here either. Exits are never gated (below).
+                if event_risk and _event_blocked_bar(inst, r, product):
+                    qty = 0
                 if qty > 0:
                     pos = {"direction": arg, "entry_price": open_px,
                            "entry_time": t, "entry_idx": i, "qty": qty,

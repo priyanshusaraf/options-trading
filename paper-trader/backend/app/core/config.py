@@ -161,7 +161,18 @@ class Settings(BaseSettings):
     overnight_min_reinforcements: int = 1    # 10%–25% positions need >=1 reinforcement to hold
     overnight_min_days_to_expiry: int = 2    # force square-off if expiry within N days (theta cliff)
     entry_min_days_to_expiry: int = 3        # refuse to OPEN an option within N days of expiry (theta cliff): blocks 0/1/2-DTE. 0 = off
-    intraday_block_weekday: int = 1          # sit out this weekday (Mon=0..Sun=6; 1=Tue/NIFTY-expiry; -1=off). Name kept for override back-compat
+    # ── scheduled-event risk (owner, 2026-08-01) ──────────────────────────────
+    # No new position in an instrument with a known event on the clock: the EIA gas
+    # (Thu) / petroleum (Wed) releases, index weekday sit-outs, bullion options into
+    # expiry, and any stock on its results date. The rule table lives in
+    # `engine/event_risk.py` and is shared by the engine, the backtester and the UI.
+    event_risk_enabled: bool = True
+    # Also square off an OPEN position before a timed release, rather than only blocking
+    # new ones — carrying a position into the print is the risk being avoided.
+    event_risk_flatten: bool = True
+    event_risk_flatten_lead_minutes: float = 2.0   # how early to be flat before the window
+
+    intraday_block_weekday: int = 1        # sit out this weekday (Mon=0..Sun=6; 1=Tue/NIFTY-expiry; -1=off). Name kept for override back-compat
     expiry_day_block_keys: str = "NIFTY"     # WHICH instruments sit out that weekday: '*' = the whole book (pre-2026-07-28 behaviour); else a comma-separated key list. Blank fails safe to '*'
     intraday_override_date: str = ""         # 'YYYY-MM-DD' to allow entries despite the weekday block, that one day only (self-expires)
     max_signal_age_minutes: float = 5.0      # act on a crossover only within this long of its candle COMPLETING; older = history, never entered (#15). 0 = off

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -474,6 +474,52 @@ def earnings_calendar():
     stocks = [i.key for i in all_instruments() if i.segment in ("NSE", "BSE")]
     with SessionLocal() as s:
         return {"earnings": earnings_core.earnings_map(s, stocks)}
+
+
+@router.get("/api/event-risk")
+def event_risk_today(request: Request, day: str | None = None):
+    """Every scheduled-event blackout in force for the universe on `day` (default
+    today), plus the health of the earnings calendar behind it.
+
+    This exists so a sit-out is never mysterious. Before it, the only way to learn the
+    bot had declined a signal was to read the journal — the cockpit showed an idle bot
+    with no explanation, which is indistinguishable from a broken one. Read-only and
+    cheap: pure rule evaluation plus one cached-calendar query."""
+    from app.core import earnings as earnings_core
+    from app.engine.event_risk import DEFAULT_RULES, blackouts_for_day, normalize_key
+    r = _runner(request)
+    try:
+        target = dt.date.fromisoformat(day) if day else r.provider.now().date()
+    except ValueError:
+        raise HTTPException(400, f"bad day '{day}' — expected YYYY-MM-DD")
+
+    enabled = bool(r.params.get("event_risk_enabled", True))
+    stocks = [i.key for i in all_instruments() if i.segment in ("NSE", "BSE")]
+    with SessionLocal() as s:
+        emap = earnings_core.earnings_map(s, [normalize_key(k) for k in stocks], target)
+
+    out = []
+    for inst in all_instruments():
+        product = r.products.get(inst.key, "options")
+        edate = emap.get(normalize_key(inst.key), {}).get("date")
+        bl = blackouts_for_day(
+            inst.key, product, target,
+            earnings_date=dt.date.fromisoformat(edate) if edate else None,
+            enabled=enabled)
+        if bl:
+            out.append({"key": inst.key, "name": inst.name, "product": product,
+                        "blackouts": [b.as_dict() for b in bl]})
+    return {
+        "day": target.isoformat(),
+        "enabled": enabled,
+        # A per-day opt-in lifts the weekday sit-outs; surfaced so the UI can explain
+        # why a "blocked" instrument is trading anyway.
+        "override_today": r._event_override_today(r.provider.now()),
+        "instruments": out,
+        "earnings_calendar": {"known": len(emap), "of_stocks": len(stocks)},
+        "rules": [{"kind": r_.kind, "label": r_.label, "keys": list(r_.keys),
+                   "products": list(r_.products)} for r_ in DEFAULT_RULES],
+    }
 
 
 @router.get("/api/positions")

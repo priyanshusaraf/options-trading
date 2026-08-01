@@ -62,6 +62,8 @@ OVERRIDABLE = (
     "order_failure_disarm_count",
     # ledger honesty — daily re-anchor of the internal ledger to real broker equity
     "ledger_auto_reanchor", "ledger_reanchor_tolerance",
+    # scheduled-event risk (EIA releases, index weekdays, bullion expiry, earnings)
+    "event_risk_enabled", "event_risk_flatten", "event_risk_flatten_lead_minutes",
 )
 
 
@@ -131,6 +133,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     # ₹ of ledger-vs-broker drift tolerated before the daily re-anchor corrects it. Too
     # tight and the ledger churns on rounding; too loose and the equity curve drifts.
     "ledger_reanchor_tolerance": (0.0, 1000000.0),
+    "event_risk_flatten_lead_minutes": (0.0, 120.0),
 }
 
 
