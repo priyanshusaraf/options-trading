@@ -52,11 +52,25 @@ _TMP_DIR = tempfile.mkdtemp(prefix="paper-trader-pytest-")
 atexit.register(shutil.rmtree, _TMP_DIR, True)
 
 # A real OS env var takes precedence over .env in pydantic-settings, so these win.
+#
+# ALL THREE databases are redirected, not just the execution one. `PT_DB_PATH` was
+# isolated per-run (the fix for the phantom 27-test failure); `ledger.db` and
+# `research.db` were not, and their defaults are FIXED paths — an absolute one under
+# backend/ for the ledger, a cwd-relative one for research. So two concurrent pytest
+# runs shared them, which is the same clobbering bug in two tables nobody had looked
+# at yet, and it fails in the worst possible way: as unrelated test failures in
+# whichever run happened to lose the race.
+#
+# It also means a bare `pytest` was reading and writing the developer's REAL
+# journal (ledger.db is the live money record on the VPS — see the memory note that
+# ledger.db, not journal.db, is THE ledger). Tests must not be able to touch it.
 SAFE_TEST_ENV = {
     "PT_PROVIDER": "mock",     # never the live Kite data client
     "PT_EXECUTION": "paper",   # live_execution_enabled() needs exactly "live"
     "PT_LIVE_ACK": "",         # empty, NOT deleted — see the module docstring
     "PT_DB_PATH": os.path.join(_TMP_DIR, "paper_trader.db"),
+    "PT_LEDGER_DB_PATH": os.path.join(_TMP_DIR, "ledger.db"),
+    "PT_RESEARCH_DB_PATH": os.path.join(_TMP_DIR, "research.db"),
 }
 os.environ.update(SAFE_TEST_ENV)
 

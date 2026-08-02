@@ -48,7 +48,22 @@ from app.core.config import get_settings
 from app.core.market_hours import ist_epoch
 from app.engine.charges import compute_charges
 from app.market_data.candles import candles_to_df
+from app.engine.decision_kernel import ExitPolicy, decide_exit
 from app.strategy.registry import get_strategy
+
+# The backtest's exit policy, stated once and reported with every result.
+#
+# The protective stop/target is NOT modelled. For the options path there is no
+# historical premium series to evaluate it against (Kite does not sell one and the
+# synthetic path is an estimate); for the spot path the live band is applied to the
+# TRADED instrument, which for equity_intraday is the same series — so this policy
+# understates exits there and that gap is real, not cosmetic. It is declared here so
+# it travels with the numbers instead of living in a docstring nobody reads next to
+# the published result.
+BACKTEST_EXIT_POLICY = ExitPolicy.no_protective_band(
+    "no historical option-premium series exists to evaluate a premium stop/target "
+    "against; the spot path trades the underlying, where the live SL/TP band is "
+    "applied by the engine and not reproduced here")
 
 # Map an instrument's live segment to the charge schedule for its UNDERLYING.
 _BACKTEST_SEGMENT = {
@@ -318,15 +333,25 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
             # no same-bar management, pine:233-234).
             if i > pos["entry_idx"]:
                 d = pos["direction"]
+                ratchet_hit = False
                 if ratchet is not None:
                     ratchet.update(float(r["high"]), float(r["low"]), close,
                                    float(r["_ratchet_atr"]))
-                    if ratchet.stop_hit(close):
-                        pending = ("EXIT", "RATCHET_STOP")
-                if pending is None and (
-                        (d == "LONG" and bool(r["longExit"])) or
-                        (d == "SHORT" and bool(r["shortExit"]))):
-                    pending = ("EXIT", "STRATEGY_EXIT")
+                    ratchet_hit = ratchet.stop_hit(close)
+                # Phase G: the SAME kernel the live engine decides with. The
+                # protective band is not evaluated here, and that is now a declared
+                # policy (BACKTEST_EXIT_POLICY) rather than an absent branch — see
+                # its note. Everything else — ratchet before strategy flag,
+                # direction-aware flag selection — is decided by shared code, so
+                # live and backtest can no longer drift apart on it silently.
+                decision = decide_exit(
+                    direction=d, price=close,
+                    stop=None, target=None,   # no protective band — see policy
+                    long_exit=bool(r["longExit"]), short_exit=bool(r["shortExit"]),
+                    ratchet_exit=ratchet_hit,
+                    policy=BACKTEST_EXIT_POLICY)
+                if decision.should_exit:
+                    pending = ("EXIT", decision.reason)
         elif r["longEntry"] or r["shortEntry"]:
             pending = ("ENTER", "LONG" if r["longEntry"] else "SHORT")
 

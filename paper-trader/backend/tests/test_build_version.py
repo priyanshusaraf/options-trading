@@ -322,8 +322,17 @@ def test_null_and_unknown_are_distinguishable_in_one_table(tmp_path, monkeypatch
         c.execute(text(_legacy_trades_ddl()))
         c.execute(text("INSERT INTO trades (id, tradingsymbol) VALUES (1, 'SUZLON')"))
     monkeypatch.setattr(sess_mod, "engine", eng)
-    sess_mod._migrate_schema()                  # adds build_sha, leaves it NULL
-    Base.metadata.create_all(eng)
+    # Adopt the legacy database the way production now does. This used to be
+    # `_migrate_schema()` + `create_all()` directly; since Phase A that pair is only
+    # the FIRST step of adoption (it reaches the Alembic baseline), and stopping
+    # there leaves the table short every column added by a later revision — which is
+    # how this test started failing on `deployment_id`. Going through init_schema
+    # keeps the test measuring what it means to measure: a legacy row that predates
+    # the column stays NULL while new rows get the sentinel.
+    from app.db import migrate
+    migrate.init_schema(eng,
+                        create_all=lambda: Base.metadata.create_all(eng),
+                        legacy_migrate=sess_mod._migrate_schema)
 
     with Session(eng) as s:
         s.add(_make_trade(id=2))                        # running, unidentifiable

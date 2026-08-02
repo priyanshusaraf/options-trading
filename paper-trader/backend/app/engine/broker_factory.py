@@ -68,7 +68,12 @@ def live_execution_enabled() -> bool:
     return execution == "live" and ack == _ACK
 
 
-def make_broker(provider, notifier=None):
+def make_broker(provider, notifier=None, deployment_id=None):
+    """Build the broker for `deployment_id`'s book.
+
+    `deployment_id=None` means "the legacy deployment" — resolved inside the broker
+    rather than here, so the default lives in exactly one place (models.LEGACY_
+    DEPLOYMENT_ID) and callers that predate deployments keep working unchanged."""
     if live_execution_enabled() and getattr(provider, "name", "") == "kite":
         from app.engine.kite_order_client import KiteOrderClient
         from app.engine.live_broker import LiveBroker
@@ -93,7 +98,9 @@ def make_broker(provider, notifier=None):
                                  tick_source=getattr(provider, "tick_size", None))
         broker = LiveBroker(provider, client, notifier=notifier,
                             poll_seconds=s.order_poll_seconds,
-                            timeout_seconds=s.order_timeout_seconds)
+                            timeout_seconds=s.order_timeout_seconds,
+                            **({} if deployment_id is None else {'deployment_id': deployment_id}))
         _refuse_live_broker_under_pytest(broker)
         return broker
-    return PaperBroker(provider)
+    return PaperBroker(provider,
+                       **({} if deployment_id is None else {'deployment_id': deployment_id}))

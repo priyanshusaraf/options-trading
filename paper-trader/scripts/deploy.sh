@@ -527,6 +527,47 @@ remote_assert "test -s $VPS_PATH/frontend/dist/index.html" "frontend/dist/index.
       VPS (1GB droplet, OOMs with the engine running). Build here and re-run:
       (cd $REPO_ROOT/frontend && npm run build) && scripts/deploy.sh"
 
+# The remote .venv is EXCLUDED from the sync (it is per-host and platform-specific),
+# so a new entry in requirements.txt does not reach the VPS by itself. Before
+# 2026-08-02 that was harmless because the dependency set had not changed since the
+# venv was built; the moment it does, the next `systemctl restart` boots a process
+# that cannot import its own code — and it fails AFTER the restart, i.e. with the
+# engine already down and positions unmanaged.
+#
+# So: install remotely, BEFORE the restart, and treat a failure as a stop. The old
+# process is still running and still managing the book at this point, which is
+# exactly why this is the safe place to fail. `pip install -r` is a no-op when the
+# venv already satisfies the file, so this costs a few seconds on a normal deploy.
+log "syncing python dependencies on remote venv"
+set +e
+dep_out="$(ssh -i "$VPS_KEY" "$VPS_HOST" \
+  "cd $VPS_PATH/backend && .venv/bin/pip install --quiet --disable-pip-version-check \
+   -r requirements.txt" 2>&1)"
+dep_rc=$?
+set -e
+if [[ $dep_rc -eq 255 ]]; then
+  fail "cannot reach $VPS_HOST to install dependencies — ssh exited 255. The files
+      are transferred; the service has NOT been restarted, so the running engine is
+      untouched and still managing the book. Re-establish access and re-run."
+elif [[ $dep_rc -ne 0 ]]; then
+  fail "remote dependency install FAILED (exit $dep_rc). NOT restarting — the
+      current process is still healthy and managing real positions, whereas a
+      restart onto an unsatisfied venv would leave the engine dead on an
+      ImportError. Fix and re-run.
+      pip said:
+$dep_out"
+fi
+
+# Prove the interpreter can actually import the app after that install. `pip
+# install` succeeding is not the same claim: a wheel can install cleanly and still
+# be unimportable on this platform, and the difference only shows up at boot.
+log "verifying the remote interpreter can import the app"
+remote_assert "cd $VPS_PATH/backend && PT_DISABLE_DOTENV=1 .venv/bin/python -c \
+  'import alembic, app.db.migrate'" "app imports on the remote venv" \
+  || fail "the remote venv cannot import the application after installing
+      requirements.txt. NOT restarting — the running engine is still fine. Debug on
+      the box: ssh $VPS_HOST 'cd $VPS_PATH/backend && .venv/bin/python -c \"import app.main\"'"
+
 log "restarting $SERVICE"
 ssh -i "$VPS_KEY" "$VPS_HOST" "systemctl restart $SERVICE"
 

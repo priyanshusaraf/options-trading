@@ -1,7 +1,7 @@
 """Engine + session factory + one-time schema/seed init."""
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
@@ -108,7 +108,18 @@ def _repair_open_position_lot_sizes(sess) -> int:
 
 
 def _migrate_schema() -> None:
-    """Additive, idempotent SQLite migrations (no Alembic in this project).
+    """FROZEN as of Alembic revision 0001 (2026-08-02). Do not add to this dict.
+
+    This was the project's whole migration mechanism: additive, idempotent SQLite
+    ALTERs. It can only ADD COLUMN — it cannot rename, drop, retype, constrain, or
+    roll back, and it carries no version number, so there was no way to ask a
+    database what shape it was in.
+
+    It is kept, and still runs, for exactly one job: carrying a database written
+    before Alembic existed up to the baseline schema, after which
+    `app/db/migrate.py` stamps it and takes over. Every schema change from here on
+    is a revision in `migrations/versions/`. `tests/test_migrate_schema_frozen.py`
+    fails the build if a column is added below.
 
     For a fresh DB, create_all already made these columns, so every ALTER is
     skipped; for an existing live DB, the new columns are appended in place
@@ -244,10 +255,27 @@ def init_db(reset: bool = False) -> None:
         )
     if reset:
         Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    _migrate_schema()
+        # drop_all leaves alembic_version behind (it is not a mapped table), which
+        # would tell the next init_schema() this is a managed database while every
+        # real table is gone. Drop it too so a reset returns to the empty state.
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    # Versioned migrations own the schema now. Empty DB -> create_all + stamp head;
+    # pre-Alembic DB -> frozen legacy ALTERs, stamp baseline, then upgrade; managed
+    # DB -> upgrade. See app/db/migrate.py for why all three converge.
+    from app.db.migrate import init_schema
+    init_schema(engine,
+                create_all=lambda: Base.metadata.create_all(engine),
+                legacy_migrate=_migrate_schema)
     s = get_settings()
     with SessionLocal() as sess:
+        # The legacy deployment must exist before anything can write a row: every
+        # executed-row table carries a NOT NULL deployment_id defaulting to it.
+        # Seeded here for databases built by create_all (which runs no revision) and
+        # by migration 0002 for databases that were migrated — whichever happens
+        # first, the other is a no-op.
+        from app.core.deployments import ensure_legacy_deployment
+        ensure_legacy_deployment(sess)
         if sess.get(CapitalState, 1) is None:
             sess.add(CapitalState(id=1, initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))

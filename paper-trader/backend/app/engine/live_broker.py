@@ -18,12 +18,19 @@ from sqlalchemy import select
 
 from app.core.instruments import get_instrument
 from app.core.logging import log
-from app.db.models import OrderJournal, Position
+from app.db.models import LEGACY_DEPLOYMENT_ID, OrderJournal, Position
 from app.engine.broker import PaperBroker
+from app.engine.broker_protocol import (
+    ProtectiveStopKind,
+    clear_protective_order_id,
+    protective_order_id,
+    set_protective_order_id,
+)
 from app.providers.base import OptionQuote
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
 from app.engine.order_executor import OrderRequest, execute_order
 from app.engine.reconcile import can_bot_close
+from app.engine.venue import protective_kind_for_book_segment
 
 TAG = "pt-bot"   # every order the bot places is tagged so it's identifiable
 
@@ -36,8 +43,9 @@ class LiveBroker(PaperBroker):
     MODE = "live"   # every fill this broker books is a REAL trade — tagged so the log never mixes it with paper
 
     def __init__(self, provider, order_client, *, poll_seconds: float = 0.5,
-                 timeout_seconds: float = 30.0, notifier=None) -> None:
-        super().__init__(provider)
+                 timeout_seconds: float = 30.0, notifier=None,
+                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
+        super().__init__(provider, deployment_id=deployment_id)
         self.client = order_client
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
@@ -92,6 +100,7 @@ class LiveBroker(PaperBroker):
             return None
         try:
             row = OrderJournal(
+                deployment_id=self.deployment_id,
                 order_id=None, tradingsymbol=req.tradingsymbol,
                 instrument_key=(context or {}).get("inst_key", ""), side=req.side,
                 kind=kind, intent=intent, qty=req.qty,
@@ -275,8 +284,8 @@ class LiveBroker(PaperBroker):
         known = {sid(r.order_id) for r in self.s.scalars(select(OrderJournal)).all()
                  if r.order_id}
         # Resting protective stops of positions still open …
-        known |= {sid(p.gtt_trigger_id) for p in self.s.scalars(select(Position)).all()
-                  if p.gtt_trigger_id}
+        known |= {sid(protective_order_id(p)) for p in self.s.scalars(select(Position)).all()
+                  if protective_order_id(p)}
         known.discard("")
 
         for o in orders or []:
@@ -517,7 +526,7 @@ class LiveBroker(PaperBroker):
                       instrument=pos.instrument_key, event="LIVE_CLOSE_BLOCKED")
             self._notify(f"🚫 CLOSE blocked {sym}: {chk.reason}")
             return None
-        if pos.gtt_trigger_id and not self._cancel_equity_stop(pos.gtt_trigger_id, sym):
+        if protective_order_id(pos) and not self._cancel_equity_stop(protective_order_id(pos), sym):
             # #7/#18: couldn't cancel the resting SL-M — do NOT send a close (the SL-M
             # could fire into it → oversell/reverse) and don't orphan it. Leave the
             # position protected by its still-resting stop and flag for the owner.
@@ -528,8 +537,8 @@ class LiveBroker(PaperBroker):
             return None
         # H4 — the SL-M stop is now cancelled; persist that before the close order so a
         # crash mid-close can't leave a dead trigger id that self-heal trusts.
-        if pos.gtt_trigger_id:
-            pos.gtt_trigger_id = None
+        if protective_order_id(pos):
+            clear_protective_order_id(pos)
             self.s.commit()
         chk2 = can_bot_close(pos, self.provider.account_positions())
         if not chk2.ok:
@@ -623,7 +632,7 @@ class LiveBroker(PaperBroker):
         # L6 — cancel the exchange GTT BEFORE the closing SELL (cancel-then-sell), so
         # a premium gap-down can't fire the server-side stop into the same window as
         # our market SELL (both execute → oversell into the owner's account).
-        gid = pos.gtt_trigger_id
+        gid = protective_order_id(pos)
         if gid and not self._cancel_gtt(gid, sym):
             # #7: couldn't cancel the exchange GTT — do NOT send the SELL (the live GTT
             # could fire into it → oversell) and don't orphan it. Leave the position
@@ -639,7 +648,7 @@ class LiveBroker(PaperBroker):
         # close would re-cancel a dead GTT and abort forever). Every path from here either
         # re-places a fresh GTT (abort/partial/fail) or deletes the row (full fill).
         if gid:
-            pos.gtt_trigger_id = None
+            clear_protective_order_id(pos)
             self.s.commit()
         # Re-check the account immediately before sending. If the GTT already fired
         # (or the owner exited) the account no longer backs us — send NO order and
@@ -701,7 +710,7 @@ class LiveBroker(PaperBroker):
         try:
             tid = self.client.place_stop_gtt(pos.tradingsymbol, exchange, pos.qty,
                                              pos.stop_price, last_price, side=side)
-            pos.gtt_trigger_id = tid
+            set_protective_order_id(pos, tid)
             self.s.commit()
             log.info(f"GTT stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (gtt {tid})",
                      instrument=pos.instrument_key, event="GTT_PLACE")
@@ -726,7 +735,7 @@ class LiveBroker(PaperBroker):
         try:
             oid = self.client.place_stop_order(pos.tradingsymbol, exchange, pos.qty,
                                                pos.stop_price, side=side, tag=TAG)
-            pos.gtt_trigger_id = oid
+            set_protective_order_id(pos, oid)
             self.s.commit()
             self._journal_stop(pos, oid, side)
             log.info(f"SL-M stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (order {oid})",
@@ -754,6 +763,7 @@ class LiveBroker(PaperBroker):
         to hand it a second owner."""
         try:
             self.s.add(OrderJournal(
+                deployment_id=self.deployment_id,
                 order_id=str(order_id), tradingsymbol=pos.tradingsymbol,
                 instrument_key=pos.instrument_key, side=side, kind="equity",
                 intent="STOP", qty=pos.qty,
@@ -804,10 +814,10 @@ class LiveBroker(PaperBroker):
         check once a backstop exists, so it's safe to call every risk-loop tick
         regardless of whether the stop ratcheted — a position that never ratchets
         (flat or underwater all session) still gets its missing stop retried."""
-        if getattr(pos, "gtt_trigger_id", None) or not self._gtt_enabled():
+        if protective_order_id(pos) or not self._gtt_enabled():
             return
         lp = last_price or pos.last_premium or pos.entry_premium
-        if pos.segment == "equity_intraday":
+        if protective_kind_for_book_segment(pos.segment) is ProtectiveStopKind.RESTING_STOP:
             self._place_equity_stop(pos, lp)
         else:
             self._place_gtt(pos, lp)
@@ -815,14 +825,14 @@ class LiveBroker(PaperBroker):
     def update_stop_protection(self, pos, last_price) -> None:
         if not self._gtt_enabled():
             return
-        gid = getattr(pos, "gtt_trigger_id", None)
+        gid = protective_order_id(pos)
         if not gid:
             # never placed, or an earlier attempt failed — place fresh at the
             # ratcheted level instead of silently no-op'ing forever.
             self.ensure_stop_protection(pos, last_price)
             return
         lp = last_price or pos.last_premium or pos.entry_premium
-        if pos.segment == "equity_intraday":
+        if protective_kind_for_book_segment(pos.segment) is ProtectiveStopKind.RESTING_STOP:
             # If the ratcheted stop is already crossed by LTP it fires THIS risk-loop
             # tick (the close cancels the SL-M) — a modify now only draws the same
             # permissible-range rejection. Leave the resting stop; the internal stop exits.
@@ -901,10 +911,10 @@ class LiveBroker(PaperBroker):
             self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange GTT (cancel "
                          f"refused) — verify on Zerodha; bot-managed stop still active")
             return
-        pos.gtt_trigger_id = None
+        clear_protective_order_id(pos)
         self.s.commit()
         self._place_gtt(pos, last_price)          # places at pos.stop_price
-        if not pos.gtt_trigger_id:
+        if not protective_order_id(pos):
             log.error(f"GTT resync REPLACE failed {pos.tradingsymbol} — no exchange stop "
                       f"resting; bot-managed stop only until retry",
                       instrument=pos.instrument_key, event="GTT_RESYNC_FAIL")
@@ -912,7 +922,7 @@ class LiveBroker(PaperBroker):
                          f"stop only until it retries; verify on Zerodha")
         else:
             log.info(f"GTT resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
-                     f"(gtt {pos.gtt_trigger_id})", instrument=pos.instrument_key,
+                     f"(gtt {protective_order_id(pos)})", instrument=pos.instrument_key,
                      event="GTT_RESYNC_RECOVERED")
 
     def _resync_equity_stop(self, pos, gid) -> None:
@@ -928,10 +938,10 @@ class LiveBroker(PaperBroker):
             self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange stop (cancel "
                          f"refused) — verify on Zerodha; bot-managed stop still active")
             return
-        pos.gtt_trigger_id = None
+        clear_protective_order_id(pos)
         self.s.commit()
         self._place_equity_stop(pos, pos.last_spot or pos.last_premium)   # places at pos.stop_price
-        if not pos.gtt_trigger_id:
+        if not protective_order_id(pos):
             log.error(f"SL-M resync REPLACE failed {pos.tradingsymbol} — no exchange stop resting; "
                       f"bot-managed stop only until retry", instrument=pos.instrument_key,
                       event="STOP_RESYNC_FAIL")
@@ -942,7 +952,7 @@ class LiveBroker(PaperBroker):
             # any recovery ever happened. Log it explicitly so it's visible in the
             # Engine/Logs console and searchable in the journal.
             log.info(f"SL-M resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
-                     f"(order {pos.gtt_trigger_id})", instrument=pos.instrument_key,
+                     f"(order {protective_order_id(pos)})", instrument=pos.instrument_key,
                      event="STOP_RESYNC_RECOVERED")
 
     def reconcile_orphans(self, now) -> list:
@@ -979,12 +989,15 @@ class LiveBroker(PaperBroker):
             self._orphan_seen[k] = self._orphan_seen.get(k, 0) + 1
             if self._orphan_seen[k] < need:
                 continue  # not enough consecutive confirmations yet — wait
-            gid, sym = pos.gtt_trigger_id, pos.tradingsymbol
+            gid, sym = protective_order_id(pos), pos.tradingsymbol
             prem = pos.last_premium or pos.entry_premium
             # book through the segment's correct close (ledger-only, no order): equity
             # is margin-based and direction-aware; routing it through the options close
             # mistakes the released notional for profit (+₹40k on ₹10k margin) and
             # mislabels the trade 'options'.
+            # NB this branch is about LEDGER BOOKING (equity margin maths vs options
+            # premium maths), not about protection shape — `equity_intraday` is a
+            # domain segment, not venue vocabulary, so it stays a segment test.
             if pos.segment == "equity_intraday":
                 # R3 (2026-07-15 DLF incident): an account-flat read alone can't tell the
                 # bot's OWN exchange-side SL-M firing apart from a genuinely external exit

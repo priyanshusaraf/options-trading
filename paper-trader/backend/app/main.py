@@ -18,7 +18,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import backtest_routes, portfolio_routes, routes
-from app.api.auth import extract_token, token_ok
+from app.api.principal import resolve_http_principal
+from app.api.versioning import VERSION_PREFIX, mount_versioned, unversioned_path
 from app.core.instruments import get_instrument
 from app.core.config import assert_boot_config, get_settings
 from app.core.logging import log
@@ -138,10 +139,14 @@ class _PollingRouteFilter(logging.Filter):
     autopsy: ~34% of the 3-day journal was polling noise). Real mutating/rare
     routes still log normally."""
     _NOISY = ("/api/execution/state", "/api/status", "/api/signals")
+    # Both surfaces, or the filter silently stops working the day the SPA moves
+    # to /api/v1 and the access log fills up again for no visible reason.
+    _NOISY_PATHS = tuple(_NOISY) + tuple(
+        f"{VERSION_PREFIX}{p[len('/api'):]}" for p in _NOISY)
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        return not any(f"GET {p} " in msg for p in self._NOISY)
+        return not any(f"GET {p} " in msg for p in self._NOISY_PATHS)
 
 
 logging.getLogger("uvicorn.access").addFilter(_PollingRouteFilter())
@@ -161,17 +166,35 @@ async def auth_gate(request: Request, call_next):
     armed flag, provider name, DB error text — on a tailnet-only box) and the Kite
     OAuth redirect endpoints (/api/login, /api/session — the browser hits
     these directly and can't attach a header), plus CORS preflight (OPTIONS)
-    and anything outside /api."""
+    and anything outside /api.
+
+    H3: this is also where the request's `Principal` is resolved — once per
+    request, at the boundary, rather than per-route. `resolve_http_principal`
+    returns None for exactly one condition (a credential was presented and
+    REFUSED), which is what the 401 below tests; with auth disabled it returns
+    the explicit anonymous-owner principal, never None.
+
+    `request.state.principal` can still be None on an EXEMPT path carrying a bad
+    token — the request is served (that is what exempt means) but no identity was
+    established, and saying so beats inventing one. Routes must read the
+    principal through `Depends(get_principal)`, which turns that case into a 401
+    rather than handing anyone a null.
+
+    Exemptions are matched on the UNVERSIONED path, so /api/v1/health is exempt
+    for the same reason /api/health is. Getting this wrong would 401 the deploy
+    probe the moment deploy.sh moves to v1."""
     settings = get_settings()
-    path = request.url.path
+    path = unversioned_path(request.url.path)
+    principal = resolve_http_principal(request)
     if (
         settings.api_token
         and path.startswith("/api")
         and path not in _AUTH_EXEMPT_PATHS
         and request.method != "OPTIONS"
     ):
-        if not token_ok(extract_token(request.headers)):
+        if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+    request.state.principal = principal
     return await call_next(request)
 
 
@@ -189,6 +212,15 @@ app.include_router(backtest_routes.router)
 app.include_router(portfolio_routes.router)
 app.include_router(ledger_routes.router)
 
+# H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
+# for why this is a mount-time transform and not 45 edited decorators, and for the
+# deprecation path off the unprefixed surface). Strictly additive — the four
+# includes above are untouched, so every shipped client and scripts/deploy.sh keep
+# hitting the exact routes they hit before. Must come BEFORE the SPA catch-all
+# registered at the bottom of this file.
+mount_versioned(app, routes.router, backtest_routes.router,
+                portfolio_routes.router, ledger_routes.router)
+
 
 def _probe_db() -> tuple[bool, str]:
     """Cheapest possible round-trip to the ledger DB. The 2026-07-23 outage ended
@@ -203,6 +235,28 @@ def _probe_db() -> tuple[bool, str]:
         return True, ""
     except Exception as e:                       # noqa: BLE001 — any failure is a failure
         return False, f"{type(e).__name__}: {e}"[:200]
+
+
+def _schema_info() -> dict:
+    """Which schema revision this database is at, and which one this build expects.
+
+    Reported alongside `build` for the same reason `build` is reported: after the
+    2026-07-28 episode, deployment state is answered by measurement, not by prose.
+    A commit alone does not tell you whether the database underneath it was
+    migrated — `up_to_date: false` says a process is running against a schema it
+    did not migrate (a restored older DB, or a boot that skipped init_db).
+
+    Deliberately NOT fatal to the readiness verdict. Making it fatal would change
+    deploy behaviour, and this migration is meant to be behaviour-preserving; the
+    field exists so the condition is *visible* before anything is built on it.
+    Defensive like every other read here — a probe must not 500 on its own bug.
+    """
+    try:
+        from app.db.migrate import schema_state
+        from app.db.session import engine
+        return schema_state(engine)
+    except Exception as e:                       # noqa: BLE001
+        return {"current": None, "head": None, "up_to_date": None, "error": str(e)}
 
 
 def _readiness_payload() -> dict:
@@ -280,8 +334,18 @@ def health():
         payload = {"ready": False, "status": "unready", "failed_checks": ["probe"],
                    "checks": [{"name": "probe", "ok": False, "fatal": True,
                                "detail": f"the readiness probe raised: {e}"}]}
-    body = {"ok": payload["ready"], "build": get_build_info(), **payload}
+    body = {"ok": payload["ready"], "build": get_build_info(),
+            "schema": _schema_info(), **payload}
     return JSONResponse(body, status_code=200 if payload["ready"] else 503)
+
+
+# /api/health is declared on the app rather than on a router, so the versioning
+# transform (which walks routers) cannot see it — mirror it by hand. Same
+# function object, so the two paths cannot answer differently.
+# The unprefixed path stays permanently: deploy.sh and any uptime monitor point
+# at it, and a probe URL is the last thing that should ever churn.
+app.add_api_route(f"{VERSION_PREFIX}/health", health, methods=["GET"],
+                  name="v1_health")
 
 
 # ── production: serve the built React SPA from the same origin ──────────────

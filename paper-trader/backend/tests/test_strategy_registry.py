@@ -32,7 +32,10 @@ def _synthetic(n: int = 400) -> pd.DataFrame:
 def test_default_key_is_v3():
     assert DEFAULT_STRATEGY_KEY == "trend_impulse_v3"
     assert get_strategy(None).key == "trend_impulse_v3"
-    assert get_strategy("does_not_exist").key == "trend_impulse_v3"  # safe fallback
+    # Fail-SAFE fallback, retained for the legacy per-instrument path only. The
+    # fail-CLOSED counterpart (`resolve_strategy`, which raises `StrategyNotFound`) and
+    # the content-hash version are pinned in tests/test_strategy_identity.py.
+    assert get_strategy("does_not_exist").key == "trend_impulse_v3"
 
 
 def test_v3_registered_and_listed():

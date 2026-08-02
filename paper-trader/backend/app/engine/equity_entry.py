@@ -18,6 +18,8 @@ testable (tests/test_equity_entry.py).
 """
 from __future__ import annotations
 
+from app.engine.decision_kernel import ExitPolicy, decide_exit
+
 from dataclasses import dataclass, field
 
 
@@ -95,22 +97,19 @@ def equity_exit(direction: str, price: float, stop: float, target: float,
 
     `target_disabled` = the owner's per-position "let it run" (no_take_profit): the
     take-profit is removed (for a runner you want to ride) but the protective stop
-    and the strategy exit are UNAFFECTED — the position is never left unprotected."""
-    if direction == "LONG":
-        if price <= stop:
-            return True, "STOP_LOSS"
-        if not target_disabled and price >= target:
-            return True, "TARGET"
-        if strat_long_exit:
-            return True, "STRATEGY_EXIT"
-    else:  # SHORT
-        if price >= stop:
-            return True, "STOP_LOSS"
-        if not target_disabled and price <= target:
-            return True, "TARGET"
-        if strat_short_exit:
-            return True, "STRATEGY_EXIT"
-    return False, ""
+    and the strategy exit are UNAFFECTED — the position is never left unprotected.
+
+    The decision itself is the shared kernel's (Phase G) so live, replay and
+    backtest cannot drift apart. The "" (not None) no-exit reason is preserved here
+    rather than in the kernel: it is this function's published contract and callers
+    unpack it directly.
+    """
+    decision = decide_exit(
+        direction=direction, price=price, stop=stop, target=target,
+        long_exit=strat_long_exit, short_exit=strat_short_exit,
+        policy=ExitPolicy.live_directional(target_enabled=not target_disabled),
+    )
+    return decision.should_exit, (decision.reason or "")
 
 
 def lockstep_band(direction: str, entry: float, qty: int, margin: float,

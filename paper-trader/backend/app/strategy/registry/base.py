@@ -36,6 +36,27 @@ class Strategy:
     # use_mfe_capture_floor, capture_start_r, capture_pct.
     risk_model: dict[str, Any] | None = None
 
+    @property
+    def version(self) -> str:
+        """Immutable content version — sha256 over the things that decide behaviour
+        (see `app/strategy/identity.py`). Computed lazily and cached per instance
+        because `inspect.getsource` is not free and the engine asks for a strategy on
+        every tick; the value cannot change for a live object, so caching it is not a
+        staleness risk. `pin_version` overrides it for artifacts whose canonical bytes
+        live somewhere other than this process's class source (deployed generated
+        strategies — the persisted composition is the artifact, not the wrapper class).
+        """
+        cached = self.__dict__.get("_version")
+        if cached is None:
+            from app.strategy.identity import compute_version
+            cached = compute_version(self)
+            self.__dict__["_version"] = cached
+        return cached
+
+    def pin_version(self, version: str) -> None:
+        """Pin this instance's version to an externally-computed content hash."""
+        self.__dict__["_version"] = version
+
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError
 

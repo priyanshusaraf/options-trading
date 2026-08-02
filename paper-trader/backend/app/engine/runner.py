@@ -29,7 +29,13 @@ from sqlalchemy import func, select
 from app.core.config import get_settings
 from app.core.instruments import all_instruments, get_instrument
 from app.core.logging import log
-from app.db.models import CapitalState, InstrumentState, SignalEvent, Trade
+from app.db.models import (
+    LEGACY_DEPLOYMENT_ID,
+    CapitalState,
+    InstrumentState,
+    SignalEvent,
+    Trade,
+)
 from app.db.session import SessionLocal
 from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
@@ -89,8 +95,28 @@ class EngineRunner:
         self.settings = get_settings()
         self.provider = get_provider()
         self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
+        # Which deployment this runner executes. One runner drives one book today,
+        # and that book is the legacy deployment — so this is the value every row
+        # already carries and nothing changes. It is an attribute rather than a
+        # literal because the whole point of Phase B is that "which book" becomes a
+        # parameter of execution instead of an assumption baked into every query.
+        self.deployment_id = LEGACY_DEPLOYMENT_ID
+        # Disarm every deployment on process start — the same invariant the global
+        # `armed` flag has (it is False below), for the same reason: nobody was
+        # watching when the process went down, so no arm state may be inherited
+        # across a restart. Best-effort; a failure here must not stop the engine
+        # booting, and the in-memory flag is disarmed regardless.
+        try:
+            from app.core.deployments import disarm_all
+            with SessionLocal() as _s:
+                if disarm_all(_s):
+                    _s.commit()
+        except Exception as e:
+            log.warn(f"could not clear persisted deployment arm state at boot: {e}",
+                     event="ARM_RESET_FAIL")
         # PaperBroker unless the live-execution flags are set (then LiveBroker).
-        self.broker = make_broker(self.provider, self.notifier)
+        self.broker = make_broker(self.provider, self.notifier,
+                                  deployment_id=self.deployment_id)
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
@@ -238,8 +264,24 @@ class EngineRunner:
         return iv
 
     def _effective_params(self) -> dict:
-        from app.core.runtime_config import effective
-        return effective(self.settings)
+        """The engine's parameter dict, resolved through the ONE scoped path
+        (Phase C): platform defaults + runtime_config, then this deployment's own
+        overrides, narrowest winning.
+
+        For the legacy deployment — the only one that exists — `params_json` is
+        `{}`, so this returns exactly what `effective()` returned before. That
+        equivalence is asserted directly in tests/test_scoped_config.py rather than
+        left as a claim.
+
+        Instrument scope is deliberately NOT applied here. This dict is resolved
+        once per loop iteration and shared across every instrument, so folding a
+        per-instrument layer into it would apply one instrument's overrides to all
+        of them. Instrument scope belongs at the per-instrument call sites, which
+        is where `resolve(..., instrument_key=...)` is meant to be used.
+        """
+        from app.core.scoped_config import resolve
+        with SessionLocal() as s:
+            return resolve(s, self.settings, deployment_id=self.deployment_id)
 
     def refresh_params(self) -> None:
         """Re-read runtime overrides so live Settings edits take effect."""
@@ -1776,7 +1818,8 @@ class EngineRunner:
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:
-            s.add(SignalEvent(time=now, instrument_key=key, signal=st["signal"],
+            s.add(SignalEvent(deployment_id=self.deployment_id,
+                              time=now, instrument_key=key, signal=st["signal"],
                               z=st["z"], slope=st["slope"], close=st["close"],
                               acted=True, note=note))
             s.commit()
@@ -2317,6 +2360,20 @@ class EngineRunner:
         """Owner control: arm (start auto-executing) or disarm (pause new entries —
         open positions are still managed and protected)."""
         self.armed = bool(value)
+        # Mirror onto this deployment's own arm flag (Phase B runtime state). The
+        # in-memory flag stays the master switch and is set FIRST: arming and — far
+        # more importantly — DISARMING must never be able to fail because of a
+        # database hiccup. The row is a durable record of what the master switch
+        # says, not a second gate that could disagree with it.
+        try:
+            from app.core.deployments import set_armed as _set_deployment_armed
+            with SessionLocal() as s:
+                _set_deployment_armed(s, self.deployment_id, self.armed)
+                s.commit()
+        except Exception as e:
+            log.warn(f"could not persist arm state for deployment "
+                     f"{self.deployment_id}: {e} — the engine's own flag is "
+                     f"authoritative and is set", event="ARM_PERSIST_FAIL")
         if self.armed and hasattr(self.broker, "order_fail_streak"):
             # #14: a deliberate re-arm is the owner saying the cause is fixed —
             # give the circuit breaker a clean slate.

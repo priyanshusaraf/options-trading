@@ -12,28 +12,31 @@ by this client — it only ever places the specific orders the LiveBroker hands 
 from __future__ import annotations
 
 from app.engine.gtt import TICK_SIZE, round_to_tick, stop_gtt_params
+from app.engine.kite_venue import kite_exchange, kite_product_for_charge_segment
 from app.engine.order_executor import OrderRequest
+from app.engine.venue import INTRADAY_EQUITY_CHARGE_SEGMENTS
 
 # Charge-segments that trade as intraday equity (MIS): same-day, leveraged, the
 # broker auto-squares-off near close. Everything else (options/futures) is NRML.
-EQUITY_INTRADAY_SEGMENTS = frozenset({"NSE_INTRADAY", "BSE_INTRADAY"})
+# Kept as a module-level name for existing importers; the definition now lives in
+# venue.py as the *neutral* classification, with the Kite spelling in kite_venue.
+EQUITY_INTRADAY_SEGMENTS = INTRADAY_EQUITY_CHARGE_SEGMENTS
 
 
 def product_for_segment(segment: str, default: str = "NRML") -> str:
     """Kite product code for a charge-segment: MIS for intraday equity, else the
-    client default (NRML for options/futures so they can carry overnight)."""
-    return "MIS" if segment in EQUITY_INTRADAY_SEGMENTS else default
+    client default (NRML for options/futures so they can carry overnight).
+
+    Kept as the historical entry point (runner.py imports it); the mapping itself
+    now lives once, in kite_venue, behind the neutral `Tenor` vocabulary."""
+    return kite_product_for_charge_segment(segment, default)
 
 
 def exchange_for_segment(segment: str) -> str:
     """Real Kite exchange for a charge-segment. Intraday-equity charge-segments carry
     an _INTRADAY suffix for the charge schedule; the exchange Kite wants is the bare
     NSE/BSE. Options/futures segments (NFO/BFO/MCX/NCDEX) are already Kite exchanges."""
-    if segment == "NSE_INTRADAY":
-        return "NSE"
-    if segment == "BSE_INTRADAY":
-        return "BSE"
-    return segment
+    return kite_exchange(segment)
 
 
 class KiteOrderClient:
@@ -84,6 +87,11 @@ class KiteOrderClient:
         except Exception:
             return TICK_SIZE
         return float(tick) if tick else TICK_SIZE
+
+    def tick_size(self, tradingsymbol: str, exchange: str | None = None) -> float:
+        """Public form of `_tick` — the `ExecutionVenue.tick_size` verb. Same
+        fail-safe fallback to the 0.05 grid; no new behaviour."""
+        return self._tick(tradingsymbol, exchange)
 
     # ── GTT safety-net stop (lives on Zerodha's servers) ──────────────────
     def place_stop_gtt(self, tradingsymbol: str, exchange: str, qty: int,

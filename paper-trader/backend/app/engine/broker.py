@@ -16,7 +16,13 @@ from app.core.config import get_settings
 from app.core.market_hours import now_ist
 from app.core.instruments import Instrument
 from app.core.logging import log
-from app.db.models import CapitalState, EquitySnapshot, Position, Trade
+from app.db.models import (
+    LEGACY_DEPLOYMENT_ID,
+    CapitalState,
+    EquitySnapshot,
+    Position,
+    Trade,
+)
 from app.db.session import SessionLocal
 from app.core.runtime_config import effective
 from app.engine.charges import compute_charges, legs_for
@@ -27,10 +33,17 @@ from app.providers.base import MarketDataProvider, OptionQuote
 class PaperBroker:
     MODE = "paper"   # stamped on every Position/Trade this broker creates (LiveBroker overrides to "live")
 
-    def __init__(self, provider: MarketDataProvider) -> None:
+    def __init__(self, provider: MarketDataProvider,
+                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
         self.provider = provider
         self.settings = get_settings()
         self.s = SessionLocal()
+        # Which book this broker writes into. Every Position/Trade/EquitySnapshot it
+        # creates is stamped with it, so attribution is a property of the write path
+        # rather than something reconstructed later from timestamps and guesswork.
+        # Defaults to the legacy deployment, which is what the single existing book
+        # is — so this changes nothing until a second deployment exists.
+        self.deployment_id = deployment_id
 
     # ── ledger ────────────────────────────────────────────────────────────
     def capital(self) -> CapitalState:
@@ -39,11 +52,38 @@ class PaperBroker:
     def cash(self) -> float:
         return self.capital().cash
 
-    def open_positions(self) -> list[Position]:
-        return list(self.s.scalars(select(Position)))
+    def open_positions(self, deployment_id: int | None = None) -> list[Position]:
+        """Open positions. UNSCOPED by default, and that is deliberate.
 
-    def position_for(self, key: str) -> Position | None:
-        return self.s.scalar(select(Position).where(Position.instrument_key == key))
+        Reads stay unscoped while writes are stamped, because the two carry
+        opposite risks. A write attributed to the wrong deployment is a reporting
+        error. A read that *misses* a position is a position nobody marks, ratchets
+        or exits — and hard invariant 2 says the risk lane must manage every
+        persisted position regardless of arm state, precisely because not getting
+        out is worse than any other failure.
+
+        So: the filter exists (a per-deployment risk lane will want it), it is
+        opt-in, and nothing in the exit path passes it today.
+        """
+        stmt = select(Position)
+        if deployment_id is not None:
+            stmt = stmt.where(Position.deployment_id == deployment_id)
+        return list(self.s.scalars(stmt))
+
+    def position_for(self, key: str, deployment_id: int | None = None) -> Position | None:
+        """The open position for `key`. Unscoped by default — see `open_positions`.
+
+        Note what the unscoped form assumes: at most ONE open position per
+        instrument across the whole system. That was structurally true before
+        deployments (audit finding C1) and stays true while only the legacy
+        deployment exists. It stops being true the moment two deployments trade the
+        same underlying, which is why the parameter is here now: the call sites that
+        must become deployment-scoped are exactly the ones that will pass it.
+        """
+        stmt = select(Position).where(Position.instrument_key == key)
+        if deployment_id is not None:
+            stmt = stmt.where(Position.deployment_id == deployment_id)
+        return self.s.scalar(stmt)
 
     def commit(self) -> None:
         self.s.commit()
@@ -69,6 +109,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            deployment_id=self.deployment_id,
             instrument_key=inst.key, direction=direction, option_type=q.option_type,
             tradingsymbol=q.tradingsymbol, exchange=inst.segment, strike=q.strike,
             expiry=q.expiry, lot_size=qty, qty=qty, entry_premium=premium,
@@ -129,6 +170,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            deployment_id=self.deployment_id,
             instrument_key=inst.key, direction=direction, option_type="EQ",
             tradingsymbol=getattr(inst, "spot_symbol", "") or inst.key,
             exchange=charge_segment, segment="equity_intraday", strategy_key=strategy_key,
@@ -173,6 +215,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            deployment_id=self.deployment_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
@@ -314,6 +357,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            deployment_id=self.deployment_id,
             instrument_key=inst.key, direction=direction, option_type="FUT",
             tradingsymbol=getattr(inst, "option_name", "") or inst.key,
             exchange=charge_segment, segment="index_futures", strategy_key=strategy_key,
@@ -353,6 +397,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            deployment_id=self.deployment_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="FUT", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="index_futures", strategy_key=pos.strategy_key,
@@ -394,6 +439,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            deployment_id=self.deployment_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
             exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
@@ -449,6 +495,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            deployment_id=self.deployment_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
             exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
@@ -505,6 +552,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            deployment_id=self.deployment_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
@@ -567,7 +615,8 @@ class PaperBroker:
         # last × qty double-counts MIS leverage and inflates the persisted equity curve.
         mtm = sum(p.mtm_value() for p in opens)
         cap = self.capital()
-        snap = EquitySnapshot(time=now, equity=cap.cash + mtm, cash=cap.cash,
+        snap = EquitySnapshot(deployment_id=self.deployment_id,
+                              time=now, equity=cap.cash + mtm, cash=cap.cash,
                               invested=invested, realized_pnl=cap.realized_pnl,
                               open_count=len(opens))
         self.s.add(snap)

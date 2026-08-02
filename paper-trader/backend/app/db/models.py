@@ -53,6 +53,96 @@ class Base(DeclarativeBase):
     pass
 
 
+# The deployment every pre-existing row belongs to. Before Phase B the system had
+# exactly one implicit book — one capital balance, one arm switch, one strategy
+# assignment per instrument — and this id names it retroactively. Rows created
+# before deployments existed are not "unattributed"; they were all executed by this
+# one. Keep it as a constant rather than a literal 1: the number appears in a
+# server_default, a seed, a backfill and every lookup default, and those four must
+# never drift apart.
+LEGACY_DEPLOYMENT_ID = 1
+
+
+class Deployment(Base):
+    """A strategy, running, with its own parameters, universe, capital and switches.
+
+    THE primary execution object. Before this existed, "what is running" was spread
+    across `instrument_state.strategy_key`, `watchlists.strategy_key`, the global
+    `Settings`/`runtime_config` merge, and a single in-memory `armed` flag on the
+    runner — six places, none of them addressable, and no way for two strategies to
+    run different risk parameters or hold the same underlying.
+
+    Everything about this table is designed so that today's behaviour is EXACTLY
+    deployment 1 and nothing else changes:
+
+    - `universe_mode='legacy'` means "whatever the per-instrument config and active
+      watchlists say", i.e. the existing resolution path, untouched.
+    - `allocation=None` means "the whole account", which is what a single book has.
+    - `strategy_key=None` means "resolve per instrument, as before" rather than
+      pinning one strategy across the book.
+    - `armed` starts False, matching the disarm-on-every-start invariant.
+
+    A second deployment therefore cannot appear by accident: it has to be created,
+    and until one is, every query that filters by deployment sees the same rows it
+    saw before.
+    """
+    __tablename__ = "deployments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+
+    # ── what runs ────────────────────────────────────────────────────────────
+    # NULL = per-instrument resolution (the legacy path). A real deployment pins one.
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Filled by Phase D (immutable strategy identity). NULL until then, and NULL on
+    # the legacy deployment forever — it does not pin a strategy, so it cannot pin a
+    # version either.
+    strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ── where it runs ────────────────────────────────────────────────────────
+    # The broker account this book belongs to. One account today; the column exists
+    # so that adding a second is a row, not a schema change.
+    account_id: Mapped[str] = mapped_column(String(64), default="default",
+                                            server_default="default")
+    # legacy | watchlist | explicit — how this deployment's instruments are decided.
+    universe_mode: Mapped[str] = mapped_column(String(16), default="legacy",
+                                               server_default="legacy")
+    watchlist_id: Mapped[int | None] = mapped_column(
+        ForeignKey("watchlists.id"), nullable=True)
+
+    # ── how it is parameterised (Phase C reads this) ─────────────────────────
+    # JSON object of deployment-scoped overrides over platform defaults. Empty
+    # object = "inherit everything", which is what the legacy deployment does.
+    params_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+
+    # ── capital ──────────────────────────────────────────────────────────────
+    # NULL = the entire account (today's single-book behaviour). A number caps what
+    # this deployment may deploy, so two books can share one account.
+    allocation: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ── runtime state + lifecycle ────────────────────────────────────────────
+    # draft | active | paused | archived. Only `active` is ever scanned.
+    status: Mapped[str] = mapped_column(String(12), default="active",
+                                        server_default="active")
+    # Per-deployment arm, alongside (never instead of) the global master switch.
+    # False on creation and reset on every process start — same invariant the global
+    # flag has, for the same reason.
+    armed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Set when this deployment's own daily-loss halt trips; cleared next session.
+    halted_on: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "strategy_key": self.strategy_key,
+                "strategy_version": self.strategy_version, "account_id": self.account_id,
+                "universe_mode": self.universe_mode, "watchlist_id": self.watchlist_id,
+                "allocation": self.allocation, "status": self.status,
+                "armed": self.armed,
+                "halted_on": self.halted_on.isoformat() if self.halted_on else None,
+                "notes": self.notes}
+
+
 class CapitalState(Base):
     __tablename__ = "capital_state"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -75,10 +165,22 @@ class InstrumentState(Base):
     priority_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "purple" intraday priority
     product: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
     overtrade_flag: Mapped[bool] = mapped_column(Boolean, default=False)  # "red" overtrading flag (advisory)
+    # Instrument-scoped parameter overrides — the narrowest layer of the
+    # Platform -> Deployment -> Instrument chain (app/core/scoped_config.py).
+    # "{}" means inherit everything, which every row is today, so this changes
+    # nothing until something writes to it.
+    params_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
 
 
 class Position(Base):
     __tablename__ = "positions"
+    # Which deployment executed this. server_default="1" is load-bearing: every
+    # row written before Phase B belongs to the legacy book, and any insert path
+    # that has not been taught about deployments still lands there instead of
+    # failing. See LEGACY_DEPLOYMENT_ID.
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
+        server_default="1", index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))       # LONG | SHORT
@@ -88,6 +190,12 @@ class Position(Base):
     # product family + originating strategy (Phase 0 foundation)
     segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
     strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Content hash of the strategy that executed this row (Phase D). NULL is
+    # meaningful and is NOT the same as 'unknown': NULL means the row predates
+    # the column and is genuinely unattributable, 'unknown' means a strategy was
+    # running but could not be identified. Same three-value rule as build_sha —
+    # never collapse the two.
+    strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     lot_size: Mapped[int] = mapped_column(Integer)
@@ -227,6 +335,13 @@ class Position(Base):
 
 class Trade(Base):
     __tablename__ = "trades"
+    # Which deployment executed this. server_default="1" is load-bearing: every
+    # row written before Phase B belongs to the legacy book, and any insert path
+    # that has not been taught about deployments still lands there instead of
+    # failing. See LEGACY_DEPLOYMENT_ID.
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
+        server_default="1", index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))
@@ -236,6 +351,12 @@ class Trade(Base):
     # product family + originating strategy (Phase 0 foundation)
     segment: Mapped[str] = mapped_column(String(16), default="options")  # options | equity_intraday
     strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Content hash of the strategy that executed this row (Phase D). NULL is
+    # meaningful and is NOT the same as 'unknown': NULL means the row predates
+    # the column and is genuinely unattributable, 'unknown' means a strategy was
+    # running but could not be identified. Same three-value rule as build_sha —
+    # never collapse the two.
+    strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     qty: Mapped[int] = mapped_column(Integer)
@@ -328,6 +449,13 @@ class Trade(Base):
 
 class EquitySnapshot(Base):
     __tablename__ = "equity_snapshots"
+    # Which deployment executed this. server_default="1" is load-bearing: every
+    # row written before Phase B belongs to the legacy book, and any insert path
+    # that has not been taught about deployments still lands there instead of
+    # failing. See LEGACY_DEPLOYMENT_ID.
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
+        server_default="1", index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     time: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
     equity: Mapped[float] = mapped_column(Float)
@@ -438,6 +566,11 @@ class GeneratedStrategyRow(Base):
     by the human Approve→Deploy bridge — never by the research process."""
     __tablename__ = "generated_strategies"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Content hash of the composition (Phase D). `key` is still the PK, so a
+    # redeploy of an edited strategy still overwrites in place — recording the
+    # version at least makes that overwrite DETECTABLE. Making identity
+    # (key, version) is tracked as remaining work.
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     composition_json: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
@@ -596,6 +729,13 @@ class BacktestResult(Base):
 
 class SignalEvent(Base):
     __tablename__ = "signal_events"
+    # Which deployment executed this. server_default="1" is load-bearing: every
+    # row written before Phase B belongs to the legacy book, and any insert path
+    # that has not been taught about deployments still lands there instead of
+    # failing. See LEGACY_DEPLOYMENT_ID.
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
+        server_default="1", index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     time: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
     instrument_key: Mapped[str] = mapped_column(String(32), index=True)
@@ -678,6 +818,13 @@ class OrderJournal(Base):
     Every site that pops _inflight/_pending_entries must mark its row terminal so the
     two stay in lockstep."""
     __tablename__ = "order_journal"
+    # Which deployment executed this. server_default="1" is load-bearing: every
+    # row written before Phase B belongs to the legacy book, and any insert path
+    # that has not been taught about deployments still lands there instead of
+    # failing. See LEGACY_DEPLOYMENT_ID.
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
+        server_default="1", index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     tradingsymbol: Mapped[str] = mapped_column(String(64))

@@ -5,34 +5,28 @@ are evaluated before the strategy flag so a protective stop/target wins any tie.
 """
 from __future__ import annotations
 
+from app.engine.decision_kernel import ExitPolicy, decide_exit
+
 
 def evaluate_exit(direction: str, stop_price: float, target_price: float,
                   current_premium: float, long_exit: bool, short_exit: bool,
                   target_disabled: bool = False, ratchet_exit: bool = False
                   ) -> tuple[bool, str | None]:
-    # protective premium guards first.
-    # L13 — a non-positive premium is a missing / bad tick, not a tradeable price (an
-    # option can't trade at <= 0), so it must NOT fire a real market STOP exit. A
-    # genuine floor is a small POSITIVE tick and still trips the stop on the next mark.
-    if current_premium > 0 and current_premium <= stop_price:
-        return True, "STOP_LOSS"
-    # `target_disabled` = owner's per-position "let it run / no take-profit": the
-    # profit cap is removed (for an overnight winner running on news) but the stop
-    # below and the strategy exit are UNAFFECTED — there is always a protective
-    # floor (the trailing stop).
-    if not target_disabled and current_premium >= target_price:
-        return True, "TARGET"
-    # H2 — the backtest-validated ratchet on the underlying (bar-cadence, close-confirmed).
-    # After the premium disaster floor, before the strategy's own exit, matching the
-    # backtest exit priority (engine.simulate: ratchet checked before longExit/shortExit).
-    if ratchet_exit:
-        return True, "RATCHET_STOP"
-    # then the strategy's own exit on the underlying
-    if direction == "LONG" and long_exit:
-        return True, "STRATEGY_EXIT"
-    if direction == "SHORT" and short_exit:
-        return True, "STRATEGY_EXIT"
-    return False, None
+    """Options exit decision. Signature and return type unchanged (callers and
+    tests are untouched); the logic now lives in the shared decision kernel so the
+    backtester and replay evaluate the same rules rather than their own copy.
+
+    `target_disabled` = owner's per-position "let it run / no take-profit": the
+    profit cap is removed (for an overnight winner running on news) but the stop
+    below and the strategy exit are UNAFFECTED — there is always a protective floor
+    (the trailing stop).
+    """
+    return decide_exit(
+        direction=direction, price=current_premium,
+        stop=stop_price, target=target_price,
+        long_exit=long_exit, short_exit=short_exit, ratchet_exit=ratchet_exit,
+        policy=ExitPolicy.live_options(target_enabled=not target_disabled),
+    ).as_tuple()
 
 
 def trailing_stop(entry: float, high_water: float, current_stop: float,
