@@ -29,6 +29,12 @@ because a correct mechanism wired to nothing is this repo's defining defect:
    a view model and a self-contained SVG, and mutation that validates before it returns. F13 is
    asserted as an equality of content addresses: an arranged graph and an unarranged one are the
    same artefact.
+7. **Python component authoring** (`app/ir/authoring.py`) — a decorator that produces a
+   conforming component from a declared interface and a function, and checks the function
+   satisfies the declaration rather than inferring it. The first second way to make a component,
+   and therefore the first time C13's guard is load-bearing rather than precautionary.
+8. **Two defects in what was already built:** warmup was a constant where C10 says derived, and
+   the suite failed two runs in five.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -41,8 +47,9 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`3b2b752` — warmup derived from bound parameters, and the suite's intermittent
-failure fixed. Preceded by `49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
+`` — Python component authoring, and the second half of the flake fix.
+Preceded by `3b2b752` (warmup derived from bound parameters; the first half) and
+`49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
 `e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
@@ -61,9 +68,8 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,522             (--collect-only, summed per file)
-   run five times consecutively, EXIT 0 every time — the previous five
-   runs had two failures (see below)
+collected: 2,539             (--collect-only, summed per file)
+   run four times consecutively after the flake fix, EXIT 0 every time
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -111,12 +117,16 @@ Three vacuous tests were found by those sweeps and fixed, all worth remembering:
   check, so deleting the comparison against the resolved graph left the suite green. Identities
   that are present and **wrong** are the interesting case, and there is now a test for them.
 
-**The suite is no longer intermittent.** It failed roughly two runs in five, always in
-`test_init_db_guard.py`, which called `init_db(reset=True)` — a DROP of every table — against the
-suite's *shared* database. In WAL mode one session left open anywhere in a 2,500-test run holds a
-read transaction that outlasts the 10s `busy_timeout`. `test_health_endpoint.py`'s ERRORs were
-collateral: fixture setup against a half-dropped database. That file now has its own database.
-If a full run ever goes red again, check it is not this shape before believing it.
+**The suite is no longer intermittent, and the first attempt at saying so was wrong.** It failed
+roughly two runs in five with "database is locked": `DROP TABLE` needs an exclusive lock, and in
+WAL mode a connection still holding a transaction blocks it past the 10s `busy_timeout`. Two
+places reset the schema — `test_init_db_guard.py` explicitly, and `test_health_endpoint.py` via
+its `TestClient` lifespan. Isolating the first was recorded as the fix on the strength of five
+clean runs; the second then erred on its own. Both halves are now in: the guard test has its own
+database, and `init_db(reset=True)` disposes the pool before dropping. **A two-in-five flake
+cannot be proven fixed by green runs** — the ordering is asserted directly instead. If a full run
+goes red again, check it is not this shape before believing it, and note that a *live* session
+still holds a checked-out connection no `dispose()` can reclaim (close your brokers).
 
 > Note for the next session: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`.
 > A backgrounded `python … | tail` returns the **pipe's** exit code; capture `$?` from pytest
