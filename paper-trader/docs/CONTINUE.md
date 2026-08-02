@@ -40,7 +40,7 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`` — the editor plane, read-only. Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
+`dec854b` — the editor plane, read-only. Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
 `e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
