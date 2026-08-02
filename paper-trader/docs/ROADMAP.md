@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,485 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,503 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -179,10 +179,30 @@ honest gaps).
       still calls `compute()`; `app/ir/` is imported only by its own tests. This is RFC 0001
       Appendix C(d), a production change to a real-money path: it needs owner acknowledgement
       before any deploy regardless of green tests. The parity evidence it would need now exists.
-- [ ] The seven remaining Strategy-OS subsystems — visual computational graph, Python component
-      authoring, Research Plane Gen 2, experiment system, marketplace, deployment, production
-      adoption — **each need their own spec → plan → build cycle.** That list is a programme, not
-      a roadmap item. (The component runtime, which used to head this list, is done above.)
+- [x] **The editor plane, read-only — DONE 2026-08-02.** `app/ir/view.py` +
+      `scripts/render_ir_graph.py` + `tests/test_ir_view.py`, 17 tests. Four of the five planes
+      in §1.2 had something real behind them; the Editor had nothing. This is its reading half:
+      a `ResolvedGraph` becomes a view model and a self-contained SVG, so a strategy's structure
+      can be **looked at** rather than only asserted about. `expanding_z_v4` renders as 18 nodes
+      across 6 layers.
+      - *There is no presentation state, which is why none can drift.* F13 keeps coordinates out
+        of the artefact; the conforming default is to not have them at all, so position is a
+        pure function of the dependency structure. A test asserts the schema has nowhere to put
+        a coordinate, and another asserts that reordering the specification does not move a node
+        between layers — if it did, editing an unrelated part of the file would redraw
+        everything and a diff of two renders would be meaningless.
+      - *The picture speaks the authored vocabulary (C4).* `n_atr/n_smooth` draws as *n_smooth*
+        **in n_atr**, not as an opaque leaf the author never placed. What resolution computed and
+        a reader of the source cannot — warmup, purity, cache identity — is on the node.
+      - *Caught by its own test, not by looking:* the first render spilled
+        `indicator.adaptive_threshold v1` out through the right edge of its box. SVG text does
+        not clip, so nothing failed and the picture was wrong while looking fine. There is now a
+        geometry test over every text element in every box, proven red by suppressing truncation.
+- [ ] The six remaining Strategy-OS subsystems — graph **editing** (the writing half of the
+      editor plane), Python component authoring, Research Plane Gen 2, marketplace, deployment,
+      production adoption — **each need their own spec → plan → build cycle.** That list is a
+      programme, not a roadmap item. (The component runtime and the experiment system, which
+      used to head this list, are done above.)
 
 **This workstream still changes no running behaviour.** `backend/app/ir/` is imported only by
 its own tests: no engine, route, or backtest path reaches it. It is a validator and a resolver

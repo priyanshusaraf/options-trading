@@ -25,6 +25,9 @@ because a correct mechanism wired to nothing is this repo's defining defect:
    track `min_abs_z` instead of remembering one of its values. First use of F7's `scalar` axis.
 5. **F14 enforced** (`app/ir/experiment.py`) — an experiment record whose binding is *derived*
    from the resolved graph, so it cannot be told the wrong versions.
+6. **The editor plane, read-only** (`app/ir/view.py`) — a resolved graph as a view model and a
+   self-contained SVG. Layout is derived from the dependency structure, so F13's "no
+   presentation state in the artefact" holds by there being none at all.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -37,7 +40,7 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`baef1c2` — F14 enforced. Preceded by `110e978` (the derived-parameter gap closed) and
+`` — the editor plane, read-only. Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
 `e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
@@ -56,7 +59,7 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,485             (--collect-only, summed per file)
+collected: 2,503             (--collect-only, summed per file)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -85,6 +88,9 @@ Guards proven able to fail, not merely observed passing:
 - **F14.** Suppressing each of its six checks — the graph comparison, the component-version
   comparison, the node-identity comparison, the finding-binding comparison, and the presence
   checks — turns its own test red.
+- **The renderer.** Suppressing label truncation turns the box-geometry test red. That test
+  exists because the first render spilled a definition out through the edge of its box and
+  nothing failed — SVG text does not clip, so the picture was wrong and looked fine.
 - **§3, F1–F13**, swept in the earlier phase.
 
 Three vacuous tests were found by those sweeps and fixed, all worth remembering:
@@ -107,22 +113,26 @@ Three vacuous tests were found by those sweeps and fixed, all worth remembering:
 
 ## 4. Next concrete action
 
-**The visual computational graph — the editor plane.**
+**The writing half of the editor plane: graph editing, and where presentation state lives.**
 
-With F14 done, RFC 0001 has no unenforced clause left, and the Language plane is complete: a
-format, a resolver, a runtime, a real strategy expressed in it, and a result binding. Of the five
-planes in §1.2, four now have something real behind them; the **Editor** has nothing at all, and
-it is the one that decides whether any of this is usable by a human rather than by a test.
+Reading a graph is done. Editing is where the architecture actually gets tested, because it is
+the first time anything mutates an artefact, and F13 is waiting for it: "presentation state MUST
+persist **beside** the graph, keyed by stable identifier, and is not part of the artefact
+grammar." Today there is no presentation state at all — `view.py` derives position — and that is
+the conforming default. The moment a human drags a node, a side table appears, and the test that
+matters is that dragging does **not** change the graph's content address.
 
-Start with the read-only direction, which needs no new architecture and no owner decision: render
-a `ResolvedGraph` — nodes by instance path, edges, per-node warmup and cache identity — from the
-existing `expanding_z_v4` artefact. That is a genuine product surface (it is the first time the
-strategy's structure has ever been *visible*), it exercises the IR from the outside, and it defers
-every hard authoring question — layout persistence (F13 says presentation state lives beside the
-graph, keyed by stable identifier), mutation, undo — until there is something to look at.
+Concretely, in this order:
 
-The remaining subsystems in the programme, in the order their dependencies suggest: Python
-component authoring, Research Plane Gen 2, marketplace, deployment, production adoption.
+1. A mutation API over a graph-def — add node, remove node, connect, disconnect, override — that
+   returns a **new** artefact and validates it, so an edit that would break §3 is refused rather
+   than stored. `validate()` already exists; nothing calls it on a write path because there is no
+   write path.
+2. A layout side table keyed by `instance_id`, with the test above: same graph, different
+   positions, identical `content_address`.
+3. Only then the frontend. The backend has no IR route yet, deliberately — `app/ir/` is imported
+   by its own tests and by `scripts/render_ir_graph.py`, and adding a route is the first thing
+   that would make this workstream part of the running application.
 
 Two things are deliberately **not** next, and one of them needs the owner:
 
