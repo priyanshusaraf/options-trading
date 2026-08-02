@@ -10,6 +10,40 @@ deployed via `scripts/deploy.sh` (exit 0) and confirmed by `curl /api/health` on
 Suites: **1,618** backend (`tests` + `research_tests`) + **143** frontend, `dryrun.py 700`
 LEDGER OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
+---
+
+## Strategy OS — Component IR (new workstream, 2026-08-02)
+
+**RFC 0001 written: [`docs/rfcs/0001-component-ir.md`](rfcs/0001-component-ir.md).** Status
+**Proposed — pending owner acceptance.** Evidence base is `~/dev/multiverse-of-ideas/reviews/`
+(nine systems read; 24 stable decisions, 14 patterns, six honest gaps).
+
+- [x] **RFC 0001 — the Component IR.** 14 Format clauses (the serialised core, with an EBNF
+      grammar), 15 Contract clauses (observable properties, no mechanism), non-goals, amendment
+      procedure. Gate 1 (expressiveness) met: five real artefacts expressed — `expanding_z_v4`
+      with its real fifteen parameters, a decomposed Wilder ATR, a generated block-grammar
+      strategy, a nested subgraph, a multi-timeframe ill-typed edge. Gate 2 (adversarial review)
+      met. **Gate 3 — owner acceptance — is outstanding.**
+      Spec: `docs/superpowers/specs/2026-08-02-component-ir-rfc-v1-design.md` ·
+      Plan: `docs/superpowers/plans/2026-08-02-component-ir-rfc-v1.md`
+- [ ] **Conformance suite — the next item, and the RFC is unenforced until it exists.** An
+      executable schema and validator for §3, plus tests for the mechanically checkable contract
+      clauses (C7 reproducibility, C13 provenance-blindness). The RFC says so in its own status
+      block: **§3/§4 conformance is currently a claim, not a fact.** This is the deliberate
+      consequence of a document-only deliverable, recorded rather than glossed.
+- [ ] The eight remaining Strategy-OS subsystems — component runtime, visual computational graph,
+      Python component authoring, Research Plane Gen 2, experiment system, marketplace,
+      deployment, production adoption — **each need their own spec → plan → build cycle.** That
+      list is a programme, not a roadmap item.
+
+**Nothing in this workstream touches running code.** No file under `backend/app/` or `frontend/`
+was modified, nothing was deployed, and the VPS is unaffected. Two findings about the *current*
+system fell out of writing the worked examples, both recorded in Appendix A rather than fixed
+here: the block library has no float-valued output at all (Wilder ATR is a private helper, so ATR
+cannot be named, shared, or forked — the Gen-2 decomposability gap), and generated strategies
+identify themselves by a content hash over source, which RFC 0001 F2 makes the body's address
+rather than the identity.
+
 > **2026-08-01/02 — a long autonomous session. 52 commits, every one deployed and verified.**
 > What changed, and what did NOT:
 >
