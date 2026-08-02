@@ -21,7 +21,10 @@ decomposition, `EngineRunner` ~2,450 lines) is not started and is deliberately l
 
 ## 2. Last verified commit
 
-`0fbb6dd` — `feat(ir): §3 stops being a claim and becomes a test`
+`34a4765` — `feat(ir): §3 stops being a claim and becomes a test`
+
+That is the commit the §3 output below was produced against; this file's own SHA correction is
+the only change after it.
 
 Preceded by `cc53bba` (the eight-phase architecture migration) and `97d6bbb` (RFC 0001).
 Branch `feat/exec-completeness`, **not pushed**, and the VPS is running `4e9f125`.
