@@ -34,7 +34,7 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`` — `expanding_z_v4` expressed in the IR and proven equal to the strategy.
+`e97ed72` — `expanding_z_v4` expressed in the IR and proven equal to the strategy.
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
 
