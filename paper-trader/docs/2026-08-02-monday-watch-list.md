@@ -6,7 +6,7 @@ commits on the box, 19 of them touching money-path files (`runner.py`,
 that runs on them: what could go wrong, what the symptom looks like, and how to
 undo it — separate from the roadmap, which records what was *built*.
 
-**Running: `5c323a0`.** Flags off: `PT_RESEARCH_ENABLED=0`,
+**Running: `83be178`.** Flags off: `PT_RESEARCH_ENABLED=0`,
 `index_futures_enabled=False`, `mtf_enabled=False`.
 
 ---
@@ -70,6 +70,16 @@ and repairs bars before the strategy sees them. It is a proven no-op on clean
 data, so this only bites if Kite's feed is genuinely dirty — in which case
 `provider_feed` names the instrument. The old behaviour was to trade on the bad
 bar.
+
+**The signal frame grew a `volume` column** (2026-08-02, `83be178`). Additive: no
+indicator in either plane reads it, every consumer names the fields it wants
+rather than reading columns positionally, and the price columns are asserted
+byte-identical to before by test. It was added because the research plane's
+`volume_surge` block had been reading False on every real frame for want of the
+data. **If a live signal differs on Monday, this is not the likely cause — but it
+is the newest thing on the money path, so rule it in or out first.** The check is
+cheap: `git diff 71a375f..HEAD -- backend/app/market_data/candles.py` is eleven
+lines, all of them additive.
 
 **`/api/health` returning 503** — the probe can now say no. It means DB
 unreachable, engine loops stopped, or the **risk lane stale >90s** (stops not
