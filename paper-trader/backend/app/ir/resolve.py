@@ -600,10 +600,20 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
 
 
 def _topological(ctx: _Context) -> list[str]:
-    ids = [n.instance_id for n in ctx.nodes]
+    return topological_order([n.instance_id for n in ctx.nodes], ctx.edges)
+
+
+def topological_order(ids: Sequence[str],
+                      edges: Sequence[ResolvedEdge]) -> list[str]:
+    """Dependency order over `ids`, deterministically.
+
+    Public because the runtime needs the same order and deriving it twice is
+    how `candles.py` happened. Ties break on the specification's node order, so
+    the result is a function of the input rather than of dict iteration.
+    """
     incoming: dict[str, set[str]] = {i: set() for i in ids}
     outgoing: dict[str, list[str]] = {i: [] for i in ids}
-    for edge in ctx.edges:
+    for edge in edges:
         src, tgt = edge.source[0], edge.target[0]
         if src in incoming and tgt in incoming and src != tgt:
             if tgt not in outgoing[src]:
@@ -613,6 +623,7 @@ def _topological(ctx: _Context) -> list[str]:
     ready = [i for i in ids if not incoming[i]]
     order: list[str] = []
     while ready:
+        ready.sort(key=list(ids).index)
         current = ready.pop(0)
         order.append(current)
         for nxt in outgoing[current]:

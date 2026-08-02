@@ -13,7 +13,8 @@
 > so that if the owner meant something narrower there is one line to correct.
 
 > **§3 and §4 are both enforced.** As of 2026-08-02 the conformance suite is
-> `backend/app/ir/` plus `backend/tests/test_ir_{conformance,corpus,contract_c13,resolution}.py`.
+> `backend/app/ir/` plus
+> `backend/tests/test_ir_{conformance,corpus,contract_c13,resolution,runtime}.py`.
 > It mechanically validates artefacts against **F1–F13**, executes all five Appendix A
 > artefacts as real data rather than sketches, and enforces **all fifteen contract clauses**
 > against a real resolver (`app/ir/resolve.py`). Suppressing any single clause turns that suite
@@ -27,9 +28,14 @@
 > component library** — given one, exact matching on all three axes is checked; given none, F7
 > is reported *unchecked* rather than passing silently.
 >
-> **Nothing here executes yet.** `app/ir/` is imported only by its own tests. C12 is enforced as
-> the *absence* of a second resolver, which is what makes parity structural; the question of
-> when the live engine runs IR graphs is Appendix C(d) and stays open.
+> A **component runtime** now consumes the resolved graph (`app/ir/runtime.py`), which is what
+> turns C8, C9, C10 and C11 from declarations into measurements — in particular C11, where
+> lookahead is caught by evaluating a prefix of the bars and demanding the shared bars match,
+> rather than by trusting a component's author.
+>
+> **Nothing in production executes IR graphs.** `app/ir/` is imported only by its own tests. C12
+> is enforced as the *absence* of a second resolver, which is what makes parity structural; the
+> question of when the live engine runs IR graphs is Appendix C(d) and stays open.
 
 ---
 

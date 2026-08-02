@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,424 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,444 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -84,14 +84,41 @@ honest gaps).
         and `graph.output` are reserved *identifiers*, not grammar constructs; warmup, purity
         and cache identity live in the kernel registry, which §2 already says supplies kernels.
         Both are recorded in §6.3 so a reader of the format knows where they live.
-- [ ] **Adopt the resolver — nothing executes IR graphs yet.** `app/ir/` is still imported only
-      by its own tests. This is RFC 0001 Appendix C(d), and it is a production change to a
-      real-money path: it needs its own phase, its own parity evidence, and owner
-      acknowledgement before any deploy.
-- [ ] The eight remaining Strategy-OS subsystems — component runtime, visual computational graph,
-      Python component authoring, Research Plane Gen 2, experiment system, marketplace,
-      deployment, production adoption — **each need their own spec → plan → build cycle.** That
-      list is a programme, not a roadmap item.
+- [x] **The component runtime — DONE 2026-08-02.** `app/ir/runtime.py` +
+      `tests/test_ir_runtime.py`, 20 tests. Built immediately after the resolver and on purpose:
+      a `ResolvedGraph` nothing evaluates is a correct mechanism wired to nothing, which is the
+      shape of this codebase's defining defect. It evaluates A.4's graph with real kernels —
+      Wilder's ATR decomposed into true range and a smoothing, instantiated at 7 and 21 — so the
+      resolver's outputs stop being structure and start being numbers.
+      - *Three §4 clauses become empirical rather than declared.* **C10:** composed warmup names
+        the unsettled prefix, and `settled()` removes it, so reading an unwarmed indicator stops
+        being the caller's job to remember. **C8/C9:** evaluation memoises on the cache identity
+        resolution computed, and never memoises a node whose kernel declares an impurity policy —
+        caching a declared impurity is caching a lie. **C11:** `check_causality` evaluates the
+        graph on a prefix of the bars and on all of them and demands the shared bars match, so a
+        kernel that reads ahead is caught whatever its author intended. Three real shapes are
+        tested: `shift(-1)`, a centred rolling window, and a whole-series normalisation.
+      - *The causality check was written the easy way first and a test caught it.* Comparing only
+        the graph's **outputs** calls the normalisation case causal: dividing both branches by a
+        max neither bar knew yet leaves `fast > slow` identical. It now compares **every node's**
+        every socket.
+      - *Every guarantee proven load-bearing.* Nine suppressions — cache lookup, cache key
+        (instance id instead of identity), the purity gate, warmup, the index check, the
+        every-node comparison, the reference series, the kernel lookup, the missing-input check —
+        each turns its own test red.
+      - *C13 holds subtractively again.* The runtime's only key for a kernel is its body's
+        content address. A component's origin is not representable there, so no execution path
+        can branch on it, and an unregistered address fails rather than falling back.
+- [ ] **Adopt the runtime — nothing in production evaluates IR graphs.** `app/ir/` is still
+      imported only by its own tests. This is RFC 0001 Appendix C(d), a production change to a
+      real-money path: its own phase, its own parity evidence against the existing strategy
+      kernels, and owner acknowledgement before any deploy. The natural first step is
+      non-executing: express `expanding_z_v4` as a real graph over real kernels and assert its
+      signals equal the current strategy's, bar for bar, on the backtester.
+- [ ] The seven remaining Strategy-OS subsystems — visual computational graph, Python component
+      authoring, Research Plane Gen 2, experiment system, marketplace, deployment, production
+      adoption — **each need their own spec → plan → build cycle.** That list is a programme, not
+      a roadmap item. (The component runtime, which used to head this list, is done above.)
 
 **This workstream still changes no running behaviour.** `backend/app/ir/` is imported only by
 its own tests: no engine, route, or backtest path reaches it. It is a validator and a resolver
