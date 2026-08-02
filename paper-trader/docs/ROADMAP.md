@@ -262,8 +262,48 @@ auto-discovered). Composition *generation* stays core — only the auto-deploy l
       **Still missing: opening-range breakout and time-of-day window.** Both need session
       awareness (IST open, per-segment hours) rather than pure bar math, so they are a
       different shape of change and are deliberately left.
-- [ ] Opening-range breakout + time-of-day window blocks (need session/timezone awareness,
-      not just bar math — see above).
+- [x] **Opening-range breakout + time-of-day window — DONE 2026-08-02 (`83be178`), TDD.**
+      The library is 19 → 23 blocks and, for the first time, complete: every registered
+      block is reachable by the search.
+      Session awareness carries two hazards the pure bar-math blocks never had.
+      **Look-ahead:** an opening range is the only construct in the library that
+      summarises a group of bars and then asks other bars about it. Computed the obvious
+      way — groupby, max, broadcast — bar 2 of the session would "break out" of a range
+      that includes bar 8, and the leak would be invisible because the backtest would
+      simply look good. The range is built via `.where(inside)` BEFORE the groupwise max,
+      and no bar inside the window can fire; both pinned by test.
+      **The host clock:** the timezone audit found a live stop that would have silently
+      stopped firing on a rebuilt UTC droplet. A time-of-day filter invites exactly that
+      bug, so these read the wall clock recorded ON THE BAR and never call a clock
+      function — asserted under `TZ=UTC`, `Asia/Kolkata` and `America/New_York`.
+      Both fail closed (a frame they cannot place in time reads False, never True), and
+      `minute` is a new grammar kind because no existing one could express one: `length`
+      caps at 400, `thr` at |10|, `pct` at 100, `choice` at 15 — and the market opens at
+      minute **555**. Same mistake as declaring the RSI threshold a `thr`, one step on.
+- [x] **Every registered block is REACHABLE — DONE 2026-08-02, and it was not before.**
+      Building the two blocks above surfaced the real defect. Seven of twenty-three
+      registered blocks were **never drawn by the search** across 200 seeds — four of them
+      (`atr_pct_lt`, `gap_up_pct`, `gap_down_pct`, `still_expanding_z`) dead since the day
+      they landed. `search.py`'s own comment claimed sampling "draws from the registry
+      itself, which is what makes a new block reachable the moment it is registered."
+      **That was false the day it was written** — the draw functions are hand-written
+      string templates, so registering a block buys a whitelist entry, not a draw. The
+      comment is corrected in place, and
+      `research_tests/test_every_block_is_reachable.py` fails the build on the next one,
+      which is what makes the corrected claim safe to write down.
+      All 23 now draw, with mirror pairs balanced (a long/short asymmetry in a draw arm
+      does not fail loudly — it yields a strategy that trades one side by accident).
+- [x] **`volume_surge` had no volume — FIXED 2026-08-02.** It read **False on every real
+      frame that has ever existed**. Kite has returned a volume on every historical bar
+      since `kite.py:360` was written; `candles_to_df` built the frame from five keys and
+      `volume` was not one of them. The unconsumed-mechanism guard structurally cannot see
+      this shape — `volume_surge` *has* callers; what it lacked was **data**.
+      The cost was not a missing feature. A composition containing it produces zero
+      signals, so the nightly burned trials on candidates that were never candidates —
+      and every one still counted toward the deflation trial count, making the DSR bar
+      *harder to clear* for the compositions that were real. `volume` is now in
+      `FRAME_COLUMNS`; the price columns are asserted unchanged, because a moved price
+      column would move every live signal and every stored backtest result.
 - [x] **Price-source + smoothing-kind as parameters — DONE 2026-08-01.** The owner's
       "modified-RSI" ask generalised: `close|hl2|hlc3|ohlc4` × `sma|ema|wilder|hull` = 16
       lawful variants of a single block, still whitelisted, still auditable in `blocks.py`.
