@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,520 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,522 collected, PYTEST EXIT 0** (five consecutive clean runs), `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -219,6 +219,27 @@ honest gaps).
         body address. It breaks no reference — the graph resolves identically — but whether it
         should change the address is a matter for an amendment (§6). A test pins current
         behaviour so the decision stays visible.
+- [x] **Warmup is derived from the bound parameters, not the component default — FIXED
+      2026-08-02.** A real defect in what the earlier phases had already built. `KernelSpec.warmup`
+      was an integer, so the kernel registry gave each component a constant taken from the
+      strategy's *defaults* — and a node overriding `ema_length` to 200 still claimed it warmed up
+      in 50 bars. Nothing would have reported it: the backtest would have read 150 bars of an
+      unwarmed EMA and looked entirely plausible, which is the worst shape a defect can have here.
+      C10 says warmup is **derived** per component, and it now is: `warmup` may be a function of
+      the node's bound parameters, evaluated during resolution and range-checked there (C11 —
+      a function returning a negative is the same read of the future a negative constant was).
+      Proven by a test that goes red against the constant it replaced.
+- [x] **The suite's intermittent failure, fixed — 2026-08-02.** `tests/test_init_db_guard.py`
+      called `init_db(reset=True)` — which DROPs every table — against the suite's **shared**
+      per-run database. `DROP TABLE` needs an exclusive lock, and in WAL mode one session left
+      open anywhere in a 2,500-test run holds a read transaction that outlasts the 10s
+      `busy_timeout`. It failed in roughly **two runs in five**, always there, and always taking
+      `test_health_endpoint.py` down with it — those ERRORs were fixture setup against a database
+      the guard test had half-dropped, not defects of their own. The file now gets its own
+      database, which it should always have had: a test that wipes the schema was relying on
+      collection order to stay benign. **Five consecutive clean full runs**, where the previous
+      five had two failures. An intermittent suite makes every claim of "tests green" negotiable,
+      which is the opposite of this repository's working rule.
 - [ ] The five remaining Strategy-OS subsystems — Python component authoring, Research Plane
       Gen 2, marketplace, deployment, production adoption — **each need their own spec → plan → build cycle.** That list is a
       programme, not a roadmap item. (The component runtime, the experiment system and both

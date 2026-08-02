@@ -245,6 +245,45 @@ def test_warmup_composes_to_the_deepest_chain(graph):
     assert graph.warmup == graph.node("n_long_entry").warmup == 302
 
 
+def test_warmup_follows_the_bound_parameter_not_the_components_default(frame):
+    """The defect this test was written for, and the reason C10 says warmup is
+    **derived** per component rather than declared as a number.
+
+    The kernel registry first gave each component a constant taken from the
+    strategy's defaults. A node overriding `ema_length` to 200 would then still
+    have claimed it warmed up in 50 bars — and nothing would have reported it.
+    The backtest would have read 150 bars of an unwarmed EMA and looked
+    entirely plausible, which is the worst shape a defect can have here.
+    """
+    slower = copy.deepcopy(GRAPH)
+    for item in slower["interface"]:
+        if item.get("identifier") == "trend":
+            for p in item["items"]:
+                if p["identifier"] == "ema_length":
+                    p["default"] = 200
+
+    graph = resolve(slower, LIBRARY)
+    assert graph.node("n_ema").warmup == 200
+    # …and it composes downstream: the z-score adds its own 50 on top.
+    assert graph.node("n_z").warmup == 250
+    assert graph.warmup == resolve(GRAPH, LIBRARY).warmup + 150
+
+
+def test_a_warmup_that_is_a_function_still_cannot_read_the_future(frame):
+    """C11 is checked at resolution now, because that is the first moment the
+    parameters exist. A function returning a negative is the same read of the
+    future a negative constant was, and is refused the same way."""
+    from app.ir.kernels import KernelDeclarationError, kernel_registry
+    from app.ir.resolve import Library
+    from app.ir.strategies.expanding_z import EMA
+
+    peeking = kernel_registry({**LIBRARY.kernels,
+                               EMA["body"]["ref"]: {"warmup": lambda p: -p["length"]}})
+    with pytest.raises(KernelDeclarationError) as exc:
+        resolve(GRAPH, Library(LIBRARY.components, LIBRARY.bodies, peeking))
+    assert exc.value.clause == "C11"
+
+
 def test_the_declared_signals_settle_after_warmup(evaluated):
     settled = evaluated.settled()
     assert len(settled["longEntry"]) == 400 - evaluated.warmup

@@ -452,20 +452,26 @@ IMPLEMENTATIONS = {
     EXIT["body"]["ref"]: _k_exit,
 }
 
-# C10 — warmup per component, declared once, composed by resolution. These are
-# the bar counts each computation needs before its output means anything.
+# C10 — warmup per component, composed by resolution.
+#
+# Every one of these is a function of the node's *bound* parameters, not of the
+# component's default. It was written with the defaults first, and that was
+# wrong in a way nothing would have reported: a node overriding `length` to 200
+# would still have claimed it warmed up in 50 bars, and a backtest would have
+# read 150 bars of an unwarmed indicator and looked entirely plausible.
 KERNELS = kernel_registry({
-    EMA["body"]["ref"]: {"warmup": D["ema_length"]},
+    EMA["body"]["ref"]: {"warmup": lambda p: p["length"]},
     TRUE_RANGE["body"]["ref"]: {"warmup": 1},
-    WILDER["body"]["ref"]: {"warmup": D["atr_length"]},
-    ZSCORE["body"]["ref"]: {"warmup": D["z_length"]},
+    WILDER["body"]["ref"]: {"warmup": lambda p: p["length"]},
+    ZSCORE["body"]["ref"]: {"warmup": lambda p: p["length"]},
     ABS["body"]["ref"]: {},
-    ADAPTIVE["body"]["ref"]: {"warmup": D["adapt_length"]},
+    ADAPTIVE["body"]["ref"]: {"warmup": lambda p: p["length"]},
     VALUE["body"]["ref"]: {},
     SCALE["body"]["ref"]: {},
-    DRIFT["body"]["ref"]: {"warmup": D["slope_lookback"]},
+    DRIFT["body"]["ref"]: {"warmup": lambda p: p["lookback"]},
     RANGE_ATR["body"]["ref"]: {},
     LE["body"]["ref"]: {},
+    # Needs the current bar and the two before it (absZ[1], absZ[2]).
     IMPULSE["body"]["ref"]: {"warmup": 2},
     ENTRY["body"]["ref"]: {},
     EXIT["body"]["ref"]: {},

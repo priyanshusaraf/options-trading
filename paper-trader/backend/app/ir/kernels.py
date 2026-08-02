@@ -22,7 +22,7 @@ claim. An open field set is that hook waiting to be added, so
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 # ── C9 — purity ───────────────────────────────────────────────────────────
 #
@@ -50,12 +50,27 @@ CACHE_IDENTITIES = ("transitive", "declared")
 
 @dataclass(frozen=True)
 class KernelSpec:
-    """What a registry knows about one leaf implementation."""
+    """What a registry knows about one leaf implementation.
 
-    warmup: int = 0
+    `warmup` is an integer **or a function of the node's bound parameters**.
+    C10 says warmup "MUST be **derived** per component", and for almost every
+    real indicator it is derived from a parameter: a 200-bar EMA does not warm
+    up in the 50 bars its default asks for. A constant here would be right only
+    for nodes that happen to take the default, and wrong silently for the rest —
+    a backtest reading unwarmed values and looking plausible.
+
+    The function is evaluated during resolution, with that node's parameters,
+    and its result is checked the same way a constant is (C11: non-negative).
+    """
+
+    warmup: int | Callable[[Mapping[str, Any]], int] = 0
     purity: str = PURE
     cache_identity: str = "transitive"
     cache_key: str | None = None
+
+    def warmup_for(self, params: Mapping[str, Any]) -> int:
+        """This kernel's warmup at these parameters."""
+        return self.warmup(params) if callable(self.warmup) else self.warmup
 
 
 _FIELDS = frozenset({"warmup", "purity", "cache_identity", "cache_key"})
@@ -90,12 +105,11 @@ def kernel_spec(**fields: Any) -> KernelSpec:
     # declaration a kernel has, and it counts *backwards*. A negative warmup
     # would be a component asking for bars that have not happened; there is no
     # other way to express it, so refusing this one refuses all of them.
-    if not isinstance(spec.warmup, int) or isinstance(spec.warmup, bool) or spec.warmup < 0:
-        raise KernelDeclarationError(
-            "C11",
-            f"warmup must be a non-negative integer of bars, not {spec.warmup!r}; "
-            "a negative warmup is a read of the future",
-        )
+    #
+    # A callable is checked at resolution instead, with the node's parameters —
+    # it cannot be checked here, because here there are no parameters yet.
+    if not callable(spec.warmup):
+        check_warmup(spec.warmup)
 
     if spec.purity != PURE and spec.purity not in IMPURITY_POLICIES:
         raise KernelDeclarationError(
@@ -118,6 +132,17 @@ def kernel_spec(**fields: Any) -> KernelSpec:
             "C8", "a transitive cache identity is its upstream; a key would be ignored")
 
     return spec
+
+
+def check_warmup(warmup: Any, where: str = "a kernel") -> int:
+    """C11 — the one temporal declaration, and it counts backwards only."""
+    if not isinstance(warmup, int) or isinstance(warmup, bool) or warmup < 0:
+        raise KernelDeclarationError(
+            "C11",
+            f"{where}'s warmup must be a non-negative integer of bars, not "
+            f"{warmup!r}; a negative warmup is a read of the future",
+        )
+    return warmup
 
 
 def kernel_registry(entries: Mapping[str, Mapping[str, Any] | KernelSpec]

@@ -40,7 +40,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from app.ir.hashing import content_address
-from app.ir.kernels import KernelSpec
+from app.ir.kernels import KernelSpec, check_warmup
 from app.ir.schema import is_parameter_reference
 
 # The two reserved identifiers. A body graph wires its interface through these;
@@ -559,8 +559,12 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
         feeds = sorted(upstream.get(instance_id, ()))
 
         # C10 — warmup composes: a node needs its own history plus everything
-        # its deepest input needed before it could produce a first value.
-        warmup = pending.spec.warmup + max(
+        # its deepest input needed before it could produce a first value. Its
+        # own share is derived from *this node's* bound parameters, so a 200-bar
+        # EMA warms up in 200 bars even where the component's default is 50.
+        own = check_warmup(pending.spec.warmup_for(pending.params),
+                           f"{pending.definition[0]} at {pending.instance_id}")
+        warmup = own + max(
             (resolved[src].warmup for _, src in feeds if src in resolved), default=0)
 
         identity: dict[str, Any] = {
