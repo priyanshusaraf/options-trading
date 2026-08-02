@@ -62,6 +62,81 @@ def _as_bool(s: pd.Series) -> pd.Series:
     return s.fillna(False).astype(bool)
 
 
+# ── the strategy's steps, named ───────────────────────────────────────────
+#
+# These were inline in `compute` until 2026-08-02. They are extracted, not
+# rewritten: `compute` calls them in the same order with the same arguments, so
+# behaviour is unchanged and the existing strategy and backtest tests are the
+# regression protection.
+#
+# The reason they are named is that the Component IR needs kernels for
+# `expanding_z_v4`, and a kernel that re-implements the expression beside the
+# strategy would be two hand-written copies of one idea — the `candles.py`
+# defect, which C12 exists because of. `app/ir/strategies/expanding_z.py` binds
+# its kernels to *these* functions, so there is one implementation and the IR
+# graph expresses the composition rather than duplicating the arithmetic.
+
+def zscore(close: pd.Series, ema: pd.Series, z_length: int) -> pd.Series:
+    spread = close - ema
+    sd = spread.rolling(z_length).std(ddof=0)
+    return pd.Series(np.where(sd > 0, spread / sd, 0.0), index=close.index)
+
+
+def adaptive_threshold(abs_z: pd.Series, adapt_length: int, pct: float,
+                       floor: float, fallback: float) -> pd.Series:
+    """Pine's adaptive percentile, read off the *prior* bar.
+
+    The `.shift(1)` is what keeps the current bar out of its own threshold.
+    """
+    raw = _percentile_nearest_rank(abs_z, adapt_length, pct)
+    return pd.Series(np.maximum(raw.shift(1).fillna(fallback), floor),
+                     index=abs_z.index)
+
+
+def drift_score(ema: pd.Series, atr: pd.Series, slope_lookback: int) -> pd.Series:
+    return pd.Series(
+        np.where(atr > 0, (ema - ema.shift(slope_lookback)) / atr, 0.0),
+        index=ema.index)
+
+
+def range_in_atr(high: pd.Series, low: pd.Series, atr: pd.Series) -> pd.Series:
+    return pd.Series(np.where(atr > 0, (high - low) / atr, 0.0), index=high.index)
+
+
+def impulse(abs_z: pd.Series, entry_abs: pd.Series, require_expansion: bool,
+            allow_reexpansion: bool) -> pd.Series:
+    expanding = abs_z > abs_z.shift(1)
+    breakout = _crossover(abs_z, entry_abs)
+    reexpansion = ((abs_z > entry_abs) & (abs_z > abs_z.shift(1))
+                   & (abs_z.shift(1) < abs_z.shift(2)))
+    out = breakout | (reexpansion if allow_reexpansion else False)
+    return out & expanding if require_expansion else out
+
+
+def directional_entry(signal_bar_ok: pd.Series, impulse_now: pd.Series,
+                      z: pd.Series, drift: pd.Series, min_drift_atr: float,
+                      direction: str) -> pd.Series:
+    if direction == "long":
+        return signal_bar_ok & impulse_now & (z > 0) & (drift > min_drift_atr)
+    return signal_bar_ok & impulse_now & (z < 0) & (drift < -min_drift_atr)
+
+
+def displacement_lost(drift: pd.Series, close: pd.Series, ema: pd.Series,
+                      abs_z: pd.Series, exit_abs: pd.Series, z: pd.Series,
+                      direction: str, exit_on_drift_flip: bool,
+                      exit_on_ema_cross: bool,
+                      use_absz_contraction_exit: bool) -> pd.Series:
+    long_side = direction == "long"
+    out = pd.Series(False, index=close.index)
+    if exit_on_drift_flip:
+        out = out | (drift < 0 if long_side else drift > 0)
+    if exit_on_ema_cross:
+        out = out | (close < ema if long_side else close > ema)
+    if use_absz_contraction_exit:
+        out = out | ((abs_z < exit_abs) & (z > 0 if long_side else z < 0))
+    return out
+
+
 class ExpandingZImpulseV4(Strategy):
     key = "expanding_z_v4"
     display_name = "Expanding Z Impulse V4"
@@ -95,51 +170,33 @@ class ExpandingZImpulseV4(Strategy):
         ema = c.ewm(span=ema_length, adjust=False).mean()
         atr = _atr(high, low, c, atr_length)
 
-        spread = c - ema
-        sd = spread.rolling(z_length).std(ddof=0)
-        z = pd.Series(np.where(sd > 0, spread / sd, 0.0), index=out.index)
+        z = zscore(c, ema, z_length)
         absZ = z.abs()
 
-        entry_raw = _percentile_nearest_rank(absZ, adapt_length, entry_pct)
-        exit_raw = _percentile_nearest_rank(absZ, adapt_length, exit_pct)
         # prior-bar thresholds (Pine entryAbsRaw[1]) avoid current-bar contamination
-        entry_abs = np.maximum(entry_raw.shift(1).fillna(min_abs_z), min_abs_z)
-        exit_abs = np.maximum(exit_raw.shift(1).fillna(min_abs_z * 0.50), min_abs_z * 0.25)
-        entry_abs = pd.Series(entry_abs, index=out.index)
-        exit_abs = pd.Series(exit_abs, index=out.index)
+        entry_abs = adaptive_threshold(absZ, adapt_length, entry_pct,
+                                       floor=min_abs_z, fallback=min_abs_z)
+        exit_abs = adaptive_threshold(absZ, adapt_length, exit_pct,
+                                      floor=min_abs_z * 0.25, fallback=min_abs_z * 0.50)
 
-        drift = pd.Series(np.where(atr > 0, (ema - ema.shift(slope_lookback)) / atr, 0.0),
-                          index=out.index)
-        bull_drift = drift > min_drift_atr
-        bear_drift = drift < -min_drift_atr
-
-        range_atr = pd.Series(np.where(atr > 0, (high - low) / atr, 0.0), index=out.index)
-        signal_bar_ok = range_atr <= max_signal_atr
+        drift = drift_score(ema, atr, slope_lookback)
+        signal_bar_ok = range_in_atr(high, low, atr) <= max_signal_atr
 
         # ── entry: adaptive impulse + mandatory still-expanding gate ──────────
-        expanding = absZ > absZ.shift(1)
-        breakout = _crossover(absZ, entry_abs)
-        reexpansion = ((absZ > entry_abs) & (absZ > absZ.shift(1))
-                       & (absZ.shift(1) < absZ.shift(2)))
-        impulse = breakout | (reexpansion if allow_reexpansion else False)
-        if require_expansion:
-            impulse = impulse & expanding
-
-        long_entry = signal_bar_ok & impulse & (z > 0) & bull_drift
-        short_entry = signal_bar_ok & impulse & (z < 0) & bear_drift
+        impulse_now = impulse(absZ, entry_abs, require_expansion, allow_reexpansion)
+        long_entry = directional_entry(signal_bar_ok, impulse_now, z, drift,
+                                       min_drift_atr, "long")
+        short_entry = directional_entry(signal_bar_ok, impulse_now, z, drift,
+                                        min_drift_atr, "short")
 
         # ── exits: displacement-lost set (engine owns the stop/trail) ─────────
-        long_exit = pd.Series(False, index=out.index)
-        short_exit = pd.Series(False, index=out.index)
-        if exit_on_drift_flip:
-            long_exit = long_exit | (drift < 0)
-            short_exit = short_exit | (drift > 0)
-        if exit_on_ema_cross:
-            long_exit = long_exit | (c < ema)
-            short_exit = short_exit | (c > ema)
-        if use_absz_contraction_exit:
-            long_exit = long_exit | ((absZ < exit_abs) & (z > 0))
-            short_exit = short_exit | ((absZ < exit_abs) & (z < 0))
+        exit_flags = dict(exit_on_drift_flip=exit_on_drift_flip,
+                          exit_on_ema_cross=exit_on_ema_cross,
+                          use_absz_contraction_exit=use_absz_contraction_exit)
+        long_exit = displacement_lost(drift, c, ema, absZ, exit_abs, z, "long",
+                                      **exit_flags)
+        short_exit = displacement_lost(drift, c, ema, absZ, exit_abs, z, "short",
+                                       **exit_flags)
 
         out["ema"] = ema
         out["atr"] = atr

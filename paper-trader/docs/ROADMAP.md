@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,444 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,460 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -109,12 +109,38 @@ honest gaps).
       - *C13 holds subtractively again.* The runtime's only key for a kernel is its body's
         content address. A component's origin is not representable there, so no execution path
         can branch on it, and an unregistered address fails rather than falling back.
-- [ ] **Adopt the runtime — nothing in production evaluates IR graphs.** `app/ir/` is still
-      imported only by its own tests. This is RFC 0001 Appendix C(d), a production change to a
-      real-money path: its own phase, its own parity evidence against the existing strategy
-      kernels, and owner acknowledgement before any deploy. The natural first step is
-      non-executing: express `expanding_z_v4` as a real graph over real kernels and assert its
-      signals equal the current strategy's, bar for bar, on the backtester.
+- [x] **`expanding_z_v4` expressed in the IR, and proven equal to the strategy — DONE
+      2026-08-02.** `app/ir/strategies/expanding_z.py` + `tests/test_ir_strategy_parity.py`,
+      16 tests. Appendix A.1 expressed this strategy as a sketch inside a markdown document,
+      which proves what its author believed. This is the real artefact: 13 components, 17 nodes,
+      41 edges, the 15 real parameters read off `default_params` rather than restated — resolved,
+      evaluated, and asserted **equal to `ExpandingZImpulseV4.compute()` bar for bar** over 400
+      bars, with entries firing on the fixture so the comparison is not two constant series.
+      - *The kernels are bound to the strategy's own functions, not rewritten.* Seven expressions
+        were extracted out of `compute()` into named pure functions (`zscore`,
+        `adaptive_threshold`, `drift_score`, `range_in_atr`, `impulse`, `directional_entry`,
+        `displacement_lost`); `compute()` calls them and so do the kernels. A second copy of the
+        arithmetic would be the `candles.py` defect, and the parity test would then be comparing
+        a copy to its original. What is under test is the **language**.
+      - *Proven able to fail.* Binding `n_entry_thr` to `exit_pct`, and re-pointing one edge from
+        `n_ema` to `n_z`, each turn the parity test red.
+      - *A new fact about production strategy code, not only about the IR:* `check_causality`
+        finds `expanding_z_v4` causal at every node — its "signals fire only on completed
+        candles" claim is now measured rather than conventional. The check is proven able to go
+        red on this graph by making the EMA peek one bar ahead.
+      - *C8's economics, demonstrated:* moving `entry_pct` recomputes the threshold, the impulse
+        and the two entry predicates, and reuses the EMA, ATR, z-score, drift and range. That is
+        what makes a sweep cheap without building the sweep into the indicator (C14).
+      - *One finding recorded, not fixed:* **a parameter cannot be derived from another
+        parameter.** `exit_abs`'s floor is `min_abs_z * 0.25` in the strategy, and F10 says an
+        override carries a value only, so the graph carries the literal `0.15` — correct at the
+        shipped `min_abs_z = 0.60` and silently wrong if it moves. Not a defect in F10, which is
+        protecting the component author's constraints; the conforming expression is a `scale`
+        component between the parameter and its consumer. Recorded in the module docstring.
+- [ ] **Adopt the runtime in a live path — NOT DONE, and it stops for the owner.** The engine
+      still calls `compute()`; `app/ir/` is imported only by its own tests. This is RFC 0001
+      Appendix C(d), a production change to a real-money path: it needs owner acknowledgement
+      before any deploy regardless of green tests. The parity evidence it would need now exists.
 - [ ] The seven remaining Strategy-OS subsystems — visual computational graph, Python component
       authoring, Research Plane Gen 2, experiment system, marketplace, deployment, production
       adoption — **each need their own spec → plan → build cycle.** That list is a programme, not
