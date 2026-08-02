@@ -27,7 +27,7 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`` — the resolver phase (see §3 below for what was run against it). Preceded by `7a1f6e4`,
+`126c9cf` — the resolver phase (see §3 below for what was run against it). Preceded by `7a1f6e4`,
 `34a4765` (§3 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
 
 Branch `feat/exec-completeness`, **not pushed**.
