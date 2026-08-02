@@ -68,14 +68,22 @@ def test_clean_candles_pass_through_unchanged():
 
 
 def test_the_dataframe_matches_the_old_converter_exactly_on_clean_data():
-    """The regression that matters most: if this frame differs at all from what
+    """The regression that matters most: if a PRICE column differs at all from what
     `pd.DataFrame([{...}])` produced, every live signal and every stored backtest
-    result silently moves."""
+    result silently moves.
+
+    `volume` was added to the frame on 2026-08-02 and is deliberately excluded from
+    this comparison — see `tests/test_frame_carries_volume.py`. It is a new column,
+    not a changed one: no indicator in either plane reads it, and the block that
+    does had been reading False on every real frame for want of it. The invariant
+    this test exists to defend is that the price columns do not move, so it now
+    says exactly that instead of freezing the column list by accident.
+    """
     candles = _series(8)
     old = pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
                          "low": c.low, "close": c.close} for c in candles])
     new = candles_to_df(candles)
-    pd.testing.assert_frame_equal(new, old)
+    pd.testing.assert_frame_equal(new[["date", "open", "high", "low", "close"]], old)
 
 
 def test_a_flat_bar_is_valid():
@@ -229,7 +237,7 @@ def test_counts_reconcile():
 def test_candles_to_df_drops_corrupt_rows():
     df = candles_to_df([_c(15), _c(16, close=float("nan")), _c(17)])
     assert len(df) == 2
-    assert list(df.columns) == ["date", "open", "high", "low", "close"]
+    assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
 
 
 def test_candles_to_df_sorts_so_indicators_see_time_order():

@@ -73,13 +73,27 @@ def enumerate_compositions(limit: int = 24) -> list[Composition]:
 
 # ── seeded sampling (Phase 2) ────────────────────────────────────────────────
 # The grid above is a fixed 3x3x2 of hand-picked strings, so adding a block to
-# BLOCKS widened the whitelist and the search not at all. Sampling draws from the
+# BLOCKS widened the whitelist and the search not at all — the RSI family was
+# registered and never sampled.
+#
+# CORRECTED 2026-08-02. This comment used to continue: "Sampling draws from the
 # registry itself, which is what makes a new block reachable the moment it is
-# registered.
+# registered." That was false the day it was written, and stayed false. The draw
+# functions below are still hand-written string templates; they are simply a wider
+# set of them. Measured across 200 seeds, SEVEN of twenty-three registered blocks
+# were unreachable, four of them dead since the day they landed.
+#
+# Registering a block does NOT make it reachable. Wiring it into `_mirror_trend`,
+# `_mirror_momentum` or `_filter` does. `research_tests/test_every_block_is_reachable.py`
+# now fails the build on the next one, which is what makes this paragraph safe to
+# write down — a docstring asserting a property is not the property.
 #
 # DETERMINISTIC per seed, without exception: a composition that cannot be
 # regenerated from its seed cannot be reproduced, and reproducibility is the
 # premise the whole plane rests on (immutable specs, content-hashed datasets).
+# Widening the draw changes WHAT a seed produces, and that is fine: a past finding
+# replays from the `composition_json` + `source` stored against its strategy key,
+# not by re-running the sampler.
 
 _LENGTH_CHOICES = (10, 14, 20, 30, 50, 100)
 _Z_THRESHOLDS = (0.5, 1.0, 1.5, 2.0)
@@ -95,28 +109,52 @@ def _mirror_trend(rng) -> tuple:
 
 
 def _mirror_momentum(rng) -> tuple:
+    """A directional trigger and its short mirror.
+
+    Every arm must be a genuine MIRROR pair. A long/short asymmetry here does not
+    fail loudly — it produces a composition that trades one side well and the other
+    by accident, which reads as a mediocre edge rather than as a bug.
+    """
     pick = rng.random()
-    if pick < 0.4:
+    if pick < 0.30:
         thr = rng.choice(_Z_THRESHOLDS)
         n = rng.choice((20, 50, 100))
         return (f"zscore_cross_up({n}, {thr})", f"zscore_cross_down({n}, {thr})",
                 f"zx{int(thr * 10)}n{n}")
-    if pick < 0.65:
+    if pick < 0.50:
         n = rng.choice((5, 10, 20))
         return f"roc_gt({n}, 0.0)", f"roc_lt({n}, 0.0)", f"roc{n}"
-    # The Phase-2 family: one RSI block, but source and smoothing are drawn, so
-    # a single grammar slot covers len(PRICE_SOURCES) x len(SMOOTHINGS) variants.
-    n = rng.choice((7, 14, 21))
-    hi, lo = rng.choice(_RSI_HI), rng.choice(_RSI_LO)
-    src = rng.randrange(len(PRICE_SOURCES))
-    sm = rng.randrange(len(SMOOTHINGS))
-    return (f"rsi_gt({n}, {hi}, {src}, {sm})", f"rsi_lt({n}, {lo}, {src}, {sm})",
-            f"rsi{n}{PRICE_SOURCES[src][:2]}{SMOOTHINGS[sm][:1]}")
+    if pick < 0.70:
+        # The Phase-2 family: one RSI block, but source and smoothing are drawn, so
+        # a single grammar slot covers len(PRICE_SOURCES) x len(SMOOTHINGS) variants.
+        n = rng.choice((7, 14, 21))
+        hi, lo = rng.choice(_RSI_HI), rng.choice(_RSI_LO)
+        src = rng.randrange(len(PRICE_SOURCES))
+        sm = rng.randrange(len(SMOOTHINGS))
+        return (f"rsi_gt({n}, {hi}, {src}, {sm})", f"rsi_lt({n}, {lo}, {src}, {sm})",
+                f"rsi{n}{PRICE_SOURCES[src][:2]}{SMOOTHINGS[sm][:1]}")
+    if pick < 0.85:
+        # Session-aware trigger: break out of the day's own opening range. This is
+        # the first draw in the search whose meaning depends on where a session
+        # STARTS rather than on bar math alone.
+        bars = rng.choice((2, 3, 4, 6))
+        buf = rng.choice((0.05, 0.1, 0.25))
+        return (f"opening_range_break_up({bars}, {buf})",
+                f"opening_range_break_down({bars}, {buf})", f"orb{bars}")
+    # Overnight gap as the trigger. Mirrored, and deliberately last: a gap fires on
+    # far fewer bars than the other arms, so it draws thinner samples.
+    pct = rng.choice((0.3, 0.5, 1.0))
+    return f"gap_up_pct({pct})", f"gap_down_pct({pct})", f"gap{int(pct * 10)}"
 
 
 def _filter(rng) -> tuple:
+    """A NON-directional gate, applied identically to the long and short arms.
+
+    Anything drawn here must be direction-neutral. A directional block in this slot
+    would be ANDed into both entries and silently disable one of them.
+    """
     pick = rng.random()
-    if pick < 0.15:
+    if pick < 0.12:
         # Regime conditioning: "only trade this idea in THIS kind of market".
         # Drawing it here means the composition count already reflects it, and
         # `run_generated` additionally inflates the deflation count because
@@ -124,12 +162,24 @@ def _filter(rng) -> tuple:
         from research.regime import REGIMES
         code = rng.randrange(len(REGIMES))
         return f"regime_is({code})", f"rg{code}"
-    if pick < 0.5:
+    if pick < 0.40:
         return None, ""
-    if pick < 0.7:
+    if pick < 0.52:
         return "range_atr_lt(14, 2.5)", "quiet"
-    if pick < 0.85 and "volume_surge" in BLOCKS:
+    if pick < 0.62:
+        # Absolute volatility ceiling, as opposed to range_atr_lt's relative one.
+        return f"atr_pct_lt(14, {rng.choice((1.5, 3.0, 5.0))})", "calm"
+    if pick < 0.74 and "volume_surge" in BLOCKS:
         return f"volume_surge(20, {rng.choice((1.5, 2.0))})", "vol"
+    if pick < 0.84:
+        # Time-of-day window. Drawn from real NSE session segments rather than
+        # arbitrary minutes: 09:15-11:30 (the morning trend), 11:30-14:00 (the
+        # midday lull), 09:15-15:00 (everything but the square-off run-in).
+        start, end, code = rng.choice((
+            (555, 690, "am"), (690, 840, "mid"), (555, 900, "day")))
+        return f"time_of_day({start}, {end})", code
+    if pick < 0.92:
+        return f"still_expanding_z({rng.choice((20, 50))})", "expand"
     return f"body_frac_gt({rng.choice((0.4, 0.5, 0.6))})", "body"
 
 

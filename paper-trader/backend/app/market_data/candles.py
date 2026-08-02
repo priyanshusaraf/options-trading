@@ -46,9 +46,17 @@ from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
-# The frame contract `strat.signals` consumes. Order matters: it is asserted
-# against the pre-existing converters so live and backtest cannot drift.
-FRAME_COLUMNS = ["date", "open", "high", "low", "close"]
+# The frame contract `strat.signals` consumes. Order matters: the PRICE columns
+# are asserted against the pre-existing converters so live and backtest cannot
+# drift.
+#
+# `volume` is additive and was added 2026-08-02. It is not a cosmetic extra: the
+# research plane's `volume_surge` block read False on every real frame for as long
+# as it existed, because the candles carried a volume and this converter dropped
+# it. A block cannot be reached by data it is never given, and no reference scan
+# can see that kind of deadness. Nothing downstream enumerates columns positionally
+# — every consumer names the fields it wants — so the addition moves no signal.
+FRAME_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 
 _PRICE_FIELDS = ("open", "high", "low", "close")
 
@@ -215,5 +223,11 @@ def frame_from(candles) -> pd.DataFrame:
     """
     if not candles:
         return pd.DataFrame(columns=FRAME_COLUMNS)
+    # `getattr` default rather than `c.volume`: hand-written regression fixtures
+    # and the replay provider's JSON predate the field, and a missing volume must
+    # degrade to "no volume information" — which reads as no surge — rather than
+    # taking the whole frame down with an AttributeError.
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+                          "low": c.low, "close": c.close,
+                          "volume": float(getattr(c, "volume", 0.0) or 0.0)}
+                         for c in candles])

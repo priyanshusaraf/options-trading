@@ -16,6 +16,7 @@ grammar; nothing else needs to change.
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -241,6 +242,142 @@ def body_frac_gt(df, frac):
     return _b((rng > 0) & ((body / rng.where(rng > 0)) > float(frac)))
 
 
+# ── session awareness (Phase 2) ──────────────────────────────────────────────
+# Every other block in this file is pure bar math and can be correct over a frame
+# of anonymous OHLC rows. These two cannot: they need to know where a trading
+# SESSION begins and what time of day a bar sits at.
+#
+# Both read the wall clock recorded ON THE BAR (`df["date"]`) and never call a
+# clock function. That is deliberate and load-bearing: the 2026-08-01 timezone
+# audit found a live stop that would have stopped firing on a rebuilt UTC droplet
+# because one path fell back to naive host-local time. A time-of-day filter is
+# exactly the shape of code that invites the same bug, so it is written to be
+# host-independent by construction rather than by configuration.
+#
+# Both fail CLOSED. A frame these cannot place in time reads False everywhere,
+# never True — a filter that cannot evaluate must narrow the strategy to nothing
+# rather than silently removing the condition it was added to impose.
+
+
+def _false(df) -> pd.Series:
+    return pd.Series(False, index=df.index)
+
+
+def _stamps(df) -> pd.Series | None:
+    """The bar timestamps as datetimes, or None if this frame has no usable clock."""
+    if "date" not in getattr(df, "columns", ()):
+        return None
+    col = df["date"]
+    # The frame from `candles_to_df` already carries real datetimes, so the normal
+    # path does no parsing at all. Only a hand-built frame reaches the fallback.
+    if pd.api.types.is_datetime64_any_dtype(col):
+        return col
+    try:
+        with warnings.catch_warnings():
+            # An unparseable column is a fail-closed case we handle below, not
+            # something to warn the operator about on every bar.
+            warnings.simplefilter("ignore")
+            ts = pd.to_datetime(col, errors="coerce")
+    except (TypeError, ValueError):
+        return None
+    if ts.isna().all():
+        return None
+    return ts
+
+
+def _minute_of_day(ts: pd.Series) -> pd.Series:
+    """Minutes since midnight, in the timezone the bar was recorded in.
+
+    `.dt.hour` reads the stamp's own wall clock — for a tz-aware IST stamp that is
+    IST, and for a naive one it is whatever the feed wrote, which is IST by this
+    project's convention. Neither reading consults the host, which is the point.
+    """
+    return ts.dt.hour * 60 + ts.dt.minute
+
+
+def time_of_day(df, start_min, end_min):
+    """True on bars inside [start_min, end_min) minutes past midnight.
+
+    Half-open on purpose: two windows meeting at the same minute partition the
+    bars instead of both claiming the boundary. Overlapping there would make
+    `all(window_a, window_b)` satisfiable for two windows meant to be disjoint.
+
+    An inverted or empty window (`end <= start`) selects NOTHING. It is not a wrap
+    around midnight — no Indian session does that — it is a nonsensical window, and
+    a nonsensical filter must exclude everything rather than include everything.
+    """
+    ts = _stamps(df)
+    if ts is None:
+        return _false(df)
+    start, end = int(start_min), int(end_min)
+    if end <= start:
+        return _false(df)
+    mod = _minute_of_day(ts)
+    return _b((mod >= start) & (mod < end))
+
+
+def _opening_range(df, bars: int):
+    """Per session: (range_high, range_low, position_within_session).
+
+    The two range series are broadcast to every bar of their session, which is
+    only safe because the caller masks off every bar inside the range window —
+    see the note there. `pos` is the bar's 0-based index within its own session
+    and is what makes that mask possible.
+    """
+    ts = _stamps(df)
+    if ts is None:
+        return None
+    day = ts.dt.normalize()
+    n = max(2, int(bars))
+    g = df.groupby(day, sort=False)
+    pos = g.cumcount()
+    inside = pos < n
+    # `.where(inside)` blanks every bar outside the opening window BEFORE the
+    # groupwise max/min, so the range is a function of the first `n` bars alone.
+    # Taking a plain groupby max here would fold the entire session — including
+    # bars that had not happened yet — into the level the session is measured
+    # against, and the resulting backtest would simply look good.
+    rng_high = df["high"].where(inside).groupby(day, sort=False).transform("max")
+    rng_low = df["low"].where(inside).groupby(day, sort=False).transform("min")
+    # A session with fewer than `n` bars never completed its range (a half day, or
+    # a truncated feed). Its range is undefined rather than partial.
+    complete = g.cumcount(ascending=False) + pos + 1 >= n
+    return rng_high, rng_low, pos, complete
+
+
+def opening_range_break_up(df, bars, buffer_pct):
+    """Close breaks above the session's opening range by at least `buffer_pct`.
+
+    The range is the HIGH of the first `bars` bars — the extent price actually
+    traded over, wicks included. Using closes would draw the range too narrow and
+    fire on ordinary noise.
+
+    **No look-ahead:** a bar can only fire once its session index is >= `bars`, so
+    every input to a True reading is the current bar or an earlier one. The buffer
+    is what separates this from `close > rolling max`: a close a hair above the
+    range is noise, not a breakout.
+    """
+    parts = _opening_range(df, bars)
+    if parts is None:
+        return _false(df)
+    rng_high, _, pos, complete = parts
+    n = max(2, int(bars))
+    level = rng_high * (1.0 + float(buffer_pct) / 100.0)
+    return _b((pos >= n) & complete & (df["close"] > level))
+
+
+def opening_range_break_down(df, bars, buffer_pct):
+    """Close breaks below the session's opening range by at least `buffer_pct`.
+    The mirror of `opening_range_break_up`, measured off the range LOW."""
+    parts = _opening_range(df, bars)
+    if parts is None:
+        return _false(df)
+    _, rng_low, pos, complete = parts
+    n = max(2, int(bars))
+    level = rng_low * (1.0 - float(buffer_pct) / 100.0)
+    return _b((pos >= n) & complete & (df["close"] < level))
+
+
 # ── regime conditioning (Phase 5) ────────────────────────────────────────────
 def regime_is(df, code):
     """True on bars sitting in the selected market regime.
@@ -326,6 +463,18 @@ BLOCKS: dict[str, BlockSpec] = {
                                   lambda a: 2, (0.5,), "momentum"),
     "body_frac_gt":     BlockSpec(body_frac_gt, (("frac", "pct"),),
                                   lambda a: 2, (0.5,), "confirmation"),
+    # Phase 2 — session awareness. Warmup is session-local (the opening range is
+    # rebuilt every day), so it is `bars`, not a multi-day history. `time_of_day`
+    # needs no history at all: a bar knows its own clock.
+    "time_of_day":      BlockSpec(time_of_day, (("start_min", "minute"),
+                                                ("end_min", "minute")),
+                                  lambda a: 0, (555, 690), "confirmation"),
+    "opening_range_break_up": BlockSpec(
+        opening_range_break_up, (("bars", "length"), ("buffer_pct", "pct")),
+        _len_plus(), (4, 0.1), "momentum"),
+    "opening_range_break_down": BlockSpec(
+        opening_range_break_down, (("bars", "length"), ("buffer_pct", "pct")),
+        _len_plus(), (4, 0.1), "momentum"),
     # Phase 5 — regime conditioning. Warmup mirrors the labeller's own windows.
     "regime_is":        BlockSpec(regime_is, (("code", "choice"),),
                                   lambda a: 220, (0,), "confirmation"),
