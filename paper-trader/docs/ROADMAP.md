@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,522 collected, PYTEST EXIT 0** (five consecutive clean runs), `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,539 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -237,9 +237,20 @@ honest gaps).
       `test_health_endpoint.py` down with it — those ERRORs were fixture setup against a database
       the guard test had half-dropped, not defects of their own. The file now gets its own
       database, which it should always have had: a test that wipes the schema was relying on
-      collection order to stay benign. **Five consecutive clean full runs**, where the previous
-      five had two failures. An intermittent suite makes every claim of "tests green" negotiable,
-      which is the opposite of this repository's working rule.
+      collection order to stay benign.
+      - **That was half the fix, and it was first recorded as the whole of it.** Five clean runs
+        followed — and then `test_health_endpoint.py` erred on its own, because its `TestClient`
+        lifespan *also* resets and had the same exposure. The other half is in `init_db`, which
+        now **disposes the pool before dropping**: a pooled connection still holding a
+        transaction blocks an exclusive lock until `busy_timeout` gives up.
+      - *Asserted by ordering, not by counting runs.* A flake that fires two runs in five cannot
+        be proven fixed by five green ones — that inference is what failed the first time. The
+        test asserts `dispose` happens before `drop`, and goes red without it. **Two earlier
+        attempts at that test were discarded for being unable to measure the change:** a leaked
+        *read* passed with and without the fix, and a leaked uncommitted *write* failed with and
+        without it (a live session holds a checked-out connection, which `dispose()` cannot
+        reclaim — that case is still "close your broker", as it always was).
+      - Four consecutive clean full runs after both halves.
 - [ ] The five remaining Strategy-OS subsystems — Python component authoring, Research Plane
       Gen 2, marketplace, deployment, production adoption — **each need their own spec → plan → build cycle.** That list is a
       programme, not a roadmap item. (The component runtime, the experiment system and both

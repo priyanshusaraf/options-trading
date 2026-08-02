@@ -22,14 +22,18 @@ def own_database(tmp_path):
     suite's shared per-run database that is two problems at once:
 
     * **it flaked.** `DROP TABLE` needs an exclusive lock, and in WAL mode a
-      single session left open anywhere in a 2,500-test run holds a read
-      transaction that blocks it past the 10s `busy_timeout` → "database is
-      locked". It failed in roughly two runs in five, always here, and always
-      taking `test_health_endpoint.py` down with it — those were ERRORs at
-      fixture setup against a database this file had half-dropped, not defects
-      of their own.
+      connection left holding a transaction anywhere in a 2,500-test run blocks
+      it past the 10s `busy_timeout` → "database is locked". It failed in
+      roughly two runs in five.
     * **it was a side effect.** A test that wipes the schema out from under
       every other test is relying on collection order to stay benign.
+
+    Isolating this file was **half** the fix and the docstring here originally
+    claimed it was all of it. Five clean runs followed, and then
+    `test_health_endpoint.py` erred on its own — its `TestClient` lifespan also
+    resets, so it had the same exposure to a connection left holding a lock. The
+    other half is in `init_db`, which now disposes the pool before dropping; see
+    `test_reset_releases_pooled_connections_before_dropping`.
 
     An intermittent failure is worse than a red one here: this repository's
     working rule is that every claim about test results comes with the command
@@ -83,6 +87,45 @@ def test_init_db_reset_allowed_in_mock():
     sess_mod.init_db(reset=True)
     with sess_mod.SessionLocal() as s:
         assert s.get(CapitalState, 1) is not None
+
+
+def test_reset_releases_pooled_connections_before_dropping(monkeypatch):
+    """`init_db(reset=True)` disposes the pool first, and that ordering is the
+    fix — so it is what gets asserted, rather than a run count.
+
+    `DROP TABLE` needs an exclusive lock. In WAL mode a pooled connection that
+    still holds a transaction blocks it until `busy_timeout` gives up, and the
+    error surfaces as "database is locked" against whichever table came first,
+    pointing at code with nothing to do with it. In the suite it appeared as
+    `test_health_endpoint.py` erroring at fixture setup, because its
+    `TestClient` lifespan resets.
+
+    **What this does not fix, stated plainly:** a session that is still *alive*
+    holds a checked-out connection, and `dispose()` cannot reclaim that one. No
+    reset survives it, and the remedy is the one already recorded for the
+    broker — close it. This covers the idle-pooled case, which is the one that
+    was flaking.
+
+    Two earlier attempts at this test are worth not repeating: asserting on a
+    leaked *read* passed with and without the fix (vacuous), and asserting on a
+    leaked uncommitted *write* failed with and without it (a live session,
+    per above). Neither would have measured the change.
+    """
+    from app.db.models import Base
+
+    order: list[str] = []
+    real_dispose, real_drop = sess_mod.engine.dispose, Base.metadata.drop_all
+
+    monkeypatch.setattr(sess_mod.engine, "dispose",
+                        lambda *a, **k: (order.append("dispose"), real_dispose(*a, **k))[1])
+    monkeypatch.setattr(Base.metadata, "drop_all",
+                        lambda *a, **k: (order.append("drop"), real_drop(*a, **k))[1])
+
+    sess_mod.init_db(reset=True)
+
+    assert order[:2] == ["dispose", "drop"], (
+        "the pool must be released before the drop, or a pooled connection "
+        f"holding a lock blocks it — got {order}")
 
 
 def test_init_db_no_reset_never_guarded(monkeypatch):

@@ -254,6 +254,20 @@ def init_db(reset: bool = False) -> None:
             "mode (provider='mock'). Refusing to DROP tables on a non-mock database."
         )
     if reset:
+        # Release every idle pooled connection before dropping. `DROP TABLE`
+        # needs an exclusive lock, and in WAL mode a pooled connection that
+        # still holds a read transaction blocks it until `busy_timeout` gives
+        # up — reported as "database is locked" against whichever table came
+        # first, pointing at code that has nothing to do with it. In the suite
+        # that was an intermittent failure in `test_health_endpoint.py`, whose
+        # TestClient lifespan resets, caused by a session leaked by an earlier
+        # test. Disposing the pool is the fix at the source rather than one
+        # leak at a time.
+        #
+        # Safe on the box: this branch is mock-only (see the guard above), and
+        # a destructive reset should not be reusing connections opened before
+        # the schema changed underneath them.
+        engine.dispose()
         Base.metadata.drop_all(engine)
         # drop_all leaves alembic_version behind (it is not a mapped table), which
         # would tell the next init_schema() this is a managed database while every
