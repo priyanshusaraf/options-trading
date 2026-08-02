@@ -46,6 +46,9 @@ class ViewNode:
     derived: bool
     layer: int
     row: int
+    # Set only when a human has arranged this node. F13 keeps it out of the
+    # artefact; it arrives from a `Layout` beside it.
+    placed: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -72,8 +75,37 @@ class GraphView:
         return max((n.layer for n in self.nodes), default=-1) + 1
 
 
-def graph_view(graph: ResolvedGraph) -> GraphView:
-    """A layout for `graph`, derived entirely from its dependency structure."""
+@dataclass(frozen=True)
+class Layout:
+    """Presentation state, stored **beside** the graph — F13, literally.
+
+    "Presentation state MUST persist beside the graph, keyed by stable
+    identifier, and is not part of the artefact grammar. Ephemeral state MUST
+    NOT be persisted. Without this separation, dragging a node changes its hash
+    and silently defeats cache identity."
+
+    So this is a separate object keyed by `instance_id`, and the graph does not
+    know it exists. A graph with a hand-arranged layout and the same graph
+    without one have the same content address — which is the invariant the
+    whole clause is for, and `test_ir_view.py` asserts it directly.
+
+    `positions` is sparse on purpose: a node nobody has moved keeps its derived
+    position, so an author who arranges two nodes does not thereby take
+    ownership of the other sixteen.
+    """
+
+    positions: Mapping[str, tuple[int, int]]
+
+    def placed(self, instance_id: str) -> tuple[int, int] | None:
+        return self.positions.get(instance_id)
+
+
+def graph_view(graph: ResolvedGraph, layout: Layout | None = None) -> GraphView:
+    """A layout for `graph`, derived from its dependency structure.
+
+    `layout` overrides the derived position of the nodes it names, and only
+    those. It is never read from or written to the artefact.
+    """
     ids = [n.instance_id for n in graph.nodes]
     order = topological_order(ids, graph.edges)
 
@@ -112,6 +144,7 @@ def graph_view(graph: ResolvedGraph) -> GraphView:
             derived=node.derived_from is not None,
             layer=column,
             row=row,
+            placed=layout.placed(node.instance_id) if layout else None,
         ))
 
     return GraphView(
@@ -156,13 +189,11 @@ def to_svg(view: GraphView) -> str:
     Theme-aware via `prefers-color-scheme`, because this is meant to be opened
     in a browser and looked at, not embedded in an app that owns the palette.
     """
-    columns = view.layers
-    tallest = max((sum(1 for n in view.nodes if n.layer == c) for c in range(columns)),
-                  default=1)
-    width = PAD * 2 + columns * BOX_W + max(columns - 1, 0) * GAP_X
-    height = HEADER + PAD * 2 + tallest * BOX_H + max(tallest - 1, 0) * GAP_Y
-
     at = {n.instance_id: _box(n) for n in view.nodes}
+    # Extents come from where the boxes actually are, so a hand-placed node
+    # cannot end up outside the canvas.
+    width = int(max((x for x, _ in at.values()), default=0) + BOX_W + PAD)
+    height = int(max((y for _, y in at.values()), default=0) + BOX_H + PAD)
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -226,6 +257,8 @@ def to_svg(view: GraphView) -> str:
 
 
 def _box(node: ViewNode) -> tuple[float, float]:
+    if node.placed is not None:
+        return (float(node.placed[0]), float(node.placed[1]))
     return (PAD + node.layer * (BOX_W + GAP_X),
             HEADER + PAD + node.row * (BOX_H + GAP_Y))
 

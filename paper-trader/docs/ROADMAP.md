@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,503 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,520 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -198,11 +198,33 @@ honest gaps).
         `indicator.adaptive_threshold v1` out through the right edge of its box. SVG text does
         not clip, so nothing failed and the picture was wrong while looking fine. There is now a
         geometry test over every text element in every box, proven red by suppressing truncation.
-- [ ] The six remaining Strategy-OS subsystems — graph **editing** (the writing half of the
-      editor plane), Python component authoring, Research Plane Gen 2, marketplace, deployment,
-      production adoption — **each need their own spec → plan → build cycle.** That list is a
-      programme, not a roadmap item. (The component runtime and the experiment system, which
-      used to head this list, are done above.)
+- [x] **The editor plane, writing half — DONE 2026-08-02.** `app/ir/edit.py` +
+      `Layout` in `app/ir/view.py` + `tests/test_ir_edit.py`, 17 tests. `validate()` had existed
+      since the format phase **with nothing calling it on a write path**, because there was no
+      write path. There is now, and the property is that it cannot store an invalid artefact: an
+      edit whose result violates §3 raises, naming the clause, instead of returning something a
+      caller could persist. Typing a parameter grid into an override is refused as C14 at the
+      edit, not discovered later.
+      - *Every edit returns a new artefact and mutates nothing* (C2's discipline applied to
+        editing), so undo is keeping references rather than inverting operations.
+      - *Removing a node removes its edges and its group membership in one operation* — offering
+        them separately would give a UI an invalid intermediate state to store.
+      - **F13 is now asserted in the only form that can go red:** a graph with a hand-arranged
+        `Layout` and the same graph without one have the **same content address**, and every
+        cache identity downstream of a dragged node is unchanged. That is exactly what the clause
+        is for — "dragging a node changes its hash and silently defeats cache identity". The
+        layout is sparse, so arranging two nodes does not take ownership of the other sixteen.
+      - *One real question surfaced and pinned rather than decided:* F2 requires the display name
+        to be **in** the artefact and F13 hashes the artefact, so a cosmetic rename mints a new
+        body address. It breaks no reference — the graph resolves identically — but whether it
+        should change the address is a matter for an amendment (§6). A test pins current
+        behaviour so the decision stays visible.
+- [ ] The five remaining Strategy-OS subsystems — Python component authoring, Research Plane
+      Gen 2, marketplace, deployment, production adoption — **each need their own spec → plan → build cycle.** That list is a
+      programme, not a roadmap item. (The component runtime, the experiment system and both
+      halves of the editor plane, which used to head this list, are done above. What the editor
+      still lacks is a *frontend* — no route, no React; that is the first thing that would make
+      this workstream part of the running application.)
 
 **This workstream still changes no running behaviour.** `backend/app/ir/` is imported only by
 its own tests: no engine, route, or backtest path reaches it. It is a validator and a resolver
