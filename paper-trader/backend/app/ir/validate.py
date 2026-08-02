@@ -12,6 +12,9 @@ a single artefact, because a node's socket types live in the *component* it
 references, not in the graph. Pass a `library` to check them. Without one they
 are reported by `unchecked_clauses()` rather than silently passing: an
 unchecked clause that looks like a passing clause is how a validator lies.
+
+One §4 clause also appears here — see `ARTEFACT_VISIBLE_CONTRACT_CLAUSES`. §4 is
+otherwise the resolver's job (`app/ir/resolve.py`).
 """
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ from app.ir.schema import (
     WIRE_TYPE_KEYS,
     is_content_address,
     is_secret_reference,
+    is_value_reference,
 )
 
 # F1–F13 are checked here. F14 binds experiments and findings to the versions
@@ -49,6 +53,13 @@ UNENFORCEABLE_CLAUSES = frozenset({"F14"})
 
 # Checkable only with a component library — see the module docstring.
 LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7"})
+
+# One §4 clause is visible in an artefact and is reported here too. C14 says
+# sweeping belongs to the searcher; an override holding a list of candidates has
+# already made search part of the component's contract, and that is true of the
+# stored artefact whether or not anything resolves it. The clause's real
+# enforcement is in `app/ir/resolve.py` — this is the earlier of two nets.
+ARTEFACT_VISIBLE_CONTRACT_CLAUSES = frozenset({"C14"})
 
 
 @dataclass(frozen=True)
@@ -224,10 +235,34 @@ def _socket(r: _Report, item: Mapping[str, Any], path: str) -> None:
         r.add("F4", f"{path}.direction", f"must be one of {SOCKET_DIRECTIONS}")
     _wire_type(r, item.get("wire_type"), f"{path}.wire_type")
 
-    if "default_source" in item and direction != "input":
-        # F8 grants default *sources* to inputs. An output does not have one.
-        r.add("F8", f"{path}.default_source",
-              "only an input may declare a default source")
+    if "default_source" in item:
+        if direction != "input":
+            # F8 grants default *sources* to inputs. An output does not have one.
+            r.add("F8", f"{path}.default_source",
+                  "only an input may declare a default source")
+        else:
+            _default_source(r, item["default_source"], f"{path}.default_source")
+
+
+def _default_source(r: _Report, source: Any, path: str) -> None:
+    """F8 — a *source*, not a value: a component reference and a socket on it.
+
+    "A graph whose unwired inputs all declare sources MUST be valid." That is a
+    promise resolution has to keep, and it can only keep it if the declaration
+    says what to insert and where to take the value from.
+    """
+    if not isinstance(source, Mapping):
+        r.add("F8", path, "a default source must name a component and a socket")
+        return
+    r.unknown_keys(source, ("component", "socket"), path, "F13")
+    ref = source.get("component")
+    if not isinstance(ref, Mapping):
+        r.add("F8", f"{path}.component", "must be a component reference")
+    else:
+        _component_ref(r, ref, f"{path}.component")
+    if not source.get("socket") or not isinstance(source.get("socket"), str):
+        r.add("F8", f"{path}.socket",
+              "must name the socket on that component the value comes from")
 
 
 def _parameter(r: _Report, item: Mapping[str, Any], path: str) -> None:
@@ -356,11 +391,22 @@ def _overrides(r: _Report, node: Mapping[str, Any], path: str) -> None:
     secret_params = set(node.get("secret_params") or ())
     for name, value in overrides.items():
         here = f"{path}.overrides.{name}"
-        if isinstance(value, Mapping) and not is_secret_reference(value):
+        if isinstance(value, Mapping) and not is_value_reference(value):
             # F10 — "An override MUST carry a value only. It MUST NOT carry a
-            # kind, bounds, or a display name."
+            # kind, bounds, or a display name." A reference form carries none of
+            # those three; a mapping that is not one of them is a definition
+            # being smuggled into a reference. See `is_parameter_reference`.
             r.add("F10", here,
                   "an override carries a value only, never a kind, bounds or display name")
+        if isinstance(value, list):
+            # C14 — "Components compute; searchers search." A list of candidate
+            # values is a sweep, and a sweep in the specification makes
+            # parameter search part of the component's contract. vectorbt builds
+            # exactly this into its indicator contract, which is why structure
+            # search is unreachable from there.
+            r.add("C14", here,
+                  "an override is one value, not a set of candidates; sweeping "
+                  "belongs to the searcher, never to the component")
         if name in secret_params and not is_secret_reference(value):
             r.add("F6", here, "a secret override must be a reference, never a literal")
 

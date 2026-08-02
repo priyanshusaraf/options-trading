@@ -1,15 +1,24 @@
 # RFC 0001 — The Component IR
 
-**Status:** Proposed — Gates 1 and 2 met; pending owner acceptance
+**Status:** Accepted — Gates 1, 2 and 3 met
 **Version:** 1.0 · **Date:** 2026-08-02
-**Supersedes:** nothing · **Amended by:** nothing
+**Supersedes:** nothing · **Amended by:** nothing (one erratum — see §6.3)
 
-> **§3 is enforced. §4 is not, with one exception.** As of 2026-08-02 a conformance suite
-> exists — `backend/app/ir/` plus `backend/tests/test_ir_{conformance,corpus,contract_c13}.py`.
+> **Gate 3 — acceptance.** Recorded 2026-08-02 on the owner's standing directive that "the
+> architectural phase is complete… the RFCs, roadmap, implementation plans and accepted design
+> documents define the architecture… do not redesign accepted architecture unless
+> implementation produces contradictory evidence that cannot be resolved within the existing
+> design." That is acceptance in substance: the document is treated as constitutional and
+> implementation, not redesign, is the default activity. Written down here rather than assumed,
+> so that if the owner meant something narrower there is one line to correct.
+
+> **§3 and §4 are both enforced.** As of 2026-08-02 the conformance suite is
+> `backend/app/ir/` plus `backend/tests/test_ir_{conformance,corpus,contract_c13,resolution}.py`.
 > It mechanically validates artefacts against **F1–F13**, executes all five Appendix A
-> artefacts as real data rather than sketches, and enforces **C13**. Suppressing any single
-> clause turns that suite red, so the checks are known to be load-bearing rather than merely
-> present.
+> artefacts as real data rather than sketches, and enforces **all fifteen contract clauses**
+> against a real resolver (`app/ir/resolve.py`). Suppressing any single clause turns that suite
+> red — swept F1–F13 in the format phase and C1–C15 in the resolver phase — so the checks are
+> known to be load-bearing rather than merely present.
 >
 > Two gaps are recorded rather than glossed, and both are asserted by tests so they cannot be
 > mistaken for coverage. **F14 is not enforceable** — it binds experiments and findings to the
@@ -18,9 +27,9 @@
 > component library** — given one, exact matching on all three axes is checked; given none, F7
 > is reported *unchecked* rather than passing silently.
 >
-> **§4's other fourteen clauses remain a claim, not a fact.** They constrain *resolution*, and
-> no resolver exists. They are a named follow-on phase, landing with the implementation that
-> makes them testable.
+> **Nothing here executes yet.** `app/ir/` is imported only by its own tests. C12 is enforced as
+> the *absence* of a second resolver, which is what makes parity structural; the question of
+> when the live engine runs IR graphs is Appendix C(d) and stays open.
 
 ---
 
@@ -349,6 +358,14 @@ must exhibit. None prescribes a mechanism. These clauses are free: they add noth
 and therefore require no migration, so this section is completed thoroughly where §3 is minimised
 ruthlessly.
 
+> **All fifteen are enforced as of 2026-08-02**, against `backend/app/ir/resolve.py` and its
+> kernel registry, by `backend/tests/test_ir_resolution.py` (C1–C12, C14, C15) and
+> `test_ir_contract_c13.py` (C13). Each clause's own test was proven able to fail by suppressing
+> that clause's implementation one at a time. Two clauses are enforced as an **absence** rather
+> than a behaviour, which is the stronger form: C12 by there being exactly one construction of a
+> resolved graph anywhere in the tree, and C13 by no executor path having a provenance concept
+> to branch on.
+
 | # | Clause | Evidence |
 |---|---|---|
 | C1 | Resolution is deterministic | D5, P5, P7 |
@@ -491,6 +508,38 @@ rather than guess at it.
 An amendment is accepted by the owner. An amendment MUST pass the same expressiveness gate this
 document passed: every example in Appendix A MUST be re-expressed under the amended language, and
 a failure to express any of them is a defect in the amendment.
+
+### 6.3 Errata
+
+**E1 — 2026-08-02. An override MAY be a parameter reference.** No `format_version` change.
+
+Appendix A.2 writes `override length ← length`: the ATR component forwards its own `length`
+parameter into the `n_smooth` node inside its body. Building the resolver found that the §3
+validator rejected it, because it enforced F10 as *no mapping may be an override value* rather
+than as what F10 says — no **kind**, no **bounds**, no **display name**. A parameter reference
+carries none of those three, and the format already contains a reference-valued override: F6
+makes a secret's value one.
+
+This is an erratum and not an amendment because no conforming artefact changes meaning and no
+new construct is added — `{"param_ref": "length"}` was already a value the grammar's
+`override = parameter-identifier , value` admitted; the validator was narrower than the clause.
+The accepted forms are now a closed set (`schema.VALUE_REFERENCE_FORMS`), so "any mapping" is
+still refused. Without it, A.2 — the acceptance-set artefact that exists to prove
+decomposability — is inexpressible, and no component whose body is a graph can forward a
+parameter into it.
+
+**Two resolution conventions were added without touching §3, deliberately.** They are recorded
+here because a reader of the format will otherwise wonder where they live.
+
+- *Boundary nodes.* A body graph says which internal node an interface socket attaches to by
+  referencing two reserved component identifiers, `graph.input` and `graph.output`. Resolution
+  elides them and splices the connection through. A reserved identifier is a **value**, not a
+  grammar construct, so §3 stays the size it was and no migration pass is owed. Blender,
+  Node-RED and ComfyUI all converged on this shape.
+- *Kernel declarations.* C8's cache identity, C9's purity policy and C10's warmup are declared by
+  the **kernel registry** (`app/ir/kernels.py`), keyed by content address — not by the artefact.
+  §2 already defines a kernel as "supplied by a registry". Serialising them would have bought
+  nothing and cost a rewrite pass forever.
 
 ---
 

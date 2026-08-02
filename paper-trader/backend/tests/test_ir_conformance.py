@@ -318,16 +318,44 @@ def test_f7_structure_axis_carries_scalar_series_and_auto():
 
 # ── F8 — default input sources ────────────────────────────────────────────
 
+A_DEFAULT_SOURCE = {
+    "component": {"identifier": "market.close", "version": 1},
+    "socket": "out",
+}
+
+
 def test_f8_an_input_may_declare_a_default_source():
     art = a_component()
-    art["interface"][0]["default_source"] = {"component": "market.close", "version": 1}
+    art["interface"][0]["default_source"] = dict(A_DEFAULT_SOURCE)
     assert_valid(art)
 
 
 def test_f8_an_output_may_not_declare_a_default_source():
     art = a_component()
-    art["interface"][2]["default_source"] = {"component": "market.close", "version": 1}
+    art["interface"][2]["default_source"] = dict(A_DEFAULT_SOURCE)
     assert_violates(art, "F8")
+
+
+def test_f8_a_default_source_names_a_component_and_a_socket():
+    """A *source*, not a value. Resolution has to insert something and take the
+    value from somewhere; a declaration that says neither cannot be honoured,
+    and F8's promise — "a graph whose unwired inputs all declare sources MUST
+    be valid" — would be unkeepable."""
+    art = a_component()
+    art["interface"][0]["default_source"] = {"component": "market.close"}
+    assert_violates(art, "F8")
+
+
+def test_f8_a_default_source_reference_carries_no_display_name():
+    """F2 again: a reference is by identifier. A default source is a component
+    reference like any other and gets no exemption."""
+    art = a_component()
+    art["interface"][0]["default_source"] = {
+        "component": {"identifier": "market.close", "version": 1,
+                      "display_name": "Close"},
+        "socket": "out",
+    }
+    assert_violates(art, "F2")
 
 
 # ── F9 — graph ────────────────────────────────────────────────────────────
@@ -379,6 +407,39 @@ def test_f10_a_plain_value_override_is_fine():
     art = a_graph()
     art["nodes"][0]["overrides"] = {"length": 50, "enabled": True, "pct": 0.65}
     assert_valid(art)
+
+
+def test_f10_an_override_may_be_a_parameter_reference():
+    """Erratum, 2026-08-02. Appendix A.2 writes `override length ← length` —
+    the ATR component forwarding its own parameter into the smoothing node
+    inside its body — and the validator rejected it, because it forbade every
+    mapping rather than the three things F10 names. A reference carries no
+    kind, no bounds and no display name, and F6 already puts one in the format.
+    Without this, A.2 is inexpressible and no component can forward a
+    parameter into its own body."""
+    art = a_graph()
+    art["nodes"][0]["overrides"] = {"length": {"param_ref": "length"}}
+    assert_valid(art)
+
+
+def test_f10_a_mapping_that_is_no_known_reference_is_still_refused():
+    """The erratum widened the rule to a closed set of reference forms, not to
+    "any mapping". An unknown one is a definition being smuggled in."""
+    art = a_graph()
+    art["nodes"][0]["overrides"] = {"length": {"ref": "length"}}
+    assert_violates(art, "F10")
+
+
+# ── C14 — sweeping is the searcher's job, checked at the artefact too ─────
+
+def test_c14_an_override_may_not_carry_a_grid_of_candidates():
+    """C14 is a contract clause, so it is enforced by the resolver
+    (`test_ir_resolution.py`). It is *also* visible in the artefact, and an
+    artefact that stores a sweep has already made search part of the
+    component's contract — vectorbt's shape — whether or not it is resolved."""
+    art = a_graph()
+    art["nodes"][0]["overrides"] = {"length": [7, 14, 21]}
+    assert_violates(art, "C14")
 
 
 # ── F11 — nesting by reference ────────────────────────────────────────────

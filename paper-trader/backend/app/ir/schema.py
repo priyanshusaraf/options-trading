@@ -131,3 +131,31 @@ def is_secret_reference(value: object) -> bool:
     return isinstance(value, dict) and set(value) == {"secret_ref"} and isinstance(
         value["secret_ref"], str
     ) and bool(value["secret_ref"])
+
+
+def is_parameter_reference(value: object) -> bool:
+    """An override that binds to an enclosing component's parameter.
+
+    Appendix A.2 writes this as `override length ← length`: the ATR component
+    passes its own `length` down to the smoothing node inside its body. Without
+    it, a component whose body is a graph cannot forward a single parameter, and
+    A.2 — the acceptance-set artefact that exists to prove decomposability — is
+    inexpressible.
+
+    This is a *reference*, exactly as F6 makes a secret's value a reference, and
+    it carries no kind, no bounds and no display name. F10 forbids those three
+    things; it does not forbid references, and the precedent is already in the
+    format. Recorded as an erratum to RFC 0001 rather than an amendment: no
+    conforming artefact changes meaning and `format_version` does not move.
+    """
+    return isinstance(value, dict) and set(value) == {"param_ref"} and isinstance(
+        value["param_ref"], str
+    ) and bool(value["param_ref"])
+
+
+VALUE_REFERENCE_FORMS = (is_secret_reference, is_parameter_reference)
+
+
+def is_value_reference(value: object) -> bool:
+    """True for every reference form an override may legitimately carry."""
+    return any(form(value) for form in VALUE_REFERENCE_FORMS)

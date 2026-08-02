@@ -5,18 +5,22 @@
 > links here as the canonical "what's next". Keep this file honest — a checked box means
 > *verified done* (tests green + the stated acceptance evidence), not "code written".
 
-**Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS running **`8cee4e9`**,
-deployed via `scripts/deploy.sh` (exit 0) and confirmed by `curl /api/health` on the box.
-Suites: **1,618** backend (`tests` + `research_tests`) + **143** frontend, `dryrun.py 700`
-LEDGER OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
+**Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
+session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
+is repeated here. `curl /api/health` on the box is the only answer. Backend suites
+`tests` + `research_tests`: **2,424 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
 
 ## Strategy OS — Component IR (new workstream, 2026-08-02)
 
-**RFC 0001 written: [`docs/rfcs/0001-component-ir.md`](rfcs/0001-component-ir.md).** Status
-**Proposed — pending owner acceptance.** Evidence base is `~/dev/multiverse-of-ideas/reviews/`
-(nine systems read; 24 stable decisions, 14 patterns, six honest gaps).
+**RFC 0001: [`docs/rfcs/0001-component-ir.md`](rfcs/0001-component-ir.md).** Status **Accepted
+2026-08-02** — Gate 3 recorded against the owner's standing directive that the architectural
+phase is complete and the RFCs define the architecture. The RFC says so in one line at the top;
+if that reading is wrong, correct that line. Evidence base is
+`~/dev/multiverse-of-ideas/reviews/` (nine systems read; 24 stable decisions, 14 patterns, six
+honest gaps).
 
 - [x] **RFC 0001 — the Component IR.** 14 Format clauses (the serialised core, with an EBNF
       grammar), 15 Contract clauses (observable properties, no mechanism), non-goals, amendment
@@ -46,25 +50,54 @@ LEDGER OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
         strategy is `register()`ed into the same dict a built-in is discovered into; no
         `Strategy` carries a field naming its origin. Guard proven red by planting
         `if strategy.is_marketplace:` in `engine/exit_monitor.py`.
-- [ ] **§4's remaining fourteen clauses — deferred to the resolver phase, deliberately.**
-      **Correction to this item as originally written:** it named *C7 (reproducibility)*
-      alongside C13. C7 constrains instance identifiers produced by resolution, and there is no
-      resolver — a test for it would assert against nothing. C1–C12, C14 and C15 are the same.
-      Writing them now would be a conformance suite with no implementation to run against,
-      which is precisely this codebase's documented unconsumed-mechanism defect wearing a
-      conformance badge. C13 was separable because it is a property of the *current* executor,
-      and the RFC asks for it by name in this phase. The rest land with the resolver that makes
-      them meaningful.
+- [x] **The resolver, and §4's remaining fourteen clauses with it — DONE 2026-08-02.**
+      `app/ir/resolve.py` (the single resolution), `app/ir/kernels.py` (the registry that
+      declares warmup, purity and cache identity), `app/ir/hashing.py` (canonical content
+      addressing), and `tests/test_ir_resolution.py` — 52 tests. The order was forced and the
+      reason held: C1–C12, C14 and C15 all constrain *resolution*, so they land with the thing
+      that makes them testable rather than as a suite with nothing to run against.
+      - *Appendix A.4 is the executed acceptance case,* not a sketch. Two instances of one
+        definition resolve to `n_fast/n_smooth` and `n_slow/n_smooth`, stay distinguishable at
+        lengths 7 and 21 (C4), keep those identifiers across re-resolution and across a
+        reordering of the node list (C7), and a kernel missing from the registry is reported at
+        `n_fast/n_smooth` — the authored vocabulary — rather than against a node the author
+        never placed (C4).
+      - *Every clause is proven load-bearing.* Suppressing each of C1–C11, C14 and C15 one at a
+        time turns that clause's **own** test red — swept all of them. The sweep found a
+        **vacuous test of its own**: the C2 no-mutation check compared a deep copy taken after
+        other tests had already resolved the shared fixture, and a resolver that eats its input
+        does so on the first call and is idempotent after. It now also resolves the shared
+        specification and asserts it is still intact. C12 was proven red by planting a second
+        `ResolvedGraph(` construction under `app/engine/`.
+      - *Two clauses are enforced as an absence,* which is the stronger form: C12 by there being
+        exactly one construction of a resolved graph in the tree (the `candles.py` defect was
+        two hand-written implementations of one idea), and C6 by the resolver's source
+        containing no clock, counter, random, environment or file read at all.
+      - *One erratum, no `format_version` change.* Building the resolver found that A.2's
+        `override length ← length` was inexpressible: the validator enforced F10 as "no mapping
+        may be an override value" rather than as F10's actual text (no kind, no bounds, no
+        display name). Recorded as RFC 0001 §6.3 E1. The accepted reference forms are a closed
+        set, so "any mapping" is still refused. F8's `default_source` also gained a shape —
+        a component reference and a socket — because resolution has to insert something and
+        take the value from somewhere.
+      - *Boundary nodes and kernel declarations were added without touching §3.* `graph.input`
+        and `graph.output` are reserved *identifiers*, not grammar constructs; warmup, purity
+        and cache identity live in the kernel registry, which §2 already says supplies kernels.
+        Both are recorded in §6.3 so a reader of the format knows where they live.
+- [ ] **Adopt the resolver — nothing executes IR graphs yet.** `app/ir/` is still imported only
+      by its own tests. This is RFC 0001 Appendix C(d), and it is a production change to a
+      real-money path: it needs its own phase, its own parity evidence, and owner
+      acknowledgement before any deploy.
 - [ ] The eight remaining Strategy-OS subsystems — component runtime, visual computational graph,
       Python component authoring, Research Plane Gen 2, experiment system, marketplace,
       deployment, production adoption — **each need their own spec → plan → build cycle.** That
       list is a programme, not a roadmap item.
 
-**This workstream still changes no running behaviour.** It now adds `backend/app/ir/` — but
-that package is imported only by its own tests: no engine, route, or backtest path reaches it,
-and `app/ir/` is a validator for a format nothing yet stores. The one place it touches existing
-code is read-only — the C13 guard *greps* `app/engine`, `app/backtest` and `app/strategy`
-without importing or altering them. Nothing was deployed and the VPS is unaffected.
+**This workstream still changes no running behaviour.** `backend/app/ir/` is imported only by
+its own tests: no engine, route, or backtest path reaches it. It is a validator and a resolver
+for a format nothing yet stores. The two places it touches existing code are read-only — the C13
+and C12 guards *grep* `app/engine`, `app/backtest`, `app/strategy` and `research/` without
+importing or altering them. Nothing was deployed and the VPS is unaffected.
 
 Two findings about the *current*
 system fell out of writing the worked examples, both recorded in Appendix A rather than fixed
