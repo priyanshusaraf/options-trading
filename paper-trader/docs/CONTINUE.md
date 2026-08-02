@@ -41,7 +41,8 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`49e9ded` — the editor plane, writing half. Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
+`3b2b752` — warmup derived from bound parameters, and the suite's intermittent
+failure fixed. Preceded by `49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
 `e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
@@ -60,7 +61,9 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,520             (--collect-only, summed per file)
+collected: 2,522             (--collect-only, summed per file)
+   run five times consecutively, EXIT 0 every time — the previous five
+   runs had two failures (see below)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -89,6 +92,7 @@ Guards proven able to fail, not merely observed passing:
 - **F14.** Suppressing each of its six checks — the graph comparison, the component-version
   comparison, the node-identity comparison, the finding-binding comparison, and the presence
   checks — turns its own test red.
+- **Warmup.** Restoring the constant it replaced turns the bound-parameter test red.
 - **The editor.** Suppressing the write-path validation, the cascade that removes a deleted
   node's edges, and the stored-position lookup each turn their own tests red.
 - **The renderer.** Suppressing label truncation turns the box-geometry test red. That test
@@ -106,6 +110,13 @@ Three vacuous tests were found by those sweeps and fixed, all worth remembering:
 - F14's `node_identities` check: every test of it emptied the mapping, which trips the *presence*
   check, so deleting the comparison against the resolved graph left the suite green. Identities
   that are present and **wrong** are the interesting case, and there is now a test for them.
+
+**The suite is no longer intermittent.** It failed roughly two runs in five, always in
+`test_init_db_guard.py`, which called `init_db(reset=True)` — a DROP of every table — against the
+suite's *shared* database. In WAL mode one session left open anywhere in a 2,500-test run holds a
+read transaction that outlasts the 10s `busy_timeout`. `test_health_endpoint.py`'s ERRORs were
+collateral: fixture setup against a half-dropped database. That file now has its own database.
+If a full run ever goes red again, check it is not this shape before believing it.
 
 > Note for the next session: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`.
 > A backgrounded `python … | tail` returns the **pipe's** exit code; capture `$?` from pytest
