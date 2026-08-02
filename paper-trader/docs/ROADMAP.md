@@ -26,18 +26,47 @@ LEDGER OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
       met. **Gate 3 — owner acceptance — is outstanding.**
       Spec: `docs/superpowers/specs/2026-08-02-component-ir-rfc-v1-design.md` ·
       Plan: `docs/superpowers/plans/2026-08-02-component-ir-rfc-v1.md`
-- [ ] **Conformance suite — the next item, and the RFC is unenforced until it exists.** An
-      executable schema and validator for §3, plus tests for the mechanically checkable contract
-      clauses (C7 reproducibility, C13 provenance-blindness). The RFC says so in its own status
-      block: **§3/§4 conformance is currently a claim, not a fact.** This is the deliberate
-      consequence of a document-only deliverable, recorded rather than glossed.
+- [x] **Conformance suite for §3, and C13.** `app/ir/schema.py` (the closed vocabularies) +
+      `app/ir/validate.py` (the validator) + three test files, 67 tests. **F1–F13 are now
+      enforced mechanically**; each returns violations naming its clause and path, so a failure
+      reads `F7 at $.edges[1].domain.timeframe` rather than as a schema error about a key.
+      - *Appendix A is executed, not asserted.* All five worked artefacts are real data in
+        `tests/test_ir_corpus.py`: A.1–A.4 validate, and A.5's final edge is rejected on the
+        **domain axis specifically** — the test pins the path and both timeframes, so a
+        validator checking only value and structure (which would pass that graph) fails here.
+      - *Every clause is proven load-bearing.* Suppressing any one of F1–F13 turns the suite
+        red — swept all thirteen. That sweep found a **vacuous test of its own**: the F9
+        uniqueness check passed under mutation because renaming a node also orphaned an edge,
+        and the dangling edge raised F9 anyway. Now asserted by path.
+      - *An unchecked clause is not a passing clause.* F7's edge type-matching needs a
+        component library; without one `unchecked_clauses()` reports F7 rather than staying
+        silent. **F14 is not enforceable at all** — the grammar has no experiment artefact —
+        and `UNENFORCEABLE_CLAUSES` records that as a fact a test asserts.
+      - *C13 (provenance-blind execution) holds, subtractively.* One `_REGISTRY`; a generated
+        strategy is `register()`ed into the same dict a built-in is discovered into; no
+        `Strategy` carries a field naming its origin. Guard proven red by planting
+        `if strategy.is_marketplace:` in `engine/exit_monitor.py`.
+- [ ] **§4's remaining fourteen clauses — deferred to the resolver phase, deliberately.**
+      **Correction to this item as originally written:** it named *C7 (reproducibility)*
+      alongside C13. C7 constrains instance identifiers produced by resolution, and there is no
+      resolver — a test for it would assert against nothing. C1–C12, C14 and C15 are the same.
+      Writing them now would be a conformance suite with no implementation to run against,
+      which is precisely this codebase's documented unconsumed-mechanism defect wearing a
+      conformance badge. C13 was separable because it is a property of the *current* executor,
+      and the RFC asks for it by name in this phase. The rest land with the resolver that makes
+      them meaningful.
 - [ ] The eight remaining Strategy-OS subsystems — component runtime, visual computational graph,
       Python component authoring, Research Plane Gen 2, experiment system, marketplace,
       deployment, production adoption — **each need their own spec → plan → build cycle.** That
       list is a programme, not a roadmap item.
 
-**Nothing in this workstream touches running code.** No file under `backend/app/` or `frontend/`
-was modified, nothing was deployed, and the VPS is unaffected. Two findings about the *current*
+**This workstream still changes no running behaviour.** It now adds `backend/app/ir/` — but
+that package is imported only by its own tests: no engine, route, or backtest path reaches it,
+and `app/ir/` is a validator for a format nothing yet stores. The one place it touches existing
+code is read-only — the C13 guard *greps* `app/engine`, `app/backtest` and `app/strategy`
+without importing or altering them. Nothing was deployed and the VPS is unaffected.
+
+Two findings about the *current*
 system fell out of writing the worked examples, both recorded in Appendix A rather than fixed
 here: the block library has no float-valued output at all (Wilder ATR is a private helper, so ATR
 cannot be named, shared, or forked — the Gen-2 decomposability gap), and generated strategies

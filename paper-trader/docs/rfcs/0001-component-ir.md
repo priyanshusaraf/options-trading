@@ -4,10 +4,23 @@
 **Version:** 1.0 · **Date:** 2026-08-02
 **Supersedes:** nothing · **Amended by:** nothing
 
-> **This RFC is normative prose. No conformance suite exists yet.** Nothing mechanically
-> validates an artefact against §3, and nothing mechanically checks an implementation against
-> §4. A conformance suite is a named follow-on phase, not an assumption of this document. Until
-> it exists, conformance is a claim made by an implementer, not a fact established by a test.
+> **§3 is enforced. §4 is not, with one exception.** As of 2026-08-02 a conformance suite
+> exists — `backend/app/ir/` plus `backend/tests/test_ir_{conformance,corpus,contract_c13}.py`.
+> It mechanically validates artefacts against **F1–F13**, executes all five Appendix A
+> artefacts as real data rather than sketches, and enforces **C13**. Suppressing any single
+> clause turns that suite red, so the checks are known to be load-bearing rather than merely
+> present.
+>
+> Two gaps are recorded rather than glossed, and both are asserted by tests so they cannot be
+> mistaken for coverage. **F14 is not enforceable** — it binds experiments and findings to the
+> versions that produced them, and the grammar has no experiment artefact to validate; it
+> becomes enforceable when the experiment system defines one. **F7's edge type-matching needs a
+> component library** — given one, exact matching on all three axes is checked; given none, F7
+> is reported *unchecked* rather than passing silently.
+>
+> **§4's other fourteen clauses remain a claim, not a fact.** They constrain *resolution*, and
+> no resolver exists. They are a named follow-on phase, landing with the implementation that
+> makes them testable.
 
 ---
 
