@@ -137,32 +137,38 @@ still holds a checked-out connection no `dispose()` can reclaim (close your brok
 
 ## 4. Next concrete action
 
-**Python component authoring — the fourth way to make a component, and the one that decides
-whether C13 survives contact with reality.**
+**Research Plane Generation 2 — generate IR graphs, not block compositions.**
 
-The Language plane is finished and both halves of the editor plane exist as libraries. What the
-platform still cannot do is let a person write a component. Today a kernel is a Python function
-registered in a dict by content address; there is no path from "here is my indicator" to a
-component with a declared interface, a version and a body address.
+This is the subsystem the Component IR was designed to unblock, and the RFC names the trap the
+platform is currently inside. C14: "vectorbt builds parameter grids into the indicator contract
+itself, which silently defines *search = parameter sweeping* for everything downstream — and the
+research plane inherited that shape. **Structure search is not reachable from a design where
+components sweep themselves.**" Generation 1 searches parameters over a fixed block grammar. The
+IR makes structure itself the thing you search.
 
-The pieces already exist and are the reason this is next rather than large:
+Everything it needs is now built, which is why this is next rather than large:
 
-- the **AST allow-list sandbox** in the research plane's code-gen builder is, per RFC 0001
-  Appendix C(f), "stronger than anything in the nine systems studied — none of them sandbox user
-  code at all". It constrains what a *kernel* may do, which is a property of the kernel registry,
-  exactly where this work lands.
-- `app/ir/edit.py` already refuses to store a non-conforming artefact, so authoring can reuse the
-  gate rather than inventing a second one.
-- **C13 is the clause under test.** A Python-authored component must land in the *same* registry
-  a built-in lands in, with no field saying where it came from — the existing guard greps for
-  exactly that and will go red if authoring introduces one. That guard was written before there
-  was a second source of components; this is the first time it is load-bearing rather than
-  precautionary.
+- `app/ir/edit.py` mutates a graph and refuses to return a non-conforming one, so a generator can
+  propose edits without also having to know §3.
+- `app/ir/authoring.py` turns the existing block vocabulary into real components with declared
+  interfaces — Appendix A.3 records that each `BlockSpec` "already declares `(param_name, kind)`
+  pairs drawn from the same bounded vocabulary as F5", so the registry is already most of a
+  component interface. What it lacks is F2's version and F4's declared panels.
+- `app/ir/experiment.py` binds every result to the versions that produced it (F14), which is the
+  thing Generation 1 never had and the reason every research finding before 2026-08 is unusable
+  as a baseline.
+- `ResolvedNode.cache_id` is transitive (C8), so a structure search that changes one node
+  recomputes only what depends on it — measured on the real strategy: moving `entry_pct` reuses
+  the EMA, ATR, z-score, drift and range.
 
-Start with the derivation: given a decorated function, produce the component-def (interface from
-the signature and annotations, body address from the source's content hash, version from the
-registry's existing entries under that identifier), and assert `validate()` accepts it. Then the
-registration path, through the sandbox.
+Concretely, in this order: (1) express the existing block library as authored components, which
+is mechanical and immediately gives the generator a typed vocabulary; (2) a mutation-based
+proposer over graphs — add/remove/rewire a node, using `edit.py` as the gate; (3) bind every run
+through `experiment.record()`. Do **not** start by porting the search loop; start by giving it
+something typed to search over.
+
+Note the isolation rule still holds: `PT_RESEARCH_ENABLED=0`, `research/guards.py` fail-closed,
+read-only bridges only.
 
 Two things are deliberately **not** next, and one of them needs the owner:
 
