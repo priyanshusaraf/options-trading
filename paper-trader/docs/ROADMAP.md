@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,460 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,463 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -111,9 +111,9 @@ honest gaps).
         can branch on it, and an unregistered address fails rather than falling back.
 - [x] **`expanding_z_v4` expressed in the IR, and proven equal to the strategy — DONE
       2026-08-02.** `app/ir/strategies/expanding_z.py` + `tests/test_ir_strategy_parity.py`,
-      16 tests. Appendix A.1 expressed this strategy as a sketch inside a markdown document,
-      which proves what its author believed. This is the real artefact: 13 components, 17 nodes,
-      41 edges, the 15 real parameters read off `default_params` rather than restated — resolved,
+      19 tests. Appendix A.1 expressed this strategy as a sketch inside a markdown document,
+      which proves what its author believed. This is the real artefact: 15 components, 17 nodes,
+      47 edges, the 15 real parameters read off `default_params` rather than restated — resolved,
       evaluated, and asserted **equal to `ExpandingZImpulseV4.compute()` bar for bar** over 400
       bars, with entries firing on the fixture so the comparison is not two constant series.
       - *The kernels are bound to the strategy's own functions, not rewritten.* Seven expressions
@@ -131,12 +131,24 @@ honest gaps).
       - *C8's economics, demonstrated:* moving `entry_pct` recomputes the threshold, the impulse
         and the two entry predicates, and reuses the EMA, ATR, z-score, drift and range. That is
         what makes a sweep cheap without building the sweep into the indicator (C14).
-      - *One finding recorded, not fixed:* **a parameter cannot be derived from another
-        parameter.** `exit_abs`'s floor is `min_abs_z * 0.25` in the strategy, and F10 says an
-        override carries a value only, so the graph carries the literal `0.15` — correct at the
-        shipped `min_abs_z = 0.60` and silently wrong if it moves. Not a defect in F10, which is
-        protecting the component author's constraints; the conforming expression is a `scale`
-        component between the parameter and its consumer. Recorded in the module docstring.
+- [x] **The derived-parameter gap, closed — DONE 2026-08-02.** Writing the strategy graph turned
+      up the one thing it could not express: `exit_abs`'s floor is `min_abs_z * 0.25`, and since
+      an override carries a value only (F10), the graph first carried the literal `0.15` —
+      correct at the shipped `min_abs_z = 0.60` and silently wrong the moment anyone moved it.
+      **The resolution was not to weaken F10**, which is what protects a component author's
+      constraints. A multiplication is a computation, and C14 says components compute: two new
+      components, `value.scalar` (a parameter, on a wire) and `math.scale`, so the exit
+      thresholds now *track* `min_abs_z` instead of remembering one of its values.
+      - Verified by moving `min_abs_z` to 1.20 with the contraction exit switched on — which is
+        the only configuration where the exit threshold reaches an output, and there is a test
+        asserting that too — and re-checking bar-for-bar parity against
+        `compute(min_abs_z=1.20, use_absz_contraction_exit=True)`. Proven able to fail by setting
+        the scale factor to 0.
+      - **This is the first use of F7's `scalar` structure axis.** It had been declared since the
+        format phase and never exercised, and the runtime had assumed every value was a series.
+        It now checks what is checkable — a series is bar-aligned, a scalar is passed through —
+        and `check_causality` compares scalars whole, because a scalar derived from the bars is
+        the sharpest lookahead there is: one number that saw everything.
 - [ ] **Adopt the runtime in a live path — NOT DONE, and it stops for the owner.** The engine
       still calls `compute()`; `app/ir/` is imported only by its own tests. This is RFC 0001
       Appendix C(d), a production change to a real-money path: it needs owner acknowledgement

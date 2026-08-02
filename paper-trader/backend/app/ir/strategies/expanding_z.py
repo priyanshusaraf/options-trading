@@ -16,18 +16,20 @@ measuring whether the IR can express the composition. What is under test here is
 the *language*: whether the strategy's structure survives being written as
 components, references, overrides and edges.
 
-**Two findings fell out of writing it**, recorded rather than fixed:
+**Two findings fell out of writing it:**
 
-1. *A parameter cannot be derived from another parameter.* `exit_abs`'s floor
-   and fallback are `min_abs_z * 0.25` and `min_abs_z * 0.50` in the strategy.
-   F10 says an override carries a value only, so the graph carries `0.15` and
-   `0.30` — correct for the shipped `min_abs_z = 0.60` and silently wrong if
-   someone changes it. This is not a defect in F10, which is protecting the
-   component author's constraints; it is a missing component. The conforming
-   expression is a `scale` component between the parameter and its consumer,
-   which requires a parameter to be wirable as a value — the language admits it
-   (a parameter and a scalar wire are both values) but nothing in the platform
-   authors it yet.
+1. *A derived parameter is a missing component, not a missing language feature.*
+   `exit_abs`'s floor and fallback are `min_abs_z * 0.25` and `min_abs_z * 0.50`
+   in the strategy. F10 says an override carries a value only, so at first this
+   graph carried the literals `0.15` and `0.30` — correct for the shipped
+   `min_abs_z = 0.60` and silently wrong the moment anyone changed it. The
+   resolution was not to weaken F10, which is what protects a component author's
+   constraints. It was that **a multiplication is a computation, and C14 says
+   components compute**: `value.scalar` puts the parameter on a wire and
+   `math.scale` derives from it, so the two thresholds now track `min_abs_z`
+   instead of remembering one of its values. This is also the first thing in the
+   platform to use F7's `scalar` structure axis, which until now was declared
+   and never exercised.
 2. *`indicator.atr.wilder`'s body is a graph, and the strategy proves it pays.*
    The ATR here is A.2's decomposition — true range into a Wilder smoothing —
    not a leaf. Forking it to an EMA smoothing is a component-reference change,
@@ -50,13 +52,13 @@ BAR = {"instrument": "NIFTY", "timeframe": "15m"}
 
 # ── artefact construction helpers ─────────────────────────────────────────
 
-def _wire(value="float"):
-    return {"value": value, "structure": "series", "domain": dict(BAR)}
+def _wire(value="float", structure="series"):
+    return {"value": value, "structure": structure, "domain": dict(BAR)}
 
 
-def _socket(identifier, direction, value="float"):
+def _socket(identifier, direction, value="float", structure="series"):
     return {"item": "socket", "identifier": identifier, "display_name": identifier,
-            "direction": direction, "wire_type": _wire(value)}
+            "direction": direction, "wire_type": _wire(value, structure)}
 
 
 def _param(identifier, kind, default):
@@ -143,11 +145,34 @@ ZSCORE = _component("indicator.zscore", [
 
 ABS = _component("math.abs", [_socket("in", "input"), _socket("out", "output")])
 
+# `floor` and `fallback` are scalar *sockets*, not parameters, and that is the
+# whole point. In the strategy they are `min_abs_z` and `min_abs_z * 0.25` —
+# one parameter and a derivation from it. F10 says an override carries a value
+# only, so a derivation cannot live in an override; it lives where derivations
+# belong, in a component. See VALUE and SCALE below.
 ADAPTIVE = _component("indicator.adaptive_threshold", [
     _socket("in", "input"),
     _param("length", "length", 200), _param("pct", "pct", 65.0),
-    _param("floor", "thr", 0.60), _param("fallback", "thr", 0.60),
+    _socket("floor", "input", structure="scalar"),
+    _socket("fallback", "input", structure="scalar"),
     _socket("out", "output"),
+])
+
+# A parameter, as a value on a wire. The override is a `param_ref`, so this is
+# how an enclosing graph's parameter reaches something that composes it.
+VALUE = _component("value.scalar", [
+    _param("value", "thr", 0.0),
+    _socket("out", "output", structure="scalar"),
+])
+
+# The missing component. `min_abs_z * 0.25` is a computation, and C14's
+# division of labour says components compute — so it is a node, wired, visible
+# and forkable, rather than a literal typed into an override with a comment
+# explaining which parameter it was supposed to track.
+SCALE = _component("math.scale", [
+    _socket("in", "input", structure="scalar"),
+    _param("factor", "mult", 1.0),
+    _socket("out", "output", structure="scalar"),
 ])
 
 DRIFT = _component("indicator.drift_atr", [
@@ -191,8 +216,8 @@ EXIT = _component("predicate.displacement_lost", [
     _socket("out", "output", value="bool"),
 ])
 
-COMPONENTS = [EMA, TRUE_RANGE, WILDER, ATR, ZSCORE, ABS, ADAPTIVE, DRIFT,
-              RANGE_ATR, LE, IMPULSE, ENTRY, EXIT]
+COMPONENTS = [EMA, TRUE_RANGE, WILDER, ATR, ZSCORE, ABS, ADAPTIVE, VALUE, SCALE,
+              DRIFT, RANGE_ATR, LE, IMPULSE, ENTRY, EXIT]
 
 
 # ── the strategy graph ────────────────────────────────────────────────────
@@ -243,17 +268,18 @@ GRAPH: dict[str, Any] = {
         _node("n_atr", "indicator.atr.wilder", length={"param_ref": "atr_length"}),
         _node("n_z", "indicator.zscore", length={"param_ref": "z_length"}),
         _node("n_absz", "math.abs"),
+        # `min_abs_z` on a wire, and its two derivations as nodes. The exit
+        # threshold's floor and fallback now *track* the parameter instead of
+        # being literals that happen to match today's value of it.
+        _node("n_min_abs_z", "value.scalar", value={"param_ref": "min_abs_z"}),
+        _node("n_exit_floor", "math.scale", factor=0.25),
+        _node("n_exit_fallback", "math.scale", factor=0.50),
         # Two instances of one definition at two percentiles — A.4's shape, in
         # the strategy the platform actually trades.
         _node("n_entry_thr", "indicator.adaptive_threshold",
-              length={"param_ref": "adapt_length"}, pct={"param_ref": "entry_pct"},
-              floor={"param_ref": "min_abs_z"}, fallback={"param_ref": "min_abs_z"}),
-        # See the module docstring, finding 1: these two are literals because a
-        # parameter cannot be derived from another parameter. Correct at the
-        # shipped min_abs_z = 0.60.
+              length={"param_ref": "adapt_length"}, pct={"param_ref": "entry_pct"}),
         _node("n_exit_thr", "indicator.adaptive_threshold",
-              length={"param_ref": "adapt_length"}, pct={"param_ref": "exit_pct"},
-              floor=D["min_abs_z"] * 0.25, fallback=D["min_abs_z"] * 0.50),
+              length={"param_ref": "adapt_length"}, pct={"param_ref": "exit_pct"}),
         _node("n_drift", "indicator.drift_atr", lookback={"param_ref": "slope_lookback"}),
         _node("n_range", "indicator.range_atr"),
         _node("n_signal_ok", "predicate.le", threshold={"param_ref": "max_signal_atr"}),
@@ -285,6 +311,13 @@ GRAPH: dict[str, Any] = {
         _edge("n_z", "out", "n_absz", "in"),
         _edge("n_absz", "out", "n_entry_thr", "in"),
         _edge("n_absz", "out", "n_exit_thr", "in"),
+
+        _edge("n_min_abs_z", "out", "n_entry_thr", "floor"),
+        _edge("n_min_abs_z", "out", "n_entry_thr", "fallback"),
+        _edge("n_min_abs_z", "out", "n_exit_floor", "in"),
+        _edge("n_min_abs_z", "out", "n_exit_fallback", "in"),
+        _edge("n_exit_floor", "out", "n_exit_thr", "floor"),
+        _edge("n_exit_fallback", "out", "n_exit_thr", "fallback"),
 
         _edge("n_ema", "out", "n_drift", "reference"),
         _edge("n_atr", "atr", "n_drift", "atr"),
@@ -358,7 +391,15 @@ def _k_abs(params, inputs):
 
 def _k_adaptive(params, inputs):
     return {"out": impl.adaptive_threshold(inputs["in"], params["length"], params["pct"],
-                                           params["floor"], params["fallback"])}
+                                           inputs["floor"], inputs["fallback"])}
+
+
+def _k_value(params, inputs):
+    return {"out": params["value"]}
+
+
+def _k_scale(params, inputs):
+    return {"out": inputs["in"] * params["factor"]}
 
 
 def _k_drift(params, inputs):
@@ -401,6 +442,8 @@ IMPLEMENTATIONS = {
     ZSCORE["body"]["ref"]: _k_zscore,
     ABS["body"]["ref"]: _k_abs,
     ADAPTIVE["body"]["ref"]: _k_adaptive,
+    VALUE["body"]["ref"]: _k_value,
+    SCALE["body"]["ref"]: _k_scale,
     DRIFT["body"]["ref"]: _k_drift,
     RANGE_ATR["body"]["ref"]: _k_range_atr,
     LE["body"]["ref"]: _k_le,
@@ -418,6 +461,8 @@ KERNELS = kernel_registry({
     ZSCORE["body"]["ref"]: {"warmup": D["z_length"]},
     ABS["body"]["ref"]: {},
     ADAPTIVE["body"]["ref"]: {"warmup": D["adapt_length"]},
+    VALUE["body"]["ref"]: {},
+    SCALE["body"]["ref"]: {},
     DRIFT["body"]["ref"]: {"warmup": D["slope_lookback"]},
     RANGE_ATR["body"]["ref"]: {},
     LE["body"]["ref"]: {},

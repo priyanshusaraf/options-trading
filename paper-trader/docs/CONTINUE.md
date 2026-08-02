@@ -20,8 +20,9 @@ because a correct mechanism wired to nothing is this repo's defining defect:
 1. **The resolver** (`app/ir/resolve.py`, `kernels.py`, `hashing.py`) — the single resolution.
 2. **The component runtime** (`app/ir/runtime.py`) — evaluates a resolved graph, and turns C8,
    C9, C10 and C11 from declarations into measurements.
-3. **`expanding_z_v4` as a real IR graph** (`app/ir/strategies/expanding_z.py`) — 13 components,
-   17 nodes, 41 edges, equal to `ExpandingZImpulseV4.compute()` bar for bar.
+3. **`expanding_z_v4` as a real IR graph** (`app/ir/strategies/expanding_z.py`) — 15 components,
+   17 nodes, 47 edges, equal to `ExpandingZImpulseV4.compute()` bar for bar, including the
+   derived thresholds that now track `min_abs_z` through `value.scalar` → `math.scale`.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -34,7 +35,8 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`e97ed72` — `expanding_z_v4` expressed in the IR and proven equal to the strategy.
+`` — the derived-parameter gap closed. Preceded by `e97ed72` (`expanding_z_v4`
+expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
 
@@ -52,7 +54,7 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,460             (--collect-only, summed per file)
+collected: 2,463             (--collect-only, summed per file)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -74,9 +76,10 @@ Guards proven able to fail, not merely observed passing:
 - **The runtime.** Nine suppressions — cache lookup, cache key, purity gate, warmup, index check,
   every-node causality comparison, reference series, kernel lookup, missing-input check — each
   turn their own test red.
-- **The strategy parity claim.** Binding `n_entry_thr` to `exit_pct`, and re-pointing one edge
-  from `n_ema` to `n_z`, each turn the bar-for-bar parity test red. The fixture is checked for
-  firing signals, so parity is not two constant series agreeing.
+- **The strategy parity claim.** Binding `n_entry_thr` to `exit_pct`, re-pointing one edge from
+  `n_ema` to `n_z`, and setting `n_exit_floor`'s scale factor to 0, each turn the bar-for-bar
+  parity test red. The fixture is checked for firing signals, so parity is not two constant
+  series agreeing.
 - **§3, F1–F13**, swept in the earlier phase.
 
 Two vacuous tests were found by those sweeps and fixed, both worth remembering:
@@ -96,21 +99,21 @@ Two vacuous tests were found by those sweeps and fixed, both worth remembering:
 
 ## 4. Next concrete action
 
-**Close the derived-parameter gap: a `scale` component, and parameters as wirable values.**
+**The experiment system — spec → plan → build.**
 
-Writing the real strategy graph produced one finding it could not express (recorded in
-`app/ir/strategies/expanding_z.py`): `exit_abs`'s floor is `min_abs_z * 0.25` in the strategy,
-and F10 rightly says an override carries a value only, so the graph carries the literal `0.15` —
-correct at the shipped `min_abs_z = 0.60` and silently wrong if it moves. That is a **missing
-component**, not a defect in F10. The conforming expression is a `scale` component between the
-parameter and its consumer, which needs a parameter to be usable as a scalar wire. The language
-admits it; nothing authors it yet. It is small, it is the only known inexpressible thing in a
-real strategy, and it should not be left sitting as a literal with a comment.
+F14 carries the heaviest evidential weight in RFC 0001, and it is the one format clause still
+recorded as **unenforceable**: it binds every experiment and finding to the exact graph version
+and every resolved component version that produced it, and the grammar has no experiment artefact
+to bind. `unchecked_clauses()` reports that honestly rather than passing silently, which is the
+correct behaviour and not a substitute for the artefact.
 
-After that, the next subsystem in the programme is the **experiment system**, because F14 — the
-clause carrying the heaviest evidential weight in the RFC — is still recorded as *unenforceable*
-purely because there is no experiment artefact to bind versions to. This platform has already
-paid the retrofit price once: every research finding before 2026-08 is unusable as a baseline.
+Everything it needs now exists. `ResolvedGraph.versions` is precisely "every resolved
+`(identifier, version)` pair" (C5), and `ResolvedNode.cache_id` gives a per-node identity that is
+transitive over its upstream (C8). An experiment record is those two plus the inputs and the
+result. Airflow needed roughly a decade and a retrofit to bind `DagVersion` to *task instances*,
+and **this platform has already paid that exact price once** — every research finding before
+2026-08 is unusable as a baseline because the deflation it claimed never engaged. The clause
+exists so it is not paid twice, and it stops being a claim the moment there is an artefact.
 
 Two things are deliberately **not** next, and one of them needs the owner:
 

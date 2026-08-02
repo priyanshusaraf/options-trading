@@ -145,6 +145,68 @@ def test_a_changed_parameter_changes_the_signals_in_both(evaluated, frame):
     assert not produced.outputs["longEntry"].equals(evaluated.outputs["longEntry"])
 
 
+def test_a_derived_parameter_tracks_the_parameter_it_derives_from(frame):
+    """The finding that writing this graph produced, and its fix.
+
+    `exit_abs`'s floor is `min_abs_z * 0.25` in the strategy. An override
+    carries a value only (F10), so the first version of this graph carried the
+    literal `0.15` — right at the shipped `min_abs_z = 0.60` and silently wrong
+    the moment anyone moved it. It is now a `value.scalar` on a wire into a
+    `math.scale`, because a multiplication is a computation and components
+    compute (C14).
+
+    Moving `min_abs_z` is what tells the two apart: with a literal the exit
+    threshold would not move, and parity against the strategy — which does
+    multiply — would break. The contraction exit is switched on so the exit
+    threshold actually reaches an output.
+    """
+    moved = copy.deepcopy(GRAPH)
+    for item in moved["interface"]:
+        if item.get("identifier") == "zscore":
+            for p in item["items"]:
+                if p["identifier"] == "min_abs_z":
+                    p["default"] = 1.20
+        if item.get("identifier") == "behaviour":
+            for p in item["items"]:
+                if p["identifier"] == "use_absz_contraction_exit":
+                    p["default"] = True
+
+    inputs = {"high": frame["high"], "low": frame["low"], "close": frame["close"]}
+    graph = resolve(moved, LIBRARY)
+    produced = evaluate(graph, inputs, IMPLEMENTATIONS)
+    expected = STRATEGY.compute(frame, min_abs_z=1.20, use_absz_contraction_exit=True)
+
+    assert graph.node("n_exit_floor").params["factor"] == 0.25
+    assert produced.values["n_min_abs_z"]["out"] == 1.20
+    assert produced.values["n_exit_floor"]["out"] == pytest.approx(0.30)
+    for name in OUTPUTS:
+        assert produced.outputs[name].equals(expected[name]), name
+
+
+def test_the_contraction_exit_is_actually_exercised_by_that_test(frame):
+    """Without this, the test above could pass on a graph whose exit threshold
+    reaches nothing — the flag would be on and the wire still dead."""
+    off = STRATEGY.compute(frame, min_abs_z=1.20, use_absz_contraction_exit=False)
+    on = STRATEGY.compute(frame, min_abs_z=1.20, use_absz_contraction_exit=True)
+    assert not off["longExit"].equals(on["longExit"])
+
+
+def test_the_scalar_axis_is_used_and_not_merely_declared(graph):
+    """F7 has carried `scalar` since the format phase and nothing produced one.
+    These three nodes are the first, and they are not series: a scalar that were
+    quietly a series would broadcast and hide the difference."""
+    assert not isinstance(
+        evaluate(graph, {"high": candles()["high"], "low": candles()["low"],
+                         "close": candles()["close"]}, IMPLEMENTATIONS)
+        .values["n_min_abs_z"]["out"], pd.Series)
+
+    for identifier in ("value.scalar", "math.scale"):
+        component = LIBRARY.components[(identifier, 1)]
+        structures = {s["wire_type"]["structure"] for s in component["interface"]
+                      if s["item"] == "socket"}
+        assert structures == {"scalar"}, identifier
+
+
 # ── what resolution says about the strategy ───────────────────────────────
 
 def test_the_atr_is_a_subgraph_not_a_leaf(graph):

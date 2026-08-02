@@ -205,14 +205,20 @@ def _check_index(node: ResolvedNode, node_inputs: Mapping[str, pd.Series],
     This catches a kernel that reindexes or resamples silently. It does not
     catch a kernel that reads a future bar and writes the answer at the present
     one — nothing local can. `check_causality` is what catches that.
+
+    F7's structure axis carries `scalar` as well as `series`, and a scalar has
+    no index to check. Rather than teach the runtime the type system, it checks
+    what is checkable: a value that is a series is bar-aligned, a value that is
+    not is passed through. A scalar that should have been a series fails at the
+    kernel that consumes it, in the same breath.
     """
-    if not node_inputs:
+    expected = next((v.index for v in node_inputs.values()
+                     if isinstance(v, pd.Series)), None)
+    if expected is None:
         return
-    expected = next(iter(node_inputs.values())).index
     for socket, series in outputs.items():
         if not isinstance(series, pd.Series):
-            raise EvaluationError("C3", node.instance_id,
-                                  f"{socket!r} is not a series")
+            continue
         if not series.index.equals(expected):
             raise EvaluationError(
                 "C11", node.instance_id,
@@ -256,7 +262,19 @@ def check_causality(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
         # and checking only what comes out the end would call that causal.
         for instance_id, sockets in partial.values.items():
             for socket, series in sockets.items():
-                reference = full.values[instance_id][socket].iloc[:n]
+                whole = full.values[instance_id][socket]
+                if not isinstance(series, pd.Series):
+                    # A scalar derived from the bars is the sharpest lookahead
+                    # there is — one number that saw everything. It is compared
+                    # whole rather than sliced.
+                    if series == whole:
+                        continue
+                    raise EvaluationError(
+                        "C11", instance_id,
+                        f"with {n} of {length} bars, the scalar {socket!r} is "
+                        f"{series!r} but {whole!r} over all of them; a scalar "
+                        "that moves with later bars was read from the future")
+                reference = whole.iloc[:n]
                 if series.equals(reference):
                     continue
                 first = next((i for i, (a, b) in enumerate(zip(series, reference))
