@@ -21,12 +21,17 @@
 > red — swept F1–F13 in the format phase and C1–C15 in the resolver phase — so the checks are
 > known to be load-bearing rather than merely present.
 >
-> Two gaps are recorded rather than glossed, and both are asserted by tests so they cannot be
-> mistaken for coverage. **F14 is not enforceable** — it binds experiments and findings to the
-> versions that produced them, and the grammar has no experiment artefact to validate; it
-> becomes enforceable when the experiment system defines one. **F7's edge type-matching needs a
-> component library** — given one, exact matching on all three axes is checked; given none, F7
-> is reported *unchecked* rather than passing silently.
+> **F14 is enforced as of 2026-08-02**, and the note that used to sit here saying it was not is
+> gone. It binds experiments and findings to the versions that produced them, and an experiment
+> is not a component or a graph — so the answer was never to widen §3. The experiment system
+> defines the record (`app/ir/experiment.py`), and the binding is **derived from the resolved
+> graph rather than supplied**, because F14's real failure mode is a stale field, not a missing
+> one. `format_version` does not move.
+>
+> One gap remains, recorded rather than glossed and asserted by a test so it cannot be mistaken
+> for coverage: **F7's edge type-matching needs a component library** — given one, exact matching
+> on all three axes is checked; given none, F7 is reported *unchecked* rather than passing
+> silently.
 >
 > A **component runtime** now consumes the resolved graph (`app/ir/runtime.py`), which is what
 > turns C8, C9, C10 and C11 from declarations into measurements — in particular C11, where
@@ -354,6 +359,15 @@ a decade, by retrofit. Versioning's value is retrospective, so adding it late le
 run permanently unattributable. **This platform has already paid that exact price**: every
 research finding recorded before 2026-08 is unusable as a baseline for this reason. The clause
 exists so it is not paid twice.
+
+> **Where F14 lives.** An experiment is not a component or a graph, so it has no artefact in the
+> §3 grammar and did not get one: widening §3 would have bought a migration liability forever for
+> a guarantee that does not need serialising into a *graph*. The experiment system defines the
+> record, and `app/ir/experiment.py` enforces the clause against it. The binding is **derived
+> from the `ResolvedGraph`** — `record()` has no parameter for the versions — because a record
+> that can be told its versions can be told last week's, and stale-not-missing is the failure
+> that has actually happened here. The record therefore reaches versions that appear nowhere in
+> the specification's node list, such as a `smoothing.wilder` reached only through the ATR's body.
 
 ---
 

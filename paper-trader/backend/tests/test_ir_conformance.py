@@ -11,7 +11,8 @@ builds a *valid* artefact and then breaks exactly the thing the clause forbids,
 so a validator that silently stopped checking would fail here rather than pass
 quietly.
 
-F14 (result binding) is deliberately absent — see `test_f14_is_not_enforceable_yet`.
+F14 (result binding) has no artefact in this grammar and is enforced by
+`app/ir/experiment.py` — see `test_f14_is_enforced_by_the_experiment_system_not_by_this_validator`.
 """
 from __future__ import annotations
 
@@ -504,27 +505,37 @@ def test_f13_unknown_keys_are_rejected_everywhere_not_just_at_the_top():
     assert_violates(art, "F13")
 
 
-# ── F14 — recorded as not yet enforceable, rather than silently skipped ───
+# ── F14 — enforced elsewhere, and the bookkeeping that proves it ─────────
 
-def test_f14_is_not_enforceable_yet():
-    """F14 binds every experiment and finding to the versions that produced it.
-    It is the clause carrying the heaviest evidential weight in the RFC — and
-    it is the one clause this suite cannot check, because the IR grammar has no
-    experiment or finding artefact to validate. It becomes enforceable when the
-    experiment system defines one.
+def test_f14_is_enforced_by_the_experiment_system_not_by_this_validator():
+    """F14 binds every experiment and finding to the versions that produced it,
+    and it is the clause carrying the heaviest evidential weight in the RFC.
 
-    This test exists so the gap is a recorded fact rather than an absence
-    someone later mistakes for coverage."""
-    from app.ir.validate import UNENFORCEABLE_CLAUSES
+    It was recorded here as *unenforceable* until 2026-08-02, because there was
+    no experiment artefact to validate. An experiment is not a component or a
+    graph, so the answer was never to widen §3 — it was for the experiment
+    system to define the record, which `app/ir/experiment.py` now does. This
+    test is the pointer, so the clause cannot go missing between two files."""
+    from app.ir.experiment import validate_experiment
+    from app.ir.validate import ELSEWHERE_ENFORCED_CLAUSES, UNENFORCEABLE_CLAUSES
 
-    assert UNENFORCEABLE_CLAUSES == {"F14"}
+    assert ELSEWHERE_ENFORCED_CLAUSES == {"F14"}
+    assert UNENFORCEABLE_CLAUSES == frozenset()
+    assert [v.clause for v in validate_experiment(None)] == ["F14"]
 
 
-def test_every_format_clause_is_either_enforced_or_declared_unenforceable():
+def test_every_format_clause_is_enforced_somewhere():
     """The guard against this suite quietly falling behind the RFC: F1–F14 must
-    each be either exercised by a test above or named in UNENFORCEABLE_CLAUSES."""
-    from app.ir.validate import ENFORCED_CLAUSES, UNENFORCEABLE_CLAUSES
+    each be exercised by a test above, enforced elsewhere and named, or
+    declared unenforceable and named. Nothing may be simply absent."""
+    from app.ir.validate import (
+        ELSEWHERE_ENFORCED_CLAUSES,
+        ENFORCED_CLAUSES,
+        UNENFORCEABLE_CLAUSES,
+    )
 
     all_clauses = {f"F{n}" for n in range(1, 15)}
-    assert ENFORCED_CLAUSES | UNENFORCEABLE_CLAUSES == all_clauses
-    assert ENFORCED_CLAUSES & UNENFORCEABLE_CLAUSES == set()
+    accounted = ENFORCED_CLAUSES | ELSEWHERE_ENFORCED_CLAUSES | UNENFORCEABLE_CLAUSES
+    assert accounted == all_clauses
+    assert ENFORCED_CLAUSES & ELSEWHERE_ENFORCED_CLAUSES == set()
+    assert accounted & UNENFORCEABLE_CLAUSES == UNENFORCEABLE_CLAUSES

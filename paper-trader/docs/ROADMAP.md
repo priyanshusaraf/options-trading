@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,463 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,485 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -149,6 +149,32 @@ honest gaps).
         It now checks what is checkable — a series is bar-aligned, a scalar is passed through —
         and `check_causality` compares scalars whole, because a scalar derived from the bars is
         the sharpest lookahead there is: one number that saw everything.
+- [x] **F14 enforced — the last unenforced clause in the RFC. DONE 2026-08-02.**
+      `app/ir/experiment.py` + `tests/test_ir_experiment.py`, 23 tests. F14 binds every
+      experiment and finding to the versions that produced it, and it had been recorded as
+      *unenforceable* through the format and resolver phases because there was no experiment
+      artefact. **The answer was never to widen §3** — an experiment is not a component or a
+      graph, and admitting one would have bought a migration liability forever. The RFC's own
+      note says F14 becomes enforceable when the *experiment system* defines a record; this is
+      that record. `format_version` does not move.
+      - *The binding is derived, not supplied.* `record()` takes a `ResolvedGraph` and reads the
+        versions off it; there is no parameter for passing them in. F14's real failure mode is a
+        **stale** field, not a missing one — which is why the record reaches
+        `smoothing.wilder`, a component that appears nowhere in the specification's node list and
+        is only known because resolution walked the ATR's body (C5).
+      - *Five parts, each load-bearing:* the graph version, every component version, every node's
+        cache identity (transitive over its upstream, C8), the data digest, and the id. A record
+        naming graph version 3 of a graph that resolved as 4 passes every structural check and is
+        caught only against the graph — which is the case the tests are built around.
+      - *"And every finding."* A `Finding` carries its experiment's binding, so a claim that
+        outlived a re-parameterised run is detected. That is the state this repository is in for
+        everything before 2026-08.
+      - *The sweep found a vacuous guard of its own:* every test of `node_identities` emptied it,
+        which trips the presence check, so deleting the comparison against the resolved graph
+        left the suite green. There is now a test for identities that are present and wrong.
+      - `UNENFORCEABLE_CLAUSES` is now **empty**, and a bookkeeping test asserts every one of
+        F1–F14 is enforced here, enforced elsewhere and named, or declared unenforceable and
+        named. Nothing may be simply absent.
 - [ ] **Adopt the runtime in a live path — NOT DONE, and it stops for the owner.** The engine
       still calls `compute()`; `app/ir/` is imported only by its own tests. This is RFC 0001
       Appendix C(d), a production change to a real-money path: it needs owner acknowledgement

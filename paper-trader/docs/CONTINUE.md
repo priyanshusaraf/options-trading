@@ -6,23 +6,25 @@ Session handoff. Exactly four things. Rewritten on every stop.
 
 ## 1. Current phase
 
-**Strategy OS — Component IR. The language is finished, enforced, and now measured against the
-strategy the platform actually trades.**
+**Strategy OS — Component IR. The language is finished, and every clause in it is enforced.**
 
 RFC 0001 is **Accepted** (Gate 3 recorded 2026-08-02 against the owner's standing directive that
 the architectural phase is complete — one line at the top of the RFC says so, and it is the line
-to correct if that reading was too broad). §3's fourteen format clauses and §4's fifteen contract
-clauses are all enforced mechanically.
+to correct if that reading was too broad). **All fourteen format clauses and all fifteen contract
+clauses are now enforced mechanically**, F14 included. `UNENFORCEABLE_CLAUSES` is empty.
 
-Three things landed this session, in order, each the consumer of the one before — deliberately,
+Five things landed this session, in order, each the consumer of the one before — deliberately,
 because a correct mechanism wired to nothing is this repo's defining defect:
 
 1. **The resolver** (`app/ir/resolve.py`, `kernels.py`, `hashing.py`) — the single resolution.
 2. **The component runtime** (`app/ir/runtime.py`) — evaluates a resolved graph, and turns C8,
    C9, C10 and C11 from declarations into measurements.
 3. **`expanding_z_v4` as a real IR graph** (`app/ir/strategies/expanding_z.py`) — 15 components,
-   17 nodes, 47 edges, equal to `ExpandingZImpulseV4.compute()` bar for bar, including the
-   derived thresholds that now track `min_abs_z` through `value.scalar` → `math.scale`.
+   17 nodes, 47 edges, equal to `ExpandingZImpulseV4.compute()` bar for bar.
+4. **The derived-parameter gap closed** — `value.scalar` → `math.scale`, so the exit thresholds
+   track `min_abs_z` instead of remembering one of its values. First use of F7's `scalar` axis.
+5. **F14 enforced** (`app/ir/experiment.py`) — an experiment record whose binding is *derived*
+   from the resolved graph, so it cannot be told the wrong versions.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -35,8 +37,8 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`110e978` — the derived-parameter gap closed. Preceded by `e97ed72` (`expanding_z_v4`
-expressed in the IR and proven equal to the strategy).
+`` — F14 enforced. Preceded by `110e978` (the derived-parameter gap closed) and
+`e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
 Preceded by `df0bf6c` (the component runtime), `126c9cf` (the resolver), `34a4765` (§3
 conformance), `cc53bba` (architecture migration), `97d6bbb` (RFC 0001).
 
@@ -54,7 +56,7 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,463             (--collect-only, summed per file)
+collected: 2,485             (--collect-only, summed per file)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -80,15 +82,21 @@ Guards proven able to fail, not merely observed passing:
   `n_ema` to `n_z`, and setting `n_exit_floor`'s scale factor to 0, each turn the bar-for-bar
   parity test red. The fixture is checked for firing signals, so parity is not two constant
   series agreeing.
+- **F14.** Suppressing each of its six checks — the graph comparison, the component-version
+  comparison, the node-identity comparison, the finding-binding comparison, and the presence
+  checks — turns its own test red.
 - **§3, F1–F13**, swept in the earlier phase.
 
-Two vacuous tests were found by those sweeps and fixed, both worth remembering:
+Three vacuous tests were found by those sweeps and fixed, all worth remembering:
 
 - C2's no-mutation check deep-copied the shared fixture *after* other tests had resolved it, and
   a resolver that eats its input does so on the first call and is idempotent after.
 - `check_causality` compared only the graph's **outputs**, which calls a whole-series
   normalisation causal: divide both branches by a max neither bar knew yet and the comparison
   between them is unchanged. It now compares every node's every socket.
+- F14's `node_identities` check: every test of it emptied the mapping, which trips the *presence*
+  check, so deleting the comparison against the resolved graph left the suite green. Identities
+  that are present and **wrong** are the interesting case, and there is now a test for them.
 
 > Note for the next session: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`.
 > A backgrounded `python … | tail` returns the **pipe's** exit code; capture `$?` from pytest
@@ -99,21 +107,22 @@ Two vacuous tests were found by those sweeps and fixed, both worth remembering:
 
 ## 4. Next concrete action
 
-**The experiment system — spec → plan → build.**
+**The visual computational graph — the editor plane.**
 
-F14 carries the heaviest evidential weight in RFC 0001, and it is the one format clause still
-recorded as **unenforceable**: it binds every experiment and finding to the exact graph version
-and every resolved component version that produced it, and the grammar has no experiment artefact
-to bind. `unchecked_clauses()` reports that honestly rather than passing silently, which is the
-correct behaviour and not a substitute for the artefact.
+With F14 done, RFC 0001 has no unenforced clause left, and the Language plane is complete: a
+format, a resolver, a runtime, a real strategy expressed in it, and a result binding. Of the five
+planes in §1.2, four now have something real behind them; the **Editor** has nothing at all, and
+it is the one that decides whether any of this is usable by a human rather than by a test.
 
-Everything it needs now exists. `ResolvedGraph.versions` is precisely "every resolved
-`(identifier, version)` pair" (C5), and `ResolvedNode.cache_id` gives a per-node identity that is
-transitive over its upstream (C8). An experiment record is those two plus the inputs and the
-result. Airflow needed roughly a decade and a retrofit to bind `DagVersion` to *task instances*,
-and **this platform has already paid that exact price once** — every research finding before
-2026-08 is unusable as a baseline because the deflation it claimed never engaged. The clause
-exists so it is not paid twice, and it stops being a claim the moment there is an artefact.
+Start with the read-only direction, which needs no new architecture and no owner decision: render
+a `ResolvedGraph` — nodes by instance path, edges, per-node warmup and cache identity — from the
+existing `expanding_z_v4` artefact. That is a genuine product surface (it is the first time the
+strategy's structure has ever been *visible*), it exercises the IR from the outside, and it defers
+every hard authoring question — layout persistence (F13 says presentation state lives beside the
+graph, keyed by stable identifier), mutation, undo — until there is something to look at.
+
+The remaining subsystems in the programme, in the order their dependencies suggest: Python
+component authoring, Research Plane Gen 2, marketplace, deployment, production adoption.
 
 Two things are deliberately **not** next, and one of them needs the owner:
 

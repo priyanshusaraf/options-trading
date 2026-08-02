@@ -45,11 +45,17 @@ from app.ir.schema import (
     is_value_reference,
 )
 
-# F1–F13 are checked here. F14 binds experiments and findings to the versions
-# that produced them; the IR grammar has no experiment artefact, so there is
-# nothing for this module to validate. Recorded, not skipped.
+# F1–F13 are checked here, against a component or graph artefact.
+#
+# F14 binds experiments and findings to the versions that produced them. It has
+# no artefact in this grammar — an experiment is not a component or a graph —
+# so it is enforced by `app/ir/experiment.py` instead, against the record the
+# experiment system defines. It was `UNENFORCEABLE` until 2026-08-02; it is not
+# any more, and `UNENFORCEABLE_CLAUSES` is now empty rather than deleted, so the
+# bookkeeping test still has something to assert.
 ENFORCED_CLAUSES = frozenset(f"F{n}" for n in range(1, 14))
-UNENFORCEABLE_CLAUSES = frozenset({"F14"})
+ELSEWHERE_ENFORCED_CLAUSES = frozenset({"F14"})
+UNENFORCEABLE_CLAUSES: frozenset[str] = frozenset()
 
 # Checkable only with a component library — see the module docstring.
 LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7"})
