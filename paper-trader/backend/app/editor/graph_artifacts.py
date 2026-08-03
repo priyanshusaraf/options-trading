@@ -62,6 +62,15 @@ class EditPublication:
 
 
 @dataclass(frozen=True)
+class PresentationPublication:
+    draft_revision: int
+    published: PublishedGraph
+    base_presentation_revision: int
+    layout: layouts.Layout
+    presentation_delta: layouts.PresentationDelta
+
+
+@dataclass(frozen=True)
 class EditResult:
     graph: dict[str, Any]
     applied_operations: tuple[dict[str, Any], ...]
@@ -456,6 +465,51 @@ def apply_and_publish(
             published=_published_record(project_id, version),
             applied_operations=edit_result.applied_operations,
             inverse_operations=edit_result.inverse_operations,
+        )
+        try:
+            result = response_factory(publication, layout)
+        except Exception as exc:
+            raise EditorDocumentFailed("editor document construction failed") from exc
+    return result
+
+
+def apply_presentation(
+    project_id: str,
+    identifier: str,
+    *,
+    base_revision: int,
+    base_presentation_revision: int,
+    operations: tuple[dict[str, Any], ...],
+    response_factory: Callable[[PresentationPublication, layouts.Layout], T],
+) -> T:
+    """Apply presentation-only commands against the coherent published head."""
+    with SessionLocal.begin() as session:
+        _active_project(session, project_id)
+        artifact = _owned_artifact(session, project_id, identifier)
+        if artifact.draft_revision != base_revision:
+            raise GraphConflict(artifact.draft_revision)
+        if artifact.current_version is None:
+            raise InvalidTransition("graph has no published version")
+        if artifact.published_revision != artifact.draft_revision:
+            raise InvalidTransition("graph has unpublished draft changes")
+        version = session.get(GraphVersion, (identifier, artifact.current_version))
+        if version is None:
+            raise GraphNotFound((project_id, identifier, artifact.current_version))
+        published = _published_record(project_id, version)
+        layout, delta = layouts.apply_presentation_batch_in_session(
+            session,
+            identifier,
+            version.version,
+            base_revision=base_presentation_revision,
+            operations=operations,
+            valid_instance_ids=_authored_ids(published.graph),
+        )
+        publication = PresentationPublication(
+            draft_revision=artifact.draft_revision,
+            published=published,
+            base_presentation_revision=base_presentation_revision,
+            layout=layout,
+            presentation_delta=delta,
         )
         try:
             result = response_factory(publication, layout)

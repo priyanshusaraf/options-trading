@@ -19,6 +19,9 @@ from app.ir.strategies.expanding_z import GRAPH
 IDENTIFIER = GRAPH["identifier"]
 EDIT_URL = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/edits"
 EDITOR_URL = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/editor"
+PRESENTATION_URL = (
+    f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/presentation-edits"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +40,38 @@ def _post(client, base_revision: int, edit: dict | list[dict]):
     return client.post(
         EDIT_URL,
         json={"base_revision": base_revision, "edits": edits},
+    )
+
+
+def _post_presentation(
+    client,
+    *,
+    graph_revision: int,
+    presentation_revision: int,
+    edits: dict | list[dict],
+):
+    batch = edits if isinstance(edits, list) else [edits]
+    return client.post(PRESENTATION_URL, json={
+        "base_revision": graph_revision,
+        "base_presentation_revision": presentation_revision,
+        "edits": batch,
+    })
+
+
+def _create_group(client, *, members: list[str] | None = None):
+    before = client.get(EDITOR_URL).json()
+    return _post_presentation(
+        client,
+        graph_revision=before["draft_revision"],
+        presentation_revision=before["layout"]["revision"],
+        edits={
+            "operation": "create_group",
+            "identifier": "g_signal",
+            "display_name": "Signal",
+            "members": members or [],
+            "frame": {"x": 10, "y": 20, "width": 300, "height": 180},
+            "collapsed": False,
+        },
     )
 
 
@@ -71,6 +106,76 @@ def test_editor_document_is_one_version_coherent_and_mirrored(client):
     mirrored = client.get(f"/api/v1{EDITOR_URL.removeprefix('/api')}")
     assert mirrored.status_code == 200
     assert mirrored.json() == body
+
+
+def test_visual_group_edit_advances_only_the_presentation_revision(client):
+    before = client.get(EDITOR_URL).json()
+
+    response = _create_group(client, members=["n_ema"])
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["version"] == before["version"]
+    assert body["draft_revision"] == before["draft_revision"]
+    assert body["content_address"] == before["content_address"]
+    assert body["layout"]["revision"] == before["layout"]["revision"] + 1
+    assert body["layout"]["groups"] == [{
+        "identifier": "g_signal",
+        "display_name": "Signal",
+        "frame": {"x": 10.0, "y": 20.0, "width": 300.0, "height": 180.0},
+        "collapsed": False,
+        "members": ["n_ema"],
+    }]
+    receipt = body["command_receipt"]
+    assert receipt["semantic_forward_operations"] == []
+    assert receipt["semantic_inverse_operations"] == []
+    assert receipt["presentation_delta"]["forward_operations"] == [{
+        "operation": "create_group",
+        "identifier": "g_signal",
+        "display_name": "Signal",
+        "members": ["n_ema"],
+        "frame": {"x": 10.0, "y": 20.0, "width": 300.0, "height": 180.0},
+        "collapsed": False,
+    }]
+    assert receipt["presentation_delta"]["inverse_operations"] == [{
+        "operation": "remove_group", "identifier": "g_signal"
+    }]
+
+
+@pytest.mark.parametrize("instance_id", ["n_unknown", "n_atr/n_smooth"])
+def test_visual_group_members_reject_unknown_and_derived_nodes(client, instance_id):
+    response = _create_group(client, members=[instance_id])
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "PRESENTATION_VALIDATION_FAILED"
+    assert body["errors"][0]["operation_index"] == 0
+    assert body["errors"][0]["path"][-1] == "members"
+
+
+def test_visual_group_edits_use_the_shared_presentation_revision(client):
+    accepted = _create_group(client)
+    assert accepted.status_code == 201, accepted.text
+
+    stale = _post_presentation(
+        client,
+        graph_revision=0,
+        presentation_revision=0,
+        edits={
+            "operation": "rename_group",
+            "identifier": "g_signal",
+            "display_name": "Stale",
+        },
+    )
+
+    assert stale.status_code == 409
+    assert stale.json() == {
+        "code": "PRESENTATION_REVISION_CONFLICT",
+        "message": "Presentation revision conflict",
+        "current_revision": None,
+        "current_presentation_revision": 1,
+        "errors": [],
+    }
 
 
 def test_clear_override_returns_inherited_parameter_metadata(client):
@@ -361,6 +466,7 @@ def test_stale_edit_is_409_and_creates_no_second_version(client):
         "code": "DRAFT_REVISION_CONFLICT",
         "message": "Graph draft revision conflict",
         "current_revision": 1,
+        "current_presentation_revision": None,
         "errors": [],
     }
     assert client.get(
@@ -585,6 +691,7 @@ def test_route_dispatches_semantic_changes_only_through_the_ir_batch_boundary():
     assert store_calls == {
         "EditResult",
         "apply_and_publish",
+        "apply_presentation",
         "load_editor_snapshot",
     }
     assert not {

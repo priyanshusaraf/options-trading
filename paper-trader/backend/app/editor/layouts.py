@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable, Mapping, Sequence
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -52,6 +52,12 @@ class Layout:
     groups: tuple[VisualGroup, ...] = ()
 
 
+@dataclass(frozen=True)
+class PresentationDelta:
+    forward_operations: tuple[dict[str, Any], ...]
+    inverse_operations: tuple[dict[str, Any], ...]
+
+
 class LayoutConflict(Exception):
     def __init__(self, current_revision: int):
         super().__init__(f"layout is at revision {current_revision}")
@@ -59,7 +65,16 @@ class LayoutConflict(Exception):
 
 
 class LayoutRejected(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation_index: int | None = None,
+        path: tuple[str | int, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.operation_index = operation_index
+        self.path = path
 
 
 def _current_revision(graph_identifier: str, graph_version: int) -> int:
@@ -382,3 +397,254 @@ def save_groups(
             _current_revision(graph_identifier, graph_version)
         ) from exc
     return result
+
+
+def _group_operation(group: VisualGroup, operation: str) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "identifier": group.identifier,
+        "display_name": group.display_name,
+        "members": list(group.members),
+        "frame": {
+            "x": group.frame.x,
+            "y": group.frame.y,
+            "width": group.frame.width,
+            "height": group.frame.height,
+        },
+        "collapsed": group.collapsed,
+    }
+
+
+def _claim_layout_revision_in_session(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    base_revision: int,
+) -> None:
+    current = session.get(IrGraphLayout, (graph_identifier, graph_version))
+    current_revision = current.revision if current is not None else 0
+    if current_revision != base_revision:
+        raise LayoutConflict(current_revision)
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    if current is None:
+        session.add(IrGraphLayout(
+            graph_identifier=graph_identifier,
+            graph_version=graph_version,
+            revision=1,
+            updated_at=now,
+        ))
+        session.flush()
+        return
+    claimed = session.execute(
+        update(IrGraphLayout)
+        .where(
+            IrGraphLayout.graph_identifier == graph_identifier,
+            IrGraphLayout.graph_version == graph_version,
+            IrGraphLayout.revision == base_revision,
+        )
+        .values(revision=base_revision + 1, updated_at=now)
+    )
+    if claimed.rowcount != 1:
+        raise LayoutConflict(current_revision)
+
+
+def _replace_groups_in_session(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    groups: tuple[VisualGroup, ...],
+) -> None:
+    session.execute(delete(IrGraphLayoutGroupMember).where(
+        IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
+        IrGraphLayoutGroupMember.graph_version == graph_version,
+    ))
+    session.execute(delete(IrGraphLayoutGroup).where(
+        IrGraphLayoutGroup.graph_identifier == graph_identifier,
+        IrGraphLayoutGroup.graph_version == graph_version,
+    ))
+    session.add_all([
+        IrGraphLayoutGroup(
+            graph_identifier=graph_identifier,
+            graph_version=graph_version,
+            identifier=group.identifier,
+            display_name=group.display_name,
+            x=group.frame.x,
+            y=group.frame.y,
+            width=group.frame.width,
+            height=group.frame.height,
+            collapsed=group.collapsed,
+        )
+        for group in groups
+    ])
+    session.flush()
+    session.add_all([
+        IrGraphLayoutGroupMember(
+            graph_identifier=graph_identifier,
+            graph_version=graph_version,
+            group_identifier=group.identifier,
+            instance_id=member,
+        )
+        for group in groups
+        for member in group.members
+    ])
+    session.flush()
+
+
+def _frame_from_operation(operation: Mapping[str, Any]) -> GroupFrame:
+    frame = operation["frame"]
+    return GroupFrame(
+        float(frame["x"]),
+        float(frame["y"]),
+        float(frame["width"]),
+        float(frame["height"]),
+    )
+
+
+def apply_presentation_batch_in_session(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    *,
+    base_revision: int,
+    operations: Sequence[Mapping[str, Any]],
+    valid_instance_ids: frozenset[str],
+) -> tuple[Layout, PresentationDelta]:
+    """Apply a closed presentation batch and return its exact replay delta."""
+    current = load_layout_in_session(
+        session, graph_identifier, graph_version, valid_instance_ids
+    )
+    if current.revision != base_revision:
+        raise LayoutConflict(current.revision)
+    groups = {group.identifier: group for group in current.groups}
+    forward: list[dict[str, Any]] = []
+    inverse: list[dict[str, Any]] = []
+
+    def reject(index: int, field: str, message: str) -> None:
+        raise LayoutRejected(
+            message, operation_index=index, path=("edits", index, field)
+        )
+
+    for index, raw in enumerate(operations):
+        operation = dict(raw)
+        kind = operation["operation"]
+        identifier = str(operation.get("identifier", ""))
+        existing = groups.get(identifier)
+        if kind in {"create_group", "put_group"}:
+            if kind == "create_group" and existing is not None:
+                reject(index, "identifier", f"visual group {identifier!r} already exists")
+            group = VisualGroup(
+                identifier=identifier,
+                display_name=str(operation["display_name"]),
+                frame=_frame_from_operation(operation),
+                collapsed=bool(operation["collapsed"]),
+                members=tuple(sorted(str(item) for item in operation["members"])),
+            )
+            try:
+                _validate_groups((group,), valid_instance_ids)
+            except LayoutRejected as exc:
+                field = "members" if "unknown or derived" in str(exc) else "frame"
+                reject(index, field, str(exc))
+            groups[identifier] = group
+            forward.append(_group_operation(group, kind))
+            inverse[0:0] = (
+                [_group_operation(existing, "put_group")]
+                if existing is not None
+                else [{"operation": "remove_group", "identifier": identifier}]
+            )
+        elif kind == "remove_group":
+            if existing is None:
+                reject(index, "identifier", f"visual group {identifier!r} does not exist")
+            del groups[identifier]
+            forward.append({"operation": kind, "identifier": identifier})
+            inverse.insert(0, _group_operation(existing, "put_group"))
+        elif kind == "rename_group":
+            if existing is None:
+                reject(index, "identifier", f"visual group {identifier!r} does not exist")
+            display_name = str(operation["display_name"])
+            groups[identifier] = VisualGroup(
+                identifier, display_name, existing.frame, existing.collapsed, existing.members
+            )
+            forward.append({
+                "operation": kind, "identifier": identifier,
+                "display_name": display_name,
+            })
+            inverse.insert(0, {
+                "operation": kind, "identifier": identifier,
+                "display_name": existing.display_name,
+            })
+        elif kind in {"add_group_member", "remove_group_member"}:
+            if existing is None:
+                reject(index, "identifier", f"visual group {identifier!r} does not exist")
+            instance_id = str(operation["instance_id"])
+            members = set(existing.members)
+            if kind == "add_group_member":
+                if instance_id not in valid_instance_ids:
+                    reject(index, "instance_id", f"instance {instance_id!r} is not an authored node")
+                if instance_id in members:
+                    reject(index, "instance_id", f"instance {instance_id!r} is already a member")
+                members.add(instance_id)
+                inverse_kind = "remove_group_member"
+            else:
+                if instance_id not in members:
+                    reject(index, "instance_id", f"instance {instance_id!r} is not a member")
+                members.remove(instance_id)
+                inverse_kind = "add_group_member"
+            groups[identifier] = VisualGroup(
+                identifier, existing.display_name, existing.frame,
+                existing.collapsed, tuple(sorted(members)),
+            )
+            normalized = {
+                "operation": kind, "identifier": identifier,
+                "instance_id": instance_id,
+            }
+            forward.append(normalized)
+            inverse.insert(0, {**normalized, "operation": inverse_kind})
+        elif kind == "set_group_frame":
+            if existing is None:
+                reject(index, "identifier", f"visual group {identifier!r} does not exist")
+            frame = _frame_from_operation(operation)
+            candidate = VisualGroup(
+                identifier, existing.display_name, frame,
+                existing.collapsed, existing.members,
+            )
+            try:
+                _validate_groups((candidate,), valid_instance_ids)
+            except LayoutRejected as exc:
+                reject(index, "frame", str(exc))
+            groups[identifier] = candidate
+            forward.append({
+                "operation": kind, "identifier": identifier,
+                "frame": _group_operation(candidate, "put_group")["frame"],
+            })
+            inverse.insert(0, {
+                "operation": kind, "identifier": identifier,
+                "frame": _group_operation(existing, "put_group")["frame"],
+            })
+        elif kind == "set_group_collapsed":
+            if existing is None:
+                reject(index, "identifier", f"visual group {identifier!r} does not exist")
+            collapsed = bool(operation["collapsed"])
+            groups[identifier] = VisualGroup(
+                identifier, existing.display_name, existing.frame,
+                collapsed, existing.members,
+            )
+            forward.append({
+                "operation": kind, "identifier": identifier,
+                "collapsed": collapsed,
+            })
+            inverse.insert(0, {
+                "operation": kind, "identifier": identifier,
+                "collapsed": existing.collapsed,
+            })
+        else:
+            reject(index, "operation", f"unsupported presentation operation {kind!r}")
+
+    ordered = _validate_groups(tuple(groups.values()), valid_instance_ids)
+    _claim_layout_revision_in_session(
+        session, graph_identifier, graph_version, base_revision
+    )
+    _replace_groups_in_session(session, graph_identifier, graph_version, ordered)
+    result = load_layout_in_session(
+        session, graph_identifier, graph_version, valid_instance_ids
+    )
+    return result, PresentationDelta(tuple(forward), tuple(inverse))

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.editor import layouts
 from app.ir.strategies.expanding_z import GRAPH
 
@@ -62,3 +62,88 @@ def test_visual_group_members_must_be_current_authored_nodes():
             groups=(_group("n_atr/n_internal"),),
             valid_instance_ids=AUTHORED_IDS,
         )
+
+
+def test_presentation_batch_returns_exact_forward_and_inverse_operations():
+    operations = (
+        {
+            "operation": "create_group",
+            "identifier": "g_signal",
+            "display_name": "Signal",
+            "members": ["n_ema"],
+            "frame": {"x": 10, "y": 20, "width": 300, "height": 180},
+            "collapsed": False,
+        },
+        {
+            "operation": "rename_group",
+            "identifier": "g_signal",
+            "display_name": "Renamed",
+        },
+        {
+            "operation": "add_group_member",
+            "identifier": "g_signal",
+            "instance_id": "n_impulse",
+        },
+        {
+            "operation": "set_group_collapsed",
+            "identifier": "g_signal",
+            "collapsed": True,
+        },
+    )
+
+    with SessionLocal.begin() as session:
+        result, delta = layouts.apply_presentation_batch_in_session(
+            session,
+            IDENTIFIER,
+            VERSION,
+            base_revision=0,
+            operations=operations,
+            valid_instance_ids=AUTHORED_IDS,
+        )
+
+    assert result.revision == 1
+    assert result.groups[0].display_name == "Renamed"
+    assert result.groups[0].members == ("n_ema", "n_impulse")
+    assert result.groups[0].collapsed is True
+    assert delta.forward_operations[0]["operation"] == "create_group"
+    assert [item["operation"] for item in delta.inverse_operations] == [
+        "set_group_collapsed",
+        "remove_group_member",
+        "rename_group",
+        "remove_group",
+    ]
+
+    with SessionLocal.begin() as session:
+        restored, _ = layouts.apply_presentation_batch_in_session(
+            session,
+            IDENTIFIER,
+            VERSION,
+            base_revision=1,
+            operations=delta.inverse_operations,
+            valid_instance_ids=AUTHORED_IDS,
+        )
+    assert restored.groups == ()
+
+
+def test_rejected_presentation_batch_does_not_advance_revision():
+    with pytest.raises(layouts.LayoutRejected):
+        with SessionLocal.begin() as session:
+            layouts.apply_presentation_batch_in_session(
+                session,
+                IDENTIFIER,
+                VERSION,
+                base_revision=0,
+                operations=({
+                    "operation": "create_group",
+                    "identifier": "g_signal",
+                    "display_name": "Signal",
+                    "members": ["n_ema", "n_missing"],
+                    "frame": {"x": 10, "y": 20, "width": 300, "height": 180},
+                    "collapsed": False,
+                },),
+                valid_instance_ids=AUTHORED_IDS,
+            )
+
+    assert layouts.load_layout(
+        IDENTIFIER, VERSION, valid_instance_ids=AUTHORED_IDS
+    ).revision == 0

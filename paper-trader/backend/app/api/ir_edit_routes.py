@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api import ir_layout_routes, ir_routes
 from app.editor import graph_artifacts as store
+from app.editor import layouts
 from app.ir import edit as ir_edit
 from app.ir.kernels import KernelDeclarationError
 from app.ir.resolve import ResolutionError, resolve
@@ -104,6 +105,76 @@ class GraphEditRequest(_ClosedModel):
     edits: list[EditRequest] = Field(min_length=1, max_length=32)
 
 
+class GroupFrameRequest(_ClosedModel):
+    x: float
+    y: float
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+
+    @field_validator("x", "y", "width", "height")
+    @classmethod
+    def finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("group frame values must be finite")
+        return value
+
+
+class CreateGroupEdit(_ClosedModel):
+    operation: Literal["create_group"]
+    identifier: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=128)
+    members: list[str] = Field(default_factory=list, max_length=256)
+    frame: GroupFrameRequest
+    collapsed: bool
+
+
+class RenameGroupEdit(_ClosedModel):
+    operation: Literal["rename_group"]
+    identifier: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=128)
+
+
+class RemoveGroupEdit(_ClosedModel):
+    operation: Literal["remove_group"]
+    identifier: str = Field(min_length=1, max_length=128)
+
+
+class GroupMemberEdit(_ClosedModel):
+    operation: Literal["add_group_member", "remove_group_member"]
+    identifier: str = Field(min_length=1, max_length=128)
+    instance_id: str = Field(min_length=1, max_length=128)
+
+
+class SetGroupFrameEdit(_ClosedModel):
+    operation: Literal["set_group_frame"]
+    identifier: str = Field(min_length=1, max_length=128)
+    frame: GroupFrameRequest
+
+
+class SetGroupCollapsedEdit(_ClosedModel):
+    operation: Literal["set_group_collapsed"]
+    identifier: str = Field(min_length=1, max_length=128)
+    collapsed: bool
+
+
+PresentationEditRequest = Annotated[
+    CreateGroupEdit | RenameGroupEdit | RemoveGroupEdit | GroupMemberEdit
+    | SetGroupFrameEdit | SetGroupCollapsedEdit,
+    Field(discriminator="operation"),
+]
+
+
+class PresentationBatchRequest(_ClosedModel):
+    base_revision: int = Field(ge=0)
+    base_presentation_revision: int = Field(ge=0)
+    edits: list[PresentationEditRequest] = Field(min_length=1, max_length=32)
+
+
+class PresentationDeltaResponse(_ClosedModel):
+    forward_operations: list[dict[str, Any]]
+    inverse_operations: list[dict[str, Any]]
+
+
 class CommandReceipt(_ClosedModel):
     applied_operations: list[EditRequest]
     inverse_operations: list[EditRequest]
@@ -111,6 +182,12 @@ class CommandReceipt(_ClosedModel):
     draft_revision: int
     version: int
     content_address: str
+    semantic_forward_operations: list[dict[str, Any]]
+    semantic_inverse_operations: list[dict[str, Any]]
+    presentation_delta: PresentationDeltaResponse
+    base_version: int
+    base_presentation_revision: int
+    presentation_revision: int
 
 
 class EditableParameterResponse(_ClosedModel):
@@ -151,6 +228,8 @@ class EditorErrorItem(_ClosedModel):
 
 EditorErrorCode = Literal[
     "DRAFT_REVISION_CONFLICT",
+    "PRESENTATION_REVISION_CONFLICT",
+    "PRESENTATION_VALIDATION_FAILED",
     "EDITOR_NOT_PUBLISHED",
     "EDITOR_HAS_UNPUBLISHED_DRAFT",
     "EDITOR_ARCHIVED",
@@ -164,6 +243,7 @@ class EditorErrorEnvelope(_ClosedModel):
     code: EditorErrorCode
     message: str
     current_revision: int | None = None
+    current_presentation_revision: int | None = None
     errors: list[EditorErrorItem] = Field(default_factory=list)
 
 
@@ -201,12 +281,14 @@ def _error_response(
     message: str,
     *,
     current_revision: int | None = None,
+    current_presentation_revision: int | None = None,
     errors: list[EditorErrorItem] | None = None,
 ) -> JSONResponse:
     envelope = EditorErrorEnvelope(
         code=code,
         message=message,
         current_revision=current_revision,
+        current_presentation_revision=current_presentation_revision,
         errors=errors or [],
     )
     return JSONResponse(status_code=status_code, content=envelope.model_dump())
@@ -354,7 +436,9 @@ def _editable_nodes(graph: dict[str, Any]) -> list[EditableNodeResponse]:
 
 
 def _document(
-    publication: store.EditPublication | store.EditorSnapshot,
+    publication: (
+        store.EditPublication | store.PresentationPublication | store.EditorSnapshot
+    ),
     layout,
     *,
     include_receipt: bool,
@@ -362,13 +446,44 @@ def _document(
     graph = publication.published
     receipt = None
     if include_receipt:
+        if isinstance(publication, store.PresentationPublication):
+            semantic_forward: list[dict[str, Any]] = []
+            semantic_inverse: list[dict[str, Any]] = []
+            presentation_forward = list(
+                publication.presentation_delta.forward_operations
+            )
+            presentation_inverse = list(
+                publication.presentation_delta.inverse_operations
+            )
+            base_presentation_revision = publication.base_presentation_revision
+            base_version = graph.version
+        else:
+            semantic_forward = list(publication.applied_operations)
+            semantic_inverse = list(publication.inverse_operations)
+            presentation_forward = []
+            presentation_inverse = []
+            base_presentation_revision = max(0, layout.revision - 1)
+            base_version = graph.version - 1
         receipt = CommandReceipt(
-            applied_operations=list(publication.applied_operations),
-            inverse_operations=list(publication.inverse_operations),
-            base_revision=publication.draft_revision - 1,
+            applied_operations=semantic_forward,
+            inverse_operations=semantic_inverse,
+            semantic_forward_operations=semantic_forward,
+            semantic_inverse_operations=semantic_inverse,
+            presentation_delta=PresentationDeltaResponse(
+                forward_operations=presentation_forward,
+                inverse_operations=presentation_inverse,
+            ),
+            base_revision=(
+                publication.draft_revision
+                if isinstance(publication, store.PresentationPublication)
+                else publication.draft_revision - 1
+            ),
             draft_revision=publication.draft_revision,
+            base_version=base_version,
             version=graph.version,
             content_address=graph.content_address,
+            base_presentation_revision=base_presentation_revision,
+            presentation_revision=layout.revision,
         )
     return EditorDocumentResponse(
         project_id=graph.project_id,
@@ -445,6 +560,66 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
                 operation_index=None,
                 clause=None,
                 path=[],
+                message=str(exc),
+            )],
+        )
+    except store.InvalidTransition as exc:
+        return _error_response(409, _transition_code(exc), str(exc))
+    except store.EditorDocumentFailed:
+        return _error_response(
+            500,
+            "EDITOR_DOCUMENT_FAILED",
+            "Editor document construction failed",
+        )
+
+
+@router.post(
+    "/projects/{project_id}/graphs/{identifier}/presentation-edits",
+    response_model=EditorDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_presentation_edit(
+    project_id: str, identifier: str, body: PresentationBatchRequest
+):
+    operations = tuple(
+        edit.model_dump(mode="python") for edit in body.edits
+    )
+    try:
+        return store.apply_presentation(
+            project_id,
+            identifier,
+            base_revision=body.base_revision,
+            base_presentation_revision=body.base_presentation_revision,
+            operations=operations,
+            response_factory=lambda publication, layout: _document(
+                publication, layout, include_receipt=True
+            ),
+        )
+    except (store.ProjectNotFound, store.GraphNotFound) as exc:
+        raise HTTPException(status_code=404, detail="graph artefact not found") from exc
+    except store.GraphConflict as exc:
+        return _error_response(
+            409,
+            "DRAFT_REVISION_CONFLICT",
+            "Graph draft revision conflict",
+            current_revision=exc.current_revision,
+        )
+    except layouts.LayoutConflict as exc:
+        return _error_response(
+            409,
+            "PRESENTATION_REVISION_CONFLICT",
+            "Presentation revision conflict",
+            current_presentation_revision=exc.current_revision,
+        )
+    except layouts.LayoutRejected as exc:
+        return _error_response(
+            422,
+            "PRESENTATION_VALIDATION_FAILED",
+            "Presentation validation failed",
+            errors=[EditorErrorItem(
+                operation_index=exc.operation_index,
+                clause=None,
+                path=list(exc.path),
                 message=str(exc),
             )],
         )
