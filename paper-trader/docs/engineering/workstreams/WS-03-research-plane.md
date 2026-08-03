@@ -125,7 +125,7 @@ finding that is not bound to what produced it.
 |---|---|---|
 | `app.ir.authoring` (`component`, `parameter`, `socket`, `wire`) | WS-01 | Derive the block library as typed, versioned components. |
 | `app.ir.edit` (`add_node`, `remove_node`, `connect`, `disconnect`, `set_override`, `EditRejected`) | WS-01 | The proposer's only mutation primitives — legality is WS-01's to decide. |
-| `app.ir.experiment` (F14 binding) | WS-01 | **Not yet consumed.** This is the topmost item in §5. |
+| `app.ir.experiment` (F14 binding) | WS-01 | Consumed by `ir_search.py` and `ir_evaluate.py`; every Gen-2 step and scored candidate derives its binding from the resolved graph. |
 | `app.backtest.engine`, `app.backtest.metrics` | WS-02 (pure kernels) | Simulation math is reused, never duplicated, via `research/evaluation/kernels.py`. |
 | `app.strategy.registry` | WS-02 | The handwritten baseline strategy and the canonical column contract. |
 | `app.core.config` / `app.core.instruments` / `app.core.market_hours` | WS-02 | Read-only. `app.core.config` binds no DB engine — that is the reason it is allowed and `app.db.session` is not. |
@@ -444,21 +444,6 @@ that shaped it: `docs/research/ARCHITECTURE.md`.
         record shape. Anyone setting a component's `cache_identity` to `"declared"` breaks that
         transitivity and should know it.
 
-- [ ] **Bind every research run through `app/ir/experiment.py` (F14).** *This comes before a
-      search objective, and the ordering is not stylistic.* F14 requires every experiment and
-      every finding to record the exact graph version and every resolved component version
-      that produced it; `app/ir/experiment.py` derives that binding from a `ResolvedGraph` —
-      `record()` has no parameter for the versions, because a record that can be *told* its
-      versions can be told last week's, and stale-not-missing is the failure that has actually
-      happened here. **Versioning's value is retrospective: adding it late leaves every prior
-      run permanently unattributable, and this platform has already paid that exact price
-      once** (§7 — every Finding predating 2026-08 is unusable as a baseline). A search loop
-      that runs before binding manufactures a second corpus with the same defect, at a much
-      higher rate. Concretely: `research/` currently imports `app.ir.authoring` and
-      `app.ir.edit` and **not** `app.ir.experiment` (verified 2026-08-03 by grepping every
-      `from app.` in `backend/research/`). The work is to make the orchestrator record an
-      `ExperimentRecord` per run and a `Finding` carrying that record's `binding`, and to make
-      it impossible to persist a Finding without one.
 - [x] **The Generation-2 search loop — DONE 2026-08-03.**
       `research/strategy/builder/ir_strategy.py` (the graph→`Strategy` adapter) +
       `ir_evaluate.py` (the loop) + `research_tests/test_ir_evaluate.py`, 21 tests.
@@ -560,9 +545,8 @@ no data, and on code registered but never drawn.
   claimed a wider search raised the bar. *Cost of leaving it:* zero if the old corpus is
   never trusted; catastrophic if it is used as prior evidence, because those numbers are
   confidently wrong in the optimistic direction. *Trigger:* any decision that reaches for a
-  pre-2026-08 Finding. **This is precisely why F14 binding is the next item in §5** — the
-  reason those runs are unusable is that nothing records what produced them, so they cannot
-  even be re-scored.
+  pre-2026-08 Finding. F14 now protects Gen-2 runs, but the reason those older runs are unusable
+  remains: nothing records what produced them, so they cannot even be re-scored.
 - **`Vocabulary.families` defaults to `None` with a `# type: ignore[assignment]`**
   (`propose.py:34`). A `Mapping` field typed non-optional and defaulted to `None`; any caller
   that reads it without passing one gets an `AttributeError` at a distance rather than a type

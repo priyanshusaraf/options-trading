@@ -32,9 +32,9 @@ graph TD
   WS02 --> WS06
   WS07 --> WS06
   WS08 --> WS06
-  WS08 -.future shell.-> WS04
+  WS08 --> WS04
   WS02 --> WS01
-  WS07 -.when it starts.-> WS04
+  WS07 --> WS04
   WS07 -.when it starts.-> WS05
   WS03 -.when it starts.-> WS05
 
@@ -62,9 +62,10 @@ before adoption starts.
 | WS-02 | WS-08 | the REST + WS API, the money record |
 | WS-07 | WS-02, WS-03, WS-08 | DB, sessions, `Settings`/`runtime_config`, the WS hub, test isolation |
 | WS-02, WS-07, WS-08 | WS-06 | what gets deployed, and what `/api/health` reports |
-| WS-08 | WS-04 | the app shell the editor will live in — future, declared now so it is not discovered late |
+| WS-08 | WS-04 | the app shell, `lib/api.ts` and shadcn primitives used by the live read-only viewer |
 | WS-02 | WS-01 | the seven pure `expanding_z_v4` steps the reference artefact's kernels compose. Live today, and the edge that makes adoption a cycle risk |
-| WS-07 | WS-04, WS-05 | future — persistence for stored layouts and for a package store |
+| WS-07 | WS-04 | current — FastAPI/SQLite/Alembic substrate for the route and next layout store |
+| WS-07 | WS-05 | future — persistence for a package store |
 | WS-03 | WS-05 | future — the AST allow-list as prior art, *not* an import (WS-05 §3) |
 
 ## 3. Roots and sinks

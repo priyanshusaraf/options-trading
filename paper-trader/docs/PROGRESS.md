@@ -63,9 +63,10 @@ that clause's implementation.
 ### The two results worth knowing
 
 **`expanding_z_v4` — the strategy that books the trades — is expressed in the IR and produces
-identical signals, bar for bar.** 15 components, 17 nodes, 47 edges, checked over 400 bars
-against `ExpandingZImpulseV4.compute()`. Proven able to fail by mis-binding one parameter and by
-re-pointing one edge.
+identical signals, bar for bar.** The authored artefact contains 19 node records and 47 edge
+records; resolution produces the 18-node, 35-edge view rendered by the application. Signal
+parity is checked over 400 bars against `ExpandingZImpulseV4.compute()`, and was proven able to
+fail by mis-binding one parameter and by re-pointing one edge.
 
 **`expanding_z_v4` is causal at every intermediate node.** "Signals fire only on completed
 candles" used to be a convention; it is now measured — evaluate on a prefix of the bars and on

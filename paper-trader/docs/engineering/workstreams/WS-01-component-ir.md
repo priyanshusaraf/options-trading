@@ -436,13 +436,11 @@ Plus, specific to this workstream and not negotiable:
   violations" as "conforming", which it is not. Trigger to fix: the first persistence layer or API
   that stores artefacts, where a library is not necessarily at hand. The honest interim rule is
   that any caller storing an artefact must call `unchecked_clauses()` and refuse a non-empty set.
-- **Nothing in production imports `app/ir/`.** The only importers are the IR's own tests,
-  `backend/scripts/render_ir_graph.py`, and WS-03's research code (`ir_components.py`,
-  `propose.py`) with its tests. No engine, route, or backtest path reaches it. This is deliberate
-  (see §8), but it means every guarantee in §3 is verified against tests and one script, never
-  against production traffic. Cost: the language is unexercised by the pressures that actually
-  break formats — persistence, migration, concurrent editors. Trigger: WS-02's adoption decision,
-  or WS-04 putting a UI in front of it.
+- **No execution or backtest path imports `app/ir/`.** The read-only WS-04 route now imports the
+  resolver, validator and view model, and WS-03 consumes the language for research. The engine
+  still calls the hand-written strategy. This is deliberate (see §8), but persistence,
+  migration and concurrent editing pressures remain untested until WS-04 stores layouts and
+  artefacts. Trigger: WS-02's adoption decision or the next WS-04 persistence slice.
 - **The reference artefact hand-builds its artefacts instead of using `authoring.py`.**
   `strategies/expanding_z.py` predates the authoring layer and constructs its components with
   private `_component`/`_socket`/`_param` helpers and `content_address(identifier)` as a stand-in

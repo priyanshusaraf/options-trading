@@ -5,7 +5,7 @@
 `frontend/src/views/GraphView.tsx` and its transport/tests. Next: the F13 layout side table. The
 libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
 WS-01**.
-**Last verified:** 2026-08-03 · commit `f61dfe4`
+**Last verified:** 2026-08-03 · commit `071a1a1`
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of

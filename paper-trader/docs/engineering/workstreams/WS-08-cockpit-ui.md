@@ -4,7 +4,7 @@
 **Owner surface:** `frontend/` — all of it. `src/views/`, `src/components/`, `src/ledger/`,
 `src/lib/`, `src/state/`, `index.css`, `tailwind.config.js`, `components.json`, `vite.config.ts`,
 `vitest.config.ts`.
-**Last verified:** 2026-08-03 · commit `cdbe686`
+**Last verified:** 2026-08-03 · commit `f61dfe4`
 
 > This is the screen the owner actually looks at. It is a React + TypeScript SPA that renders
 > everything the trading engine knows — open positions, the equity curve, the trade book, the
@@ -101,9 +101,8 @@ reference site `ag-website-git-main-match-up.vercel.app` sits behind Vercel depl
 protection, so the font names and palette values cannot be read without either a browser
 extension with access or the owner simply supplying them. Nothing else is blocked.
 
-**Currently blocking:** nothing today. It will block **WS-04 Editor**, which has no surface of
-its own and is specified to live inside this SPA and reuse `lib/api.ts` and
-`components/ui/`.
+**Currently blocking:** nothing. WS-04 now uses this SPA, `lib/api.ts` and `components/ui/` for
+its read-only graph viewer.
 
 ## 4. Completed
 
@@ -217,9 +216,10 @@ Plus, specific to this workstream:
   computes. Two hand-written implementations of one idea is the shape that produced the
   `candles.py` defect. Cost: low while the backend sends a verdict and the client only presents
   it. Trigger: the client ever *deciding* rather than presenting.
-- **No end-to-end or component-render tests.** Everything green is pure logic plus a
-  source-scanning lint test; no view is ever mounted in CI. A view can be structurally broken
-  with the suite fully green. Trigger: the first regression that ships past a green suite.
+- **Component-render coverage is narrow.** `GraphView.test.ts` renders the WS-04 graph states
+  and semantic canvas, but most cockpit views still have only pure logic or source-scanning
+  guards and there is no end-to-end suite. Trigger: the first uncovered view regression or the
+  next stateful cockpit workflow.
 
 ## 8. Blockers
 
@@ -231,10 +231,8 @@ Plus, specific to this workstream:
 
 ## 9. Future work
 
-- **Component-render tests** (Testing Library or Playwright). Trigger: the first user-visible
-  regression that a green suite let through.
-- **A host for WS-04's graph canvas** — route, layout shell, reuse of `components/ui/`. Trigger:
-  WS-04's first roadmap item starting.
+- **Broader component-render and end-to-end tests** (Testing Library or Playwright). Trigger:
+  the next stateful cockpit workflow or an uncovered regression.
 - **Surfacing `build.commit` in the UI**, not just in `/api/health`. Deployment state is already
   answerable in one curl; putting it on screen removes the curl. Trigger: the next time someone
   asks "is this the new build?" and answers it from prose.

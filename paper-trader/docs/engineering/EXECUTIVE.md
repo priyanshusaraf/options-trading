@@ -72,23 +72,25 @@ document is incomplete — that is a defect to fix, not a reason to read the who
 
 ## 4. Sequencing, as it stands
 
-The dependency graph in `DEPENDENCIES.md` produces this order. It is a consequence of the
-declared edges, not a preference:
+The dependency graph in `DEPENDENCIES.md` constrains order but does not define one total order.
+The current product sequence is:
 
-1. **WS-01 Component IR** — foundation. Every RFC clause has an enforcement point, which is
-   not the same as "fully checked": F7 and F8 are only checked when a component library is
-   supplied and are reported *unchecked* otherwise, and F14 is enforced by the experiment
-   system rather than the artefact validator. WS-01's own §5 and §7 are the authority on what
-   remains. Only WS-01 could unblock WS-04 and WS-05, and it already has.
-2. **WS-03 Research Plane** — the largest consumer of WS-01, and unblocked. Currently the
-   highest-value active stream.
-3. **WS-07 Infrastructure** — substrate; work here is triggered by the others' needs.
-4. **WS-02 Execution** — blocked on the owner for deployment, not for development.
-5. **WS-04 Editor** — unblocked by WS-01 but not started; the first thing that would make the
-   IR part of the running application.
-6. **WS-08 Cockpit UI** — active, independent, small.
-7. **WS-06 Deployment** — reactive; owner-blocked items only.
-8. **WS-05 Marketplace** — deliberately last. Its trigger is third-party distribution.
+1. **Stage A stabilisation** — trustworthy remote state, coordination documents, master plan and
+   fail-closed CI.
+2. **WS-04 Editor** — F13 layout separation, durable graph objects, editing and authoring
+   equivalence. WS-01 supplies the language and WS-07 supplies persistence.
+3. **WS-03 Research Plane** — connect immutable graph versions to the existing gates, explanations,
+   unattended runs and approval evidence. Do not build a second scoring pipeline.
+4. **Versioning and daily review** — comparisons, findings, approval history and review queues
+   across WS-04/08/07.
+5. **WS-02 execution integration** — local reversible parity, replay and shadow slices. Deployment
+   remains owner-gated.
+6. **WS-08 cockpit and WS-07 data identity** — operational surfaces and a durable data model.
+7. **WS-05 Marketplace** — only after authoring, research, versioning and deployment contracts are
+   coherent; third-party distribution remains its trigger.
+
+WS-01 remains the foundation, WS-07 remains the substrate, and WS-06 remains the deployment sink.
+The detailed slice order and gates live in `EXECUTION_PLAN.md`.
 
 ## 5. Standing decisions
 
@@ -137,7 +139,10 @@ during it.
 | Deploy the eight-phase architecture migration | WS-02 → WS-06 | **Owner.** Committed, verified, off the box for several sessions |
 | Adopt the IR runtime in a live path | WS-01 → WS-02 | **Owner.** RFC Appendix C(d); parity evidence now exists |
 | Does a display-name change mint a new body address? | WS-01 | Open question, pinned by a test. Resolving it is an RFC amendment |
-| Narrow per-block declared inputs | WS-03 → WS-01 | WS-03's derived components declare the whole OHLCV frame |
+
+The ordered programme beyond these coordination items lives in
+[`EXECUTION_PLAN.md`](EXECUTION_PLAN.md). Workstream §5 lists remain the authority for local
+implementation detail.
 
 ## 9. Health checks for this layer
 

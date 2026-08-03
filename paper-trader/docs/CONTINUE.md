@@ -10,28 +10,48 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**WS-04 Editor is active.** Its first vertical slice is committed end to end: one read-only JSON
-route over the resolved `expanding_z_v4` graph and a native HTML/SVG viewer in the existing
-`Strategy Graph` tab. The route is mounted on `/api` and `/api/v1`, resolves only a fixed
-repository-owned catalogue, and has no execution, broker, provider, database or order
-dependency.
+**Stage A repository and programme stabilisation is active.** The WS-04 read-only graph stack is
+verified and pushed. Coordination documents now distinguish the 19 authored nodes/47 authored
+edges from the 18 resolved view nodes/35 resolved view edges, and the sequential full-product
+plan lives at `docs/engineering/EXECUTION_PLAN.md`. The next slice is fail-closed CI; F13 sparse
+layout persistence follows it.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
 
-## 2. Last verified commit
+## 2. Repository and remote state
 
-`f61dfe4` — typed read-only React graph viewer, transport/render tests and tab integration.
-Preceded by `000075d` (route handoff documentation) and `049b699` (the closed graph API and 14
-route tests).
+- Repository root: `/Users/priyanshusaraf/dev/options-trading`
+- Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
+- Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
+- Verified product HEAD before this documentation slice: `071a1a1`
+- Latest verified remote before this documentation slice: `071a1a1`
+- Ahead/behind after that push: `0/0`
+- Working tree expected after publishing this handoff: clean
 
-Branch `feat/exec-completeness`, 92 commits ahead of `main`. The working tree contains only the
-current documentation edits.
+The commit containing this handoff is the current HEAD after publication; resolve its SHA with
+`git rev-parse HEAD`. A Git commit cannot embed its own content-derived SHA. Verify the published
+state with `git rev-list --left-right --count '@{upstream}...HEAD'` and `git status --short`.
 
 The VPS build was **not measured this session.** `curl localhost:8090/api/health` on the box is
 the only answer — never read it off a document.
 
-## 3. Last acceptance command and output
+## 3. Latest acceptance evidence
+
+Focused trust run on 2026-08-03 before publishing `071a1a1`:
+
+```
+$ .venv/bin/python -m pytest -q tests/test_ir_routes.py tests/test_ir_view.py tests/test_ir_edit.py
+48 passed · EXIT 0
+
+$ npm test -- --run src/lib/irGraphApi.test.ts src/views/GraphView.test.ts src/views/mobileLayout.test.ts
+13 passed · EXIT 0
+
+$ npm run typecheck && npm run build
+TYPECHECK OK · BUILD OK
+```
+
+The last full acceptance evidence remains:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q     # from backend/
@@ -73,7 +93,14 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-04 Editor — implement the F13 layout side table.**
+**Stage A — add fail-closed CI.** Start from S0.4 in
+`docs/engineering/EXECUTION_PLAN.md`. Inspect current requirements, lockfiles, test collection and
+deterministic scripts; write a workflow validation check that first fails because no workflow
+exists; then add backend, deterministic-smoke and frontend jobs. Run every workflow-equivalent
+command locally, prove the guard rejects a missing test directory or required command, update
+this handoff, commit and push.
+
+**After CI: WS-04 Editor — implement the F13 layout side table.**
 
 Choose the presentation-state store and add a sparse record keyed by graph identifier/version
 and `instance_id`; store only positions the user has moved. Define what happens to orphaned rows

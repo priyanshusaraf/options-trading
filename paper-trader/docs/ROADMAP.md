@@ -11,6 +11,9 @@ document — see [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · VPS build **not measured** —
 `curl /api/health` is the only answer.
 
+The full sequential programme, including current and later slice gates, is maintained in
+[`engineering/EXECUTION_PLAN.md`](engineering/EXECUTION_PLAN.md).
+
 ---
 
 ## 1. Order of work
