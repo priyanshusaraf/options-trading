@@ -8,14 +8,17 @@ import {
   type PointerEvent,
 } from 'react'
 import {
-  getIrGraph,
+  EditorApiError,
+  getIrEditorDocument,
   getIrGraphLayout,
+  postIrEditorOperations,
   putIrGraphLayout,
   type IrGraphLayout,
   type IrGraphView,
   type IrViewNode,
 } from '../lib/api'
 import {
+  adoptEditorLayout,
   beginLayoutEditor,
   failLayoutSave,
   moveLayoutNode,
@@ -25,6 +28,22 @@ import {
   type LayoutEditorPhase,
   type LayoutEditorState,
 } from './graphLayoutState'
+import { GraphEditControls } from './GraphEditControls'
+import {
+  acceptPublication,
+  acceptReload,
+  beginGraphEditor,
+  draftClearOverride,
+  draftDisplayName,
+  draftSetOverrideJson,
+  failEditorRequest,
+  startPublish,
+  startRedo,
+  startReload,
+  startUndo,
+  type GraphEditorState,
+  type StartedEditorRequest,
+} from './graphEditorState'
 import { Badge } from '../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
@@ -34,6 +53,7 @@ import {
 import { cn } from '../lib/utils'
 
 const GRAPH_IDENTIFIER = 'strategy.expanding_z_impulse'
+const PROJECT_ID = 'project.repository_catalogue'
 const NODE_WIDTH = 288
 const NODE_HEIGHT = 340
 const X_GAP = 88
@@ -371,21 +391,35 @@ export function GraphCanvas({ graph, layout, onMove }: {
 export function GraphViewState({
   graph,
   layout,
+  graphEditor,
   phase = 'clean',
   message = null,
   error,
   onMove,
   onSave,
   onReload,
+  onDisplayName,
+  onSetOverride,
+  onClearOverride,
+  onUndo,
+  onRedo,
+  onEditorReload,
 }: {
   graph: IrGraphView | null
   layout?: IrGraphLayout | null
+  graphEditor?: GraphEditorState | null
   phase?: LayoutEditorPhase
   message?: string | null
   error: string | null
   onMove?: (instanceId: string, point: Point) => void
   onSave?: () => void
   onReload?: () => void
+  onDisplayName?: (displayName: string) => void
+  onSetOverride?: (instanceId: string, parameter: string, source: string) => void
+  onClearOverride?: (instanceId: string, parameter: string) => void
+  onUndo?: () => void
+  onRedo?: () => void
+  onEditorReload?: () => void
 }) {
   if (error) {
     return (
@@ -409,6 +443,24 @@ export function GraphViewState({
   const buttonClass = 'rounded border border-edge px-3 py-1.5 text-xs font-medium text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400'
   return (
     <>
+      {graphEditor
+        && onDisplayName
+        && onSetOverride
+        && onClearOverride
+        && onUndo
+        && onRedo
+        && onEditorReload
+        && (
+          <GraphEditControls
+            state={graphEditor}
+            onDisplayName={onDisplayName}
+            onSetOverride={onSetOverride}
+            onClearOverride={onClearOverride}
+            onUndo={onUndo}
+            onRedo={onRedo}
+            onReload={onEditorReload}
+          />
+        )}
       {phase === 'dirty' && (
         <div className="mb-3 flex items-center justify-between gap-3" role="status">
           <span className="text-xs font-medium text-amber-300">Unsaved layout</span>
@@ -450,17 +502,18 @@ export function GraphViewState({
 }
 
 export default function GraphView() {
-  const [graph, setGraph] = useState<IrGraphView | null>(null)
-  const [editor, setEditor] = useState<LayoutEditorState | null>(null)
+  const [graphEditor, setGraphEditor] = useState<GraphEditorState | null>(null)
+  const [layoutEditor, setLayoutEditor] = useState<LayoutEditorState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const latestRequest = useRef(0)
 
   useEffect(() => {
     let current = true
-    getIrGraph(GRAPH_IDENTIFIER)
-      .then(async (view) => {
-        if (current) setGraph(view)
-        const storedLayout = await getIrGraphLayout(view.identifier, view.version)
-        if (current) setEditor(beginLayoutEditor(storedLayout))
+    getIrEditorDocument(PROJECT_ID, GRAPH_IDENTIFIER)
+      .then((document) => {
+        if (!current) return
+        setGraphEditor(beginGraphEditor(document))
+        setLayoutEditor(beginLayoutEditor(document.layout))
       })
       .catch((reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : 'The graph could not be loaded')
@@ -469,38 +522,147 @@ export default function GraphView() {
   }, [])
 
   const moveNode = (instanceId: string, point: Point) => {
-    setEditor((current) => current ? moveLayoutNode(current, instanceId, point) : current)
+    setLayoutEditor((current) => current ? moveLayoutNode(current, instanceId, point) : current)
   }
 
   const saveLayout = async () => {
-    if (!editor || editor.phase === 'saving') return
-    const draft = editor
-    setEditor(startLayoutSave(draft))
+    if (!layoutEditor || layoutEditor.phase === 'saving') return
+    const draft = layoutEditor
+    setLayoutEditor(startLayoutSave(draft))
     const result = await persistLayoutEditor(draft, putIrGraphLayout)
-    setEditor(result)
+    setLayoutEditor((current) => (
+      current?.layout.graph_version === result.layout.graph_version ? result : current
+    ))
   }
 
   const reloadLayout = async () => {
-    if (!graph || !editor) return
-    const current = editor
+    const graph = graphEditor?.accepted?.view
+    if (!graph || !layoutEditor) return
+    const current = layoutEditor
     try {
       const reloaded = await getIrGraphLayout(graph.identifier, graph.version)
-      setEditor((latest) => reloadLayoutEditor(latest ?? current, reloaded))
+      setLayoutEditor((latest) => (
+        latest && latest.layout.graph_version !== reloaded.graph_version
+          ? latest
+          : reloadLayoutEditor(latest ?? current, reloaded)
+      ))
     } catch (reason: unknown) {
-      setEditor((latest) => failLayoutSave(latest ?? current, reason))
+      setLayoutEditor((latest) => failLayoutSave(latest ?? current, reason))
     }
   }
+
+  const runPublication = (started: StartedEditorRequest | null) => {
+    if (!started) return
+    latestRequest.current = started.requestId
+    setGraphEditor(started.state)
+    postIrEditorOperations(
+      PROJECT_ID,
+      GRAPH_IDENTIFIER,
+      started.request.baseRevision,
+      started.request.operations,
+    ).then((document) => {
+      if (latestRequest.current !== started.requestId) return
+      setGraphEditor((current) => current
+        ? acceptPublication(current, started.requestId, document)
+        : current)
+      setLayoutEditor((current) => current
+        ? adoptEditorLayout(current, document.layout)
+        : beginLayoutEditor(document.layout))
+    }).catch((reason: unknown) => {
+      if (latestRequest.current !== started.requestId) return
+      const failure = reason instanceof EditorApiError
+        ? reason
+        : new EditorApiError(
+            'network',
+            reason instanceof Error ? reason.message : 'Editor request failed',
+            null,
+            reason,
+          )
+      setGraphEditor((current) => current
+        ? failEditorRequest(current, started.requestId, failure)
+        : current)
+    })
+  }
+
+  const publishDraft = (drafted: GraphEditorState) => {
+    setGraphEditor(drafted)
+    runPublication(startPublish(drafted))
+  }
+
+  const updateDisplayName = (displayName: string) => {
+    if (graphEditor) publishDraft(draftDisplayName(graphEditor, displayName))
+  }
+
+  const setOverride = (instanceId: string, parameter: string, source: string) => {
+    if (graphEditor) publishDraft(
+      draftSetOverrideJson(graphEditor, instanceId, parameter, source),
+    )
+  }
+
+  const clearOverride = (instanceId: string, parameter: string) => {
+    if (graphEditor) publishDraft(
+      draftClearOverride(graphEditor, instanceId, parameter),
+    )
+  }
+
+  const undo = () => {
+    if (graphEditor) runPublication(startUndo(graphEditor))
+  }
+
+  const redo = () => {
+    if (graphEditor) runPublication(startRedo(graphEditor))
+  }
+
+  const reloadEditor = () => {
+    if (!graphEditor) return
+    const started = startReload(graphEditor)
+    latestRequest.current = started.requestId
+    setGraphEditor(started.state)
+    getIrEditorDocument(PROJECT_ID, GRAPH_IDENTIFIER)
+      .then((document) => {
+        if (latestRequest.current !== started.requestId) return
+        setGraphEditor((current) => current
+          ? acceptReload(current, started.requestId, document)
+          : current)
+        setLayoutEditor((current) => reloadLayoutEditor(
+          current ?? beginLayoutEditor(document.layout), document.layout,
+        ))
+      })
+      .catch((reason: unknown) => {
+        if (latestRequest.current !== started.requestId) return
+        const failure = reason instanceof EditorApiError
+          ? reason
+          : new EditorApiError(
+              'network',
+              reason instanceof Error ? reason.message : 'Editor reload failed',
+              null,
+              reason,
+            )
+        setGraphEditor((current) => current
+          ? failEditorRequest(current, started.requestId, failure)
+          : current)
+      })
+  }
+
+  const graph = graphEditor?.accepted?.view ?? null
 
   return (
     <GraphViewState
       graph={graph}
-      layout={editor?.layout ?? null}
-      phase={editor?.phase}
-      message={editor?.message}
+      layout={layoutEditor?.layout ?? null}
+      graphEditor={graphEditor}
+      phase={layoutEditor?.phase}
+      message={layoutEditor?.message}
       error={error}
       onMove={moveNode}
       onSave={saveLayout}
       onReload={reloadLayout}
+      onDisplayName={updateDisplayName}
+      onSetOverride={setOverride}
+      onClearOverride={clearOverride}
+      onUndo={undo}
+      onRedo={redo}
+      onEditorReload={reloadEditor}
     />
   )
 }

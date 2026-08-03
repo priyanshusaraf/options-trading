@@ -1,13 +1,14 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { IrGraphLayout, IrGraphView } from '../lib/api'
+import type { IrEditorDocument, IrGraphLayout, IrGraphView } from '../lib/api'
 import {
   GraphCanvas,
   GraphViewState,
   movePointFromPointer,
   movePointWithKey,
 } from './GraphView'
+import { beginGraphEditor } from './graphEditorState'
 
 const GRAPH: IrGraphView = {
   identifier: 'strategy.example',
@@ -66,6 +67,36 @@ const LAYOUT: IrGraphLayout = {
     // Keep the renderer closed even if a malformed response reaches the client.
     { instance_id: 'risk/threshold', x: 999, y: 999 },
   ],
+}
+
+const EDITOR_DOCUMENT: IrEditorDocument = {
+  project_id: 'project.catalogue',
+  identifier: GRAPH.identifier,
+  display_name: GRAPH.display_name,
+  draft_revision: 2,
+  version: GRAPH.version,
+  content_address: 'sha256:graph',
+  authored_graph: {
+    identifier: GRAPH.identifier,
+    version: GRAPH.version,
+    display_name: GRAPH.display_name,
+    nodes: [{
+      instance_id: 'prices',
+      component: { identifier: 'source.close', version: 1 },
+      overrides: { window: 20 },
+    }],
+  },
+  view: GRAPH,
+  editable_nodes: [{
+    instance_id: 'prices',
+    component_identifier: 'source.close',
+    component_version: 1,
+    parameters: [{
+      identifier: 'window', kind: 'length', default: 10, value: 20, overridden: true,
+    }],
+  }],
+  layout: LAYOUT,
+  command_receipt: null,
 }
 
 describe('GraphCanvas', () => {
@@ -152,6 +183,26 @@ describe('GraphCanvas', () => {
 })
 
 describe('GraphViewState', () => {
+  it('renders coherent persistent editing controls with the accepted graph', () => {
+    const html = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      graphEditor: beginGraphEditor(EDITOR_DOCUMENT),
+      error: null,
+      onDisplayName: () => undefined,
+      onSetOverride: () => undefined,
+      onClearOverride: () => undefined,
+      onUndo: () => undefined,
+      onRedo: () => undefined,
+      onEditorReload: () => undefined,
+    }))
+
+    expect(html).toContain('Graph editing')
+    expect(html).toContain('Graph display name')
+    expect(html).toContain('aria-label="Set prices window override"')
+    expect(html).toContain('Example Strategy')
+  })
+
   it('announces loading while no response has arrived', () => {
     const html = renderToStaticMarkup(React.createElement(GraphViewState, {
       graph: null,

@@ -88,6 +88,25 @@ export const reloadLayoutEditor = (
   layout: IrGraphLayout,
 ): LayoutEditorState => beginLayoutEditor(layout)
 
+export function adoptEditorLayout(
+  state: LayoutEditorState,
+  layout: IrGraphLayout,
+): LayoutEditorState {
+  const retainsLocalPositions = (
+    state.phase === 'dirty'
+    || state.phase === 'saving'
+    || state.phase === 'conflict'
+    || state.phase === 'error'
+  )
+  if (!retainsLocalPositions) return beginLayoutEditor(layout)
+  return {
+    layout: { ...layout, positions: state.layout.positions },
+    phase: 'dirty',
+    message: null,
+    retryRevision: null,
+  }
+}
+
 export const saveBaseRevision = (state: LayoutEditorState): number =>
   state.retryRevision ?? state.layout.revision
 

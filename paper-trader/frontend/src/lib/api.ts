@@ -50,6 +50,199 @@ export interface IrGraphLayout {
   readonly positions: readonly IrLayoutPosition[]
 }
 
+export interface IrAuthoredNode {
+  readonly instance_id: string
+  readonly component: {
+    readonly identifier: string
+    readonly version: number
+  }
+  readonly overrides: Readonly<Record<string, unknown>>
+}
+
+export interface IrAuthoredGraph {
+  readonly identifier: string
+  readonly version: number
+  readonly display_name: string
+  readonly nodes: readonly IrAuthoredNode[]
+}
+
+export interface IrEditableParameter {
+  readonly identifier: string
+  readonly kind: string
+  readonly default: unknown
+  readonly value: unknown
+  readonly overridden: boolean
+}
+
+export interface IrEditableNode {
+  readonly instance_id: string
+  readonly component_identifier: string
+  readonly component_version: number
+  readonly parameters: readonly IrEditableParameter[]
+}
+
+export type IrEditorOperation =
+  | { readonly operation: 'set_display_name'; readonly display_name: string }
+  | {
+      readonly operation: 'set_override'
+      readonly instance_id: string
+      readonly parameter: string
+      readonly value: unknown
+    }
+  | {
+      readonly operation: 'clear_override'
+      readonly instance_id: string
+      readonly parameter: string
+    }
+
+export interface IrCommandReceipt {
+  readonly applied_operations: readonly IrEditorOperation[]
+  readonly inverse_operations: readonly IrEditorOperation[]
+  readonly base_revision: number
+  readonly draft_revision: number
+  readonly version: number
+  readonly content_address: string
+}
+
+export interface IrEditorDocument {
+  readonly project_id: string
+  readonly identifier: string
+  readonly display_name: string
+  readonly draft_revision: number
+  readonly version: number
+  readonly content_address: string
+  readonly authored_graph: IrAuthoredGraph
+  readonly view: IrGraphView
+  readonly editable_nodes: readonly IrEditableNode[]
+  readonly layout: IrGraphLayout
+  readonly command_receipt: IrCommandReceipt | null
+}
+
+export interface IrEditorErrorItem {
+  readonly operation_index: number | null
+  readonly clause: string | null
+  readonly path: readonly (string | number)[]
+  readonly message: string
+}
+
+export interface IrEditorErrorEnvelope {
+  readonly code:
+    | 'DRAFT_REVISION_CONFLICT'
+    | 'EDITOR_NOT_PUBLISHED'
+    | 'EDITOR_HAS_UNPUBLISHED_DRAFT'
+    | 'EDITOR_ARCHIVED'
+    | 'REQUEST_VALIDATION_FAILED'
+    | 'IR_VALIDATION_FAILED'
+    | 'EDITOR_DOCUMENT_FAILED'
+  readonly message: string
+  readonly current_revision: number | null
+  readonly errors: readonly IrEditorErrorItem[]
+}
+
+export type EditorApiErrorCategory =
+  | 'conflict'
+  | 'validation'
+  | 'server'
+  | 'non-json-server'
+  | 'network'
+
+export class EditorApiError extends Error {
+  readonly category: EditorApiErrorCategory
+  readonly envelope: IrEditorErrorEnvelope | null
+  readonly originalCause: unknown
+
+  constructor(
+    category: EditorApiErrorCategory,
+    message: string,
+    envelope: IrEditorErrorEnvelope | null = null,
+    originalCause?: unknown,
+  ) {
+    super(message)
+    this.name = 'EditorApiError'
+    this.category = category
+    this.envelope = envelope
+    this.originalCause = originalCause
+  }
+}
+
+const editorPath = (projectId: string, identifier: string) =>
+  `/api/ir/projects/${encodeURIComponent(projectId)}/graphs/${encodeURIComponent(identifier)}`
+
+const editorHeaders = (): Record<string, string> =>
+  TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}
+
+const editorEnvelope = async (response: Response): Promise<IrEditorErrorEnvelope> => {
+  try {
+    return await response.json() as IrEditorErrorEnvelope
+  } catch (cause: unknown) {
+    throw new EditorApiError(
+      'non-json-server',
+      `Editor request failed (${response.status})`,
+      null,
+      cause,
+    )
+  }
+}
+
+const editorFailure = async (response: Response): Promise<never> => {
+  const envelope = await editorEnvelope(response)
+  const category: EditorApiErrorCategory = response.status === 409
+    ? 'conflict'
+    : response.status === 422
+      ? 'validation'
+      : 'server'
+  throw new EditorApiError(category, envelope.message, envelope)
+}
+
+const editorFetch = async (
+  url: string,
+  init: RequestInit,
+): Promise<IrEditorDocument> => {
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  } catch (cause: unknown) {
+    const message = cause instanceof Error ? cause.message : 'Editor network request failed'
+    throw new EditorApiError('network', message, null, cause)
+  }
+  if (!response.ok) return editorFailure(response)
+  try {
+    return await response.json() as IrEditorDocument
+  } catch (cause: unknown) {
+    throw new EditorApiError(
+      'non-json-server',
+      `Editor request failed (${response.status})`,
+      null,
+      cause,
+    )
+  }
+}
+
+export const getIrEditorDocument = async (
+  projectId: string,
+  identifier: string,
+): Promise<IrEditorDocument> => editorFetch(
+  `${editorPath(projectId, identifier)}/editor`,
+  { headers: editorHeaders() },
+)
+
+export const postIrEditorOperations = async (
+  projectId: string,
+  identifier: string,
+  baseRevision: number,
+  edits: readonly IrEditorOperation[],
+): Promise<IrEditorDocument> => editorFetch(
+  `${editorPath(projectId, identifier)}/edits`,
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...editorHeaders(),
+    },
+    body: JSON.stringify({ base_revision: baseRevision, edits }),
+  },
+)
+
 interface IrLayoutFailureBody {
   readonly detail?: unknown
   readonly current_revision?: unknown
