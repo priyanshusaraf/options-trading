@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.3 is implemented; S4.3 is awaiting this slice publication.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.4 is implemented; S4.5 comparison is the active slice.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -35,6 +35,9 @@ S4.3 keeps the existing Finding ledger, derives exact graph/evidence binding thr
 run foreign key, creates interpretations from completed evidence only, and revises by atomic
 immutable successor. The UI shows automated/authored active and superseded history and retains
 revision intent on conflict.
+S4.4 gives nightly and manual research one shared OS lock and a canonical atomic current/last
+receipt. The read-only status API and cockpit show bounded plan identity, progress and safe failure
+without exposing remote run controls or invoking research during reads.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -49,6 +52,7 @@ viewer and does not adopt the IR runtime in a live path.
 - S4.2 product-surface slice: current HEAD after this handoff is published
 - S4.3 backend lineage boundary: `c645b64`
 - S4.3 product-surface slice: current HEAD after this handoff is published
+- S4.4 operations observability: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -66,7 +70,7 @@ Latest acceptance run on 2026-08-03:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q
-2,856 passed · 6 skipped · EXIT 0
+2,883 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -75,7 +79,7 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build
-202 passed · TYPECHECK OK · BUILD OK · EXIT 0
+208 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   ResearchComparison,
   ResearchFinding,
+  ResearchOperationStatus,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
@@ -92,7 +93,69 @@ const FINDINGS: ResearchFinding[] = [{
   },
 }]
 
+const OPERATION: ResearchOperationStatus = {
+  state: 'available',
+  active: {
+    operation_id: 'op-running', trigger: 'nightly', state: 'running',
+    stage: 'experiments', started_at: '2026-08-03T01:00:00Z', completed_at: null,
+    build: 'abc123', provider_mode: 'mock', plan: null,
+    completed_run_ids: [12], failure: null,
+  },
+  last: {
+    operation_id: 'op-last', trigger: 'manual_script', state: 'failed',
+    stage: 'generation', started_at: '2026-08-02T01:00:00Z',
+    completed_at: '2026-08-02T01:05:00Z', build: 'def456', provider_mode: 'kite',
+    plan: null, completed_run_ids: [11],
+    failure: { stage: 'generation', code: 'RESEARCH_GENERATION_FAILED', message: 'research generation failed' },
+  },
+}
+
 describe('ResearchEvidenceSurface', () => {
+  it('shows explicit never-run state and a completed last receipt', () => {
+    const never = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [], detail: null, comparison: null, reason: '',
+      operationStatus: { state: 'never_run', active: null, last: null },
+    }))
+    expect(never).toContain('No bounded research operation has run yet.')
+
+    const completed: ResearchOperationStatus = {
+      state: 'available', active: null,
+      last: { ...OPERATION.last!, state: 'completed', stage: 'completed', failure: null },
+    }
+    const done = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: null, comparison: null, reason: '',
+      operationStatus: completed,
+    }))
+    expect(done).toContain('Last · completed · completed · manual script')
+  })
+
+  it('shows current and last server receipts without operation controls', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: DETAIL, comparison: null, reason: '',
+      operationStatus: OPERATION,
+    }))
+
+    expect(html).toContain('Research operation status')
+    expect(html).toContain('Running · experiments · nightly')
+    expect(html).toContain('Last · failed · generation · manual script')
+    expect(html).toContain('RESEARCH_GENERATION_FAILED: research generation failed')
+    expect(html).toContain('Run 12')
+    expect(html).not.toContain('Start research')
+    expect(html).not.toContain('Cancel research')
+  })
+
+  it('contains operation receipt failure without hiding experiment evidence', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: DETAIL, comparison: null, reason: '',
+      operationStatus: null,
+      operationError: 'research operation status is unavailable because its receipt is invalid',
+    }))
+
+    expect(html).toContain('research operation status is unavailable')
+    expect(html).toContain('Experiment history')
+    expect(html).toContain('failed validation: pbo')
+  })
+
   it('surfaces persisted rejection, gates, provenance, comparison, and accessible decisions', () => {
     const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
       runs: [RUN, { ...RUN, run_id: 11 }],

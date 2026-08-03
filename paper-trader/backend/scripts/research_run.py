@@ -1,6 +1,5 @@
 """Headless end-to-end run of the autonomous research pipeline over a SMALL live
-universe — the human-triggered sibling of `research.nightly` (which ships with an
-empty plan until the M3 scheduler lands).
+universe — the human-triggered sibling of `research.nightly`.
 
 It does exactly what the nightly cron will do, with a hand-written plan:
   1. enforce the fail-closed capital guardrails (distinct DB, no order/broker/runner
@@ -16,7 +15,7 @@ Data source is whatever PT_PROVIDER selects (kite for live candles). No capital 
 the provider is SafePaperKite (orders hard-disabled) and the research plane never
 constructs a broker. Run from backend/:
 
-    PT_PROVIDER=kite PT_RESEARCH_DB_PATH=/tmp/research.db \
+    PT_RESEARCH_ENABLED=1 PT_PROVIDER=kite PT_RESEARCH_DB_PATH=/tmp/research.db \
     PT_RESEARCH_REPORT_DIR=/tmp/reports .venv/bin/python scripts/research_run.py
 """
 from __future__ import annotations
@@ -25,6 +24,7 @@ import logging
 import os
 import subprocess
 import sys
+import datetime as dt
 
 # make `app` and `research` importable when this file is run directly as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,6 +82,10 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _now() -> str:
+    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
 def _dump_db(session) -> None:
     from research.domain.models import (
         ExperimentRun, ExperimentSpec, Finding, Hypothesis,
@@ -136,25 +140,14 @@ def _dump_db(session) -> None:
               f"param_hash={c.parameterization_hash[:12]}… universe={c.qualifying_universe_json}")
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s",
-                        datefmt="%H:%M:%S")
-
+def _enforce_isolation() -> str:
     # research plane must NEVER run in a live-execution environment
     os.environ.pop("PT_EXECUTION", None)
     os.environ.setdefault("PT_PROVIDER", "kite")
 
     from research.config import research_db_path
-    from research.domain.base import init_research_db, make_engine, make_sessionmaker
     from research.guards import enforce
-
     from app.core.config import get_settings
-    from app.core.instruments import get_instrument
-    from app.providers.factory import get_provider
-    from research.data.store import KiteDataSource
-    from research.orchestrator.generate import run_generated
-    from research.orchestrator.run import run_nightly
-    from research.universe import ALWAYS_ALLOWED
 
     research_db = research_db_path()
     exec_db = get_settings().db_path
@@ -164,32 +157,106 @@ def main() -> int:
     enforce(research_db=research_db, exec_db=exec_db,
             loaded_modules=sys.modules, env=os.environ)
     print("guardrails: PASS (distinct DBs · no order/broker/runner imports · not live)\n")
+    return research_db
 
-    # (2) schema
-    engine = make_engine(research_db)
-    init_research_db(engine)
-    Session = make_sessionmaker(engine)
 
-    # (3) live data source (SafePaperKite — data only, orders hard-disabled)
-    source = KiteDataSource(provider=get_provider())
-    report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
-    os.makedirs(report_dir, exist_ok=True)
+def _research_enabled() -> bool:
+    from app.core.config import get_settings
 
-    # (4) run the plan through the full pipeline, then let the bot GENERATE + evaluate
-    #     its own strategies on the permanent research sandbox (the always-allowed
-    #     commodities). Generated survivors become human-gated candidates like any other.
-    with Session() as session:
-        reports = run_nightly(session, source, _plan(get_instrument),
-                              git_commit=_git_commit(), report_dir=report_dir)
-        sandbox = [get_instrument(k) for k in UNIVERSE if k in ALWAYS_ALLOWED]
-        if sandbox:
-            print(f"\n── code-gen: composing strategies on the sandbox "
-                  f"{[i.key for i in sandbox]} ──")
-            for interval in INTERVALS:
-                run_generated(session, source, sandbox, interval, limit=8,
-                              git_commit=_git_commit(), min_trades=30, n_folds=4,
-                              min_positive_fold_frac=0.5)
-        _dump_db(session)
+    return get_settings().research_enabled
+
+
+def _run_enabled_operation(research_db: str) -> tuple[list, str]:
+    from app.core.config import get_settings
+    from app.core.instruments import get_instrument
+    from app.providers.factory import get_provider
+    from research.config import operation_lock_path, operation_receipt_path
+    from research.data.store import KiteDataSource
+    from research.domain.base import init_research_db, make_engine, make_sessionmaker
+    from research.operations import (
+        ResearchOperationRecorder,
+        acquire_operation_lock,
+        safe_plan_summary,
+    )
+    from research.orchestrator.generate import run_generated
+    from research.orchestrator.run import run_nightly
+    from research.universe import ALWAYS_ALLOWED
+
+    with acquire_operation_lock(operation_lock_path()):
+        recorder = ResearchOperationRecorder.start(
+            operation_receipt_path(),
+            trigger="manual_script",
+            build=_git_commit(),
+            provider_mode=get_settings().provider,
+            now=_now,
+        )
+        engine = None
+        try:
+            # (2) schema
+            engine = make_engine(research_db)
+            init_research_db(engine)
+            Session = make_sessionmaker(engine)
+
+            # (3) live data source (SafePaperKite — data only, orders hard-disabled)
+            provider = get_provider()
+            source = KiteDataSource(provider=provider)
+            report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
+            os.makedirs(report_dir, exist_ok=True)
+
+            # (4) run the full server-owned plan and generated sandbox search.
+            with Session() as session:
+                recorder.transition("planning")
+                plan = _plan(get_instrument)
+                recorder.set_plan(safe_plan_summary(plan))
+                reports = run_nightly(
+                    session,
+                    source,
+                    plan,
+                    git_commit=_git_commit(),
+                    report_dir=report_dir,
+                    progress=recorder.add_completed_run,
+                    stage=recorder.transition,
+                )
+                recorder.transition("generation")
+                sandbox = [get_instrument(k) for k in UNIVERSE if k in ALWAYS_ALLOWED]
+                if sandbox:
+                    print(f"\n── code-gen: composing strategies on the sandbox "
+                          f"{[i.key for i in sandbox]} ──")
+                    for interval in INTERVALS:
+                        generated = run_generated(
+                            session, source, sandbox, interval, limit=8,
+                            git_commit=_git_commit(), min_trades=30, n_folds=4,
+                            min_positive_fold_frac=0.5,
+                        )
+                        for report in generated:
+                            if isinstance(report.get("run_id"), int):
+                                recorder.add_completed_run(report["run_id"])
+                _dump_db(session)
+            recorder.complete(now=_now)
+            return reports, provider.name
+        except Exception:
+            recorder.fail(now=_now)
+            raise
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s",
+                        datefmt="%H:%M:%S")
+
+    research_db = _enforce_isolation()
+    if not _research_enabled():
+        print("research plane disabled (PT_RESEARCH_ENABLED=0) — manual run skipped")
+        return 0
+    from research.operations import OperationAlreadyRunning
+
+    try:
+        reports, provider_name = _run_enabled_operation(research_db)
+    except OperationAlreadyRunning:
+        print("RESEARCH_OPERATION_ALREADY_RUNNING: another research operation owns the lock")
+        return 2
 
     # (5) show every generated report
     for rep in reports:
@@ -198,7 +265,7 @@ def main() -> int:
         print("=" * 78)
         with open(rep["report_path"]) as fh:
             print(fh.read())
-    print(f"\ndone — {len(reports)} experiment(s) run against live {get_provider().name} data")
+    print(f"\ndone — {len(reports)} experiment(s) run against live {provider_name} data")
     return 0
 
 

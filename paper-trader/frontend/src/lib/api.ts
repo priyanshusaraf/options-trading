@@ -712,6 +712,34 @@ export interface ResearchFinding {
   }
 }
 
+export interface ResearchOperationReceipt {
+  readonly operation_id: string
+  readonly trigger: 'nightly' | 'manual_script'
+  readonly state: 'running' | 'completed' | 'failed'
+  readonly stage: string
+  readonly started_at: string
+  readonly completed_at: string | null
+  readonly build: string
+  readonly provider_mode: string
+  readonly plan: {
+    readonly content_address: string
+    readonly experiment_count: number
+    readonly items: readonly Record<string, unknown>[]
+  } | null
+  readonly completed_run_ids: readonly number[]
+  readonly failure: {
+    readonly stage: string
+    readonly code: string
+    readonly message: string
+  } | null
+}
+
+export interface ResearchOperationStatus {
+  readonly state: 'never_run' | 'available'
+  readonly active: ResearchOperationReceipt | null
+  readonly last: ResearchOperationReceipt | null
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -732,6 +760,9 @@ const researchFetch = async <T>(url: string, init?: RequestInit): Promise<T> => 
   }
   return body as T
 }
+
+export const getResearchOperationStatus = (): Promise<ResearchOperationStatus> =>
+  researchFetch('/api/research/operations/status')
 
 export const getResearchRuns = (projectId: string): Promise<{ runs: ResearchRunSummary[] }> =>
   researchFetch(`${researchPath(projectId)}/experiments`)

@@ -3,6 +3,7 @@ import {
   compareResearchRuns,
   createResearchFinding,
   decideResearchCandidate,
+  getResearchOperationStatus,
   getResearchRun,
   reviseResearchFinding,
 } from './api'
@@ -10,6 +11,20 @@ import {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('research evidence transport', () => {
+  it('loads operation receipts from the closed read-only status route', async () => {
+    const status = { state: 'never_run', active: null, last: null }
+    const request = vi.fn().mockResolvedValue({
+      ok: true, json: async () => status,
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await expect(getResearchOperationStatus()).resolves.toEqual(status)
+    expect(request).toHaveBeenCalledWith(
+      '/api/research/operations/status',
+      { headers: {} },
+    )
+  })
+
   it('loads persisted detail from an encoded project-owned path', async () => {
     const detail = { run_id: 4, evidence_state: 'verified' }
     const request = vi.fn().mockResolvedValue({

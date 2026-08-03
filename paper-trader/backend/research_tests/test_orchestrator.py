@@ -299,11 +299,17 @@ def test_run_nightly_writes_report_files(research_session, inst_factory, candles
              "strategy_key": "trend_impulse_v3",
              "instruments": [inst_factory(k) for k in keys], "interval": "day",
              "min_trades": 1, "n_folds": 4, "min_positive_fold_frac": 0.0}]
-    reports = run_nightly(research_session, src, plan, git_commit="abc",
-                          report_dir=str(tmp_path))
+    stages = []
+    run_ids = []
+    reports = run_nightly(
+        research_session, src, plan, git_commit="abc", report_dir=str(tmp_path),
+        stage=stages.append, progress=run_ids.append,
+    )
     assert len(reports) == 1
     assert os.path.exists(reports[0]["report_path"])
     assert research_session.query(ExperimentRun).count() == 1
+    assert stages == ["collection", "experiments", "reports"]
+    assert run_ids == [reports[0]["run_id"]]
 
 
 def test_run_nightly_empty_plan_is_noop(research_session):

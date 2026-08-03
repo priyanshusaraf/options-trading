@@ -18,9 +18,10 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.4 research operations observability
-- **Next product checkpoint:** a user can see whether scheduled research collection and execution
-  ran, what bounded plan/data identity it used, and why it failed without reading process logs.
+- **Current slice:** S4.5 version and experiment comparison
+- **Next product checkpoint:** a user can compare two immutable graph versions and their persisted
+  experiment evidence, with structural, parameter, component, data and result differences kept
+  explicit and presentation state excluded from executable identity.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -80,9 +81,10 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | done — atomic semantic/presentation history published |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | done — canonical equivalence and fresh-connection reload proved |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | done — exact immutable provenance and closed start API verified |
-| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate decisions | S4.1 | done — verified and publication pending in the slice commit |
-| S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | done — verified and publication pending in the slice commit |
-| S4.4 | Make bounded research operations and failures observable | S4.3 | active — bounded checklist generated |
+| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate decisions | S4.1 | done — verified and published |
+| S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | done — verified and published |
+| S4.4 | Make bounded research operations and failures observable | S4.3 | done — verified in the safety checkpoint; publication in this slice commit |
+| S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -439,17 +441,42 @@ so S4.2's immediately preceding full checkpoint remains the major-checkpoint bas
 
 **S4.4 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile `run_nightly`, research CLI/plans, provider collection, run failure evidence and
+1. [x] Reconcile `run_nightly`, research CLI/plans, provider collection, run failure evidence and
        current operational entry points; record a narrow design before changing behavior.
-2. [ ] Define one bounded server-owned operation receipt for scheduled/manual research attempts,
+2. [x] Define one bounded server-owned operation receipt for scheduled/manual research attempts,
        including plan identity, build, provider mode, start/end state and safe failure summary,
        without duplicating ExperimentRun or accepting arbitrary executable plans.
-3. [ ] Add closed read/status APIs and deterministic mock-run coverage; expose collection/data-
+3. [x] Add closed read/status APIs and deterministic mock-run coverage; expose collection/data-
        quality and terminal pipeline failures without credentials, tracebacks or provider payloads.
-4. [ ] Surface last/active operation, per-experiment progress and exact safe failure feedback
+4. [x] Surface last/active operation, per-experiment progress and exact safe failure feedback
        accessibly; keep execution, deployment, arming and orders outside the surface.
-5. [ ] Prove restart/reload, concurrent-attempt, stale-status, raw-plan and research/execution
+5. [x] Prove restart/reload, concurrent-attempt, stale-status, raw-plan and research/execution
        isolation guards; run applicable regressions, publish, inspect CI and continue.
+
+**S4.4 completion evidence, 2026-08-03.** ADR 0005 adds one canonical, content-addressed,
+mode-0600 current/last receipt beside `research.db` and one real non-blocking OS lock shared by
+nightly and manual entry points. Isolation and the disabled-plane gate run before receipt writes.
+Only bounded server-owned plan summaries, stable stage failures and committed ExperimentRun ids
+persist; tracebacks, credentials, provider payloads and HTTP plan/control input remain excluded.
+The closed read-only status route and `/api/v1` mirror verify the receipt without invoking research,
+and the cockpit contains corrupt status separately from experiment history. Overlap, stale-owner,
+atomic reload, overflow, corruption, freeze and isolation guards pass. The safety checkpoint passed
+2,883 backend/research tests plus 6 skips, all 208 frontend tests, typecheck, production build,
+`LEDGER OK` and 16/16 `SWEEP OK`.
+
+**S4.5 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile the existing run-evidence comparator, immutable graph-version store, Component IR
+       identity rules and presentation-state exclusion; record the missing comparison contract.
+2. [ ] Define one pure server-derived comparison document for two project-owned immutable graph
+       versions and optional persisted runs, separating structure, parameters, component versions,
+       data identity, gates/costs and results without accepting graph/evidence identity from clients.
+3. [ ] Add closed read/compare APIs and guard wrong-project, missing, corrupt, legacy and
+       incomparable inputs; reads must not resolve, execute, collect, evaluate or mutate state.
+4. [ ] Surface accessible version/run selection and exact difference categories with lossless reload,
+       explicit incomparable reasons and no presentation contamination or execution controls.
+5. [ ] Prove canonical ordering, same-version equivalence, presentation-only invariance and
+       client-identity rejection; run applicable regressions, publish, inspect CI and continue.
 
 ## 4. Medium-term sequence
 

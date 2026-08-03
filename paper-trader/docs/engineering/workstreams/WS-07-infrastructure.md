@@ -193,6 +193,10 @@ validation, replay and the migration framework are all landed.
       duplicates, gaps or inverted bars — is unanswered. As of deploy it reported `{}` with the
       markets shut, which is "the scan has not run", not "the feed is clean". Check
       `/api/health` `provider_feed` and grep for `FEED_QUALITY`.
+- [x] **Bounded research operation persistence — 2026-08-03.** One canonical mode-0600 JSON
+      current/last receipt uses fsync plus atomic replace beside `research.db`; one OS file lock
+      serializes nightly and manual processes. This is operational status, not a second experiment
+      database or execution ledger, and rollback leaves only optional inert files.
 - [ ] **DB session hygiene — the broker's long-lived session (DELIBERATELY DEFERRED).** The
       other half of the 2026-08-01 item, split out rather than silently dropped. `broker.s` is
       long-lived **by design** and it is load-bearing: E0.2's auto-reanchor had exactly one

@@ -3,8 +3,8 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.3 complete locally and awaiting its
-slice publication.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.4 complete in the current publication
+commit; S4.5 immutable version/experiment comparison is next.
 
 ---
 
@@ -36,7 +36,7 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Immutable graph runs, verified evidence/comparison, candidate decisions and successor-based finding history complete; operations observability next |
+| **Research** | Immutable graph runs, evidence/decisions/findings and bounded operation receipts complete; full graph-version/evidence comparison next |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
@@ -64,6 +64,7 @@ that clause's implementation.
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
 | `research/…/ir_strategy.py`, `ir_evaluate.py` | Scores explored graphs through the existing Gen-1 gates |
 | `research/domain/models.py::Finding`, project-owned finding routes | Verified run-bound interpretations with immutable successor history |
+| `research/operations.py`, operation status route | Locked, canonical current/last research attempts with safe read-only cockpit status |
 
 ### The two results worth knowing
 

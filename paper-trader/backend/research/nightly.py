@@ -1,10 +1,9 @@
 """Nightly research entry point — the cron one-shot (`python -m research.nightly`).
 
 It (1) enforces the fail-closed capital guardrails, (2) ensures research.db exists,
-then (3) runs the configured research plan through the orchestrator (qualify ->
-validate -> score -> knowledge -> promotion -> report). The plan is empty until the
-scheduler/config lands (M3), so an unconfigured run is a safe no-op that still proves
-the guardrails and schema.
+then (3) builds the bounded server-owned plan and runs it through the orchestrator
+(qualify -> validate -> score -> knowledge -> promotion -> report). An empty plan is
+a safe no-op that still proves the guardrails and schema.
 
 Run by cron at ~19:00 IST (well after the 15:30 close, well before the ~06:00 token
 rollover), under its own lockfile so a slow run never overlaps the next.
@@ -14,9 +13,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import datetime as dt
 
 from research.config import (nightly_generate_limit, nightly_interval,
                              nightly_search_seed, nightly_strategy_key,
+                             operation_lock_path, operation_receipt_path,
                              research_db_path, watchlist_snapshot_path)
 from research.plan import build_plan
 from research.universe import eligible_for_research, read_watchlist_snapshot
@@ -24,6 +25,12 @@ from research.domain.base import init_research_db, make_engine, make_sessionmake
 from research.guards import enforce
 from research.orchestrator.report import write_report
 from research.orchestrator.run import run_nightly
+from research.operations import (
+    OperationAlreadyRunning,
+    ResearchOperationRecorder,
+    acquire_operation_lock,
+    safe_plan_summary,
+)
 
 
 def _execution_db_path() -> str:
@@ -41,6 +48,10 @@ def _git_commit() -> str:
             stderr=subprocess.DEVNULL).strip()[:40] or "unknown"
     except Exception:
         return "unknown"
+
+
+def _now() -> str:
+    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
 def _load_plan(session) -> list:
@@ -128,6 +139,53 @@ def _run_generation(session, source, plan, report_dir) -> list:
     return reports
 
 
+def _run_enabled_operation(research_db: str) -> list:
+    from app.core.config import get_settings
+
+    with acquire_operation_lock(operation_lock_path()):
+        recorder = ResearchOperationRecorder.start(
+            operation_receipt_path(),
+            trigger="nightly",
+            build=_git_commit(),
+            provider_mode=get_settings().provider,
+            now=_now,
+        )
+        engine = None
+        try:
+            engine = make_engine(research_db)
+            init_research_db(engine)
+            Session = make_sessionmaker(engine)
+            with Session() as session:
+                src = _make_source()
+                recorder.transition("planning")
+                plan = _load_plan(session)
+                recorder.set_plan(safe_plan_summary(plan))
+                report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
+                reports = run_nightly(
+                    session,
+                    source=src,
+                    plan=plan,
+                    git_commit=_git_commit(),
+                    report_dir=report_dir,
+                    progress=recorder.add_completed_run,
+                    stage=recorder.transition,
+                )
+                recorder.transition("generation")
+                generated = _run_generation(session, src, plan, report_dir)
+                for report in generated:
+                    if isinstance(report.get("run_id"), int):
+                        recorder.add_completed_run(report["run_id"])
+                reports += generated
+            recorder.complete(now=_now)
+            return reports
+        except Exception:
+            recorder.fail(now=_now)
+            raise
+        finally:
+            if engine is not None:
+                engine.dispose()
+
+
 def main() -> int:
     research_db = research_db_path()
     # Fail closed BEFORE any research work: distinct DB, no capital-moving imports,
@@ -141,16 +199,11 @@ def main() -> int:
     if not get_settings().research_enabled:
         print("research plane disabled (PT_RESEARCH_ENABLED=0) — nightly run skipped")
         return 0
-    engine = make_engine(research_db)
-    init_research_db(engine)
-    Session = make_sessionmaker(engine)
-    with Session() as session:
-        src = _make_source()
-        plan = _load_plan(session)
-        report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
-        reports = run_nightly(session, source=src, plan=plan,
-                              git_commit=_git_commit(), report_dir=report_dir)
-        reports += _run_generation(session, src, plan, report_dir)
+    try:
+        reports = _run_enabled_operation(research_db)
+    except OperationAlreadyRunning:
+        print("RESEARCH_OPERATION_ALREADY_RUNNING: another research operation owns the lock")
+        return 2
     print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
     return 0
 

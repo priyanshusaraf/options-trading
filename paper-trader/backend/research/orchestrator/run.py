@@ -561,7 +561,10 @@ def _regime_context(datasets) -> dict:
     return out
 
 
-def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") -> list:
+def run_nightly(
+    session, source, plan, *, git_commit="unknown", report_dir=".",
+    progress=None, stage=None,
+) -> list:
     """Run every experiment in `plan` and write a report per run. Each plan item:
     {program, hypothesis, strategy_key, instruments:[inst], interval, ...gate knobs}.
     `source` (a DataSource) supplies candles for each instrument via `materialize`;
@@ -575,12 +578,16 @@ def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") 
         strat = kernels.get_strategy(item["strategy_key"])
         interval = item.get("interval", "day")
         days = item.get("days", 2000)
+        if stage is not None:
+            stage("collection")
         datasets = [(inst, materialize(source, inst, interval, days))
                     for inst in item["instruments"]]
         logger.info("[data] materialized %d dataset(s) @ %s: %s",
                     len(datasets), interval,
                     ", ".join(f"{ds.instrument_key}({ds.bar_count}b,#{ds.content_hash[:8]})"
                               for _, ds in datasets))
+        if stage is not None:
+            stage("experiments")
         report = run_experiment(
             session, program_name=item["program"],
             hypothesis_statement=item["hypothesis"], strategy=strat, datasets=datasets,
@@ -588,6 +595,10 @@ def run_nightly(session, source, plan, *, git_commit="unknown", report_dir=".") 
             min_trades=item.get("min_trades", 20), n_folds=item.get("n_folds", 4),
             min_positive_fold_frac=item.get("min_positive_fold_frac", 0.6),
             optimize_search=item.get("optimize_search", False))
+        if progress is not None:
+            progress(report["run_id"])
+        if stage is not None:
+            stage("reports")
         path = os.path.join(report_dir, f"report_run_{report['run_id']}.md")
         write_report(report, path)
         report["report_path"] = path

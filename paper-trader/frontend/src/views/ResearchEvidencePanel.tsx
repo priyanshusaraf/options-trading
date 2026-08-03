@@ -3,12 +3,15 @@ import {
   compareResearchRuns,
   createResearchFinding,
   decideResearchCandidate,
+  getResearchOperationStatus,
   getResearchRun,
   getResearchFindings,
   getResearchRuns,
   reviseResearchFinding,
   type ResearchComparison,
   type ResearchFinding,
+  type ResearchOperationReceipt,
+  type ResearchOperationStatus,
   type ResearchRunDetail,
   type ResearchRunSummary,
 } from '../lib/api'
@@ -16,11 +19,43 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 
 const readable = (value: unknown) => JSON.stringify(value, null, 2)
 
+function OperationReceipt({
+  label, receipt, onSelect,
+}: {
+  label: string
+  receipt: ResearchOperationReceipt
+  onSelect?: (runId: number) => void
+}) {
+  const trigger = receipt.trigger.replace('_', ' ')
+  return <div className="rounded border border-edge p-2">
+    <p className="font-medium">
+      {label} · {label === 'Running' ? receipt.stage : `${receipt.state} · ${receipt.stage}`} · {trigger}
+    </p>
+    <p className="text-muted">
+      {receipt.started_at}{receipt.completed_at ? ` → ${receipt.completed_at}` : ''}
+      {' · '}build {receipt.build} · provider {receipt.provider_mode}
+    </p>
+    {receipt.plan && <p>
+      {receipt.plan.experiment_count} planned · <code className="break-all">{receipt.plan.content_address}</code>
+    </p>}
+    {receipt.completed_run_ids.length > 0 && <div className="mt-1 flex flex-wrap gap-2">
+      {receipt.completed_run_ids.map((runId) => <button
+        type="button" className="btn" key={runId} onClick={() => onSelect?.(runId)}
+      >Run {runId}</button>)}
+    </div>}
+    {receipt.failure && <p role="alert" className="text-amber-300">
+      {receipt.failure.code}: {receipt.failure.message}
+    </p>}
+  </div>
+}
+
 export function ResearchEvidenceSurface({
   runs,
   detail,
   comparison,
   findings = [],
+  operationStatus = null,
+  operationError = null,
   reason,
   findingStatement = '',
   findingPolarity = 'negative',
@@ -41,6 +76,8 @@ export function ResearchEvidenceSurface({
   detail: ResearchRunDetail | null
   comparison: ResearchComparison | null
   findings?: readonly ResearchFinding[]
+  operationStatus?: ResearchOperationStatus | null
+  operationError?: string | null
   reason: string
   findingStatement?: string
   findingPolarity?: 'positive' | 'negative'
@@ -90,6 +127,19 @@ export function ResearchEvidenceSurface({
         </p>
       </CardHeader>
       <CardContent className="space-y-4 text-xs">
+        <section aria-label="Research operation status" className="space-y-2">
+          <div className="stat-label">Research operation status</div>
+          {operationError && <p role="alert" className="text-amber-300">{operationError}</p>}
+          {operationStatus?.state === 'never_run' && (
+            <p className="text-muted">No bounded research operation has run yet.</p>
+          )}
+          {operationStatus?.active && <OperationReceipt
+            label="Running" receipt={operationStatus.active} onSelect={onSelect}
+          />}
+          {operationStatus?.last && <OperationReceipt
+            label="Last" receipt={operationStatus.last} onSelect={onSelect}
+          />}
+        </section>
         {error && <p role="alert" className="text-amber-300">{error}</p>}
         {runs.length === 0 ? (
           <p className="text-muted">No graph-bound experiments yet.</p>
@@ -313,6 +363,8 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
   const [detail, setDetail] = useState<ResearchRunDetail | null>(null)
   const [comparison, setComparison] = useState<ResearchComparison | null>(null)
   const [findings, setFindings] = useState<ResearchFinding[]>([])
+  const [operationStatus, setOperationStatus] = useState<ResearchOperationStatus | null>(null)
+  const [operationError, setOperationError] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [findingStatement, setFindingStatement] = useState('')
   const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
@@ -344,6 +396,29 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
       setError(cause instanceof Error ? cause.message : 'Research history request failed')
     })
   }, [projectId])
+
+  useEffect(() => {
+    let disposed = false
+    const loadOperation = () => {
+      setOperationError(null)
+      getResearchOperationStatus().then((status) => {
+        if (!disposed) setOperationStatus(status)
+      }).catch((cause) => {
+        if (!disposed) {
+          setOperationStatus(null)
+          setOperationError(
+            cause instanceof Error ? cause.message : 'Research operation status request failed',
+          )
+        }
+      })
+    }
+    loadOperation()
+    const timer = window.setInterval(loadOperation, 10_000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   const compare = async (left: number, right: number) => {
     setBusy(true); setError(null)
@@ -405,6 +480,8 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
     detail={detail}
     comparison={comparison}
     findings={findings}
+    operationStatus={operationStatus}
+    operationError={operationError}
     reason={reason}
     findingStatement={findingStatement}
     findingPolarity={findingPolarity}

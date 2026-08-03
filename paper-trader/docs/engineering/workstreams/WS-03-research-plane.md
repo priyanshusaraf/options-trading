@@ -140,6 +140,17 @@ finding that is not bound to what produced it.
 
 Newest first. Dates are the dates the work landed.
 
+### Bounded research operation receipts — S4.4
+
+- Nightly and manual research share one non-blocking OS lock and one canonical mode-0600 atomic
+  current/last receipt. Stale active state is reconciled only after a new process owns the lock.
+- Receipts persist bounded server-owned plan identity, stage, build/provider mode, safe failure and
+  committed ExperimentRun ids. They never copy evidence, provider payloads, tracebacks or secrets.
+- The research gate protects a read-only status API and `/api/v1` mirror. Reads verify persisted
+  bytes and invoke no provider, planner, orchestrator, evaluator, gate or execution path.
+- Full safety acceptance passed 2,883 backend/research tests plus 6 skips, 208 frontend tests,
+  typecheck, build, `LEDGER OK` and 16/16 `SWEEP OK`.
+
 ### Project-owned findings and immutable interpretation history — S4.3
 
 - ADR 0004 retains the existing `Finding` row and uses `evidence_run_id` as the canonical

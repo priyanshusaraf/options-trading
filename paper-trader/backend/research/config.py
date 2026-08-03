@@ -18,6 +18,24 @@ def research_db_path(env: Mapping | None = None) -> str:
     return e.get("PT_RESEARCH_DB_PATH", DEFAULT_RESEARCH_DB)
 
 
+def operation_receipt_path(env: Mapping | None = None) -> str:
+    """Canonical current/last operation receipt beside research.db by default."""
+    e = os.environ if env is None else env
+    return e.get(
+        "PT_RESEARCH_OPERATION_RECEIPT",
+        f"{research_db_path(e)}.operations.json",
+    )
+
+
+def operation_lock_path(env: Mapping | None = None) -> str:
+    """Shared process lock used by every bounded research entry point."""
+    e = os.environ if env is None else env
+    return e.get(
+        "PT_RESEARCH_OPERATION_LOCK",
+        f"{operation_receipt_path(e)}.lock",
+    )
+
+
 DEFAULT_WATCHLIST_SNAPSHOT = "research_watchlist_snapshot.json"
 
 

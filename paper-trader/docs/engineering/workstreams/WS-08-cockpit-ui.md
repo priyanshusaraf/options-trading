@@ -149,6 +149,10 @@ $ cd frontend && npm test
 
 ## 5. Active roadmap
 
+S4.4 adds a read-only research operation section beside persisted evidence. It shows never-run,
+active and last state, safe failures, plan address and linked run ids. Corrupt receipt feedback is
+contained without hiding experiment history, and no start/cancel/retry control is present.
+
 Migrated from `docs/ROADMAP.md` "Workstream D — UI". Ordered; the topmost unchecked item is what
 an implementation agent picks up.
 

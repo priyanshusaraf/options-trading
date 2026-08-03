@@ -20,6 +20,12 @@ def _run(env_extra, tmp_path=None):
     env = {**os.environ, "PYTHONPATH": "."}
     if tmp_path is not None:
         env.setdefault("PT_RESEARCH_REPORT_DIR", str(tmp_path))
+        env.setdefault(
+            "PT_RESEARCH_OPERATION_RECEIPT", str(tmp_path / "operations.json")
+        )
+        env.setdefault(
+            "PT_RESEARCH_OPERATION_LOCK", str(tmp_path / "operations.lock")
+        )
         # Generation is the expensive half and this harness only asserts the
         # entry point wires up; keep the subprocess quick.
         env.setdefault("PT_RESEARCH_GENERATE_LIMIT", "0")
@@ -36,6 +42,13 @@ def test_nightly_initialises_research_db(tmp_path):
               "PT_RESEARCH_ENABLED": "1"}, tmp_path)
     assert r.returncode == 0, r.stderr
     assert os.path.exists(research_db)
+    from research.operations import ResearchOperationRecorder
+    state = ResearchOperationRecorder.load(tmp_path / "operations.json")
+    assert state["active"] is None
+    assert state["last"]["state"] == "completed"
+    assert state["last"]["trigger"] == "nightly"
+    assert state["last"]["plan"]["content_address"].startswith("sha256:")
+    assert state["last"]["completed_run_ids"]
 
 
 def test_nightly_skips_when_research_disabled(tmp_path):
@@ -46,10 +59,11 @@ def test_nightly_skips_when_research_disabled(tmp_path):
     r = _run({"PT_RESEARCH_DB_PATH": research_db,
               "PT_DB_PATH": str(tmp_path / "paper_trader.db"),
               "PT_EXECUTION": "paper",
-              "PT_RESEARCH_ENABLED": "0"})
+              "PT_RESEARCH_ENABLED": "0"}, tmp_path)
     assert r.returncode == 0, r.stderr
     assert "skipped" in r.stdout
     assert not os.path.exists(research_db)
+    assert not os.path.exists(tmp_path / "operations.json")
 
 
 def test_nightly_fails_closed_when_research_db_equals_execution_db(tmp_path):

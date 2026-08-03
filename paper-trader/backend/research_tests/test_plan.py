@@ -189,7 +189,7 @@ def test_nightly_runs_generated_compositions_too():
     import inspect
     from research import nightly
     assert "run_generated" in inspect.getsource(nightly._run_generation)
-    assert "_run_generation" in inspect.getsource(nightly.main)
+    assert "_run_generation" in inspect.getsource(nightly._run_enabled_operation)
 
 
 def test_generation_reuses_the_plan_universe():
