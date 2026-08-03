@@ -10,20 +10,23 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**WS-04 Editor is active.** The first application consumer of the Component IR is committed: a
-single read-only JSON route over the resolved `expanding_z_v4` graph. It is mounted on `/api` and
-`/api/v1`, resolves only a fixed repository-owned catalogue, and has no execution, broker,
-provider, database or order dependency.
+**WS-04 Editor is active.** Its first vertical slice is committed end to end: one read-only JSON
+route over the resolved `expanding_z_v4` graph and a native HTML/SVG viewer in the existing
+`Strategy Graph` tab. The route is mounted on `/api` and `/api/v1`, resolves only a fixed
+repository-owned catalogue, and has no execution, broker, provider, database or order
+dependency.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
 
 ## 2. Last verified commit
 
-`049b699` — read-only IR graph API route, its closed response contract and 14 route tests.
+`f61dfe4` — typed read-only React graph viewer, transport/render tests and tab integration.
+Preceded by `000075d` (route handoff documentation) and `049b699` (the closed graph API and 14
+route tests).
 
-Branch `feat/exec-completeness`, 89 commits ahead of `main`, one commit ahead of origin before
-the documentation update. The working tree contains only the current documentation edits.
+Branch `feat/exec-completeness`, 92 commits ahead of `main`. The working tree contains only the
+current documentation edits.
 
 The VPS build was **not measured this session.** `curl localhost:8090/api/health` on the box is
 the only answer — never read it off a document.
@@ -39,12 +42,25 @@ RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK
 
 $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
+
+$ npm test && npm run typecheck && npm run build          # from frontend/
+153 passed · TYPECHECK OK · BUILD OK
 ```
+
+Live-browser acceptance used a dotenv-disabled mock/paper backend with temporary databases.
+Desktop and 390×844 rendered 18 node articles, 35 SVG paths and 35 connection rows with no
+console errors. At phone width the 2,216px canvas stayed inside a 356px scroller and the page did
+not overflow.
 
 New route guards proven able to fail rather than merely observed passing: unversioned
 registration, `/api/v1` mirroring, complete serialization including cache identity, read-only
 graph identity, and library-dependent F7 validation. The fixed catalogue also rejects unknown
 identifiers before `resolve()` is reached.
+
+Frontend guards were also observed red before implementation: missing graph transport, missing
+canvas module, missing tab wiring, non-semantic node cards, collapsed impurity policy, absent
+state presenter and absent scroller containment. The reviewed result has no remaining Critical
+or Important finding.
 
 Five shapes of **vacuous test** were caught this session by suppression sweeps and fixed —
 right-clause-wrong-cause, a fixture already corrupted by an earlier test, checking only the
@@ -57,17 +73,14 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-04 Editor — implement the React graph view.**
+**WS-04 Editor — implement the F13 layout side table.**
 
-Add typed `getIrGraph()` transport in `frontend/src/lib/api.ts`, then a read-only graph view in
-the existing tab shell. Render nodes by authored instance path; show definition, all bound
-parameters, warmup, purity and full cache identity; draw edges and show source/target sockets in
-an accessible connection table. Derived and impure states need text labels as well as visual
-distinction. Keep the deterministic backend layer/row positions, add no graph library, and add
-no editing, dragging or persistence yet.
-
-After the browser workflow passes typecheck, tests and build, update these handoff documents and
-continue to the F13 layout side table.
+Choose the presentation-state store and add a sparse record keyed by graph identifier/version
+and `instance_id`; store only positions the user has moved. Define what happens to orphaned rows
+after a node is removed. Feed the stored `Layout` to `graph_view()` without adding graph fields.
+The acceptance proof must save a position, reload both layout and artefact, and show that the
+graph's `content_address` is unchanged. Do not add drag gestures until this route/store boundary
+and proof exist.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

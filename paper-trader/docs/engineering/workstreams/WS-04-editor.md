@@ -1,16 +1,17 @@
 # WS-04 — Editor (visual computational graph)
 
 **Status:** active
-**Owner surface:** `backend/app/api/ir_routes.py`, `backend/tests/test_ir_routes.py`; next:
-`frontend/src/views/GraphView.tsx`. The libraries it consumes — `backend/app/ir/view.py`,
-`backend/app/ir/edit.py` — are **owned by WS-01**.
-**Last verified:** 2026-08-03 · commit `049b699`
+**Owner surface:** `backend/app/api/ir_routes.py`, `backend/tests/test_ir_routes.py`,
+`frontend/src/views/GraphView.tsx` and its transport/tests. Next: the F13 layout side table. The
+libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
+WS-01**.
+**Last verified:** 2026-08-03 · commit `f61dfe4`
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
 > its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. The resolved view
-> model now has a read-only HTTP route. There is no React component yet, so the IR is
-> application-reachable but still has no workflow a user can click.
+> model now has a read-only HTTP route and a React canvas in the existing application shell.
+> The viewer is clickable and inspectable; editing and presentation-state persistence remain.
 
 ---
 
@@ -77,6 +78,7 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 | Export | Guarantee |
 |---|---|
 | `GET /api/ir/graphs/{identifier}` and `/api/v1/ir/graphs/{identifier}` | Resolves only a fixed repository-owned graph catalogue and returns the complete `GraphView` contract under a closed response schema. It is read-only, validates with the real component library, and imports no engine, broker, provider, database or order surface. Unknown identifiers fail with 404 before `resolve()` is called. |
+| `GraphView` in the `Strategy Graph` tab | Fetches the fixed graph through the typed REST client and renders a read-only native HTML/SVG canvas. Node cards expose authored paths, definition, every bound parameter, warmup, exact purity policy and full cache identity. Wires are decorative; an accessible table exposes every source and target socket. |
 
 **Consumes**
 
@@ -94,8 +96,8 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 **Depends on:** WS-01 (the whole consumed surface above), WS-08 (the app shell it will live in),
 WS-07 (the FastAPI app that would host a route).
 
-**Blocked by:** nothing external. The read-only route is committed and the React viewer is the
-next accepted slice; live-engine adoption remains separately owner-gated — see §8.
+**Blocked by:** nothing external. The read-only viewer is committed and the F13 layout side
+table is the next accepted slice; live-engine adoption remains separately owner-gated — see §8.
 
 **Currently blocking:** nothing. No workstream is waiting on the editor.
 
@@ -110,6 +112,17 @@ because the accepted slice requires one JSON route and neither extra endpoint ha
 Fourteen route tests cover registration, fixed-catalogue access, read-only graph identity,
 ordered serialization, errors, response schema and the fresh-process import closure.
 
+**Read-only React viewer — `f61dfe4`, 2026-08-03.** The existing desktop and mobile tab shell
+now opens `Strategy Graph`. A typed client fetches the fixed route and rejects non-success
+responses. The canvas renders native semantic node cards and SVG Bézier wires without a graph
+dependency; an accessible connections table carries socket direction. It shows the complete
+inspection contract, keeps the exact impurity policy in text, and has explicit loading, error,
+empty and edge-free states. Seven render tests, two transport tests and a shell wiring guard
+were added. The complete frontend suite is 153 passing tests; typecheck and the production build
+pass. Live-browser acceptance at desktop and a 390×844 override rendered 18 node articles, 35
+wires and 35 connection rows with no console errors. At the phone width the 2,216px canvas sits
+inside a 356px scroller while the page itself does not overflow.
+
 The underlying editor libraries remain owned by WS-01:
 
 - `app/ir/view.py` — read-only view model plus SVG renderer, with derived layout (WS-01).
@@ -123,7 +136,7 @@ The underlying editor libraries remain owned by WS-01:
   display name **is** part of the artefact even though nothing references it (F2), so a rename
   does move the hash (WS-01).
 
-Verified 2026-08-03 at `049b699`: `app.api.ir_routes` loads no `app.engine`, `app.providers`,
+Verified 2026-08-03 through `f61dfe4`: `app.api.ir_routes` loads no `app.engine`, `app.providers`,
 `app.broker`, `app.db` or `app.options` module in a fresh process. The IR is reachable through a
 read-only application route, but the engine still does not consume it.
 
@@ -132,7 +145,7 @@ read-only application route, but the engine still does not consume it.
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
       repository graph, calls `graph_view()`, and returns the complete `ViewNode`/`ViewEdge`
       contract. Committed as `049b699`; full backend acceptance passed.
-- [ ] **React rendering of the `ResolvedGraph`.** Draw the JSON contract in the existing app.
+- [x] **React rendering of the `ResolvedGraph`.** Draw the JSON contract in the existing app.
       Per node show: instance path (`container`
       + `label`), `definition` (`identifier v<version>`), bound `params`, `warmup` in bars, and
       `cache_id`. Distinguish `derived` nodes and non-`pure` nodes visually, as `to_svg` already
@@ -140,7 +153,8 @@ read-only application route, but the engine still does not consume it.
       usable through the running application.** Acceptance:
       `expanding_z_v4` renders in the browser with node count, edge count and total warmup
       matching `scripts/render_ir_graph.py` output for the same graph. Use `lib/api.ts` and the
-      existing shadcn primitives; add no graph library in this read-only slice.
+      existing shadcn primitives; add no graph library in this read-only slice. Committed as
+      `f61dfe4`; browser acceptance matched 18 nodes, 35 edges, six layers and 302 bars.
 - [ ] **The layout side table (F13).** Persist `instance_id → (x, y)` beside the graph, keyed by
       `(graph identifier, version)`, and feed it to `graph_view(graph, layout=...)`. The
       constraint is load-bearing and already has a test at the library level: dragging a node
@@ -190,13 +204,12 @@ Plus, specific to this workstream:
 - **`scripts/render_ir_graph.py` hardcodes one strategy** (`app.ir.strategies.expanding_z`).
   Fine as a proof, useless as a tool the moment a second IR strategy exists. Cost of leaving it:
   none today. Trigger: a second graph in `app/ir/strategies/`.
-- **`to_svg` styling is inline and duplicated from nothing** — it defines its own light/dark
+- **`to_svg` styling is inline and duplicated from the React canvas** — it defines its own light/dark
   palette rather than the app's shadcn CSS variables. That is correct for a standalone file that
-  must open in any browser with no stylesheet, and wrong the moment the same rendering appears
-  inside the SPA. Trigger: the first roadmap item. Expect the browser rendering to be a separate
-  implementation, not a reuse of `to_svg` — and expect that to be a deliberate second
-  implementation of a picture, which is exactly the shape that produced the `candles.py` defect.
-  If both survive, one of them must be derived from the other or pinned by a shared test.
+  must open in any browser with no stylesheet. The browser viewer deliberately implements the
+  picture separately so it can expose semantic cards and a socket table. Counts and warmup are
+  pinned through route and browser acceptance, but visual layout equivalence is not. Trigger for
+  consolidation: the first drift in node placement or edge routing between the two renderers.
 - **`graph_view` assigns rows greedily per layer**, breaking ties on specification order. It is
   deterministic and readable, and it will produce crossing edges on any non-trivial graph. Cost:
   cosmetic until a graph gets wide. Trigger: a graph where the picture stops being legible.

@@ -3,7 +3,7 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · 89 commits ahead of `main`.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · 92 commits ahead of `main`.
 
 ---
 
@@ -36,7 +36,7 @@ that clause's implementation.
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
 | **Research** | Gen 2 functionally complete; remaining work is operational runs and explanations |
-| **Editor** | Read-only backend route done; **React view next** |
+| **Editor** | Read-only route and React viewer done; **F13 layout side table next** |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
 
@@ -54,6 +54,7 @@ that clause's implementation.
 | `app/ir/authoring.py` | Write a component in Python |
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
 | `app/api/ir_routes.py` | One read-only, fixed-catalogue route for the resolved graph view |
+| `frontend/src/views/GraphView.tsx` | Read-only semantic HTML/SVG graph viewer in the existing tab shell |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
@@ -88,9 +89,10 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**WS-04 Editor: render the resolved `expanding_z_v4` graph in React.** Use the existing REST
-client and app shell; show authored instance paths, sockets, parameters, warmup, purity and cache
-identity. Keep this slice read-only. Layout persistence follows only after the viewer is real.
+**WS-04 Editor: add the F13 layout side table.** Persist only moved-node positions beside the
+graph, keyed by graph identifier/version and instance ID. Feed the sparse layout to
+`graph_view()`, define orphan cleanup, and prove store/reload does not change the artefact's
+content address. The viewer remains read-only until that separation is proven.
 
 ---
 
@@ -105,7 +107,14 @@ LEDGER OK ✓ · EXIT 0
 
 $ .venv/bin/python scripts/backtest_smoke.py
 SWEEP OK ✓ · EXIT 0
+
+$ npm test && npm run typecheck && npm run build          # from frontend/
+153 passed · TYPECHECK OK · BUILD OK
 ```
+
+Browser acceptance: desktop and 390×844 rendered 18 nodes, 35 edges and 35 connection rows with
+no console errors or page-level horizontal overflow. The wide canvas scrolls inside its own
+container on the phone.
 
 Two things about this suite, both learned the hard way:
 

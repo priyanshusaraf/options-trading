@@ -21,7 +21,7 @@ plane now builds on, and is complete as a language.
 
 | Priority | Workstream | Next item | Blocked? |
 |---|---|---|---|
-| 1 | [WS-04 Editor](engineering/workstreams/WS-04-editor.md) | React graph view over the read-only API | no |
+| 1 | [WS-04 Editor](engineering/workstreams/WS-04-editor.md) | F13 sparse layout side table and content-address proof | no |
 | 2 | [WS-08 Cockpit UI](engineering/workstreams/WS-08-cockpit-ui.md) | typography and palette pass | **needs the owner's reference site** |
 | 3 | [WS-02 Execution](engineering/workstreams/WS-02-execution.md) | index-futures segment (E2) | **deploy blocked on owner** |
 | 4 | [WS-03 Research Plane](engineering/workstreams/WS-03-research-plane.md) | a week of unattended nightly runs on real candles | no |
