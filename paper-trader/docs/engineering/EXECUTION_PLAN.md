@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S3.2b structural node/edge/group editing
-- **Next product checkpoint:** a user can add or remove authored nodes, connect or disconnect typed
-  sockets and manage groups through the same revision-safe editor contract.
+- **Current slice:** S3.3 visual/hand-authored equivalence and lossless reload
+- **Next product checkpoint:** the closed editor can reproduce a hand-authored executable graph by
+  content address and reload its semantic and presentation state without loss.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -77,8 +77,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | done — verified locally; publication in this slice commit |
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | done — verified locally; publication in this slice commit |
 | S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | done — backend `7cc6525`, frontend `197c4e9` |
-| S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | active — design boundary next |
-| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | later |
+| S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | done — atomic semantic/presentation history published |
+| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | active — next bounded slice |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | later |
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | later |
 
@@ -316,11 +316,35 @@ deterministic smoke scripts. No execution path changed and nothing was deployed.
 
 **S3.2b bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Add typed structural batches for add/remove node, connect/disconnect and group.
-2. [ ] Add accessible component selection, node create/remove and group membership controls.
-3. [ ] Add accessible socket selection and connect/disconnect controls.
-4. [ ] Extend canonical inverse receipts and define changed-node sparse-layout reconciliation.
-5. [ ] Prove exact failure retention, run applicable regressions, document, commit and push.
+1. [x] Add typed structural batches for add/remove node, connect/disconnect and group.
+2. [x] Add accessible component selection, node create/remove and group membership controls.
+3. [x] Add accessible socket selection and connect/disconnect controls.
+4. [x] Extend canonical inverse receipts and define changed-node sparse-layout reconciliation.
+5. [x] Prove exact failure retention, run applicable regressions, document, commit and push.
+
+**S3.2b completion evidence, 2026-08-03.** Semantic add/remove/connect/disconnect batches validate
+only their final graph through `app.ir.edit.apply_batch()` and publish one immutable version.
+Visual groups are separately revisioned presentation state and never enter graph, component,
+cache, experiment or runtime identity. One transaction inserts the semantic version, reconciles
+positions and group memberships, advances both heads when required and constructs the coherent
+response. Exact receipts replay semantic and presentation forward/inverse batches for lossless
+undo and redo. Server-derived component, graph-boundary and authored-socket descriptors drive the
+accessible React controls. Seven negative guards proved content-address isolation, final-state
+validation, transaction atomicity, orphan pruning, two-sided undo, executable-identity uniqueness
+and the `app.ir.edit` boundary. Acceptance passed 2,794 backend tests with 6 skips, all 195
+frontend tests, typecheck, production build and both deterministic smoke scripts.
+
+**S3.3 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Define one hand-authored reference graph and an equivalent closed editor command history.
+2. [ ] Prove the editor-produced canonical graph has the same executable content address at the
+       same server-issued version, with presentation state excluded from both inputs.
+3. [ ] Prove service/database reload preserves authored graph bytes, descriptors, positions,
+       groups, revisions and deterministic undo/redo inputs without client reconstruction.
+4. [ ] Add explicit mismatch diagnostics for semantic, ordering and presentation-contamination
+       failures while keeping raw graph replacement and client-selected versions forbidden.
+5. [ ] Run the S3.3 focused and WS-04 regressions, update the three coordination documents,
+       commit deliberately, push, inspect Actions and continue into the next unblocked slice.
 
 ## 4. Medium-term sequence
 

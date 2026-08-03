@@ -3,17 +3,17 @@
 **Status:** active
 **Owner surface:** `backend/app/api/ir_routes.py`, `backend/app/api/ir_layout_routes.py`,
 `backend/app/editor/`, their backend tests, `frontend/src/views/GraphView.tsx` and its
-transport/tests. Next: bounded structural node/edge/group editing. The
+transport/tests. Next: S3.3 visual/hand-authored equivalence and lossless reload. The
 libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
 WS-01**.
-**Last verified:** 2026-08-03 · S3.2a complete
+**Last verified:** 2026-08-03 · S3.2b complete
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
 > its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. The resolved view
 > model now has a read-only HTTP route and a React canvas in the existing application shell.
-> Sparse presentation state and graph name/override edits now persist through revision-checked
-> APIs. Structural node, edge and group controls are the next bounded slice.
+> Sparse positions and visual groups now persist through one presentation revision. Semantic
+> node/edge edits publish immutable versions and reconcile presentation in the same transaction.
 
 ---
 
@@ -163,6 +163,16 @@ retains invalid or rejected intent, reports exact clauses and paths, guards stal
 uses backend receipts for undo/redo. Backend `7cc6525` and frontend `197c4e9` are published; the
 shared-persistence acceptance checkpoint and deterministic smoke checks pass.
 
+**Structural and visual-group interaction — S3.2b, 2026-08-03.** Add/remove node and typed
+connect/disconnect operations now pass only through the final-state `app.ir.edit.apply_batch()`
+boundary. Visual groups live beside layouts and are excluded from every executable identity.
+Semantic publication and presentation reconciliation share one rollback boundary; exact receipts
+restore both halves during undo/redo. The editor document publishes server-derived component and
+socket descriptors, and React exposes accessible structural, membership, frame and collapse
+controls without inferring topology. Seven named negative guards passed after restoration. Full
+acceptance passed 2,794 backend tests with 6 skips, 195 frontend tests, typecheck, production build
+and both deterministic smoke scripts.
+
 ## 5. Active roadmap
 
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
@@ -192,12 +202,13 @@ shared-persistence acceptance checkpoint and deterministic smoke checks pass.
       revision. Show unsaved, saving, saved, conflict and error states. A 409 or network failure
       must preserve the user's local positions and offer an explicit reload/retry path. Published
       through `22a148f`.
-- [ ] **Mutation in the UI.** Rename and set/clear override are complete. Next wire structural
-      add, delete, connect, disconnect and group operations to accessible controls. Every call
+- [x] **Mutation in the UI.** Rename and set/clear override are complete. Structural
+      add, delete, connect, disconnect and group operations are wired to accessible controls. Every call
       returns a new artefact; the client replaces accepted state from the coherent response and
       never patches that state in place (C2). Render `EditRejected` as the clause plus JSON path,
       not as a generic failure. Grouping remains subject to the F12 executable-versus-presentation
-      boundary, which S3.2b must resolve before implementation.
+      boundary. S3.2b resolves groups as separately revisioned presentation state and publishes
+      semantic changes with atomic presentation reconciliation.
 - [ ] **Round-trip proof.** Author a graph entirely through the UI that is byte-identical, by
       content address, to a hand-written artefact for the same strategy. Until this passes, the
       editor is a viewer with buttons.

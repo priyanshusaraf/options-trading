@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S3.2a is implemented and published.** Fail-closed CI is on the branch. Its first
+**Stage A through S3.2b is implemented and published.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -20,9 +20,10 @@ and retains local work on conflict or transport failure. ADR 0001 rejects duplic
 ledgers and accepts the minimum ownership, identity and lifecycle contract. S2.2 adds durable
 projects, optimistic graph drafts, append-only graph versions and reversible layout ownership.
 S3.1 applies bounded edit batches through the existing IR primitives. S3.2a adds one coherent
-editor document plus revision-safe graph rename and parameter override interaction. The frontend
-uses backend-issued inverse receipts for undo/redo, retains rejected intent and preserves dirty
-layout positions when an edit creates a new immutable graph version.
+editor document plus revision-safe graph rename and parameter override interaction. S3.2b adds
+final-state semantic node/edge batches, separately revisioned visual groups, atomic presentation
+reconciliation, server-derived component/socket descriptors and accessible structural/group
+controls. Backend receipts restore both semantic and presentation state during undo/redo.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -32,8 +33,8 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed implementation slice: S3.2a through frontend commit `197c4e9`
-- S3.2a backend commit: `7cc6525`
+- Last completed/pushed implementation slice: S3.2b through frontend commit `0b3b784`
+- S3.2b backend/history commits: `4585f1a`, `934649b`, `46809bf`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
 
@@ -50,7 +51,7 @@ Latest acceptance run on 2026-08-03:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests --tb=short
-2,774 passed · 6 skipped · 71 warnings · EXIT 0
+2,794 passed · 6 skipped · 76 warnings · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -59,7 +60,7 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build
-189 passed · TYPECHECK OK · BUILD OK · EXIT 0
+195 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
@@ -70,6 +71,15 @@ S3.2a's focused backend editor/layout/graph/view set passed 104 tests, its WS-04
 310 and its database/migration regression passed 86. Focused frontend editor tests passed 39.
 Transaction guard mutations proved stale-CAS, closed-schema, layout-identity, response rollback and
 canonical-inverse assertions fail for their intended reasons before restoration.
+
+S3.2b's backend WS-04 regression passed 131 tests before the shared checkpoint. The frontend
+workstream regression passed 51 tests. Negative controls proved visual groups cannot contaminate
+content addresses, invalid final semantic state cannot publish, reconciliation cannot leave the
+transaction, removed nodes cannot retain positions/memberships, semantic-only undo is incomplete,
+different canonical JSON cannot claim one executable identity and routes cannot bypass
+`app.ir.edit.apply_batch()`. The full checkpoint first exposed the superseded public
+`carry_layout_forward()` wrapper; removing that dead surface made the no-unconsumed-mechanisms
+guard and complete acceptance green.
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
 absent. Guard proof then removed `research_tests` from the backend command; the specific contract
@@ -130,12 +140,13 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S3.2b — add structural node, edge and group editing.**
+**S3.3 — prove visual/hand-authored equivalence and lossless reload.**
 
-Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: close the structural
-operation contract, expose accessible component and socket selection, extend canonical inverse
-receipts and define sparse-layout reconciliation for added/removed authored nodes. Keep server
-revision and immutable versions authoritative. Execution remains untouched.
+Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: define one reference
+graph and equivalent closed command history, compare canonical executable identity at the same
+server version, prove graph/descriptors/positions/groups/revisions reload exactly, and add precise
+mismatch diagnostics. Keep raw replacement and client-selected immutable versions forbidden.
+Execution remains untouched.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 
