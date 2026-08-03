@@ -100,6 +100,46 @@ def test_risk_iteration_keeps_the_event_loop_responsive():
     asyncio.run(_probe_loop_free(r))
 
 
+def test_cancelling_risk_iteration_drains_its_worker_before_returning():
+    """A cancelled asyncio wrapper must not abandon its SQLite worker thread.
+
+    TestClient shutdown cancels the engine lanes.  If cancellation returns while
+    ``mark_and_exit_positions`` is still running in ``to_thread``, the next app
+    lifespan can call ``init_db(reset=True)`` while that worker still owns the
+    execution database.  The result is the suite-order-dependent
+    ``database is locked`` cascade this test pins.
+    """
+    import threading
+
+    r = _runner()
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_pass():
+        started.set()
+        release.wait(timeout=2)
+
+    r.mark_and_exit_positions = blocked_pass
+    asyncio.run(_probe_cancel_drains_worker(r, started, release))
+
+
+async def _probe_cancel_drains_worker(r, started, release):
+    task = asyncio.create_task(r._risk_iteration())
+    try:
+        while not started.is_set():
+            await asyncio.sleep(0.001)
+        task.cancel()
+        await asyncio.sleep(0.02)
+        assert not task.done(), \
+            "lane cancellation returned while its SQLite worker was still running"
+    finally:
+        release.set()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 async def _probe_loop_free(r):
     ticks = {"n": 0}
     stop = {"v": False}

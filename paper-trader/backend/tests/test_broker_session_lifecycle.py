@@ -74,3 +74,5 @@ def test_shutdown_closes_the_session_after_cancelling_the_lanes():
     assert "runner.broker.close()" in src
     assert src.index("risk_task.cancel()") < src.index("runner.broker.close()"), \
         "the session is closed before the lanes are cancelled"
+    assert src.index("await asyncio.gather") < src.index("runner.broker.close()"), \
+        "the session is closed before cancelled lane workers are drained"

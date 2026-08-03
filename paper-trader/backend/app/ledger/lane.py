@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, time
 
+from app.core.async_tasks import to_thread_drained
 from app.core.logging import log
 
 # Force a sweep in this window regardless of cadence, so a late start or a
@@ -41,7 +42,7 @@ async def _tick_guarded(fn) -> None:
     A raise here must never kill the lane: Kite's orderbook is same-day only, so
     a dead lane silently loses the rest of the trading day."""
     try:
-        await asyncio.to_thread(fn)
+        await to_thread_drained(fn)
     except Exception as e:
         log.warn(f"manual-detect tick failed: {e}")
 

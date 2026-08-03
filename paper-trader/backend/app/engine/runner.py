@@ -27,6 +27,7 @@ import pandas as pd
 from sqlalchemy import func, select
 
 from app.core.config import get_settings
+from app.core.async_tasks import to_thread_drained
 from app.core.instruments import all_instruments, get_instrument
 from app.core.logging import log
 from app.db.models import (
@@ -1987,7 +1988,7 @@ class EngineRunner:
         # is only ever touched by one lane at a time (risk vs signal stay serialised).
         async with self._lock:
             try:
-                await asyncio.to_thread(self.mark_and_exit_positions)
+                await to_thread_drained(self.mark_and_exit_positions)
             except Exception:
                 self._rollback_session()   # H3 — clean the session before releasing the lock
                 raise
@@ -2269,7 +2270,7 @@ class EngineRunner:
         # serialised) — identical discipline to _risk_iteration.
         async with self._lock:
             try:
-                await asyncio.to_thread(self._signal_iteration_blocking)
+                await to_thread_drained(self._signal_iteration_blocking)
             except Exception:
                 self._rollback_session()   # H3 — clean the session before releasing the lock
                 raise
@@ -2278,7 +2279,7 @@ class EngineRunner:
         # shared-session lock. Run it OFF the lock and off the event loop so its ~30s of
         # Kite fetches can never starve the risk loop (2026-07-13 risk_loop_stalled 24×).
         try:
-            await asyncio.to_thread(self._maybe_cache_chains)
+            await to_thread_drained(self._maybe_cache_chains)
         except Exception as e:
             log.error(f"option cache sweep error: {e}", event="OPTION_CACHE")
         self._beat_now("signal")           # P3 heartbeat
