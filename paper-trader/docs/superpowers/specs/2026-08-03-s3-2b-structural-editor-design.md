@@ -51,6 +51,8 @@ The backend publishes component descriptors and graph-boundary descriptors in th
 
 The server limits a semantic batch to 32 operations and applies the existing recursive JSON bounds to overrides. Instance, component, group and socket identifiers retain the 128-character request limit. Components must exist in the server library at the selected version.
 
+Ordinary `add_node` and `connect` requests append in authored specification order. Canonical receipt inverses may also carry server-issued `node_index` and `edge_index` values. These bounded indexes restore the exact prior array order because format-v1 content addressing and deterministic row ordering include specification order. They are closed semantic fields, not raw JSON or client-selected versions.
+
 ## Final-state batch validation in `app.ir.edit`
 
 The public `app.ir.edit` boundary gains a typed semantic-batch operation model and `apply_batch()` function. Individual legacy helpers keep their validate-on-result behavior. `apply_batch()` uses private pure transformers for each closed operation, then validates only the final graph with the real component library. The route resolves that final result before persistence.
@@ -68,9 +70,9 @@ Architecture guards require the route to call `app.ir.edit.apply_batch()`. Reimp
 The backend constructs the semantic inverse from exact pre-operation state while applying the batch. It reverses operation order:
 
 - `add_node` inverts to `remove_node`;
-- `remove_node` inverts to `add_node` with the exact component reference, overrides, domain and secret-parameter identifiers, followed by exact `connect` operations for every removed incident edge;
+- `remove_node` inverts to `add_node` with the exact component reference, overrides, domain, secret-parameter identifiers and original node index, followed by exact `connect` operations with original edge indexes for every removed incident edge;
 - `connect` inverts to `disconnect`;
-- `disconnect` inverts to `connect`;
+- `disconnect` inverts to `connect` at the original edge index;
 - rename and override inverses retain the S3.2a rules.
 
 The inverse itself is submitted through the same closed semantic batch and validated only in its final state. There is no `restore_graph`, raw node JSON replacement or client-supplied immutable version.

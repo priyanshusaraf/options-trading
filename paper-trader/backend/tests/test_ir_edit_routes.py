@@ -421,23 +421,12 @@ def test_failure_after_layout_prepare_rolls_back_graph_and_layout(client, monkey
     assert positions == ()
 
 
-def test_rename_route_calls_the_ir_edit_primitive(client, monkeypatch):
-    from app.ir import edit as ir_edit
-
-    original = ir_edit.rename
-    calls = []
-
-    def recording_rename(graph, display_name):
-        calls.append((graph["identifier"], display_name))
-        return original(graph, display_name)
-
-    monkeypatch.setattr(ir_edit, "rename", recording_rename)
+def test_rename_route_publishes_the_batch_result(client):
     response = _post(
         client, 0, {"operation": "set_display_name", "display_name": "Observed"}
     )
 
     assert response.status_code == 201
-    assert calls == [(IDENTIFIER, "Observed")]
     assert response.json()["authored_graph"]["display_name"] == "Observed"
 
 
@@ -571,7 +560,7 @@ def test_override_value_depth_is_bounded(client):
     assert response.json()["code"] == "REQUEST_VALIDATION_FAILED"
 
 
-def test_route_dispatches_only_to_the_three_s3_2a_ir_edit_primitives():
+def test_route_dispatches_semantic_changes_only_through_the_ir_batch_boundary():
     path = pathlib.Path(__file__).resolve().parents[1] / "app/api/ir_edit_routes.py"
     tree = ast.parse(path.read_text())
     calls = {
@@ -582,11 +571,9 @@ def test_route_dispatches_only_to_the_three_s3_2a_ir_edit_primitives():
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "ir_edit"
     }
-    assert calls == {
-        "set_override",
-        "clear_override",
-        "rename",
-    }
+    assert "apply_batch" in calls
+    assert not calls & {"set_override", "clear_override", "rename", "add_node",
+                        "remove_node", "connect", "disconnect", "group"}
     store_calls = {
         node.func.attr
         for node in ast.walk(tree)

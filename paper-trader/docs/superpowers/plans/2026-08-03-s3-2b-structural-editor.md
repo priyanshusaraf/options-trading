@@ -174,9 +174,10 @@ class AddNode:
     overrides: Mapping[str, Any]
     domain: Mapping[str, str] | None
     secret_params: tuple[str, ...]
+    node_index: int | None = None
 ```
 
-Define corresponding `RemoveNode`, `Connect`, `Disconnect`, `SetDisplayName`, `SetOverride` and `ClearOverride`. Refactor existing helpers to call private `_add_node`, `_remove_node`, `_connect`, `_disconnect`, `_rename`, `_set_override` and `_clear_override` transformers before `_result()`.
+Define corresponding `RemoveNode`, `Connect`, `Disconnect`, `SetDisplayName`, `SetOverride` and `ClearOverride`; `Connect` carries optional `edge_index`. Ordinary calls omit indexes and append. Server inverses retain original node and edge indexes. Refactor existing helpers to call private `_add_node`, `_remove_node`, `_connect`, `_disconnect`, `_rename`, `_set_override` and `_clear_override` transformers before `_result()`.
 
 Implement:
 

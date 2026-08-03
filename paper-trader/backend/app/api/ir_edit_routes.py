@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
@@ -15,7 +16,7 @@ from app.ir import edit as ir_edit
 from app.ir.kernels import KernelDeclarationError
 from app.ir.resolve import ResolutionError, resolve
 from app.ir.strategies.expanding_z import LIBRARY
-from app.ir.validate import Violation, validate
+from app.ir.validate import Violation
 
 
 router = APIRouter(prefix="/api/ir")
@@ -243,65 +244,35 @@ def _transition_code(exc: store.InvalidTransition) -> EditorErrorCode:
     return "EDITOR_ARCHIVED"
 
 
-def _apply_one(graph: dict[str, Any], request: EditRequest) -> dict[str, Any]:
+def _semantic_operation(request: EditRequest) -> ir_edit.SemanticOperation:
     if isinstance(request, SetOverrideEdit):
-        return ir_edit.set_override(
-            graph, request.instance_id, request.parameter, request.value
+        return ir_edit.SetOverride(
+            request.instance_id, request.parameter, request.value
         )
     if isinstance(request, ClearOverrideEdit):
-        return ir_edit.clear_override(graph, request.instance_id, request.parameter)
-    return ir_edit.rename(graph, request.display_name)
+        return ir_edit.ClearOverride(request.instance_id, request.parameter)
+    return ir_edit.SetDisplayName(request.display_name)
 
 
-def _node(graph: dict[str, Any], instance_id: str) -> dict[str, Any] | None:
-    return next(
-        (node for node in graph.get("nodes", ()) if node.get("instance_id") == instance_id),
-        None,
-    )
-
-
-def _inverse_for(graph: dict[str, Any], request: EditRequest) -> dict[str, Any]:
-    if isinstance(request, SetDisplayNameEdit):
-        return {
-            "operation": "set_display_name",
-            "display_name": str(graph["display_name"]),
-        }
-    node = _node(graph, request.instance_id)
-    if node is None:
-        raise RuntimeError("accepted edit has no authored source node for its inverse")
-    overrides = node.get("overrides", {})
-    if isinstance(request, ClearOverrideEdit) or request.parameter in overrides:
-        return {
-            "operation": "set_override",
-            "instance_id": request.instance_id,
-            "parameter": request.parameter,
-            "value": overrides[request.parameter],
-        }
+def _operation_dict(operation: ir_edit.SemanticOperation) -> dict[str, Any]:
     return {
-        "operation": "clear_override",
-        "instance_id": request.instance_id,
-        "parameter": request.parameter,
+        key: value
+        for key, value in asdict(operation).items()
+        if value is not None
     }
 
 
 def _apply_all(graph: dict[str, Any], requests: list[EditRequest]) -> store.EditResult:
-    edited = graph
-    applied: list[dict[str, Any]] = []
-    inverse: list[dict[str, Any]] = []
-    for index, request in enumerate(requests):
-        before = edited
-        try:
-            edited = _apply_one(edited, request)
-        except ir_edit.EditRejected as exc:
-            raise BatchEditRejected(index, exc.violations) from exc
-        applied.append(request.model_dump(mode="json"))
-        inverse.insert(0, _inverse_for(before, request))
-
-    violations = validate(edited, LIBRARY.components)
-    if violations:
-        raise BatchEditRejected(None, violations)
     try:
-        resolve(edited, LIBRARY)
+        result = ir_edit.apply_batch(
+            graph,
+            tuple(_semantic_operation(request) for request in requests),
+            LIBRARY.components,
+        )
+    except ir_edit.EditRejected as exc:
+        raise BatchEditRejected(exc.operation_index, exc.violations) from exc
+    try:
+        resolve(result.graph, LIBRARY)
     except ResolutionError as exc:
         raise BatchEditRejected(
             None, [Violation(exc.clause, exc.path, exc.message)]
@@ -316,9 +287,13 @@ def _apply_all(graph: dict[str, Any], requests: list[EditRequest]) -> store.Edit
             )],
         ) from exc
     return store.EditResult(
-        graph=edited,
-        applied_operations=tuple(applied),
-        inverse_operations=tuple(inverse),
+        graph=result.graph,
+        applied_operations=tuple(
+            _operation_dict(operation) for operation in result.applied_operations
+        ),
+        inverse_operations=tuple(
+            _operation_dict(operation) for operation in result.inverse_operations
+        ),
     )
 
 
