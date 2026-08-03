@@ -63,6 +63,10 @@ does it.
 8. **Linear instruments are first priority.** Future derivative engines must extend this
    architecture rather than force a redesign.
 
+The accepted ownership, identity, lifecycle and persistence contract for the product objects is
+[ADR 0001](engineering/decisions/0001-product-object-contract.md). It extends these invariants; it
+does not replace the Component IR RFC.
+
 ## 4. The live-money rule
 
 Any change affecting execution, order routing, sizing, exits or live trading behaviour **stops

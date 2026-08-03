@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S2.1 minimum product-object architecture and persistence contract
-- **Next product checkpoint:** one accepted ownership, identity, immutability and lifecycle
-  contract can drive the first durable project/graph-version migration.
+- **Current slice:** S2.2 durable Project, graph artefact and immutable graph-version persistence
+- **Next product checkpoint:** a user can create a project, edit a graph draft and publish an
+  immutable version without changing prior versions or existing execution behaviour.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -73,8 +73,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | done — published; dotenv boundary corrected at `4f8fb9a`, shutdown worker race at `b243b59` |
 | S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | done — verified, documented and published |
 | S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | done — verified, documented and published |
-| S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | active |
-| S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | later |
+| S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | done — ADR 0001 accepted |
+| S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | active |
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | later |
 | S3.2 | Add typed visual mutations, validation feedback, undo/redo and accessible controls | S3.1 | later |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2 | later |
@@ -239,6 +239,20 @@ state. Extend the existing `Deployment` entity rather than creating a second dep
 conflicts and legal state transitions. Existing databases migrate without rewriting the money
 record. Model/migration equivalence, upgrade/downgrade, conflict/orphan and invalid-transition
 tests pass. Mutation or direct SQL attempts that would rewrite an immutable graph version fail.
+
+**S2.1 decision evidence, 2026-08-03.**
+[ADR 0001](decisions/0001-product-object-contract.md) rejects Project/watchlist execution roots,
+mutable versions, presentation-inside-IR, duplicate research ledgers, auto-active promotion and a
+generic JSON object store. It accepts the existing research records and `Deployment` root, defines
+all eight product identities/lifecycles, and fixes the S2.2 migration and rollback boundary.
+
+**S2.2 bounded checklist.**
+
+1. [ ] Add Project, graph artefact and immutable graph-version model/migration tests.
+2. [ ] Seed the fixed catalogue graph and attach existing layouts without touching money records.
+3. [ ] Implement draft revision and atomic publish repositories with direct-SQL immutability proof.
+4. [ ] Add closed Project/graph draft/version APIs and invalid ownership/conflict paths.
+5. [ ] Run persistence/workstream regressions, migration rollback, docs, bounded commit and push.
 
 ### S3.1–S3.3 — real visual authoring
 

@@ -10,13 +10,14 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A and S1.1 are published; S1.2 is complete locally.** Fail-closed CI is on the branch. Its first
+**Stage A through S1.2 is published; S2.1 is accepted locally.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
 drains those workers before the broker session closes. F13 is published at `22a148f`. The React
 viewer now loads the sparse layout, moves authored nodes by pointer or keyboard, saves by revision,
-and retains local work on conflict or transport failure. S2.1 product-object architecture is next.
+and retains local work on conflict or transport failure. ADR 0001 rejects duplicate product
+ledgers and accepts the minimum ownership, identity and lifecycle contract. S2.2 persistence is next.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -26,9 +27,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed slice: F13 sparse layout persistence through `22a148f`
-- Latest verified remote before the S1.2 commit: `22a148f`
-- Expected ahead/behind after publishing S1.2: `0/0`
+- Last completed/pushed slice: S1.2 conflict-safe layout editor through `1a27d39`
+- Latest verified remote before the S2.1 commit: `1a27d39`
+- Expected ahead/behind after publishing S2.1: `0/0`
 - Working tree expected after publishing this handoff: clean
 
 The commit containing this handoff is the current HEAD after publication; resolve its SHA with
@@ -115,12 +116,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S2.1 — accept the minimum product-object architecture and persistence contract.**
+**S2.2 — persist projects, editable graph artefacts and immutable graph versions.**
 
-Write the focused architecture record for Project, Graph artefact, immutable Graph version,
-Layout, Experiment, Finding, Deployment candidate and Deployment. Reject alternate ownership,
-identity and state-transition claims before accepting one contract. Extend the existing deployment
-root; do not create a second execution model or cross a live-runtime gate.
+Implement the application-database portion of ADR 0001 test-first: Project, optimistic-concurrency
+graph draft and append-only graph version. Seed the fixed catalogue version before attaching layout
+ownership, enforce immutable versions against direct SQL, and keep deployment/research extensions
+for their later gated slices. No runtime path adopts the new records.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 
