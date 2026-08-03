@@ -245,7 +245,11 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**L1 execution integration — write the adoption design, then stop for owner approval.**
+**L1 execution integration — the design is written; STOP for owner approval.**
+
+ADR 0011 (`docs/engineering/decisions/0011-l1-ir-runtime-adoption.md`) and the Stage 0 plan
+(`docs/superpowers/plans/2026-08-03-l1-stage0-adapter.md`) are published and **PROPOSED**.
+Do not begin implementation until the owner approves ADR 0011.
 
 The M-band is closed and no further review-workflow slice is queued. The next deliverable is a
 written design, not code:

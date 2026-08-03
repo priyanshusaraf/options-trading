@@ -326,6 +326,33 @@ sync with reality before.
 - Telegram is optional; blank creds = silently off.
 - Commit and push only when asked. Working branch is a feature branch off `main`.
 
+## Reference repositories (`~/dev/multiverse-of-ideas`)
+
+A local competitor-research library of eleven cloned projects sits at
+`~/dev/multiverse-of-ideas`. **You may consult it. It is advisory, never authoritative.**
+
+**Start at [`docs/engineering/reference/multiverse-index.md`](docs/engineering/reference/multiverse-index.md)** —
+it maps each repository to the workstream it informs and the exact review section to open. Use
+the index before any broad exploration; do not scan `repos/` looking for ideas.
+
+- **This codebase's architecture and its hard invariants take precedence** over anything a
+  reference project does, no matter how mature that project is.
+- **Only `reviews/` prose may cross into our code.** Nothing in `repos/` is copied, vendored, or
+  imported. Re-derive abstractions; never transcribe source.
+- **Licensing is the reason, not caution.** Most of the library is GPL-family; OpenAlgo is
+  AGPL-3.0 (§13 triggers on merely serving users) and vectorbt carries a **Commons Clause** rider
+  that forbids hosting fees — both fatal to the hosted/marketplace path. If code is ever copied,
+  it must preserve licence and attribution, and that is an owner decision recorded in the index
+  first. Never classify a licence by grep; read the file's first fifteen lines.
+- **No reference repository may introduce a second graph schema, ledger, validator, deployment
+  model, or execution authority.** One of anything is the rule.
+- Older documents cite this library as `~/dev/il/` — the path moved; read it as
+  `~/dev/multiverse-of-ideas/`.
+
+Verified 2026-08-03: **no reference source code exists in this repository.** The only traces are
+two prose comments citing vectorbt and ComfyUI as design counter-examples
+(`app/ir/validate.py:472`, `app/ir/schema.py:44`).
+
 ## Subagent rules
 
 - Subagents must never run `git stash`, `git checkout -- .`, `git reset`, or anything else that
