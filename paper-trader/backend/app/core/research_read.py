@@ -29,12 +29,14 @@ from research.domain.base import make_engine, make_sessionmaker
 from research.domain.models import (
     ExperimentRun,
     ExperimentSpec,
+    Finding,
     GeneratedStrategyRecord,
     PromotionCandidate,
 )
 from research.evidence import (
     EvidenceMissing,
     EvidenceRejected,
+    confidence_from_trades,
     decode_terminal_evidence,
 )
 from research.strategy.explain import explain
@@ -73,6 +75,14 @@ class StoredEvidenceCorrupt(Exception):
 
 
 class CandidateDecisionConflict(Exception):
+    pass
+
+
+class FindingEvidenceUnavailable(Exception):
+    pass
+
+
+class FindingRevisionConflict(Exception):
     pass
 
 
@@ -165,6 +175,175 @@ def get_graph_run(project_id: str, run_id: int) -> dict | None:
         if view is None or view["graph"].get("project_id") != project_id:
             return None
         return view
+
+
+def _verified_finding_run(session, project_id: str, run_id: int) -> dict | None:
+    run = session.get(ExperimentRun, run_id)
+    spec = session.get(ExperimentSpec, run.spec_id) if run is not None else None
+    if run is None or spec is None:
+        return None
+    recipe = _recipe_for(session, run_id)
+    graph = _graph_for_recipe(recipe)
+    if graph is None or graph.get("project_id") != project_id:
+        return None
+    if run.status != "completed":
+        raise FindingEvidenceUnavailable(run_id)
+    try:
+        evidence = decode_terminal_evidence(run.checkpoint_json)
+    except EvidenceMissing as exc:
+        raise FindingEvidenceUnavailable(run_id) from exc
+    except EvidenceRejected as exc:
+        raise StoredEvidenceCorrupt(run_id) from exc
+    evidence_run = evidence.get("run")
+    evidence_provenance = evidence.get("provenance")
+    evidence_graph = (
+        evidence_provenance.get("graph_provenance", {}).get("graph")
+        if isinstance(evidence_provenance, dict) else None
+    )
+    if (
+        evidence.get("spec_id") != spec.id
+        or not isinstance(evidence_run, dict)
+        or evidence_run.get("id") != run.id
+        or evidence_run.get("status") != "completed"
+        or evidence_graph != graph
+    ):
+        raise StoredEvidenceCorrupt(run_id)
+    return {
+        "run": run,
+        "spec": spec,
+        "recipe": recipe,
+        "evidence": evidence,
+        "binding": {
+            "run_id": run.id,
+            "spec_id": spec.id,
+            "evidence_content_address": content_address(evidence),
+            "graph": graph,
+        },
+    }
+
+
+def _finding_view(finding: Finding, context: dict) -> dict:
+    return {
+        "finding_id": finding.id,
+        "statement": finding.statement,
+        "polarity": finding.polarity,
+        "confidence": finding.confidence,
+        "evidence_run_id": finding.evidence_run_id,
+        "superseded_by": finding.superseded_by,
+        "status": "superseded" if finding.superseded_by is not None else "active",
+        "created_at": finding.created_at.isoformat() if finding.created_at else None,
+        "binding": context["binding"],
+    }
+
+
+def list_project_findings(project_id: str) -> list[dict]:
+    with _research_session() as session:
+        if session is None:
+            return []
+        views = []
+        for finding in session.query(Finding).order_by(Finding.id.asc()).all():
+            if finding.evidence_run_id is None:
+                continue
+            context = _verified_finding_run(
+                session, project_id, finding.evidence_run_id
+            )
+            if context is not None:
+                views.append(_finding_view(finding, context))
+        return views
+
+
+def get_project_finding(project_id: str, finding_id: int) -> dict | None:
+    with _research_session() as session:
+        if session is None:
+            return None
+        finding = session.get(Finding, finding_id)
+        if finding is None or finding.evidence_run_id is None:
+            return None
+        context = _verified_finding_run(
+            session, project_id, finding.evidence_run_id
+        )
+        return _finding_view(finding, context) if context is not None else None
+
+
+def _finding_confidence(evidence: dict) -> float:
+    results = evidence.get("results")
+    instruments = results.get("instruments", []) if isinstance(results, dict) else []
+    trades = 0
+    if isinstance(instruments, list):
+        for item in instruments:
+            qualification = item.get("qualification") if isinstance(item, dict) else None
+            value = qualification.get("trades") if isinstance(qualification, dict) else None
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                trades += value
+    return confidence_from_trades(trades)
+
+
+def create_project_finding(
+    project_id: str, run_id: int, *, statement: str, polarity: str
+) -> dict | None:
+    with _research_session() as session:
+        if session is None:
+            return None
+        context = _verified_finding_run(session, project_id, run_id)
+        if context is None:
+            return None
+        finding = Finding(
+            hypothesis_id=context["spec"].hypothesis_id,
+            statement=statement,
+            polarity=polarity,
+            confidence=_finding_confidence(context["evidence"]),
+            evidence_run_id=run_id,
+        )
+        session.add(finding)
+        session.commit()
+        return _finding_view(finding, context)
+
+
+def _after_finding_successor_insert(_session, _successor) -> None:
+    """Failure-injection seam proving successor/CAS transaction atomicity."""
+
+
+def revise_project_finding(
+    project_id: str, finding_id: int, *, statement: str, polarity: str
+) -> dict | None:
+    with _research_session() as session:
+        if session is None:
+            return None
+        original = session.get(Finding, finding_id)
+        if original is None or original.evidence_run_id is None:
+            return None
+        context = _verified_finding_run(
+            session, project_id, original.evidence_run_id
+        )
+        if context is None:
+            return None
+        if original.superseded_by is not None:
+            raise FindingRevisionConflict(finding_id)
+        successor = Finding(
+            hypothesis_id=original.hypothesis_id,
+            statement=statement,
+            polarity=polarity,
+            confidence=_finding_confidence(context["evidence"]),
+            evidence_run_id=original.evidence_run_id,
+        )
+        session.add(successor)
+        session.flush()
+        _after_finding_successor_insert(session, successor)
+        claimed = session.execute(
+            update(Finding)
+            .where(Finding.id == finding_id, Finding.superseded_by.is_(None))
+            .values(superseded_by=successor.id)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            session.rollback()
+            raise FindingRevisionConflict(finding_id)
+        session.commit()
+        session.refresh(original)
+        return {
+            "superseded": _finding_view(original, context),
+            "successor": _finding_view(successor, context),
+        }
 
 
 def _view(session, c: PromotionCandidate) -> dict:

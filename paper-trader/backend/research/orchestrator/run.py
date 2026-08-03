@@ -32,7 +32,7 @@ from research.domain.models import (
     ResearchProgram,
 )
 from research.evaluation import kernels
-from research.evidence import encode_terminal_evidence
+from research.evidence import confidence_from_trades, encode_terminal_evidence
 from research.orchestrator.report import write_report
 from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
@@ -154,11 +154,6 @@ def _get_or_create_hypothesis(session, program_id: int, statement: str) -> Hypot
         session.add(h)
         session.flush()
     return h
-
-
-def _confidence(trades: int) -> float:
-    """Crude monotone-in-evidence confidence, saturating in trade count."""
-    return round(min(0.95, trades / (trades + 30.0)), 3) if trades else 0.1
 
 
 def _record_edge(session, strategy, instrument_key: str, validated: bool,
@@ -301,7 +296,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                         ie.instrument_key, ie.reason, ie.trades)
             rejected.append({"instrument": ie.instrument_key, "reason": ie.reason})
             session.add(Finding(
-                hypothesis_id=hyp.id, polarity="negative", confidence=_confidence(ie.trades),
+                hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} did not qualify on {ie.instrument_key} "
                           f"({interval}): {ie.reason}"))
@@ -378,7 +373,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             rejected.append({"instrument": ie.instrument_key,
                              "reason": f"failed validation: {', '.join(failed)}"})
             session.add(Finding(
-                hypothesis_id=hyp.id, polarity="negative", confidence=_confidence(ie.trades),
+                hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} qualified but failed validation on "
                           f"{ie.instrument_key}: {', '.join(failed)}"))
@@ -399,7 +394,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         }
         _record_edge(session, strategy, ie.instrument_key, True, run.id)
         session.add(Finding(
-            hypothesis_id=hyp.id, polarity="positive", confidence=_confidence(ie.trades),
+            hypothesis_id=hyp.id, polarity="positive", confidence=confidence_from_trades(ie.trades),
             evidence_run_id=run.id,
             statement=f"{strategy.key} validated on {ie.instrument_key} "
                       f"({interval}), DSR={sc.dsr:.3f}"))

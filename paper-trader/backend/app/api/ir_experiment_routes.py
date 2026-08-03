@@ -152,6 +152,42 @@ class CandidateDecisionResponse(_ClosedModel):
     decision: dict
 
 
+class FindingRequest(_ClosedModel):
+    statement: str = Field(min_length=1, max_length=4000)
+    polarity: Literal["positive", "negative"]
+
+    @model_validator(mode="after")
+    def _meaningful_statement(self):
+        if not self.statement.strip():
+            raise ValueError("finding statement must not be blank")
+        return self
+
+
+class FindingRevisionRequest(FindingRequest):
+    expected_superseded_by: Literal[None]
+
+
+class FindingResponse(_ClosedModel):
+    finding_id: int
+    statement: str
+    polarity: Literal["positive", "negative"]
+    confidence: float
+    evidence_run_id: int
+    superseded_by: int | None
+    status: Literal["active", "superseded"]
+    created_at: str | None
+    binding: dict
+
+
+class FindingListResponse(_ClosedModel):
+    findings: list[FindingResponse]
+
+
+class FindingRevisionResponse(_ClosedModel):
+    superseded: FindingResponse
+    successor: FindingResponse
+
+
 def request_validation_envelope(errors: list[dict]) -> dict:
     return {
         "code": "EXPERIMENT_REQUEST_INVALID",
@@ -367,6 +403,102 @@ def post_candidate_decision(
     if result is None:
         raise _error(404, "CANDIDATE_NOT_FOUND", "candidate not found")
     return CandidateDecisionResponse(**result)
+
+
+def _finding_failure(exc: Exception) -> None:
+    if isinstance(exc, research_read.StoredEvidenceCorrupt):
+        raise _error(
+            409,
+            "FINDING_EVIDENCE_CORRUPT",
+            "persisted finding evidence failed integrity verification",
+        ) from exc
+    if isinstance(exc, research_read.FindingEvidenceUnavailable):
+        raise _error(
+            409,
+            "FINDING_EVIDENCE_UNAVAILABLE",
+            "finding requires a completed run with verified terminal evidence",
+        ) from exc
+    raise exc
+
+
+@router.get(
+    "/projects/{project_id}/findings",
+    response_model=FindingListResponse,
+)
+def get_findings(project_id: str) -> FindingListResponse:
+    try:
+        findings = research_read.list_project_findings(project_id)
+    except (research_read.StoredEvidenceCorrupt,
+            research_read.FindingEvidenceUnavailable) as exc:
+        _finding_failure(exc)
+    return FindingListResponse(findings=findings)
+
+
+@router.get(
+    "/projects/{project_id}/findings/{finding_id}",
+    response_model=FindingResponse,
+)
+def get_finding(project_id: str, finding_id: int) -> FindingResponse:
+    try:
+        finding = research_read.get_project_finding(project_id, finding_id)
+    except (research_read.StoredEvidenceCorrupt,
+            research_read.FindingEvidenceUnavailable) as exc:
+        _finding_failure(exc)
+    if finding is None:
+        raise _error(404, "FINDING_NOT_FOUND", "finding not found")
+    return FindingResponse(**finding)
+
+
+@router.post(
+    "/projects/{project_id}/experiments/{run_id}/findings",
+    response_model=FindingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_finding(
+    project_id: str, run_id: int, body: FindingRequest
+) -> FindingResponse:
+    try:
+        finding = research_read.create_project_finding(
+            project_id,
+            run_id,
+            statement=body.statement.strip(),
+            polarity=body.polarity,
+        )
+    except (research_read.StoredEvidenceCorrupt,
+            research_read.FindingEvidenceUnavailable) as exc:
+        _finding_failure(exc)
+    if finding is None:
+        raise _error(404, "FINDING_RUN_NOT_FOUND", "experiment run not found")
+    return FindingResponse(**finding)
+
+
+@router.post(
+    "/projects/{project_id}/findings/{finding_id}/revisions",
+    response_model=FindingRevisionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_finding_revision(
+    project_id: str, finding_id: int, body: FindingRevisionRequest
+) -> FindingRevisionResponse:
+    try:
+        revision = research_read.revise_project_finding(
+            project_id,
+            finding_id,
+            statement=body.statement.strip(),
+            polarity=body.polarity,
+        )
+    except research_read.FindingRevisionConflict as exc:
+        raise _error(
+            409,
+            "FINDING_REVISION_CONFLICT",
+            "finding was already superseded",
+        ) from exc
+    except (research_read.StoredEvidenceCorrupt,
+            research_read.FindingEvidenceUnavailable) as exc:
+        _finding_failure(exc)
+    if revision is None:
+        raise _error(404, "FINDING_NOT_FOUND", "finding not found")
+    return FindingRevisionResponse(**revision)
 
 
 @router.get(

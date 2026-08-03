@@ -20,6 +20,11 @@ class EvidenceRejected(Exception):
     """Stored or newly produced evidence cannot be trusted."""
 
 
+def confidence_from_trades(trades: int) -> float:
+    """Existing monotone research confidence rule, shared by findings."""
+    return round(min(0.95, trades / (trades + 30.0)), 3) if trades else 0.1
+
+
 def _reject_constant(value: str):
     raise ValueError(f"non-finite JSON value {value}")
 
@@ -71,6 +76,7 @@ def decode_terminal_evidence(raw: str | None) -> dict[str, Any]:
 __all__ = [
     "EvidenceMissing",
     "EvidenceRejected",
+    "confidence_from_trades",
     "decode_terminal_evidence",
     "encode_terminal_evidence",
 ]
