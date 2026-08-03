@@ -182,6 +182,12 @@ semantic and presentation state. Mismatch diagnostics distinguish semantic conte
 order, presentation contamination and executable identity. The focused proof and 187-test WS-04
 regression pass; S3.3 changes no persistence schema or execution path.
 
+**Immutable graph comparison — S4.5, 2026-08-03.** `app/editor/comparison.py` compares two
+server-loaded published documents without resolution. Node and edge topology is keyed by authored
+identity and socket endpoints; component refs, overrides, interface, metadata, array-order identity
+and content address remain distinct. Layouts and visual groups are never loaded, and a contaminated
+executable `groups` field or false declared address fails closed.
+
 ## 5. Active roadmap
 
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named

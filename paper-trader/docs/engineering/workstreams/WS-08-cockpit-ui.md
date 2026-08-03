@@ -153,6 +153,10 @@ S4.4 adds a read-only research operation section beside persisted evidence. It s
 active and last state, safe failures, plan address and linked run ids. Corrupt receipt feedback is
 contained without hiding experiment history, and no start/cancel/retry control is present.
 
+S4.5 adds accessible left/right immutable version selectors with optional paired persisted runs.
+Exact graph/evidence difference categories and incomparable reasons wrap inside the existing
+research panel; no publish, merge, restore, execution or deployment control is introduced.
+
 Migrated from `docs/ROADMAP.md` "Workstream D — UI". Ordered; the topmost unchecked item is what
 an implementation agent picks up.
 

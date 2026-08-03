@@ -721,7 +721,9 @@ export default function GraphView({ researchEnabled = false }: { researchEnabled
 
   return (
     <>
-      {researchEnabled && <ResearchEvidencePanel projectId={PROJECT_ID} />}
+      {researchEnabled && <ResearchEvidencePanel
+        projectId={PROJECT_ID} graphIdentifier={GRAPH_IDENTIFIER}
+      />}
       <GraphViewState
         graph={graph}
         layout={layoutEditor?.layout ?? null}

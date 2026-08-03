@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.4 is implemented; S4.5 comparison is the active slice.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.5 is implemented; S4.6a daily review is the active slice.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -38,6 +38,9 @@ revision intent on conflict.
 S4.4 gives nightly and manual research one shared OS lock and a canonical atomic current/last
 receipt. The read-only status API and cockpit show bounded plan identity, progress and safe failure
 without exposing remote run controls or invoking research during reads.
+S4.5 compares server-owned immutable graph documents by structure, components, parameters,
+interface, metadata and exact identity, then optionally composes verified persisted run evidence.
+The UI selects versions and paired evidence without supplying graph or evidence claims.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -53,6 +56,7 @@ viewer and does not adopt the IR runtime in a live path.
 - S4.3 backend lineage boundary: `c645b64`
 - S4.3 product-surface slice: current HEAD after this handoff is published
 - S4.4 operations observability: current HEAD after this handoff is published
+- S4.5 version/evidence comparison: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -79,7 +83,7 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build
-208 passed · TYPECHECK OK · BUILD OK · EXIT 0
+209 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
@@ -107,6 +111,11 @@ replays the persisted inverse receipt. Presentation-contamination, semantic-cont
 edge-order and executable-identity diagnostics are pinned. S3.3 changes no schema, research gate or
 execution path, so the complete checkpoint was not repeated after S3.2b's immediately preceding
 green run.
+
+S4.5's focused backend/API set passed 37 tests and the combined WS-03/04/API regression passed 141.
+All 209 frontend tests, typecheck and production build pass. S4.5 changes no schema, runtime or
+safety boundary, so S4.4's 2,883-pass full checkpoint and exact-head green Actions run
+`30819757907` remain the shared baseline.
 
 S4.3's focused and WS-03/API regression collected 570 tests and completed with 6 skips. All 204
 frontend tests, typecheck and production build pass. Negative proofs cover cross-project and raw

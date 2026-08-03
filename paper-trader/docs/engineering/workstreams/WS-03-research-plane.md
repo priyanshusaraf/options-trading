@@ -140,6 +140,16 @@ finding that is not bound to what produced it.
 
 Newest first. Dates are the dates the work landed.
 
+### Immutable graph-version and experiment comparison — S4.5
+
+- The accepted evidence comparator remains the only result/data/gate comparison. A separate pure
+  editor comparator reads the two immutable graph documents and reports structure, components,
+  parameters, interface, metadata and exact identity without resolving either graph.
+- Optional runs must be selected as a pair and bind exactly to each selected server-owned version
+  in both recipe and verified evidence. Legacy, running, corrupt and mismatched evidence fails closed.
+- The 141-test WS-03/04/API regression and all 209 frontend tests, typecheck and build pass. S4.4's
+  immediately preceding full checkpoint remains current.
+
 ### Bounded research operation receipts — S4.4
 
 - Nightly and manual research share one non-blocking OS lock and one canonical mode-0600 atomic

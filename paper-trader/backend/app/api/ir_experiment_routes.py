@@ -12,6 +12,7 @@ from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
 from app.editor import graph_artifacts as store
+from app.editor.comparison import GraphComparisonRejected, compare_graph_versions
 from research.compare import compare_experiment_evidence
 from research.config import research_db_path
 from research.data.store import materialize
@@ -132,6 +133,36 @@ class GraphComparisonResponse(_ClosedModel):
     equivalent: bool
     incomparable: list[str]
     differences: list[GraphComparisonDifference]
+
+
+class VersionComparisonSelection(_ClosedModel):
+    graph_identifier: str = Field(min_length=1, max_length=128)
+    graph_version: int = Field(ge=1)
+    run_id: int | None = Field(default=None, ge=1)
+
+
+class VersionComparisonRequest(_ClosedModel):
+    left: VersionComparisonSelection
+    right: VersionComparisonSelection
+
+    @model_validator(mode="after")
+    def _paired_run_selection(self):
+        if (self.left.run_id is None) != (self.right.run_id is None):
+            raise ValueError("comparison run ids must be selected as a pair")
+        return self
+
+
+class VerifiedComparisonSelection(_ClosedModel):
+    project_id: str
+    graph_identifier: str
+    graph_version: int
+    content_address: str
+    run_id: int | None
+
+
+class VersionComparisonResponse(GraphComparisonResponse):
+    left: VerifiedComparisonSelection
+    right: VerifiedComparisonSelection
 
 
 class CandidateDecisionRequest(_ClosedModel):
@@ -376,6 +407,118 @@ def post_graph_experiment_comparison(
         )
     return GraphComparisonResponse(
         **compare_experiment_evidence(left["evidence"], right["evidence"])
+    )
+
+
+def _load_comparison_graph(
+    project_id: str, selection: VersionComparisonSelection
+):
+    try:
+        return store.load_version(
+            project_id, selection.graph_identifier, selection.graph_version
+        )
+    except (store.ProjectNotFound, store.GraphNotFound) as exc:
+        raise _error(
+            404,
+            "EXPERIMENT_GRAPH_VERSION_NOT_FOUND",
+            "graph version not found",
+        ) from exc
+    except store.GraphVersionCorrupt as exc:
+        raise _error(
+            409,
+            "GRAPH_VERSION_CORRUPT",
+            "persisted graph version failed integrity verification",
+        ) from exc
+
+
+def _comparison_run(
+    project_id: str,
+    selection: VersionComparisonSelection,
+    published,
+):
+    if selection.run_id is None:
+        return None
+    try:
+        run = research_read.get_graph_run(project_id, selection.run_id)
+    except research_read.StoredEvidenceCorrupt as exc:
+        raise _error(
+            409,
+            "EXPERIMENT_EVIDENCE_CORRUPT",
+            "persisted experiment evidence failed integrity verification",
+        ) from exc
+    if run is None:
+        raise _error(404, "EXPERIMENT_RUN_NOT_FOUND", "experiment run not found")
+    if run["evidence_state"] != "verified" or run["evidence"] is None:
+        raise _error(
+            409,
+            "EXPERIMENT_EVIDENCE_UNAVAILABLE",
+            "verified terminal evidence is unavailable for comparison",
+        )
+    expected = {
+        "project_id": project_id,
+        "identifier": published.identifier,
+        "version": published.version,
+        "content_address": published.content_address,
+    }
+    evidence_provenance = run["evidence"].get("provenance")
+    evidence_graph = (
+        evidence_provenance.get("graph_provenance", {}).get("graph")
+        if isinstance(evidence_provenance, dict) else None
+    )
+    if run["graph"] != expected or evidence_graph != expected:
+        raise _error(
+            409,
+            "EXPERIMENT_GRAPH_BINDING_MISMATCH",
+            "experiment run is not bound to the selected graph version",
+        )
+    return run
+
+
+@router.post(
+    "/projects/{project_id}/version-comparisons",
+    response_model=VersionComparisonResponse,
+)
+def post_version_comparison(
+    project_id: str, body: VersionComparisonRequest
+) -> VersionComparisonResponse:
+    left_graph = _load_comparison_graph(project_id, body.left)
+    right_graph = _load_comparison_graph(project_id, body.right)
+    try:
+        graph_result = compare_graph_versions(
+            {"graph": left_graph.graph, "content_address": left_graph.content_address},
+            {"graph": right_graph.graph, "content_address": right_graph.content_address},
+        )
+    except GraphComparisonRejected as exc:
+        raise _error(409, "GRAPH_VERSION_CORRUPT", str(exc)) from exc
+
+    left_run = _comparison_run(project_id, body.left, left_graph)
+    right_run = _comparison_run(project_id, body.right, right_graph)
+    differences = list(graph_result["differences"])
+    incomparable = list(graph_result["incomparable"])
+    if left_run is not None and right_run is not None:
+        evidence_result = compare_experiment_evidence(
+            left_run["evidence"], right_run["evidence"]
+        )
+        differences.extend(evidence_result["differences"])
+        incomparable.extend(evidence_result["incomparable"])
+    differences.sort(key=lambda item: (item["dimension"], repr(item["path"])))
+    incomparable = list(dict.fromkeys(incomparable))
+
+    def verified(selection, published):
+        return VerifiedComparisonSelection(
+            project_id=project_id,
+            graph_identifier=published.identifier,
+            graph_version=published.version,
+            content_address=published.content_address,
+            run_id=selection.run_id,
+        )
+
+    return VersionComparisonResponse(
+        left=verified(body.left, left_graph),
+        right=verified(body.right, right_graph),
+        equivalent=not differences,
+        incomparable=incomparable,
+        differences=differences,
     )
 
 

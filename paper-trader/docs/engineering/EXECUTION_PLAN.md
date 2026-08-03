@@ -18,10 +18,10 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.5 version and experiment comparison
-- **Next product checkpoint:** a user can compare two immutable graph versions and their persisted
-  experiment evidence, with structural, parameter, component, data and result differences kept
-  explicit and presentation state excluded from executable identity.
+- **Current slice:** S4.6a daily research review read model and queues
+- **Next product checkpoint:** a user can review one ordered project timeline and actionable queues
+  for operations, experiments, findings and candidate decisions without reconstructing state across
+  separate panels or triggering research during reads.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -84,7 +84,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate decisions | S4.1 | done — verified and published |
 | S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | done — verified and published |
 | S4.4 | Make bounded research operations and failures observable | S4.3 | done — verified in the safety checkpoint; publication in this slice commit |
-| S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | active — bounded checklist generated |
+| S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | done — verified; publication in this slice commit |
+| S4.6a | Add a daily research review read model and actionable queues | S4.5 | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -466,17 +467,42 @@ atomic reload, overflow, corruption, freeze and isolation guards pass. The safet
 
 **S4.5 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile the existing run-evidence comparator, immutable graph-version store, Component IR
+1. [x] Reconcile the existing run-evidence comparator, immutable graph-version store, Component IR
        identity rules and presentation-state exclusion; record the missing comparison contract.
-2. [ ] Define one pure server-derived comparison document for two project-owned immutable graph
+2. [x] Define one pure server-derived comparison document for two project-owned immutable graph
        versions and optional persisted runs, separating structure, parameters, component versions,
        data identity, gates/costs and results without accepting graph/evidence identity from clients.
-3. [ ] Add closed read/compare APIs and guard wrong-project, missing, corrupt, legacy and
+3. [x] Add closed read/compare APIs and guard wrong-project, missing, corrupt, legacy and
        incomparable inputs; reads must not resolve, execute, collect, evaluate or mutate state.
-4. [ ] Surface accessible version/run selection and exact difference categories with lossless reload,
+4. [x] Surface accessible version/run selection and exact difference categories with lossless reload,
        explicit incomparable reasons and no presentation contamination or execution controls.
-5. [ ] Prove canonical ordering, same-version equivalence, presentation-only invariance and
+5. [x] Prove canonical ordering, same-version equivalence, presentation-only invariance and
        client-identity rejection; run applicable regressions, publish, inspect CI and continue.
+
+**S4.5 completion evidence, 2026-08-03.** ADR 0006 retains the accepted verified-evidence
+comparator and adds a pure immutable-IR comparator over server-loaded graph documents. Authored
+nodes and edges compare by stable identity/endpoints; component refs, parameters, interface,
+metadata and exact document/order identity remain separate categories. Content-address mismatch
+and executable `groups` contamination fail closed. A closed version-list read and combined
+comparison verify project ownership, canonical graph bytes and optional paired run bindings against
+both recipe and signed evidence provenance. Reads call no resolver, provider, orchestrator or
+presentation store. The product offers accessible left/right versions and optional run evidence,
+with exact incomparable reasons and no execution controls. The 141-test WS-03/04/API regression and
+all 209 frontend tests, typecheck and build pass. No schema/runtime/safety boundary changed after
+S4.4's immediately preceding full checkpoint and fully green Actions run `30819757907`.
+
+**S4.6a bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile projects, bounded operation receipts, graph-bound runs, findings, candidate
+       decisions and immutable version events; define which existing ledger owns each timeline fact.
+2. [ ] Record a closed project-owned daily-review read model with deterministic event identity,
+       ordering, cursor pagination, bounded date/type/status filters and actionable queue semantics.
+3. [ ] Add one read-only aggregation API that derives events and queues from existing stores without
+       copying evidence, accepting client state, recomputing research or mutating acknowledgements.
+4. [ ] Surface an accessible timeline plus failed-operation, review-needed, pending-decision and
+       active-finding queues with exact links back to existing evidence/version views.
+5. [ ] Prove stable pagination, cross-project isolation, corrupt-source containment, no provider/
+       resolver/evaluator calls and narrow-screen behavior; verify, publish, inspect CI and continue.
 
 ## 4. Medium-term sequence
 

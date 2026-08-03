@@ -54,6 +54,14 @@ class PublishedGraph:
 
 
 @dataclass(frozen=True)
+class PublishedGraphIdentity:
+    project_id: str
+    identifier: str
+    version: int
+    content_address: str
+
+
+@dataclass(frozen=True)
 class EditPublication:
     draft_revision: int
     published: PublishedGraph
@@ -99,6 +107,10 @@ class GraphVersionNotFound(Exception):
     pass
 
 
+class GraphVersionCorrupt(Exception):
+    pass
+
+
 class GraphConflict(Exception):
     def __init__(self, current_revision: int):
         super().__init__(f"graph draft is at revision {current_revision}")
@@ -141,12 +153,21 @@ def _draft_record(artifact: GraphArtifact) -> GraphDraft:
 
 
 def _published_record(project_id: str, version: GraphVersion) -> PublishedGraph:
+    try:
+        graph = json.loads(version.artifact_json)
+    except (TypeError, ValueError) as exc:
+        raise GraphVersionCorrupt((version.graph_identifier, version.version)) from exc
+    if (
+        canonical_json(graph) != version.artifact_json
+        or content_address(graph) != version.content_address
+    ):
+        raise GraphVersionCorrupt((version.graph_identifier, version.version))
     return PublishedGraph(
         project_id=project_id,
         identifier=version.graph_identifier,
         version=version.version,
         content_address=version.content_address,
-        graph=json.loads(version.artifact_json),
+        graph=graph,
     )
 
 
@@ -538,6 +559,26 @@ def load_version(project_id: str, identifier: str, version: int) -> PublishedGra
         if published is None:
             raise GraphNotFound((project_id, identifier, version))
         return _published_record(project_id, published)
+
+
+def list_versions(project_id: str, identifier: str) -> tuple[PublishedGraphIdentity, ...]:
+    with SessionLocal() as session:
+        _owned_artifact(session, project_id, identifier)
+        versions = session.scalars(
+            select(GraphVersion)
+            .where(GraphVersion.graph_identifier == identifier)
+            .order_by(GraphVersion.version)
+        ).all()
+        identities = []
+        for version in versions:
+            published = _published_record(project_id, version)
+            identities.append(PublishedGraphIdentity(
+                project_id=project_id,
+                identifier=identifier,
+                version=published.version,
+                content_address=published.content_address,
+            ))
+        return tuple(identities)
 
 
 def load_owned_version_for_experiment(

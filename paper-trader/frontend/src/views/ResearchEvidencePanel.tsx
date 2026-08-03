@@ -1,19 +1,22 @@
 import { useEffect, useState } from 'react'
 import {
-  compareResearchRuns,
+  compareResearchVersions,
   createResearchFinding,
   decideResearchCandidate,
   getResearchOperationStatus,
   getResearchRun,
   getResearchFindings,
+  getResearchGraphVersions,
   getResearchRuns,
   reviseResearchFinding,
   type ResearchComparison,
   type ResearchFinding,
+  type ResearchGraphVersion,
   type ResearchOperationReceipt,
   type ResearchOperationStatus,
   type ResearchRunDetail,
   type ResearchRunSummary,
+  type ResearchVersionSelection,
 } from '../lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 
@@ -54,6 +57,7 @@ export function ResearchEvidenceSurface({
   detail,
   comparison,
   findings = [],
+  versions = [],
   operationStatus = null,
   operationError = null,
   reason,
@@ -76,6 +80,7 @@ export function ResearchEvidenceSurface({
   detail: ResearchRunDetail | null
   comparison: ResearchComparison | null
   findings?: readonly ResearchFinding[]
+  versions?: readonly ResearchGraphVersion[]
   operationStatus?: ResearchOperationStatus | null
   operationError?: string | null
   reason: string
@@ -85,7 +90,7 @@ export function ResearchEvidenceSurface({
   busy?: boolean
   error?: string | null
   onSelect?: (runId: number) => void
-  onCompare?: (leftRunId: number, rightRunId: number) => void
+  onCompare?: (left: ResearchVersionSelection, right: ResearchVersionSelection) => void
   onReason?: (reason: string) => void
   onDecision?: (decision: 'approved' | 'rejected') => void
   onFindingStatement?: (statement: string) => void
@@ -94,19 +99,41 @@ export function ResearchEvidenceSurface({
   onCancelRevision?: () => void
   onFindingSubmit?: () => void
 }) {
-  const [left, setLeft] = useState<number | null>(runs[0]?.run_id ?? null)
-  const [right, setRight] = useState<number | null>(runs[1]?.run_id ?? runs[0]?.run_id ?? null)
+  const orderedVersions = versions.length > 0
+    ? [...versions].sort((a, b) => a.version - b.version)
+    : Array.from(new Map(runs.map((run) => [run.graph.version, {
+        project_id: run.graph.project_id,
+        identifier: run.graph.identifier,
+        version: run.graph.version,
+        content_address: run.graph.content_address,
+      }])).values()).sort((a, b) => a.version - b.version)
+  const latestVersion = orderedVersions[orderedVersions.length - 1]
+  const previousVersion = orderedVersions[orderedVersions.length - 2]
+  const [leftVersion, setLeftVersion] = useState<number | null>(
+    previousVersion?.version ?? latestVersion?.version ?? null,
+  )
+  const [rightVersion, setRightVersion] = useState<number | null>(
+    latestVersion?.version ?? null,
+  )
+  const [leftRun, setLeftRun] = useState<number | null>(null)
+  const [rightRun, setRightRun] = useState<number | null>(null)
+  const leftIdentity = orderedVersions.find((item) => item.version === leftVersion)
+  const rightIdentity = orderedVersions.find((item) => item.version === rightVersion)
   useEffect(() => {
-    if (runs.length === 0) {
-      setLeft(null)
-      setRight(null)
+    if (orderedVersions.length === 0) {
+      setLeftVersion(null)
+      setRightVersion(null)
       return
     }
-    if (!runs.some((run) => run.run_id === left)) setLeft(runs[0].run_id)
-    if (!runs.some((run) => run.run_id === right)) {
-      setRight(runs[1]?.run_id ?? runs[0].run_id)
+    if (!orderedVersions.some((version) => version.version === leftVersion)) {
+      setLeftVersion(previousVersion?.version ?? latestVersion!.version)
+      setLeftRun(null)
     }
-  }, [runs, left, right])
+    if (!orderedVersions.some((version) => version.version === rightVersion)) {
+      setRightVersion(latestVersion!.version)
+      setRightRun(null)
+    }
+  }, [versions, runs, leftVersion, rightVersion])
   const evidence = detail?.evidence
   const provenance = evidence?.provenance
   const results = evidence?.results
@@ -319,29 +346,78 @@ export function ResearchEvidenceSurface({
           </section>
         )}
 
-        {runs.length >= 1 && (
-          <section aria-label="Compare experiments" className="space-y-2 border-t border-edge/50 pt-3">
-            <div className="stat-label">Compare persisted runs</div>
+        {orderedVersions.length >= 1 && (
+          <section aria-label="Compare immutable versions and evidence" className="space-y-2 border-t border-edge/50 pt-3">
+            <div className="stat-label">Compare immutable versions and evidence</div>
             <div className="flex flex-wrap gap-2">
-              <label>Left run <select value={left ?? ''} onChange={(event) => setLeft(Number(event.target.value))}>
-                {runs.map((run) => <option key={run.run_id} value={run.run_id}>{run.run_id}</option>)}
+              <label>Left version <select value={leftVersion ?? ''} onChange={(event) => {
+                setLeftVersion(Number(event.target.value)); setLeftRun(null)
+              }}>
+                {orderedVersions.map((version) => <option key={version.version} value={version.version}>
+                  v{version.version}
+                </option>)}
               </select></label>
-              <label>Right run <select value={right ?? ''} onChange={(event) => setRight(Number(event.target.value))}>
-                {runs.map((run) => <option key={run.run_id} value={run.run_id}>{run.run_id}</option>)}
+              <label>Left evidence <select value={leftRun ?? ''} onChange={(event) => {
+                setLeftRun(event.target.value ? Number(event.target.value) : null)
+              }}>
+                <option value="">Graph only</option>
+                {runs.filter((run) => (
+                  run.graph.version === leftVersion
+                  && run.graph.identifier === leftIdentity?.identifier
+                )).map((run) => (
+                  <option key={run.run_id} value={run.run_id}>Run {run.run_id}</option>
+                ))}
+              </select></label>
+              <label>Right version <select value={rightVersion ?? ''} onChange={(event) => {
+                setRightVersion(Number(event.target.value)); setRightRun(null)
+              }}>
+                {orderedVersions.map((version) => <option key={version.version} value={version.version}>
+                  v{version.version}
+                </option>)}
+              </select></label>
+              <label>Right evidence <select value={rightRun ?? ''} onChange={(event) => {
+                setRightRun(event.target.value ? Number(event.target.value) : null)
+              }}>
+                <option value="">Graph only</option>
+                {runs.filter((run) => (
+                  run.graph.version === rightVersion
+                  && run.graph.identifier === rightIdentity?.identifier
+                )).map((run) => (
+                  <option key={run.run_id} value={run.run_id}>Run {run.run_id}</option>
+                ))}
               </select></label>
               <button
                 className="btn"
-                disabled={busy || left === null || right === null}
-                onClick={() => left !== null && right !== null && onCompare?.(left, right)}
-              >Compare runs</button>
+                disabled={
+                  busy || leftVersion === null || rightVersion === null
+                  || ((leftRun === null) !== (rightRun === null))
+                }
+                onClick={() => {
+                  if (!leftIdentity || !rightIdentity) return
+                  onCompare?.(
+                    {
+                      graph_identifier: leftIdentity.identifier,
+                      graph_version: leftIdentity.version,
+                      ...(leftRun === null ? {} : { run_id: leftRun }),
+                    },
+                    {
+                      graph_identifier: rightIdentity.identifier,
+                      graph_version: rightIdentity.version,
+                      ...(rightRun === null ? {} : { run_id: rightRun }),
+                    },
+                  )
+                }}
+              >Compare versions</button>
             </div>
             {comparison && (
               <div role="status">
-                <p>{comparison.equivalent ? 'Evidence is exactly equivalent.' : 'Evidence differs.'}</p>
+                <p>{comparison.equivalent
+                  ? 'Selected versions and evidence are exactly equivalent.'
+                  : 'Selected versions or evidence differ.'}</p>
                 {comparison.incomparable.length > 0 && (
                   <p className="text-amber-300">Not like-for-like: {comparison.incomparable.join(', ')}</p>
                 )}
-                <ul className="list-disc pl-5">
+                <ul className="min-w-0 list-disc break-all pl-5">
                   {comparison.differences.map((difference, index) => (
                     <li key={`${difference.dimension}:${difference.path.join('.')}:${index}`}>
                       {difference.dimension}.{difference.path.join('.')}: {' '}
@@ -358,11 +434,14 @@ export function ResearchEvidenceSurface({
   )
 }
 
-export default function ResearchEvidencePanel({ projectId }: { projectId: string }) {
+export default function ResearchEvidencePanel({
+  projectId, graphIdentifier,
+}: { projectId: string; graphIdentifier: string }) {
   const [runs, setRuns] = useState<ResearchRunSummary[]>([])
   const [detail, setDetail] = useState<ResearchRunDetail | null>(null)
   const [comparison, setComparison] = useState<ResearchComparison | null>(null)
   const [findings, setFindings] = useState<ResearchFinding[]>([])
+  const [versions, setVersions] = useState<ResearchGraphVersion[]>([])
   const [operationStatus, setOperationStatus] = useState<ResearchOperationStatus | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [reason, setReason] = useState('')
@@ -382,11 +461,13 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
   }
 
   const refresh = async (preferredRunId?: number) => {
-    const [runResponse, findingResponse] = await Promise.all([
+    const [runResponse, findingResponse, versionResponse] = await Promise.all([
       getResearchRuns(projectId), getResearchFindings(projectId),
+      getResearchGraphVersions(projectId, graphIdentifier),
     ])
     setRuns(runResponse.runs)
     setFindings(findingResponse.findings)
+    setVersions(versionResponse)
     const runId = preferredRunId ?? detail?.run_id ?? runResponse.runs[0]?.run_id
     if (runId) await loadDetail(runId)
   }
@@ -395,7 +476,7 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
     refresh().catch((cause) => {
       setError(cause instanceof Error ? cause.message : 'Research history request failed')
     })
-  }, [projectId])
+  }, [projectId, graphIdentifier])
 
   useEffect(() => {
     let disposed = false
@@ -420,9 +501,9 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
     }
   }, [])
 
-  const compare = async (left: number, right: number) => {
-    setBusy(true); setError(null)
-    try { setComparison(await compareResearchRuns(projectId, left, right)) }
+  const compare = async (left: ResearchVersionSelection, right: ResearchVersionSelection) => {
+    setBusy(true); setError(null); setComparison(null)
+    try { setComparison(await compareResearchVersions(projectId, left, right)) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Comparison failed') }
     finally { setBusy(false) }
   }
@@ -480,6 +561,7 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
     detail={detail}
     comparison={comparison}
     findings={findings}
+    versions={versions}
     operationStatus={operationStatus}
     operationError={operationError}
     reason={reason}

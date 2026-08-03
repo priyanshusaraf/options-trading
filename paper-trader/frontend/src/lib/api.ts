@@ -695,6 +695,32 @@ export interface ResearchComparison {
   readonly differences: readonly ResearchComparisonDifference[]
 }
 
+export interface ResearchGraphVersion {
+  readonly project_id: string
+  readonly identifier: string
+  readonly version: number
+  readonly content_address: string
+}
+
+export interface ResearchVersionSelection {
+  readonly graph_identifier: string
+  readonly graph_version: number
+  readonly run_id?: number
+}
+
+export interface ResearchVersionComparison extends ResearchComparison {
+  readonly left: ResearchVerifiedVersionSelection
+  readonly right: ResearchVerifiedVersionSelection
+}
+
+export interface ResearchVerifiedVersionSelection {
+  readonly project_id: string
+  readonly graph_identifier: string
+  readonly graph_version: number
+  readonly content_address: string
+  readonly run_id: number | null
+}
+
 export interface ResearchFinding {
   readonly finding_id: number
   readonly statement: string
@@ -781,6 +807,21 @@ export const compareResearchRuns = (
     method: 'POST',
     body: JSON.stringify({ left_run_id: leftRunId, right_run_id: rightRunId }),
   },
+)
+
+export const getResearchGraphVersions = (
+  projectId: string, identifier: string,
+): Promise<ResearchGraphVersion[]> => researchFetch(
+  `${researchPath(projectId)}/graphs/${encodeURIComponent(identifier)}/versions`,
+)
+
+export const compareResearchVersions = (
+  projectId: string,
+  left: ResearchVersionSelection,
+  right: ResearchVersionSelection,
+): Promise<ResearchVersionComparison> => researchFetch(
+  `${researchPath(projectId)}/version-comparisons`,
+  { method: 'POST', body: JSON.stringify({ left, right }) },
 )
 
 export const decideResearchCandidate = (

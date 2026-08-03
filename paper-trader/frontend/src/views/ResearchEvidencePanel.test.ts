@@ -164,6 +164,10 @@ describe('ResearchEvidenceSurface', () => {
       findings: FINDINGS,
       reason: 'Reviewed evidence',
       findingStatement: 'A new interpretation',
+      versions: [
+        { project_id: 'project.alpha', identifier: 'strategy.alpha', version: 3, content_address: 'sha256:v3' },
+        { project_id: 'project.alpha', identifier: 'strategy.alpha', version: 4, content_address: 'sha256:v4' },
+      ],
       onSelect: () => undefined,
       onCompare: () => undefined,
       onReason: () => undefined,
@@ -186,6 +190,10 @@ describe('ResearchEvidenceSurface', () => {
     expect(html).toContain('Record an interpretation')
     expect(html).toContain('Record finding')
     expect(html).toContain('Revise finding 22')
+    expect(html).toContain('Compare immutable versions and evidence')
+    expect(html).toContain('Left version')
+    expect(html).toContain('Right version')
+    expect(html).toContain('Graph only')
   })
 
   it('shows the persisted terminal reason without offering another decision', () => {

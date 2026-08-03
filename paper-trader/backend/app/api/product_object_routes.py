@@ -69,6 +69,15 @@ class PublishedGraphResponse(BaseModel):
     graph: dict[str, Any]
 
 
+class PublishedGraphIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    project_id: str
+    identifier: str
+    version: int
+    content_address: str
+
+
 def _project_response(project: store.ProjectRecord) -> ProjectResponse:
     return ProjectResponse(
         project_id=project.project_id,
@@ -129,6 +138,24 @@ def put_project_status(
         raise _not_found(exc) from exc
     except store.InvalidTransition as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/projects/{project_id}/graphs/{identifier}/versions",
+    response_model=list[PublishedGraphIdentityResponse],
+)
+def get_graph_versions(
+    project_id: str, identifier: str
+) -> list[PublishedGraphIdentityResponse]:
+    try:
+        return [
+            PublishedGraphIdentityResponse(**vars(version))
+            for version in store.list_versions(project_id, identifier)
+        ]
+    except (store.ProjectNotFound, store.GraphNotFound) as exc:
+        raise _not_found(exc) from exc
+    except store.GraphVersionCorrupt as exc:
+        raise HTTPException(status_code=409, detail="graph version is corrupt") from exc
 
 
 @router.post(

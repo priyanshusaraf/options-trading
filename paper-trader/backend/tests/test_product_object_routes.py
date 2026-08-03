@@ -93,6 +93,32 @@ def test_publish_conflict_and_invalid_transition_are_explicit(client):
     assert duplicate.json() == {"detail": "this draft revision is already published"}
 
 
+def test_version_list_is_server_owned_ordered_and_mirrored(client):
+    project = _create_project(client)
+    base = f"/api/ir/projects/{project['project_id']}/graphs/strategy.desk"
+    client.post(
+        f"/api/ir/projects/{project['project_id']}/graphs",
+        json={"identifier": "strategy.desk", "graph": _graph()},
+    )
+    published = client.post(f"{base}/versions", json={"base_revision": 0}).json()
+
+    response = client.get(f"{base}/versions")
+
+    assert response.status_code == 200
+    assert response.json() == [{
+        "project_id": project["project_id"],
+        "identifier": "strategy.desk",
+        "version": 1,
+        "content_address": published["content_address"],
+    }]
+    assert client.get(f"/api/v1{base.removeprefix('/api')}/versions").json() == response.json()
+
+    other = _create_project(client, "Other")
+    assert client.get(
+        f"/api/ir/projects/{other['project_id']}/graphs/strategy.desk/versions"
+    ).status_code == 404
+
+
 def test_invalid_graph_duplicate_identity_and_archived_project_fail_closed(client):
     project = _create_project(client)
     url = f"/api/ir/projects/{project['project_id']}/graphs"

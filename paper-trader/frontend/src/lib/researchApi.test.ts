@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   compareResearchRuns,
+  compareResearchVersions,
   createResearchFinding,
   decideResearchCandidate,
   getResearchOperationStatus,
   getResearchRun,
+  getResearchGraphVersions,
   reviseResearchFinding,
 } from './api'
 
@@ -53,6 +55,39 @@ describe('research evidence transport', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ left_run_id: 3, right_run_id: 7 }),
+      },
+    )
+  })
+
+  it('lists server-owned versions and submits selectors without graph identity claims', async () => {
+    const response = { equivalent: true, incomparable: [], differences: [] }
+    const request = vi.fn().mockResolvedValue({
+      ok: true, json: async () => response,
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await getResearchGraphVersions('project.alpha', 'strategy/alpha')
+    await compareResearchVersions(
+      'project.alpha',
+      { graph_identifier: 'strategy/alpha', graph_version: 2, run_id: 7 },
+      { graph_identifier: 'strategy/alpha', graph_version: 3, run_id: 9 },
+    )
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      '/api/ir/projects/project.alpha/graphs/strategy%2Falpha/versions',
+      { headers: {} },
+    )
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      '/api/ir/projects/project.alpha/version-comparisons',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          left: { graph_identifier: 'strategy/alpha', graph_version: 2, run_id: 7 },
+          right: { graph_identifier: 'strategy/alpha', graph_version: 3, run_id: 9 },
+        }),
       },
     )
   })

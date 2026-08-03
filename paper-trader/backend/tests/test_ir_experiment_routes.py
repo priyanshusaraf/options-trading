@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.db.session import init_db
+from app.db.session import engine as execution_engine
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.editor import graph_artifacts as graph_store
 from app.engine.runner import EngineRunner
@@ -509,6 +510,197 @@ def test_comparison_rejects_corrupt_and_running_evidence(client):
     })
     assert unavailable.status_code == 409
     assert unavailable.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"
+
+
+def _publish_label_change(client):
+    editor_url = (
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/editor"
+    )
+    before = client.get(editor_url).json()
+    response = client.post(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/edits",
+        json={
+            "base_revision": before["draft_revision"],
+            "base_presentation_revision": before["layout"]["revision"],
+            "edits": [{"operation": "set_display_name", "display_name": "Compared"}],
+            "presentation_edits": [],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _selection(version, run_id=None):
+    selected = {"graph_identifier": IDENTIFIER, "graph_version": version}
+    if run_id is not None:
+        selected["run_id"] = run_id
+    return selected
+
+
+def test_combined_version_and_verified_evidence_comparison_is_server_derived(client):
+    first = client.post(URL, json=_request()).json()
+    changed = _publish_label_change(client)
+    second_url = URL.replace(f"/{VERSION}/experiments", f"/{changed['version']}/experiments")
+    second = client.post(second_url, json=_request()).json()
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons"
+
+    response = client.post(compare_url, json={
+        "left": _selection(VERSION, first["run_id"]),
+        "right": _selection(changed["version"], second["run_id"]),
+    })
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["left"]["content_address"] == first["binding"]["graph"]["content_address"]
+    assert body["right"]["content_address"] == changed["content_address"]
+    assert body["left"]["run_id"] == first["run_id"]
+    assert body["right"]["run_id"] == second["run_id"]
+    assert any(item["dimension"] == "metadata" for item in body["differences"])
+    assert any(item["dimension"] == "graph" for item in body["differences"])
+    assert client.post(
+        compare_url.replace("/api/", "/api/v1/", 1),
+        json={"left": _selection(VERSION), "right": _selection(VERSION)},
+    ).json()["equivalent"] is True
+
+
+def test_combined_comparison_rejects_raw_claims_one_sided_runs_and_mismatch(client):
+    started = client.post(URL, json=_request()).json()
+    changed = _publish_label_change(client)
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons"
+
+    raw = client.post(compare_url, json={
+        "left": {**_selection(VERSION), "graph": GRAPH},
+        "right": _selection(VERSION),
+    })
+    assert raw.status_code == 422
+    assert raw.json()["code"] == "EXPERIMENT_REQUEST_INVALID"
+
+    one_sided = client.post(compare_url, json={
+        "left": _selection(VERSION, started["run_id"]),
+        "right": _selection(VERSION),
+    })
+    assert one_sided.status_code == 422
+
+    mismatch = client.post(compare_url, json={
+        "left": _selection(changed["version"], started["run_id"]),
+        "right": _selection(changed["version"], started["run_id"]),
+    })
+    assert mismatch.status_code == 409
+    assert mismatch.json()["code"] == "EXPERIMENT_GRAPH_BINDING_MISMATCH"
+
+    other = client.post(
+        "/api/ir/projects", json={"name": "Other comparison", "description": ""}
+    ).json()
+    hidden = client.post(
+        compare_url.replace(CATALOGUE_PROJECT_ID, other["project_id"]),
+        json={"left": _selection(VERSION), "right": _selection(VERSION)},
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["code"] == "EXPERIMENT_GRAPH_VERSION_NOT_FOUND"
+
+
+def test_combined_comparison_rejects_running_and_legacy_evidence(client):
+    started = client.post(URL, json=_request()).json()
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons"
+    body = {
+        "left": _selection(VERSION, started["run_id"]),
+        "right": _selection(VERSION, started["run_id"]),
+    }
+
+    _set_run_checkpoint(started["run_id"], None)
+    _set_run_status(started["run_id"], "running")
+    running = client.post(compare_url, json=body)
+    assert running.status_code == 409
+    assert running.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"
+
+    _set_run_status(started["run_id"], "completed")
+    legacy = client.post(compare_url, json=body)
+    assert legacy.status_code == 409
+    assert legacy.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"
+
+
+def test_combined_comparison_never_resolves_executes_collects_or_loads_presentation(
+    client, monkeypatch,
+):
+    from app.api import ir_experiment_routes
+    from app.editor import graph_artifacts
+    from app.editor import layouts
+    from app.ir import resolve as resolve_module
+    from app.providers import factory
+    from research.orchestrator import run as orchestrator_run
+
+    editor_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/editor"
+    editor = client.get(editor_url).json()
+    grouped = client.post(editor_url.removesuffix("/editor") + "/presentation-edits", json={
+        "base_revision": editor["draft_revision"],
+        "base_presentation_revision": editor["layout"]["revision"],
+        "edits": [{
+            "operation": "create_group", "identifier": "comparison_visual",
+            "display_name": "Comparison visual", "members": ["n_ema"],
+            "frame": {"x": 10, "y": 10, "width": 200, "height": 100},
+            "collapsed": False,
+        }],
+    })
+    assert grouped.status_code == 201
+
+    forbidden = lambda *args, **kwargs: pytest.fail("comparison recomputed state")
+    monkeypatch.setattr(resolve_module, "resolve", forbidden)
+    monkeypatch.setattr(layouts, "load_layout_in_session", forbidden)
+    monkeypatch.setattr(factory, "get_provider", forbidden)
+    monkeypatch.setattr(orchestrator_run, "run_nightly", forbidden)
+    monkeypatch.setattr(
+        ir_experiment_routes, "run_published_graph_experiment", forbidden
+    )
+    monkeypatch.setattr(graph_artifacts, "publish_draft", forbidden)
+
+    response = client.post(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons",
+        json={"left": _selection(VERSION), "right": _selection(VERSION)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["equivalent"] is True
+
+
+def test_combined_comparison_rejects_corrupt_declared_graph_identity(client):
+    with execution_engine.begin() as connection:
+        connection.exec_driver_sql("DROP TRIGGER graph_versions_refuse_update")
+        connection.exec_driver_sql(
+            "UPDATE graph_versions SET content_address = ? "
+            "WHERE graph_identifier = ? AND version = ?",
+            ("sha256:" + "0" * 64, IDENTIFIER, VERSION),
+        )
+
+    response = client.post(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons",
+        json={"left": _selection(VERSION), "right": _selection(VERSION)},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "GRAPH_VERSION_CORRUPT"
+
+
+def test_combined_comparison_verifies_evidence_graph_binding_not_only_recipe(client):
+    started = client.post(URL, json=_request()).json()
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session.begin() as session:
+        run = session.get(ExperimentRun, started["run_id"])
+        evidence = decode_terminal_evidence(run.checkpoint_json)
+        evidence["provenance"]["graph_provenance"]["graph"]["version"] += 1
+        run.checkpoint_json = encode_terminal_evidence(evidence)
+    engine.dispose()
+
+    response = client.post(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/version-comparisons",
+        json={
+            "left": _selection(VERSION, started["run_id"]),
+            "right": _selection(VERSION, started["run_id"]),
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "EXPERIMENT_GRAPH_BINDING_MISMATCH"
 
 
 @pytest.mark.parametrize("decision", ["approved", "rejected"])
