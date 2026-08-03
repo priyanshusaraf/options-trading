@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import functools
 import hashlib
 import json
 import logging
@@ -45,6 +46,69 @@ from research.stats.retest import retest_priority
 from research.strategy.builder.describe import explanation_for
 
 logger = logging.getLogger("research.orchestrator")
+
+_ACTIVE_RUN_KEY = "research_active_terminal_run"
+
+
+def _failure_contract(stage: str) -> dict[str, str]:
+    normalized = stage if stage in {
+        "qualification", "validation", "promotion", "finalization",
+        "evidence_persistence",
+    } else "pipeline"
+    return {
+        "stage": normalized,
+        "code": f"RESEARCH_{normalized.upper()}_FAILED",
+        "message": f"research {normalized.replace('_', ' ')} failed",
+    }
+
+
+def _persist_failed_run(fn):
+    """Make a started run terminal without persisting partial pipeline writes."""
+    @functools.wraps(fn)
+    def wrapped(session, *args, **kwargs):
+        session.info.pop(_ACTIVE_RUN_KEY, None)
+        try:
+            return fn(session, *args, **kwargs)
+        except Exception:
+            active = session.info.get(_ACTIVE_RUN_KEY)
+            if active is None:
+                raise
+            session.rollback()
+            run = session.get(ExperimentRun, active["run_id"])
+            if run is not None and run.status != "completed":
+                failure = _failure_contract(active["stage"])
+                run.status = "failed"
+                run.decision = "needs_review"
+                run.completed_at = dt.datetime.now()
+                run.spent_bar_seconds = float(active["spent_bar_seconds"])
+                run.error = failure["code"]
+                try:
+                    run.checkpoint_json = encode_terminal_evidence({
+                        "spec_id": run.spec_id,
+                        "run": {
+                            "id": run.id,
+                            "status": run.status,
+                            "decision": run.decision,
+                        },
+                        "provenance": active["recipe"],
+                        "results": {"failure": failure},
+                    })
+                    session.commit()
+                except Exception:
+                    # A broken evidence encoder must still never leave a false
+                    # completed state. Missing failed evidence then fails closed.
+                    session.rollback()
+                    run = session.get(ExperimentRun, active["run_id"])
+                    run.status = "failed"
+                    run.decision = "needs_review"
+                    run.completed_at = dt.datetime.now()
+                    run.error = "RESEARCH_FAILURE_EVIDENCE_PERSISTENCE_FAILED"
+                    run.checkpoint_json = None
+                    session.commit()
+            raise
+        finally:
+            session.info.pop(_ACTIVE_RUN_KEY, None)
+    return wrapped
 
 
 def spec_hash(recipe: dict) -> str:
@@ -120,6 +184,7 @@ def _record_edge(session, strategy, instrument_key: str, validated: bool,
                        getattr(strategy, "key", "?"), instrument_key, e)
 
 
+@_persist_failed_run
 def run_experiment(session, *, program_name, hypothesis_statement, strategy, datasets,
                    params=None, git_commit="unknown", seed=0, min_trades=20, n_folds=4,
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
@@ -194,6 +259,14 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     run = ExperimentRun(spec_id=sid, status="running", started_at=dt.datetime.now())
     session.add(run)
     session.flush()
+    run_id = run.id
+    session.commit()
+    session.info[_ACTIVE_RUN_KEY] = {
+        "run_id": run_id,
+        "recipe": recipe,
+        "stage": "qualification",
+        "spent_bar_seconds": 0,
+    }
     logger.info("[run] opened run #%d on %d instrument(s), strategy=%s%s",
                 run.id, len(datasets), strategy.key,
                 " (optimize)" if optimize_search else " (fixed params)")
@@ -205,7 +278,9 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     total_bars = 0
 
     for inst, ds in datasets:
+        session.info[_ACTIVE_RUN_KEY]["stage"] = "qualification"
         total_bars += ds.bar_count
+        session.info[_ACTIVE_RUN_KEY]["spent_bar_seconds"] = total_bars
         ie = qualify_instrument(ds.candles, inst, interval, strategy, params,
                                 min_trades=min_trades, seed=seed, capital=capital)
         evidence_item = {
@@ -239,6 +314,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         logger.info("[qualify] %-10s PASS   — %d trades clear the min-evidence bar",
                     ie.instrument_key, ie.trades)
         qualified.append(ie.instrument_key)
+        session.info[_ACTIVE_RUN_KEY]["stage"] = "validation"
         # Optimization runs ONLY here — after qualification — and always as nested
         # walk-forward (search on each fold's IS, evaluate the winner on untouched OOS).
         if optimize_search:
@@ -330,6 +406,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
 
     promotion = None
     breadth = None
+    session.info[_ACTIVE_RUN_KEY]["stage"] = "promotion"
     if validated:
         # Picking the best of N validated instruments is ITSELF a selection, and it
         # was unaccounted: each instrument's DSR was deflated for its own parameter
@@ -415,6 +492,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     # attach the plain-language 'what this strategy does + the exact logic it used'.
     # Generated strategies are explained from their composition (exact); hand-written
     # ones route through the authored explanation.
+    session.info[_ACTIVE_RUN_KEY]["stage"] = "finalization"
     explanation = dataclasses.asdict(explanation_for(strategy, params))
     if optimize_search:
         explanation["note"] = ("Parameters were optimized within a bounded grid per "
@@ -434,6 +512,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         "regimes": regimes,
         "breadth": breadth,
     }
+    session.info[_ACTIVE_RUN_KEY]["stage"] = "evidence_persistence"
     run.checkpoint_json = encode_terminal_evidence({
         "spec_id": sid,
         "run": {

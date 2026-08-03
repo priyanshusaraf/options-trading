@@ -87,7 +87,9 @@ class GraphExperimentResponse(_ClosedModel):
     binding: dict
 
 
-EvidenceState = Literal["verified", "legacy_unbound", "corrupt"]
+EvidenceState = Literal[
+    "verified", "legacy_unbound", "corrupt", "pending", "running"
+]
 
 
 class GraphRunSummary(_ClosedModel):

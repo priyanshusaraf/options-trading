@@ -6,6 +6,8 @@ research.db, touching no capital.
 """
 import json
 
+import pytest
+
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import (
     ExperimentRun,
@@ -17,7 +19,7 @@ from research.domain.models import (
 from research.evaluation import kernels
 from research.orchestrator.report import render_markdown
 from research.orchestrator.run import run_experiment, spec_hash
-from research.evidence import decode_terminal_evidence
+from research.evidence import EvidenceRejected, decode_terminal_evidence
 
 
 def _datasets(inst_factory, candles_factory, keys):
@@ -69,6 +71,71 @@ def test_completed_run_persists_verified_terminal_evidence(
         "AAA", "BBB"
     }
     assert all("qualification" in item for item in evidence["results"]["instruments"])
+
+
+def test_controlled_pipeline_failure_persists_safe_terminal_evidence(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    def fail_qualification(*_args, **_kwargs):
+        raise RuntimeError("provider secret must not be persisted")
+
+    monkeypatch.setattr(
+        "research.orchestrator.run.qualify_instrument", fail_qualification
+    )
+
+    with pytest.raises(RuntimeError, match="provider secret"):
+        _run(research_session, inst_factory, candles_factory)
+
+    research_session.expire_all()
+    run = research_session.query(ExperimentRun).one()
+    evidence = decode_terminal_evidence(run.checkpoint_json)
+    assert run.status == "failed"
+    assert run.decision == "needs_review"
+    assert run.completed_at is not None
+    assert evidence["run"] == {
+        "id": run.id,
+        "status": "failed",
+        "decision": "needs_review",
+    }
+    assert evidence["provenance"]["datasets"]
+    assert evidence["results"]["failure"] == {
+        "stage": "qualification",
+        "code": "RESEARCH_QUALIFICATION_FAILED",
+        "message": "research qualification failed",
+    }
+    assert "secret" not in run.error
+    assert "secret" not in run.checkpoint_json
+
+
+def test_terminal_evidence_write_failure_cannot_leave_completed_run(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    from research.orchestrator import run as run_module
+
+    real_encode = run_module.encode_terminal_evidence
+    calls = 0
+
+    def fail_success_evidence_once(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise EvidenceRejected("injected terminal write failure")
+        return real_encode(payload)
+
+    monkeypatch.setattr(
+        run_module, "encode_terminal_evidence", fail_success_evidence_once
+    )
+
+    with pytest.raises(EvidenceRejected, match="injected terminal write failure"):
+        _run(research_session, inst_factory, candles_factory)
+
+    research_session.expire_all()
+    run = research_session.query(ExperimentRun).one()
+    evidence = decode_terminal_evidence(run.checkpoint_json)
+    assert run.status == "failed"
+    assert run.decision == "needs_review"
+    assert evidence["results"]["failure"]["stage"] == "evidence_persistence"
+    assert evidence["results"]["failure"]["code"] == (
+        "RESEARCH_EVIDENCE_PERSISTENCE_FAILED"
+    )
 
 
 def test_run_experiment_deposits_a_finding_per_instrument(research_session, inst_factory, candles_factory):

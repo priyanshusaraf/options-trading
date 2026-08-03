@@ -86,7 +86,14 @@ def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> d
         evidence = decode_terminal_evidence(run.checkpoint_json)
         evidence_state = "verified"
     except EvidenceMissing:
-        evidence_state = "legacy_unbound"
+        if run.status in {"pending", "running"}:
+            evidence_state = run.status
+        elif run.status == "failed":
+            if include_evidence:
+                raise StoredEvidenceCorrupt(run.id)
+            evidence_state = "corrupt"
+        else:
+            evidence_state = "legacy_unbound"
     except EvidenceRejected as exc:
         if include_evidence:
             raise StoredEvidenceCorrupt(run.id) from exc

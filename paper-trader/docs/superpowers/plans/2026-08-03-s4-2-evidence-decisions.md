@@ -41,8 +41,8 @@ deployment activation, arming, orders, Python or live IR-runtime adoption.
 2. [x] Extend the orchestrator's per-instrument record so qualification failures and validation
    failures retain exact structured values, not only prose.
 3. [x] Persist success evidence, regimes, breadth and exact explanation before the terminal commit.
-4. Persist a bounded failed-run envelope and `status=failed` for controlled pipeline failures.
-5. Prove a failure while writing evidence cannot leave a completed run without verified evidence.
+4. [x] Persist a bounded failed-run envelope and `status=failed` for controlled pipeline failures.
+5. [x] Prove a failure while writing evidence cannot leave a completed run without verified evidence.
 
 ## Task 3: Add closed project-owned evidence reads
 
@@ -52,7 +52,7 @@ deployment activation, arming, orders, Python or live IR-runtime adoption.
 - Create or extend: `backend/app/core/research_read.py`
 - Extend: `backend/tests/test_ir_experiment_routes.py`
 
-1. Add failing list/detail tests for completed, failed, running and legacy-unbound graph runs.
+1. [x] Add failing list/detail tests for completed, failed, running and legacy-unbound graph runs.
 2. [x] Verify project ownership from immutable graph provenance and hide cross-project run ids.
 3. [x] Return persisted evidence only; guard with spies proving no provider, resolver, evaluator or gate
    is called during reads.

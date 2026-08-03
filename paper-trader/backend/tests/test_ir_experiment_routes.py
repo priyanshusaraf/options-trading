@@ -18,6 +18,7 @@ from research.domain.base import (
     make_sessionmaker,
 )
 from research.domain.models import ExperimentRun, ExperimentSpec
+from research.evidence import decode_terminal_evidence, encode_terminal_evidence
 
 
 IDENTIFIER = GRAPH["identifier"]
@@ -319,6 +320,50 @@ def test_legacy_missing_evidence_is_visible_but_not_treated_as_empty_success(cli
     assert response.status_code == 200
     assert response.json()["evidence_state"] == "legacy_unbound"
     assert response.json()["evidence"] is None
+
+
+def test_running_and_failed_run_states_are_explicit_on_list_and_detail(client):
+    running = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(running["run_id"], None)
+    _set_run_status(running["run_id"], "running")
+
+    failed = client.post(URL, json=_request()).json()
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session.begin() as session:
+        run = session.get(ExperimentRun, failed["run_id"])
+        evidence = decode_terminal_evidence(run.checkpoint_json)
+        evidence["run"] = {
+            "id": run.id, "status": "failed", "decision": "needs_review"
+        }
+        evidence["results"] = {"failure": {
+            "stage": "validation",
+            "code": "RESEARCH_VALIDATION_FAILED",
+            "message": "research validation failed",
+        }}
+        run.status = "failed"
+        run.decision = "needs_review"
+        run.checkpoint_json = encode_terminal_evidence(evidence)
+    engine.dispose()
+
+    list_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments"
+    listed = client.get(list_url)
+    by_id = {item["run_id"]: item for item in listed.json()["runs"]}
+    assert by_id[running["run_id"]]["status"] == "running"
+    assert by_id[running["run_id"]]["evidence_state"] == "running"
+    assert by_id[failed["run_id"]]["status"] == "failed"
+    assert by_id[failed["run_id"]]["evidence_state"] == "verified"
+
+    running_detail = client.get(f"{list_url}/{running['run_id']}")
+    assert running_detail.status_code == 200
+    assert running_detail.json()["evidence_state"] == "running"
+    assert running_detail.json()["evidence"] is None
+
+    failed_detail = client.get(f"{list_url}/{failed['run_id']}")
+    assert failed_detail.status_code == 200
+    assert failed_detail.json()["evidence"]["results"]["failure"]["code"] == (
+        "RESEARCH_VALIDATION_FAILED"
+    )
 
 
 def test_corrupt_persisted_evidence_fails_closed(client):
