@@ -1,6 +1,8 @@
 # L1 Stage 0 — production-grade IR strategy adapter (implementation plan)
 
-**Status: PROPOSED. Blocked on owner approval of ADR 0011. Do not begin.**
+**Status: COMPLETE, 2026-08-03.** Approved for Stage 0 only. The live engine remains the
+sole execution authority: nothing binds a graph to an instrument, and no order, paper, shadow
+or live path consumes the adapter.
 
 **Goal:** make an IR graph safely bindable as a `Strategy` and rebuild the parity claim honestly.
 **No live behaviour changes in this stage** — nothing binds an IR graph to an instrument.
@@ -15,8 +17,13 @@ order routing, sizing, exits or the ledger.
 
 1. Failing test first: an `app.`-side import of the adapter, asserting `research.guards`
    `FORBIDDEN_MODULES` is not violated in either direction.
-2. Move `IRGraphStrategy` from `research/strategy/builder/ir_strategy.py` into `app/ir/`, keeping
-   behaviour identical. Research imports the new location; `app/` may now import it too.
+2. **Placed at `app/strategy/ir_adapter.py`, not `app/ir/`** — corrected during
+   implementation. `app/ir/strategies/expanding_z.py` already imports
+   `app.strategy.registry` (its kernels delegate to the hand-written implementation so the
+   planes cannot drift), so putting the adapter inside `app.ir` would deepen that tangle.
+   The language core `app/ir/*.py` imports neither `app.strategy`, `research` nor
+   `app.engine`, and an AST-based test now enforces exactly that.
+   Research **subclasses** the shared adapter rather than duplicating it.
 3. Prove the research plane still passes `research_tests/test_ir_evaluate.py` unchanged.
 4. Prove no `app/engine/*` module imports `research.*` as a result.
 
@@ -53,12 +60,17 @@ order routing, sizing, exits or the ledger.
    `InstrumentState.strategy_key`.
 3. Failing test: editing a graph keeps existing bindings resolvable, with the version changing.
 
-## Task 6: Cost inside the signal-loop budget
+## Task 6: Cost inside the signal-loop budget — **task withdrawn as wrong**
 
-1. Pass a persistent `Cache` to `evaluate()` (`ir_strategy.py:107-111`) and prove memoisation is
-   actually on — assert `cache_hits` on re-evaluation.
-2. Measure per-scan evaluation cost against `signal_loop_seconds = 2.5` and record the number.
-   Memory matters: the box is 1 GB and has OOM'd twice.
+The instruction to "pass a persistent `Cache`" was a defect in this plan and in ADR 0011 §3
+conflict #7. `Cache` is keyed on `node.cache_id`, fixed at resolution and carrying nothing
+about the input data, so a cache reused across frames returns the previous frame's series —
+measured: every one of 18 nodes a hit, every value stale. Implementing it would have produced
+silently wrong live signals.
+
+A fresh cache per evaluation is therefore correct, and memoisation still works within one
+evaluation. The hazard is pinned by a guard test so it cannot be "optimised" back in.
+Per-scan cost measurement moves to Stage 1, where there is a live lane to measure against.
 
 ## Task 7: Rebuild the parity claim honestly
 

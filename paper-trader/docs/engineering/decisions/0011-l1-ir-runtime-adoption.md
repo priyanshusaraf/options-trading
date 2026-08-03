@@ -1,6 +1,8 @@
 # ADR 0011: Staged adoption of the Component IR runtime in the live path
 
-- **Status:** **PROPOSED — awaiting owner approval. No implementation has begun.**
+- **Status:** **Stage 0 APPROVED and IMPLEMENTED (2026-08-03). Stages 1–3 remain PROPOSED
+  and owner-gated.** The live engine is still the sole execution authority; nothing binds a
+  graph to an instrument, and no order, paper, shadow or live path consumes the adapter.
 - **Date:** 2026-08-03
 - **Owners:** WS-02 execution, WS-01 Component IR, WS-03 research plane
 - **Depends on:** RFC 0001 (Appendix C(d)), ADR 0001, the S3.3 equivalence proof, S4.1–S4.6 research binding
@@ -66,7 +68,7 @@ That narrowness is what makes staged adoption feasible.
 | 4 | **Backtest warmup trim disappears.** `compute_signals` trims on indicator columns `("ema","z","slope","atr","absZ")` (`backtest/engine.py:218`); the adapter emits only the four booleans, so `warm_cols` is empty and **nothing is trimmed** — breaking hard invariant 4 (live/backtest parity). | source | **critical** |
 | 5 | **Unknown strategy keys silently become v3.** `set_strategy` (`runner.py:362`) and `universe_resolver` (`:95-96`) coerce an unregistered key to the default; `get_strategy` logs `strategy_fallback` only once per 300 s. | source | **critical** |
 | 6 | **Content-address keys drift.** `IRGraphStrategy.key` embeds 12 hex of the graph address (`ir_strategy.py:83`), so **editing a graph changes its key** — every persisted `InstrumentState.strategy_key` stops resolving and falls back to v3 per #5. The generated-strategy path chose stable keys + versioned content (`generated_strategies.py:36-46`); the two identity schemes are inconsistent. | source | **critical** |
-| 7 | **No memoisation in the adapter.** `evaluate()` builds a fresh `Cache` unless one is passed (`runtime.py:58`); the adapter passes none (`ir_strategy.py:107-111`), so C8 is entirely off inside a 2.5 s loop on a 1 GB droplet that has OOM'd twice. | source | major |
+| 7 | ~~**No memoisation in the adapter.**~~ **WITHDRAWN — this ADR was wrong, and acting on it would have been a correctness bug.** See §4a. | measured | — |
 | 8 | **Parameters frozen at resolution.** `compute` **raises** if given any params (`ir_strategy.py:87-94`). Live passes none, so it works — but no `runtime_config` or `Settings` value can ever reach graph parameters without re-resolution. | source | major |
 | 9 | **Telemetry goes blank.** `_generic_latest` returns `ema/z/trend = None` when those columns are absent (`runner.py:539-551`); cockpit, `/ws` and `SignalEvent` rows lose their indicator values. Trading is unaffected. | source | minor |
 | 10 | **Frame contract mismatch.** The adapter demands all six OHLCV columns (`ir_strategy.py:102-104`) though `GRAPH` declares only `high/low/close` (`expanding_z.py:235`). Live frames carry all six, so this bites only narrower callers. | source | minor |
@@ -97,6 +99,35 @@ live adoption.** Stage 0 below exists to fix precisely this.
 
 ---
 
+## 4a. A correction this ADR must carry: the cache is not an optimisation
+
+The original conflict #7 read "C8 memoisation is entirely off in the adapter" and the Stage 0
+plan said to pass a persistent `Cache`. **That was wrong, and implementing it would have
+produced silently incorrect signals on live money.**
+
+`Cache` is keyed on `node.cache_id` (`runtime.py:138`), which is computed **at resolution**
+from node identity and bound parameters. It carries nothing about the input data. A cache
+reused across two different candle frames therefore returns the *first* frame's series for
+the second. Measured on the real graph:
+
+```
+reused-cache result == FIRST frame's result : True
+reused-cache result == CORRECT result       : False
+cache hits on 2nd evaluate                  : 18     (every node)
+```
+
+Every node reports a hit, the evaluation looks fast and healthy, and every value is stale.
+In a signal lane this is the worst available failure: the strategy would keep trading
+yesterday's signal shape with today's prices and nothing would log.
+
+The adapter's existing behaviour — a fresh `Cache` per `evaluate()` — is therefore
+**correct, not a missed optimisation**. Memoisation still does its intended job *within* one
+evaluation (a subgraph appearing twice is computed once). `tests/test_ir_adapter.py` pins the
+hazard so that "turn the cache on for performance" cannot be done quietly later.
+
+The performance question is real but separate, and must be answered by measurement against
+the 2.5 s signal-loop budget, not by sharing a cache.
+
 ## 5. The staged sequence
 
 Each stage is independently reversible and ends at a decision point. **Stages 0–2 touch no
@@ -123,6 +154,45 @@ Then close the correctness conflicts, each test-first:
 **Exit criterion:** parity re-proved **through `IRGraphStrategy`** (not `evaluate()`), on real
 recorded candles, across multiple instruments and intervals, over a parameter sweep, including
 short frames, gaps and session boundaries — plus a measured per-scan cost budget.
+
+**Stage 0 outcome, 2026-08-03.** Implemented at `app/strategy/ir_adapter.py`. Conflicts 1–6
+and 8–10 are closed; #7 was withdrawn as wrong (§4a). The `research/` bridge now **subclasses**
+the shared adapter rather than duplicating it, inverting exactly two declared policies —
+identity (address-embedded keys, because a search must tell hundreds of candidates apart) and
+tolerance (short windows are a result, not an error). Attempting a straight de-duplication is
+what surfaced that conflict: the two planes need opposite answers, and the difference is now
+declared in one place instead of forked into two adapters.
+
+### Stage 1 acceptance criteria (quantitative and structural)
+
+Stage 1 may not be proposed until all of the following hold. **These are entry criteria for
+the shadow lane, not for live adoption.**
+
+*Structural:*
+
+1. The shadow evaluation reaches no order, position, ledger or capital seam — proven by a
+   test that patches every broker entry point and fails if one is touched.
+2. The hand-written strategy remains authoritative for every signal that reaches an order.
+3. Divergence is persisted per bar with the graph's content address, so a disagreement can be
+   attributed to an exact graph version after the fact.
+4. A shadow failure (raise, timeout, missing kernel) cannot degrade the authoritative lane;
+   proven by injecting each and asserting the live signal is unchanged.
+5. Enabling and disabling the shadow lane requires no deploy and no restart.
+
+*Quantitative, measured on real sessions before Stage 2 is proposed:*
+
+6. ≥ 20 live sessions of recorded divergence on at least 3 instruments. (`research/shadow.py`
+   uses `MIN_SHADOW_SESSIONS = 5` for simulated promotion candidates; a live lane against real
+   money warrants more.)
+7. Per-bar agreement on all four canonical columns ≥ 99.9% over settled bars, with **every**
+   disagreement individually explained — an unexplained divergence blocks Stage 2 regardless
+   of the rate.
+8. Zero `InsufficientHistory` refusals during market hours on any instrument the shadow lane
+   is configured for; a refusal means the live admission guard and the graph warmup disagree
+   and must be reconciled before proceeding.
+9. Added evaluation cost ≤ 20% of the signal-loop budget (`signal_loop_seconds = 2.5`) at the
+   95th percentile, and no measurable increase in resident memory across a full session — the
+   box is 1 GB and has OOM'd twice.
 
 ### Stage 1 — shadow lane, computed but never acted on (no live effect)
 

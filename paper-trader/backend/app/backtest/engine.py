@@ -218,8 +218,28 @@ def compute_signals(candles, strat, params) -> pd.DataFrame:
     # trim warmup rows where the strategy's indicators are still NaN. The columns
     # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
     # known indicator columns this strategy actually emitted — keeps v3 identical.
+    return trim_warmup(sig, strat).reset_index(drop=True)
+
+
+def trim_warmup(sig: pd.DataFrame, strat) -> pd.DataFrame:
+    """Drop the bars this strategy does not consider settled.
+
+    Two mechanisms, because strategies declare warmup two different ways:
+
+    1. A strategy that **declares** its warmup (`declared_warmup`) is trimmed by count.
+       A graph-backed strategy emits only the four canonical columns, so the NaN sniff
+       below finds nothing to drop and would hand the backtest 302 warmup bars the live
+       lane masks to False — the two planes would then disagree about which bars exist,
+       which is hard invariant 4.
+    2. Every hand-written strategy keeps the original behaviour exactly: drop rows where
+       its own indicator columns are still NaN. The columns differ per strategy (v3:
+       slope; v4: atr/absZ), so drop on whichever it actually emitted.
+    """
+    declared = getattr(strat, "declared_warmup", None)
+    if isinstance(declared, int) and declared > 0:
+        return sig.iloc[declared:]
     warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
-    return sig.dropna(subset=warm_cols).reset_index(drop=True)
+    return sig.dropna(subset=warm_cols)
 
 
 def _event_blocked_bar(inst, row, product: str) -> bool:

@@ -245,11 +245,25 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**L1 execution integration — the design is written; STOP for owner approval.**
+**L1 Stage 1 (shadow lane) — STOP for a second owner approval.**
 
-ADR 0011 (`docs/engineering/decisions/0011-l1-ir-runtime-adoption.md`) and the Stage 0 plan
-(`docs/superpowers/plans/2026-08-03-l1-stage0-adapter.md`) are published and **PROPOSED**.
-Do not begin implementation until the owner approves ADR 0011.
+Stage 0 is complete and published. `app/strategy/ir_adapter.py` presents a resolved graph as
+a `Strategy`; `tests/test_ir_adapter.py` proves parity **through the adapter** on real
+recorded series across instruments, plus every closed failure path. The `research/` bridge
+subclasses the shared adapter, inverting two declared policies (address-embedded identity,
+short-window tolerance) rather than duplicating the evaluation.
+
+**The live engine is still the sole execution authority.** No order, paper, shadow or live
+path consumes the adapter, and a test asserts `app/engine/*` imports neither it nor `app.ir`.
+
+Stage 1's structural and quantitative entry criteria are ADR 0011 §5. Do not begin it, or any
+paper/shadow/live adoption, without explicit owner approval.
+
+One correction carried into the record: ADR 0011 originally said to pass a persistent
+`evaluate()` `Cache`. That was **wrong and would have produced silently stale live signals** —
+`Cache` is keyed on `node.cache_id`, which is fixed at resolution and carries nothing about
+the input data. Measured: reusing one across frames returns the previous frame's series with
+all 18 nodes reporting hits. A guard test now pins the hazard.
 
 The M-band is closed and no further review-workflow slice is queued. The next deliverable is a
 written design, not code:

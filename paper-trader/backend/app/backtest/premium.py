@@ -60,6 +60,7 @@ import math
 
 import pandas as pd
 
+from app.backtest.engine import trim_warmup
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.core.market_hours import ist_epoch
@@ -211,8 +212,8 @@ def simulate_premium(candles, inst, interval: str, *, strategy=None,
     rm = getattr(strat, "risk_model", None)
     if rm:
         sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
-    warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
-    sig = sig.dropna(subset=warm_cols).reset_index(drop=True)
+    # One warmup rule for both backtesters and the live lane — see `engine.trim_warmup`.
+    sig = trim_warmup(sig, strat).reset_index(drop=True)
     if sig.empty:
         return [], BTMetrics()
 

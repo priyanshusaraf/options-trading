@@ -133,6 +133,49 @@ WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ## 4. Completed
 
+### L1 Stage 0 — the shared IR strategy adapter (2026-08-03)
+
+`app/strategy/ir_adapter.py` presents a resolved Component IR graph behind the `Strategy`
+contract. **It changes nothing the engine executes**: no order, paper, shadow or live path
+consumes it, and a test asserts `app/engine/*` imports neither the adapter nor `app.ir`.
+
+Placement is deliberate. The adapter is *not* in `app/ir/`, because
+`app/ir/strategies/expanding_z.py` already imports `app.strategy.registry` — its kernels
+delegate to the hand-written implementation so the two planes cannot drift — and putting the
+adapter inside `app.ir` would deepen that tangle. The language core (`app/ir/*.py`) imports
+neither `app.strategy`, `research` nor `app.engine`, and an AST-based test enforces it.
+
+Six silent-failure defects closed, each proven by a mutation that turns its guard red:
+
+| Defect | Was | Now |
+|---|---|---|
+| Insufficient history | 134 real bars against a 302-bar warmup returned four all-False columns forever | `InsufficientHistory`, naming bars and warmup |
+| `risk_model` | dropped, silently disabling the live ATR ratchet | carried from the graph, strictly validated, partial declarations refused |
+| Backtest warmup trim | keyed off indicator columns the adapter never emits, so **nothing** was trimmed — 340 bars returned where 38 were settled (a latent invariant-4 violation) | `trim_warmup` honours a declared warmup; hand-written strategies keep the exact previous behaviour |
+| Identity | key embedded the content address, so an edit orphaned every persisted binding | key is stable, version is the content address |
+| Registry fallback | an unregistered `ir.*` key silently traded the default strategy | `IR_NAMESPACE` keys never fall back; hand-written keys keep their deliberate fail-safe |
+| Frame contract | demanded all six OHLCV fields regardless of the graph | follows the graph's declared inputs |
+
+The parity claim was rebuilt rather than inherited. The previous proof compared `evaluate()`
+against the hand-written strategy over 400 bars of a **synthetic sine wave**, one instrument,
+two of fifteen parameters moved — and **bypassed the adapter entirely**, so its masking,
+frame contract and identity were outside the claim. `tests/test_ir_adapter.py` now exercises
+the adapter itself on real recorded series across instruments, asserts the warmup mask
+exactly, and covers every closed failure path.
+
+**One correction worth keeping.** ADR 0011 originally called for a persistent `evaluate()`
+cache. That was wrong: `Cache` is keyed on `node.cache_id`, fixed at resolution and carrying
+nothing about the input data, so reusing one across frames returns the previous frame's
+series — measured, all 18 nodes hit, every value stale. In a signal lane that is the worst
+available failure, because it looks fast and healthy. A fresh cache per evaluation is
+correct; a guard test pins the hazard.
+
+Research now **subclasses** the shared adapter instead of duplicating it, inverting exactly
+two declared policies: identity includes the content address (a search must tell hundreds of
+candidates apart) and a short window is a result rather than an error. Attempting a straight
+de-duplication is what surfaced that conflict.
+
+
 Verified and committed work, newest first. Dates and SHAs are from `docs/ROADMAP.md` and
 `git log`; where the roadmap records evidence, the evidence is kept.
 

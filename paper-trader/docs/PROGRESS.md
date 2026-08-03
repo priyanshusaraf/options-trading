@@ -3,9 +3,10 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6d immutable project review
-snapshots is complete in the current publication commit. This closes the M-band (M1–M6). The
-next boundary is **L1 execution integration**, whose adoption design is owner-gated.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · the M-band (M1–M6) is closed and
+**L1 Stage 0** is complete: a shared IR strategy adapter now exists with an honest parity
+claim. **Stage 1 (shadow) requires owner approval.** The live engine remains the sole
+execution authority — nothing binds a graph to an instrument.
 
 ---
 
@@ -39,7 +40,7 @@ that clause's implementation.
 | **Language** | Done — format, resolver, runtime, experiment binding |
 | **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, comparison, daily review, notes, saved views, bounded search and immutable historical snapshots complete |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
-| **Runtime** | Evaluates graphs; **not adopted by the live engine** |
+| **Runtime** | Evaluates graphs; bindable as a `Strategy` via the shared adapter, but **not adopted by the live engine** — no order, paper, shadow or live path consumes it |
 | **Marketplace** | Not started |
 
 ### Built (all verified, all committed, none deployed)
@@ -71,6 +72,7 @@ that clause's implementation.
 | `app/core/review_state.py`, migration `0008` | Project-owned optimistic review notes and canonical saved filters outside source/executable identity |
 | `app/core/review_search.py`, review search route | Unicode-stable bounded search over verified summaries and active owner notes only |
 | `app/core/review_snapshot.py`, `review_snapshot_store.py`, migration `0009` | Append-only content-addressed historical review captures, verified on every read and contained when corrupt |
+| `app/strategy/ir_adapter.py` | A resolved graph behind the `Strategy` contract: stable identity, loud refusal of insufficient history, carried `risk_model`, declared-input frame contract. Shared by research; consumed by no execution path |
 
 ### The two results worth knowing
 
@@ -103,17 +105,18 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**L1 execution integration — design first, owner-gated.** The M-band is closed: a user can
-create a project, author a graph, publish immutable versions, run a bound experiment, read
-verified evidence, compare versions, record findings and decisions, review a research day and
-freeze it immutably. None of it is adopted by the live engine.
+**L1 Stage 1 — the shadow lane. Requires owner approval before implementation.**
 
-The next deliverable is a written L1 adoption design: reconcile the live execution path against
-the Component IR runtime, enumerate every bypass and conflict, define the smallest safe adoption
-sequence, and separate paper/shadow adoption from live-money adoption. **Implementation of live
-IR-runtime adoption does not begin until the owner approves that design.**
+Stage 0 is done: `app/strategy/ir_adapter.py` presents a resolved graph as a `Strategy`,
+with a parity claim rebuilt through the adapter itself rather than around it. Six silent-
+failure defects are closed — insufficient history now refuses instead of masking every
+signal, `risk_model` is carried instead of silently disabling the ATR ratchet, backtest and
+live agree on which bars are settled, graph-backed keys are stable across edits and never
+substitutable, and the frame contract follows the graph's declared inputs.
 
----
+Stage 1 adds a shadow lane that evaluates a graph alongside the authoritative hand-written
+strategy and records divergence, reaching no order. Its entry criteria — structural and
+quantitative — are in ADR 0011 §5. **Do not begin without owner approval.**
 
 ## 5. Verification state
 

@@ -12,6 +12,9 @@ There are TWO resolution functions, and picking the wrong one is a real-money bu
   attribution record.
 * `get_strategy(key)` — **fail-safe**: unknown/None falls back to the default strategy.
   This exists for the legacy per-instrument path only (see the allow-list below).
+  **One exception: keys in `IR_NAMESPACE` (`ir.`) never fall back.** A graph-backed
+  strategy that quietly became the default would trade one logic and attribute another,
+  which is the marketplace failure described below arriving early.
 
 Why the split (audit finding C4): falling back is the right posture for one owner
 running one strategy he wrote — a stale per-instrument assignment must not crash a tick.
@@ -48,6 +51,10 @@ from app.core.logging import log
 from .base import CANONICAL_COLUMNS, Strategy
 
 DEFAULT_STRATEGY_KEY = "trend_impulse_v3"
+
+#: Keys in this namespace are produced by `app/strategy/ir_adapter.py` from a Component IR
+#: graph. They are never substitutable — see `resolve_strategy`.
+IR_NAMESPACE = "ir."
 
 _REGISTRY: dict[str, Strategy] = {}
 _SKIP = {"base"}
@@ -120,6 +127,16 @@ def resolve_strategy(key: str | None, *, allow_fallback: bool = False) -> Strate
     if key and key in _REGISTRY:
         return _REGISTRY[key]
     if not allow_fallback:
+        raise StrategyNotFound(key, sorted(_REGISTRY))
+    if key and key.startswith(IR_NAMESPACE):
+        # A graph-backed key is never substitutable, whatever the caller asked for.
+        # Falling back here trades the default strategy while the instrument row, the
+        # trade row and the experiment binding all still name the graph — and because a
+        # graph's key is derived from its identifier, an unregistered one usually means
+        # the graph was edited or its registration was skipped, not that it never existed.
+        # For hand-written strategies the fallback is a deliberate robustness choice: a
+        # single bad config row should not stop the book from trading. For a graph it is
+        # silent misattribution, so it fails closed regardless of `allow_fallback`.
         raise StrategyNotFound(key, sorted(_REGISTRY))
     if key:
         # A key was ASKED FOR and is being ignored. Loud, because the engine will now
