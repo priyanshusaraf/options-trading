@@ -37,6 +37,88 @@ export interface IrGraphView {
   readonly edges: readonly IrViewEdge[]
 }
 
+export interface IrLayoutPosition {
+  readonly instance_id: string
+  readonly x: number
+  readonly y: number
+}
+
+export interface IrGraphLayout {
+  readonly graph_identifier: string
+  readonly graph_version: number
+  readonly revision: number
+  readonly positions: readonly IrLayoutPosition[]
+}
+
+interface IrLayoutFailureBody {
+  readonly detail?: unknown
+  readonly current_revision?: unknown
+}
+
+export class IrLayoutConflict extends Error {
+  readonly currentRevision: number
+
+  constructor(currentRevision: number) {
+    super(`Layout changed on the server (revision ${currentRevision})`)
+    this.name = 'IrLayoutConflict'
+    this.currentRevision = currentRevision
+  }
+}
+
+const layoutPath = (identifier: string, version: number) =>
+  `/api/ir/graphs/${encodeURIComponent(identifier)}/versions/${version}/layout`
+
+const layoutFailureBody = async (response: Response): Promise<IrLayoutFailureBody> => {
+  try {
+    return await response.json() as IrLayoutFailureBody
+  } catch {
+    return {}
+  }
+}
+
+const layoutFailureMessage = (response: Response, body: IrLayoutFailureBody): string =>
+  typeof body.detail === 'string'
+    ? body.detail
+    : `Layout request failed (${response.status})`
+
+export const getIrGraphLayout = async (
+  identifier: string,
+  version: number,
+): Promise<IrGraphLayout> => {
+  const response = await fetch(layoutPath(identifier, version), {
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  })
+  if (!response.ok) {
+    const body = await layoutFailureBody(response)
+    throw new Error(layoutFailureMessage(response, body))
+  }
+  return response.json() as Promise<IrGraphLayout>
+}
+
+export const putIrGraphLayout = async (
+  identifier: string,
+  version: number,
+  baseRevision: number,
+  positions: readonly IrLayoutPosition[],
+): Promise<IrGraphLayout> => {
+  const response = await fetch(layoutPath(identifier, version), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+    },
+    body: JSON.stringify({ base_revision: baseRevision, positions }),
+  })
+  if (!response.ok) {
+    const body = await layoutFailureBody(response)
+    if (response.status === 409 && typeof body.current_revision === 'number') {
+      throw new IrLayoutConflict(body.current_revision)
+    }
+    throw new Error(layoutFailureMessage(response, body))
+  }
+  return response.json() as Promise<IrGraphLayout>
+}
+
 export const getIrGraph = async (identifier: string): Promise<IrGraphView> => {
   const response = await fetch(`/api/ir/graphs/${encodeURIComponent(identifier)}`, {
     headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},

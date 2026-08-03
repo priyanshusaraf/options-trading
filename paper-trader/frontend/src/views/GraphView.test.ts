@@ -1,8 +1,13 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { IrGraphView } from '../lib/api'
-import { GraphCanvas, GraphViewState } from './GraphView'
+import type { IrGraphLayout, IrGraphView } from '../lib/api'
+import {
+  GraphCanvas,
+  GraphViewState,
+  movePointFromPointer,
+  movePointWithKey,
+} from './GraphView'
 
 const GRAPH: IrGraphView = {
   identifier: 'strategy.example',
@@ -51,6 +56,18 @@ const GRAPH: IrGraphView = {
   }],
 }
 
+const LAYOUT: IrGraphLayout = {
+  graph_identifier: GRAPH.identifier,
+  graph_version: GRAPH.version,
+  revision: 3,
+  positions: [
+    { instance_id: 'prices', x: 444, y: 55 },
+    // A derived-node override cannot be authored through the backend contract.
+    // Keep the renderer closed even if a malformed response reaches the client.
+    { instance_id: 'risk/threshold', x: 999, y: 999 },
+  ],
+}
+
 describe('GraphCanvas', () => {
   it('renders the graph identity, contract totals, and every inspection field', () => {
     const html = renderToStaticMarkup(React.createElement(GraphCanvas, { graph: GRAPH }))
@@ -90,6 +107,41 @@ describe('GraphCanvas', () => {
     expect(html).toMatch(/overflow-x-auto[^>]*><div class="relative" style="width:720px/)
   })
 
+  it('applies sparse authored coordinates without mutating graph identity fields', () => {
+    const identityBefore = JSON.stringify(GRAPH)
+
+    const html = renderToStaticMarkup(React.createElement(GraphCanvas, {
+      graph: GRAPH,
+      layout: LAYOUT,
+    }))
+
+    expect(html).toContain('left:444px;top:55px')
+    expect(html).not.toContain('left:999px;top:999px')
+    expect(JSON.stringify(GRAPH)).toBe(identityBefore)
+  })
+
+  it('exposes a move handle only for authored nodes', () => {
+    const html = renderToStaticMarkup(React.createElement(GraphCanvas, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      onMove: () => undefined,
+    }))
+
+    expect(html).toContain('aria-label="Move prices"')
+    expect(html).not.toContain('aria-label="Move risk/threshold"')
+  })
+
+  it('maps keyboard and pointer movement to deterministic canvas coordinates', () => {
+    expect(movePointWithKey({ x: 40, y: 50 }, 'ArrowRight', false)).toEqual({ x: 50, y: 50 })
+    expect(movePointWithKey({ x: 40, y: 50 }, 'ArrowUp', true)).toEqual({ x: 40, y: 49 })
+    expect(movePointWithKey({ x: 40, y: 50 }, 'Enter', false)).toBeNull()
+    expect(movePointFromPointer(
+      { x: 40, y: 50 },
+      { x: 100, y: 120 },
+      { x: 145, y: 105 },
+    )).toEqual({ x: 85, y: 35 })
+  })
+
   it('explains an edge-free graph instead of rendering an unexplained empty table', () => {
     const html = renderToStaticMarkup(React.createElement(GraphCanvas, {
       graph: { ...GRAPH, edges: [] },
@@ -108,6 +160,73 @@ describe('GraphViewState', () => {
 
     expect(html).toContain('aria-label="Loading strategy graph"')
     expect(html).toContain('aria-live="polite"')
+  })
+
+  it('keeps announcing loading while the graph layout is still pending', () => {
+    const html = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: null,
+      error: null,
+    }))
+
+    expect(html).toContain('aria-label="Loading strategy graph"')
+  })
+
+  it('announces unsaved layout work', () => {
+    const html = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      phase: 'dirty',
+      error: null,
+      onMove: () => undefined,
+      onSave: () => undefined,
+    }))
+
+    expect(html).toContain('role="status"')
+    expect(html).toContain('Unsaved layout')
+    expect(html).toContain('Save layout')
+  })
+
+  it('renders saving, saved, conflict, and error states without hiding recovery', () => {
+    const saving = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      phase: 'saving',
+      error: null,
+    }))
+    const saved = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      phase: 'saved',
+      error: null,
+    }))
+    const conflict = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      phase: 'conflict',
+      message: 'revision 7',
+      error: null,
+      onSave: () => undefined,
+      onReload: () => undefined,
+    }))
+    const failed = renderToStaticMarkup(React.createElement(GraphViewState, {
+      graph: GRAPH,
+      layout: LAYOUT,
+      phase: 'error',
+      message: 'network unavailable',
+      error: null,
+      onSave: () => undefined,
+      onReload: () => undefined,
+    }))
+
+    expect(saving).toContain('Saving layout')
+    expect(saved).toContain('Layout saved')
+    expect(conflict).toContain('Local positions are retained')
+    expect(conflict).toContain('Retry against latest')
+    expect(conflict).toContain('Reload server')
+    expect(failed).toContain('network unavailable')
+    expect(failed).toContain('Retry save')
+    expect(failed).toContain('Reload server')
   })
 
   it('renders fetch failures as alerts', () => {

@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S1.2 conflict-safe graph layout interaction in the React viewer
-- **Next product checkpoint:** a user can move a graph node, save and reload the layout, and
-  see conflicts or failures without losing local work.
+- **Current slice:** S2.1 minimum product-object architecture and persistence contract
+- **Next product checkpoint:** one accepted ownership, identity, immutability and lifecycle
+  contract can drive the first durable project/graph-version migration.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -72,8 +72,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S0.3 | Reconcile coordination documents and establish this master plan | S0.2 | done — `4c0eda2` |
 | S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | done — published; dotenv boundary corrected at `4f8fb9a`, shutdown worker race at `b243b59` |
 | S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | done — verified, documented and published |
-| S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | active |
-| S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | later |
+| S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | done — verified, documented and published |
+| S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | active |
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | later |
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | later |
 | S3.2 | Add typed visual mutations, validation feedback, undo/redo and accessible controls | S3.1 | later |
@@ -213,6 +213,15 @@ reload, 409 conflict, retry and API failure. A layout-only before/after fixture 
 graph identity fields. Full frontend tests, typecheck, build and 390px containment pass. A
 suppressed save call must turn the reload test red. Rollback is a frontend/API revert; stored
 layout rows remain valid.
+
+**Next bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [x] Add typed layout GET/PUT transport and an explicit conflict/error taxonomy.
+2. [x] Load sparse coordinates beside the immutable graph and prove identity fields do not move.
+3. [x] Add pointer and keyboard movement for authored nodes with a visible dirty state.
+4. [x] Save against `base_revision`; retain local work on conflict/error and support retry/reload.
+5. [x] Run component, accessibility, 390px, full frontend and applicable backend regressions;
+   update handoff evidence, commit and push.
 
 ### S2.1–S2.2 — minimum durable product objects
 

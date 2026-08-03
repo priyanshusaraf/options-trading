@@ -53,7 +53,7 @@ describe('390px: the phone gets its own header', () => {
 })
 
 describe('strategy graph navigation', () => {
-  it('exposes the read-only graph view through the existing tab shell', () => {
+  it('exposes the graph layout editor through the existing tab shell', () => {
     const app = Object.values(APP)[0]
     expect(app).toContain("['graph', 'Strategy Graph']")
     expect(app).toContain("tab === 'graph' && <GraphView")

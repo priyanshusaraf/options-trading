@@ -1,5 +1,30 @@
-import { useEffect, useId, useMemo, useState } from 'react'
-import { getIrGraph, type IrGraphView, type IrViewNode } from '../lib/api'
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react'
+import {
+  getIrGraph,
+  getIrGraphLayout,
+  putIrGraphLayout,
+  type IrGraphLayout,
+  type IrGraphView,
+  type IrViewNode,
+} from '../lib/api'
+import {
+  beginLayoutEditor,
+  failLayoutSave,
+  moveLayoutNode,
+  persistLayoutEditor,
+  reloadLayoutEditor,
+  startLayoutSave,
+  type LayoutEditorPhase,
+  type LayoutEditorState,
+} from './graphLayoutState'
 import { Badge } from '../components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Skeleton } from '../components/ui/skeleton'
@@ -18,6 +43,33 @@ const MARGIN = 24
 interface Point {
   x: number
   y: number
+}
+
+export function movePointWithKey(point: Point, key: string, precise: boolean): Point | null {
+  const step = precise ? 1 : 10
+  const delta: Record<string, Point> = {
+    ArrowLeft: { x: -step, y: 0 },
+    ArrowRight: { x: step, y: 0 },
+    ArrowUp: { x: 0, y: -step },
+    ArrowDown: { x: 0, y: step },
+  }
+  const movement = delta[key]
+  if (!movement) return null
+  return {
+    x: Math.max(0, point.x + movement.x),
+    y: Math.max(0, point.y + movement.y),
+  }
+}
+
+export function movePointFromPointer(
+  point: Point,
+  pointerStart: Point,
+  pointerNow: Point,
+): Point {
+  return {
+    x: Math.max(0, point.x + pointerNow.x - pointerStart.x),
+    y: Math.max(0, point.y + pointerNow.y - pointerStart.y),
+  }
 }
 
 function nodePosition(node: IrViewNode): Point {
@@ -45,10 +97,48 @@ function purityLabel(purity: IrViewNode['purity']): string {
   return purity === 'pure' ? 'Pure' : `Impure · ${purity.replace('_', ' ')}`
 }
 
-function NodeCard({ node, point }: { node: IrViewNode; point: Point }) {
+function NodeCard({ node, point, onMove }: {
+  node: IrViewNode
+  point: Point
+  onMove?: (instanceId: string, point: Point) => void
+}) {
   const params = Object.entries(node.params)
   const impure = node.purity !== 'pure'
   const titleId = useId()
+  const drag = useRef<{ point: Point; pointer: Point } | null>(null)
+
+  const moveFromKey = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const moved = movePointWithKey(point, event.key, event.shiftKey)
+    if (!moved || !onMove) return
+    event.preventDefault()
+    onMove(node.instance_id, moved)
+  }
+
+  const startDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!onMove) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = {
+      point,
+      pointer: { x: event.clientX, y: event.clientY },
+    }
+  }
+
+  const continueDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!onMove || !drag.current || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+    onMove(node.instance_id, movePointFromPointer(
+      drag.current.point,
+      drag.current.pointer,
+      { x: event.clientX, y: event.clientY },
+    ))
+  }
+
+  const stopDrag = (event: PointerEvent<HTMLButtonElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    drag.current = null
+  }
+
   return (
     <article
       data-node-path={authoredPath(node)}
@@ -70,6 +160,21 @@ function NodeCard({ node, point }: { node: IrViewNode; point: Point }) {
             <p className="mt-1 break-all text-[11px] text-muted">{node.definition}</p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
+            {!node.derived && onMove && (
+              <button
+                type="button"
+                aria-label={`Move ${authoredPath(node)}`}
+                title="Drag, or use arrow keys. Hold Shift for 1px steps."
+                className="touch-none cursor-move rounded border border-edge px-2 py-1 text-[10px] uppercase tracking-wide text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                onKeyDown={moveFromKey}
+                onPointerDown={startDrag}
+                onPointerMove={continueDrag}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
+              >
+                Move
+              </button>
+            )}
             {node.derived && (
               <Badge variant="chip" className="bg-sky-500/20 text-sky-300">Derived</Badge>
             )}
@@ -114,10 +219,29 @@ function NodeCard({ node, point }: { node: IrViewNode; point: Point }) {
   )
 }
 
-export function GraphCanvas({ graph }: { graph: IrGraphView }) {
+export function GraphCanvas({ graph, layout, onMove }: {
+  graph: IrGraphView
+  layout?: IrGraphLayout
+  onMove?: (instanceId: string, point: Point) => void
+}) {
   const points = useMemo(
-    () => new Map(graph.nodes.map((node) => [node.instance_id, nodePosition(node)])),
-    [graph.nodes],
+    () => {
+      const layoutMatches = layout?.graph_identifier === graph.identifier
+        && layout.graph_version === graph.version
+      const overrides = new Map(
+        layoutMatches
+          ? layout.positions.map((position) => [position.instance_id, position] as const)
+          : [],
+      )
+      return new Map(graph.nodes.map((node) => {
+        const override = node.derived ? undefined : overrides.get(node.instance_id)
+        return [
+          node.instance_id,
+          override ? { x: override.x, y: override.y } : nodePosition(node),
+        ]
+      }))
+    },
+    [graph, layout],
   )
   const dimensions = useMemo(() => {
     const positioned = [...points.values()]
@@ -131,7 +255,7 @@ export function GraphCanvas({ graph }: { graph: IrGraphView }) {
     <section aria-labelledby="strategy-graph-title" className="space-y-4">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="stat-label">Component IR · read-only</p>
+          <p className="stat-label">Component IR · layout editor</p>
           <h1 id="strategy-graph-title" className="mt-1 text-xl font-semibold text-zinc-100">
             {graph.display_name}
           </h1>
@@ -187,7 +311,12 @@ export function GraphCanvas({ graph }: { graph: IrGraphView }) {
             })}
           </svg>
           {graph.nodes.map((node) => (
-            <NodeCard key={node.instance_id} node={node} point={points.get(node.instance_id)!} />
+            <NodeCard
+              key={node.instance_id}
+              node={node}
+              point={points.get(node.instance_id)!}
+              onMove={onMove}
+            />
           ))}
         </div>
       </div>
@@ -239,9 +368,24 @@ export function GraphCanvas({ graph }: { graph: IrGraphView }) {
   )
 }
 
-export function GraphViewState({ graph, error }: {
+export function GraphViewState({
+  graph,
+  layout,
+  phase = 'clean',
+  message = null,
+  error,
+  onMove,
+  onSave,
+  onReload,
+}: {
   graph: IrGraphView | null
+  layout?: IrGraphLayout | null
+  phase?: LayoutEditorPhase
+  message?: string | null
   error: string | null
+  onMove?: (instanceId: string, point: Point) => void
+  onSave?: () => void
+  onReload?: () => void
 }) {
   if (error) {
     return (
@@ -251,7 +395,7 @@ export function GraphViewState({ graph, error }: {
       </Card>
     )
   }
-  if (!graph) {
+  if (!graph || layout === null) {
     return (
       <section aria-label="Loading strategy graph" aria-live="polite" className="space-y-3">
         <Skeleton className="h-7 w-72" />
@@ -262,22 +406,101 @@ export function GraphViewState({ graph, error }: {
   if (graph.nodes.length === 0) {
     return <p role="status" className="card p-4 text-sm text-muted">This strategy graph has no nodes.</p>
   }
-  return <GraphCanvas graph={graph} />
+  const buttonClass = 'rounded border border-edge px-3 py-1.5 text-xs font-medium text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400'
+  return (
+    <>
+      {phase === 'dirty' && (
+        <div className="mb-3 flex items-center justify-between gap-3" role="status">
+          <span className="text-xs font-medium text-amber-300">Unsaved layout</span>
+          {onSave && <button type="button" className={buttonClass} onClick={onSave}>Save layout</button>}
+        </div>
+      )}
+      {phase === 'saving' && (
+        <p role="status" aria-live="polite" className="mb-3 text-xs text-muted">Saving layout…</p>
+      )}
+      {phase === 'saved' && (
+        <p role="status" aria-live="polite" className="mb-3 text-xs text-emerald-300">Layout saved</p>
+      )}
+      {(phase === 'conflict' || phase === 'error') && (
+        <div role="alert" className="mb-3 rounded border border-amber-500/60 p-3 text-xs">
+          <p className="font-medium text-amber-200">
+            {phase === 'conflict'
+              ? 'Layout changed elsewhere. Local positions are retained.'
+              : `${message ?? 'Layout request failed'}. Local positions are retained.`}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {onSave && (
+              <button type="button" className={buttonClass} onClick={onSave}>
+                {phase === 'conflict' ? 'Retry against latest' : 'Retry save'}
+              </button>
+            )}
+            {onReload && (
+              <button type="button" className={buttonClass} onClick={onReload}>Reload server</button>
+            )}
+          </div>
+        </div>
+      )}
+      <GraphCanvas
+        graph={graph}
+        layout={layout ?? undefined}
+        onMove={phase === 'saving' ? undefined : onMove}
+      />
+    </>
+  )
 }
 
 export default function GraphView() {
   const [graph, setGraph] = useState<IrGraphView | null>(null)
+  const [editor, setEditor] = useState<LayoutEditorState | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let current = true
     getIrGraph(GRAPH_IDENTIFIER)
-      .then((view) => { if (current) setGraph(view) })
+      .then(async (view) => {
+        if (current) setGraph(view)
+        const storedLayout = await getIrGraphLayout(view.identifier, view.version)
+        if (current) setEditor(beginLayoutEditor(storedLayout))
+      })
       .catch((reason: unknown) => {
         if (current) setError(reason instanceof Error ? reason.message : 'The graph could not be loaded')
       })
     return () => { current = false }
   }, [])
 
-  return <GraphViewState graph={graph} error={error} />
+  const moveNode = (instanceId: string, point: Point) => {
+    setEditor((current) => current ? moveLayoutNode(current, instanceId, point) : current)
+  }
+
+  const saveLayout = async () => {
+    if (!editor || editor.phase === 'saving') return
+    const draft = editor
+    setEditor(startLayoutSave(draft))
+    const result = await persistLayoutEditor(draft, putIrGraphLayout)
+    setEditor(result)
+  }
+
+  const reloadLayout = async () => {
+    if (!graph || !editor) return
+    const current = editor
+    try {
+      const reloaded = await getIrGraphLayout(graph.identifier, graph.version)
+      setEditor((latest) => reloadLayoutEditor(latest ?? current, reloaded))
+    } catch (reason: unknown) {
+      setEditor((latest) => failLayoutSave(latest ?? current, reason))
+    }
+  }
+
+  return (
+    <GraphViewState
+      graph={graph}
+      layout={editor?.layout ?? null}
+      phase={editor?.phase}
+      message={editor?.message}
+      error={error}
+      onMove={moveNode}
+      onSave={saveLayout}
+      onReload={reloadLayout}
+    />
+  )
 }

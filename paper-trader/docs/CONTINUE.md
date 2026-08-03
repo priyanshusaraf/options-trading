@@ -10,13 +10,13 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A is published and S1.1 is complete locally.** Fail-closed CI is on the branch. Its first
+**Stage A and S1.1 are published; S1.2 is complete locally.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
-drains those workers before the broker session closes. S1.1 adds the F13 sparse layout store,
-closed GET/PUT API, optimistic concurrency, orphan handling and migration rollback. S1.2 browser
-interaction is active next.
+drains those workers before the broker session closes. F13 is published at `22a148f`. The React
+viewer now loads the sparse layout, moves authored nodes by pointer or keyboard, saves by revision,
+and retains local work on conflict or transport failure. S2.1 product-object architecture is next.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -26,9 +26,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed slice: CI/runtime hardening through `b243b59`
-- Latest verified remote before the S1.1 commit: `b243b59`
-- Expected ahead/behind after publishing S1.1: `0/0`
+- Last completed/pushed slice: F13 sparse layout persistence through `22a148f`
+- Latest verified remote before the S1.2 commit: `22a148f`
+- Expected ahead/behind after publishing S1.2: `0/0`
 - Working tree expected after publishing this handoff: clean
 
 The commit containing this handoff is the current HEAD after publication; resolve its SHA with
@@ -52,8 +52,8 @@ RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
 $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
-$ npm ci && npm test && npm run typecheck && npm run build
-153 passed · TYPECHECK OK · BUILD OK · EXIT 0
+$ npm test && npm run typecheck && npm run build
+169 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
@@ -71,7 +71,8 @@ regression and the complete CI-shaped suite pass after `b243b59`.
 
 Known dependency risks: backend requirements use version floors rather than a lockfile; `npm ci`
 reports six audit findings (three moderate, two high, one critical). The frontend tests/build are
-green, but those findings remain open and must not be described as solved by CI.
+green, but those findings remain open and must not be described as solved by CI. The built JS is
+227.39 kB gzip, above the current 200 kB Vite-SPA profile budget; the build warning remains open.
 
 Live-browser acceptance used a dotenv-disabled mock/paper backend with temporary databases.
 Desktop and 390×844 rendered 18 node articles, 35 SVG paths and 35 connection rows with no
@@ -91,6 +92,13 @@ input made the identity proof fail on the expected mismatch. After restoration, 
 address, component versions, node cache identities and experiment binding stay unchanged while
 the rendered node uses its stored coordinate.
 
+S1.2 was also test-first. The layout transport tests first failed with missing functions; layout
+rendering first ignored stored coordinates; move handles, deterministic movement and save-state
+tests each failed before their implementation. The completed state machine retains the exact
+draft on 409 and transport failure, retries a conflict against the server-reported revision, and
+replaces local work only through explicit reload. A guard test requires the persistence function
+to receive the full sparse draft, so suppressing the save call turns it red.
+
 Frontend guards were also observed red before implementation: missing graph transport, missing
 canvas module, missing tab wiring, non-semantic node cards, collapsed impurity policy, absent
 state presenter and absent scroller containment. The reviewed result has no remaining Critical
@@ -107,12 +115,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-04 Editor — implement S1.2, conflict-safe layout interaction.**
+**S2.1 — accept the minimum product-object architecture and persistence contract.**
 
-Add the typed layout transport to `frontend/src/lib/api.ts`; load it beside the graph; apply sparse
-coordinates without changing the graph payload; support pointer and keyboard movement; and save
-against `base_revision`. Render unsaved, saving, saved, 409 conflict and transport-error states.
-A conflict or failure must retain local coordinates until the user explicitly reloads or retries.
+Write the focused architecture record for Project, Graph artefact, immutable Graph version,
+Layout, Experiment, Finding, Deployment candidate and Deployment. Reject alternate ownership,
+identity and state-transition claims before accepting one contract. Extend the existing deployment
+root; do not create a second execution model or cross a live-runtime gate.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 
