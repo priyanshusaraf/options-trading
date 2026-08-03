@@ -1,5 +1,59 @@
 const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
 
+export type IrPurity = 'pure' | 'account_state' | 'broker_state' | 'wall_clock'
+
+export interface IrViewNode {
+  readonly instance_id: string
+  readonly label: string
+  readonly container: string
+  readonly definition: string
+  readonly params: Readonly<Record<string, unknown>>
+  readonly warmup: number
+  readonly purity: IrPurity
+  readonly cache_id: string
+  readonly derived: boolean
+  readonly layer: number
+  readonly row: number
+  readonly placed: readonly [number, number] | null
+}
+
+export interface IrViewEdge {
+  readonly source: string
+  readonly target: string
+  readonly source_socket: string
+  readonly target_socket: string
+  readonly derived: boolean
+}
+
+export interface IrGraphView {
+  readonly identifier: string
+  readonly version: number
+  readonly display_name: string
+  readonly warmup: number
+  readonly layers: number
+  readonly inputs: readonly string[]
+  readonly outputs: readonly string[]
+  readonly nodes: readonly IrViewNode[]
+  readonly edges: readonly IrViewEdge[]
+}
+
+export const getIrGraph = async (identifier: string): Promise<IrGraphView> => {
+  const response = await fetch(`/api/ir/graphs/${encodeURIComponent(identifier)}`, {
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  })
+  if (!response.ok) {
+    let message = `Graph request failed (${response.status})`
+    try {
+      const body = await response.json() as { detail?: unknown }
+      if (typeof body.detail === 'string') message = body.detail
+    } catch {
+      // A non-JSON error still fails with the HTTP status above.
+    }
+    throw new Error(message)
+  }
+  return response.json() as Promise<IrGraphView>
+}
+
 const j = (u: string) =>
   fetch(u, { headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {} }).then((r) => r.json())
 const post = (u: string, body: any) =>
@@ -200,4 +254,3 @@ export const setWatchlistStatus = (name: string, status: string) =>
   post(`/api/portfolio/watchlists/${encodeURIComponent(name)}/status`, { status })
 export const setArchiveStatus = (strategyKey: string, status: string) =>
   post(`/api/portfolio/archive/${encodeURIComponent(strategyKey)}/status`, { status })
-

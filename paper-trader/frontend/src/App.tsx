@@ -13,6 +13,7 @@ import PortfolioView from './views/PortfolioView'
 import DashboardView from './views/DashboardView'
 import TradesView from './views/TradesView'
 import CalendarView from './views/CalendarView'
+import GraphView from './views/GraphView'
 import SettingsView from './views/SettingsView'
 
 const TABS: [string, string][] = [
@@ -26,6 +27,7 @@ const TABS: [string, string][] = [
   ['trades', 'Trade Log'],
   ['calendar', 'Calendar'],
   ['dashboard', 'Dashboard'],
+  ['graph', 'Strategy Graph'],
   ['settings', 'Settings'],
 ]
 
@@ -70,6 +72,7 @@ function Shell() {
         {tab === 'trades' && <TradesView />}
         {tab === 'calendar' && <CalendarView />}
         {tab === 'dashboard' && <DashboardView />}
+        {tab === 'graph' && <GraphView />}
         {tab === 'settings' && <SettingsView />}
       </main>
       {/* The journal renders OUTSIDE <main>: it is a full-bleed fixed sub-app

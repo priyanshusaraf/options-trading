@@ -51,3 +51,11 @@ describe('390px: the phone gets its own header', () => {
     expect(Object.values(APP)[0]).toContain('MobileTopBar')
   })
 })
+
+describe('strategy graph navigation', () => {
+  it('exposes the read-only graph view through the existing tab shell', () => {
+    const app = Object.values(APP)[0]
+    expect(app).toContain("['graph', 'Strategy Graph']")
+    expect(app).toContain("tab === 'graph' && <GraphView")
+  })
+})
