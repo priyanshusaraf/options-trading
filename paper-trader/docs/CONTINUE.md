@@ -35,6 +35,9 @@ because a correct mechanism wired to nothing is this repo's defining defect:
    and therefore the first time C13's guard is load-bearing rather than precautionary.
 8. **Two defects in what was already built:** warmup was a constant where C10 says derived, and
    the suite failed two runs in five.
+9. **Research Plane Gen 2, step one** (`research/strategy/builder/ir_components.py`) — all 23
+   blocks derived into IR components, each proven to compute *exactly* what calling the block
+   computes, bar for bar. Building it exposed a live defect: all 23 shared one body address.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -47,7 +50,8 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`c234e70` — Python component authoring, and the second half of the flake fix.
+`` — the block library as 23 IR components. Preceded by `c234e70` (Python
+component authoring, and the second half of the flake fix).
 Preceded by `3b2b752` (warmup derived from bound parameters; the first half) and
 `49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
 `e97ed72` (`expanding_z_v4` expressed in the IR and proven equal to the strategy).
@@ -68,8 +72,7 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,539             (--collect-only, summed per file)
-   run four times consecutively after the flake fix, EXIT 0 every time
+collected: 2,578             (--collect-only, summed per file)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -101,6 +104,11 @@ Guards proven able to fail, not merely observed passing:
 - **Warmup.** Restoring the constant it replaced turns the bound-parameter test red.
 - **The editor.** Suppressing the write-path validation, the cascade that removes a deleted
   node's edges, and the stored-position lookup each turn their own tests red.
+- **Authoring.** Suppressing the body-collision guard, the `closes_over` contribution to the
+  body address, and the dynamic-access `unchecked` report each turn their own tests red.
+  *Caveat learned here:* a sweep that greps only `^FAILED` misses mutations that break a
+  **fixture**, which report as `ERROR`. One guard read as vacuous for exactly that reason and
+  was not. Count both.
 - **The renderer.** Suppressing label truncation turns the box-geometry test red. That test
   exists because the first render spilled a definition out through the edge of its box and
   nothing failed — SVG text does not clip, so the picture was wrong and looked fine.
@@ -137,38 +145,37 @@ still holds a checked-out connection no `dispose()` can reclaim (close your brok
 
 ## 4. Next concrete action
 
-**Research Plane Generation 2 — generate IR graphs, not block compositions.**
+**Research Plane Gen 2, step two: a mutation-based structure proposer over graphs.**
 
-This is the subsystem the Component IR was designed to unblock, and the RFC names the trap the
-platform is currently inside. C14: "vectorbt builds parameter grids into the indicator contract
-itself, which silently defines *search = parameter sweeping* for everything downstream — and the
-research plane inherited that shape. **Structure search is not reachable from a design where
-components sweep themselves.**" Generation 1 searches parameters over a fixed block grammar. The
-IR makes structure itself the thing you search.
+The vocabulary is now typed, versioned and composable — 23 block components, each proven
+equivalent to the block it came from, and `test_two_blocks_compose_into_one_graph` shows two of
+them wired through a `logic.and` into one graph. What does not exist yet is anything that
+*proposes* such a graph.
 
-Everything it needs is now built, which is why this is next rather than large:
+The pieces are all in place and the design follows from them:
 
-- `app/ir/edit.py` mutates a graph and refuses to return a non-conforming one, so a generator can
-  propose edits without also having to know §3.
-- `app/ir/authoring.py` turns the existing block vocabulary into real components with declared
-  interfaces — Appendix A.3 records that each `BlockSpec` "already declares `(param_name, kind)`
-  pairs drawn from the same bounded vocabulary as F5", so the registry is already most of a
-  component interface. What it lacks is F2's version and F4's declared panels.
-- `app/ir/experiment.py` binds every result to the versions that produced it (F14), which is the
-  thing Generation 1 never had and the reason every research finding before 2026-08 is unusable
-  as a baseline.
-- `ResolvedNode.cache_id` is transitive (C8), so a structure search that changes one node
-  recomputes only what depends on it — measured on the real strategy: moving `entry_pct` reuses
-  the EMA, ATR, z-score, drift and range.
+- `app/ir/edit.py` is the gate. A proposer emits edits — add a node, rewire an edge, drop a
+  branch — and `edit.py` refuses any that would not produce a conforming artefact, so the
+  proposer never needs to know §3. That is the whole reason the writing half of the editor plane
+  was built before this.
+- `groups()` in `ir_components.py` carries the `trend`/`momentum`/`volatility`/`confirmation`
+  families **beside** the components rather than on them, so a proposer can bias its choices
+  without the IR learning what a family means (C13).
+- `ResolvedNode.cache_id` is transitive (C8), so a mutation that changes one node recomputes only
+  what depends on it. Measured on the real strategy: moving `entry_pct` reuses the EMA, ATR,
+  z-score, drift and range. This is what makes structure search affordable rather than
+  quadratic — and it is the thing Generation 1 could not do at all.
+- `app/ir/experiment.py` binds each run to the versions that produced it (F14). **Bind from the
+  first run, not later** — that is the retrofit this platform has already paid for once.
 
-Concretely, in this order: (1) express the existing block library as authored components, which
-is mechanical and immediately gives the generator a typed vocabulary; (2) a mutation-based
-proposer over graphs — add/remove/rewire a node, using `edit.py` as the gate; (3) bind every run
-through `experiment.record()`. Do **not** start by porting the search loop; start by giving it
-something typed to search over.
+Start with the proposer and its legality property: every graph it emits validates, resolves, and
+evaluates without raising, over a few thousand random mutations. Do not start with a search
+objective — a proposer that emits illegal graphs makes every downstream statistic meaningless,
+and legality is the property that is cheap to test now and impossible to retrofit confidence in
+later.
 
-Note the isolation rule still holds: `PT_RESEARCH_ENABLED=0`, `research/guards.py` fail-closed,
-read-only bridges only.
+Isolation still holds: `PT_RESEARCH_ENABLED=0`, `research/guards.py` fail-closed, read-only
+bridges only, and `research/` imports `app.ir` and never the reverse.
 
 Two things are deliberately **not** next, and one of them needs the owner:
 
