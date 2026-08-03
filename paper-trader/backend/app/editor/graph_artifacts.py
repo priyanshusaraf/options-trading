@@ -59,6 +59,9 @@ class EditPublication:
     published: PublishedGraph
     applied_operations: tuple[dict[str, Any], ...]
     inverse_operations: tuple[dict[str, Any], ...]
+    base_version: int
+    base_presentation_revision: int
+    presentation_delta: layouts.PresentationDelta
 
 
 @dataclass(frozen=True)
@@ -393,6 +396,8 @@ def apply_and_publish(
     identifier: str,
     *,
     base_revision: int,
+    base_presentation_revision: int,
+    presentation_operations: tuple[dict[str, Any], ...],
     transform: Callable[[dict[str, Any]], EditResult],
     response_factory: Callable[[EditPublication, layouts.Layout], T],
 ) -> T:
@@ -428,17 +433,18 @@ def apply_and_publish(
             raise GraphConflict(artifact.draft_revision) from exc
         _after_version_insert(session, version)
 
+        source_version = artifact.current_version
         valid_ids = _authored_ids(document)
-        if _authored_ids(original) == valid_ids:
-            layout = layouts.carry_layout_forward(
-                session,
-                identifier,
-                artifact.current_version,
-                version.version,
-                valid_ids,
-            )
-        else:
-            layout = layouts.Layout(identifier, version.version, 0, ())
+        layout, presentation_delta = layouts.carry_and_reconcile_presentation(
+            session,
+            identifier,
+            source_version,
+            version.version,
+            base_revision=base_presentation_revision,
+            source_instance_ids=_authored_ids(original),
+            target_instance_ids=valid_ids,
+            operations=presentation_operations,
+        )
 
         claimed = session.execute(
             update(GraphArtifact)
@@ -465,6 +471,9 @@ def apply_and_publish(
             published=_published_record(project_id, version),
             applied_operations=edit_result.applied_operations,
             inverse_operations=edit_result.inverse_operations,
+            base_version=source_version,
+            base_presentation_revision=base_presentation_revision,
+            presentation_delta=presentation_delta,
         )
         try:
             result = response_factory(publication, layout)

@@ -138,7 +138,7 @@ def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(mon
     assert versions == ()
 
 
-def test_identity_changing_edit_does_not_infer_a_layout():
+def test_identity_changing_edit_creates_reconciled_presentation_head():
     from app.ir import edit as ir_edit
 
     def add_constant(graph):
@@ -159,11 +159,13 @@ def test_identity_changing_edit_does_not_infer_a_layout():
         store.CATALOGUE_PROJECT_ID,
         GRAPH["identifier"],
         base_revision=0,
+        base_presentation_revision=0,
+        presentation_operations=(),
         transform=add_constant,
         response_factory=lambda published, carried: (published, carried),
     )
 
     assert publication.published.version == GRAPH["version"] + 1
     assert layout.graph_version == publication.published.version
-    assert layout.revision == 0
+    assert layout.revision == 1
     assert layout.positions == ()

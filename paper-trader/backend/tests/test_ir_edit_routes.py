@@ -37,10 +37,25 @@ def client():
 
 def _post(client, base_revision: int, edit: dict | list[dict]):
     edits = edit if isinstance(edit, list) else [edit]
+    current = client.get(EDITOR_URL).json()
     return client.post(
         EDIT_URL,
-        json={"base_revision": base_revision, "edits": edits},
+        json={
+            "base_revision": base_revision,
+            "base_presentation_revision": current["layout"]["revision"],
+            "edits": edits,
+            "presentation_edits": [],
+        },
     )
+
+
+def _post_structural(client, before: dict, edits: list[dict], presentation_edits=()):
+    return client.post(EDIT_URL, json={
+        "base_revision": before["draft_revision"],
+        "base_presentation_revision": before["layout"]["revision"],
+        "edits": edits,
+        "presentation_edits": list(presentation_edits),
+    })
 
 
 def _post_presentation(
@@ -176,6 +191,122 @@ def test_visual_group_edits_use_the_shared_presentation_revision(client):
         "current_presentation_revision": 1,
         "errors": [],
     }
+
+
+def test_remove_node_prunes_position_and_membership_in_same_publication(client):
+    before = client.get(EDITOR_URL).json()
+    positioned = client.put(
+        f"/api/ir/graphs/{IDENTIFIER}/versions/{before['version']}/layout",
+        json={
+            "base_revision": before["layout"]["revision"],
+            "positions": [{"instance_id": "n_exit_fallback", "x": 40, "y": 80}],
+        },
+    )
+    assert positioned.status_code == 200, positioned.text
+    grouped = _create_group(client, members=["n_exit_fallback"])
+    assert grouped.status_code == 201, grouped.text
+    current = grouped.json()
+
+    response = _post_structural(client, current, [
+        {
+            "operation": "connect",
+            "source": {"instance_id": "n_exit_floor", "socket": "out"},
+            "target": {"instance_id": "n_exit_thr", "socket": "fallback"},
+        },
+        {
+            "operation": "disconnect",
+            "source": {"instance_id": "n_exit_fallback", "socket": "out"},
+            "target": {"instance_id": "n_exit_thr", "socket": "fallback"},
+        },
+        {"operation": "remove_node", "instance_id": "n_exit_fallback"},
+    ])
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert "n_exit_fallback" not in {
+        item["instance_id"] for item in body["layout"]["positions"]
+    }
+    assert "n_exit_fallback" not in body["layout"]["groups"][0]["members"]
+    delta = body["command_receipt"]["presentation_delta"]
+    assert {item["operation"] for item in delta["forward_operations"]} >= {
+        "clear_position", "remove_group_member"
+    }
+    assert {item["operation"] for item in delta["inverse_operations"]} >= {
+        "set_position", "add_group_member"
+    }
+
+
+def test_added_node_has_no_position_unless_same_request_supplies_one(client):
+    before = client.get(EDITOR_URL).json()
+    add = {
+        "operation": "add_node",
+        "instance_id": "n_spare",
+        "identifier": "value.scalar",
+        "version": 1,
+        "overrides": {"value": 3.0},
+        "domain": None,
+        "secret_params": [],
+    }
+
+    response = _post_structural(client, before, [add])
+    assert response.status_code == 201, response.text
+    assert "n_spare" not in {
+        item["instance_id"] for item in response.json()["layout"]["positions"]
+    }
+
+    init_db(reset=True)
+    before = client.get(EDITOR_URL).json()
+    positioned = _post_structural(client, before, [add], [{
+        "operation": "set_position", "instance_id": "n_spare", "x": 12, "y": 24,
+    }])
+    assert positioned.status_code == 201, positioned.text
+    assert positioned.json()["layout"]["positions"] == [{
+        "instance_id": "n_spare", "x": 12.0, "y": 24.0,
+    }]
+
+
+def test_stale_source_presentation_rolls_back_semantic_version(client):
+    accepted = _create_group(client)
+    assert accepted.status_code == 201, accepted.text
+
+    stale = client.post(EDIT_URL, json={
+        "base_revision": 0,
+        "base_presentation_revision": 0,
+        "edits": [{"operation": "set_display_name", "display_name": "Stale"}],
+        "presentation_edits": [],
+    })
+
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "PRESENTATION_REVISION_CONFLICT"
+    assert stale.json()["current_presentation_revision"] == 1
+    assert client.get(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/versions/"
+        f"{GRAPH['version'] + 1}"
+    ).status_code == 404
+
+
+def test_presentation_reconcile_failure_rolls_back_semantic_version(
+    client, monkeypatch
+):
+    from app.editor import layouts
+
+    before = client.get(EDITOR_URL).json()
+
+    def fail_reconcile(*_args):
+        raise RuntimeError("injected presentation reconciliation failure")
+
+    monkeypatch.setattr(layouts, "_after_presentation_reconcile", fail_reconcile)
+    with pytest.raises(RuntimeError, match="presentation reconciliation"):
+        _post_structural(client, before, [{
+            "operation": "set_display_name", "display_name": "Must roll back",
+        }])
+
+    after = client.get(EDITOR_URL).json()
+    assert after == before
+    assert client.get(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/versions/"
+        f"{GRAPH['version'] + 1}"
+    ).status_code == 404
 
 
 def test_clear_override_returns_inherited_parameter_metadata(client):
@@ -331,12 +462,15 @@ def test_backend_returns_canonical_forward_and_inverse_receipt(client):
 def test_response_construction_failure_rolls_back_publication(client, monkeypatch):
     from app.api import ir_routes
 
+    before = client.get(EDITOR_URL).json()
+
     def fail_response(*_args):
         raise RuntimeError("injected editor response failure")
 
     monkeypatch.setattr(ir_routes, "graph_response", fail_response, raising=False)
-    response = _post(
-        client, 0, {"operation": "set_display_name", "display_name": "Must roll back"}
+    response = _post_structural(
+        client, before,
+        [{"operation": "set_display_name", "display_name": "Must roll back"}],
     )
 
     assert response.status_code == 500
@@ -544,7 +678,9 @@ def test_edit_ownership_is_hidden_and_arbitrary_fields_are_rejected(client):
         f"/api/ir/projects/{other['project_id']}/graphs/{IDENTIFIER}/edits",
         json={
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "edits": [{"operation": "set_display_name", "display_name": "Not mine"}],
+            "presentation_edits": [],
         },
     )
     assert hidden.status_code == 404
@@ -552,15 +688,18 @@ def test_edit_ownership_is_hidden_and_arbitrary_fields_are_rejected(client):
     for payload in (
         {
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "version": 99,
             "edits": [{"operation": "set_display_name", "display_name": "No"}],
         },
         {
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "edits": [{"operation": "python", "source": "raise SystemExit"}],
         },
         {
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "edits": [{
                 "operation": "set_display_name",
                 "display_name": "No",
@@ -587,14 +726,21 @@ def test_edit_request_models_are_closed_and_route_is_mirrored(client):
         f"/api/v1{EDIT_URL.removeprefix('/api')}",
         json={
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "edits": [{"operation": "set_display_name", "display_name": "Versioned"}],
+            "presentation_edits": [],
         },
     )
     assert response.status_code == 201
 
 
 def test_edit_batch_bounds_are_closed(client):
-    empty = client.post(EDIT_URL, json={"base_revision": 0, "edits": []})
+    empty = client.post(EDIT_URL, json={
+        "base_revision": 0,
+        "base_presentation_revision": 0,
+        "edits": [],
+        "presentation_edits": [],
+    })
     assert empty.status_code == 422
     assert empty.json()["code"] == "REQUEST_VALIDATION_FAILED"
 
@@ -603,13 +749,23 @@ def test_edit_batch_bounds_are_closed(client):
         for index in range(32)
     ]
     assert client.post(
-        EDIT_URL, json={"base_revision": 0, "edits": edits}
+        EDIT_URL, json={
+            "base_revision": 0,
+            "base_presentation_revision": 0,
+            "edits": edits,
+            "presentation_edits": [],
+        }
     ).status_code == 201
 
     init_db(reset=True)
     too_many = client.post(
         EDIT_URL,
-        json={"base_revision": 0, "edits": edits + [edits[-1]]},
+        json={
+            "base_revision": 0,
+            "base_presentation_revision": 0,
+            "edits": edits + [edits[-1]],
+            "presentation_edits": [],
+        },
     )
     assert too_many.status_code == 422
     assert too_many.json()["code"] == "REQUEST_VALIDATION_FAILED"

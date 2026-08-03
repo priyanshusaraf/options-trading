@@ -94,15 +94,54 @@ class ClearOverrideEdit(_ClosedModel):
     parameter: str = Field(min_length=1, max_length=128)
 
 
+class SocketRefRequest(_ClosedModel):
+    instance_id: str = Field(min_length=1, max_length=128)
+    socket: str = Field(min_length=1, max_length=128)
+
+
+class AddNodeEdit(_ClosedModel):
+    operation: Literal["add_node"]
+    instance_id: str = Field(min_length=1, max_length=128)
+    identifier: str = Field(min_length=1, max_length=128)
+    version: int = Field(ge=1)
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    domain: dict[str, str] | None = None
+    secret_params: list[str] = Field(default_factory=list, max_length=128)
+    node_index: int | None = Field(default=None, ge=0)
+
+
+class RemoveNodeEdit(_ClosedModel):
+    operation: Literal["remove_node"]
+    instance_id: str = Field(min_length=1, max_length=128)
+
+
+class ConnectEdit(_ClosedModel):
+    operation: Literal["connect"]
+    source: SocketRefRequest
+    target: SocketRefRequest
+    edge_index: int | None = Field(default=None, ge=0)
+
+
+class DisconnectEdit(_ClosedModel):
+    operation: Literal["disconnect"]
+    source: SocketRefRequest
+    target: SocketRefRequest
+
+
 EditRequest = Annotated[
-    SetDisplayNameEdit | SetOverrideEdit | ClearOverrideEdit,
+    SetDisplayNameEdit | SetOverrideEdit | ClearOverrideEdit | AddNodeEdit
+    | RemoveNodeEdit | ConnectEdit | DisconnectEdit,
     Field(discriminator="operation"),
 ]
 
 
 class GraphEditRequest(_ClosedModel):
     base_revision: int = Field(ge=0)
+    base_presentation_revision: int = Field(ge=0)
     edits: list[EditRequest] = Field(min_length=1, max_length=32)
+    presentation_edits: list["SetPositionEdit"] = Field(
+        default_factory=list, max_length=32
+    )
 
 
 class GroupFrameRequest(_ClosedModel):
@@ -116,6 +155,20 @@ class GroupFrameRequest(_ClosedModel):
     def finite(cls, value: float) -> float:
         if not math.isfinite(value):
             raise ValueError("group frame values must be finite")
+        return value
+
+
+class SetPositionEdit(_ClosedModel):
+    operation: Literal["set_position"]
+    instance_id: str = Field(min_length=1, max_length=128)
+    x: float
+    y: float
+
+    @field_validator("x", "y")
+    @classmethod
+    def finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("position values must be finite")
         return value
 
 
@@ -327,6 +380,29 @@ def _transition_code(exc: store.InvalidTransition) -> EditorErrorCode:
 
 
 def _semantic_operation(request: EditRequest) -> ir_edit.SemanticOperation:
+    if isinstance(request, AddNodeEdit):
+        return ir_edit.AddNode(
+            request.instance_id,
+            request.identifier,
+            request.version,
+            request.overrides,
+            request.domain,
+            tuple(request.secret_params),
+            request.node_index,
+        )
+    if isinstance(request, RemoveNodeEdit):
+        return ir_edit.RemoveNode(request.instance_id)
+    if isinstance(request, ConnectEdit):
+        return ir_edit.Connect(
+            ir_edit.SocketRef(request.source.instance_id, request.source.socket),
+            ir_edit.SocketRef(request.target.instance_id, request.target.socket),
+            request.edge_index,
+        )
+    if isinstance(request, DisconnectEdit):
+        return ir_edit.Disconnect(
+            ir_edit.SocketRef(request.source.instance_id, request.source.socket),
+            ir_edit.SocketRef(request.target.instance_id, request.target.socket),
+        )
     if isinstance(request, SetOverrideEdit):
         return ir_edit.SetOverride(
             request.instance_id, request.parameter, request.value
@@ -460,10 +536,14 @@ def _document(
         else:
             semantic_forward = list(publication.applied_operations)
             semantic_inverse = list(publication.inverse_operations)
-            presentation_forward = []
-            presentation_inverse = []
-            base_presentation_revision = max(0, layout.revision - 1)
-            base_version = graph.version - 1
+            presentation_forward = list(
+                publication.presentation_delta.forward_operations
+            )
+            presentation_inverse = list(
+                publication.presentation_delta.inverse_operations
+            )
+            base_presentation_revision = publication.base_presentation_revision
+            base_version = publication.base_version
         receipt = CommandReceipt(
             applied_operations=semantic_forward,
             inverse_operations=semantic_inverse,
@@ -525,6 +605,10 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
             project_id,
             identifier,
             base_revision=body.base_revision,
+            base_presentation_revision=body.base_presentation_revision,
+            presentation_operations=tuple(
+                edit.model_dump(mode="python") for edit in body.presentation_edits
+            ),
             transform=lambda graph: _apply_all(graph, body.edits),
             response_factory=lambda publication, layout: _document(
                 publication, layout, include_receipt=True
@@ -538,6 +622,25 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
             "DRAFT_REVISION_CONFLICT",
             "Graph draft revision conflict",
             current_revision=exc.current_revision,
+        )
+    except layouts.LayoutConflict as exc:
+        return _error_response(
+            409,
+            "PRESENTATION_REVISION_CONFLICT",
+            "Presentation revision conflict",
+            current_presentation_revision=exc.current_revision,
+        )
+    except layouts.LayoutRejected as exc:
+        return _error_response(
+            422,
+            "PRESENTATION_VALIDATION_FAILED",
+            "Presentation validation failed",
+            errors=[EditorErrorItem(
+                operation_index=exc.operation_index,
+                clause=None,
+                path=list(exc.path),
+                message=str(exc),
+            )],
         )
     except BatchEditRejected as exc:
         return _error_response(

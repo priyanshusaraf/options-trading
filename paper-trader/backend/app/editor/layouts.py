@@ -164,14 +164,107 @@ def _after_layout_prepare(_session: Session, _layout: IrGraphLayout) -> None:
     """Failure-injection seam proving graph and carried layout are atomic."""
 
 
-def carry_layout_forward(
+def _after_presentation_reconcile(_session: Session, _layout: IrGraphLayout) -> None:
+    """Failure-injection seam for semantic/presentation publication atomicity."""
+
+
+def carry_and_reconcile_presentation(
     session: Session,
     graph_identifier: str,
     from_version: int,
     to_version: int,
-    valid_instance_ids: frozenset[str],
-) -> Layout:
-    """Create a fresh revision-one layout stream inside the caller's transaction."""
+    *,
+    base_revision: int,
+    source_instance_ids: frozenset[str],
+    target_instance_ids: frozenset[str],
+    operations: Sequence[Mapping[str, Any]] = (),
+) -> tuple[Layout, PresentationDelta]:
+    """Carry presentation to an immutable graph version and prune removed nodes."""
+    source = load_layout_in_session(
+        session, graph_identifier, from_version, source_instance_ids
+    )
+    if source.revision != base_revision:
+        raise LayoutConflict(source.revision)
+    added_ids = target_instance_ids - source_instance_ids
+    positions = {
+        position.instance_id: position
+        for position in source.positions
+        if position.instance_id in target_instance_ids
+    }
+    groups = tuple(
+        VisualGroup(
+            group.identifier,
+            group.display_name,
+            group.frame,
+            group.collapsed,
+            tuple(member for member in group.members if member in target_instance_ids),
+        )
+        for group in source.groups
+    )
+    forward: list[dict[str, Any]] = []
+    inverse: list[dict[str, Any]] = []
+    for position in source.positions:
+        if position.instance_id not in target_instance_ids:
+            forward.append({
+                "operation": "clear_position",
+                "instance_id": position.instance_id,
+            })
+            inverse.insert(0, {
+                "operation": "set_position",
+                "instance_id": position.instance_id,
+                "x": position.x,
+                "y": position.y,
+            })
+    for group in source.groups:
+        for member in group.members:
+            if member not in target_instance_ids:
+                forward.append({
+                    "operation": "remove_group_member",
+                    "identifier": group.identifier,
+                    "instance_id": member,
+                })
+                inverse.insert(0, {
+                    "operation": "add_group_member",
+                    "identifier": group.identifier,
+                    "instance_id": member,
+                })
+    for index, raw in enumerate(operations):
+        operation = dict(raw)
+        instance_id = str(operation["instance_id"])
+        if operation.get("operation") != "set_position":
+            raise LayoutRejected(
+                "semantic publication accepts only set_position presentation edits",
+                operation_index=index,
+                path=("presentation_edits", index, "operation"),
+            )
+        if instance_id not in added_ids:
+            raise LayoutRejected(
+                "a same-request position may reference only a newly added authored node",
+                operation_index=index,
+                path=("presentation_edits", index, "instance_id"),
+            )
+        if instance_id in positions:
+            raise LayoutRejected(
+                f"position for {instance_id!r} appears more than once",
+                operation_index=index,
+                path=("presentation_edits", index, "instance_id"),
+            )
+        x, y = float(operation["x"]), float(operation["y"])
+        if not math.isfinite(x) or not math.isfinite(y):
+            raise LayoutRejected(
+                "positions must contain finite numbers",
+                operation_index=index,
+                path=("presentation_edits", index),
+            )
+        positions[instance_id] = Position(instance_id, x, y)
+        forward.append({
+            "operation": "set_position", "instance_id": instance_id,
+            "x": x, "y": y,
+        })
+        inverse.insert(0, {
+            "operation": "clear_position", "instance_id": instance_id,
+        })
+
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     target = IrGraphLayout(
         graph_identifier=graph_identifier,
@@ -180,28 +273,52 @@ def carry_layout_forward(
         updated_at=now,
     )
     session.add(target)
-    source_rows = session.scalars(
-        select(IrGraphLayoutPosition).where(
-            IrGraphLayoutPosition.graph_identifier == graph_identifier,
-            IrGraphLayoutPosition.graph_version == from_version,
-        ).order_by(IrGraphLayoutPosition.instance_id)
-    )
+    session.flush()
     session.add_all([
         IrGraphLayoutPosition(
             graph_identifier=graph_identifier,
             graph_version=to_version,
-            instance_id=row.instance_id,
-            x=row.x,
-            y=row.y,
+            instance_id=position.instance_id,
+            x=position.x,
+            y=position.y,
         )
-        for row in source_rows
-        if row.instance_id in valid_instance_ids
+        for position in sorted(positions.values(), key=lambda item: item.instance_id)
     ])
+    ordered_groups = _validate_groups(groups, target_instance_ids)
+    _replace_groups_in_session(
+        session, graph_identifier, to_version, ordered_groups
+    )
     session.flush()
     _after_layout_prepare(session, target)
-    return load_layout_in_session(
-        session, graph_identifier, to_version, valid_instance_ids
+    _after_presentation_reconcile(session, target)
+    return (
+        load_layout_in_session(
+            session, graph_identifier, to_version, target_instance_ids
+        ),
+        PresentationDelta(tuple(forward), tuple(inverse)),
     )
+
+
+def carry_layout_forward(
+    session: Session,
+    graph_identifier: str,
+    from_version: int,
+    to_version: int,
+    valid_instance_ids: frozenset[str],
+) -> Layout:
+    """Create a fresh revision-one layout stream inside the caller's transaction."""
+    layout, _ = carry_and_reconcile_presentation(
+        session,
+        graph_identifier,
+        from_version,
+        to_version,
+        base_revision=load_layout_in_session(
+            session, graph_identifier, from_version, valid_instance_ids
+        ).revision,
+        source_instance_ids=valid_instance_ids,
+        target_instance_ids=valid_instance_ids,
+    )
+    return layout
 
 
 def save_layout(
