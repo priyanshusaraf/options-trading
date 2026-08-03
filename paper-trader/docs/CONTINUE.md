@@ -50,7 +50,7 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`` — the block library as 23 IR components. Preceded by `c234e70` (Python
+`0dd7a4d` — the block library as 23 IR components. Preceded by `c234e70` (Python
 component authoring, and the second half of the flake fix).
 Preceded by `3b2b752` (warmup derived from bound parameters; the first half) and
 `49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
