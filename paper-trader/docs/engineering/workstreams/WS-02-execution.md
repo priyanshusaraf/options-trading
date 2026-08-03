@@ -133,6 +133,47 @@ WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ## 4. Completed
 
+### Execution-state ownership — the binding contract (2026-08-04)
+
+ADR 0012. **Six mechanisms already express "what strategy runs where"**, and nothing
+reconciled them: `deployments.strategy_key`, `instrument_state.strategy_key`, watchlist
+assignments, `strategy_lifecycle`, `generated_strategies`, and `graph_artifacts`. Adding a
+seventh for IR-backed strategies would have been the second deployment model this project
+has a standing rule against.
+
+**The finding that organised the slice:** `resolve_deployment_strategy` has tests and **no
+production caller** — verified by grep, recorded in the ADR — so the object the architecture
+calls "THE primary execution object" does not decide what executes. The engine resolves per
+instrument. That is the codebase's defining defect sitting under the deployment model itself.
+
+`app/core/execution_binding.py` answers, for one instrument under one deployment: which
+strategy key, at which content version, from which source, decided by which layer, why — and
+whether that source may execute at all. It is a **description with a gate attached**, not a
+new resolver: the engine's path is untouched, and an equivalence test pins that the
+contract's answer and `get_strategy`'s are the same object for every assignment the engine
+can hold.
+
+**The gate.** `AUTHORITY_BY_SOURCE` maps source → may-execute; `ir_graph` is `shadow`.
+Resolving such a binding raises `AuthorityNotGranted`. This matters because once Stage 2
+registers a graph-backed strategy, nothing else would stop `POST
+/api/instruments/NIFTY/strategy` from making it authoritative — the registry resolves it and
+the engine trades it. Every owner gate in ADR 0011 now begins at one reviewed line, and a
+mutation proves it: flipping `SOURCE_IR_GRAPH` to `AUTHORITATIVE` turns the guard red.
+
+Failure posture differs by layer on purpose: a deployment pin that will not resolve raises
+(a deployment is a promise about which strategy is trading); a per-instrument assignment
+falls back but **reports** the substitution; a graph-backed key never falls back at either
+layer.
+
+`BINDING_MECHANISMS` names all six as `table.column`, with a test that each still exists, so
+a seventh is a deliberate edit and a rename cannot leave the registry describing a schema
+nobody has.
+
+**Not done here, deliberately:** the engine does not call `resolve_binding` yet. Wiring it is
+a behaviour-preserving refactor with its own equivalence proof — the next slice — and not a
+change of authority. The smallest safe paper/shadow deployment architecture is *designed* in
+ADR 0012 §3 and unbuilt.
+
 ### L1 Stage 1 — the shadow lane (2026-08-04, engineering-closed)
 
 Owner-approved as a **shadow-only integration**. `EngineRunner.scan_signals` now evaluates

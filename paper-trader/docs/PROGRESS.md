@@ -109,12 +109,18 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**The next bounded slice is the Strategy-OS execution-state architecture** — reconciling the
-Deployment object and the deployment-candidate lifecycle with IR-backed strategies, and
-defining who owns execution state across immutable graph versions, approved research
-evidence, deployment candidates, deployments, the legacy authoritative strategy and the
-non-authoritative shadow lane. Non-authoritative, contracts and guards only; the existing
-engine stays authoritative until a later owner-approved authority transition.
+**Execution-state ownership is now defined and gated** (ADR 0012,
+`app/core/execution_binding.py`): one typed binding contract across immutable graph versions,
+research evidence, candidates, deployments, the legacy authoritative strategy and the shadow
+lane, plus one place — `AUTHORITY_BY_SOURCE` — where a source of logic is granted the right
+to execute. `ir_graph` is `shadow` there, so every ADR 0011 owner gate begins at one reviewed
+line, proven by a mutation.
+
+**The next bounded slice: wire the engine to the binding contract.** Behaviour-preserving,
+with an equivalence proof against today's per-instrument resolution — the contract currently
+describes the engine without being consulted by it, which is the same unconsumed-mechanism
+shape it was written to fix. After that, the paper/shadow deployment architecture designed in
+ADR 0012 §3, which needs owner approval before any of it becomes authoritative.
 
 **Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
 market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,
@@ -129,7 +135,7 @@ what it trades — an owner decision, not a slice's.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q  # from backend/
-3,083 passed · 6 skipped · EXIT 0
+3,098 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -144,7 +150,7 @@ $ .venv/bin/python scripts/ir_shadow_replay.py     # L1 Stage 1 measurement
 110/110 settled bars agree · 0 unexplained · eval p95 3.8 ms · loop share 1.46% · EXIT 0
 
 $ .venv/bin/python scripts/ir_shadow_mutations.py  # L1 Stage 1 guard proofs
-all 11 guards reddened on their own defect and were restored · EXIT 0
+all 12 guards reddened on their own defect and were restored · EXIT 0
 ```
 
 CI contract proof: removing `research_tests` from the backend workflow command turns

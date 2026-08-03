@@ -28,10 +28,12 @@ STORE = BACKEND / "app" / "engine" / "ir_shadow_store.py"
 METRICS = BACKEND / "app" / "engine" / "ir_shadow_metrics.py"
 CONFIG = BACKEND / "app" / "core" / "config.py"
 ADAPTER = BACKEND / "app" / "strategy" / "ir_adapter.py"
+BINDING = BACKEND / "app" / "core" / "execution_binding.py"
 
 ISOLATION = "tests/test_ir_shadow_isolation.py"
 ADMISSION = "tests/test_ir_shadow_admission.py"
 CORE = "tests/test_ir_shadow.py"
+BINDING_TESTS = "tests/test_execution_binding.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -128,6 +130,16 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "        if True:\n            return",
         f"{ADMISSION}::"
         "test_an_admitted_pairing_that_keeps_refusing_is_demoted_rather_than_left_to_repeat",
+    ),
+    (
+        # The single line that separates "observed" from "trading real money". Everything
+        # ADR 0012 calls an owner gate begins here.
+        "a graph-backed strategy is granted the authority to execute",
+        BINDING,
+        "    SOURCE_IR_GRAPH: SHADOW,",
+        "    SOURCE_IR_GRAPH: AUTHORITATIVE,",
+        f"{BINDING_TESTS}::"
+        "test_binding_a_registered_graph_to_an_instrument_is_refused_not_silently_shadowed",
     ),
     (
         "a persistent cross-frame evaluation cache is reintroduced",
