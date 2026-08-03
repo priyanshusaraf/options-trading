@@ -71,19 +71,15 @@ def test_backend_job_installs_requirements_and_names_both_test_roots():
     )
 
 
-def test_dotenv_opt_out_is_scoped_to_non_pytest_smoke_processes():
-    """Pytest must be able to simulate the production dotenv branch.
-
-    Root conftest already removes dotenv from the test process before app imports.
-    A workflow-level opt-out leaks into tests that temporarily remove pytest from
-    ``sys.modules`` and makes the production boundary impossible to exercise.
-    """
+def test_ci_disables_dotenv_for_every_process_it_starts():
+    """No runner process may resolve an ignored or injected production ``.env``."""
     workflow = _workflow()
-    jobs = workflow["jobs"]
 
-    assert "PT_DISABLE_DOTENV" not in workflow.get("env", {})
-    assert "PT_DISABLE_DOTENV" not in jobs["backend"].get("env", {})
-    assert jobs["deterministic-smoke"]["env"]["PT_DISABLE_DOTENV"] == "1"
+    assert workflow["env"]["PT_DISABLE_DOTENV"] == "1"
+    assert all(
+        "PT_DISABLE_DOTENV" not in job.get("env", {})
+        for job in workflow["jobs"].values()
+    )
 
 
 def test_deterministic_smoke_job_runs_both_secret_free_proofs():

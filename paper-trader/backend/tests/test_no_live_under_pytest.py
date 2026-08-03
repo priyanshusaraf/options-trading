@@ -45,11 +45,12 @@ def test_production_credentials_do_not_resolve_under_pytest():
     assert s.telegram_bot_token == ""
 
 
-def test_a_real_process_still_reads_dotenv():
+def test_a_real_process_still_reads_dotenv(monkeypatch):
     """The isolation must not follow the code into production, where .env is the
     entire configuration mechanism."""
     from app.core.config import _env_file_for_this_process
 
+    monkeypatch.delenv("PT_DISABLE_DOTENV", raising=False)
     assert _env_file_for_this_process() is None          # here: pytest is imported
     with mock.patch.dict(sys.modules):
         del sys.modules["pytest"]

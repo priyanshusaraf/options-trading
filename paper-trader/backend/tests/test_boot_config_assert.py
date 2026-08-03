@@ -50,8 +50,9 @@ def test_settings_helper_really_populates_the_aliased_credentials():
 
 # ---------------------------------------------------------------- env_file ----
 
-def test_detached_env_file_outside_a_test_run_refuses_to_boot():
+def test_detached_env_file_outside_a_test_run_refuses_to_boot(monkeypatch):
     """The exact production scenario: pytest got imported, `.env` detached."""
+    monkeypatch.delenv("PT_DISABLE_DOTENV", raising=False)
     s = _settings(provider="mock")
     with pytest.raises(BootConfigError) as e:
         assert_boot_config(s, env_file=None, under_test=False)
