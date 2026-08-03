@@ -376,28 +376,6 @@ def carry_and_reconcile_presentation(
     )
 
 
-def carry_layout_forward(
-    session: Session,
-    graph_identifier: str,
-    from_version: int,
-    to_version: int,
-    valid_instance_ids: frozenset[str],
-) -> Layout:
-    """Create a fresh revision-one layout stream inside the caller's transaction."""
-    layout, _ = carry_and_reconcile_presentation(
-        session,
-        graph_identifier,
-        from_version,
-        to_version,
-        base_revision=load_layout_in_session(
-            session, graph_identifier, from_version, valid_instance_ids
-        ).revision,
-        source_instance_ids=valid_instance_ids,
-        target_instance_ids=valid_instance_ids,
-    )
-    return layout
-
-
 def save_layout(
     graph_identifier: str,
     graph_version: int,
