@@ -23,7 +23,7 @@ market data.
 > separate client (`LiveExecutionKite`), which `SafePaperKite` does not gate.
 >
 > Paper mode still exists and is the fallback whenever either live flag is absent or the
-> provider is `mock`. See `docs/architecture.md` § Safety model.
+> provider is `mock`. See `docs/engineering/reference/engine-internals.md` § Safety model.
 
 ---
 

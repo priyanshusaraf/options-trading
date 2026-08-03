@@ -1,7 +1,7 @@
 # Architecture
 
 *Relocated from `CLAUDE.md` on 2026-07-28 so it loads on demand rather than in every session.
-Facts contradicted by [`audit/ground-truth-2026-07-28.md`](audit/ground-truth-2026-07-28.md)
+Facts contradicted by [`audit/ground-truth-2026-07-28.md`](../../audit/ground-truth-2026-07-28.md)
 were corrected during the move; those corrections are marked **(corrected 2026-07-28)**.*
 
 ## What this is
@@ -12,7 +12,7 @@ signal, autonomously picks an instrument and executes an order — no human in t
 
 **It runs on a DigitalOcean droplet, not localhost** (corrected 2026-07-28 — the old
 "localhost / single local process" framing was false; see
-[`operations.md`](operations.md)). It is **executing real money**: `backend/.env` ships
+[`operations.md`](../../operations.md)). It is **executing real money**: `backend/.env` ships
 `PT_EXECUTION=live` + `PT_LIVE_ACK=I_UNDERSTAND_REAL_MONEY`, and the production database
 holds 34 real trades and 50 real broker order IDs (audit §3). The synthetic ₹50,000
 starting capital is still the ledger seed and is persisted across restarts — note this
@@ -170,7 +170,7 @@ omitted) `watchlists`, `watchlist_membership`, `strategy_lifecycle`, `generated_
 **The `order_journal` table is built and in production use** (58 rows, 50 with real broker order
 IDs) — docs describing it as a deferred design are stale.
 
-Database growth is an open problem — see [`ROADMAP.md`](ROADMAP.md), Workstream F.
+Database growth is an open problem — see [`ROADMAP.md`](../../ROADMAP.md), Workstream F.
 
 ## API + frontend
 

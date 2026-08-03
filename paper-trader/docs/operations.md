@@ -1,7 +1,7 @@
 # Operations
 
 *Relocated from `CLAUDE.md` on 2026-07-28. Deploy, VPS access, go-live procedure, and open
-operational items. Architecture lives in [`architecture.md`](architecture.md); the agenda lives
+operational items. Architecture lives in [`engineering/reference/engine-internals.md`](engineering/reference/engine-internals.md); the agenda lives
 in [`ROADMAP.md`](ROADMAP.md).*
 
 ## Where the bot actually runs
@@ -169,7 +169,7 @@ Open `https://paper-trader.taile25969.ts.net` → **Connect Kite** (the access t
 
 *Historical note: this checklist was written before the platform went live. It first ran on
 2026-07-13; the live path has since placed 50 real orders. Read
-[`architecture.md`](architecture.md) § Safety model first. Keep this as the procedure for
+[`engineering/reference/engine-internals.md`](engineering/reference/engine-internals.md) § Safety model first. Keep this as the procedure for
 re-enabling live execution after it has been turned off.*
 
 1. **Whitelist the static IP** in the Kite developer console (order routes reject otherwise).

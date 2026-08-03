@@ -200,7 +200,7 @@ engine running, and a Vite build there can take live positions down with it.
 | `frontend/src/` | React + TS + Tailwind; `state/LiveContext.tsx` holds `/ws`; all REST via `lib/api.ts` |
 | `research/` | isolated research plane, own DB, fail-closed import guards. Dormant. |
 
-Deeper detail: `docs/architecture.md`. Operations, deploy, and going-live: `docs/operations.md`.
+Deeper detail: `docs/engineering/reference/engine-internals.md`. Operations, deploy, and going-live: `docs/operations.md`.
 Incident post-mortems: `docs/incidents/`.
 
 ## Sizing rules (get these right — they moved recently)
@@ -263,16 +263,28 @@ wrong; read the live value.
 
 ## The agenda
 
-**`docs/PROGRESS.md` is the one-page state — read it first.** What is built, what is running,
-what is blocked on the owner, what is next, and the current verification output.
+**Work is organised into eight workstreams.** Read
+[`docs/engineering/WORKSTREAMS.md`](docs/engineering/WORKSTREAMS.md) to find yours.
 
-**`docs/ROADMAP.md` is the canonical, always-current agenda.** Read it at the start of every
-session and work the topmost unchecked item of the highest active workstream. Tick boxes only
-with verified evidence (tests green + the phase's stated acceptance), and update the tracker in
-the same commit as the work.
+An implementation session should load **three things only**: `docs/ARCHITECTURE.md`, the
+workstream document you are working in, and the documents of anything it lists under *Depends
+on*. Not the roadmap, not the other seven workstreams. If your workstream document is missing
+something you need, that is a defect in the document — fix it there rather than reading around
+it.
 
-Do not restate roadmap contents here — duplicating it into CLAUDE.md is how this file drifted
-out of sync with reality before.
+| Document | When to read it |
+|---|---|
+| `docs/PROGRESS.md` | the one-page state: built, running, blocked, next |
+| `docs/ARCHITECTURE.md` | always — the invariants that cross every workstream |
+| `docs/engineering/WORKSTREAMS.md` | to find the right workstream |
+| `docs/engineering/workstreams/WS-NN-*.md` | the whole agenda for one subsystem |
+| `docs/ROADMAP.md` | only for cross-workstream sequencing and owner blockers |
+| `docs/engineering/EXECUTIVE.md` | when changing an interface or sequencing across streams |
+| `docs/rfcs/0001-component-ir.md` | the constitution |
+
+Tick a box only with verified evidence, in the same commit as the work. Do not restate a
+workstream's contents here — duplicating them into CLAUDE.md is how this file drifted out of
+sync with reality before.
 
 ## Conventions & gotchas
 

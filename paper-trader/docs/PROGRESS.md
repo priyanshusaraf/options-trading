@@ -1,7 +1,7 @@
 # PROGRESS
 
 **One page. What is built, what is running, what is blocked, what is next.**
-Read this first. `ROADMAP.md` is the detailed agenda; `CONTINUE.md` is the session handoff.
+Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
 **Updated 2026-08-03** · branch `feat/exec-completeness` · 77 commits ahead of `main`, not pushed.
 
@@ -22,6 +22,11 @@ own tests and by one script.
 ---
 
 ## 2. Where the Strategy OS stands
+
+Work is organised into **eight workstreams** — see
+[`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md). Each is independently maintainable;
+the architecture is singular.
+
 
 RFC 0001 (the Component IR) is **Accepted**, and **all 29 normative clauses are enforced by
 tests** — 14 Format, 15 Contract. Each clause's own test was proven able to fail by suppressing
@@ -115,10 +120,18 @@ Two things about this suite, both learned the hard way:
 
 ## 6. How the docs relate
 
+Implementation work loads **three documents**: `ARCHITECTURE.md`, one workstream document, and
+whatever that workstream declares under *Depends on*. Nothing else.
+
 | File | Purpose |
 |---|---|
 | `PROGRESS.md` | this page — the at-a-glance state |
-| `ROADMAP.md` | the agenda, item by item, with acceptance evidence |
-| `CONTINUE.md` | session handoff: last verified commit, last acceptance run, next action |
+| `ARCHITECTURE.md` | the invariants that cross every workstream |
+| `engineering/WORKSTREAMS.md` | the eight streams and which owns what |
+| `engineering/workstreams/WS-NN-*.md` | the whole agenda for one subsystem |
+| `engineering/EXECUTIVE.md` | coordination: interfaces, sequencing, drift |
+| `engineering/DEPENDENCIES.md` | the dependency graph |
+| `ROADMAP.md` | cross-workstream order and owner blockers only |
+| `CONTINUE.md` | session handoff: last verified commit, acceptance run, next action |
 | `rfcs/0001-component-ir.md` | the constitution |
 | `../CLAUDE.md` | how to work in this repo; live-money invariants |
