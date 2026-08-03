@@ -3,7 +3,8 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · 92 commits ahead of `main`.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · 98 commits ahead of `main` after the
+current layout slice is committed.
 
 ---
 
@@ -36,7 +37,7 @@ that clause's implementation.
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
 | **Research** | Gen 2 functionally complete; remaining work is operational runs and explanations |
-| **Editor** | Read-only route and React viewer done; **F13 layout side table next** |
+| **Editor** | Read-only viewer and F13 sparse layout API done locally; **drag/save UI next** |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
 
@@ -54,6 +55,8 @@ that clause's implementation.
 | `app/ir/authoring.py` | Write a component in Python |
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
 | `app/api/ir_routes.py` | One read-only, fixed-catalogue route for the resolved graph view |
+| `app/api/ir_layout_routes.py`, `app/editor/layouts.py` | Closed, revision-checked sparse layout API and transactional store |
+| `app/db/models.py`, migration `0005` | Layout head plus sparse authored-node coordinate rows |
 | `frontend/src/views/GraphView.tsx` | Read-only semantic HTML/SVG graph viewer in the existing tab shell |
 | `.github/workflows/strategy-os-ci.yml` | Fail-closed push/PR checks for backend, research, smoke, frontend, type and build contracts |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
@@ -77,7 +80,8 @@ all of them, and every shared bar must agree. This is a new fact about productio
 
 ## 3. Blocked on the owner
 
-Both have been waiting several sessions. Development continues; deployment cannot.
+These owner-gated production actions have been waiting several sessions. Development continues;
+deployment cannot.
 
 1. **Deploy the architecture migration** (phases A–H). Committed and verified, not on the box.
    Touches sizing, exits and order routing — the live-money rule stops it regardless of green
@@ -91,10 +95,10 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**WS-04 Editor: add the F13 layout side table.** Persist only moved-node positions beside the
-graph, keyed by graph identifier/version and instance ID. Feed the sparse layout to
-`graph_view()`, define orphan cleanup, and prove store/reload does not change the artefact's
-content address. The viewer remains read-only until that separation is proven.
+**WS-04 Editor: implement S1.2 conflict-safe layout interaction.** Load the layout document into
+the React viewer, let pointer and keyboard users move authored nodes, and save the complete sparse
+set against its revision. Preserve local work on 409 or transport failure and prove reload uses
+the stored coordinates without changing any graph identity field.
 
 ---
 
@@ -102,7 +106,7 @@ content address. The viewer remains read-only until that separation is proven.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests --tb=short  # from backend/
-2,700 passed · 6 skipped · EXIT 0
+2,719 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -121,14 +125,23 @@ action-origin guard red. Restoring both returns all six contract tests green. Th
 lock resolves with six `npm audit` findings (three moderate, two high, one critical); that
 dependency-hardening slice remains open.
 
+The first published Actions run found two environment-boundary tests that assumed
+`PT_DISABLE_DOTENV` was absent. The tests now delete that variable explicitly while the workflow
+retains its fail-closed global opt-out; `4f8fb9a` contains the correction.
+The next Linux run exposed a distinct shutdown race: cancelling a lane abandoned its active
+worker thread while it still held SQLite state. `b243b59` makes each lane drain blocking work and
+waits for all three lanes before closing the broker session; the exact regression and the
+CI-shaped complete suite pass.
+
 Browser acceptance: desktop and 390×844 rendered 18 nodes, 35 edges and 35 connection rows with
 no console errors or page-level horizontal overflow. The wide canvas scrolls inside its own
 container on the phone.
 
 Two things about this suite, both learned the hard way:
 
-- **It was intermittent** (two runs in five) until 2026-08-03. Two places reset the schema, and a
-  connection holding a lock blocks `DROP TABLE` past the timeout. Both are fixed. If a run goes
+- **It was intermittent** (two runs in five) until 2026-08-03. Schema resets and an abandoned
+  shutdown worker could retain a connection that blocks `DROP TABLE` past the timeout. The known
+  paths are fixed. If a run goes
   red, check it is not that shape first.
 - **A green test can be vacuous.** Five distinct shapes have been caught here by mutating the
   implementation and checking the clause's *own* test goes red. Counting green runs is not

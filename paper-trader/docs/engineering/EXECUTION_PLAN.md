@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S1.1 sparse layout persistence and API
+- **Current slice:** S1.2 conflict-safe graph layout interaction in the React viewer
 - **Next product checkpoint:** a user can move a graph node, save and reload the layout, and
-  prove that executable identity did not change.
+  see conflicts or failures without losing local work.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -70,9 +70,9 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S0.1 | Verify authoritative checkout, Git/worktree/remote state and WS-04 commits | none | done |
 | S0.2 | Independently verify and push the read-only graph API/viewer stack | S0.1 | done — remote at `071a1a1` |
 | S0.3 | Reconcile coordination documents and establish this master plan | S0.2 | done — `4c0eda2` |
-| S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | done — workflow and contract test in the current CI slice |
-| S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | active |
-| S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | later |
+| S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | done — published; dotenv boundary corrected at `4f8fb9a`, shutdown worker race at `b243b59` |
+| S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | done — verified, documented and published |
+| S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | active |
 | S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | later |
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | later |
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | later |
@@ -142,8 +142,8 @@ incorrect; local acceptance commands remain authoritative until the corrected wo
 **Problem.** The graph viewer derives every position on each read. It cannot preserve a user's
 layout, and the persistence boundary required by F13 is unproven.
 
-**User-visible outcome.** A moved node position and justified viewport state survive reload while
-the strategy's executable identity remains byte-for-byte unchanged.
+**User-visible outcome.** A moved node position survives reload while the strategy's executable
+identity remains byte-for-byte unchanged. Viewport state stays outside this slice.
 
 **Architectural boundary.** WS-07 owns the SQLAlchemy model and Alembic revision. WS-04 owns a
 small layout repository/service and HTTP contracts. WS-01's `Layout` and `graph_view()` remain
@@ -152,8 +152,10 @@ remains read-only; this slice stores presentation state only.
 
 **Data contract.**
 
-- Key each record by `(graph_identifier, graph_version, instance_id)` with finite numeric `x`
-  and `y`, an update timestamp and a monotonic revision used for optimistic concurrency.
+- Keep a layout head keyed by `(graph_identifier, graph_version)` with its update timestamp and
+  monotonic revision. Store finite numeric `x` and `y` in sparse child rows keyed by
+  `(graph_identifier, graph_version, instance_id)`. The parent is necessary because an empty
+  layout still needs a revision for optimistic concurrency.
 - Store only moved authored instance IDs. A missing row means derived placement.
 - `GET` returns the current sparse layout plus revision. `PUT` replaces the sparse layout under
   an expected revision; stale revisions return 409 and never partially write.
@@ -164,9 +166,10 @@ remains read-only; this slice stores presentation state only.
   keeps an old layout harmless without coupling layout persistence to graph mutation that does
   not exist yet.
 
-**Likely files.** `backend/app/db/models.py`, a new Alembic revision,
-`backend/app/api/ir_layout_routes.py` or a focused layout module beside `ir_routes.py`, route
-registration, `tests/test_ir_layout_routes.py`, schema-migration tests and WS-04/07 docs.
+**Implemented files.** `backend/app/db/models.py`, Alembic revision `0005`,
+`backend/app/editor/layouts.py`, `backend/app/api/ir_layout_routes.py`, the fixed
+`backend/app/ir/catalogue.py`, route registration, `tests/test_ir_layout_routes.py`,
+schema-migration tests and WS-04/07 docs.
 
 **Test-first acceptance.**
 
@@ -183,8 +186,16 @@ registration, `tests/test_ir_layout_routes.py`, schema-migration tests and WS-04
   closure. Regression: complete backend and research suites plus both deterministic smoke scripts.
 
 **Rollback.** API and code revert cleanly. The additive table may remain unused; if downgrade is
-required before release, the revision drops only the layout table. No existing money record is
+required before release, revision `0005` drops the position table and then the layout-head table.
+The downgrade/upgrade test proves the trades table remains present. No existing money record is
 rewritten.
+
+**Implementation evidence, 2026-08-03.** The closed GET/PUT contract, sparse replacement,
+revision conflict, validation, orphan filtering/cleanup, `/api/v1` mirror and graph/component/
+cache/experiment identity proof pass. A mutation that inserted layout into the graph hash input
+failed the identity proof on the expected mismatch. Model/migration equivalence and the
+`0005 → 0004 → 0005` rollback path pass. The complete backend and research run is 2,719 passed
+and 6 skipped; both deterministic smoke scripts pass.
 
 ### S1.2 — frontend layout load, drag and save
 

@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import backtest_routes, ir_routes, portfolio_routes, routes
+from app.api import backtest_routes, ir_layout_routes, ir_routes, portfolio_routes, routes
 from app.api.principal import resolve_http_principal
 from app.api.versioning import VERSION_PREFIX, mount_versioned, unversioned_path
 from app.core.instruments import get_instrument
@@ -217,6 +217,7 @@ app.include_router(backtest_routes.router)
 app.include_router(portfolio_routes.router)
 app.include_router(ledger_routes.router)
 app.include_router(ir_routes.router)
+app.include_router(ir_layout_routes.router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -225,7 +226,8 @@ app.include_router(ir_routes.router)
 # hitting the exact routes they hit before. Must come BEFORE the SPA catch-all
 # registered at the bottom of this file.
 mount_versioned(app, routes.router, backtest_routes.router,
-                portfolio_routes.router, ledger_routes.router, ir_routes.router)
+                portfolio_routes.router, ledger_routes.router, ir_routes.router,
+                ir_layout_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:

@@ -1,17 +1,19 @@
 # WS-04 — Editor (visual computational graph)
 
 **Status:** active
-**Owner surface:** `backend/app/api/ir_routes.py`, `backend/tests/test_ir_routes.py`,
-`frontend/src/views/GraphView.tsx` and its transport/tests. Next: the F13 layout side table. The
+**Owner surface:** `backend/app/api/ir_routes.py`, `backend/app/api/ir_layout_routes.py`,
+`backend/app/editor/`, their backend tests, `frontend/src/views/GraphView.tsx` and its
+transport/tests. Next: conflict-safe layout interaction in the viewer. The
 libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
 WS-01**.
-**Last verified:** 2026-08-03 · commit `071a1a1`
+**Last verified:** 2026-08-03 · current S1.1 slice
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
 > its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. The resolved view
 > model now has a read-only HTTP route and a React canvas in the existing application shell.
-> The viewer is clickable and inspectable; editing and presentation-state persistence remain.
+> Sparse presentation state has a revision-checked persistence API; the browser does not yet
+> load or change it.
 
 ---
 
@@ -78,6 +80,8 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 | Export | Guarantee |
 |---|---|
 | `GET /api/ir/graphs/{identifier}` and `/api/v1/ir/graphs/{identifier}` | Resolves only a fixed repository-owned graph catalogue and returns the complete `GraphView` contract under a closed response schema. It is read-only, validates with the real component library, and imports no engine, broker, provider, database or order surface. Unknown identifiers fail with 404 before `resolve()` is called. |
+| `GET`/`PUT /api/ir/graphs/{identifier}/versions/{version}/layout` and `/api/v1` mirrors | Reads or atomically replaces sparse moved-node coordinates. The document carries a monotonic revision; stale writes return 409. Unknown graphs/versions, derived or unknown IDs, duplicates, non-finite coordinates and extra fields are refused. |
+| `app/editor/layouts.py` | Loads valid sparse positions, filters orphaned IDs on read and replaces all position rows in the same transaction that advances the revision. |
 | `GraphView` in the `Strategy Graph` tab | Fetches the fixed graph through the typed REST client and renders a read-only native HTML/SVG canvas. Node cards expose authored paths, definition, every bound parameter, warmup, exact purity policy and full cache identity. Wires are decorative; an accessible table exposes every source and target socket. |
 
 **Consumes**
@@ -96,8 +100,7 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 **Depends on:** WS-01 (the whole consumed surface above), WS-08 (the app shell it will live in),
 WS-07 (the FastAPI app that would host a route).
 
-**Blocked by:** nothing external. The read-only viewer is committed and the F13 layout side
-table is the next accepted slice; live-engine adoption remains separately owner-gated — see §8.
+**Blocked by:** nothing external. Live-engine adoption remains separately owner-gated — see §8.
 
 **Currently blocking:** nothing. No workstream is waiting on the editor.
 
@@ -140,6 +143,17 @@ Verified 2026-08-03 through `f61dfe4`: `app.api.ir_routes` loads no `app.engine`
 `app.broker`, `app.db` or `app.options` module in a fresh process. The IR is reachable through a
 read-only application route, but the engine still does not consume it.
 
+**Sparse layout persistence and closed API — current S1.1 slice, 2026-08-03.** Alembic `0005`
+adds a layout head keyed by graph identifier/version and child coordinates keyed by authored
+instance ID. An empty layout retains a revision. GET returns revision zero without creating a
+row; PUT replaces the sparse set under `base_revision`, and a stale write returns 409 without a
+partial change. Reads filter orphaned IDs and the next successful write deletes them. The fixed
+catalogue moved to `app/ir/catalogue.py` so graph and layout routes resolve the same repository
+object without coupling the read-only graph route to the database. The identity proof saves,
+reloads and renders a moved position while graph content address, component versions, node cache
+identities and experiment binding remain unchanged. Revision downgrade removes only the two
+layout tables and preserves the money record.
+
 ## 5. Active roadmap
 
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
@@ -155,14 +169,19 @@ read-only application route, but the engine still does not consume it.
       matching `scripts/render_ir_graph.py` output for the same graph. Use `lib/api.ts` and the
       existing shadcn primitives; add no graph library in this read-only slice. Committed as
       `f61dfe4`; browser acceptance matched 18 nodes, 35 edges, six layers and 302 bars.
-- [ ] **The layout side table (F13).** Persist `instance_id → (x, y)` beside the graph, keyed by
+- [x] **The layout side table (F13).** Persist `instance_id → (x, y)` beside the graph, keyed by
       `(graph identifier, version)`, and feed it to `graph_view(graph, layout=...)`. The
       constraint is load-bearing and already has a test at the library level: dragging a node
       MUST NOT change the graph's content address. Add the equivalent assertion at the route
       level — save a position, re-read the artefact, compare `content_address`. Sparse by
       construction: never write a row for a node the author has not moved, so an unmoved node
       keeps its derived position and the derived layout stays the default. Decide and write down
-      what happens to an orphaned entry when its node is removed.
+      what happens to an orphaned entry when its node is removed. Implemented in the current
+      S1.1 slice with optimistic concurrency, orphan filtering/cleanup and migration rollback.
+- [ ] **Conflict-safe layout interaction.** Load the sparse layout into the existing viewer,
+      move authored nodes by pointer and keyboard, and save the complete sparse set against its
+      revision. Show unsaved, saving, saved, conflict and error states. A 409 or network failure
+      must preserve the user's local positions and offer an explicit reload/retry path.
 - [ ] **Mutation in the UI.** Wire the eight `edit.py` functions to canvas gestures: add,
       delete, connect, disconnect, set/clear override, group, rename. Every call returns a new
       artefact — the client must replace its copy, never patch in place (C2). Render
@@ -182,6 +201,7 @@ Nothing in this workstream is done without all of:
 ```bash
 # backend, from backend/
 .venv/bin/python -m pytest -q tests/test_ir_view.py tests/test_ir_edit.py
+.venv/bin/python -m pytest -q tests/test_ir_layout_routes.py tests/test_schema_migrations.py
 .venv/bin/python -m pytest -q tests research_tests      # both suites, no regressions
 .venv/bin/python scripts/render_ir_graph.py /tmp/ws04.svg
 

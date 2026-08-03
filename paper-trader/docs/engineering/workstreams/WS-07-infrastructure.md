@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner surface:** `backend/app/db/` (`models.py`, `session.py`, `migrate.py`), `backend/migrations/`, `backend/app/core/config.py`, `backend/app/core/runtime_config.py`, `backend/app/engine/retention.py`, `backend/app/ws/manager.py`, `backend/app/market_data/candles.py`, `backend/app/providers/replay.py` (carved out of WS-02's `app/providers/`), `backend/conftest.py`
-**Last verified:** 2026-08-03 · commit `cdbe686`
+**Last verified:** 2026-08-03 · current S1.1 slice
 
 > Everything the trading engine stands on that is not the trading engine: the SQLite database
 > and its schema history, how sessions and pooled connections are handed out and given back,
@@ -71,6 +71,7 @@ structurally unable to touch production.
 | `app/db/session.py:engine` | `pool_pre_ping=True`, `pool_timeout=10`, `check_same_thread=False`; on connect: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=10000`. |
 | `app/db/session.py:init_db(reset=False)` | `reset=True` **raises** unless `provider == "mock"` — the last line of defence against a stray reset wiping the live book. `reset=True` disposes the pool before `drop_all`, and drops `alembic_version` too so a reset returns to the genuinely empty state. |
 | `app/db/migrate.py:init_schema(...)` | Converges three DB states (empty / pre-Alembic / managed) onto head, non-destructively. Baseline is revision `0001` (2026-08-02). |
+| `IrGraphLayout` / `IrGraphLayoutPosition` | Mutable editor presentation state beside immutable graph identity. A parent revision survives an empty sparse set; child rows contain authored-node coordinates only. Alembic revision `0005` owns both tables. |
 | `app/core/config.py:Settings` | Static config. `env_prefix="PT_"`; `KITE_*` and `TELEGRAM_*` deliberately unprefixed via `validation_alias`. `env_file` is `None` under pytest. |
 | `app/core/runtime_config.py:effective()` | The merged, type-coerced parameter dict the engine reads. Only `OVERRIDABLE` keys are accepted; every numeric key is range-checked against `BOUNDS`. |
 | `app/engine/retention.py:prune(now, policy)` | Idempotent; returns `{table: rows_removed}`. Touches only `option_data`, `signal_events`, `equity_snapshots`. A window of `0` or negative means **keep forever**, never "delete everything". |
@@ -103,13 +104,17 @@ validation, replay and the migration framework are all landed.
 - **Versioned migrations — `0001` baseline, 2026-08-02.** Alembic now owns schema change.
   Revisions in `backend/migrations/versions/`: `0001_baseline_schema`,
   `0002_deployment_entity`, `0003_instrument_scoped_params`,
-  `0004_strategy_version_provenance`. The old additive `ADD COLUMN` dict in `session.py`
+  `0004_strategy_version_provenance`, `0005_ir_graph_layout`. The old additive `ADD COLUMN` dict in `session.py`
   (`_migrate_schema`) is **frozen** — `tests/test_migrate_schema_frozen.py` fails the build if
   a column is added to it. It still runs, for exactly one job: carrying a pre-Alembic database
   (the owner's live `paper_trader.db`) up to the baseline, after which `init_schema` stamps
   `0001` and upgrades. The invariant that makes the empty-DB path (`create_all` + stamp head)
   and the migrated-up path safe to coexist is that they must produce *identical* schemas — not
   assumed, asserted column by column by `tests/test_schema_migrations.py`.
+- **Sparse IR layout schema — revision `0005`, 2026-08-03.** Adds only
+  `ir_graph_layouts` and `ir_graph_layout_positions`; no execution or money row changes. Schema
+  equivalence passes for fresh and baseline-migrated databases. A direct downgrade to `0004`
+  removes both layout tables while preserving `trades`, and upgrading again restores head.
 - **DB session hygiene — DONE + DEPLOYED 2026-08-01 (`4e9f125`), TDD.** Not minor:
   `_upsert_state` handed an **open** session to four callers that each ended with
   `s.commit(); s.close()`, so any raise in between skipped the close and leaked the pooled
@@ -253,7 +258,7 @@ Plus, for a change here:
    execution one. `make_broker()` additionally raises if it ever resolves a real `LiveBroker`
    while `PYTEST_CURRENT_TEST` is set. Do not add env forcing to a subdirectory conftest, and
    keep the denylist as backup rather than deleting it.
-4. **The suite was intermittent — 2 runs in 5 — until 2026-08-03. Two causes, both fixed; do
+4. **The suite was intermittent — 2 runs in 5 — until 2026-08-03. Three causes, all fixed; do
    not reintroduce either shape.** `test_init_db_guard.py` called `init_db(reset=True)`, which
    `DROP`s every table, against the **shared** per-run database. `DROP TABLE` needs an
    exclusive lock, and in WAL mode a single session left open anywhere in a ~2,500-test run
@@ -265,9 +270,12 @@ Plus, for a change here:
    `c234e70` — `init_db(reset=True)` now calls `engine.dispose()` before `drop_all`, releasing
    every *idle* pooled connection, which fixes the class at the source rather than one leak at
    a time. **A dispose cannot reclaim a connection that is still checked out by a live
-   session** — so close your brokers in fixtures, or the lock is still held. (Related known
-   hazard: `with TestClient(app)` starts the real engine lanes, so calling `scan_signals()`
-   directly races them on the shared session.)
+   session** — so close your brokers in fixtures, or the lock is still held. **(c)** `b243b59`
+   — lane cancellation now drains the active `asyncio.to_thread` worker and lifespan shutdown
+   awaits all three lanes before closing the broker. Without that wait, a fast TestClient restart
+   could race the abandoned worker against `drop_all`. (Related known hazard: `with
+   TestClient(app)` starts the real engine lanes, so calling `scan_signals()` directly races them
+   on the shared session.)
 5. **Never dump a full test run into context** — write to a file and read the failures. And a
    backgrounded `cmd | tail` reports the *pipe's* exit code; use `backend/.venv/bin/python`,
    not bare `python`.

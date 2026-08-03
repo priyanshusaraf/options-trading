@@ -10,10 +10,13 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A repository and programme stabilisation is complete.** The WS-04 read-only graph stack
-is verified and pushed; coordination documents and the master execution plan agree; fail-closed
-CI now covers backend, research, migration/architecture guards, deterministic smoke, frontend
-tests, TypeScript and the production build. S1.1 F13 sparse layout persistence is active next.
+**Stage A is published and S1.1 is complete locally.** Fail-closed CI is on the branch. Its first
+run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
+now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
+Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
+drains those workers before the broker session closes. S1.1 adds the F13 sparse layout store,
+closed GET/PUT API, optimistic concurrency, orphan handling and migration rollback. S1.2 browser
+interaction is active next.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -23,9 +26,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed slice before CI: `4c0eda2`
-- Latest verified remote before the CI commit: `4c0eda2`
-- Ahead/behind after that push: `0/0`
+- Last completed/pushed slice: CI/runtime hardening through `b243b59`
+- Latest verified remote before the S1.1 commit: `b243b59`
+- Expected ahead/behind after publishing S1.1: `0/0`
 - Working tree expected after publishing this handoff: clean
 
 The commit containing this handoff is the current HEAD after publication; resolve its SHA with
@@ -37,11 +40,11 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-CI-equivalent acceptance run on 2026-08-03:
+Latest acceptance run on 2026-08-03:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests --tb=short
-2,700 passed · 6 skipped · 1 deprecation warning · EXIT 0
+2,719 passed · 6 skipped · 1 deprecation warning · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -58,6 +61,14 @@ absent. Guard proof then removed `research_tests` from the backend command; the 
 test failed on that missing root. A second mutation replaced official checkout with a SHA-pinned
 unapproved action; the action-origin guard failed. Both returned green after restoration.
 
+The first Actions run on `c48dd27` failed two tests because CI's deliberate global
+`PT_DISABLE_DOTENV=1` reached test cases simulating a real non-pytest process. The correction at
+`4f8fb9a` keeps the global guard and makes both tests delete the variable explicitly. The 36
+CI/config safety tests pass with `PT_DISABLE_DOTENV=1` in the caller environment. Run
+`30797183456` then exposed the shutdown race: a cancelled wrapper returned while its SQLite
+worker kept running, so later app startup could not drop `order_journal`. The focused cancellation
+regression and the complete CI-shaped suite pass after `b243b59`.
+
 Known dependency risks: backend requirements use version floors rather than a lockfile; `npm ci`
 reports six audit findings (three moderate, two high, one critical). The frontend tests/build are
 green, but those findings remain open and must not be described as solved by CI.
@@ -71,6 +82,14 @@ New route guards proven able to fail rather than merely observed passing: unvers
 registration, `/api/v1` mirroring, complete serialization including cache identity, read-only
 graph identity, and library-dependent F7 validation. The fixed catalogue also rejects unknown
 identifiers before `resolve()` is reached.
+
+S1.1 was test-first: the layout routes first returned 404 and migration head remained `0004`.
+The completed checks cover empty read, sparse replace/reload, stale 409 with no partial write,
+unknown/derived/duplicate/non-finite/extra-field rejection, orphan filtering and cleanup,
+`/api/v1`, schema equivalence and `0005 → 0004 → 0005`. Injecting layout into the graph hash
+input made the identity proof fail on the expected mismatch. After restoration, graph content
+address, component versions, node cache identities and experiment binding stay unchanged while
+the rendered node uses its stored coordinate.
 
 Frontend guards were also observed red before implementation: missing graph transport, missing
 canvas module, missing tab wiring, non-semantic node cards, collapsed impurity policy, absent
@@ -88,14 +107,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-04 Editor — implement S1.1, the F13 layout side table and closed API.**
+**WS-04 Editor — implement S1.2, conflict-safe layout interaction.**
 
-Choose the presentation-state store and add a sparse record keyed by graph identifier/version
-and `instance_id`; store only positions the user has moved. Define what happens to orphaned rows
-after a node is removed. Feed the stored `Layout` to `graph_view()` without adding graph fields.
-The acceptance proof must save a position, reload both layout and artefact, and show that the
-graph's `content_address` is unchanged. Do not add drag gestures until this route/store boundary
-and proof exist.
+Add the typed layout transport to `frontend/src/lib/api.ts`; load it beside the graph; apply sparse
+coordinates without changing the graph payload; support pointer and keyboard movement; and save
+against `base_revision`. Render unsaved, saving, saved, 409 conflict and transport-error states.
+A conflict or failure must retain local coordinates until the user explicitly reloads or retries.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

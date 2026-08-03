@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -767,6 +768,40 @@ class RuntimeConfig(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(64))   # stringified; coerced to the field's type
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+
+
+class IrGraphLayout(Base):
+    """Revision head for sparse editor coordinates on one graph version.
+
+    This is presentation state. It points at an immutable graph identity but is
+    never an input to graph or component hashing. A parent row exists even when
+    its position set is empty so optimistic concurrency still has a revision.
+    """
+    __tablename__ = "ir_graph_layouts"
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+class IrGraphLayoutPosition(Base):
+    """One authored node whose derived placement the editor has overridden."""
+    __tablename__ = "ir_graph_layout_positions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["graph_identifier", "graph_version"],
+            ["ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class OptionData(Base):

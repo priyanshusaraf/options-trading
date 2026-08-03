@@ -7,13 +7,13 @@ resolves on a caller's behalf from arbitrary input, or touches execution.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from app.ir.resolve import Library, ResolutionError, resolve
-from app.ir.strategies import expanding_z
+from app.ir.catalogue import catalogue
+from app.ir.resolve import ResolutionError, resolve
 from app.ir.validate import validate
 from app.ir.view import graph_view
 
@@ -61,17 +61,8 @@ class IrGraphResponse(BaseModel):
     edges: list[IrEdgeResponse]
 
 
-def _catalogue() -> dict[str, tuple[Mapping[str, Any], Library]]:
-    """Artefacts this build can render.
-
-    A fixed table, not a registry lookup: a route that resolves whatever it is
-    handed is an execution surface, and this one is a viewer.
-    """
-    return {expanding_z.GRAPH["identifier"]: (expanding_z.GRAPH, expanding_z.LIBRARY)}
-
-
 def _resolved(identifier: str):
-    entry = _catalogue().get(identifier)
+    entry = catalogue().get(identifier)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"no IR graph named {identifier!r}")
     graph, library = entry

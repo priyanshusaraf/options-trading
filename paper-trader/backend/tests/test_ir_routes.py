@@ -52,7 +52,7 @@ def test_repository_graph_resolution_checks_library_dependent_wire_types(client,
     ill_typed["edges"][9]["source"] = {"instance": "n_ema", "socket": "out"}
     monkeypatch.setattr(
         ir_routes,
-        "_catalogue",
+        "catalogue",
         lambda: {ill_typed["identifier"]: (ill_typed, LIBRARY)},
     )
 

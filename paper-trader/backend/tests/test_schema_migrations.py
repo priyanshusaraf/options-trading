@@ -16,6 +16,7 @@ two things stay true forever, and neither is checked by any other test:
 from __future__ import annotations
 
 import sqlalchemy as sa
+from alembic import command
 
 from app.db import migrate
 from app.db.models import Base
@@ -100,6 +101,45 @@ def test_models_and_migrations_agree(tmp_path):
         )
         assert migrated[table]["indexes"] == fresh[table]["indexes"], \
             f"index mismatch in {table!r}"
+
+
+def test_layout_schema_is_versioned_and_uses_sparse_child_rows(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    schema = _schema(engine)
+
+    assert migrate.head_revision() == "0005"
+    assert set(schema["ir_graph_layouts"]["columns"]) == {
+        "graph_identifier", "graph_version", "revision", "updated_at",
+    }
+    assert set(schema["ir_graph_layout_positions"]["columns"]) == {
+        "graph_identifier", "graph_version", "instance_id", "x", "y",
+    }
+
+
+def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+        ))
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0004")
+
+    tables = set(sa.inspect(engine).get_table_names())
+    assert migrate.schema_version(engine) == "0004"
+    assert "ir_graph_layouts" not in tables
+    assert "ir_graph_layout_positions" not in tables
+    assert "trades" in tables
+    with engine.connect() as connection:
+        capital = connection.execute(sa.text(
+            "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
+        )).one()
+    assert capital == (50000.0, 49000.0, -1000.0)
+
+    assert migrate.upgrade_to_head(engine) == "0005"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):

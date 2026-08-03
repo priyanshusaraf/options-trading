@@ -64,7 +64,7 @@ before adoption starts.
 | WS-02, WS-07, WS-08 | WS-06 | what gets deployed, and what `/api/health` reports |
 | WS-08 | WS-04 | the app shell, `lib/api.ts` and shadcn primitives used by the live read-only viewer |
 | WS-02 | WS-01 | the seven pure `expanding_z_v4` steps the reference artefact's kernels compose. Live today, and the edge that makes adoption a cycle risk |
-| WS-07 | WS-04 | current — FastAPI/SQLite/Alembic substrate for the route and next layout store |
+| WS-07 | WS-04 | current — FastAPI plus the SQLite/Alembic `0005` sparse layout store |
 | WS-07 | WS-05 | future — persistence for a package store |
 | WS-03 | WS-05 | future — the AST allow-list as prior art, *not* an import (WS-05 §3) |
 

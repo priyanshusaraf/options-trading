@@ -15,7 +15,7 @@ roadmap, not the other seven.
 | WS-01 | **Component IR** | active | `backend/app/ir/` | [WS-01](workstreams/WS-01-component-ir.md) |
 | WS-02 | **Execution & Brokers** | active · live money | `backend/app/engine/`, `providers/`, `options/`, `strategy/`, `backtest/` | [WS-02](workstreams/WS-02-execution.md) |
 | WS-03 | **Research Plane** | active | `backend/research/` | [WS-03](workstreams/WS-03-research-plane.md) |
-| WS-04 | **Editor** | active | read-only IR graph API/viewer; layout and editing next | [WS-04](workstreams/WS-04-editor.md) |
+| WS-04 | **Editor** | active | IR graph viewer + persisted layout API; interaction and editing next | [WS-04](workstreams/WS-04-editor.md) |
 | WS-05 | **Marketplace** | not started | — | [WS-05](workstreams/WS-05-marketplace.md) |
 | WS-06 | **Deployment & Operations** | active · owner-blocked | `scripts/deploy.sh`, the VPS, `/api/health` | [WS-06](workstreams/WS-06-deployment.md) |
 | WS-07 | **Infrastructure & Persistence** | active | `backend/app/db/`, `core/`, `ws/`, test harness | [WS-07](workstreams/WS-07-infrastructure.md) |
