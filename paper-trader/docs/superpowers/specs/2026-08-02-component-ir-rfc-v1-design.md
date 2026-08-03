@@ -278,7 +278,7 @@ named follow-on phase, and until it exists the RFC's status section says so in i
 
 **The working tree is dirty — 48 files before this spec was added, the entire enterprise
 architecture migration, Phases A–H
-(`docs/2026-08-02-architecture-migration.md`), none of it committed and therefore none of it
+(`docs/reports/2026-08-02-architecture-migration.md`), none of it committed and therefore none of it
 deployed** (`deploy.sh` refuses a dirty tree). Phase E is this work's direct ancestor: `spec.py`
 exists as a compiled contract that nothing executes.
 

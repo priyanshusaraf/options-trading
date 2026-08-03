@@ -1,3 +1,9 @@
+> **Superseded 2026-08-03** by `docs/engineering/workstreams/WS-02-execution.md` (execution,
+> costs, live-path hardening) and `docs/engineering/workstreams/WS-03-research-plane.md`
+> (out-of-sample discipline, DSR/PBO),
+> which carry these recommendations forward as tracked roadmap items. The pre-existing
+> correction banner below remains accurate. Kept as the original research review.
+
 # Making a solo autonomous options/equity-intraday platform genuinely excellent — a decision-ready review
 
 > **Superseded in part, 2026-07-28.** This review was written **2026-07-05, before the

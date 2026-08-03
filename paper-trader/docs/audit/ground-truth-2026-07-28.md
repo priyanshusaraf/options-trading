@@ -343,7 +343,7 @@ edge argument.
   → **0**; `... HEAD` → **0**. It is on **both** branches, so `−35%` is stale everywhere,
   including on `main`. `0.35` survives only in prose: `config.py:8` (module docstring),
   `CLAUDE.md:197`, `docs/product-overview.md:131`, and
-  `docs/2026-07-28-platform-status-report.md:101`.
+  `docs/reports/2026-07-28-platform-status-report.md:101`.
 - Percentage basis confirmed: every options stop/target/trail number is a fraction of
   `entry_premium` (`broker.py:76-77`, `exit_monitor.py:64,97`). There is no absolute-rupee
   exit knob on the options lane.
@@ -413,14 +413,14 @@ file. **There is not one executable rsync invocation anywhere.** Full inventory:
 | `docs/superpowers/plans/2026-07-10-vps-deployment.md:308` | The **only** full rsync command line in the repo, in a fenced bash block. Flags: `rsync -av --exclude .venv --exclude node_modules --exclude '*.db*' --exclude 'access_token.json'`. **Does not exclude `.env`.** |
 | `docs/ROADMAP.md:173` | Unchecked TODO: "rsync with `--exclude .env --exclude '*.db'`" |
 | `docs/ROADMAP.md:387` | **Falsely asserts as settled fact** that ".env, DBs, and access_token.json are excluded by the rsync filter" — no such filter exists |
-| `docs/STATUS.html:205`, `:364` | "Add `--exclude .env` to the deploy rsync. This has taken the VPS down twice." |
-| `docs/2026-07-28-platform-status-report.md:171` | Correctly: "The `--exclude .env` guard is still a documented TODO." |
+| `docs/reports/STATUS.html:205`, `:364` | "Add `--exclude .env` to the deploy rsync. This has taken the VPS down twice." |
+| `docs/reports/2026-07-28-platform-status-report.md:171` | Correctly: "The `--exclude .env` guard is still a documented TODO." |
 
 **Verdict: the rule exists only as prose, and is unenforceable as written** because no deploy
 automation exists to enforce it in. Two further problems:
 
-1. `docs/ROADMAP.md:387` **contradicts** `docs/STATUS.html:205` and
-   `docs/2026-07-28-platform-status-report.md:171`. One says the filter is in place; the others
+1. `docs/ROADMAP.md:387` **contradicts** `docs/reports/STATUS.html:205` and
+   `docs/reports/2026-07-28-platform-status-report.md:171`. One says the filter is in place; the others
    say it is an open TODO that has caused two outages. The TODO version is correct.
 2. The single concrete recipe an operator would copy
    (`plans/2026-07-10-vps-deployment.md:308`) **omits `.env`** — copy-pasting the documented
@@ -430,9 +430,9 @@ automation exists to enforce it in. Two further problems:
 
 All prose, no enforced code. `CLAUDE.md:43-46`: SSH is
 `ssh -i ~/.ssh/paper-trader-vps root@64.227.191.162`; "Deploy = rsync whole tree from Mac +
-`systemctl restart paper-trader` (VPS has NO git)." Restated at `docs/STATUS.html:355`.
+`systemctl restart paper-trader` (VPS has NO git)." Restated at `docs/reports/STATUS.html:355`.
 Restart/verify step at `plans/2026-07-10-vps-deployment.md:466`. Post-deploy verification is
-also prose only (`CLAUDE.md:250-251`, refined at `docs/STATUS.html:364` — "the post-deploy
+also prose only (`CLAUDE.md:250-251`, refined at `docs/reports/STATUS.html:364` — "the post-deploy
 check must curl `/`, not just health" — and `docs/ROADMAP.md:174`). `CLAUDE.md:251` notes macOS
 ships an old rsync, so flags like `--info=progress2` must be avoided.
 
@@ -469,7 +469,7 @@ system actually trades. **DOC BUG.**
 `docs/product-overview.md:493` docks the Maintainability score for "some deferred designs
 (**e.g. a persisted order journal**)". The table exists at
 `backend/app/db/models.py:610` (`__tablename__ = "order_journal"`), and production holds
-**58 rows** including 50 real broker order IDs (§3). `docs/audit-deferred-design.md:10-19`
+**58 rows** including 50 real broker order IDs (§3). `docs/reports/audit-deferred-design.md:10-19`
 describes it as H13/deferred — also stale. **DOC BUG.**
 
 ### 7.5 "One risk toggle ships disabled" — it was enabled 11 days ago
@@ -595,7 +595,7 @@ cd backend
    means it can never fire on a live ledger; the production curve overstates equity by
    roughly 2×. Either relax the guard or make the manual reconcile path part of go-live.
 3. **Update the stop to −30%** in `CLAUDE.md:197`, `docs/product-overview.md:131, 239, 251`,
-   `config.py:8`, `docs/2026-07-28-platform-status-report.md:101`.
+   `config.py:8`, `docs/reports/2026-07-28-platform-status-report.md:101`.
 4. **Rewrite `CLAUDE.md:200`** — real-margin sizing (7k/10k targets, 2.5k dust floor), no
    leverage cap, concurrency 3 by default / 4 in production.
 5. **Delete the false assertion at `docs/ROADMAP.md:387`** and add `--exclude .env` to the

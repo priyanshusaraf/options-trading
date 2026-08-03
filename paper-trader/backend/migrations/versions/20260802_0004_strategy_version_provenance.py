@@ -26,7 +26,7 @@ The 72 real trades stay NULL.
 `generated_strategies.version` is added but `key` remains the primary key. Making
 identity `(key, version)` is a larger change — it needs the deploy bridge to write
 both, and the registry to resolve both — and it is recorded in
-`docs/2026-08-02-architecture-migration.md` as remaining work rather than half-done
+`docs/reports/2026-08-02-architecture-migration.md` as remaining work rather than half-done
 here.
 """
 from __future__ import annotations

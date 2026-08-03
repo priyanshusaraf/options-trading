@@ -1,3 +1,7 @@
+> **Superseded 2026-08-03** by `docs/engineering/workstreams/WS-02-execution.md` — H13, H16,
+> H2 and H9 are built and shipped (C6 synthetic-premium remains deliberately unbuilt), so
+> nothing here is still "deferred". Kept for the design rationale behind the code that exists.
+
 # Pre-Live Audit — Deferred items (design-staged)
 
 These findings are large or research-scope: responsibly building them on a live-money

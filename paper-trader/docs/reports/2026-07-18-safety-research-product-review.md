@@ -1,3 +1,14 @@
+> **SUPERSEDED / CONTAINS STALE CLAIMS.** *(header added 2026-08-03)*
+> The findings were real and all ten (E1–E10) are now closed — but two claims in §0 have since
+> become false. **The leverage verdict is the dangerous one:** §0 describes
+> `qty = min(margin_qty, lev_qty)` as a live control, i.e. an owner leverage cap that binds.
+> That cap was **removed on 2026-07-22 (`0f93f9a`)** on the owner's instruction and must not
+> be reintroduced; sizing is now against full real broker margin. §0 also records exits as an
+> unresolved "tuning bleed" with `profit_lock_frac` 0.5 — the parameters were retuned from
+> real excursion data on 2026-08-01 (lock threshold 150, frac 0.7). Current truth:
+> [`docs/engineering/workstreams/WS-02-execution.md`](../engineering/workstreams/WS-02-execution.md)
+> §4 (E1–E10 with their fixes) and `CLAUDE.md` "Sizing rules".
+
 # Full Safety Review · Research-Plane Assessment · Product Ideation
 
 **Date:** 2026-07-18 · **Branch reviewed:** `feat/exits-journal` (61 commits ahead of `main`, deployed live on the VPS) · **Scope:** whole branch, `git merge-base main HEAD`..HEAD.

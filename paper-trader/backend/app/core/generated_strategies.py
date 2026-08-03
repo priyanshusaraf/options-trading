@@ -41,7 +41,7 @@ def save_generated(session, key: str, composition_json: str, source: str = ""):
     version, so trades attributed to the old version can be told apart from trades
     attributed to the new one instead of both silently pointing at whatever the row
     happens to contain today. Making identity `(key, version)` is tracked as
-    remaining work in docs/2026-08-02-architecture-migration.md.
+    remaining work in docs/reports/2026-08-02-architecture-migration.md.
     """
     try:
         version = generated_version(json.loads(composition_json))

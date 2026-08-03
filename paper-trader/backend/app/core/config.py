@@ -351,7 +351,7 @@ class Settings(BaseSettings):
     intraday_lockstep_enabled: bool = True
     intraday_lockstep_trigger_pct: float = 0.03  # profit per lockstep, as a fraction of deployed margin
     # C-P2 (2026-08-01): retuned from the excursion telemetry of 22 replayable real
-    # trades (`scripts/exit_sweep.py`, report in docs/2026-08-01-exit-sweep.md). The old
+    # trades (`scripts/exit_sweep.py`, report in docs/reports/2026-08-01-exit-sweep.md). The old
     # ₹600 threshold sat ABOVE the p75 peak of the actual book (median peak ₹164), so the
     # lock almost never armed — it fired on 1 of 22 trades. At ₹150 × 0.7 the same 22
     # trades turn −₹913 into +₹268. Small sample: a direction, not a proven setting.

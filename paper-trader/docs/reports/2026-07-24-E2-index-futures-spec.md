@@ -1,3 +1,12 @@
+> **SUPERSEDED / CONTAINS STALE CLAIMS.** *(header added 2026-08-03)*
+> The status line below — **"DRAFT for owner + Fable review. No code written against this
+> spec"** — is **false**. All twelve build steps were implemented and deployed on 2026-08-01;
+> the segment ships behind `index_futures_enabled=False`, and only step 13 (owner + Fable
+> review before the flag is flipped) remains. Read this as the design rationale for code that
+> already exists, not as work to start. Current truth:
+> [`docs/engineering/workstreams/WS-02-execution.md`](../engineering/workstreams/WS-02-execution.md)
+> §4 (what was built) and §5 (the remaining E2 items).
+
 # E2 spec — index-futures segment
 
 Status: DRAFT for owner + Fable review. No code written against this spec.

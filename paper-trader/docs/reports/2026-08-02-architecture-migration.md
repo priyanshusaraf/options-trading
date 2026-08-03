@@ -1,3 +1,12 @@
+> **SUPERSEDED / CONTAINS STALE CLAIMS.** *(header added 2026-08-03)*
+> The opening line **"Nothing in this migration is committed"** — and everything that follows
+> from it, including "none of it is deployed because `deploy.sh` refuses a dirty tree" — is
+> **false**. Phases A–H were committed as `cc53bba` on 2026-08-02. The migration is committed
+> and verified; what is still true is that it is **not deployed** (blocked on owner
+> acknowledgement, not on a dirty tree). Current truth:
+> [`docs/engineering/workstreams/WS-02-execution.md`](../engineering/workstreams/WS-02-execution.md)
+> §4 (phase-by-phase, with the SHA) and §8 (why it is undeployed).
+
 # Enterprise Architecture Migration — status
 
 Working record for the migration that must complete before Phases 3 / 5 / 6 / 9 / 13.

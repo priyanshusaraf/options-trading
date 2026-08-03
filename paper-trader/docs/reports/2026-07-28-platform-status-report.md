@@ -1,3 +1,15 @@
+> **SUPERSEDED / CONTAINS STALE CLAIMS.** *(header added 2026-08-03)*
+> A status report is only true on its date. Three of its claims are now false and are the kind
+> someone acts on: **(1)** §15 states the build-provenance work is "not yet on the box" and
+> "the live build is unidentifiable" — it was deployed 2026-08-01 (`4e9f125`), and
+> `/api/health` now reports the running commit; **(2)** §16 lists E2 index futures as "spec
+> written, 13 TDD steps ready to execute" — all twelve build steps shipped 2026-08-01;
+> **(3)** §18 ends by calling the undeployed Workstream B / E0-E1 fixes "the single most
+> valuable next action" — they went live 2026-08-01. The trade counts (34 real trades) are
+> also a 2026-07-28 snapshot; the book stood at 72 trades on 2026-08-01. Current truth:
+> [`docs/PROGRESS.md`](../PROGRESS.md) and the eight
+> [workstream documents](../engineering/WORKSTREAMS.md).
+
 # Autonomous Options & Equity Trading Platform — Status Report
 
 *Generated 2026-07-28 · branch `feat/exec-completeness` · sources: `docs/ROADMAP.md`, `CLAUDE.md`, `docs/product-overview.md`, live VPS DB snapshot (`vps-snapshots/paper_trader-offload-20260723-094218.db`)*

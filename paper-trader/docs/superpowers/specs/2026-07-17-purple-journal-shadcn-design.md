@@ -199,7 +199,7 @@ typecheck.
 
 ## 6. H13 — persisted order journal
 
-Build exactly per the existing Fable spec in `docs/audit-remaining-impl-guide.md`
+Build exactly per the existing Fable spec in `docs/reports/audit-remaining-impl-guide.md`
 (§H13): `OrderJournal` table, write-through WORKING→TERMINAL around every real
 order, `recover_journal()` on startup before the loops, tag sweep, journal I/O
 never blocks an order. One Sonnet agent, TDD, the spec's test list is the

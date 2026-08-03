@@ -1,3 +1,8 @@
+> **Superseded 2026-08-03** by `docs/engineering/workstreams/WS-02-execution.md` — of the four
+> "still open" items, H16, H13, H2 and H9 are all built and shipped, leaving only C6
+> (synthetic-premium backtest), which the owner deliberately left inert. Kept as the
+> implementation spec those subsystems were built from.
+
 # Remaining audit fixes — implementation guide (Fable-advisor spec)
 
 Airtight, code-cited plan for the 4 items still open after 22 findings were fixed. Produced by a

@@ -28,7 +28,7 @@ for the equity/index universe. Borne out by the book: 70 of 72 real trades are
 **Read the book before changing an exit.** Across all 72 trades, `TARGET` has fired **zero**
 times: 45 exits were the owner closing manually (`RECONCILED_EXTERNAL_EXIT`, net +₹2,761) and
 the bot's own exits net **−₹2,927**. The 2026-08-01 excursion sweep
-(`docs/2026-08-01-exit-sweep.md`) shows why — the largest favourable excursion ever recorded
+(`docs/reports/2026-08-01-exit-sweep.md`) shows why — the largest favourable excursion ever recorded
 is 1.216% of notional against a 1.5% target. This is an entry-quality problem as much as an
 exit one: the median trade travels further against you (0.427%) than for you (0.286%).
 
@@ -201,7 +201,8 @@ engine running, and a Vite build there can take live positions down with it.
 | `research/` | isolated research plane, own DB, fail-closed import guards. Dormant. |
 
 Deeper detail: `docs/engineering/reference/engine-internals.md`. Operations, deploy, and going-live: `docs/operations.md`.
-Incident post-mortems: `docs/incidents/`.
+Incident post-mortems: `docs/incidents/`. Point-in-time audits and reports: `docs/reports/`
+(see its `README.md` — some are flagged stale).
 
 ## Sizing rules (get these right — they moved recently)
 
@@ -281,6 +282,7 @@ it.
 | `docs/ROADMAP.md` | only for cross-workstream sequencing and owner blockers |
 | `docs/engineering/EXECUTIVE.md` | when changing an interface or sequencing across streams |
 | `docs/rfcs/0001-component-ir.md` | the constitution |
+| `docs/reports/README.md` | the frozen point-in-time reports — audits, autopsies, teardowns. Index says which are current, superseded, or stale. Never a source of current state |
 
 Tick a box only with verified evidence, in the same commit as the work. Do not restate a
 workstream's contents here — duplicating them into CLAUDE.md is how this file drifted out of

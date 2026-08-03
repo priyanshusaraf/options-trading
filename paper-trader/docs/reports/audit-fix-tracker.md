@@ -1,3 +1,9 @@
+> **Superseded 2026-08-03** by `docs/engineering/workstreams/WS-02-execution.md` §4 and
+> `docs/PROGRESS.md`; the work it tracks was merged to `main` 2026-07-10 and is long deployed,
+> and the 📐 design-staged items (H13 order journal, H2 ratchet, H9 OOS gate) have since been
+> built. Kept for the finding-by-finding history. (The "Source:" path below now lives at
+> `docs/reports/pre-live-audit-2026-07-09-recovered.md`.)
+
 # Pre-Live Audit — Fix Tracker
 
 Source: `docs/pre-live-audit-2026-07-09-recovered.md` (26 CONFIRMED + 3 PLAUSIBLE).

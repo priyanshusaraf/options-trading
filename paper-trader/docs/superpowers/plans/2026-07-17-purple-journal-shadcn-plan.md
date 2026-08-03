@@ -2330,7 +2330,7 @@ git commit -m "fix(logging): latch a bad Kite token — one probe/loop instead o
 
 **Interfaces:**
 - Consumes: existing `max_open_drawdown` knob (already wired into the halt
-  logic per `audit-fix-tracker.md`'s H15 entry — this task only changes the
+  logic per `docs/reports/audit-fix-tracker.md`'s H15 entry — this task only changes the
   **default value** from `0.0` (off) to `2500.0`; verify the halt logic itself
   already exists with `grep -rn "max_open_drawdown" backend/app/engine/`).
 
@@ -2529,8 +2529,8 @@ Build exactly per the existing detailed spec — **do not re-derive it**; both
 documents already exist in this repo and were produced by a prior Fable
 architecture pass specifically for this feature:
 
-- Design: `docs/audit-deferred-design.md` §"H13 — No persisted order journal"
-- Implementation guide: `docs/audit-remaining-impl-guide.md` §"H13 — Persisted
+- Design: `docs/reports/audit-deferred-design.md` §"H13 — No persisted order journal"
+- Implementation guide: `docs/reports/audit-remaining-impl-guide.md` §"H13 — Persisted
   order journal + startup recovery"
 
 ### Task E1: `OrderJournal` model + migration
@@ -2568,7 +2568,7 @@ unknown existing data.
 
 ```python
 # backend/tests/test_order_journal.py
-"""H13 — persisted order journal (see docs/audit-remaining-impl-guide.md).
+"""H13 — persisted order journal (see docs/reports/audit-remaining-impl-guide.md).
 This file grows across Tasks E1-E4."""
 import datetime as dt
 
@@ -2616,7 +2616,7 @@ class OrderJournal(Base):
     written BEFORE placement, marked TERMINAL on resolution. On startup,
     recover_journal() reconciles any still-WORKING row against the broker so a
     crash mid-order doesn't leave unrecoverable in-flight state. See
-    docs/audit-remaining-impl-guide.md §H13 for the full design."""
+    docs/reports/audit-remaining-impl-guide.md §H13 for the full design."""
     __tablename__ = "order_journal"
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
@@ -2682,7 +2682,7 @@ git commit -m "feat(engine): OrderJournal table (H13 foundation)"
 This task requires reading `backend/app/engine/live_broker.py`,
 `backend/app/engine/order_executor.py`, and
 `backend/app/engine/kite_order_client.py` in full before writing code — the
-guide (`docs/audit-remaining-impl-guide.md` §H13, steps 2-4) is written
+guide (`docs/reports/audit-remaining-impl-guide.md` §H13, steps 2-4) is written
 against these files' actual current structure and names exact methods
 (`_actual_fill`, `_note_order_outcome`, `_record_inflight`,
 `_pending_entries`) that must be located precisely, not guessed. Follow the
@@ -2699,7 +2699,7 @@ first to reuse its exact FakeClient class/import path rather than duplicating
 a second fake broker client."""
 # NOTE TO IMPLEMENTER: import FakeClient from wherever test_live_broker.py
 # defines/imports it (grep -n "class FakeClient" backend/tests/test_live_broker.py).
-# The tests below are the ACCEPTANCE BAR from docs/audit-remaining-impl-guide.md
+# The tests below are the ACCEPTANCE BAR from docs/reports/audit-remaining-impl-guide.md
 # §H13's test list — write them against the real FakeClient, adapting fixture
 # setup to match test_live_broker.py's existing conventions exactly (same
 # LiveBroker construction pattern) so this file's tests run in the same style
@@ -2772,7 +2772,7 @@ real assertions in Step 1's actual delivery (not this plan document).
 
 - [ ] **Step 3: Implement per the guide**
 
-Follow `docs/audit-remaining-impl-guide.md` §H13 steps 2-4 exactly:
+Follow `docs/reports/audit-remaining-impl-guide.md` §H13 steps 2-4 exactly:
 2. `order_executor.execute_order` gains `on_placed: Callable[[str], None] |
    None = None`, called right after `order_id = client.place(req)`,
    try/except-wrapped.
@@ -2818,7 +2818,7 @@ git commit -m "feat(engine): write-through order journaling around LiveBroker._e
   E2's list are exercised here if not already fully covered)
 
 **Interfaces:** per the guide's step 5 exactly — implement `recover_journal`
-with the per-row branching table from `docs/audit-remaining-impl-guide.md`
+with the per-row branching table from `docs/reports/audit-remaining-impl-guide.md`
 §H13 step 5 (NULL order_id → tag sweep; status raises → keep WORKING;
 ENTRY filled>0 → rebuild `_pending_entries` + `adopt_pending_entries(now)`
 ONCE; ENTRY dead → DEAD; ENTRY working → rebuild both dicts; EXIT filled≥qty →
