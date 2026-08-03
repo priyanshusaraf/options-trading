@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,6 +12,7 @@ from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
 from app.editor import graph_artifacts as store
+from research.compare import compare_experiment_evidence
 from research.config import research_db_path
 from research.data.store import materialize
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
@@ -104,6 +105,24 @@ class GraphRunListResponse(_ClosedModel):
 
 class GraphRunDetail(GraphRunSummary):
     evidence: dict | None
+
+
+class GraphComparisonRequest(_ClosedModel):
+    left_run_id: int = Field(ge=1)
+    right_run_id: int = Field(ge=1)
+
+
+class GraphComparisonDifference(_ClosedModel):
+    dimension: str
+    path: list[str | int]
+    left: Any
+    right: Any
+
+
+class GraphComparisonResponse(_ClosedModel):
+    equivalent: bool
+    incomparable: list[str]
+    differences: list[GraphComparisonDifference]
 
 
 def request_validation_envelope(errors: list[dict]) -> dict:
@@ -261,6 +280,40 @@ def post_graph_experiment(
 )
 def get_graph_experiments(project_id: str) -> GraphRunListResponse:
     return GraphRunListResponse(runs=research_read.list_graph_runs(project_id))
+
+
+@router.post(
+    "/projects/{project_id}/experiments/comparisons",
+    response_model=GraphComparisonResponse,
+)
+def post_graph_experiment_comparison(
+    project_id: str, body: GraphComparisonRequest
+) -> GraphComparisonResponse:
+    try:
+        left = research_read.get_graph_run(project_id, body.left_run_id)
+        right = research_read.get_graph_run(project_id, body.right_run_id)
+    except research_read.StoredEvidenceCorrupt as exc:
+        raise _error(
+            409,
+            "EXPERIMENT_EVIDENCE_CORRUPT",
+            "persisted experiment evidence failed integrity verification",
+        ) from exc
+    if left is None or right is None:
+        raise _error(404, "EXPERIMENT_RUN_NOT_FOUND", "experiment run not found")
+    if (
+        left["evidence_state"] != "verified"
+        or right["evidence_state"] != "verified"
+        or left["evidence"] is None
+        or right["evidence"] is None
+    ):
+        raise _error(
+            409,
+            "EXPERIMENT_EVIDENCE_UNAVAILABLE",
+            "verified terminal evidence is unavailable for comparison",
+        )
+    return GraphComparisonResponse(
+        **compare_experiment_evidence(left["evidence"], right["evidence"])
+    )
 
 
 @router.get(

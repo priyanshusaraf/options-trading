@@ -248,6 +248,14 @@ def _set_run_checkpoint(run_id: int, checkpoint: str | None) -> None:
     engine.dispose()
 
 
+def _set_run_status(run_id: int, status: str) -> None:
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session.begin() as session:
+        session.get(ExperimentRun, run_id).status = status
+    engine.dispose()
+
+
 def test_project_owned_evidence_list_and_detail_return_persisted_results_only(
         client, monkeypatch):
     started = client.post(URL, json=_request()).json()
@@ -325,3 +333,109 @@ def test_corrupt_persisted_evidence_fails_closed(client):
         "code": "EXPERIMENT_EVIDENCE_CORRUPT",
         "message": "persisted experiment evidence failed integrity verification",
     }
+
+
+def test_project_owned_comparison_reports_exact_graph_difference(client):
+    first = client.post(URL, json=_request()).json()
+    editor_url = (
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/editor"
+    )
+    editor = client.get(editor_url).json()
+    changed = client.post(
+        editor_url.removesuffix("/editor") + "/edits",
+        json={
+            "base_revision": editor["draft_revision"],
+            "base_presentation_revision": editor["layout"]["revision"],
+            "edits": [{"operation": "set_display_name", "display_name": "Compare"}],
+            "presentation_edits": [],
+        },
+    ).json()
+    second = client.post(
+        URL.replace(f"/{VERSION}/", f"/{changed['version']}/"), json=_request()
+    ).json()
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/comparisons"
+
+    response = client.post(compare_url, json={
+        "left_run_id": first["run_id"],
+        "right_run_id": second["run_id"],
+    })
+    assert response.status_code == 200
+    result = response.json()
+    assert result["equivalent"] is False
+    # The live materializer supplies an exact snapshot identity. A later run may
+    # therefore differ in both graph and data, even with the same requested days.
+    assert "DATASET_IDENTITY_CHANGED" in result["incomparable"]
+    assert any(item["dimension"] == "graph" for item in result["differences"])
+
+    same = client.post(compare_url.replace("/api/", "/api/v1/", 1), json={
+        "left_run_id": first["run_id"],
+        "right_run_id": first["run_id"],
+    })
+    assert same.status_code == 200
+    assert same.json() == {"equivalent": True, "incomparable": [], "differences": []}
+
+
+def test_comparison_marks_changed_dataset_contract_incomparable(client):
+    first = client.post(URL, json=_request()).json()
+    changed_request = _request()
+    changed_request["datasets"][0]["days"] = 31
+    second = client.post(URL, json=changed_request).json()
+
+    response = client.post(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/comparisons",
+        json={"left_run_id": first["run_id"], "right_run_id": second["run_id"]},
+    )
+    assert response.status_code == 200
+    assert "DATASET_IDENTITY_CHANGED" in response.json()["incomparable"]
+
+
+def test_comparison_rejects_legacy_cross_project_and_raw_evidence(client):
+    first = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(first["run_id"], None)
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/comparisons"
+    legacy = client.post(compare_url, json={
+        "left_run_id": first["run_id"], "right_run_id": first["run_id"]
+    })
+    assert legacy.status_code == 409
+    assert legacy.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"
+
+    raw = client.post(compare_url, json={
+        "left_run_id": first["run_id"],
+        "right_run_id": first["run_id"],
+        "evidence": {"client": "claim"},
+    })
+    assert raw.status_code == 422
+    assert raw.json()["code"] == "EXPERIMENT_REQUEST_INVALID"
+
+    other = client.post(
+        "/api/ir/projects", json={"name": "Other", "description": ""}
+    ).json()
+    hidden = client.post(
+        compare_url.replace(CATALOGUE_PROJECT_ID, other["project_id"]),
+        json={"left_run_id": first["run_id"], "right_run_id": first["run_id"]},
+    )
+    assert hidden.status_code == 404
+    assert hidden.json()["code"] == "EXPERIMENT_RUN_NOT_FOUND"
+
+
+def test_comparison_rejects_corrupt_and_running_evidence(client):
+    corrupt_run = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(corrupt_run["run_id"], '{"tampered":true}')
+    compare_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/comparisons"
+
+    corrupt = client.post(compare_url, json={
+        "left_run_id": corrupt_run["run_id"],
+        "right_run_id": corrupt_run["run_id"],
+    })
+    assert corrupt.status_code == 409
+    assert corrupt.json()["code"] == "EXPERIMENT_EVIDENCE_CORRUPT"
+
+    running = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(running["run_id"], None)
+    _set_run_status(running["run_id"], "running")
+    unavailable = client.post(compare_url, json={
+        "left_run_id": running["run_id"],
+        "right_run_id": running["run_id"],
+    })
+    assert unavailable.status_code == 409
+    assert unavailable.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"

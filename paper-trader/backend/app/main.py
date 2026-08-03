@@ -192,8 +192,10 @@ async def editor_request_validation_handler(
     path = unversioned_path(request.url.path)
     if (
         path.startswith("/api/ir/projects/")
-        and "/graphs/" in path
-        and path.endswith("/experiments")
+        and (
+            ("/graphs/" in path and path.endswith("/experiments"))
+            or path.endswith("/experiments/comparisons")
+        )
     ):
         return JSONResponse(
             status_code=422,

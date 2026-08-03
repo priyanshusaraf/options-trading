@@ -67,12 +67,12 @@ deployment activation, arming, orders, Python or live IR-runtime adoption.
 - Extend: `backend/app/api/ir_experiment_routes.py`
 - Extend: `backend/tests/test_ir_experiment_routes.py`
 
-1. Add table-driven failing tests for graph, component/node, dataset, cost, gate, build and result
+1. [x] Add table-driven failing tests for graph, component/node, dataset, cost, gate, build and result
    differences plus exact equality.
-2. Mark changed dataset/cost/gate dimensions incomparable rather than emitting misleading
+2. [x] Mark changed dataset/cost/gate dimensions incomparable rather than emitting misleading
    performance deltas.
-3. Expose one closed project-owned comparison route over two verified persisted runs.
-4. Reject legacy, corrupt, running, cross-project and client-supplied evidence.
+3. [x] Expose one closed project-owned comparison route over two verified persisted runs.
+4. [x] Reject legacy, corrupt, running, cross-project and client-supplied evidence.
 
 ## Task 5: Add explicit candidate decisions and the product evidence surface
 
