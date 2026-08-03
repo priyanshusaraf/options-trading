@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S3.2a frontend rename/override editing with local history
-- **Next product checkpoint:** a user can rename a graph and set or clear a node override from the
-  viewer, see exact backend rejection detail and undo or redo without losing immutable history.
+- **Current slice:** S3.2b structural node/edge/group editing
+- **Next product checkpoint:** a user can add or remove authored nodes, connect or disconnect typed
+  sockets and manage groups through the same revision-safe editor contract.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -76,8 +76,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | done — ADR 0001 accepted |
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | done — verified locally; publication in this slice commit |
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | done — verified locally; publication in this slice commit |
-| S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | active |
-| S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | later |
+| S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | done — backend `7cc6525`, frontend `197c4e9` |
+| S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | active — design boundary next |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | later |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | later |
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | later |
@@ -297,11 +297,30 @@ full backend/frontend acceptance pass; execution still reads none of these recor
 
 **S3.2a bounded checklist.**
 
-1. [ ] Add a typed frontend edit-batch transport and exact 409/422 error decoding.
-2. [ ] Add accessible graph-name and node-override controls backed by the server revision.
-3. [ ] Keep prior and next immutable editor states for deterministic undo/redo requests.
-4. [ ] Retain the current graph on conflict/failure and present exact clause/path feedback.
-5. [ ] Run focused/frontend regressions, build, document, commit and push.
+1. [x] Add a typed frontend edit-batch transport and exact 409/422 error decoding.
+2. [x] Add accessible graph-name and node-override controls backed by the server revision.
+3. [x] Use backend-issued canonical receipts for deterministic undo/redo requests.
+4. [x] Retain local intent on conflict/failure and present exact clause/path feedback.
+5. [x] Run focused and workstream regressions, full checkpoint acceptance, document, commit and push.
+
+**S3.2a completion evidence, 2026-08-03.** The backend exposes one coherent editor document and
+accepts only rename and set/clear override operations for this slice. It validates and constructs
+the resolved view, editable authored-node descriptors, canonical inverse receipt and sparse layout
+before committing one immutable version. Failure injection after version insertion, layout
+preparation and response construction proves full rollback. The React editor replaces accepted
+state only from that document, preserves dirty layout coordinates across graph rekeying, retains
+failed command intent, ignores stale responses and submits undo/redo from server receipts. Focused
+editor, layout, migration and workstream regressions pass. The shared-persistence checkpoint passed
+2,774 backend tests with 6 skips, all 189 frontend tests, typecheck, production build and both
+deterministic smoke scripts. No execution path changed and nothing was deployed.
+
+**S3.2b bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Add typed structural batches for add/remove node, connect/disconnect and group.
+2. [ ] Add accessible component selection, node create/remove and group membership controls.
+3. [ ] Add accessible socket selection and connect/disconnect controls.
+4. [ ] Extend canonical inverse receipts and define changed-node sparse-layout reconciliation.
+5. [ ] Prove exact failure retention, run applicable regressions, document, commit and push.
 
 ## 4. Medium-term sequence
 

@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S2.2 is published; S3.1 is complete locally.** Fail-closed CI is on the branch. Its first
+**Stage A through S3.2a is implemented and published.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -19,8 +19,10 @@ viewer now loads the sparse layout, moves authored nodes by pointer or keyboard,
 and retains local work on conflict or transport failure. ADR 0001 rejects duplicate product
 ledgers and accepts the minimum ownership, identity and lifecycle contract. S2.2 adds durable
 projects, optimistic graph drafts, append-only graph versions and reversible layout ownership.
-S3.1 applies bounded edit batches through the eight existing IR primitives and publishes one
-validated, resolved immutable version atomically.
+S3.1 applies bounded edit batches through the existing IR primitives. S3.2a adds one coherent
+editor document plus revision-safe graph rename and parameter override interaction. The frontend
+uses backend-issued inverse receipts for undo/redo, retains rejected intent and preserves dirty
+layout positions when an edit creates a new immutable graph version.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -30,9 +32,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed slice: S2.2 immutable graph lineages through `9c1b99a`
-- Latest verified remote before the S3.1 commit: `9c1b99a`
-- Expected ahead/behind after publishing S3.1: `0/0`
+- Last completed/pushed implementation slice: S3.2a through frontend commit `197c4e9`
+- S3.2a backend commit: `7cc6525`
+- Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
 
 The commit containing this handoff is the current HEAD after publication; resolve its SHA with
@@ -48,7 +50,7 @@ Latest acceptance run on 2026-08-03:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests --tb=short
-2,746 passed · 6 skipped · 71 warnings · EXIT 0
+2,774 passed · 6 skipped · 71 warnings · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -57,16 +59,17 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build
-169 passed · TYPECHECK OK · BUILD OK · EXIT 0
+189 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
 41 tests, including `0006 → 0005 → 0006`, orphan quarantine/restore, direct-SQL immutability,
 stale draft conflicts and rollback after a flushed version insert.
 
-S3.1's edit-route contract passed 11 focused tests and its final editor/IR regression passed 332.
-The `9c1b99a` S2.2 Actions run `30801554865` completed green in backend, frontend and
-deterministic-smoke jobs before S3.1 publication.
+S3.2a's focused backend editor/layout/graph/view set passed 104 tests, its WS-04 regression passed
+310 and its database/migration regression passed 86. Focused frontend editor tests passed 39.
+Transaction guard mutations proved stale-CAS, closed-schema, layout-identity, response rollback and
+canonical-inverse assertions fail for their intended reasons before restoration.
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
 absent. Guard proof then removed `research_tests` from the backend command; the specific contract
@@ -127,12 +130,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S3.2a — add frontend graph rename and parameter override editing.**
+**S3.2b — add structural node, edge and group editing.**
 
-Add the typed edit-batch transport, then expose graph rename plus set/clear override controls in the
-existing viewer. Keep server revision and immutable versions authoritative, retain the current view
-on 409/422/transport failure, show exact clause/path detail, and add bounded undo/redo over those
-operations. Structural node/edge/group controls remain S3.2b; execution remains untouched.
+Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: close the structural
+operation contract, expose accessible component and socket selection, extend canonical inverse
+receipts and define sparse-layout reconciliation for added/removed authored nodes. Keep server
+revision and immutable versions authoritative. Execution remains untouched.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

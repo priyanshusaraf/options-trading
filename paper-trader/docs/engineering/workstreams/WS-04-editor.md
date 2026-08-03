@@ -3,17 +3,17 @@
 **Status:** active
 **Owner surface:** `backend/app/api/ir_routes.py`, `backend/app/api/ir_layout_routes.py`,
 `backend/app/editor/`, their backend tests, `frontend/src/views/GraphView.tsx` and its
-transport/tests. Next: conflict-safe layout interaction in the viewer. The
+transport/tests. Next: bounded structural node/edge/group editing. The
 libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
 WS-01**.
-**Last verified:** 2026-08-03 · current S1.1 slice
+**Last verified:** 2026-08-03 · S3.2a complete
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
 > its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. The resolved view
 > model now has a read-only HTTP route and a React canvas in the existing application shell.
-> Sparse presentation state has a revision-checked persistence API; the browser does not yet
-> load or change it.
+> Sparse presentation state and graph name/override edits now persist through revision-checked
+> APIs. Structural node, edge and group controls are the next bounded slice.
 
 ---
 
@@ -154,6 +154,15 @@ reloads and renders a moved position while graph content address, component vers
 identities and experiment binding remain unchanged. Revision downgrade removes only the two
 layout tables and preserves the money record.
 
+**Persistent rename and override interaction — S3.2a, 2026-08-03.** A coherent editor GET and
+closed mutation POST now carry authored graph state, resolved view, editable parameter descriptors,
+sparse layout and canonical command receipts. Rename and set/clear override publish one immutable
+version under the draft revision. Response-construction, version-insert and layout-preparation
+failures roll back the whole transaction. The React surface renders authored parameters only,
+retains invalid or rejected intent, reports exact clauses and paths, guards stale responses and
+uses backend receipts for undo/redo. Backend `7cc6525` and frontend `197c4e9` are published; the
+shared-persistence acceptance checkpoint and deterministic smoke checks pass.
+
 ## 5. Active roadmap
 
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
@@ -178,18 +187,17 @@ layout tables and preserves the money record.
       keeps its derived position and the derived layout stays the default. Decide and write down
       what happens to an orphaned entry when its node is removed. Implemented in the current
       S1.1 slice with optimistic concurrency, orphan filtering/cleanup and migration rollback.
-- [ ] **Conflict-safe layout interaction.** Load the sparse layout into the existing viewer,
+- [x] **Conflict-safe layout interaction.** Load the sparse layout into the existing viewer,
       move authored nodes by pointer and keyboard, and save the complete sparse set against its
       revision. Show unsaved, saving, saved, conflict and error states. A 409 or network failure
-      must preserve the user's local positions and offer an explicit reload/retry path.
-- [ ] **Mutation in the UI.** Wire the eight `edit.py` functions to canvas gestures: add,
-      delete, connect, disconnect, set/clear override, group, rename. Every call returns a new
-      artefact — the client must replace its copy, never patch in place (C2). Render
-      `EditRejected` as the clause plus the JSON path, not as a generic failure toast; the
-      violation names the rule the author broke and that is the whole value of it. Grouping is
-      F12: a group boxes nodes for tidiness and is **neither versionable nor publishable** — the
-      UI must not offer "publish this group" or "version this group", because offering it is how
-      the distinction erodes.
+      must preserve the user's local positions and offer an explicit reload/retry path. Published
+      through `22a148f`.
+- [ ] **Mutation in the UI.** Rename and set/clear override are complete. Next wire structural
+      add, delete, connect, disconnect and group operations to accessible controls. Every call
+      returns a new artefact; the client replaces accepted state from the coherent response and
+      never patches that state in place (C2). Render `EditRejected` as the clause plus JSON path,
+      not as a generic failure. Grouping remains subject to the F12 executable-versus-presentation
+      boundary, which S3.2b must resolve before implementation.
 - [ ] **Round-trip proof.** Author a graph entirely through the UI that is byte-identical, by
       content address, to a hand-written artefact for the same strategy. Until this passes, the
       editor is a viewer with buttons.
