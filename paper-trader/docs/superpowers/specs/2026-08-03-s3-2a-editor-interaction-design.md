@@ -1,168 +1,203 @@
 # S3.2a Editor Interaction Design
 
 Date: 2026-08-03
-Status: Approved design
-Workstream: Strategy OS S3.2a
+Status: Final accepted contract
+Workstream: Strategy OS WS-04 / S3.2a
 
-## Context
+## Scope
 
-S3.1 publishes validated batches of the eight closed IR edit primitives into an immutable graph lineage. The current frontend still reads the fixed Python catalogue graph, while persistent project graphs, graph versions, and draft revisions live behind separate product-object APIs. The existing layout API also accepts only the fixed catalogue version.
+S3.2a adds a persistent editor workflow for graph display names and authored-node parameter overrides. It does not add node, edge, or group editing. The backend remains the authority for validation, component resolution, derived topology, parameter binding, warmup, layers, cache identity, content addressing, immutable publication, and draft revision advancement.
 
-That split prevents the editor from adopting a newly published persistent version as one coherent state. A second fetch would create a race between authored graph data, resolved view data, draft revision, graph version, and layout. Patching the resolved view in the browser would duplicate backend validation and resolution rules and could not safely recompute derived nodes, layers, warmup, or cache identity.
+The frontend holds local intent, command history, and presentation state. It does not construct an executable graph, patch a resolved view after publication, or infer server state from separate authored and resolved reads.
 
-S3.2a therefore adds a server-owned editor document and limits interactive editing to graph rename and parameter overrides. Structural node, edge, and group editing remains S3.2b.
+## State model
 
-## Product boundary
+The existing product-object layer supports a newly created artefact with no published version. It also contains internal `save_draft()` support, although no raw draft-replacement HTTP route is exposed. Removing that storage capability would redesign the S2.2 product-object contract, so S3.2a does not remove it.
 
-S3.2a delivers:
+An artefact becomes editor-enabled after its first publication. For an editor-enabled artefact:
 
-- a persisted editor document containing the authored graph and its resolved view;
-- accessible graph-name and authored-node parameter-override controls;
-- exact validation and conflict feedback;
-- deterministic command-based undo and redo through new immutable versions;
-- sparse layout continuity across identity-preserving edits;
-- explicit reload behavior after conflicts or external lineage changes.
+- `current_version` points to the immutable editable lineage head;
+- `draft_revision` is the monotonic concurrency revision for that head;
+- `published_revision` must equal `draft_revision`;
+- every accepted S3.2a batch creates one immutable version and atomically advances all three fields;
+- the S3.2a editor never creates an unpublished mutable executable snapshot.
 
-S3.2a does not add:
+`GET /editor` returns `409 EDITOR_NOT_PUBLISHED` when `current_version` is null and `409 EDITOR_HAS_UNPUBLISHED_DRAFT` when the stored draft revision differs from the published revision. This rejects an incoherent read instead of pairing a mutable draft with a different immutable version.
 
-- structural node, edge, or group controls;
-- raw graph replacement;
-- client-selected graph versions for publication;
-- client-side validation or resolution as an authority;
-- execution, code evaluation, Python input, or live-money behavior;
-- layout coordinates in graph identity or content addressing.
+## Naming contract
 
-## Rejected alternatives
+The external operation is `set_display_name`. It maps one-to-one to the existing `app.ir.edit.rename()` primitive, whose documented behavior changes only `graph["display_name"]`.
 
-### Separate authored and resolved fetches
+The operation does not change:
 
-Fetching a persistent authored graph and a catalogue-derived view independently can combine different revisions and versions. It also needs extra loading and partial-failure states. The editor document keeps the state atomic.
+- the stable graph artefact identifier;
+- the IR graph identifier;
+- project ownership;
+- route identity;
+- layout foreign keys or lineage selection;
+- node instance identifiers;
+- experiment lookup identity.
 
-### Optimistic browser-side view patching
+The display name is executable artefact content. Changing it therefore creates a new immutable graph version and content address. The operation name states the mutable field and avoids implying an identifier change.
 
-Updating the current resolved view from edit intent would reproduce resolver semantics in TypeScript. It cannot reliably update derived topology, parameter binding, warmup, layers, or cache identity. The backend remains the only authority for the resolved view.
+## Closed edit vocabulary
 
-### Snapshot-only undo and redo
+The S3.2a edit endpoint accepts only:
 
-Replacing a draft with an earlier raw snapshot would bypass the closed edit vocabulary and weaken auditability. Undo and redo instead send inverse and forward edit batches through the same validation and publication path as ordinary edits.
+- `set_display_name`;
+- `set_override`;
+- `clear_override`.
 
-## Backend design
+It accepts one to 32 operations. The HTTP model rejects S3.1 structural operations, raw graph fields, client versions, unknown operations, arbitrary code, and extra fields. Each accepted request item maps to exactly one existing IR primitive. Structural operations remain available only as internal S3.1 vocabulary until S3.2b defines their product controls and layout reconciliation.
 
-### Coherent editor document
+Override values must be canonical JSON. Values may contain at most eight nested composite levels, 256 total list items and object entries, and strings of at most 4,096 characters. Object keys use the existing parameter-name limit. NaN and Infinity are rejected recursively. The real component/version library and existing IR validation and resolution path reject unknown parameter keys, invalid types, constraints, unknown nodes, and derived-node identifiers.
 
-Add `GET /api/ir/projects/{project_id}/graphs/{identifier}/editor` for a persistent graph draft. The existing API-version mirroring also exposes the route under `/api/v1`. Its response contains:
+## Coherent editor document
 
-- project identifier;
-- graph identifier;
-- current draft revision;
-- current immutable version and content address;
-- the persisted authored graph;
-- the backend-resolved graph view used by the existing viewer.
+Add:
 
-The existing `POST /api/ir/projects/{project_id}/graphs/{identifier}/edits` endpoint returns the same coherent document after a successful publication. The frontend can therefore adopt one response without a follow-up read. The existing fixed-catalogue view route remains available as a compatibility path.
+`GET /api/ir/projects/{project_id}/graphs/{identifier}/editor`
 
-The persisted view builder reuses the existing IR graph validation, component-library resolution, and graph-view response mapping. It does not add a second response model or resolver implementation with different semantics.
+The existing versioned-router mechanism mirrors it under `/api/v1`. The response contains:
 
-### Edit and publication transaction
+- `project_id`;
+- stable `identifier`;
+- mutable `display_name`;
+- `draft_revision`;
+- current immutable `version`;
+- executable `content_address`;
+- `authored_graph` from that immutable version;
+- `view` resolved from that exact authored graph;
+- `layout` for that exact identifier and version;
+- `command_receipt`, which is null on GET.
 
-Every mutation supplies the server-issued draft revision. The backend maps each discriminated edit item to exactly one existing primitive, validates and resolves the final graph, inserts a new immutable graph version, advances the draft revision and current pointer, and constructs the returned editor document.
+The response is the only canonical frontend read model. The existing fixed-catalogue graph route remains as a compatibility route. Persistent and catalogue views share one field-by-field graph-view mapper.
 
-These writes remain one database transaction. A failure after version insertion must leave the version table, draft content, draft revision, current pointer, and layout lineage unchanged. Existing immutable-version update and delete protections remain in force.
+Layout in the response is presentation state, not executable state. It remains excluded from graph and component hashing, content address, cache identity, experiment binding, runtime inputs, and runtime outputs.
 
-The request continues to accept bounded batches of one to 32 edits. S3.2a uses rename, set-override, and clear-override operations. No route accepts an entire replacement graph.
+## Canonical command receipt
 
-### Persisted layout lookup and carry-forward
+A successful POST returns the complete editor document plus a canonical receipt:
 
-Layout reads and writes resolve persistent graph versions instead of requiring the fixed catalogue version. They validate authored node identifiers against the selected persisted graph version and keep the existing optimistic layout revision contract.
+- normalized `applied_operations`;
+- canonical `inverse_operations`;
+- `base_revision`;
+- resulting `draft_revision`;
+- resulting graph `version`;
+- resulting `content_address`.
 
-After a successful publication, the repository compares the old and new authored node-identifier sets. If the sets are identical, it copies the prior version's sparse positions into a layout for the new version inside the publication transaction. S3.2a rename and override edits meet this condition. If node identity changes, the repository does not infer structural reconciliation; S3.2b will define that policy.
+The backend constructs inverses from the exact accepted pre-edit graph inside the publication transaction:
 
-The copied layout starts a new version-scoped layout revision. Graph hashing and content addressing continue to exclude layout coordinates.
+- `set_display_name` inverts to the prior display name;
+- `set_override` inverts to the prior explicit value, or `clear_override` when none existed;
+- `clear_override` inverts to `set_override` with the prior explicit value.
 
-## Frontend design
+The backend does not accept an inverse supplied by the frontend. Undo posts the receipt's inverse batch against the exact resulting draft revision. Redo posts the prior receipt's applied batch against the current exact revision. Each successful undo or redo returns a new canonical receipt and immutable version.
 
-### Typed transport
+A conflict blocks publication and the frontend never silently rebases. A new successful ordinary edit clears redo. Validation, server, and network failures retain local command intent and both stacks. Explicit reload is the only action that discards unresolved intent and invalidates history after an external lineage change.
 
-Add typed transport for the editor document and edit-batch response. The transport distinguishes:
+## Closed error contract
 
-- successful coherent document responses;
-- HTTP 409 revision conflicts;
-- HTTP 422 validation failures with exact clause and path data;
-- non-JSON server failures;
-- network failures.
+Editor-operation errors use one envelope:
 
-The transport sends the complete edit batch and the last server-issued draft revision. It never sends a graph version as publication authority.
+```json
+{
+  "code": "IR_VALIDATION_FAILED",
+  "message": "Graph validation failed",
+  "current_revision": null,
+  "errors": [
+    {
+      "operation_index": 0,
+      "clause": "F8",
+      "path": ["nodes", "n_ema", "parameters", "span"],
+      "message": "Expected an integer greater than zero"
+    }
+  ]
+}
+```
 
-### Editor state
+The accepted codes are:
 
-The graph screen owns an editor state with:
+- `DRAFT_REVISION_CONFLICT` with HTTP 409 and `current_revision`;
+- `EDITOR_NOT_PUBLISHED` with HTTP 409;
+- `EDITOR_HAS_UNPUBLISHED_DRAFT` with HTTP 409;
+- `REQUEST_VALIDATION_FAILED` with HTTP 422 for closed-envelope, batch, bounds, and JSON-value failures;
+- `IR_VALIDATION_FAILED` with HTTP 422 for primitive, graph, parameter, and resolution failures;
+- `EDITOR_DOCUMENT_FAILED` with HTTP 500 when a coherent response cannot be built.
 
-- the last accepted editor document;
-- idle, submitting, conflict, validation-error, and transport-error phases;
-- a user-facing message with clause and path where available;
-- an undo stack and a redo stack.
+Every envelope has `code`, `message`, nullable `current_revision`, and an `errors` list. Each error has nullable `operation_index`, nullable `clause`, a structured path of strings and integer indexes, and a message. Primitive failures record their operation index. Whole-result validation and resolution failures use a null operation index because no single operation is authoritative.
 
-Existing sparse layout editing remains a separate state machine. A graph-edit failure does not discard the current graph, layout, or command history.
+Request-model validation for both `/api` and `/api/v1` edit paths is normalized to this envelope. The frontend adds separate `non-json-server` and `network` transport categories because those failures cannot carry the server envelope.
 
-After a successful identity-preserving graph edit, the frontend rekeys its current sparse positions to the returned graph version. Dirty positions remain dirty and can be saved against the new version. Clean positions remain clean because the server copied the same persisted positions to the new version in the publication transaction. An explicit reload reads the new version-scoped layout from the layout endpoint. The frontend never inserts positions into graph content.
+## Layout snapshot and carry-forward
 
-### Accessible rename and override controls
+Every editor document includes an `IrLayoutResponse` whose identifier and version must equal the document identifier and version.
 
-The graph-name form has an explicit label, input, and submit button. Each authored node exposes override controls for parameters known from the resolved view. Derived nodes do not expose edit controls.
+When old and new authored node-identifier sets are identical:
 
-Override input uses JSON syntax so strings, numbers, booleans, null, arrays, and objects retain their types. Invalid JSON is rejected locally without a request; backend validation remains authoritative for valid JSON values. Clear-override is a distinct accessible action.
+- the backend creates a layout head for the new graph version in the graph publication transaction;
+- the new head always starts at layout revision 1;
+- valid sparse positions from the old version are copied;
+- the old version's layout concurrency counter is not inherited;
+- a missing or empty old layout becomes an explicit new revision-1 head with no positions.
 
-Submitting controls and history controls use native disabled semantics while a request is active. Validation and conflict messages use an alert region and include the exact backend clause and path when present.
+When node identity changes, no layout head or positions are inferred. A later read returns the existing explicit missing-layout representation: revision 0 with no positions. S3.2a rejects identity-changing operations, but the repository rule is pinned now because S3.1 can exercise the persistence function and S3.2b will rely on it.
 
-### Command history
+Dirty frontend positions are local presentation intent. After an identity-preserving graph edit succeeds, the frontend keeps those positions, adopts the response's new layout revision and graph version, and remains layout-dirty. A clean frontend adopts the response layout directly.
 
-Each successful user command stores a forward edit batch and an inverse edit batch:
+## Transaction and response-construction boundary
 
-- rename inverts to the prior display name;
-- set override inverts to the prior explicit value, or to clear when no explicit value existed;
-- clear override inverts to set with the prior explicit value.
+One successful edit transaction:
 
-History changes only after backend success. Undo submits the inverse batch using the current server revision, then moves the command to the redo stack. Redo submits the forward batch and moves the command back to the undo stack. Each success creates a new immutable graph version; undo never deletes or rewinds lineage.
+1. verifies active project ownership and artefact ownership;
+2. verifies the supplied draft revision and published-head coherence;
+3. normalizes every request item and constructs canonical inverse operations from the pre-edit graph;
+4. maps every item to one accepted IR primitive;
+5. applies the full batch;
+6. validates the authored graph with the real component library;
+7. resolves it and constructs the graph view;
+8. computes the executable content address;
+9. inserts the immutable graph version;
+10. prepares and flushes layout carry-forward when node identity is unchanged;
+11. advances the head pointer, published revision, and draft revision;
+12. constructs and validates the full editor response and command receipt;
+13. commits only after response construction succeeds.
 
-A 409, 422, or transport failure leaves both history stacks unchanged. An explicit reload adopts the latest server document and clears both stacks because commands derived from the earlier lineage may no longer be safe.
+The persistence function accepts a typed response factory and invokes it while its SQLAlchemy transaction remains open. This keeps Pydantic response construction out of the storage module while proving it occurs before commit.
 
-## Error and concurrency behavior
+Failure-injection seams exist after graph-version insertion, after layout preparation, and during response construction. Any failure leaves immutable versions, draft JSON, draft revision, published revision, head pointer, layout head, layout revision, and positions unchanged. Tests run with SQLite foreign keys enabled. Existing immutable-version UPDATE and DELETE refusal triggers remain unchanged.
 
-- A stale draft revision returns 409 with the authoritative current revision and no partial write.
-- An invalid edit returns the existing F7, F9, or C5 clause and path data and no partial write.
-- A network or unparseable response retains the last accepted document and permits retry or reload.
-- Reload is explicit after conflict. It replaces the document, reloads the version-scoped layout, and clears command history.
-- The UI does not silently overwrite a concurrent editor's publication.
+## Frontend state and stale-response protection
+
+The frontend state records:
+
+- phase: `loading`, `ready-clean`, `ready-dirty`, `saving`, `conflicted`, `validation-error`, `transport-error`, or `reloading`;
+- last accepted editor document;
+- local command draft;
+- undo and redo receipt stacks;
+- monotonically increasing request identity;
+- conflict, validation, or transport details.
+
+Only a successful response whose request identity matches the latest pending request can replace the accepted document. A stale response is ignored. Conflict blocks further publication until explicit reload. Validation and transport failures retain the command draft. Reload replaces the whole document, discards local command intent, clears both history stacks, and advances request identity so older responses cannot land afterward.
+
+The frontend never patches the resolved graph view. It replaces canonical authored, resolved, version, revision, content-address, and persisted-layout state only from a complete accepted editor document.
+
+## Accessible controls
+
+The display-name field has a persistent label, inherited current value, field-associated validation, submit status, and pending disabled state. Each authored node lists resolved parameter values and clearly labels whether each value is inherited/default or explicitly overridden. Override values use JSON input to retain types. Set and clear actions are keyboard operable and have screen-reader labels.
+
+Undo, redo, reload, conflicts, validation details, and save status use native buttons, disabled semantics, alert/status regions, and visible text. Derived nodes never receive override controls. Structural controls are absent.
 
 ## Verification
 
-Focused backend tests cover:
+Backend focused tests pin coherent GET and POST documents, `/api` and `/api/v1` parity, same-version authored/view/layout state, display-name semantics, set/clear/mixed batches, batch bounds, closed operations, recursive JSON bounds, exact error envelopes, parameter validation, ownership, archive behavior, monotonic versioning, content addressing, carry-forward revision 1, explicit empty layout, identity-changing no-copy behavior, three rollback seams, response-construction rollback, SQLite foreign keys, and immutable-version triggers.
 
-- reading the seeded persistent editor document;
-- coherent authored and resolved data for the current draft;
-- edit responses returning the new coherent document;
-- old immutable versions remaining readable;
-- sparse layout carry-forward without graph-identity changes;
-- transaction rollback after injected failure;
-- exact conflict, validation clause, and path responses;
-- refusal of raw replacement and client-selected publication versions.
+Frontend focused tests pin typed transport categories, stale-response rejection, local-intent retention, exact conflict and validation details, display name, typed set/clear controls, inherited versus overridden presentation, canonical receipts, undo, redo, redo clearing, reload invalidation, keyboard and screen-reader semantics, derived-node exclusion, dirty and clean layout adoption, and layout exclusion from executable identity.
 
-Focused frontend tests cover:
+Non-vacuous guards temporarily suppress draft-revision validation, add layout to content hashing, use the wrong prior override for an inverse, accept a stale response, accept raw replacement, and fail response construction. Each mutation must make its named test red before restoration.
 
-- success, 409, 422, non-JSON, and network transport results;
-- semantic rename and override controls;
-- exclusion of edit controls from derived nodes;
-- invalid JSON causing no request;
-- forward and inverse batch construction;
-- history movement only after success;
-- graph, layout, and history retention on failure;
-- explicit reload clearing unsafe history;
-- dirty and clean layout rebasing after publication.
-
-Guard tests must fail if the persisted editor path bypasses backend resolution, if the frontend omits the batch or draft revision, or if undo replaces graph snapshots instead of calling the closed edit API.
-
-Implementation uses focused tests while code changes are in progress. At slice completion it runs the editor/IR workstream regression. Because this slice joins shared persistence, resolution, and layout behavior, it also runs the full backend and frontend acceptance suites before publication.
+During implementation, run focused editor, IR, persistence, and frontend tests. At completion run WS-04 regression, migration/database-safety regression, complete frontend tests, TypeScript checking, production build, complete backend and research acceptance, deterministic ledger smoke, and deterministic backtest smoke. Do not deploy.
 
 ## Completion boundary
 
-S3.2a is complete when a user can load a persistent graph draft, rename it, set and clear typed parameter overrides, undo and redo those commands through immutable publications, preserve sparse layout positions across those edits, and recover explicitly from exact validation or revision conflicts without losing the accepted local state. Structural editing begins only in S3.2b.
+S3.2a is complete when a user can load one coherent persistent editor document, set its display name, set and clear authored parameter overrides, retain unresolved intent across failures, detect and explicitly reload after conflicts, undo and redo through new immutable publications, retain sparse layout across identity-preserving versions, and prove presentation state never changes executable identity. S3.2b begins with structural editing and changed-node layout reconciliation.
