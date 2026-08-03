@@ -150,13 +150,21 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.1 — bind immutable graph versions to the existing research experiment flow.**
+**S4.2 — surface evidence, rejection reasons, comparison and candidate decisions.**
 
-Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: reconcile project-owned
-graph identity with the existing experiment contract, persist the minimum graph/data/cost binding,
-start research only from a published immutable version, and prove reload never follows a newer
-graph silently. Reuse the existing research ledger and statistical gates. Execution remains
-untouched, and live IR-runtime adoption remains owner-gated.
+S4.1 is complete in the current slice: an exact project-owned immutable graph version now starts
+the existing research orchestrator through a closed API and persists graph, resolution, dataset,
+cost, gate, hypothesis and build provenance in the existing immutable ExperimentSpec. Full
+acceptance passed with 2,813 backend/research tests plus 6 skips, `LEDGER OK`, 16/16 `SWEEP OK`,
+195 frontend tests, typecheck and build. The prior exact-head Actions run `30811942113` was green;
+inspect the new exact-head run after this slice is pushed.
+
+Continue from the new five-item S4.2 checklist in `docs/engineering/EXECUTION_PLAN.md`. First
+reconcile the existing ExperimentSpec/Run, Finding, PromotionCandidate and shadow state before
+writing the detailed design. Surface persisted evidence and exact failure reasons without
+recomputing them, compare immutable experiment provenance deterministically, and keep every
+candidate decision behind the existing shadow/human gate. Do not activate deployments or adopt
+the IR runtime in live execution.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

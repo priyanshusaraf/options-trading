@@ -68,6 +68,127 @@ def test_spec_is_content_addressed_and_stable(research_session, inst_factory, ca
     assert research_session.query(ExperimentRun).count() == 2
 
 
+def test_spec_records_every_result_affecting_data_cost_and_gate_input(
+        research_session, inst_factory, candles_factory):
+    report = _run(
+        research_session,
+        inst_factory,
+        candles_factory,
+        capital=75_000.0,
+        slippage_bps=7.5,
+        slippage_multiplier=2.5,
+        pbo_threshold=0.22,
+        sibling_trials=3,
+    )
+
+    spec = research_session.get(ExperimentSpec, report["spec_id"])
+    recipe = json.loads(spec.recipe_json)
+    assert recipe["program"] == "Trend Following"
+    assert recipe["hypothesis"] == "EMA trend persists in large-caps"
+    assert recipe["git_commit"] == "deadbeef"
+    assert recipe["datasets"] == {
+        "AAA": {
+            "bar_count": 400,
+            "content_hash": recipe["datasets"]["AAA"]["content_hash"],
+            "end_ts": recipe["datasets"]["AAA"]["end_ts"],
+            "instrument_key": "AAA",
+            "interval": "day",
+            "requested_days": 2000,
+            "start_ts": recipe["datasets"]["AAA"]["start_ts"],
+        },
+        "BBB": {
+            "bar_count": 400,
+            "content_hash": recipe["datasets"]["BBB"]["content_hash"],
+            "end_ts": recipe["datasets"]["BBB"]["end_ts"],
+            "instrument_key": "BBB",
+            "interval": "day",
+            "requested_days": 2000,
+            "start_ts": recipe["datasets"]["BBB"]["start_ts"],
+        },
+    }
+    assert recipe["cost_assumptions"] == {
+        "capital": 75_000.0,
+        "charge_model": "zerodha_charges_v1",
+        "sizing_model": "one_lot_or_cash_budget_v1",
+        "slippage_bps": 7.5,
+        "slippage_multiplier": 2.5,
+    }
+    assert recipe["gates"] == {
+        "min_oos_trades": 1,
+        "min_positive_fold_fraction": 0.0,
+        "n_folds": 4,
+        "optimize_search": False,
+        "pbo_threshold": 0.22,
+        "sibling_trials": 3,
+    }
+
+
+def test_cost_or_gate_change_creates_a_distinct_immutable_spec(
+        research_session, inst_factory, candles_factory):
+    first = _run(research_session, inst_factory, candles_factory)
+    second = _run(
+        research_session,
+        inst_factory,
+        candles_factory,
+        slippage_bps=6.0,
+    )
+    third = _run(
+        research_session,
+        inst_factory,
+        candles_factory,
+        pbo_threshold=0.25,
+    )
+
+    assert len({first["spec_id"], second["spec_id"], third["spec_id"]}) == 3
+    assert research_session.query(ExperimentSpec).count() == 3
+
+
+def test_hypothesis_or_build_change_cannot_reuse_a_spec_with_stale_provenance(
+        research_session, inst_factory, candles_factory):
+    strat = kernels.get_strategy("trend_impulse_v3")
+    _, datasets = _datasets(inst_factory, candles_factory, ["AAA"])
+    common = {
+        "session": research_session,
+        "program_name": "Programme A",
+        "strategy": strat,
+        "datasets": datasets,
+        "params": dict(strat.default_params),
+        "min_trades": 1,
+    }
+    first = run_experiment(
+        **common, hypothesis_statement="Hypothesis A", git_commit="aaaaaaa"
+    )
+    second = run_experiment(
+        **common, hypothesis_statement="Hypothesis B", git_commit="aaaaaaa"
+    )
+    third = run_experiment(
+        **common, hypothesis_statement="Hypothesis A", git_commit="bbbbbbb"
+    )
+
+    assert len({first["spec_id"], second["spec_id"], third["spec_id"]}) == 3
+
+
+def test_qualification_uses_the_recorded_capital_assumption(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    from research.orchestrator import run as orchestrator
+
+    seen = []
+    original = orchestrator.qualify_instrument
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("capital"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, "qualify_instrument", spy)
+    _run(
+        research_session,
+        inst_factory,
+        candles_factory,
+        capital=75_000.0,
+    )
+    assert seen == [75_000.0, 75_000.0]
+
+
 def test_report_renders_markdown(research_session, inst_factory, candles_factory):
     report = _run(research_session, inst_factory, candles_factory)
     md = render_markdown(report)

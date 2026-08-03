@@ -26,6 +26,7 @@ def content_hash(candles) -> str:
 class Dataset:
     instrument_key: str
     interval: str
+    requested_days: int
     bar_count: int
     start_ts: int
     end_ts: int
@@ -64,6 +65,7 @@ def materialize(source, inst, interval, days: int = 2000) -> Dataset:
     return Dataset(
         instrument_key=getattr(inst, "key", ""),
         interval=interval,
+        requested_days=days,
         bar_count=len(candles),
         start_ts=int(candles[0].ts.timestamp()) if candles else 0,
         end_ts=int(candles[-1].ts.timestamp()) if candles else 0,

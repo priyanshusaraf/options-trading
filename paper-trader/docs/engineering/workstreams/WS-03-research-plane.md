@@ -2,7 +2,7 @@
 
 **Status:** active
 **Owner surface:** `backend/research/`, `backend/research_tests/`, `docs/research/ARCHITECTURE.md`, `backend/app/core/research_read.py` (read-only bridge), `backend/app/core/generated_strategies.py` (read-only bridge)
-**Last verified:** 2026-08-03 · commit `cdbe686`
+**Last verified:** 2026-08-03 · S4.1 full checkpoint (this slice)
 
 > This workstream is the **laboratory**: an autonomous quantitative-research process that
 > runs after the market closes, invents and tests strategy ideas against historical bars,
@@ -139,6 +139,30 @@ finding that is not bound to what produced it.
 ## 4. Completed
 
 Newest first. Dates are the dates the work landed.
+
+### Immutable published-graph experiment binding — S4.1
+
+- **One accepted experiment ledger and gate pipeline.**
+  `research/orchestrator/graph_experiment.py` adapts the exact project-owned immutable graph to
+  `IRGraphStrategy`, derives F14 resolution/data evidence, then calls the existing
+  `run_experiment`. It contains no qualification, walk-forward, gate, score or promotion copy.
+- **Complete immutable recipe provenance.** `ExperimentSpec.recipe_json` now content-addresses
+  project/graph/version/content address, component versions, node cache identities, detailed
+  dataset identities and F14 digests, capital and slippage assumptions, every statistical-gate
+  input, program, hypothesis, build commit, seed and rule versions. Same inputs reuse a spec and
+  create a new run; any result-affecting change creates a new spec.
+- **Closed project-owned API.**
+  `POST /api/ir/projects/{project}/graphs/{identifier}/versions/{version}/experiments` and its
+  `/api/v1` mirror accept bounded dataset/cost/gate intent only. They reject raw graph/identity
+  fields, drafts, archived/wrong owners, unknown versions, invalid data and disabled research with
+  exact responses. The application side is read-only; the research write stays in `research.db`.
+- **Pinned reload proof.** After a newer graph head is published, re-running the old route reuses
+  the old immutable spec; the new version produces a distinct spec. Fresh research sessions reload
+  the exact graph, resolution, data, cost and gate evidence.
+- **Verification.** Three negative mutations made the graph-address, closed-body and derived-node
+  evidence tests fail. Full acceptance passed: 2,813 backend/research tests plus 6 skips,
+  deterministic `LEDGER OK`, 16/16 `SWEEP OK`, 195 frontend tests, typecheck and production build.
+  No execution, deployment activation, broker or live IR-runtime path changed.
 
 ### Generation 2 — structure search over Component IR graphs
 

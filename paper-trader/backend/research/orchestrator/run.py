@@ -49,7 +49,27 @@ logger = logging.getLogger("research.orchestrator")
 def spec_hash(recipe: dict) -> str:
     """Content address of an experiment recipe — the ExperimentSpec id."""
     return hashlib.sha256(
-        json.dumps(recipe, sort_keys=True, default=str).encode()).hexdigest()[:32]
+        json.dumps(
+            recipe,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()[:32]
+
+
+def _dataset_identity(dataset) -> dict:
+    """The exact frozen data selection that fed an experiment recipe."""
+    return {
+        "instrument_key": dataset.instrument_key,
+        "interval": dataset.interval,
+        "requested_days": dataset.requested_days,
+        "bar_count": dataset.bar_count,
+        "start_ts": dataset.start_ts,
+        "end_ts": dataset.end_ts,
+        "content_hash": dataset.content_hash,
+    }
 
 
 def _get_or_create_program(session, name: str) -> ResearchProgram:
@@ -104,7 +124,10 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
                    qualifier_version="q1", optimizer_version="none",
                    validator_version="v1", scoring_version="s1",
-                   sibling_trials: int = 1, pbo_threshold: float = 0.30) -> dict:
+                   sibling_trials: int = 1, pbo_threshold: float = 0.30,
+                   slippage_bps: float = 5.0,
+                   slippage_multiplier: float = 2.0,
+                   graph_provenance: dict | None = None) -> dict:
     """`datasets` = list of (instrument, Dataset). Returns a report dict.
 
     `sibling_trials` — how many OTHER candidates were searched alongside this one in
@@ -120,17 +143,44 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     interval = datasets[0][1].interval if datasets else "day"
 
     recipe = {
+        "program": program_name,
+        "hypothesis": hypothesis_statement,
+        "git_commit": git_commit,
         "strategy": strategy.key, "params": params, "interval": interval,
-        "datasets": {ds.instrument_key: ds.content_hash for _, ds in datasets},
-        "min_trades": min_trades, "n_folds": n_folds, "seed": seed,
-        "optimize_search": optimize_search,
+        "datasets": {ds.instrument_key: _dataset_identity(ds) for _, ds in datasets},
+        "cost_assumptions": {
+            "capital": capital,
+            "charge_model": "zerodha_charges_v1",
+            "sizing_model": "one_lot_or_cash_budget_v1",
+            "slippage_bps": slippage_bps,
+            "slippage_multiplier": slippage_multiplier,
+        },
+        "gates": {
+            "min_oos_trades": min_trades,
+            "n_folds": n_folds,
+            "min_positive_fold_fraction": min_positive_fold_frac,
+            "optimize_search": optimize_search,
+            "pbo_threshold": pbo_threshold,
+            "sibling_trials": sibling_trials,
+        },
+        "seed": seed,
         "versions": [qualifier_version, optimizer_version, validator_version, scoring_version],
     }
+    if graph_provenance is not None:
+        recipe["graph_provenance"] = graph_provenance
     sid = spec_hash(recipe)
     spec = session.get(ExperimentSpec, sid)
     if spec is None:
         spec = ExperimentSpec(
-            id=sid, hypothesis_id=hyp.id, recipe_json=json.dumps(recipe, default=str),
+            id=sid,
+            hypothesis_id=hyp.id,
+            recipe_json=json.dumps(
+                recipe,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+                allow_nan=False,
+            ),
             git_commit=git_commit, qualifier_version=qualifier_version,
             optimizer_version=optimizer_version, validator_version=validator_version,
             scoring_version=scoring_version, rng_seed=seed)
@@ -155,7 +205,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     for inst, ds in datasets:
         total_bars += ds.bar_count
         ie = qualify_instrument(ds.candles, inst, interval, strategy, params,
-                                min_trades=min_trades, seed=seed)
+                                min_trades=min_trades, seed=seed, capital=capital)
         if not ie.qualified:
             logger.info("[qualify] %-10s REJECT — %s (%d trades)",
                         ie.instrument_key, ie.reason, ie.trades)
@@ -186,8 +236,14 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                     is_trades=tr.is_trades, oos_trades=tr.oos_trades, selected=tr.selected))
             logger.info("[optimize] %-10s %d trials over %d folds; %d OOS trades pooled",
                         ie.instrument_key, len(opt.trials), n_folds, len(opt.oos_trades))
-            gates = gates_from_folds(opt.per_fold_oos, min_oos_trades=min_trades,
-                                     min_positive_fold_frac=min_positive_fold_frac, seed=seed)
+            gates = gates_from_folds(
+                opt.per_fold_oos,
+                min_oos_trades=min_trades,
+                min_positive_fold_frac=min_positive_fold_frac,
+                slippage_bps=slippage_bps,
+                slippage_mult=slippage_multiplier,
+                seed=seed,
+            )
             # PBO asks what the DSR cannot: does the IN-SAMPLE ranking carry any
             # out-of-sample information at all, or does picking the winner just
             # pick noise? A search can clear every gate above and still be pure
@@ -209,7 +265,8 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         else:
             v = validate(ds.candles, inst, strategy, params, n_folds=n_folds, capital=capital,
                          min_oos_trades=min_trades, min_positive_fold_frac=min_positive_fold_frac,
-                         seed=seed)
+                         slippage_bps=slippage_bps,
+                         slippage_mult=slippage_multiplier, seed=seed)
             # Single-pass validation searches nothing, so there is no selection
             # to deflate: n_trials=1 makes the DSR reduce to a PSR against zero,
             # which is correct here rather than a gap.

@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.1 immutable graph-version research binding
-- **Next product checkpoint:** an owned immutable graph version can start a reproducible experiment
-  through the existing research pipeline without entering an execution path.
+- **Current slice:** S4.2 evidence, rejection, comparison and candidate surface
+- **Next product checkpoint:** a user can inspect why an immutable-graph experiment passed or
+  failed, compare its exact provenance, and make a candidate decision without entering execution.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -79,8 +79,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | done — backend `7cc6525`, frontend `197c4e9` |
 | S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | done — atomic semantic/presentation history published |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | done — canonical equivalence and fresh-connection reload proved |
-| S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | active — contract reconciliation next |
-| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | later |
+| S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | done — exact immutable provenance and closed start API verified |
+| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | active — contract reconciliation next |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -359,18 +359,46 @@ checkpoint was not repeated after S3.2b's immediately preceding green checkpoint
 
 **S4.1 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile immutable graph identity, project ownership and the existing research experiment
+1. [x] Reconcile immutable graph identity, project ownership and the existing research experiment
        contract; write the S4.1 design record and test-first implementation plan.
-2. [ ] Define the minimum persisted binding from experiment to graph identifier, version, content
+2. [x] Define the minimum persisted binding from experiment to graph identifier, version, content
        address, versioned dataset identity and explicit cost assumptions without duplicating the
        research ledger or gate pipeline.
-3. [ ] Add a closed project-owned API that starts the existing experiment flow from a published
+3. [x] Add a closed project-owned API that starts the existing experiment flow from a published
        immutable graph version and rejects drafts, archived owners, unknown versions and raw graph
        payloads with exact feedback.
-4. [ ] Prove persisted resolution, data, cost and statistical-gate evidence remains reproducible
+4. [x] Prove persisted resolution, data, cost and statistical-gate evidence remains reproducible
        across reload and cannot silently follow a newer graph version.
-5. [ ] Run focused WS-03/WS-04/WS-07 regressions, update the three coordination documents, commit,
+5. [x] Run focused WS-03/WS-04/WS-07 regressions, update the three coordination documents, commit,
        push, inspect Actions and continue; do not adopt the IR runtime in live execution.
+
+**S4.1 completion evidence, 2026-08-03.**
+[ADR 0002](decisions/0002-graph-version-research-binding.md) accepts copied immutable provenance
+across the application/research database boundary and rejects duplicate ledgers, cross-database
+foreign keys, mutable-head binding, raw graph input and a second gate pipeline. The closed
+project-owned start route persists canonical graph, resolution, dataset, cost, gate, hypothesis
+and build provenance in the existing immutable `ExperimentSpec`; reload and newer-head tests prove
+the selected version cannot move. Three deliberate mutations made the content-address, closed-body
+and resolution-evidence guards fail. The full checkpoint passed: 2,813 backend/research tests plus
+6 skips, dry-run `LEDGER OK`, 16/16 backtest smoke `SWEEP OK`, 195 frontend tests, typecheck and
+production build. Live execution and IR runtime adoption remain untouched.
+
+**S4.2 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile the existing ExperimentSpec/Run, Finding, PromotionCandidate and shadow-state
+       contracts with S4.2; write the evidence/decision design record and test-first plan.
+2. [ ] Add closed project-owned read APIs for experiment summary and detail that expose persisted
+       qualification failures, walk-forward gates, DSR/PBO/N_eff, regimes, breadth, explanation,
+       graph/data/cost provenance and terminal errors without recomputing evidence.
+3. [ ] Add deterministic comparison over two immutable experiment specs/runs: graph structure and
+       parameters, component versions, dataset identity, costs, gates and result deltas, with
+       explicit incomparable reasons instead of inferred equivalence.
+4. [ ] Surface the evidence and exact rejection reasons accessibly in the product, and reconcile
+       candidate creation/decision with the existing shadow and human-approval state machine; no
+       approval may activate a deployment or bypass shadow evidence.
+5. [ ] Prove reload, ownership, legacy-unbound, pending/terminal decision, raw-evidence and stale
+       revision guards; run focused then workstream regression, update handoff once, commit/push,
+       inspect exact-head CI and continue without adopting the IR runtime in live execution.
 
 ## 4. Medium-term sequence
 

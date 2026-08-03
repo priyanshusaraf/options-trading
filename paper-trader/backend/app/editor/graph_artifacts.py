@@ -95,6 +95,10 @@ class GraphNotFound(Exception):
     pass
 
 
+class GraphVersionNotFound(Exception):
+    pass
+
+
 class GraphConflict(Exception):
     def __init__(self, current_revision: int):
         super().__init__(f"graph draft is at revision {current_revision}")
@@ -533,6 +537,23 @@ def load_version(project_id: str, identifier: str, version: int) -> PublishedGra
         published = session.get(GraphVersion, (identifier, version))
         if published is None:
             raise GraphNotFound((project_id, identifier, version))
+        return _published_record(project_id, published)
+
+
+def load_owned_version_for_experiment(
+    project_id: str, identifier: str, version: int
+) -> PublishedGraph:
+    """Load exactly one active-project published version for research binding."""
+    with SessionLocal() as session:
+        _active_project(session, project_id)
+        artifact = _owned_artifact(session, project_id, identifier)
+        if artifact.current_version is None:
+            raise InvalidTransition("graph has no published version")
+        if artifact.published_revision != artifact.draft_revision:
+            raise InvalidTransition("graph has unpublished draft changes")
+        published = session.get(GraphVersion, (identifier, version))
+        if published is None:
+            raise GraphVersionNotFound((project_id, identifier, version))
         return _published_record(project_id, published)
 
 

@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     backtest_routes,
+    ir_experiment_routes,
     ir_edit_routes,
     ir_layout_routes,
     ir_routes,
@@ -169,6 +170,16 @@ logging.getLogger("uvicorn.access").addFilter(_PollingRouteFilter())
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)
 
 
+@app.exception_handler(ir_experiment_routes.GraphExperimentFailure)
+async def graph_experiment_failure_handler(
+    _request: Request, exc: ir_experiment_routes.GraphExperimentFailure
+):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.code, "message": exc.message},
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def editor_request_validation_handler(
     request: Request, exc: RequestValidationError
@@ -179,6 +190,15 @@ async def editor_request_validation_handler(
     mirror is normalized through ``unversioned_path`` before matching.
     """
     path = unversioned_path(request.url.path)
+    if (
+        path.startswith("/api/ir/projects/")
+        and "/graphs/" in path
+        and path.endswith("/experiments")
+    ):
+        return JSONResponse(
+            status_code=422,
+            content=ir_experiment_routes.request_validation_envelope(exc.errors()),
+        )
     if (
         path.startswith("/api/ir/projects/")
         and "/graphs/" in path
@@ -252,6 +272,7 @@ app.include_router(ir_routes.router)
 app.include_router(ir_layout_routes.router)
 app.include_router(product_object_routes.router)
 app.include_router(ir_edit_routes.router)
+app.include_router(ir_experiment_routes.router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -262,7 +283,7 @@ app.include_router(ir_edit_routes.router)
 mount_versioned(app, routes.router, backtest_routes.router,
                 portfolio_routes.router, ledger_routes.router, ir_routes.router,
                 ir_layout_routes.router, product_object_routes.router,
-                ir_edit_routes.router)
+                ir_edit_routes.router, ir_experiment_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:

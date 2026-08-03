@@ -40,9 +40,11 @@ def qualification_gate(net_pnls, *, min_trades: int, seed: int = 0) -> tuple[boo
 
 
 def qualify_instrument(candles, inst, interval, strategy, params, *,
-                       min_trades: int = 20, seed: int = 0) -> InstrumentEvaluation:
+                       min_trades: int = 20, seed: int = 0,
+                       capital: float = 50_000.0) -> InstrumentEvaluation:
     trades, metrics = kernels.simulate(candles, inst, interval,
-                                       strategy=strategy, params=params)
+                                       strategy=strategy, params=params,
+                                       capital=capital)
     net = [t.net_pnl for t in trades]
     ok, reason = qualification_gate(net, min_trades=min_trades, seed=seed)
     return InstrumentEvaluation(getattr(inst, "key", ""), interval, len(net),
@@ -50,9 +52,10 @@ def qualify_instrument(candles, inst, interval, strategy, params, *,
 
 
 def qualify(instruments_candles, strategy, params, *, interval: str = "day",
-            min_trades: int = 20, seed: int = 0) -> QualificationOutcome:
+            min_trades: int = 20, seed: int = 0,
+            capital: float = 50_000.0) -> QualificationOutcome:
     """`instruments_candles` is an iterable of (instrument, candles)."""
     evals = [qualify_instrument(candles, inst, interval, strategy, params,
-                                min_trades=min_trades, seed=seed)
+                                min_trades=min_trades, seed=seed, capital=capital)
              for inst, candles in instruments_candles]
     return QualificationOutcome(evals, [e.instrument_key for e in evals if e.qualified])

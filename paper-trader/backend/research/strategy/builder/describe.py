@@ -82,5 +82,30 @@ def explanation_for(strategy, params: dict) -> StrategyExplanation:
     comp = getattr(strategy, "composition", None)
     if comp is not None:
         return explain_composition(comp)
+    resolved = getattr(strategy, "resolved", None)
+    graph = getattr(strategy, "graph", None)
+    if resolved is not None and graph is not None:
+        outputs = [
+            f"Output {name} is produced by {source[0]}.{source[1]}."
+            for name, source in sorted(resolved.outputs.items())
+        ]
+        return StrategyExplanation(
+            strategy_key=strategy.key,
+            display_name=strategy.display_name,
+            thesis=(
+                f"This experiment evaluates immutable Component IR graph "
+                f"{resolved.identifier} version {resolved.version}."
+            ),
+            primitives=[
+                f"{identifier}@{version}"
+                for identifier, version in resolved.versions
+            ],
+            rules=outputs,
+            caveats=(
+                "The immutable graph and its resolved node identities define the "
+                "signals. Position sizing, charges and slippage stress are recorded "
+                "separately in the experiment specification."
+            ),
+        )
     from research.strategy.explain import explain
     return explain(strategy.key, params)
