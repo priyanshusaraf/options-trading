@@ -80,6 +80,10 @@ export interface IrAuthoredGraph {
   readonly version: number
   readonly display_name: string
   readonly nodes: readonly IrAuthoredNode[]
+  readonly edges?: readonly {
+    readonly source: { readonly instance: string; readonly socket: string }
+    readonly target: { readonly instance: string; readonly socket: string }
+  }[]
 }
 
 export interface IrEditableParameter {

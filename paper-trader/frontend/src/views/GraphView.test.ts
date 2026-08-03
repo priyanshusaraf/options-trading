@@ -136,6 +136,23 @@ describe('GraphCanvas', () => {
     expect(html).toContain('Derived connection')
   })
 
+  it('renders revisioned visual groups behind graph nodes', () => {
+    const grouped = {
+      ...LAYOUT,
+      groups: [{
+        identifier: 'g_risk', display_name: 'Risk controls',
+        frame: { x: 20, y: 30, width: 500, height: 400 },
+        collapsed: true, members: ['prices'],
+      }],
+    }
+    const html = renderToStaticMarkup(React.createElement(GraphCanvas, {
+      graph: GRAPH, layout: grouped,
+    }))
+
+    expect(html).toContain('Risk controls visual group, collapsed')
+    expect(html).toContain('Risk controls · 1 members')
+  })
+
   it('contains a canvas wider than 390px inside its own horizontal scroller', () => {
     const html = renderToStaticMarkup(React.createElement(GraphCanvas, { graph: GRAPH }))
 

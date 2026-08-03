@@ -16,6 +16,8 @@ import {
   putIrGraphLayout,
   type IrGraphLayout,
   type IrGraphView,
+  type IrEditorOperation,
+  type IrPresentationOperation,
   type IrViewNode,
 } from '../lib/api'
 import {
@@ -29,6 +31,8 @@ import {
   type LayoutEditorState,
 } from './graphLayoutState'
 import { GraphEditControls } from './GraphEditControls'
+import { GraphGroupControls } from './GraphGroupControls'
+import { GraphStructureControls } from './GraphStructureControls'
 import {
   acceptPublication,
   acceptReload,
@@ -38,9 +42,11 @@ import {
   draftSetOverrideJson,
   failEditorRequest,
   startPublish,
+  startPresentationCommand,
   startRedo,
   startReload,
   startUndo,
+  startSemanticCommand,
   type GraphEditorState,
   type StartedEditorRequest,
 } from './graphEditorState'
@@ -265,11 +271,20 @@ export function GraphCanvas({ graph, layout, onMove }: {
   )
   const dimensions = useMemo(() => {
     const positioned = [...points.values()]
+    const groups = layout?.groups ?? []
     return {
-      width: Math.max(720, ...positioned.map(({ x }) => x + NODE_WIDTH + MARGIN)),
-      height: Math.max(420, ...positioned.map(({ y }) => y + NODE_HEIGHT + MARGIN)),
+      width: Math.max(
+        720,
+        ...positioned.map(({ x }) => x + NODE_WIDTH + MARGIN),
+        ...groups.map((group) => group.frame.x + group.frame.width + MARGIN),
+      ),
+      height: Math.max(
+        420,
+        ...positioned.map(({ y }) => y + NODE_HEIGHT + MARGIN),
+        ...groups.map((group) => group.frame.y + group.frame.height + MARGIN),
+      ),
     }
-  }, [points])
+  }, [points, layout?.groups])
 
   return (
     <section aria-labelledby="strategy-graph-title" className="space-y-4">
@@ -300,6 +315,24 @@ export function GraphCanvas({ graph, layout, onMove }: {
           style={{ width: dimensions.width, height: dimensions.height }}
           data-testid="graph-canvas"
         >
+          {(layout?.groups ?? []).map((group) => (
+            <div
+              key={group.identifier}
+              className="pointer-events-none absolute rounded-lg border border-dashed border-violet-400/70 bg-violet-500/5"
+              style={{
+                left: group.frame.x,
+                top: group.frame.y,
+                width: group.frame.width,
+                height: group.collapsed ? 36 : group.frame.height,
+              }}
+              role="group"
+              aria-label={`${group.display_name} visual group${group.collapsed ? ', collapsed' : ''}`}
+            >
+              <span className="m-2 inline-block rounded bg-bg/90 px-2 py-1 text-[11px] text-violet-200">
+                {group.display_name} · {group.members.length} members
+              </span>
+            </div>
+          ))}
           <svg
             aria-hidden="true"
             focusable="false"
@@ -404,6 +437,8 @@ export function GraphViewState({
   onUndo,
   onRedo,
   onEditorReload,
+  onSemantic,
+  onPresentation,
 }: {
   graph: IrGraphView | null
   layout?: IrGraphLayout | null
@@ -420,6 +455,8 @@ export function GraphViewState({
   onUndo?: () => void
   onRedo?: () => void
   onEditorReload?: () => void
+  onSemantic?: (operations: readonly IrEditorOperation[]) => void
+  onPresentation?: (operations: readonly IrPresentationOperation[]) => void
 }) {
   if (error) {
     return (
@@ -461,6 +498,20 @@ export function GraphViewState({
             onReload={onEditorReload}
           />
         )}
+      {graphEditor?.accepted && onSemantic && onPresentation && (
+        <>
+          <GraphStructureControls
+            document={graphEditor.accepted}
+            disabled={Boolean(graphEditor.pending) || ['dirty', 'saving', 'conflict', 'error'].includes(phase)}
+            onSemantic={onSemantic}
+          />
+          <GraphGroupControls
+            document={graphEditor.accepted}
+            disabled={Boolean(graphEditor.pending) || ['dirty', 'saving', 'conflict', 'error'].includes(phase)}
+            onPresentation={onPresentation}
+          />
+        </>
+      )}
       {phase === 'dirty' && (
         <div className="mb-3 flex items-center justify-between gap-3" role="status">
           <span className="text-xs font-medium text-amber-300">Unsaved layout</span>
@@ -615,11 +666,23 @@ export default function GraphView() {
   }
 
   const undo = () => {
-    if (graphEditor) runPublication(startUndo(graphEditor))
+    if (graphEditor) runPublication(startUndo(graphEditor, layoutEditor?.phase))
   }
 
   const redo = () => {
-    if (graphEditor) runPublication(startRedo(graphEditor))
+    if (graphEditor) runPublication(startRedo(graphEditor, layoutEditor?.phase))
+  }
+
+  const submitSemantic = (operations: readonly IrEditorOperation[]) => {
+    if (graphEditor) runPublication(startSemanticCommand(
+      graphEditor, operations, [], layoutEditor?.phase,
+    ))
+  }
+
+  const submitPresentation = (operations: readonly IrPresentationOperation[]) => {
+    if (graphEditor) runPublication(startPresentationCommand(
+      graphEditor, operations, layoutEditor?.phase,
+    ))
   }
 
   const reloadEditor = () => {
@@ -672,6 +735,8 @@ export default function GraphView() {
       onUndo={undo}
       onRedo={redo}
       onEditorReload={reloadEditor}
+      onSemantic={submitSemantic}
+      onPresentation={submitPresentation}
     />
   )
 }

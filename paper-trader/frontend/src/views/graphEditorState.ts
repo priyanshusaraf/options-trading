@@ -194,14 +194,34 @@ export const startPublish = (
 export const startPresentationCommand = (
   state: GraphEditorState,
   operations: readonly IrPresentationOperation[],
+  layoutPhase: string = 'clean',
 ): StartedEditorRequest | null => operations.length > 0
+  && !['dirty', 'saving', 'conflict', 'error'].includes(layoutPhase)
   ? start(state, 'publish', 'presentation', [], operations, null)
   : null
 
-export const startUndo = (state: GraphEditorState): StartedEditorRequest | null => {
+export const startSemanticCommand = (
+  state: GraphEditorState,
+  operations: readonly IrEditorOperation[],
+  presentationOperations: readonly IrPresentationOperation[] = [],
+  layoutPhase: string = 'clean',
+): StartedEditorRequest | null => operations.length > 0
+  && !['dirty', 'saving', 'conflict', 'error'].includes(layoutPhase)
+  ? start(
+      state, 'publish', 'semantic', operations, presentationOperations, null,
+    )
+  : null
+
+export const startUndo = (
+  state: GraphEditorState,
+  layoutPhase: string = 'clean',
+): StartedEditorRequest | null => {
   const receipt = state.undo[state.undo.length - 1]
   if (!receipt) return null
   const semantic = receipt.semantic_inverse_operations
+  if (semantic.length > 0 && ['dirty', 'saving', 'conflict', 'error'].includes(layoutPhase)) {
+    return null
+  }
   return start(
     state,
     'undo',
@@ -212,10 +232,16 @@ export const startUndo = (state: GraphEditorState): StartedEditorRequest | null 
   )
 }
 
-export const startRedo = (state: GraphEditorState): StartedEditorRequest | null => {
+export const startRedo = (
+  state: GraphEditorState,
+  layoutPhase: string = 'clean',
+): StartedEditorRequest | null => {
   const receipt = state.redo[state.redo.length - 1]
   if (!receipt) return null
   const semantic = receipt.semantic_forward_operations
+  if (semantic.length > 0 && ['dirty', 'saving', 'conflict', 'error'].includes(layoutPhase)) {
+    return null
+  }
   return start(
     state,
     'redo',
