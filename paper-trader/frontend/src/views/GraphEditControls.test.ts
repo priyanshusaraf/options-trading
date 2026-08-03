@@ -40,9 +40,13 @@ const DOCUMENT: IrEditorDocument = {
     }, {
       identifier: 'offset', kind: 'integer', default: 0, value: 0, overridden: false,
     }],
+    sockets: [],
   }],
+  component_catalogue: [],
+  graph_sockets: [],
   layout: {
-    graph_identifier: 'strategy.example', graph_version: 7, revision: 1, positions: [],
+    graph_identifier: 'strategy.example', graph_version: 7, revision: 1,
+    positions: [], groups: [],
   },
   command_receipt: null,
 }
@@ -102,6 +106,7 @@ describe('GraphEditControls', () => {
       code: 'IR_VALIDATION_FAILED',
       message: 'Graph validation failed',
       current_revision: null,
+      current_presentation_revision: null,
       errors: [{
         operation_index: 0,
         clause: 'C11',

@@ -3,6 +3,7 @@ import {
   type IrCommandReceipt,
   type IrEditorDocument,
   type IrEditorOperation,
+  type IrPresentationOperation,
 } from '../lib/api'
 
 export type EditorPhase =
@@ -43,8 +44,11 @@ export interface GraphEditorState {
 }
 
 export interface EditorPublicationRequest {
+  readonly kind: 'semantic' | 'presentation'
   readonly baseRevision: number
-  readonly operations: readonly IrEditorOperation[]
+  readonly basePresentationRevision: number
+  readonly semanticOperations: readonly IrEditorOperation[]
+  readonly presentationOperations: readonly IrPresentationOperation[]
 }
 
 export interface StartedEditorRequest {
@@ -152,7 +156,9 @@ export function draftSetOverrideJson(
 const start = (
   state: GraphEditorState,
   kind: PendingKind,
-  operations: readonly IrEditorOperation[],
+  commandKind: 'semantic' | 'presentation',
+  semanticOperations: readonly IrEditorOperation[],
+  presentationOperations: readonly IrPresentationOperation[],
   historyReceipt: IrCommandReceipt | null,
 ): StartedEditorRequest | null => {
   if (!state.accepted || state.pending || state.phase === 'conflicted') return null
@@ -161,7 +167,10 @@ const start = (
     requestId,
     request: {
       baseRevision: state.accepted.draft_revision,
-      operations,
+      basePresentationRevision: state.accepted.layout.revision,
+      kind: commandKind,
+      semanticOperations,
+      presentationOperations,
     },
     state: {
       ...state,
@@ -173,19 +182,48 @@ const start = (
   }
 }
 
-export const startPublish = (state: GraphEditorState): StartedEditorRequest | null =>
+export const startPublish = (
+  state: GraphEditorState,
+  layoutPhase: string = 'clean',
+): StartedEditorRequest | null =>
   state.draft && state.draft.operations.length > 0
-    ? start(state, 'publish', state.draft.operations, null)
+    && !['dirty', 'saving', 'conflict', 'error'].includes(layoutPhase)
+    ? start(state, 'publish', 'semantic', state.draft.operations, [], null)
     : null
+
+export const startPresentationCommand = (
+  state: GraphEditorState,
+  operations: readonly IrPresentationOperation[],
+): StartedEditorRequest | null => operations.length > 0
+  ? start(state, 'publish', 'presentation', [], operations, null)
+  : null
 
 export const startUndo = (state: GraphEditorState): StartedEditorRequest | null => {
   const receipt = state.undo[state.undo.length - 1]
-  return receipt ? start(state, 'undo', receipt.inverse_operations, receipt) : null
+  if (!receipt) return null
+  const semantic = receipt.semantic_inverse_operations
+  return start(
+    state,
+    'undo',
+    semantic.length > 0 ? 'semantic' : 'presentation',
+    semantic,
+    receipt.presentation_delta.inverse_operations,
+    receipt,
+  )
 }
 
 export const startRedo = (state: GraphEditorState): StartedEditorRequest | null => {
   const receipt = state.redo[state.redo.length - 1]
-  return receipt ? start(state, 'redo', receipt.applied_operations, receipt) : null
+  if (!receipt) return null
+  const semantic = receipt.semantic_forward_operations
+  return start(
+    state,
+    'redo',
+    semantic.length > 0 ? 'semantic' : 'presentation',
+    semantic,
+    receipt.presentation_delta.forward_operations,
+    receipt,
+  )
 }
 
 export function acceptPublication(

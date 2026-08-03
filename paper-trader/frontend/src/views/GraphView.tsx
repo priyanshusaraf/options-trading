@@ -12,13 +12,13 @@ import {
   getIrEditorDocument,
   getIrGraphLayout,
   postIrEditorOperations,
+  postIrPresentationOperations,
   putIrGraphLayout,
   type IrGraphLayout,
   type IrGraphView,
   type IrViewNode,
 } from '../lib/api'
 import {
-  adoptEditorLayout,
   beginLayoutEditor,
   failLayoutSave,
   moveLayoutNode,
@@ -555,19 +555,28 @@ export default function GraphView() {
     if (!started) return
     latestRequest.current = started.requestId
     setGraphEditor(started.state)
-    postIrEditorOperations(
-      PROJECT_ID,
-      GRAPH_IDENTIFIER,
-      started.request.baseRevision,
-      started.request.operations,
-    ).then((document) => {
+    const request = started.request.kind === 'semantic'
+      ? postIrEditorOperations(
+          PROJECT_ID,
+          GRAPH_IDENTIFIER,
+          started.request.baseRevision,
+          started.request.basePresentationRevision,
+          started.request.semanticOperations,
+          started.request.presentationOperations,
+        )
+      : postIrPresentationOperations(
+          PROJECT_ID,
+          GRAPH_IDENTIFIER,
+          started.request.baseRevision,
+          started.request.basePresentationRevision,
+          started.request.presentationOperations,
+        )
+    request.then((document) => {
       if (latestRequest.current !== started.requestId) return
       setGraphEditor((current) => current
         ? acceptPublication(current, started.requestId, document)
         : current)
-      setLayoutEditor((current) => current
-        ? adoptEditorLayout(current, document.layout)
-        : beginLayoutEditor(document.layout))
+      setLayoutEditor(beginLayoutEditor(document.layout))
     }).catch((reason: unknown) => {
       if (latestRequest.current !== started.requestId) return
       const failure = reason instanceof EditorApiError
@@ -586,7 +595,7 @@ export default function GraphView() {
 
   const publishDraft = (drafted: GraphEditorState) => {
     setGraphEditor(drafted)
-    runPublication(startPublish(drafted))
+    runPublication(startPublish(drafted, layoutEditor?.phase))
   }
 
   const updateDisplayName = (displayName: string) => {

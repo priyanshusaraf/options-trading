@@ -3,6 +3,7 @@ import {
   EditorApiError,
   getIrEditorDocument,
   postIrEditorOperations,
+  postIrPresentationOperations,
   type IrEditorDocument,
 } from './api'
 
@@ -58,12 +59,16 @@ export const DOCUMENT: IrEditorDocument = {
       value: 50,
       overridden: true,
     }],
+    sockets: [],
   }],
+  component_catalogue: [],
+  graph_sockets: [],
   layout: {
     graph_identifier: 'strategy.example',
     graph_version: 7,
     revision: 1,
     positions: [{ instance_id: 'n_ema', x: 12, y: 24 }],
+    groups: [],
   },
   command_receipt: null,
 }
@@ -99,6 +104,12 @@ describe('IR editor transport', () => {
         draft_revision: 4,
         version: 8,
         content_address: 'sha256:renamed',
+        semantic_forward_operations: [{ operation: 'set_display_name', display_name: 'Renamed' }],
+        semantic_inverse_operations: [{ operation: 'set_display_name', display_name: 'Example' }],
+        presentation_delta: { forward_operations: [], inverse_operations: [] },
+        base_version: 7,
+        base_presentation_revision: 1,
+        presentation_revision: 1,
       },
     } satisfies IrEditorDocument
     const publish = vi.fn().mockResolvedValue({
@@ -111,6 +122,7 @@ describe('IR editor transport', () => {
       'project.repository_catalogue',
       'strategy.example',
       3,
+      1,
       [{ operation: 'set_display_name', display_name: 'Renamed' }],
     )).resolves.toEqual(accepted)
     expect(publish).toHaveBeenCalledWith(
@@ -120,7 +132,41 @@ describe('IR editor transport', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_revision: 3,
+          base_presentation_revision: 1,
           edits: [{ operation: 'set_display_name', display_name: 'Renamed' }],
+          presentation_edits: [],
+        }),
+      },
+    )
+  })
+
+  it('posts presentation commands without executable identity fields', async () => {
+    const publish = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => DOCUMENT,
+    } as Response)
+    vi.stubGlobal('fetch', publish)
+
+    await postIrPresentationOperations(
+      'project.repository_catalogue',
+      'strategy.example',
+      3,
+      1,
+      [{
+        operation: 'remove_group',
+        identifier: 'g_signal',
+      }],
+    )
+
+    expect(publish).toHaveBeenCalledWith(
+      '/api/ir/projects/project.repository_catalogue/graphs/strategy.example/presentation-edits',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_revision: 3,
+          base_presentation_revision: 1,
+          edits: [{ operation: 'remove_group', identifier: 'g_signal' }],
         }),
       },
     )
@@ -154,14 +200,14 @@ describe('IR editor transport', () => {
     vi.stubGlobal('fetch', fetchEditor)
 
     const conflict = await postIrEditorOperations(
-      'project', 'graph', 3,
+      'project', 'graph', 3, 1,
       [{ operation: 'set_display_name', display_name: 'Stale' }],
     ).catch((reason: unknown) => reason)
     expect(conflict).toBeInstanceOf(EditorApiError)
     expect(conflict).toMatchObject({ category: 'conflict', envelope: conflictEnvelope })
 
     const validation = await postIrEditorOperations(
-      'project', 'graph', 3,
+      'project', 'graph', 3, 1,
       [{ operation: 'set_override', instance_id: 'n_ema', parameter: 'length', value: -1 }],
     ).catch((reason: unknown) => reason)
     expect(validation).toBeInstanceOf(EditorApiError)

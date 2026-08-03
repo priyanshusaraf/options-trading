@@ -48,6 +48,22 @@ export interface IrGraphLayout {
   readonly graph_version: number
   readonly revision: number
   readonly positions: readonly IrLayoutPosition[]
+  readonly groups: readonly IrVisualGroup[]
+}
+
+export interface IrGroupFrame {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+export interface IrVisualGroup {
+  readonly identifier: string
+  readonly display_name: string
+  readonly frame: IrGroupFrame
+  readonly collapsed: boolean
+  readonly members: readonly string[]
 }
 
 export interface IrAuthoredNode {
@@ -79,6 +95,40 @@ export interface IrEditableNode {
   readonly component_identifier: string
   readonly component_version: number
   readonly parameters: readonly IrEditableParameter[]
+  readonly sockets: readonly IrSocketDescriptor[]
+}
+
+export interface IrSocketDescriptor {
+  readonly identifier: string
+  readonly display_name: string
+  readonly direction: 'input' | 'output'
+  readonly wire_type: Readonly<Record<string, unknown>>
+  readonly has_default_source: boolean
+}
+
+export interface IrBoundarySocketDescriptor extends IrSocketDescriptor {
+  readonly instance_id: 'io_in' | 'io_out'
+}
+
+export interface IrParameterDescriptor {
+  readonly identifier: string
+  readonly display_name: string
+  readonly kind: string
+  readonly default: unknown
+  readonly panel_path: readonly string[]
+}
+
+export interface IrComponentDescriptor {
+  readonly identifier: string
+  readonly version: number
+  readonly display_name: string
+  readonly parameters: readonly IrParameterDescriptor[]
+  readonly sockets: readonly IrSocketDescriptor[]
+}
+
+export interface IrSocketRef {
+  readonly instance_id: string
+  readonly socket: string
 }
 
 export type IrEditorOperation =
@@ -94,6 +144,66 @@ export type IrEditorOperation =
       readonly instance_id: string
       readonly parameter: string
     }
+  | {
+      readonly operation: 'add_node'
+      readonly instance_id: string
+      readonly identifier: string
+      readonly version: number
+      readonly overrides: Readonly<Record<string, unknown>>
+      readonly domain: Readonly<Record<string, string>> | null
+      readonly secret_params: readonly string[]
+      readonly node_index?: number
+    }
+  | { readonly operation: 'remove_node'; readonly instance_id: string }
+  | {
+      readonly operation: 'connect'
+      readonly source: IrSocketRef
+      readonly target: IrSocketRef
+      readonly edge_index?: number
+    }
+  | {
+      readonly operation: 'disconnect'
+      readonly source: IrSocketRef
+      readonly target: IrSocketRef
+    }
+
+export type IrPresentationOperation =
+  | {
+      readonly operation: 'create_group' | 'put_group'
+      readonly identifier: string
+      readonly display_name: string
+      readonly members: readonly string[]
+      readonly frame: IrGroupFrame
+      readonly collapsed: boolean
+    }
+  | {
+      readonly operation: 'rename_group'
+      readonly identifier: string
+      readonly display_name: string
+    }
+  | { readonly operation: 'remove_group'; readonly identifier: string }
+  | {
+      readonly operation: 'add_group_member' | 'remove_group_member'
+      readonly identifier: string
+      readonly instance_id: string
+    }
+  | {
+      readonly operation: 'set_group_frame'
+      readonly identifier: string
+      readonly frame: IrGroupFrame
+    }
+  | {
+      readonly operation: 'set_group_collapsed'
+      readonly identifier: string
+      readonly collapsed: boolean
+    }
+  | {
+      readonly operation: 'set_position'
+      readonly instance_id: string
+      readonly x: number
+      readonly y: number
+    }
+  | { readonly operation: 'clear_position'; readonly instance_id: string }
 
 export interface IrCommandReceipt {
   readonly applied_operations: readonly IrEditorOperation[]
@@ -102,6 +212,15 @@ export interface IrCommandReceipt {
   readonly draft_revision: number
   readonly version: number
   readonly content_address: string
+  readonly semantic_forward_operations: readonly IrEditorOperation[]
+  readonly semantic_inverse_operations: readonly IrEditorOperation[]
+  readonly presentation_delta: {
+    readonly forward_operations: readonly IrPresentationOperation[]
+    readonly inverse_operations: readonly IrPresentationOperation[]
+  }
+  readonly base_version: number
+  readonly base_presentation_revision: number
+  readonly presentation_revision: number
 }
 
 export interface IrEditorDocument {
@@ -114,6 +233,8 @@ export interface IrEditorDocument {
   readonly authored_graph: IrAuthoredGraph
   readonly view: IrGraphView
   readonly editable_nodes: readonly IrEditableNode[]
+  readonly component_catalogue: readonly IrComponentDescriptor[]
+  readonly graph_sockets: readonly IrBoundarySocketDescriptor[]
   readonly layout: IrGraphLayout
   readonly command_receipt: IrCommandReceipt | null
 }
@@ -128,6 +249,8 @@ export interface IrEditorErrorItem {
 export interface IrEditorErrorEnvelope {
   readonly code:
     | 'DRAFT_REVISION_CONFLICT'
+    | 'PRESENTATION_REVISION_CONFLICT'
+    | 'PRESENTATION_VALIDATION_FAILED'
     | 'EDITOR_NOT_PUBLISHED'
     | 'EDITOR_HAS_UNPUBLISHED_DRAFT'
     | 'EDITOR_ARCHIVED'
@@ -136,6 +259,7 @@ export interface IrEditorErrorEnvelope {
     | 'EDITOR_DOCUMENT_FAILED'
   readonly message: string
   readonly current_revision: number | null
+  readonly current_presentation_revision: number | null
   readonly errors: readonly IrEditorErrorItem[]
 }
 
@@ -230,7 +354,9 @@ export const postIrEditorOperations = async (
   projectId: string,
   identifier: string,
   baseRevision: number,
+  basePresentationRevision: number,
   edits: readonly IrEditorOperation[],
+  presentationEdits: readonly IrPresentationOperation[] = [],
 ): Promise<IrEditorDocument> => editorFetch(
   `${editorPath(projectId, identifier)}/edits`,
   {
@@ -239,7 +365,34 @@ export const postIrEditorOperations = async (
       'Content-Type': 'application/json',
       ...editorHeaders(),
     },
-    body: JSON.stringify({ base_revision: baseRevision, edits }),
+    body: JSON.stringify({
+      base_revision: baseRevision,
+      base_presentation_revision: basePresentationRevision,
+      edits,
+      presentation_edits: presentationEdits,
+    }),
+  },
+)
+
+export const postIrPresentationOperations = async (
+  projectId: string,
+  identifier: string,
+  baseRevision: number,
+  basePresentationRevision: number,
+  edits: readonly IrPresentationOperation[],
+): Promise<IrEditorDocument> => editorFetch(
+  `${editorPath(projectId, identifier)}/presentation-edits`,
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...editorHeaders(),
+    },
+    body: JSON.stringify({
+      base_revision: baseRevision,
+      base_presentation_revision: basePresentationRevision,
+      edits,
+    }),
   },
 )
 

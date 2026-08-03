@@ -13,6 +13,7 @@ import {
   draftSetOverrideJson,
   failEditorRequest,
   startPublish,
+  startPresentationCommand,
   startRedo,
   startReload,
   startUndo,
@@ -25,6 +26,12 @@ const RECEIPT: IrCommandReceipt = {
   draft_revision: 4,
   version: 8,
   content_address: 'sha256:renamed',
+  semantic_forward_operations: [{ operation: 'set_display_name', display_name: 'Renamed' }],
+  semantic_inverse_operations: [{ operation: 'set_display_name', display_name: 'Example' }],
+  presentation_delta: { forward_operations: [], inverse_operations: [] },
+  base_version: 7,
+  base_presentation_revision: 1,
+  presentation_revision: 1,
 }
 
 const DOCUMENT: IrEditorDocument = {
@@ -57,10 +64,14 @@ const DOCUMENT: IrEditorDocument = {
     }, {
       identifier: 'offset', kind: 'integer', default: 0, value: 0, overridden: false,
     }],
+    sockets: [],
   }],
+  component_catalogue: [],
+  graph_sockets: [],
   layout: {
     graph_identifier: 'strategy.example', graph_version: 7, revision: 1,
     positions: [{ instance_id: 'n_ema', x: 10, y: 20 }],
+    groups: [],
   },
   command_receipt: null,
 }
@@ -107,6 +118,30 @@ describe('graph editor state', () => {
     expect(startPublish(invalid)).toBeNull()
   })
 
+  it('blocks publication while local layout intent is unresolved', () => {
+    const drafted = draftDisplayName(beginGraphEditor(DOCUMENT), 'Renamed')
+
+    expect(startPublish(drafted, 'dirty')).toBeNull()
+    expect(startPublish(drafted, 'saving')).toBeNull()
+    expect(startPublish(drafted, 'conflict')).toBeNull()
+  })
+
+  it('starts presentation-only commands against both accepted revisions', () => {
+    const started = startPresentationCommand(beginGraphEditor(DOCUMENT), [{
+      operation: 'remove_group', identifier: 'g_signal',
+    }])!
+
+    expect(started.request).toEqual({
+      kind: 'presentation',
+      baseRevision: 3,
+      basePresentationRevision: 1,
+      semanticOperations: [],
+      presentationOperations: [{
+        operation: 'remove_group', identifier: 'g_signal',
+      }],
+    })
+  })
+
   it('adopts only the matching publication and clears redo after a new edit', () => {
     const drafted = draftDisplayName(beginGraphEditor(DOCUMENT), 'Renamed')
     const pending = startPublish({ ...drafted, redo: [RECEIPT] })!
@@ -115,8 +150,11 @@ describe('graph editor state', () => {
     )
 
     expect(pending.request).toEqual({
+      kind: 'semantic',
       baseRevision: 3,
-      operations: [{ operation: 'set_display_name', display_name: 'Renamed' }],
+      basePresentationRevision: 1,
+      semanticOperations: [{ operation: 'set_display_name', display_name: 'Renamed' }],
+      presentationOperations: [],
     })
     expect(accepted.phase).toBe('ready-clean')
     expect(accepted.accepted?.version).toBe(8)
@@ -167,12 +205,18 @@ describe('graph editor state', () => {
     }
     const undo = startUndo(withHistory)!
     expect(undo.request).toEqual({
+      kind: 'semantic',
       baseRevision: 4,
-      operations: RECEIPT.inverse_operations,
+      basePresentationRevision: 1,
+      semanticOperations: RECEIPT.semantic_inverse_operations,
+      presentationOperations: [],
     })
     const undoneDocument = acceptedDocument({
+      ...RECEIPT,
       applied_operations: RECEIPT.inverse_operations,
       inverse_operations: RECEIPT.applied_operations,
+      semantic_forward_operations: RECEIPT.semantic_inverse_operations,
+      semantic_inverse_operations: RECEIPT.semantic_forward_operations,
       base_revision: 4,
       draft_revision: 5,
       version: 9,
@@ -184,8 +228,11 @@ describe('graph editor state', () => {
 
     const redo = startRedo(undone)!
     expect(redo.request).toEqual({
+      kind: 'semantic',
       baseRevision: 5,
-      operations: RECEIPT.applied_operations,
+      basePresentationRevision: 1,
+      semanticOperations: RECEIPT.semantic_forward_operations,
+      presentationOperations: [],
     })
     const redone = acceptPublication(
       redo.state,

@@ -67,6 +67,7 @@ const LAYOUT: IrGraphLayout = {
     // Keep the renderer closed even if a malformed response reaches the client.
     { instance_id: 'risk/threshold', x: 999, y: 999 },
   ],
+  groups: [],
 }
 
 const EDITOR_DOCUMENT: IrEditorDocument = {
@@ -94,7 +95,10 @@ const EDITOR_DOCUMENT: IrEditorDocument = {
     parameters: [{
       identifier: 'window', kind: 'length', default: 10, value: 20, overridden: true,
     }],
+    sockets: [],
   }],
+  component_catalogue: [],
+  graph_sockets: [],
   layout: LAYOUT,
   command_receipt: null,
 }

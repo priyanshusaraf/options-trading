@@ -11,6 +11,7 @@ const LAYOUT: IrGraphLayout = {
   graph_version: 4,
   revision: 2,
   positions: [{ instance_id: 'signal', x: 120, y: 48 }],
+  groups: [],
 }
 
 afterEach(() => vi.unstubAllGlobals())
