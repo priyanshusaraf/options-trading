@@ -223,6 +223,31 @@ def test_visual_group_edits_use_the_shared_presentation_revision(client):
     }
 
 
+def test_visual_group_receipt_undo_and_redo_are_lossless(client):
+    created = _create_group(client, members=["n_ema"])
+    assert created.status_code == 201, created.text
+    created_body = created.json()
+    create_receipt = created_body["command_receipt"]
+
+    undone = _post_presentation(
+        client,
+        graph_revision=created_body["draft_revision"],
+        presentation_revision=created_body["layout"]["revision"],
+        edits=create_receipt["presentation_delta"]["inverse_operations"],
+    )
+    assert undone.status_code == 201, undone.text
+    assert undone.json()["layout"]["groups"] == []
+
+    redone = _post_presentation(
+        client,
+        graph_revision=undone.json()["draft_revision"],
+        presentation_revision=undone.json()["layout"]["revision"],
+        edits=create_receipt["presentation_delta"]["forward_operations"],
+    )
+    assert redone.status_code == 201, redone.text
+    assert redone.json()["layout"]["groups"] == created_body["layout"]["groups"]
+
+
 def test_remove_node_prunes_position_and_membership_in_same_publication(client):
     before = client.get(EDITOR_URL).json()
     positioned = client.put(
@@ -264,6 +289,37 @@ def test_remove_node_prunes_position_and_membership_in_same_publication(client):
     assert {item["operation"] for item in delta["inverse_operations"]} >= {
         "set_position", "add_group_member"
     }
+
+    receipt = body["command_receipt"]
+    undone = _post_structural(
+        client,
+        body,
+        receipt["semantic_inverse_operations"],
+        delta["inverse_operations"],
+    )
+    assert undone.status_code == 201, undone.text
+    restored = undone.json()
+    assert "n_exit_fallback" in {
+        node["instance_id"] for node in restored["authored_graph"]["nodes"]
+    }
+    assert restored["layout"]["positions"] == [{
+        "instance_id": "n_exit_fallback", "x": 40.0, "y": 80.0,
+    }]
+    assert "n_exit_fallback" in restored["layout"]["groups"][0]["members"]
+
+    redone = _post_structural(
+        client,
+        restored,
+        receipt["semantic_forward_operations"],
+        delta["forward_operations"],
+    )
+    assert redone.status_code == 201, redone.text
+    removed_again = redone.json()
+    assert "n_exit_fallback" not in {
+        node["instance_id"] for node in removed_again["authored_graph"]["nodes"]
+    }
+    assert removed_again["layout"]["positions"] == []
+    assert "n_exit_fallback" not in removed_again["layout"]["groups"][0]["members"]
 
 
 def test_added_node_has_no_position_unless_same_request_supplies_one(client):

@@ -191,7 +191,7 @@ def carry_and_reconcile_presentation(
         for position in source.positions
         if position.instance_id in target_instance_ids
     }
-    groups = tuple(
+    carried_groups = tuple(
         VisualGroup(
             group.identifier,
             group.display_name,
@@ -201,6 +201,7 @@ def carry_and_reconcile_presentation(
         )
         for group in source.groups
     )
+    groups = {group.identifier: group for group in carried_groups}
     forward: list[dict[str, Any]] = []
     inverse: list[dict[str, Any]] = []
     for position in source.positions:
@@ -230,40 +231,116 @@ def carry_and_reconcile_presentation(
                 })
     for index, raw in enumerate(operations):
         operation = dict(raw)
-        instance_id = str(operation["instance_id"])
-        if operation.get("operation") != "set_position":
+        kind = str(operation.get("operation"))
+        instance_id = str(operation.get("instance_id", ""))
+        if kind == "set_position":
+            if instance_id not in added_ids:
+                raise LayoutRejected(
+                    "a same-request position may reference only a newly added authored node",
+                    operation_index=index,
+                    path=("presentation_edits", index, "instance_id"),
+                )
+            if instance_id in positions:
+                raise LayoutRejected(
+                    f"position for {instance_id!r} appears more than once",
+                    operation_index=index,
+                    path=("presentation_edits", index, "instance_id"),
+                )
+            x, y = float(operation["x"]), float(operation["y"])
+            if not math.isfinite(x) or not math.isfinite(y):
+                raise LayoutRejected(
+                    "positions must contain finite numbers",
+                    operation_index=index,
+                    path=("presentation_edits", index),
+                )
+            positions[instance_id] = Position(instance_id, x, y)
+            forward.append({
+                "operation": "set_position", "instance_id": instance_id,
+                "x": x, "y": y,
+            })
+            inverse.insert(0, {
+                "operation": "clear_position", "instance_id": instance_id,
+            })
+        elif kind == "clear_position":
+            removed = next(
+                (item for item in source.positions if item.instance_id == instance_id),
+                None,
+            )
+            if instance_id not in source_instance_ids - target_instance_ids or removed is None:
+                raise LayoutRejected(
+                    "clear_position may confirm only a position pruned for a removed node",
+                    operation_index=index,
+                    path=("presentation_edits", index, "instance_id"),
+                )
+        elif kind in {"add_group_member", "remove_group_member"}:
+            identifier = str(operation["identifier"])
+            group = groups.get(identifier)
+            if group is None:
+                raise LayoutRejected(
+                    f"visual group {identifier!r} does not exist",
+                    operation_index=index,
+                    path=("presentation_edits", index, "identifier"),
+                )
+            members = set(group.members)
+            if kind == "add_group_member":
+                if instance_id not in target_instance_ids or instance_id in members:
+                    raise LayoutRejected(
+                        "add_group_member must restore a missing current authored member",
+                        operation_index=index,
+                        path=("presentation_edits", index, "instance_id"),
+                    )
+                members.add(instance_id)
+                forward.append(dict(operation))
+                inverse.insert(0, {**operation, "operation": "remove_group_member"})
+            elif instance_id in members:
+                members.remove(instance_id)
+                forward.append(dict(operation))
+                inverse.insert(0, {**operation, "operation": "add_group_member"})
+            elif instance_id not in source_instance_ids - target_instance_ids:
+                raise LayoutRejected(
+                    "remove_group_member must remove or confirm a removed authored member",
+                    operation_index=index,
+                    path=("presentation_edits", index, "instance_id"),
+                )
+            groups[identifier] = VisualGroup(
+                identifier, group.display_name, group.frame,
+                group.collapsed, tuple(sorted(members)),
+            )
+        elif kind in {"put_group", "remove_group"}:
+            identifier = str(operation["identifier"])
+            existing = groups.get(identifier)
+            if kind == "put_group":
+                candidate = VisualGroup(
+                    identifier,
+                    str(operation["display_name"]),
+                    _frame_from_operation(operation),
+                    bool(operation["collapsed"]),
+                    tuple(sorted(str(item) for item in operation["members"])),
+                )
+                _validate_groups((candidate,), target_instance_ids)
+                groups[identifier] = candidate
+                forward.append(_group_operation(candidate, kind))
+                inverse.insert(0, (
+                    _group_operation(existing, "put_group")
+                    if existing is not None
+                    else {"operation": "remove_group", "identifier": identifier}
+                ))
+            else:
+                if existing is None:
+                    raise LayoutRejected(
+                        f"visual group {identifier!r} does not exist",
+                        operation_index=index,
+                        path=("presentation_edits", index, "identifier"),
+                    )
+                del groups[identifier]
+                forward.append({"operation": kind, "identifier": identifier})
+                inverse.insert(0, _group_operation(existing, "put_group"))
+        else:
             raise LayoutRejected(
-                "semantic publication accepts only set_position presentation edits",
+                f"unsupported semantic presentation delta {kind!r}",
                 operation_index=index,
                 path=("presentation_edits", index, "operation"),
             )
-        if instance_id not in added_ids:
-            raise LayoutRejected(
-                "a same-request position may reference only a newly added authored node",
-                operation_index=index,
-                path=("presentation_edits", index, "instance_id"),
-            )
-        if instance_id in positions:
-            raise LayoutRejected(
-                f"position for {instance_id!r} appears more than once",
-                operation_index=index,
-                path=("presentation_edits", index, "instance_id"),
-            )
-        x, y = float(operation["x"]), float(operation["y"])
-        if not math.isfinite(x) or not math.isfinite(y):
-            raise LayoutRejected(
-                "positions must contain finite numbers",
-                operation_index=index,
-                path=("presentation_edits", index),
-            )
-        positions[instance_id] = Position(instance_id, x, y)
-        forward.append({
-            "operation": "set_position", "instance_id": instance_id,
-            "x": x, "y": y,
-        })
-        inverse.insert(0, {
-            "operation": "clear_position", "instance_id": instance_id,
-        })
 
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     target = IrGraphLayout(
@@ -284,7 +361,7 @@ def carry_and_reconcile_presentation(
         )
         for position in sorted(positions.values(), key=lambda item: item.instance_id)
     ])
-    ordered_groups = _validate_groups(groups, target_instance_ids)
+    ordered_groups = _validate_groups(tuple(groups.values()), target_instance_ids)
     _replace_groups_in_session(
         session, graph_identifier, to_version, ordered_groups
     )
@@ -607,6 +684,29 @@ def _replace_groups_in_session(
     session.flush()
 
 
+def _replace_positions_in_session(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    positions: Iterable[Position],
+) -> None:
+    session.execute(delete(IrGraphLayoutPosition).where(
+        IrGraphLayoutPosition.graph_identifier == graph_identifier,
+        IrGraphLayoutPosition.graph_version == graph_version,
+    ))
+    session.add_all([
+        IrGraphLayoutPosition(
+            graph_identifier=graph_identifier,
+            graph_version=graph_version,
+            instance_id=position.instance_id,
+            x=position.x,
+            y=position.y,
+        )
+        for position in sorted(positions, key=lambda item: item.instance_id)
+    ])
+    session.flush()
+
+
 def _frame_from_operation(operation: Mapping[str, Any]) -> GroupFrame:
     frame = operation["frame"]
     return GroupFrame(
@@ -633,6 +733,7 @@ def apply_presentation_batch_in_session(
     if current.revision != base_revision:
         raise LayoutConflict(current.revision)
     groups = {group.identifier: group for group in current.groups}
+    positions = {position.instance_id: position for position in current.positions}
     forward: list[dict[str, Any]] = []
     inverse: list[dict[str, Any]] = []
 
@@ -646,7 +747,39 @@ def apply_presentation_batch_in_session(
         kind = operation["operation"]
         identifier = str(operation.get("identifier", ""))
         existing = groups.get(identifier)
-        if kind in {"create_group", "put_group"}:
+        if kind == "set_position":
+            instance_id = str(operation["instance_id"])
+            if instance_id not in valid_instance_ids:
+                reject(index, "instance_id", f"instance {instance_id!r} is not an authored node")
+            x, y = float(operation["x"]), float(operation["y"])
+            if not math.isfinite(x) or not math.isfinite(y):
+                reject(index, "x", "positions must contain finite numbers")
+            previous = positions.get(instance_id)
+            positions[instance_id] = Position(instance_id, x, y)
+            forward.append({
+                "operation": kind, "instance_id": instance_id, "x": x, "y": y,
+            })
+            inverse.insert(0, (
+                {
+                    "operation": "set_position",
+                    "instance_id": instance_id,
+                    "x": previous.x,
+                    "y": previous.y,
+                }
+                if previous is not None
+                else {"operation": "clear_position", "instance_id": instance_id}
+            ))
+        elif kind == "clear_position":
+            instance_id = str(operation["instance_id"])
+            previous = positions.pop(instance_id, None)
+            if previous is None:
+                reject(index, "instance_id", f"position for {instance_id!r} does not exist")
+            forward.append({"operation": kind, "instance_id": instance_id})
+            inverse.insert(0, {
+                "operation": "set_position", "instance_id": instance_id,
+                "x": previous.x, "y": previous.y,
+            })
+        elif kind in {"create_group", "put_group"}:
             if kind == "create_group" and existing is not None:
                 reject(index, "identifier", f"visual group {identifier!r} already exists")
             group = VisualGroup(
@@ -761,6 +894,9 @@ def apply_presentation_batch_in_session(
         session, graph_identifier, graph_version, base_revision
     )
     _replace_groups_in_session(session, graph_identifier, graph_version, ordered)
+    _replace_positions_in_session(
+        session, graph_identifier, graph_version, positions.values()
+    )
     result = load_layout_in_session(
         session, graph_identifier, graph_version, valid_instance_ids
     )

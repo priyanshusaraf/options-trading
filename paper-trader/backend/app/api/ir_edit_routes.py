@@ -110,6 +110,8 @@ class AddNodeEdit(_ClosedModel):
     secret_params: list[str] = Field(default_factory=list, max_length=128)
     node_index: int | None = Field(default=None, ge=0)
 
+    _overrides_are_bounded_json = field_validator("overrides")(_bounded_json)
+
 
 class RemoveNodeEdit(_ClosedModel):
     operation: Literal["remove_node"]
@@ -140,7 +142,7 @@ class GraphEditRequest(_ClosedModel):
     base_revision: int = Field(ge=0)
     base_presentation_revision: int = Field(ge=0)
     edits: list[EditRequest] = Field(min_length=1, max_length=32)
-    presentation_edits: list["SetPositionEdit"] = Field(
+    presentation_edits: list["PresentationDeltaEditRequest"] = Field(
         default_factory=list, max_length=32
     )
 
@@ -173,8 +175,22 @@ class SetPositionEdit(_ClosedModel):
         return value
 
 
+class ClearPositionEdit(_ClosedModel):
+    operation: Literal["clear_position"]
+    instance_id: str = Field(min_length=1, max_length=128)
+
+
 class CreateGroupEdit(_ClosedModel):
     operation: Literal["create_group"]
+    identifier: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=128)
+    members: list[str] = Field(default_factory=list, max_length=256)
+    frame: GroupFrameRequest
+    collapsed: bool
+
+
+class PutGroupEdit(_ClosedModel):
+    operation: Literal["put_group"]
     identifier: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=128)
     members: list[str] = Field(default_factory=list, max_length=256)
@@ -218,10 +234,18 @@ PresentationEditRequest = Annotated[
 ]
 
 
+PresentationDeltaEditRequest = Annotated[
+    CreateGroupEdit | PutGroupEdit | RenameGroupEdit | RemoveGroupEdit
+    | GroupMemberEdit | SetGroupFrameEdit | SetGroupCollapsedEdit
+    | SetPositionEdit | ClearPositionEdit,
+    Field(discriminator="operation"),
+]
+
+
 class PresentationBatchRequest(_ClosedModel):
     base_revision: int = Field(ge=0)
     base_presentation_revision: int = Field(ge=0)
-    edits: list[PresentationEditRequest] = Field(min_length=1, max_length=32)
+    edits: list[PresentationDeltaEditRequest] = Field(min_length=1, max_length=32)
 
 
 class PresentationDeltaResponse(_ClosedModel):
@@ -387,7 +411,9 @@ def request_validation_envelope(errors: list[dict[str, Any]]) -> dict[str, Any]:
             loc = loc[1:]
         operation_index = (
             int(loc[1])
-            if len(loc) > 1 and loc[0] == "edits" and isinstance(loc[1], int)
+            if len(loc) > 1
+            and loc[0] in {"edits", "presentation_edits"}
+            and isinstance(loc[1], int)
             else None
         )
         items.append(EditorErrorItem(

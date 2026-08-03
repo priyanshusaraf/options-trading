@@ -855,6 +855,20 @@ class GraphVersion(Base):
         DateTime, nullable=False, default=dt.datetime.now)
 
 
+@event.listens_for(GraphVersion, "before_insert")
+def _graph_version_identity_matches_json(_mapper, _connection, target) -> None:
+    """Refuse ORM persistence when executable bytes and identity diverge."""
+    import json
+
+    from app.ir.hashing import canonical_json, content_address
+
+    document = json.loads(target.artifact_json)
+    if canonical_json(document) != target.artifact_json:
+        raise ValueError("graph version artifact_json must be canonical JSON")
+    if content_address(document) != target.content_address:
+        raise ValueError("graph version content address does not match artifact_json")
+
+
 event.listen(
     GraphVersion.__table__,
     "after_create",

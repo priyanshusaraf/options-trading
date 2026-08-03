@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 
 import pytest
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from app.db.models import GraphArtifact, GraphVersion
 from app.db.session import SessionLocal, init_db
 from app.editor import graph_artifacts as store
-from app.ir.hashing import content_address
+from app.ir.hashing import canonical_json, content_address
 from app.ir.strategies.expanding_z import GRAPH
 
 
@@ -115,6 +116,26 @@ def test_publish_is_append_only_and_server_assigns_version_identity():
     assert first == store.load_version(project.project_id, "strategy.desk", 1)
     with pytest.raises(store.InvalidTransition, match="already published"):
         store.publish_draft(project.project_id, "strategy.desk", base_revision=1)
+
+
+def test_different_immutable_json_cannot_claim_one_executable_identity():
+    project = store.create_project("Desk")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
+    first = store.publish_draft(project.project_id, "strategy.desk", base_revision=0)
+    different = copy.deepcopy(first.graph)
+    different["version"] = 2
+    different["parent_version"] = 1
+    different["display_name"] = "Different bytes"
+
+    with pytest.raises(ValueError, match="content address does not match"):
+        with SessionLocal.begin() as session:
+            session.add(GraphVersion(
+                graph_identifier="strategy.desk",
+                version=2,
+                artifact_json=canonical_json(different),
+                content_address=first.content_address,
+                created_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+            ))
 
 
 def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(monkeypatch):

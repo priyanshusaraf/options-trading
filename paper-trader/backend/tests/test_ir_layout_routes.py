@@ -71,6 +71,7 @@ def test_missing_layout_carries_as_explicit_revision_one(client):
         EDIT_URL,
         json={
             "base_revision": 0,
+            "base_presentation_revision": 0,
             "edits": [{
                 "operation": "set_display_name",
                 "display_name": "Edited",
@@ -102,6 +103,7 @@ def test_saved_layout_carries_positions_but_not_its_revision_counter(client):
         EDIT_URL,
         json={
             "base_revision": 0,
+            "base_presentation_revision": 2,
             "edits": [{
                 "operation": "set_override",
                 "instance_id": "n_ema",
@@ -128,6 +130,7 @@ def test_saved_layout_carries_positions_but_not_its_revision_counter(client):
 def test_source_layout_never_enters_new_graph_content_address(client):
     payload = {
         "base_revision": 0,
+        "base_presentation_revision": 0,
         "edits": [{"operation": "set_display_name", "display_name": "Same edit"}],
     }
     without_layout = client.post(EDIT_URL, json=payload).json()["content_address"]
@@ -137,6 +140,7 @@ def test_source_layout_never_enters_new_graph_content_address(client):
         LAYOUT_URL,
         json={"base_revision": 0, "positions": [_position("n_ema", 44.0, 55.0)]},
     )
+    payload["base_presentation_revision"] = 1
     with_layout = client.post(EDIT_URL, json=payload).json()["content_address"]
 
     assert with_layout == without_layout
