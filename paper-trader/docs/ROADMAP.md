@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,578 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,597 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -282,7 +282,32 @@ honest gaps).
         hand-authored components are still fully checked. Same discipline as `unchecked_clauses()`.
       - *`research/` imports `app.ir`, never the reverse.* The isolation rule is about capital;
         the IR is a language, not an executor.
-- [ ] Structure search: a mutation-based proposer over graphs, using `app/ir/edit.py` as the gate.
+- [x] **Structure search — the proposer. DONE 2026-08-03.**
+      `research/strategy/builder/propose.py` + `research_tests/test_ir_propose.py`, 16 tests.
+      Five mutations — add, drop, swap, rewire, retune — every one going through
+      `app/ir/edit.py`, so the proposer owns no opinion about the format (a second implementation
+      of §3 is the defect C12 exists because of; a test greps for one).
+      - **1,000 random mutations, every one asserted through `validate → resolve → evaluate`.**
+        All three, because a graph can pass the format and be unresolvable, or resolve and have a
+        socket nothing feeds. Plus a guard that all five mutations fire across those seeds, and a
+        40-step lineage, since mutations compound.
+      - *Legality before objective, deliberately.* A proposer that emits illegal graphs makes
+        every downstream statistic meaningless, and confidence in recorded numbers cannot be
+        retrofitted — this platform has been there.
+      - *Deterministic.* Seeded throughout, replay-exact, with a test grepping for unseeded
+        `Random`, clocks and uuids. F14 binds findings to what produced them; a clock-seeded
+        proposer makes that binding a fiction.
+      - *`rewire` is the mutation Generation 1 could not express at all* — there was no
+        representation in which "move this predicate elsewhere in the structure" is sayable.
+      - *C14 holds:* the proposer proposes and does not score. A test greps for `sharpe`,
+        `fitness`, `objective`, `rank`.
+- [x] **F8's converse, now enforced — found by the proposer.** An input that is neither wired nor
+      given a default source is a socket nothing feeds: such a graph validates, **resolves
+      cleanly**, and raises the moment a kernel reaches for it. The proposer produced one within
+      its first hundred mutations. F8 joins F7 as library-dependent (which sockets a node has
+      lives in the component) and is reported *unchecked* without one rather than passing. The
+      Appendix A.4 and A.5 fixtures were abbreviations that omitted their bar wiring; they are
+      now complete artefacts.
 - [ ] Bind every research run through `app/ir/experiment.py` (F14).
 - [ ] Narrow each block's declared inputs — every derived component currently declares the whole
       OHLCV frame because the adapter rebuilds it. Inferring per-block inputs from the body is

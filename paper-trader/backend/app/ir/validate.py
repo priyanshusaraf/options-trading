@@ -58,7 +58,14 @@ ELSEWHERE_ENFORCED_CLAUSES = frozenset({"F14"})
 UNENFORCEABLE_CLAUSES: frozenset[str] = frozenset()
 
 # Checkable only with a component library — see the module docstring.
-LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7"})
+#
+# F8 joined F7 here on 2026-08-03. "A graph whose unwired inputs all declare
+# sources MUST be valid" has a converse the validator was not enforcing: an
+# unwired input with **no** declared source is a graph that resolves cleanly and
+# then raises at evaluation, because the socket is simply never fed. The
+# research proposer produced one within its first hundred mutations. Which
+# sockets a node has lives in the component, so this needs a library like F7.
+LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7", "F8"})
 
 # One §4 clause is visible in an artefact and is reported here too. C14 says
 # sweeping belongs to the searcher; an override holding a list of candidates has
@@ -344,6 +351,57 @@ def _graph(r: _Report, art: Mapping[str, Any],
             _group(r, group, f"$.groups[{i}]", instances)
     else:
         r.add("F12", "$.groups", "must be a list")
+
+    if library is not None:
+        _unwired_inputs(r, art, instances, library)
+
+
+def _unwired_inputs(r: _Report, art: Mapping[str, Any], instances: dict,
+                    library: Mapping[tuple[str, int], Any]) -> None:
+    """F8 — every input is wired, or declares where its value comes from.
+
+    The clause is written as a permission ("an input MAY declare a default
+    source") with a guarantee attached ("a graph whose unwired inputs all
+    declare sources MUST be valid"). The converse is what matters in practice:
+    an input that is neither wired nor defaulted is a socket nothing ever
+    feeds, and a graph containing one resolves perfectly and then raises the
+    moment a kernel reaches for it.
+    """
+    fed: set[tuple[str, str]] = set()
+    for edge in art.get("edges", ()):
+        if isinstance(edge, Mapping) and isinstance(edge.get("target"), Mapping):
+            target = edge["target"]
+            fed.add((target.get("instance"), target.get("socket")))
+
+    for instance_id, node in instances.items():
+        ref = node.get("component") or {}
+        component = library.get((ref.get("identifier"), ref.get("version")))
+        if component is None:
+            continue
+        for socket in _input_sockets(component):
+            if (instance_id, socket["identifier"]) in fed:
+                continue
+            if socket.get("default_source"):
+                continue
+            r.add("F8", f"$.nodes.{instance_id}.{socket['identifier']}",
+                  "is neither wired nor given a default source; nothing will "
+                  "ever feed it")
+
+
+def _input_sockets(component: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    out: list[Mapping[str, Any]] = []
+
+    def walk(items):
+        for item in items or ():
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("item") == "panel":
+                walk(item.get("items"))
+            elif item.get("item") == "socket" and item.get("direction") == "input":
+                out.append(item)
+
+    walk(component.get("interface"))
+    return out
 
 
 def _node(r: _Report, node: Any, path: str, instances: dict) -> None:

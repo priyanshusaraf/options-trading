@@ -15,6 +15,8 @@ structural error that happens to fail.
 """
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from app.ir.validate import LIBRARY_DEPENDENT_CLAUSES, clauses_violated, unchecked_clauses, validate
@@ -153,8 +155,18 @@ A4_DUAL_ATR = {
     "identifier": "strategy.dual_atr_filter",
     "version": 1,
     "display_name": "Dual ATR Filter",
-    "interface": [out_socket("longEntry", "Long Entry")],
+    "interface": [
+        {"item": "socket", "identifier": "high", "display_name": "High",
+         "direction": "input", "wire_type": wire()},
+        {"item": "socket", "identifier": "low", "display_name": "Low",
+         "direction": "input", "wire_type": wire()},
+        {"item": "socket", "identifier": "close", "display_name": "Close",
+         "direction": "input", "wire_type": wire()},
+        out_socket("longEntry", "Long Entry"),
+    ],
     "nodes": [
+        {"instance_id": "io_in", "component": {"identifier": "graph.input", "version": 1},
+         "overrides": {}},
         {"instance_id": "n_fast",
          "component": {"identifier": "indicator.atr.wilder", "version": 1},
          "overrides": {"length": 7}},
@@ -165,6 +177,11 @@ A4_DUAL_ATR = {
          "overrides": {}},
     ],
     "edges": [
+        # Appendix A.4 abbreviates these away; a real artefact has to feed the
+        # sockets it declares, and since 2026-08-03 the validator says so (F8).
+        *({"source": {"instance": "io_in", "socket": f},
+           "target": {"instance": n, "socket": f}}
+          for f in ("high", "low", "close") for n in ("n_fast", "n_slow")),
         {"source": {"instance": "n_fast", "socket": "atr"},
          "target": {"instance": "n_cmp", "socket": "a"}},
         {"source": {"instance": "n_slow", "socket": "atr"},
@@ -182,8 +199,14 @@ A5_MULTI_TIMEFRAME = {
     "identifier": "strategy.mtf_ema_cross",
     "version": 1,
     "display_name": "MTF EMA Cross",
-    "interface": [out_socket("longEntry", "Long Entry")],
+    "interface": [
+        {"item": "socket", "identifier": "close", "display_name": "Close",
+         "direction": "input", "wire_type": wire()},
+        out_socket("longEntry", "Long Entry"),
+    ],
     "nodes": [
+        {"instance_id": "io_in", "component": {"identifier": "graph.input", "version": 1},
+         "overrides": {}},
         {"instance_id": "n_5m", "component": {"identifier": "indicator.ema", "version": 1},
          "overrides": {"length": 20}, "domain": {"instrument": "NIFTY", "timeframe": "5m"}},
         {"instance_id": "n_15m", "component": {"identifier": "indicator.ema", "version": 1},
@@ -192,6 +215,8 @@ A5_MULTI_TIMEFRAME = {
          "overrides": {}, "domain": {"instrument": "NIFTY", "timeframe": "5m"}},
     ],
     "edges": [
+        *({"source": {"instance": "io_in", "socket": "close"},
+           "target": {"instance": n, "socket": "source"}} for n in ("n_5m", "n_15m")),
         {"source": {"instance": "n_5m", "socket": "out"},
          "target": {"instance": "n_cmp", "socket": "a"}},
         {"source": {"instance": "n_15m", "socket": "out"},
@@ -258,9 +283,10 @@ def test_a2_body_is_a_graph_which_is_what_makes_a_component_decomposable():
 def test_a4_references_one_definition_twice_and_keeps_the_instances_distinct():
     """F11 nesting by reference, and the precondition for C4: n_fast and n_slow
     expand from the same definition and MUST remain distinguishable."""
-    refs = [n["component"] for n in A4_DUAL_ATR["nodes"][:2]]
-    assert refs[0] == refs[1]
-    assert A4_DUAL_ATR["nodes"][0]["instance_id"] != A4_DUAL_ATR["nodes"][1]["instance_id"]
+    fast, slow = (next(n for n in A4_DUAL_ATR["nodes"] if n["instance_id"] == i)
+                  for i in ("n_fast", "n_slow"))
+    assert fast["component"] == slow["component"]
+    assert fast["instance_id"] != slow["instance_id"]
 
 
 # ── A.5 — the rejection, for the right reason ─────────────────────────────
@@ -276,7 +302,11 @@ def test_a5_final_edge_is_ill_typed_on_the_domain_axis():
     violations = validate(A5_MULTI_TIMEFRAME, library=LIBRARY)
     assert [v.clause for v in violations] == ["F7"]
     only = violations[0]
-    assert only.path == "$.edges[1].domain.timeframe"
+    # The index moved when the bar-input edges were added ahead of it. Pinned by
+    # position anyway: the point is that ONE specific edge is rejected, and a
+    # test that only checked "some F7 somewhere" would pass against a validator
+    # that rejected the wrong one.
+    assert only.path == "$.edges[3].domain.timeframe"
     assert "'15m'" in only.message and "'5m'" in only.message
 
 
@@ -293,12 +323,64 @@ def test_a4_type_checks_clean_against_the_same_library():
     assert validate(A4_DUAL_ATR, library=LIBRARY) == []
 
 
+# ── F8's converse: an input nothing feeds ─────────────────────────────────
+
+def test_an_input_that_nothing_feeds_is_rejected_given_a_library():
+    """F8 is written as a permission — "an input MAY declare a default source" —
+    with a guarantee attached: "a graph whose unwired inputs all declare sources
+    MUST be valid". The converse is what bites. An input that is neither wired
+    nor defaulted is a socket nothing will ever feed, and such a graph
+    validates, **resolves cleanly**, and then raises the moment a kernel reaches
+    for it. The research proposer produced one within its first hundred
+    mutations, which is how this came to be enforced.
+    """
+    broken = copy.deepcopy(A4_DUAL_ATR)
+    broken["edges"] = [e for e in broken["edges"]
+                       if not (e["target"]["instance"] == "n_fast"
+                               and e["target"]["socket"] == "close")]
+
+    violations = validate(broken, library=LIBRARY)
+    assert [v.clause for v in violations] == ["F8"]
+    assert violations[0].path == "$.nodes.n_fast.close"
+
+
+def test_that_same_graph_looks_fine_without_a_library():
+    """Which is exactly why F8 is reported as *unchecked* rather than passing
+    when no library is supplied. Whether a node even has a `close` input is a
+    fact about the component, not about the graph."""
+    broken = copy.deepcopy(A4_DUAL_ATR)
+    broken["edges"] = [e for e in broken["edges"]
+                       if not (e["target"]["instance"] == "n_fast"
+                               and e["target"]["socket"] == "close")]
+    assert validate(broken) == []
+
+
+def test_a_declared_default_source_satisfies_the_same_input():
+    """The permission half. An unwired input whose component declares where its
+    value comes from is valid — that is the clause's actual promise, and it is
+    what makes graph mutation a local edit rather than a constraint problem."""
+    atr = copy.deepcopy(A2_ATR_WILDER)
+    atr["interface"][2]["default_source"] = {
+        "component": {"identifier": "market.close", "version": 1}, "socket": "out"}
+
+    broken = copy.deepcopy(A4_DUAL_ATR)
+    broken["edges"] = [e for e in broken["edges"]
+                       if not (e["target"]["instance"] == "n_fast"
+                               and e["target"]["socket"] == "close")]
+
+    assert validate(broken, library={**LIBRARY,
+                                     ("indicator.atr.wilder", 1): atr}) == []
+
+
 # ── the honesty guard ─────────────────────────────────────────────────────
 
 def test_without_a_library_f7_is_reported_unchecked_not_passed():
     """An unchecked clause that looks like a passing clause is how a validator
     lies. This codebase's documented failure mode is mechanisms that exist and
     are wired to nothing; a silent skip is the same defect in a validator."""
-    assert "F7" in unchecked_clauses(library=None)
-    assert "F7" not in unchecked_clauses(library=LIBRARY)
-    assert LIBRARY_DEPENDENT_CLAUSES == {"F7"}
+    assert {"F7", "F8"} <= unchecked_clauses(library=None)
+    assert not ({"F7", "F8"} & unchecked_clauses(library=LIBRARY))
+    # F8 joined F7 on 2026-08-03: an input that is neither wired nor defaulted
+    # is a socket nothing feeds, and which sockets a node has lives in the
+    # component — so, like F7, it needs a library to check.
+    assert LIBRARY_DEPENDENT_CLAUSES == {"F7", "F8"}
