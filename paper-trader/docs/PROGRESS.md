@@ -3,8 +3,8 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6a daily research review is complete
-in the current publication commit; S4.6b durable notes and saved views is next.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6b durable review notes and saved
+views is complete in the current publication commit; S4.6c bounded search is next.
 
 ---
 
@@ -36,7 +36,7 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, version/evidence comparison and daily review aggregation complete |
+| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, comparison, daily review, notes and saved views complete |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
@@ -67,6 +67,7 @@ that clause's implementation.
 | `research/operations.py`, operation status route | Locked, canonical current/last research attempts with safe read-only cockpit status |
 | `app/editor/comparison.py`, version comparison route | Pure immutable graph structure/parameter/component diff composed with verified run evidence |
 | `app/core/research_review.py`, review route | Derived project timeline, closed cursor/filters, current queues and separate global operations lane |
+| `app/core/review_state.py`, migration `0008` | Project-owned optimistic review notes and canonical saved filters outside source/executable identity |
 
 ### The two results worth knowing
 
@@ -99,9 +100,9 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**S4.6b: durable review notes and saved views.** Define project/principal ownership and stable event
-anchors first, then persist bounded non-executable annotations and reusable filters without hiding
-or mutating the authoritative timeline and queues.
+**S4.6c: bounded project review search.** Define the safe corpus and normalization first, then search
+server-authored event summaries and active owner notes without loading raw graph/evidence content or
+crossing into research execution.
 
 ---
 

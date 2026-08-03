@@ -825,6 +825,35 @@ export interface ResearchReview {
   }[]
 }
 
+export interface ResearchReviewNote {
+  readonly note_id: string
+  readonly project_id: string
+  readonly event_id: string
+  readonly event_type: ResearchReviewEventType
+  readonly body: string
+  readonly created_by: 'owner'
+  readonly revision: number
+  readonly anchor_state: 'available' | 'missing'
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export interface ResearchReviewSavedView {
+  readonly view_id: string
+  readonly project_id: string
+  readonly name: string
+  readonly filters: Required<Pick<ResearchReviewFilters, 'limit'>> & {
+    readonly event_type: ResearchReviewEventType | null
+    readonly status: string | null
+    readonly after: string | null
+    readonly before: string | null
+  }
+  readonly created_by: 'owner'
+  readonly revision: number
+  readonly created_at: string
+  readonly updated_at: string
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -837,7 +866,7 @@ const researchFetch = async <T>(url: string, init?: RequestInit): Promise<T> => 
       ...init?.headers,
     },
   })
-  const body = await response.json()
+  const body = response.status === 204 ? undefined : await response.json()
   if (!response.ok) {
     throw new Error(typeof body.message === 'string'
       ? body.message
@@ -859,6 +888,61 @@ export const getResearchReview = (
   const suffix = query.toString()
   return researchFetch(`${researchPath(projectId)}/review${suffix ? `?${suffix}` : ''}`)
 }
+
+export const getResearchReviewNotes = (
+  projectId: string,
+): Promise<{ notes: ResearchReviewNote[] }> => researchFetch(
+  `${researchPath(projectId)}/review/notes`,
+)
+
+export const createResearchReviewNote = (
+  projectId: string, eventId: string, body: string,
+): Promise<ResearchReviewNote> => researchFetch(
+  `${researchPath(projectId)}/review/notes`,
+  { method: 'POST', body: JSON.stringify({ event_id: eventId, body }) },
+)
+
+export const updateResearchReviewNote = (
+  projectId: string, noteId: string, baseRevision: number, body: string,
+): Promise<ResearchReviewNote> => researchFetch(
+  `${researchPath(projectId)}/review/notes/${encodeURIComponent(noteId)}`,
+  { method: 'PATCH', body: JSON.stringify({ base_revision: baseRevision, body }) },
+)
+
+export const deleteResearchReviewNote = (
+  projectId: string, noteId: string, baseRevision: number,
+): Promise<void> => researchFetch(
+  `${researchPath(projectId)}/review/notes/${encodeURIComponent(noteId)}`,
+  { method: 'DELETE', body: JSON.stringify({ base_revision: baseRevision }) },
+)
+
+export const getResearchReviewSavedViews = (
+  projectId: string,
+): Promise<{ views: ResearchReviewSavedView[] }> => researchFetch(
+  `${researchPath(projectId)}/review/views`,
+)
+
+export const createResearchReviewSavedView = (
+  projectId: string, name: string, filters: ResearchReviewFilters,
+): Promise<ResearchReviewSavedView> => researchFetch(
+  `${researchPath(projectId)}/review/views`,
+  { method: 'POST', body: JSON.stringify({ name, filters }) },
+)
+
+export const updateResearchReviewSavedView = (
+  projectId: string, viewId: string, baseRevision: number,
+  name: string, filters: ResearchReviewFilters,
+): Promise<ResearchReviewSavedView> => researchFetch(
+  `${researchPath(projectId)}/review/views/${encodeURIComponent(viewId)}`,
+  { method: 'PATCH', body: JSON.stringify({ base_revision: baseRevision, name, filters }) },
+)
+
+export const deleteResearchReviewSavedView = (
+  projectId: string, viewId: string, baseRevision: number,
+): Promise<void> => researchFetch(
+  `${researchPath(projectId)}/review/views/${encodeURIComponent(viewId)}`,
+  { method: 'DELETE', body: JSON.stringify({ base_revision: baseRevision }) },
+)
 
 export const getResearchRuns = (projectId: string): Promise<{ runs: ResearchRunSummary[] }> =>
   researchFetch(`${researchPath(projectId)}/experiments`)

@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.6b durable review notes and saved views
-- **Next product checkpoint:** a user can retain project-owned review context and repeat a bounded
-  review without weakening the server-derived timeline or current queues.
+- **Current slice:** S4.6c bounded project review search
+- **Next product checkpoint:** a user can find server-authored review facts and owner notes without
+  loading or indexing raw executable graphs, evidence or scorecards.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -85,7 +85,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S4.4 | Make bounded research operations and failures observable | S4.3 | done — verified in the safety checkpoint; publication in this slice commit |
 | S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | done — verified; publication in this slice commit |
 | S4.6a | Add a daily research review read model and actionable queues | S4.5 | done — verified and published in this slice commit |
-| S4.6b | Persist project review notes and saved filter views | S4.6a | active — bounded checklist generated |
+| S4.6b | Persist project review notes and saved filter views | S4.6a | done — schema checkpoint verified; publication in this slice commit |
+| S4.6c | Add bounded project review search | S4.6b | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -520,16 +521,43 @@ execution or shared-runtime boundary changed, so S4.4's 2,883-pass checkpoint re
 
 **S4.6b bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile event identity, project ownership, authenticated principal semantics, retention and
+1. [x] Reconcile event identity, project ownership, authenticated principal semantics, retention and
        event disappearance before allowing review notes or saved views to persist.
-2. [ ] Record a closed contract that keeps notes and saved filters non-executable, separately
+2. [x] Record a closed contract that keeps notes and saved filters non-executable, separately
        revisioned and unable to acknowledge, hide or mutate authoritative queues.
-3. [ ] Add reversible persistence plus optimistic APIs for bounded project notes and named saved
+3. [x] Add reversible persistence plus optimistic APIs for bounded project notes and named saved
        filter views; prove cross-project isolation, stale-write rejection and migration equivalence.
-4. [ ] Add accessible create/edit/delete note and save/apply/delete view workflows while preserving
+4. [x] Add accessible create/edit/delete note and save/apply/delete view workflows while preserving
        exact server validation feedback and lossless reload.
-5. [ ] Prove annotations cannot change graph/evidence/cache/experiment identity or source events;
+5. [x] Prove annotations cannot change graph/evidence/cache/experiment identity or source events;
        run the schema checkpoint, publish, inspect exact-head CI and continue to bounded search.
+
+**S4.6b completion evidence, 2026-08-03.** ADR 0008 keeps review writing in two project-owned
+application tables, normalizes authenticated and auth-disabled callers to the same durable owner,
+and rejects note/view semantics that acknowledge or hide authoritative queues. Notes have immutable
+server-verified project-event anchors, optimistic revisions and tombstones; a disappeared event
+leaves a visible missing anchor without a copied summary. Saved views contain only canonical
+type/status/UTC-date/limit filters and never cursors. Closed principal-aware CRUD APIs and `/api/v1`
+mirrors reject invented/global/wrong-project anchors, stale writes, duplicate active names and
+unknown filter fields. The UI retains note/view drafts on failure, isolates auxiliary read failures,
+supports accessible note create/edit/delete and view save/apply/delete, and does not insert writing
+into timeline counts or cursors. Migration `0008` is model-equivalent, rolls back when empty, refuses
+populated destructive downgrade and preserves money, graph and layout records. The focused set
+passed 44 backend and 19 frontend tests. The schema checkpoint passed 2,922 backend/research tests
+with 6 skips, all 214 frontend tests, typecheck/build, `LEDGER OK`, 16/16 `SWEEP OK`, and head `0008`.
+
+**S4.6c bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile the safe search corpus and reject raw graph JSON, evidence, scorecards, candidate
+       reasons, global operations and other cross-project or sensitive text.
+2. [ ] Record deterministic query normalization, bounded matching/ranking, pagination interaction,
+       missing-note behavior and source-corruption containment before implementation.
+3. [ ] Add a closed server-authoritative search read over bounded project event summaries and active
+       owner notes without a new index/table or research/execution calls.
+4. [ ] Add an accessible search control with exact empty/invalid/source-error feedback, result links,
+       saved-view independence and lossless reload.
+5. [ ] Prove case/Unicode normalization, stable ordering, cross-project isolation, corpus exclusion,
+       no write/recompute seams and narrow-screen containment; verify, publish and continue.
 
 ## 4. Medium-term sequence
 

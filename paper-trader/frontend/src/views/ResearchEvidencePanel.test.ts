@@ -6,6 +6,8 @@ import type {
   ResearchFinding,
   ResearchOperationStatus,
   ResearchReview,
+  ResearchReviewNote,
+  ResearchReviewSavedView,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
@@ -148,6 +150,27 @@ const REVIEW: ResearchReview = {
   source_errors: [{ source: 'candidate', source_id: '8', code: 'CANDIDATE_DECISION_CORRUPT' }],
 }
 
+const REVIEW_NOTES: ResearchReviewNote[] = [{
+  note_id: 'note.1', project_id: 'project.alpha', event_id: 'candidate:7',
+  event_type: 'candidate_created', body: 'Check the breadth before deciding.',
+  created_by: 'owner', revision: 0, anchor_state: 'available',
+  created_at: '2026-08-03T02:00:00Z', updated_at: '2026-08-03T02:00:00Z',
+}, {
+  note_id: 'note.2', project_id: 'project.alpha', event_id: 'run:missing',
+  event_type: 'experiment_run', body: 'Retained after source restore.',
+  created_by: 'owner', revision: 1, anchor_state: 'missing',
+  created_at: '2026-08-03T02:01:00Z', updated_at: '2026-08-03T02:02:00Z',
+}]
+
+const SAVED_VIEWS: ResearchReviewSavedView[] = [{
+  view_id: 'view.1', project_id: 'project.alpha', name: 'Failed runs',
+  filters: {
+    event_type: 'experiment_run', status: 'failed', after: null, before: null, limit: 25,
+  },
+  created_by: 'owner', revision: 0,
+  created_at: '2026-08-03T02:00:00Z', updated_at: '2026-08-03T02:00:00Z',
+}]
+
 describe('ResearchEvidenceSurface', () => {
   it('polling refresh retains loaded older events while updating current facts', () => {
     const old = REVIEW.timeline.events[0]
@@ -177,6 +200,9 @@ describe('ResearchEvidenceSurface', () => {
     const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
       runs: [RUN], detail: null, comparison: null, reason: '', review: REVIEW,
       reviewFilters: { event_type: 'candidate_created', status: 'created' },
+      reviewNotes: REVIEW_NOTES, savedViews: SAVED_VIEWS,
+      noteEventId: 'candidate:7', noteDraft: 'Keep this draft after conflict',
+      savedViewName: 'Current review',
       onSelect: () => undefined, onReviewFilters: () => undefined, onReviewMore: () => undefined,
     }))
 
@@ -193,6 +219,14 @@ describe('ResearchEvidenceSurface', () => {
     expect(html).toContain('Load older events')
     expect(html).toContain('Event type')
     expect(html).toContain('Status')
+    expect(html).toContain('Saved review views')
+    expect(html).toContain('Apply Failed runs')
+    expect(html).toContain('Save current filters')
+    expect(html).toContain('Check the breadth before deciding.')
+    expect(html).toContain('Notes with missing source events')
+    expect(html).toContain('Retained after source restore.')
+    expect(html).toContain('Keep this draft after conflict')
+    expect(html).toContain('Save note')
     expect(html).toContain('grid-cols-1')
     expect(html).toContain('min-w-0')
     expect(html).toContain('break-all')

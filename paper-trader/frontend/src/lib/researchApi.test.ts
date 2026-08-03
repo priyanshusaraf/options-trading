@@ -3,9 +3,13 @@ import {
   compareResearchRuns,
   compareResearchVersions,
   createResearchFinding,
+  createResearchReviewNote,
+  createResearchReviewSavedView,
+  deleteResearchReviewNote,
   decideResearchCandidate,
   getResearchOperationStatus,
   getResearchReview,
+  getResearchReviewNotes,
   getResearchRun,
   getResearchGraphVersions,
   reviseResearchFinding,
@@ -14,6 +18,51 @@ import {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('research evidence transport', () => {
+  it('uses closed project paths for revisioned review notes and handles tombstone responses', async () => {
+    const note = { note_id: 'note.1', revision: 0 }
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ notes: [note] }) } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => note } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 204 } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await getResearchReviewNotes('project.alpha')
+    await createResearchReviewNote('project.alpha', 'run:4', 'Review this run')
+    await expect(deleteResearchReviewNote('project.alpha', 'note.1', 0)).resolves.toBeUndefined()
+
+    expect(request).toHaveBeenNthCalledWith(2,
+      '/api/ir/projects/project.alpha/review/notes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: 'run:4', body: 'Review this run' }),
+      })
+    expect(request).toHaveBeenNthCalledWith(3,
+      '/api/ir/projects/project.alpha/review/notes/note.1', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base_revision: 0 }),
+      })
+  })
+
+  it('saves validated filters without a cursor or client-owned event state', async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true, status: 201, json: async () => ({ view_id: 'view.1' }),
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await createResearchReviewSavedView('project.alpha', 'Failed runs', {
+      event_type: 'experiment_run', status: 'failed', limit: 25,
+    })
+
+    expect(request).toHaveBeenCalledWith(
+      '/api/ir/projects/project.alpha/review/views', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Failed runs',
+          filters: { event_type: 'experiment_run', status: 'failed', limit: 25 },
+        }),
+      },
+    )
+  })
+
   it('loads the project review with bounded server filters only', async () => {
     const review = { project_id: 'project.alpha', timeline: { events: [] } }
     const request = vi.fn().mockResolvedValue({

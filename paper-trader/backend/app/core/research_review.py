@@ -208,7 +208,35 @@ def paginate_review_events(
     return {"events": page, "next_cursor": next_cursor}
 
 
+def normalize_review_filters(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonical persisted subset of the transient review query contract."""
+    fields = {"event_type", "status", "after", "before", "limit"}
+    if not isinstance(value, Mapping) or not set(value) <= fields:
+        raise ReviewQueryRejected("saved review filters contain unsupported fields")
+    event_type = value.get("event_type")
+    status = value.get("status")
+    limit = value.get("limit", 25)
+    if event_type is not None and event_type not in EVENT_TYPES:
+        raise ReviewQueryRejected("saved review event type is unsupported")
+    if status is not None and status not in EVENT_STATUSES:
+        raise ReviewQueryRejected("saved review status is unsupported")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+        raise ReviewQueryRejected("saved review limit must be between 1 and 100")
+    after = _timestamp(value["after"]) if value.get("after") is not None else None
+    before = _timestamp(value["before"]) if value.get("before") is not None else None
+    if after is not None and before is not None and after >= before:
+        raise ReviewQueryRejected("saved review date range is invalid")
+    return {
+        "after": after,
+        "before": before,
+        "event_type": event_type,
+        "limit": limit,
+        "status": status,
+    }
+
+
 __all__ = [
     "EVENT_STATUSES", "EVENT_TYPES", "ReviewQueryRejected", "decode_review_cursor",
-    "encode_review_cursor", "make_review_event", "paginate_review_events",
+    "encode_review_cursor", "make_review_event", "normalize_review_filters",
+    "paginate_review_events",
 ]

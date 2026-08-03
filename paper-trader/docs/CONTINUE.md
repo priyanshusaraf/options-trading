@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.6a is implemented; S4.6b durable review notes and saved views is the active
+**Stage A through S4.6b is implemented; S4.6c bounded project review search is the active
 slice.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
@@ -46,6 +46,11 @@ S4.6a derives one project-owned timeline from verified immutable graph, run, fin
 facts and keeps the global operation receipt outside project identity and pagination. Closed filters,
 content-addressed cursors, current queues and source-error containment are exposed through one
 read-only route and accessible daily-review surface without invoking research or write seams.
+S4.6b persists non-authoritative project review notes and saved filter views under optimistic
+revisions. Notes anchor only to server-derived project events and survive missing source events
+without stale summary copies. Saved views contain no cursor or queue visibility state. Migration
+`0008`, closed principal-aware APIs and accessible workflows leave source facts and identities
+unchanged.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -63,6 +68,7 @@ viewer and does not adopt the IR runtime in a live path.
 - S4.4 operations observability: current HEAD after this handoff is published
 - S4.5 version/evidence comparison: current HEAD after this handoff is published
 - S4.6a daily review: current HEAD after this handoff is published
+- S4.6b review notes/saved views: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -131,6 +137,15 @@ receipt containment, global-operation non-attribution and no resolver/provider/o
 calls. It changes no schema, execution or shared-runtime boundary, so the S4.4 full checkpoint is
 not repeated.
 
+S4.6b's focused migration/repository/API/review set passed 44 backend tests and its frontend
+transport/surface set passed 19. The shared-persistence checkpoint collected 2,928 backend/research
+tests and completed with 2,922 passed plus 6 expected skips. All 214 frontend tests, typecheck and
+production build pass; deterministic smoke reports `LEDGER OK` and 16/16 `SWEEP OK`; migration head
+is `0008`. Negative proofs cover destructive downgrade refusal, stale CAS rollback, immutable note
+anchors, missing-source retention without copied summaries, global/wrong-project anchor refusal,
+owner normalization, graph/presentation identity invariance and no IR/research/execution writes.
+Exact-head S4.6a Actions run `30822688238` is fully green.
+
 S4.3's focused and WS-03/API regression collected 570 tests and completed with 6 skips. All 204
 frontend tests, typecheck and production build pass. Negative proofs cover cross-project and raw
 identity input, non-completed/legacy/corrupt evidence, internally consistent but contradictory
@@ -197,12 +212,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.6b — durable review notes and saved views.**
+**S4.6c — bounded project review search.**
 
-Continue from the new five-item S4.6b checklist in `docs/engineering/EXECUTION_PLAN.md`. First
-reconcile stable event anchors, project/principal ownership, retention and source-event disappearance.
-Reject any design where notes or saved views alter executable identity, mutate source facts, hide an
-authoritative queue or imply that an unresolved safety/research state has been acknowledged.
+Continue from the new five-item S4.6c checklist in `docs/engineering/EXECUTION_PLAN.md`. First
+define the allowed corpus and deterministic normalization. Search only bounded server-authored event
+summaries and active owner notes. Do not load or index raw graph JSON, evidence, scorecards,
+candidate decision reasons, global operation text or cross-project content.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

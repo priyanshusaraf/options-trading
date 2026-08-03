@@ -2,13 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import {
   compareResearchVersions,
   createResearchFinding,
+  createResearchReviewNote,
+  createResearchReviewSavedView,
   decideResearchCandidate,
+  deleteResearchReviewNote,
+  deleteResearchReviewSavedView,
   getResearchReview,
+  getResearchReviewNotes,
+  getResearchReviewSavedViews,
   getResearchRun,
   getResearchFindings,
   getResearchGraphVersions,
   getResearchRuns,
   reviseResearchFinding,
+  updateResearchReviewNote,
   type ResearchComparison,
   type ResearchFinding,
   type ResearchGraphVersion,
@@ -17,6 +24,8 @@ import {
   type ResearchReview,
   type ResearchReviewEventType,
   type ResearchReviewFilters,
+  type ResearchReviewNote,
+  type ResearchReviewSavedView,
   type ResearchRunDetail,
   type ResearchRunSummary,
   type ResearchVersionSelection,
@@ -88,6 +97,12 @@ export function ResearchEvidenceSurface({
   review = null,
   reviewFilters = {},
   reviewError = null,
+  reviewNotes = [],
+  savedViews = [],
+  noteEventId = null,
+  editingNoteId = null,
+  noteDraft = '',
+  savedViewName = '',
   reason,
   findingStatement = '',
   findingPolarity = 'negative',
@@ -105,6 +120,16 @@ export function ResearchEvidenceSurface({
   onFindingSubmit,
   onReviewFilters,
   onReviewMore,
+  onStartNote,
+  onEditNote,
+  onCancelNote,
+  onNoteDraft,
+  onSubmitNote,
+  onDeleteNote,
+  onSavedViewName,
+  onSaveView,
+  onApplyView,
+  onDeleteView,
 }: {
   runs: readonly ResearchRunSummary[]
   detail: ResearchRunDetail | null
@@ -116,6 +141,12 @@ export function ResearchEvidenceSurface({
   review?: ResearchReview | null
   reviewFilters?: ResearchReviewFilters
   reviewError?: string | null
+  reviewNotes?: readonly ResearchReviewNote[]
+  savedViews?: readonly ResearchReviewSavedView[]
+  noteEventId?: string | null
+  editingNoteId?: string | null
+  noteDraft?: string
+  savedViewName?: string
   reason: string
   findingStatement?: string
   findingPolarity?: 'positive' | 'negative'
@@ -133,6 +164,16 @@ export function ResearchEvidenceSurface({
   onFindingSubmit?: () => void
   onReviewFilters?: (filters: ResearchReviewFilters) => void
   onReviewMore?: () => void
+  onStartNote?: (eventId: string) => void
+  onEditNote?: (note: ResearchReviewNote) => void
+  onCancelNote?: () => void
+  onNoteDraft?: (body: string) => void
+  onSubmitNote?: () => void
+  onDeleteNote?: (note: ResearchReviewNote) => void
+  onSavedViewName?: (name: string) => void
+  onSaveView?: () => void
+  onApplyView?: (view: ResearchReviewSavedView) => void
+  onDeleteView?: (view: ResearchReviewSavedView) => void
 }) {
   const orderedVersions = versions.length > 0
     ? [...versions].sort((a, b) => a.version - b.version)
@@ -228,6 +269,31 @@ export function ResearchEvidenceSurface({
                 >Finding {item.finding_id} · run {item.evidence_run_id}</button>)}
               </div>
             </div>
+            <section aria-label="Saved review views" className="space-y-2 rounded border border-edge p-2">
+              <p className="font-medium">Saved review views</p>
+              <div className="flex min-w-0 flex-wrap gap-2">
+                <label htmlFor="saved-review-name">View name</label>
+                <input
+                  id="saved-review-name" maxLength={80} value={savedViewName}
+                  onChange={(event) => onSavedViewName?.(event.target.value)}
+                />
+                <button
+                  type="button" className="btn" disabled={busy || !savedViewName.trim()}
+                  onClick={onSaveView}
+                >Save current filters</button>
+              </div>
+              {savedViews.length === 0 && <p className="text-muted">No saved views.</p>}
+              <ul className="flex min-w-0 flex-wrap gap-2">
+                {savedViews.map((view) => <li key={view.view_id} className="break-words">
+                  <button type="button" className="btn" onClick={() => onApplyView?.(view)}>
+                    Apply {view.name}
+                  </button>{' '}
+                  <button type="button" className="btn" onClick={() => onDeleteView?.(view)}>
+                    Delete {view.name}
+                  </button>
+                </li>)}
+              </ul>
+            </section>
             <div className="flex min-w-0 flex-wrap gap-2">
               <label>Event type <select
                 value={reviewFilters.event_type ?? ''}
@@ -292,11 +358,61 @@ export function ResearchEvidenceSurface({
                     setRightVersion(item.references.graph!.version)
                     setRightRun(null)
                   }}>Use version {item.references.graph.version} in comparison</button>}
+                  <div className="mt-2 space-y-1 border-t border-edge/50 pt-2">
+                    {reviewNotes.filter((note) => note.event_id === item.event_id).map((note) => (
+                      <div key={note.note_id} className="rounded bg-panel2 p-2">
+                        <p className="whitespace-pre-wrap break-words">{note.body}</p>
+                        <button type="button" className="btn mt-1" onClick={() => onEditNote?.(note)}>
+                          Edit note
+                        </button>{' '}
+                        <button type="button" className="btn mt-1" onClick={() => onDeleteNote?.(note)}>
+                          Delete note
+                        </button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn" onClick={() => onStartNote?.(item.event_id)}>
+                      Add note
+                    </button>
+                  </div>
                 </li>)}
               </ol>}
             {review.timeline.next_cursor && <button
               type="button" className="btn" onClick={onReviewMore}
             >Load older events</button>}
+            {reviewNotes.some((note) => note.anchor_state === 'missing') && <section
+              aria-label="Notes with missing source events" className="space-y-2"
+            >
+              <p className="font-medium">Notes with missing source events</p>
+              {reviewNotes.filter((note) => note.anchor_state === 'missing').map((note) => <div
+                key={note.note_id} className="rounded border border-amber-500/40 p-2"
+              >
+                <p className="text-amber-300">Source event unavailable · {note.event_id}</p>
+                <p className="whitespace-pre-wrap break-words">{note.body}</p>
+                <button type="button" className="btn mt-1" onClick={() => onEditNote?.(note)}>
+                  Edit note
+                </button>{' '}
+                <button type="button" className="btn mt-1" onClick={() => onDeleteNote?.(note)}>
+                  Delete note
+                </button>
+              </div>)}
+            </section>}
+            {noteEventId && <section aria-label="Review note editor" className="space-y-2 rounded border border-edge p-2">
+              <label htmlFor="review-note-body">
+                {editingNoteId ? 'Edit review note' : 'Add review note'}
+              </label>
+              <textarea
+                id="review-note-body" className="min-h-20 w-full rounded border border-edge bg-panel2 p-2"
+                maxLength={4000} value={noteDraft}
+                onChange={(event) => onNoteDraft?.(event.target.value)}
+              />
+              <button
+                type="button" className="btn" disabled={busy || !noteDraft.trim()}
+                onClick={onSubmitNote}
+              >Save note</button>{' '}
+              <button type="button" className="btn" disabled={busy} onClick={onCancelNote}>
+                Cancel note
+              </button>
+            </section>}
           </>}
         </section>
         <section aria-label="Research operation status" className="space-y-2">
@@ -592,6 +708,12 @@ export default function ResearchEvidencePanel({
   const reviewRequest = useRef(0)
   const [reviewFilters, setReviewFilters] = useState<ResearchReviewFilters>({ limit: 25 })
   const [reviewError, setReviewError] = useState<string | null>(null)
+  const [reviewNotes, setReviewNotes] = useState<ResearchReviewNote[]>([])
+  const [savedViews, setSavedViews] = useState<ResearchReviewSavedView[]>([])
+  const [noteEventId, setNoteEventId] = useState<string | null>(null)
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [noteDraft, setNoteDraft] = useState('')
+  const [savedViewName, setSavedViewName] = useState('')
   const [reason, setReason] = useState('')
   const [findingStatement, setFindingStatement] = useState('')
   const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
@@ -620,10 +742,24 @@ export default function ResearchEvidencePanel({
     if (runId) await loadDetail(runId)
   }
 
+  const refreshReviewArtifacts = async () => {
+    const [notes, views] = await Promise.allSettled([
+      getResearchReviewNotes(projectId), getResearchReviewSavedViews(projectId),
+    ])
+    if (notes.status === 'fulfilled') setReviewNotes(notes.value.notes)
+    if (views.status === 'fulfilled') setSavedViews(views.value.views)
+    const rejected = [notes, views].find((result) => result.status === 'rejected')
+    if (rejected?.status === 'rejected') {
+      setError(rejected.reason instanceof Error
+        ? rejected.reason.message : 'Review writing request failed')
+    }
+  }
+
   useEffect(() => {
     refresh().catch((cause) => {
       setError(cause instanceof Error ? cause.message : 'Research history request failed')
     })
+    void refreshReviewArtifacts()
   }, [projectId, graphIdentifier])
 
   const loadReview = async (
@@ -720,6 +856,66 @@ export default function ResearchEvidencePanel({
     } finally { setBusy(false) }
   }
 
+  const cancelNote = () => {
+    setNoteEventId(null)
+    setEditingNoteId(null)
+    setNoteDraft('')
+  }
+
+  const submitNote = async () => {
+    if (!noteEventId || !noteDraft.trim()) return
+    setBusy(true); setError(null)
+    try {
+      if (editingNoteId) {
+        const note = reviewNotes.find((item) => item.note_id === editingNoteId)
+        if (!note) return
+        await updateResearchReviewNote(
+          projectId, note.note_id, note.revision, noteDraft.trim(),
+        )
+      } else {
+        await createResearchReviewNote(projectId, noteEventId, noteDraft.trim())
+      }
+      setReviewNotes((await getResearchReviewNotes(projectId)).notes)
+      cancelNote()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Review note request failed')
+    } finally { setBusy(false) }
+  }
+
+  const removeNote = async (note: ResearchReviewNote) => {
+    setBusy(true); setError(null)
+    try {
+      await deleteResearchReviewNote(projectId, note.note_id, note.revision)
+      setReviewNotes((await getResearchReviewNotes(projectId)).notes)
+      if (editingNoteId === note.note_id) cancelNote()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Review note delete failed')
+    } finally { setBusy(false) }
+  }
+
+  const saveView = async () => {
+    if (!savedViewName.trim()) return
+    setBusy(true); setError(null)
+    try {
+      const { cursor: _cursor, ...filters } = reviewFilters
+      await createResearchReviewSavedView(projectId, savedViewName.trim(), filters)
+      setSavedViews((await getResearchReviewSavedViews(projectId)).views)
+      setSavedViewName('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Saved view request failed')
+    } finally { setBusy(false) }
+  }
+
+  const removeView = async (view: ResearchReviewSavedView) => {
+    setBusy(true); setError(null)
+    try {
+      await deleteResearchReviewSavedView(projectId, view.view_id, view.revision)
+      setSavedViews((await getResearchReviewSavedViews(projectId)).views)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Saved view delete failed')
+    } finally { setBusy(false) }
+  }
+
   return <ResearchEvidenceSurface
     runs={runs}
     detail={detail}
@@ -731,6 +927,12 @@ export default function ResearchEvidencePanel({
     review={review}
     reviewFilters={reviewFilters}
     reviewError={reviewError}
+    reviewNotes={reviewNotes}
+    savedViews={savedViews}
+    noteEventId={noteEventId}
+    editingNoteId={editingNoteId}
+    noteDraft={noteDraft}
+    savedViewName={savedViewName}
     reason={reason}
     findingStatement={findingStatement}
     findingPolarity={findingPolarity}
@@ -751,5 +953,26 @@ export default function ResearchEvidencePanel({
       if (!review?.timeline.next_cursor) return
       void loadReview({ ...reviewFilters, cursor: review.timeline.next_cursor }, true)
     }}
+    onStartNote={(eventId) => {
+      setNoteEventId(eventId); setEditingNoteId(null); setNoteDraft(''); setError(null)
+    }}
+    onEditNote={(note) => {
+      setNoteEventId(note.event_id); setEditingNoteId(note.note_id)
+      setNoteDraft(note.body); setError(null)
+    }}
+    onCancelNote={cancelNote}
+    onNoteDraft={setNoteDraft}
+    onSubmitNote={submitNote}
+    onDeleteNote={removeNote}
+    onSavedViewName={setSavedViewName}
+    onSaveView={saveView}
+    onApplyView={(view) => setReviewFilters({
+      event_type: view.filters.event_type ?? undefined,
+      status: view.filters.status ?? undefined,
+      after: view.filters.after?.slice(0, 16) ?? undefined,
+      before: view.filters.before?.slice(0, 16) ?? undefined,
+      limit: view.filters.limit,
+    })}
+    onDeleteView={removeView}
   />
 }

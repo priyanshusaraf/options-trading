@@ -1004,6 +1004,63 @@ class IrGraphLayoutPositionOrphanArchive(Base):
     y: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+class ProjectReviewNote(Base):
+    """Mutable owner writing anchored to, but never copied into, a review event."""
+    __tablename__ = "project_review_notes"
+    __table_args__ = (
+        CheckConstraint("length(event_id) BETWEEN 1 AND 200", name="ck_review_note_event_id"),
+        CheckConstraint(
+            "event_type IN ('graph_version_published', 'experiment_run', "
+            "'finding_created', 'candidate_created', 'candidate_decided')",
+            name="ck_review_note_event_type",
+        ),
+        CheckConstraint("length(body) BETWEEN 1 AND 4000", name="ck_review_note_body"),
+        CheckConstraint("created_by = 'owner'", name="ck_review_note_owner"),
+        CheckConstraint("revision >= 0", name="ck_review_note_revision"),
+        Index("ix_project_review_notes_project_event", "project_id", "event_id"),
+    )
+
+    note_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+
+
+class ProjectReviewSavedView(Base):
+    """A named canonical review filter document; never a persisted cursor."""
+    __tablename__ = "project_review_saved_views"
+    __table_args__ = (
+        CheckConstraint("length(name) BETWEEN 1 AND 80", name="ck_review_view_name"),
+        CheckConstraint("json_valid(filters_json)", name="ck_review_view_filters_json"),
+        CheckConstraint("created_by = 'owner'", name="ck_review_view_owner"),
+        CheckConstraint("revision >= 0", name="ck_review_view_revision"),
+        Index("ix_project_review_saved_views_project", "project_id"),
+        Index(
+            "uq_project_review_saved_views_active_name",
+            "project_id", "name", unique=True,
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
+
+    view_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    filters_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+
+
 class OptionData(Base):
     """Persistent option-chain research dataset. Every distinct contract quote we
     fetch is appended (deduped at snapshot cadence) to build a growing local
