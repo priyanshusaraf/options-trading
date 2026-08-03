@@ -20,6 +20,8 @@ import dataclasses
 import json
 import os
 
+from sqlalchemy import update
+
 from research.config import research_db_path
 from research.domain.base import make_engine, make_sessionmaker
 from research.domain.models import (
@@ -127,30 +129,41 @@ def list_pending_promotions() -> list[dict]:
 
 
 def get_promotion(candidate_id: int) -> dict | None:
-    """One candidate's full view, or None if research.db or the row is absent."""
+    """One pending candidate, or None for absent and every non-pending state."""
     with _research_session() as session:
         if session is None:
             return None
         try:
-            c = session.get(PromotionCandidate, candidate_id)
+            c = (session.query(PromotionCandidate)
+                 .filter_by(id=candidate_id, status="pending")
+                 .one_or_none())
             return _view(session, c) if c is not None else None
         except Exception:
             return None
 
 
 def approve_candidate(candidate_id: int, git_sha: str = "") -> bool:
-    """Stamp a human approval onto the candidate (status → approved, + git sha). The
-    sole write to research.db from the execution plane; touches research bookkeeping
-    only — never capital. Returns False if the candidate (or research.db) is absent."""
+    """Compare-and-swap one pending candidate to approved.
+
+    Returns False for absent, shadow, stale or terminal candidates. The status clause
+    is authorization, not merely optimistic concurrency: direct knowledge of a shadow
+    candidate id must never bypass prospective evidence.
+    """
     with _research_session() as session:
         if session is None:
             return False
         try:
-            c = session.get(PromotionCandidate, candidate_id)
-            if c is None:
+            claimed = session.execute(
+                update(PromotionCandidate)
+                .where(
+                    PromotionCandidate.id == candidate_id,
+                    PromotionCandidate.status == "pending",
+                )
+                .values(status="approved", approved_git_sha=git_sha or None)
+            )
+            if claimed.rowcount != 1:
+                session.rollback()
                 return False
-            c.status = "approved"
-            c.approved_git_sha = git_sha or None
             session.commit()
             return True
         except Exception:

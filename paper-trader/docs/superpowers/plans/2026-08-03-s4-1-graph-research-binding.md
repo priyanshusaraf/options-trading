@@ -86,7 +86,7 @@ orders, Python input, raw graph replacement or presentation identity.
    surface changes.
 3. [x] Update `docs/engineering/EXECUTION_PLAN.md`, `docs/engineering/workstreams/WS-03-research-plane.md`
    and `docs/CONTINUE.md` once with stable evidence.
-4. [ ] Commit deliberately, push `feat/exec-completeness`, verify the remote head and inspect the exact
+4. [x] Commit deliberately, push `feat/exec-completeness`, verify the remote head and inspect the exact
    GitHub Actions run.
 5. [x] Generate the next bounded checklist from `EXECUTION_PLAN.md` and continue into it unless a
    genuine owner-gated blocker is reached.

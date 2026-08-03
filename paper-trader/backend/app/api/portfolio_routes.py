@@ -9,6 +9,7 @@ new subsystem's surface stays cohesive.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.core import research_read
@@ -71,7 +72,13 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
     approved. `dry_run` previews the assignment/conflicts without writing."""
     cand = research_read.get_promotion(candidate_id)
     if cand is None:
-        return {"error": f"no pending promotion #{candidate_id}"}
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "PROMOTION_NOT_PENDING",
+                "message": "promotion is not pending human approval",
+            },
+        )
     name = body.watchlist_name or cand["strategy_key"]
     req = DeployRequest(
         watchlist_name=name, strategy_key=cand["strategy_key"],
@@ -83,6 +90,15 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
             return {"dry_run": True, "candidate_id": candidate_id,
                     "watchlist": prev.watchlist_name, "strategy_key": prev.strategy_key,
                     "accepted": prev.accepted, "rejected": prev.rejected}
+    if not research_read.approve_candidate(candidate_id, git_sha=""):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "PROMOTION_STATUS_CONFLICT",
+                "message": "promotion status changed before approval",
+            },
+        )
+    with SessionLocal() as s:
         res = deploy(s, req)
         # A generated strategy carries its composition across the plane boundary here,
         # once, at the human-gated deploy — so the engine can reconstruct + run it at the
@@ -93,7 +109,6 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
             save_generated(s, cand["strategy_key"], _json.dumps(cand["composition"]),
                            source=cand.get("generated_source") or "")
         s.commit()
-    research_read.approve_candidate(candidate_id, git_sha="")
     return {"dry_run": False, "candidate_id": candidate_id, "watchlist_id": res.watchlist_id,
             "assigned": res.assigned, "rejected": res.rejected,
             "generated": bool(cand.get("composition")),

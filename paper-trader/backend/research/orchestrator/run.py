@@ -31,6 +31,7 @@ from research.domain.models import (
     ResearchProgram,
 )
 from research.evaluation import kernels
+from research.evidence import encode_terminal_evidence
 from research.orchestrator.report import write_report
 from research.pipeline.optimize import optimize
 from research.pipeline.qualify import qualify_instrument
@@ -200,12 +201,26 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     qualified: list[str] = []
     rejected: list[dict] = []
     validated: list[dict] = []
+    instrument_evidence: list[dict] = []
     total_bars = 0
 
     for inst, ds in datasets:
         total_bars += ds.bar_count
         ie = qualify_instrument(ds.candles, inst, interval, strategy, params,
                                 min_trades=min_trades, seed=seed, capital=capital)
+        evidence_item = {
+            "instrument": ie.instrument_key,
+            "interval": interval,
+            "dataset_content_hash": ds.content_hash,
+            "qualification": {
+                "qualified": ie.qualified,
+                "trades": ie.trades,
+                "reason": ie.reason,
+            },
+            "validation": None,
+            "scorecard": None,
+        }
+        instrument_evidence.append(evidence_item)
         if not ie.qualified:
             logger.info("[qualify] %-10s REJECT — %s (%d trades)",
                         ie.instrument_key, ie.reason, ie.trades)
@@ -274,6 +289,11 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             n_trials = max(1, sibling_trials)
             var_sr = 0.0
 
+        evidence_item["validation"] = {
+            "passed": passed,
+            "gates": gates,
+        }
+
         gate_summary = " ".join(
             f"{g}={'✓' if r['passed'] else '✗'}({r['value']})" for g, r in gates.items())
         if not passed:
@@ -297,6 +317,10 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                     n_trials, var_sr, expected_max_sharpe(var_sr, n_trials))
         validated.append({"instrument": ie.instrument_key, "dsr": sc.dsr,
                           "gates": gates, "scorecard": sc.components})
+        evidence_item["scorecard"] = {
+            "dsr": sc.dsr,
+            "components": sc.components,
+        }
         _record_edge(session, strategy, ie.instrument_key, True, run.id)
         session.add(Finding(
             hypothesis_id=hyp.id, polarity="positive", confidence=_confidence(ie.trades),
@@ -305,6 +329,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                       f"({interval}), DSR={sc.dsr:.3f}"))
 
     promotion = None
+    breadth = None
     if validated:
         # Picking the best of N validated instruments is ITSELF a selection, and it
         # was unaccounted: each instrument's DSR was deflated for its own parameter
@@ -347,6 +372,12 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         # scorecard payload carries {best, validated:[{instrument, dsr, scorecard}]}.
         validated_universe = [{"instrument": v["instrument"], "dsr": v["dsr"],
                                "scorecard": v["scorecard"]} for v in validated]
+        breadth = {
+            "n_validated": len(validated),
+            "mean_correlation": round(rho, 4),
+            "n_effective": round(n_eff, 3),
+            "var_sr_across_instruments": round(breadth_var_sr, 6),
+        }
         session.add(PromotionCandidate(
             run_id=run.id,
             parameterization_hash=spec_hash({"strategy": strategy.key, "params": params}),
@@ -361,9 +392,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 "best": best, "validated": validated_universe,
                 # Recorded so a human reviewing the queue can see that "validated on
                 # 12 instruments" was really ~N_eff independent bets.
-                "breadth": {"n_validated": len(validated), "mean_correlation": round(rho, 4),
-                            "n_effective": round(n_eff, 3),
-                            "var_sr_across_instruments": round(breadth_var_sr, 6)}}),
+                "breadth": breadth}),
             ))
         promotion = best
         logger.info("[promotion] queued %s (DSR=%.4f) for human review — NOT auto-deployed",
@@ -382,14 +411,6 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                 len(rejected) + len(validated), len(validated), len(rejected),
                 hyp.status, hyp.retest_priority)
 
-    run.status = "completed"
-    run.decision = "propose" if validated else "archive"
-    run.completed_at = dt.datetime.now()
-    run.spent_bar_seconds = float(total_bars)
-    session.commit()
-    logger.info("[run] #%d completed: decision=%s · %d qualified · %d validated · %d bars",
-                run.id, run.decision, len(qualified), len(validated), total_bars)
-
     # A result nobody can interpret is a result nobody should trust with capital:
     # attach the plain-language 'what this strategy does + the exact logic it used'.
     # Generated strategies are explained from their composition (exact); hand-written
@@ -399,15 +420,44 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
         explanation["note"] = ("Parameters were optimized within a bounded grid per "
                                "walk-forward fold; the values above are the search base — "
                                "see the OptimizationTrial ledger for each fold's winner.")
-
-    return {
+    regimes = _regime_context(datasets)
+    run.status = "completed"
+    run.decision = "propose" if validated else "archive"
+    run.completed_at = dt.datetime.now()
+    run.spent_bar_seconds = float(total_bars)
+    report = {
         "spec_id": sid, "run_id": run.id, "git_commit": git_commit,
         "program": program_name, "hypothesis": hypothesis_statement,
         "qualified": qualified, "rejected": rejected, "validated": validated,
         "promotion": promotion, "decision": run.decision, "total_bars": total_bars,
         "explanation": explanation,
-        "regimes": _regime_context(datasets),
+        "regimes": regimes,
+        "breadth": breadth,
     }
+    run.checkpoint_json = encode_terminal_evidence({
+        "spec_id": sid,
+        "run": {
+            "id": run.id,
+            "status": run.status,
+            "decision": run.decision,
+        },
+        "provenance": recipe,
+        "results": {
+            "qualified": qualified,
+            "rejected": rejected,
+            "validated": validated,
+            "instruments": instrument_evidence,
+            "promotion": promotion,
+            "breadth": breadth,
+            "total_bars": total_bars,
+            "regimes": regimes,
+            "explanation": explanation,
+        },
+    })
+    session.commit()
+    logger.info("[run] #%d completed: decision=%s · %d qualified · %d validated · %d bars",
+                run.id, run.decision, len(qualified), len(validated), total_bars)
+    return report
 
 
 def _regime_context(datasets) -> dict:

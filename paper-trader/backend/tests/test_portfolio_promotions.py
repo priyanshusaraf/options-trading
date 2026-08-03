@@ -102,6 +102,14 @@ def _seed_research_db(path: str) -> int:
         return cand.id
 
 
+def _set_candidate_status(path: str, candidate_id: int, status: str) -> None:
+    eng = make_engine(path)
+    Session = make_sessionmaker(eng)
+    with Session.begin() as session:
+        session.get(PromotionCandidate, candidate_id).status = status
+    eng.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _research_on(monkeypatch):
     # this file exercises the research-plane API itself; lift the freeze gate
@@ -171,9 +179,55 @@ def test_deploy_promotion_stages_watchlist_and_approves_candidate(client):
 
 def test_deploy_unknown_promotion_returns_error(client):
     c, _ = client
-    res = c.post("/api/portfolio/promotions/9999/deploy",
-                 json={"watchlist_name": "X"}).json()
-    assert "error" in res
+    response = c.post("/api/portfolio/promotions/9999/deploy",
+                      json={"watchlist_name": "X"})
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROMOTION_NOT_PENDING"
+
+
+@pytest.mark.parametrize("candidate_status", ["shadow", "approved", "rejected"])
+def test_direct_id_cannot_stage_a_candidate_outside_the_pending_queue(
+        client, candidate_status, monkeypatch):
+    c, cid = client
+    from research.config import research_db_path
+
+    _set_candidate_status(research_db_path(), cid, candidate_status)
+    response = c.post(
+        f"/api/portfolio/promotions/{cid}/deploy",
+        json={"watchlist_name": "Bypass"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "PROMOTION_NOT_PENDING",
+        "message": "promotion is not pending human approval",
+    }
+    assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
+
+
+def test_status_race_before_approval_cannot_stage_application_state(client, monkeypatch):
+    c, cid = client
+    from app.core import research_read
+
+    monkeypatch.setattr(research_read, "approve_candidate", lambda *_args, **_kw: False)
+    response = c.post(
+        f"/api/portfolio/promotions/{cid}/deploy",
+        json={"watchlist_name": "Race"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROMOTION_STATUS_CONFLICT"
+    assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
+
+
+def test_approval_compare_and_swap_refuses_shadow_and_terminal_rows(client):
+    _, cid = client
+    from app.core import research_read
+    from research.config import research_db_path
+
+    for status in ("shadow", "approved", "rejected"):
+        _set_candidate_status(research_db_path(), cid, status)
+        assert research_read.approve_candidate(cid) is False
 
 
 @pytest.fixture

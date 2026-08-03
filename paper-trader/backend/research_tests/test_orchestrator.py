@@ -17,6 +17,7 @@ from research.domain.models import (
 from research.evaluation import kernels
 from research.orchestrator.report import render_markdown
 from research.orchestrator.run import run_experiment, spec_hash
+from research.evidence import decode_terminal_evidence
 
 
 def _datasets(inst_factory, candles_factory, keys):
@@ -44,6 +45,30 @@ def test_run_experiment_persists_completed_run_and_spec(research_session, inst_f
     spec = research_session.get(ExperimentSpec, runs[0].spec_id)
     assert spec.git_commit == "deadbeef"
     assert report["spec_id"] == spec.id
+
+
+def test_completed_run_persists_verified_terminal_evidence(
+        research_session, inst_factory, candles_factory):
+    report = _run(research_session, inst_factory, candles_factory)
+    run = research_session.get(ExperimentRun, report["run_id"])
+    evidence = decode_terminal_evidence(run.checkpoint_json)
+
+    assert evidence["spec_id"] == report["spec_id"]
+    assert evidence["run"] == {
+        "id": report["run_id"],
+        "status": "completed",
+        "decision": report["decision"],
+    }
+    assert evidence["provenance"]["datasets"]
+    assert evidence["results"]["qualified"] == report["qualified"]
+    assert evidence["results"]["rejected"] == report["rejected"]
+    assert evidence["results"]["validated"] == report["validated"]
+    assert evidence["results"]["regimes"] == report["regimes"]
+    assert evidence["results"]["explanation"] == report["explanation"]
+    assert {item["instrument"] for item in evidence["results"]["instruments"]} == {
+        "AAA", "BBB"
+    }
+    assert all("qualification" in item for item in evidence["results"]["instruments"])
 
 
 def test_run_experiment_deposits_a_finding_per_instrument(research_session, inst_factory, candles_factory):
