@@ -343,12 +343,12 @@ frontend tests, typecheck, production build and both deterministic smoke scripts
 
 **S3.3 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Define one hand-authored reference graph and an equivalent closed editor command history.
-2. [ ] Prove the editor-produced canonical graph has the same executable content address at the
+1. [x] Define one hand-authored reference graph and an equivalent closed editor command history.
+2. [x] Prove the editor-produced canonical graph has the same executable content address at the
        same server-issued version, with presentation state excluded from both inputs.
-3. [ ] Prove service/database reload preserves authored graph bytes, descriptors, positions,
+3. [x] Prove service/database reload preserves authored graph bytes, descriptors, positions,
        groups, revisions and deterministic undo/redo inputs without client reconstruction.
-4. [ ] Add explicit mismatch diagnostics for semantic, ordering and presentation-contamination
+4. [x] Add explicit mismatch diagnostics for semantic, ordering and presentation-contamination
        failures while keeping raw graph replacement and client-selected versions forbidden.
 5. [x] Run the S3.3 focused and WS-04 regressions, update the three coordination documents,
        commit deliberately, push, inspect Actions and continue into the next unblocked slice.
@@ -574,17 +574,44 @@ execution or safety-boundary change.
 
 **S4.6d bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile the historical-review purpose, exact frozen corpus, project ownership, retention,
+1. [x] Reconcile the historical-review purpose, exact frozen corpus, project ownership, retention,
        note revisions and the lack of a cross-store atomic read before choosing persistence.
-2. [ ] Record a content-addressed immutable snapshot contract that distinguishes captured history
+2. [x] Record a content-addressed immutable snapshot contract that distinguishes captured history
        from current source truth and excludes raw graph/evidence/scorecard/global-operation content.
-3. [ ] Add closed server-derived capture/list/read APIs with bounded size, source-error policy,
+3. [x] Add closed server-derived capture/list/read APIs with bounded size, source-error policy,
        optimistic duplicate handling and no client-supplied facts, restore or queue mutation.
-4. [ ] Add an accessible capture/history/open workflow that labels stale or missing sources and
+4. [x] Add an accessible capture/history/open workflow that labels stale or missing sources and
        never presents a snapshot as a current queue or executable state.
-5. [ ] Prove identity isolation, cross-project refusal, corruption detection, deterministic content
+5. [x] Prove identity isolation, cross-project refusal, corruption detection, deterministic content
        address, migration rollback and no research/execution/edit seams; run the persistence
        checkpoint, publish and continue to a separately designed fork/restore boundary.
+
+**S4.6d completion evidence, 2026-08-03.** A snapshot is an append-only, project-owned,
+content-addressed manifest of the closed S4.6a review projection plus active owner notes. Capture
+is stabilized rather than atomic: two matching source reads bracket one application transaction
+that verifies the project and capture key, reads notes, rebuilds and validates the manifest, and
+inserts the immutable row. Any source error, source difference, bound breach or post-flush failure
+rolls the whole transaction back. The response reports a `capture_window`, never an `as_of`.
+
+Reads are bounded and self-verifying. `content_address` is `sha256(canonical_json(...))`, so the
+listing verifies up to 100 records by hashing stored bytes without parsing a manifest, while
+read-one adds full semantic revalidation. A row that fails verification is reported as
+`integrity: "corrupt"` and refused on open, without withholding intact history.
+
+Nine focused store guards, seven route guards and five manifest guards pass, alongside the
+migration set at head `0009` (empty rollback to `0008`, populated-downgrade refusal, money and
+review-state retention). Eight deliberate mutations were each proven red and restored: forbidden
+seam, content-address verification on read, listing bound, corrupt containment, archived fail-fast,
+the append-only DELETE trigger, source-change rejection and source-error refusal.
+
+Two defects were found and fixed rather than documented around. The content-address guard was
+**vacuous**: its tampered fixture failed schema validation before reaching the address comparison,
+so an isolating case with a valid manifest and a false declared address now pins it. The seam
+guards patched unresolved bindings — `graph_artifacts` holds its own `resolve` reference, and one
+leg patched a function that does not exist — so they now patch resolved bindings with
+`raising=True`. `ExperimentRun.decision` is additionally narrowed to the orchestrator vocabulary
+before it can enter an immutable summary, and the frontend gained a request gate so a superseded
+capture or project switch cannot adopt a stale response.
 
 ## 4. Medium-term sequence
 
@@ -662,8 +689,8 @@ Prioritise each by measured product value, dependency readiness and operational 
 | Checkpoint | Required evidence | Status |
 |---|---|---|
 | C0 Repository trust | Correct worktree, clean state, focused WS-04 tests, remote at expected commit | done |
-| C1 Layout separation | Move/save/reload with identity-invariance and conflict/orphan proofs | pending S1 |
-| C2 Durable authoring | Immutable versions, legal edits, undo/redo, lossless reload, hand-authored equivalence | pending S2–S3 |
+| C1 Layout separation | Move/save/reload with identity-invariance and conflict/orphan proofs | done (S1.1–S1.2) |
+| C2 Durable authoring | Immutable versions, legal edits, undo/redo, lossless reload, hand-authored equivalence | done (S2.2, S3.1–S3.3) |
 | C3 Research decision | Versioned experiment, full evidence, comparison, approval/rejection, deployment candidate | pending M1–M5 |
 | C4 Reversible execution | Parity, replay, shadow, rollback and observability complete locally | pending L1; deployment owner-gated |
 | C5 Product operations | Cockpit and data identity support daily operation without prose reconstruction | pending L2–L3 |

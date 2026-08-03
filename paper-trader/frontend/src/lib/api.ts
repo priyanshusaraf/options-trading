@@ -879,6 +879,42 @@ export interface ResearchReviewSearch {
   }[]
 }
 
+export interface ResearchReviewSnapshotMetadata {
+  readonly snapshot_id: string
+  readonly project_id: string
+  readonly label: string
+  readonly capture_key: string
+  readonly content_address: string
+  readonly created_by: 'owner'
+  readonly integrity: 'verified' | 'corrupt'
+  readonly capture_window: {
+    readonly started_at: string
+    readonly completed_at: string
+  }
+}
+
+export interface ResearchReviewSnapshot extends ResearchReviewSnapshotMetadata {
+  readonly manifest: {
+    readonly schema_version: 1
+    readonly project_id: string
+    readonly events: readonly ResearchReviewEvent[]
+    readonly captured_queues: Pick<
+      ResearchReview['queues'],
+      'review_needed_runs' | 'pending_candidates' | 'active_findings'
+    >
+    readonly notes: readonly {
+      readonly note_id: string
+      readonly event_id: string
+      readonly event_type: ResearchReviewEventType
+      readonly body: string
+      readonly revision: number
+      readonly anchor_state: 'available' | 'missing'
+      readonly updated_at: string
+    }[]
+    readonly source_errors: readonly never[]
+  }
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -924,6 +960,28 @@ export const searchResearchReview = (
   if (query.cursor !== undefined) params.set('cursor', query.cursor)
   return researchFetch(`${researchPath(projectId)}/review/search?${params.toString()}`)
 }
+
+export const getResearchReviewSnapshots = (
+  projectId: string,
+): Promise<{ snapshots: ResearchReviewSnapshotMetadata[] }> => researchFetch(
+  `${researchPath(projectId)}/review/snapshots`,
+)
+
+export const getResearchReviewSnapshot = (
+  projectId: string, snapshotId: string,
+): Promise<ResearchReviewSnapshot> => researchFetch(
+  `${researchPath(projectId)}/review/snapshots/${encodeURIComponent(snapshotId)}`,
+)
+
+export const captureResearchReviewSnapshot = (
+  projectId: string, label: string, captureKey: string,
+): Promise<ResearchReviewSnapshot> => researchFetch(
+  `${researchPath(projectId)}/review/snapshots`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ label, capture_key: captureKey }),
+  },
+)
 
 export const getResearchReviewNotes = (
   projectId: string,

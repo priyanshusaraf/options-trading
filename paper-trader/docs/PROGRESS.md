@@ -3,8 +3,9 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6c bounded project review search is
-complete in the current publication commit; S4.6d immutable review snapshots is next.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6d immutable project review
+snapshots is complete in the current publication commit. This closes the M-band (M1–M6). The
+next boundary is **L1 execution integration**, whose adoption design is owner-gated.
 
 ---
 
@@ -36,7 +37,7 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, comparison, daily review, notes, saved views and bounded search complete |
+| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, comparison, daily review, notes, saved views, bounded search and immutable historical snapshots complete |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
@@ -69,6 +70,7 @@ that clause's implementation.
 | `app/core/research_review.py`, review route | Derived project timeline, closed cursor/filters, current queues and separate global operations lane |
 | `app/core/review_state.py`, migration `0008` | Project-owned optimistic review notes and canonical saved filters outside source/executable identity |
 | `app/core/review_search.py`, review search route | Unicode-stable bounded search over verified summaries and active owner notes only |
+| `app/core/review_snapshot.py`, `review_snapshot_store.py`, migration `0009` | Append-only content-addressed historical review captures, verified on every read and contained when corrupt |
 
 ### The two results worth knowing
 
@@ -101,9 +103,15 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**S4.6d: immutable project review snapshots.** Reconcile the exact historical corpus and
-cross-store consistency limits first. A capture must remain distinct from current queue truth,
-executable identity and any future restore operation.
+**L1 execution integration — design first, owner-gated.** The M-band is closed: a user can
+create a project, author a graph, publish immutable versions, run a bound experiment, read
+verified evidence, compare versions, record findings and decisions, review a research day and
+freeze it immutably. None of it is adopted by the live engine.
+
+The next deliverable is a written L1 adoption design: reconcile the live execution path against
+the Component IR runtime, enumerate every bypass and conflict, define the smallest safe adoption
+sequence, and separate paper/shadow adoption from live-money adoption. **Implementation of live
+IR-runtime adoption does not begin until the owner approves that design.**
 
 ---
 

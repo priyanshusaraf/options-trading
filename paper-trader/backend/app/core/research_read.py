@@ -233,6 +233,17 @@ def _verified_candidate_decision(candidate: PromotionCandidate) -> dict | None:
     return envelope
 
 
+#: The orchestrator's decision vocabulary (`research/orchestrator/run.py`). Review
+#: summaries are frozen verbatim into immutable, content-addressed review snapshots,
+#: so only known tokens may reach them — an unrecognised value is reported as its
+#: run status rather than copied out of the research database unvalidated.
+RUN_DECISIONS = frozenset({"propose", "archive", "needs_review"})
+
+
+def _run_outcome(run: ExperimentRun) -> str:
+    return run.decision if run.decision in RUN_DECISIONS else run.status
+
+
 def _empty_project_review_source() -> dict:
     return {
         "events": [],
@@ -270,7 +281,7 @@ def project_review_source(project_id: str) -> dict:
                     event_type="experiment_run",
                     occurred_at=run.completed_at or run.started_at or run.created_at,
                     status=status,
-                    summary=f"Experiment run {run.id}: {run.decision or run.status}",
+                    summary=f"Experiment run {run.id}: {_run_outcome(run)}",
                     references={
                         "graph": graph_ref, "run_id": run.id,
                         "finding_id": None, "candidate_id": None,

@@ -9,6 +9,7 @@ import type {
   ResearchReviewNote,
   ResearchReviewSavedView,
   ResearchReviewSearch,
+  ResearchReviewSnapshot,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
@@ -197,6 +198,30 @@ const REVIEW_SEARCH: ResearchReviewSearch = {
   }],
 }
 
+const REVIEW_SNAPSHOT: ResearchReviewSnapshot = {
+  snapshot_id: 'snapshot.1', project_id: 'project.alpha', label: 'Morning review',
+  capture_key: '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f', content_address: 'sha256:snapshot',
+  created_by: 'owner', integrity: 'verified',
+  capture_window: {
+    started_at: '2026-08-03T02:00:00.000000Z',
+    completed_at: '2026-08-03T02:00:01.000000Z',
+  },
+  manifest: {
+    schema_version: 1, project_id: 'project.alpha', events: REVIEW.timeline.events,
+    captured_queues: {
+      review_needed_runs: REVIEW.queues.review_needed_runs,
+      pending_candidates: REVIEW.queues.pending_candidates,
+      active_findings: REVIEW.queues.active_findings,
+    },
+    notes: [{
+      note_id: 'note.1', event_id: 'candidate:7', event_type: 'candidate_created',
+      body: 'Frozen owner interpretation.', revision: 0, anchor_state: 'available',
+      updated_at: '2026-08-03T02:00:00.000000Z',
+    }],
+    source_errors: [],
+  },
+}
+
 describe('ResearchEvidenceSurface', () => {
   it('polling refresh retains loaded older events while updating current facts', () => {
     const old = REVIEW.timeline.events[0]
@@ -282,6 +307,48 @@ describe('ResearchEvidenceSurface', () => {
     expect(html).toContain('Load more search results')
     expect(html).toContain('min-w-0')
     expect(html).toContain('break-words')
+  })
+
+  it('labels immutable review history as historical and keeps capture intent on failure', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: null, comparison: null, reason: '', review: REVIEW,
+      snapshotLabel: 'Keep this capture label', snapshots: [REVIEW_SNAPSHOT],
+      openedSnapshot: REVIEW_SNAPSHOT,
+      snapshotError: 'review sources changed during capture; retry from current state',
+      onSnapshotLabel: () => undefined, onCaptureSnapshot: () => undefined,
+      onOpenSnapshot: () => undefined,
+    }))
+
+    expect(html).toContain('aria-label="Historical review snapshots"')
+    expect(html).toContain('for="review-snapshot-label"')
+    expect(html).toContain('value="Keep this capture label"')
+    expect(html).toContain('Capture current review')
+    expect(html).toContain('Open Morning review')
+    expect(html).toContain('Historical capture')
+    expect(html).toContain('Capture window')
+    expect(html).toContain('Historical queue counts')
+    expect(html).toContain('Frozen owner interpretation.')
+    expect(html).toContain('review sources changed during capture')
+    expect(html).not.toContain('Restore snapshot')
+  })
+
+  it('labels a corrupt capture and refuses to open it without hiding intact history', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: null, comparison: null, reason: '', review: REVIEW,
+      snapshots: [
+        REVIEW_SNAPSHOT,
+        {
+          ...REVIEW_SNAPSHOT, snapshot_id: 'snapshot.2', label: 'Damaged capture',
+          integrity: 'corrupt' as const,
+        },
+      ],
+      onOpenSnapshot: () => undefined,
+    }))
+
+    expect(html).toContain('Open Morning review')
+    expect(html).toContain('Damaged capture')
+    expect(html).toContain('failed integrity verification')
+    expect(html).toContain('disabled')
   })
 
   it('shows explicit never-run state and a completed last receipt', () => {

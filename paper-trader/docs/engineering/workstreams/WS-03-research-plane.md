@@ -140,6 +140,40 @@ finding that is not bound to what produced it.
 
 Newest first. Dates are the dates the work landed.
 
+### The daily review workflow — S4.6a–S4.6d
+
+- **S4.6a** derives one project-owned timeline from verified immutable graph, run, finding and
+  candidate facts, with closed filters, content-addressed cursors and current queues. The global
+  operation receipt stays in a separate lane: a zero-plan or pre-spec failure is an installation
+  fact and must never be attributed to a project.
+- **S4.6b** persists non-authoritative notes and saved filter views under optimistic revisions
+  (migration `0008`). Notes anchor to server-derived events and survive a missing source without
+  copying a stale summary. Neither object can acknowledge or hide a queue.
+- **S4.6c** searches only verified event summaries and active owner note bodies, with
+  Unicode-stable literal matching and query-bound keyset cursors. Raw graph, evidence, scorecard,
+  candidate-reason and global-operation text are outside the corpus.
+- **S4.6d** freezes a review day into an append-only content-addressed manifest (migration
+  `0009`). Capture is **stabilized, not atomic**: the application and research stores cannot give
+  one consistent instant, so two matching source reads bracket one application transaction, and an
+  observed mid-capture change refuses the capture rather than recording a mixed observation. The
+  response reports a `capture_window`, never an `as_of`.
+
+Reads are bounded and self-verifying. Because `content_address` is `sha256(canonical_json(...))`,
+a listing verifies stored bytes by hashing them — no parsing, constant size per row — while
+read-one adds full semantic revalidation. A record that fails verification is reported `corrupt`
+and refused on open **without withholding intact history**.
+
+`ExperimentRun.decision` is an unconstrained `String(16)`; it is now narrowed to the orchestrator
+vocabulary before it can enter an immutable summary, because S4.6d makes that text permanent and
+content-addressed.
+
+Two guard defects were found here and are worth remembering. The content-address guard was
+**vacuous** — its tampered fixture failed schema validation before the address comparison ran.
+And the seam guards patched bindings the call path never resolves (`graph_artifacts` does
+`from app.ir.resolve import resolve`, and one leg patched a function that does not exist). Both
+now fail for their intended reason; seam guards use `raising=True` so a renamed seam breaks the
+test instead of hollowing it out.
+
 ### Immutable graph-version and experiment comparison — S4.5
 
 - The accepted evidence comparator remains the only result/data/gate comparison. A separate pure

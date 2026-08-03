@@ -5,12 +5,14 @@ import {
   createResearchFinding,
   createResearchReviewNote,
   createResearchReviewSavedView,
+  captureResearchReviewSnapshot,
   deleteResearchReviewNote,
   decideResearchCandidate,
   getResearchOperationStatus,
   getResearchReview,
   searchResearchReview,
   getResearchReviewNotes,
+  getResearchReviewSnapshots,
   getResearchRun,
   getResearchGraphVersions,
   reviseResearchFinding,
@@ -94,6 +96,32 @@ describe('research evidence transport', () => {
       '/api/ir/projects/project%2Falpha/review/search?q=%EF%BC%A1lpha+context&limit=12&cursor=sealed-position',
       { headers: {} },
     )
+  })
+
+  it('captures and lists immutable review snapshots without client review facts', async () => {
+    const snapshot = { snapshot_id: 'snapshot.1', label: 'Morning review' }
+    const request = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 201, json: async () => snapshot } as Response)
+      .mockResolvedValueOnce({
+        ok: true, status: 200, json: async () => ({ snapshots: [snapshot] }),
+      } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await captureResearchReviewSnapshot(
+      'project/alpha', 'Morning review', '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f',
+    )
+    await getResearchReviewSnapshots('project/alpha')
+
+    expect(request).toHaveBeenNthCalledWith(1,
+      '/api/ir/projects/project%2Falpha/review/snapshots', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: 'Morning review',
+          capture_key: '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f',
+        }),
+      })
+    expect(request).toHaveBeenNthCalledWith(2,
+      '/api/ir/projects/project%2Falpha/review/snapshots', { headers: {} })
   })
 
   it('loads operation receipts from the closed read-only status route', async () => {

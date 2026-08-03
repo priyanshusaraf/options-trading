@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.principal import Principal, get_principal, require
-from app.core import review_state
+from app.core import review_snapshot_store, review_state
 from app.core.config import get_settings
 from app.core.review_aggregation import project_review_source
 from app.core.review_search import (
@@ -84,6 +84,11 @@ class ViewCreate(_ClosedModel):
 
 class ViewUpdate(ViewCreate):
     base_revision: int = Field(ge=0)
+
+
+class SnapshotCapture(_ClosedModel):
+    label: str = Field(min_length=1, max_length=80)
+    capture_key: str = Field(min_length=36, max_length=36)
 
 
 def _query_rejected(message: str) -> JSONResponse:
@@ -278,6 +283,148 @@ def _view_response(view: review_state.ReviewSavedView) -> dict:
         "created_at": _timestamp(view.created_at),
         "updated_at": _timestamp(view.updated_at),
     }
+
+
+def _snapshot_metadata(
+    snapshot: review_snapshot_store.ReviewSnapshot | review_snapshot_store.SnapshotListing,
+) -> dict:
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "project_id": snapshot.project_id,
+        "label": snapshot.label,
+        "capture_key": snapshot.capture_key,
+        "content_address": snapshot.content_address,
+        "created_by": snapshot.created_by,
+        "capture_window": {
+            "started_at": _timestamp(snapshot.capture_started_at),
+            "completed_at": _timestamp(snapshot.capture_completed_at),
+        },
+    }
+
+
+def _snapshot_listing(snapshot: review_snapshot_store.SnapshotListing) -> dict:
+    return {**_snapshot_metadata(snapshot), "integrity": snapshot.integrity}
+
+
+def _snapshot_response(snapshot: review_snapshot_store.ReviewSnapshot) -> dict:
+    return {
+        **_snapshot_metadata(snapshot), "integrity": "verified",
+        "manifest": snapshot.manifest,
+    }
+
+
+def _snapshot_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, store.ProjectNotFound):
+        return JSONResponse(
+            status_code=404,
+            content={"code": "REVIEW_PROJECT_NOT_FOUND", "message": "project not found"},
+        )
+    if isinstance(exc, review_snapshot_store.SnapshotNotFound):
+        return JSONResponse(
+            status_code=404,
+            content={"code": "REVIEW_SNAPSHOT_NOT_FOUND", "message": "review snapshot not found"},
+        )
+    if isinstance(exc, store.InvalidTransition):
+        return JSONResponse(
+            status_code=409,
+            content={"code": "REVIEW_PROJECT_ARCHIVED", "message": "project is archived"},
+        )
+    if isinstance(exc, review_snapshot_store.SnapshotSourceChanged):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "REVIEW_SNAPSHOT_SOURCE_CHANGED",
+                "message": "review sources changed during capture; retry from current state",
+            },
+        )
+    if isinstance(exc, review_snapshot_store.SnapshotCaptureConflict):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "REVIEW_SNAPSHOT_CAPTURE_CONFLICT",
+                "message": "capture key was already used for different intent",
+            },
+        )
+    if isinstance(exc, review_snapshot_store.SnapshotCorrupt):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "REVIEW_SNAPSHOT_CORRUPT",
+                "message": "persisted review snapshot failed integrity verification",
+            },
+        )
+    message = str(exc)
+    source_incomplete = "source errors" in message or "limit is" in message
+    return JSONResponse(
+        status_code=409 if source_incomplete else 422,
+        content={
+            "code": (
+                "REVIEW_SNAPSHOT_SOURCE_INCOMPLETE"
+                if source_incomplete else "REVIEW_SNAPSHOT_INVALID"
+            ),
+            "message": message,
+        },
+    )
+
+
+_SNAPSHOT_EXCEPTIONS = (
+    store.ProjectNotFound,
+    store.InvalidTransition,
+    review_snapshot_store.SnapshotCaptureConflict,
+    review_snapshot_store.SnapshotCaptureRejected,
+    review_snapshot_store.SnapshotCorrupt,
+    review_snapshot_store.SnapshotNotFound,
+    review_snapshot_store.SnapshotSourceChanged,
+)
+
+
+@router.post(
+    "/projects/{project_id}/review/snapshots",
+    status_code=status.HTTP_201_CREATED,
+)
+def post_review_snapshot(
+    project_id: str,
+    body: SnapshotCapture,
+    principal: Principal = Depends(get_principal),
+):
+    actor = _owner(principal, "capture project review snapshot", project_id)
+    try:
+        snapshot = review_snapshot_store.capture_snapshot(
+            project_id,
+            label=body.label,
+            capture_key=body.capture_key,
+            created_by=actor,
+        )
+    except _SNAPSHOT_EXCEPTIONS as exc:
+        return _snapshot_error(exc)
+    return _snapshot_response(snapshot)
+
+
+@router.get("/projects/{project_id}/review/snapshots")
+def get_review_snapshots(
+    project_id: str,
+    principal: Principal = Depends(get_principal),
+):
+    _owner(principal, "list project review snapshots", project_id)
+    try:
+        snapshots = review_snapshot_store.list_snapshots(project_id)
+    except _SNAPSHOT_EXCEPTIONS as exc:
+        return _snapshot_error(exc)
+    return {"snapshots": [_snapshot_listing(snapshot) for snapshot in snapshots]}
+
+
+@router.get("/projects/{project_id}/review/snapshots/{snapshot_id}")
+def get_review_snapshot(
+    project_id: str,
+    snapshot_id: str,
+    principal: Principal = Depends(get_principal),
+):
+    _owner(principal, "read project review snapshot", project_id)
+    try:
+        snapshot = review_snapshot_store.get_snapshot(project_id, snapshot_id)
+    except _SNAPSHOT_EXCEPTIONS as exc:
+        return _snapshot_error(exc)
+    return _snapshot_response(snapshot)
 
 
 def _search_rejected(message: str, *, source_limit: bool = False) -> JSONResponse:

@@ -164,3 +164,26 @@ def test_corrupt_candidate_is_contained_without_hiding_other_events(client):
         "source": "candidate", "source_id": str(pending_id),
         "code": "CANDIDATE_DECISION_CORRUPT",
     }]
+
+
+def test_an_unknown_run_decision_never_reaches_a_review_summary():
+    """Review summaries are frozen verbatim into immutable content-addressed
+    snapshots, so only the orchestrator's own decision vocabulary may reach them."""
+    from app.core.research_read import RUN_DECISIONS, _run_outcome
+
+    class _Unvalidated:
+        decision = "<injected>"
+        status = "completed"
+
+    class _Known:
+        decision = "propose"
+        status = "completed"
+
+    class _Absent:
+        decision = None
+        status = "running"
+
+    assert _run_outcome(_Unvalidated()) == "completed"
+    assert _run_outcome(_Known()) == "propose"
+    assert _run_outcome(_Absent()) == "running"
+    assert RUN_DECISIONS == {"propose", "archive", "needs_review"}

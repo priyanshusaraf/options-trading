@@ -10,8 +10,8 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.6c is implemented; S4.6d immutable project review snapshots is the active
-slice.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.6d is implemented. The M-band (M1–M6) is closed; the next boundary is the
+owner-gated L1 execution-integration adoption design.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -73,7 +73,8 @@ viewer and does not adopt the IR runtime in a live path.
 - S4.5 version/evidence comparison: current HEAD after this handoff is published
 - S4.6a daily review: current HEAD after this handoff is published
 - S4.6b review notes/saved views: current HEAD after this handoff is published
-- S4.6c bounded review search: current HEAD after this handoff is published
+- S4.6c bounded review search: `b8831c7`
+- S4.6d immutable review snapshots: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -90,8 +91,8 @@ the only answer — never read it off a document.
 Latest acceptance run on 2026-08-03:
 
 ```
-$ .venv/bin/python -m pytest tests research_tests -q
-2,883 passed · 6 skipped · EXIT 0
+$ PT_DISABLE_DOTENV=1 .venv/bin/python -m pytest tests research_tests
+2,959 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -99,9 +100,28 @@ RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
 $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
-$ npm test && npm run typecheck && npm run build
-209 passed · TYPECHECK OK · BUILD OK · EXIT 0
+$ .venv/bin/python -m app.db.migrate head
+0009 · EXIT 0
+
+$ npm test -- --run && npm run typecheck && npm run build
+222 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
+
+Note this project's pytest config sets `addopts = -q` and suppresses the trailing count line;
+`-rs` or `--collect-only` is how you get exact numbers. An `EXIT 0` with no visible summary is
+normal here and is not evidence that nothing ran.
+
+S4.6d's checkpoint was required because migration `0009` adds durable historical state. Eight
+deliberate mutations were proven red and restored: forbidden seam, content-address verification on
+read, listing bound, corrupt containment, archived fail-fast, the append-only DELETE trigger,
+source-change rejection and source-error refusal. Two defects surfaced and were fixed rather than
+noted: the content-address guard was **vacuous** (its fixture failed schema validation before
+reaching the address comparison, so an isolating valid-manifest/false-address case now pins it),
+and the seam guards patched unresolved bindings (`graph_artifacts` holds its own `resolve`
+reference, and one leg patched a function that does not exist) — they now patch resolved bindings
+with `raising=True`. A frontend request gate stops a superseded capture or project switch from
+adopting a stale response, and `ExperimentRun.decision` is narrowed to the orchestrator vocabulary
+before it can enter an immutable content-addressed summary.
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
 41 tests, including `0006 → 0005 → 0006`, orphan quarantine/restore, direct-SQL immutability,
@@ -225,12 +245,24 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.6d — immutable project review snapshots.**
+**L1 execution integration — write the adoption design, then stop for owner approval.**
 
-Continue from the five-item S4.6d checklist in `docs/engineering/EXECUTION_PLAN.md`. First
-reconcile what a historical review freezes, how it records source errors and note revisions, and
-what consistency it can claim across application and research stores. Do not let capture become
-raw artefact storage, current queue authority, executable identity or an implicit restore command.
+The M-band is closed and no further review-workflow slice is queued. The next deliverable is a
+written design, not code:
+
+1. reconcile the live engine, strategy interface, deployment model, accounting, order lifecycle,
+   reconciliation, shadow mode and rollback against the Component IR runtime;
+2. enumerate every place the live path bypasses or conflicts with Strategy OS;
+3. define the smallest safe adoption sequence, separating paper/shadow from live-money adoption;
+4. state which existing execution behavior stays authoritative at each stage;
+5. specify compatibility, shadow-validation, rollback, migration and failure containment;
+6. produce a test-first plan with explicit non-vacuous safety proofs, and an honest scope/risk
+   estimate.
+
+**Do not begin live IR-runtime adoption, live-money activation or any material execution/risk
+change before the owner approves that design.** Routine implementation, testing, documentation,
+commits, pushes and CI continue autonomously once it is approved; human end-to-end product
+validation is deferred by the owner and is not a blocker.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

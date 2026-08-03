@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   compareResearchVersions,
+  captureResearchReviewSnapshot,
   createResearchFinding,
   createResearchReviewNote,
   createResearchReviewSavedView,
@@ -10,6 +11,8 @@ import {
   getResearchReview,
   getResearchReviewNotes,
   getResearchReviewSavedViews,
+  getResearchReviewSnapshot,
+  getResearchReviewSnapshots,
   searchResearchReview,
   getResearchRun,
   getResearchFindings,
@@ -29,10 +32,15 @@ import {
   type ResearchReviewSavedView,
   type ResearchReviewSearch,
   type ResearchReviewSearchResult,
+  type ResearchReviewSnapshot,
+  type ResearchReviewSnapshotMetadata,
   type ResearchRunDetail,
   type ResearchRunSummary,
   type ResearchVersionSelection,
 } from '../lib/api'
+import {
+  beginRequest, createRequestGate, invalidate, isCurrent,
+} from './reviewRequestGate'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 
 const readable = (value: unknown) => JSON.stringify(value, null, 2)
@@ -110,6 +118,10 @@ export function ResearchEvidenceSurface({
   search = null,
   searchError = null,
   searchBusy = false,
+  snapshotLabel = '',
+  snapshots = [],
+  openedSnapshot = null,
+  snapshotError = null,
   reason,
   findingStatement = '',
   findingPolarity = 'negative',
@@ -142,6 +154,9 @@ export function ResearchEvidenceSurface({
   onSearchClear,
   onSearchMore,
   onSearchResult,
+  onSnapshotLabel,
+  onCaptureSnapshot,
+  onOpenSnapshot,
 }: {
   runs: readonly ResearchRunSummary[]
   detail: ResearchRunDetail | null
@@ -163,6 +178,10 @@ export function ResearchEvidenceSurface({
   search?: ResearchReviewSearch | null
   searchError?: string | null
   searchBusy?: boolean
+  snapshotLabel?: string
+  snapshots?: readonly ResearchReviewSnapshotMetadata[]
+  openedSnapshot?: ResearchReviewSnapshot | null
+  snapshotError?: string | null
   reason: string
   findingStatement?: string
   findingPolarity?: 'positive' | 'negative'
@@ -195,6 +214,9 @@ export function ResearchEvidenceSurface({
   onSearchClear?: () => void
   onSearchMore?: () => void
   onSearchResult?: (result: ResearchReviewSearchResult) => void
+  onSnapshotLabel?: (label: string) => void
+  onCaptureSnapshot?: () => void
+  onOpenSnapshot?: (snapshot: ResearchReviewSnapshotMetadata) => void
 }) {
   const orderedVersions = versions.length > 0
     ? [...versions].sort((a, b) => a.version - b.version)
@@ -258,6 +280,69 @@ export function ResearchEvidenceSurface({
           {review?.source_errors.map((item) => <p
             role="alert" className="text-amber-300" key={`${item.source}:${item.source_id}`}
           >{item.code}: {item.source} {item.source_id}</p>)}
+          <section aria-label="Historical review snapshots" className="min-w-0 space-y-2 rounded border border-edge p-2">
+            <p className="font-medium">Historical review snapshots</p>
+            <p className="text-muted">Immutable captures are historical observations, not current queues or restore points.</p>
+            <div className="flex min-w-0 flex-wrap items-end gap-2">
+              <label className="min-w-0 flex-1" htmlFor="review-snapshot-label">
+                Capture label
+                <input
+                  id="review-snapshot-label" className="mt-1 w-full min-w-0"
+                  maxLength={80} value={snapshotLabel}
+                  onChange={(event) => onSnapshotLabel?.(event.target.value)}
+                />
+              </label>
+              <button
+                type="button" className="btn" disabled={busy || !snapshotLabel.trim()}
+                onClick={onCaptureSnapshot}
+              >Capture current review</button>
+            </div>
+            {snapshotError && <p role="alert" className="break-words text-amber-300">{snapshotError}</p>}
+            {snapshots.length === 0
+              ? <p className="text-muted">No historical captures.</p>
+              : <ul className="min-w-0 space-y-1">{snapshots.map((snapshot) => <li
+                key={snapshot.snapshot_id} className="min-w-0 break-words"
+              >
+                <button
+                  type="button" className="btn"
+                  disabled={snapshot.integrity === 'corrupt'}
+                  onClick={() => onOpenSnapshot?.(snapshot)}
+                >
+                  Open {snapshot.label}
+                </button>{' '}
+                <span className="text-muted">{snapshot.capture_window.completed_at}</span>
+                {snapshot.integrity === 'corrupt' && <span
+                  role="alert" className="text-amber-300"
+                >{' '}· failed integrity verification; cannot be opened</span>}
+              </li>)}</ul>}
+            {openedSnapshot && <section
+              aria-label="Opened historical review capture"
+              className="min-w-0 space-y-2 rounded bg-panel2 p-2"
+            >
+              <p className="font-medium">Historical capture · {openedSnapshot.label}</p>
+              <p className="break-all text-muted">
+                Capture window {openedSnapshot.capture_window.started_at} → {' '}
+                {openedSnapshot.capture_window.completed_at}
+              </p>
+              <p className="break-all text-muted">{openedSnapshot.content_address}</p>
+              <p className="font-medium">Historical queue counts</p>
+              <p className="text-muted">
+                Runs {openedSnapshot.manifest.captured_queues.review_needed_runs.length} · {' '}
+                candidates {openedSnapshot.manifest.captured_queues.pending_candidates.length} · {' '}
+                findings {openedSnapshot.manifest.captured_queues.active_findings.length}
+              </p>
+              <ol aria-label="Captured review events" className="min-w-0 space-y-1">
+                {openedSnapshot.manifest.events.map((event) => <li
+                  key={event.event_id} className="min-w-0 break-words"
+                >{event.summary} · {event.status}</li>)}
+              </ol>
+              <ul aria-label="Captured owner notes" className="min-w-0 space-y-1">
+                {openedSnapshot.manifest.notes.map((note) => <li
+                  key={note.note_id} className="min-w-0 whitespace-pre-wrap break-words"
+                >{note.body}{note.anchor_state === 'missing' ? ' · source event unavailable' : ''}</li>)}
+              </ul>
+            </section>}
+          </section>
           {review && <>
             <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
               <div className="rounded border border-edge p-2">
@@ -798,6 +883,12 @@ export default function ResearchEvidencePanel({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchBusy, setSearchBusy] = useState(false)
   const searchRequest = useRef(0)
+  const [snapshotLabel, setSnapshotLabel] = useState('')
+  const [snapshots, setSnapshots] = useState<ResearchReviewSnapshotMetadata[]>([])
+  const [openedSnapshot, setOpenedSnapshot] = useState<ResearchReviewSnapshot | null>(null)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
+  const snapshotCaptureKey = useRef<string | null>(null)
+  const snapshotGate = useRef(createRequestGate())
   const [reason, setReason] = useState('')
   const [findingStatement, setFindingStatement] = useState('')
   const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
@@ -827,11 +918,17 @@ export default function ResearchEvidencePanel({
   }
 
   const refreshReviewArtifacts = async () => {
-    const [notes, views] = await Promise.allSettled([
+    const [notes, views, snapshotHistory] = await Promise.allSettled([
       getResearchReviewNotes(projectId), getResearchReviewSavedViews(projectId),
+      getResearchReviewSnapshots(projectId),
     ])
     if (notes.status === 'fulfilled') setReviewNotes(notes.value.notes)
     if (views.status === 'fulfilled') setSavedViews(views.value.views)
+    if (snapshotHistory.status === 'fulfilled') setSnapshots(snapshotHistory.value.snapshots)
+    // A damaged or unavailable capture history is contained in its own channel so it
+    // cannot mask notes, saved views or the live review behind a generic error.
+    else setSnapshotError(snapshotHistory.reason instanceof Error
+      ? snapshotHistory.reason.message : 'Review snapshot history unavailable')
     const rejected = [notes, views].find((result) => result.status === 'rejected')
     if (rejected?.status === 'rejected') {
       setError(rejected.reason instanceof Error
@@ -852,6 +949,13 @@ export default function ResearchEvidencePanel({
     setSearch(null)
     setSearchError(null)
     setSearchBusy(false)
+    setSnapshotLabel('')
+    setSnapshots([])
+    setOpenedSnapshot(null)
+    setSnapshotError(null)
+    snapshotCaptureKey.current = null
+    // Retire in-flight snapshot work so a previous project's capture cannot land here.
+    invalidate(snapshotGate.current)
   }, [projectId])
 
   const loadReview = async (
@@ -1037,6 +1141,43 @@ export default function ResearchEvidencePanel({
     }
   }
 
+  const captureSnapshot = async () => {
+    if (!snapshotLabel.trim()) return
+    const requestId = beginRequest(snapshotGate.current)
+    setBusy(true); setSnapshotError(null)
+    snapshotCaptureKey.current ??= crypto.randomUUID()
+    try {
+      const captured = await captureResearchReviewSnapshot(
+        projectId, snapshotLabel.trim(), snapshotCaptureKey.current,
+      )
+      const history = await getResearchReviewSnapshots(projectId)
+      if (!isCurrent(snapshotGate.current, requestId)) return
+      setOpenedSnapshot(captured)
+      setSnapshots(history.snapshots)
+      setSnapshotLabel('')
+      snapshotCaptureKey.current = null
+    } catch (cause) {
+      if (!isCurrent(snapshotGate.current, requestId)) return
+      // The capture key and label survive so a retry is the same idempotent intent.
+      setSnapshotError(cause instanceof Error ? cause.message : 'Review snapshot capture failed')
+    } finally {
+      if (isCurrent(snapshotGate.current, requestId)) setBusy(false)
+    }
+  }
+
+  const openSnapshot = async (snapshot: ResearchReviewSnapshotMetadata) => {
+    const requestId = beginRequest(snapshotGate.current)
+    setSnapshotError(null)
+    try {
+      const opened = await getResearchReviewSnapshot(projectId, snapshot.snapshot_id)
+      if (!isCurrent(snapshotGate.current, requestId)) return
+      setOpenedSnapshot(opened)
+    } catch (cause) {
+      if (!isCurrent(snapshotGate.current, requestId)) return
+      setSnapshotError(cause instanceof Error ? cause.message : 'Review snapshot read failed')
+    }
+  }
+
   return <ResearchEvidenceSurface
     runs={runs}
     detail={detail}
@@ -1058,6 +1199,10 @@ export default function ResearchEvidencePanel({
     search={search}
     searchError={searchError}
     searchBusy={searchBusy}
+    snapshotLabel={snapshotLabel}
+    snapshots={snapshots}
+    openedSnapshot={openedSnapshot}
+    snapshotError={snapshotError}
     reason={reason}
     findingStatement={findingStatement}
     findingPolarity={findingPolarity}
@@ -1117,5 +1262,10 @@ export default function ResearchEvidencePanel({
       target?.scrollIntoView({ block: 'center' })
       target?.focus()
     }}
+    onSnapshotLabel={(value) => {
+      setSnapshotLabel(value); setSnapshotError(null); snapshotCaptureKey.current = null
+    }}
+    onCaptureSnapshot={() => { void captureSnapshot() }}
+    onOpenSnapshot={(snapshot) => { void openSnapshot(snapshot) }}
   />
 }

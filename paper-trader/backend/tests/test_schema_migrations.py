@@ -115,7 +115,7 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
 
-    assert migrate.head_revision() == "0008"
+    assert migrate.head_revision() == "0009"
     assert set(schema["projects"]["columns"]) == {
         "project_id", "name", "description", "status", "created_at", "updated_at",
     }
@@ -147,10 +147,19 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         "view_id", "project_id", "name", "filters_json", "created_by", "revision",
         "deleted_at", "created_at", "updated_at",
     }
+    assert set(schema["project_review_snapshots"]["columns"]) == {
+        "snapshot_id", "project_id", "label", "capture_key", "manifest_json",
+        "content_address", "created_by", "capture_started_at", "capture_completed_at",
+    }
     assert any(
         name == "uq_project_review_saved_views_active_name"
         and columns == ("project_id", "name") and unique
         for name, columns, unique in schema["project_review_saved_views"]["indexes"]
+    )
+    assert any(
+        name == "uq_project_review_snapshots_capture_key"
+        and columns == ("project_id", "capture_key") and unique
+        for name, columns, unique in schema["project_review_snapshots"]["indexes"]
     )
     assert set(schema["ir_graph_layout_orphan_archive"]["columns"]) == {
         "graph_identifier", "graph_version", "revision", "updated_at", "archived_at",
@@ -262,7 +271,7 @@ def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_pa
                 "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
             ), {"identifier": identifier, "version": version})
 
-    assert migrate.upgrade_to_head(engine) == "0008"
+    assert migrate.upgrade_to_head(engine) == "0009"
     with engine.connect() as connection:
         layouts = connection.execute(sa.text(
             "SELECT graph_identifier, graph_version FROM ir_graph_layouts"
@@ -318,7 +327,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0008"
+    assert migrate.schema_version(engine) == "0009"
 
     with engine.begin() as connection:
         connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
@@ -330,7 +339,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0008"
+    assert migrate.schema_version(engine) == "0009"
 
 
 def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
@@ -373,7 +382,7 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
     assert position == ("n_ema", 10.0, 20.0)
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0008"
+    assert migrate.upgrade_to_head(engine) == "0009"
 
 
 def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
@@ -399,7 +408,7 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
         )).one()
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0008"
+    assert migrate.upgrade_to_head(engine) == "0009"
 
 
 def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_path):
@@ -447,7 +456,7 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
             "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
         )).one() == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0008"
+    assert migrate.upgrade_to_head(engine) == "0009"
 
 
 def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_path):
@@ -476,7 +485,7 @@ def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_pa
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
     assert capital == (50000.0, 49000.0, -1000.0)
     assert graph.content_address.startswith("sha256:")
-    assert migrate.upgrade_to_head(engine) == "0008"
+    assert migrate.upgrade_to_head(engine) == "0009"
 
 
 def test_review_state_migration_refuses_populated_downgrade(tmp_path):
@@ -495,7 +504,68 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0007")
 
+    assert migrate.schema_version(engine) == "0009"
+
+
+def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO project_review_notes "
+            "(note_id, project_id, event_id, event_type, body, created_by, revision, "
+            " deleted_at, created_at, updated_at) VALUES "
+            "('note-keep', 'project.repository_catalogue', 'run:1', 'experiment_run', "
+            " 'Keep this note', 'owner', 0, NULL, "
+            " '2026-08-03 10:00:00', '2026-08-03 10:00:00')"
+        ))
+        command.downgrade(migrate.alembic_config(connection), "0008")
+
     assert migrate.schema_version(engine) == "0008"
+    assert "project_review_snapshots" not in set(sa.inspect(engine).get_table_names())
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT body FROM project_review_notes WHERE note_id = 'note-keep'"
+        )).scalar_one() == "Keep this note"
+        assert connection.execute(sa.text(
+            "SELECT cash FROM capital_state WHERE id = 1"
+        )).scalar_one() == 49000.0
+    assert migrate.upgrade_to_head(engine) == "0009"
+
+
+def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
+    from app.ir.hashing import canonical_json, content_address
+
+    engine = _build_from_baseline(tmp_path)
+    manifest = {
+        "schema_version": 1,
+        "project_id": "project.repository_catalogue",
+        "events": [],
+        "captured_queues": {
+            "review_needed_runs": [], "pending_candidates": [], "active_findings": [],
+        },
+        "notes": [],
+        "source_errors": [],
+    }
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO project_review_snapshots "
+            "(snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
+            " created_by, capture_started_at, capture_completed_at) VALUES "
+            "('snapshot.1', 'project.repository_catalogue', 'Daily', "
+            " '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f', :manifest, :address, 'owner', "
+            " '2026-08-03 10:00:00', '2026-08-03 10:00:01')"
+        ), {"manifest": canonical_json(manifest), "address": content_address(manifest)})
+
+    with pytest.raises(RuntimeError, match="review snapshots exist"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0008")
+
+    assert migrate.schema_version(engine) == "0009"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):

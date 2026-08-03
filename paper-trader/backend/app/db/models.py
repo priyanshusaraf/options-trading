@@ -1061,6 +1061,75 @@ class ProjectReviewSavedView(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
 
 
+class ProjectReviewSnapshot(Base):
+    """Append-only historical observation of the closed project review projection."""
+    __tablename__ = "project_review_snapshots"
+    __table_args__ = (
+        CheckConstraint("length(label) BETWEEN 1 AND 80", name="ck_review_snapshot_label"),
+        CheckConstraint("length(capture_key) = 36", name="ck_review_snapshot_capture_key"),
+        CheckConstraint("created_by = 'owner'", name="ck_review_snapshot_owner"),
+        CheckConstraint("json_valid(manifest_json)", name="ck_review_snapshot_manifest_json"),
+        CheckConstraint(
+            "json_extract(manifest_json, '$.schema_version') = 1",
+            name="ck_review_snapshot_schema_version",
+        ),
+        CheckConstraint(
+            "json_extract(manifest_json, '$.project_id') IS project_id",
+            name="ck_review_snapshot_project_matches_json",
+        ),
+        CheckConstraint(
+            "capture_completed_at >= capture_started_at",
+            name="ck_review_snapshot_capture_window",
+        ),
+        Index("ix_project_review_snapshots_project_completed", "project_id", "capture_completed_at"),
+        Index(
+            "uq_project_review_snapshots_capture_key",
+            "project_id", "capture_key", unique=True,
+        ),
+    )
+
+    snapshot_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False)
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    capture_key: Mapped[str] = mapped_column(String(36), nullable=False)
+    manifest_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False)
+    capture_started_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    capture_completed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
+@event.listens_for(ProjectReviewSnapshot, "before_insert")
+def _review_snapshot_identity_matches_json(_mapper, _connection, target) -> None:
+    import json
+
+    from app.core.review_snapshot import validate_snapshot_manifest
+    from app.ir.hashing import canonical_json
+
+    document = json.loads(target.manifest_json)
+    if canonical_json(document) != target.manifest_json:
+        raise ValueError("review snapshot manifest_json must be canonical JSON")
+    validated = validate_snapshot_manifest(document)
+    if validated.content_address != target.content_address:
+        raise ValueError("review snapshot content address does not match manifest_json")
+
+
+for trigger_name, operation in (
+    ("project_review_snapshots_refuse_update", "UPDATE"),
+    ("project_review_snapshots_refuse_delete", "DELETE"),
+):
+    event.listen(
+        ProjectReviewSnapshot.__table__,
+        "after_create",
+        DDL(
+            f"CREATE TRIGGER {trigger_name} BEFORE {operation} "
+            "ON project_review_snapshots BEGIN "
+            "SELECT RAISE(ABORT, 'review snapshots are immutable'); END"
+        ).execute_if(dialect="sqlite"),
+    )
+
+
 class OptionData(Base):
     """Persistent option-chain research dataset. Every distinct contract quote we
     fetch is appended (deduped at snapshot cadence) to build a growing local

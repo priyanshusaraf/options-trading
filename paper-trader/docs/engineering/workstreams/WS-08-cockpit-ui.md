@@ -244,6 +244,13 @@ Plus, specific to this workstream:
 - **Surfacing `build.commit` in the UI**, not just in `/api/health`. Deployment state is already
   answerable in one curl; putting it on screen removes the curl. Trigger: the next time someone
   asks "is this the new build?" and answers it from prose.
+- **Historical review captures are read-only by construction.** The daily-review surface can
+  freeze a review day and reopen it, but every opened object is labelled "Historical capture",
+  shows its capture window rather than an instant, and never mixes captured queue counts into the
+  live queues. There is deliberately no restore or fork control: applying historical state has
+  separate authority and provenance requirements. A capture that fails integrity verification is
+  labelled and its open control disabled rather than rendering unverified content. A request gate
+  stops a superseded capture or a project switch from adopting a stale response.
 - **An override-vs-default diff view.** The Settings screen already flags an override whose value
   differs from the shipped default in amber; a single screen listing all ten current divergences
   would make the operating configuration legible at a glance. Trigger: an eleventh override, or
