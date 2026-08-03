@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.config import get_settings
+from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
 from app.editor import graph_artifacts as store
@@ -83,6 +84,26 @@ class GraphExperimentResponse(_ClosedModel):
     run_id: int
     decision: Literal["propose", "archive"]
     binding: dict
+
+
+EvidenceState = Literal["verified", "legacy_unbound", "corrupt"]
+
+
+class GraphRunSummary(_ClosedModel):
+    run_id: int
+    spec_id: str
+    status: str
+    decision: str | None
+    evidence_state: EvidenceState
+    graph: dict
+
+
+class GraphRunListResponse(_ClosedModel):
+    runs: list[GraphRunSummary]
+
+
+class GraphRunDetail(GraphRunSummary):
+    evidence: dict | None
 
 
 def request_validation_envelope(errors: list[dict]) -> dict:
@@ -232,6 +253,32 @@ def post_graph_experiment(
             )
     finally:
         engine.dispose()
+
+
+@router.get(
+    "/projects/{project_id}/experiments",
+    response_model=GraphRunListResponse,
+)
+def get_graph_experiments(project_id: str) -> GraphRunListResponse:
+    return GraphRunListResponse(runs=research_read.list_graph_runs(project_id))
+
+
+@router.get(
+    "/projects/{project_id}/experiments/{run_id}",
+    response_model=GraphRunDetail,
+)
+def get_graph_experiment(project_id: str, run_id: int) -> GraphRunDetail:
+    try:
+        run = research_read.get_graph_run(project_id, run_id)
+    except research_read.StoredEvidenceCorrupt as exc:
+        raise _error(
+            409,
+            "EXPERIMENT_EVIDENCE_CORRUPT",
+            "persisted experiment evidence failed integrity verification",
+        ) from exc
+    if run is None:
+        raise _error(404, "EXPERIMENT_RUN_NOT_FOUND", "experiment run not found")
+    return GraphRunDetail(**run)
 
 
 __all__ = ["GraphExperimentFailure", "request_validation_envelope", "router"]

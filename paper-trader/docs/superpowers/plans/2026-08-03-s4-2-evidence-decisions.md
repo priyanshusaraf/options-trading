@@ -53,10 +53,10 @@ deployment activation, arming, orders, Python or live IR-runtime adoption.
 - Extend: `backend/tests/test_ir_experiment_routes.py`
 
 1. Add failing list/detail tests for completed, failed, running and legacy-unbound graph runs.
-2. Verify project ownership from immutable graph provenance and hide cross-project run ids.
-3. Return persisted evidence only; guard with spies proving no provider, resolver, evaluator or gate
+2. [x] Verify project ownership from immutable graph provenance and hide cross-project run ids.
+3. [x] Return persisted evidence only; guard with spies proving no provider, resolver, evaluator or gate
    is called during reads.
-4. Add exact malformed/corrupt-evidence feedback and `/api/v1` parity.
+4. [x] Add exact malformed/corrupt-evidence feedback and `/api/v1` parity.
 
 ## Task 4: Implement deterministic comparison
 

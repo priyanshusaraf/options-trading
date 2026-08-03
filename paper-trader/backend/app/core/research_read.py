@@ -30,6 +30,11 @@ from research.domain.models import (
     GeneratedStrategyRecord,
     PromotionCandidate,
 )
+from research.evidence import (
+    EvidenceMissing,
+    EvidenceRejected,
+    decode_terminal_evidence,
+)
 from research.strategy.explain import explain
 
 
@@ -59,6 +64,72 @@ def _recipe_for(session, run_id: int) -> dict:
         return json.loads(spec.recipe_json)
     except (ValueError, TypeError):
         return {}
+
+
+class StoredEvidenceCorrupt(Exception):
+    pass
+
+
+def _graph_for_recipe(recipe: dict) -> dict | None:
+    provenance = recipe.get("graph_provenance")
+    graph = provenance.get("graph") if isinstance(provenance, dict) else None
+    return graph if isinstance(graph, dict) else None
+
+
+def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> dict | None:
+    recipe = _recipe_for(session, run.id)
+    graph = _graph_for_recipe(recipe)
+    if graph is None:
+        return None
+    evidence = None
+    try:
+        evidence = decode_terminal_evidence(run.checkpoint_json)
+        evidence_state = "verified"
+    except EvidenceMissing:
+        evidence_state = "legacy_unbound"
+    except EvidenceRejected as exc:
+        if include_evidence:
+            raise StoredEvidenceCorrupt(run.id) from exc
+        evidence_state = "corrupt"
+    view = {
+        "run_id": run.id,
+        "spec_id": run.spec_id,
+        "status": run.status,
+        "decision": run.decision,
+        "evidence_state": evidence_state,
+        "graph": graph,
+    }
+    if include_evidence:
+        view["evidence"] = evidence
+    return view
+
+
+def list_graph_runs(project_id: str) -> list[dict]:
+    """Graph-bound runs owned by one copied immutable project provenance."""
+    with _research_session() as session:
+        if session is None:
+            return []
+        runs = session.query(ExperimentRun).order_by(ExperimentRun.id.desc()).all()
+        views = []
+        for run in runs:
+            view = _graph_run_view(session, run, include_evidence=False)
+            if view is not None and view["graph"].get("project_id") == project_id:
+                views.append(view)
+        return views
+
+
+def get_graph_run(project_id: str, run_id: int) -> dict | None:
+    """One graph-bound run, hidden unless its immutable recipe owns the project."""
+    with _research_session() as session:
+        if session is None:
+            return None
+        run = session.get(ExperimentRun, run_id)
+        if run is None:
+            return None
+        view = _graph_run_view(session, run, include_evidence=True)
+        if view is None or view["graph"].get("project_id") != project_id:
+            return None
+        return view
 
 
 def _view(session, c: PromotionCandidate) -> dict:

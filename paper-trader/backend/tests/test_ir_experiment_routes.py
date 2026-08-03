@@ -17,7 +17,7 @@ from research.domain.base import (
     make_engine,
     make_sessionmaker,
 )
-from research.domain.models import ExperimentSpec
+from research.domain.models import ExperimentRun, ExperimentSpec
 
 
 IDENTIFIER = GRAPH["identifier"]
@@ -238,3 +238,90 @@ def test_selected_version_and_persisted_evidence_do_not_follow_a_newer_head(clie
         assert recipe["cost_assumptions"] == first_body["binding"]["cost_assumptions"]
         assert recipe["gates"] == first_body["binding"]["gates"]
     engine.dispose()
+
+
+def _set_run_checkpoint(run_id: int, checkpoint: str | None) -> None:
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session.begin() as session:
+        session.get(ExperimentRun, run_id).checkpoint_json = checkpoint
+    engine.dispose()
+
+
+def test_project_owned_evidence_list_and_detail_return_persisted_results_only(
+        client, monkeypatch):
+    started = client.post(URL, json=_request()).json()
+    list_url = f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments"
+    detail_url = f"{list_url}/{started['run_id']}"
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("evidence reads must not recompute or fetch data")
+
+    monkeypatch.setattr(client.app.state.runner.provider, "get_candles", forbidden)
+    monkeypatch.setattr(
+        "research.orchestrator.graph_experiment.build_graph_provenance", forbidden
+    )
+    monkeypatch.setattr("research.orchestrator.run.run_experiment", forbidden)
+
+    listed = client.get(list_url)
+    assert listed.status_code == 200
+    assert listed.json()["runs"] == [{
+        "run_id": started["run_id"],
+        "spec_id": started["spec_id"],
+        "status": "completed",
+        "decision": "archive",
+        "evidence_state": "verified",
+        "graph": started["binding"]["graph"],
+    }]
+
+    detail = client.get(detail_url)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["evidence_state"] == "verified"
+    assert body["evidence"]["spec_id"] == started["spec_id"]
+    assert body["evidence"]["provenance"]["graph_provenance"]["graph"] == (
+        started["binding"]["graph"]
+    )
+    assert body["evidence"]["results"]["instruments"]
+
+    mirrored = client.get(detail_url.replace("/api/", "/api/v1/", 1))
+    assert mirrored.status_code == 200
+    assert mirrored.json() == body
+
+
+def test_evidence_detail_hides_cross_project_run_ids(client):
+    started = client.post(URL, json=_request()).json()
+    other = client.post(
+        "/api/ir/projects", json={"name": "Other", "description": ""}
+    ).json()
+    response = client.get(
+        f"/api/ir/projects/{other['project_id']}/experiments/{started['run_id']}"
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "EXPERIMENT_RUN_NOT_FOUND"
+
+
+def test_legacy_missing_evidence_is_visible_but_not_treated_as_empty_success(client):
+    started = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(started["run_id"], None)
+
+    response = client.get(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/{started['run_id']}"
+    )
+    assert response.status_code == 200
+    assert response.json()["evidence_state"] == "legacy_unbound"
+    assert response.json()["evidence"] is None
+
+
+def test_corrupt_persisted_evidence_fails_closed(client):
+    started = client.post(URL, json=_request()).json()
+    _set_run_checkpoint(started["run_id"], '{"tampered":true}')
+
+    response = client.get(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/experiments/{started['run_id']}"
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "EXPERIMENT_EVIDENCE_CORRUPT",
+        "message": "persisted experiment evidence failed integrity verification",
+    }
