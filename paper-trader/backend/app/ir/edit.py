@@ -147,13 +147,20 @@ def disconnect(graph: Mapping[str, Any], source: tuple[str, str],
 
 def group(graph: Mapping[str, Any], identifier: str, display_name: str,
           members: Sequence[str]) -> dict[str, Any]:
-    """Box some nodes together. F12: a group is neither versionable nor
-    publishable."""
-    out = _copy(graph)
-    out.setdefault("groups", []).append(
-        {"identifier": identifier, "display_name": display_name,
-         "members": list(members)})
-    return _result(f"group({identifier!r})", out)
+    """Reject the retired executable-group primitive.
+
+    The import remains for one compatibility window so an old caller receives
+    the F12 refusal instead of silently persisting presentation state.
+    """
+    raise EditRejected(
+        f"group({identifier!r})",
+        [Violation(
+            "F12",
+            "$.groups",
+            "visual groups are revisioned presentation state and cannot be "
+            "executable graph content",
+        )],
+    )
 
 
 def rename(graph: Mapping[str, Any], display_name: str) -> dict[str, Any]:

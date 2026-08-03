@@ -70,7 +70,6 @@ def test_no_edit_mutates_its_input(graph):
     set_override(graph, "n_ema", "length", 21)
     connect(graph, ("n_ema", "out"), ("n_range", "high"))
     remove_node(graph, "n_range")
-    group(graph, "g1", "Group", ["n_ema"])
 
     assert graph == before
 
@@ -99,11 +98,13 @@ def test_removing_a_node_removes_its_edges_in_the_same_operation(graph):
                    for e in edited["edges"])
 
 
-def test_removing_a_node_removes_it_from_any_group(graph):
-    grouped = group(graph, "g1", "Thresholds", ["n_entry_thr", "n_exit_thr"])
-    edited = remove_node(grouped, "n_exit_thr")
-    assert edited["groups"][0]["members"] == ["n_entry_thr"]
-    assert validate(edited) == []
+def test_visual_group_primitive_refuses_executable_persistence(graph):
+    with pytest.raises(EditRejected) as exc:
+        group(graph, "g1", "Thresholds", ["n_entry_thr", "n_exit_thr"])
+
+    violation = exc.value.violations[0]
+    assert (violation.clause, violation.path) == ("F12", "$.groups")
+    assert graph["groups"] == []
 
 
 def test_a_duplicate_instance_id_is_refused(graph):

@@ -470,10 +470,13 @@ def test_f12_a_group_may_not_be_versioned_or_published():
         assert_violates(art, "F12")
 
 
-def test_f12_a_plain_group_is_fine():
+def test_f12_visual_groups_are_not_executable_graph_content():
     art = a_graph()
     art["groups"] = [{"identifier": "g1", "display_name": "Filters", "members": ["n_ema"]}]
-    assert_valid(art)
+    violations = validate(art)
+    assert [(violation.clause, violation.path) for violation in violations] == [
+        ("F12", "$.groups")
+    ]
 
 
 def test_f12_a_group_member_must_be_a_declared_instance():

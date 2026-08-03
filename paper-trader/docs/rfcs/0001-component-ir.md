@@ -345,6 +345,14 @@ group MUST NOT be versionable or publishable. If grouping-for-tidiness were also
 every cosmetic box would become a versionable artefact and the version history would fill with
 noise (P9).
 
+**Format-v1 erratum.** The grammar above incorrectly placed the visual `group` production inside
+`graph-def`, while this clause and F13 require presentation state to live beside executable
+content. Existing format-v1 graph bytes and content addresses are retained: `groups` is a reserved
+compatibility field whose only conforming value is `[]`. Visual group records, labels, membership,
+frames and collapse state belong to revisioned presentation storage and MUST NOT be written to,
+published with, or hashed as executable graph JSON. The old `app.ir.edit.group()` entry point is
+therefore an explicit F12 refusal, not a semantic editing primitive.
+
 **F13 — Presentation state.** Semantic content MUST be hashed. Presentation state MUST persist
 **beside** the graph, keyed by stable identifier, and is not part of the artefact grammar.
 Ephemeral state MUST NOT be persisted. Without this separation, dragging a node changes its hash

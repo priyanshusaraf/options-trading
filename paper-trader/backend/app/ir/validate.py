@@ -30,7 +30,6 @@ from app.ir.schema import (
     DOMAIN_AXES,
     EDGE_KEYS,
     GRAPH_KEYS,
-    GROUP_KEYS,
     INTERFACE_ITEMS,
     KINDS,
     NODE_KEYS,
@@ -347,8 +346,13 @@ def _graph(r: _Report, art: Mapping[str, Any],
 
     groups = art.get("groups", [])
     if isinstance(groups, list):
-        for i, group in enumerate(groups):
-            _group(r, group, f"$.groups[{i}]", instances)
+        if groups:
+            r.add(
+                "F12",
+                "$.groups",
+                "visual groups are revisioned presentation state and cannot be "
+                "executable graph content",
+            )
     else:
         r.add("F12", "$.groups", "must be a list")
 
@@ -552,27 +556,3 @@ def _socket_wire_type(component: Mapping[str, Any], name: str) -> Mapping[str, A
         return None
 
     return walk(component.get("interface"))
-
-
-def _group(r: _Report, group: Any, path: str, instances: dict) -> None:
-    if not isinstance(group, Mapping):
-        r.add("F12", path, "a group must be a mapping")
-        return
-    # F12 — "A group MUST NOT be versionable or publishable." If tidying were
-    # also the reuse unit, every cosmetic box would fill the version history.
-    for key in sorted(set(group) - GROUP_KEYS):
-        r.add("F12", f"{path}.{key}",
-              "visual grouping is not semantic reuse; a group is neither "
-              "versionable nor publishable")
-    if not group.get("identifier"):
-        r.add("F12", f"{path}.identifier", "missing")
-    if not group.get("display_name"):
-        r.add("F12", f"{path}.display_name", "missing")
-    members = group.get("members")
-    if not isinstance(members, list):
-        r.add("F12", f"{path}.members", "must be a list of instance identifiers")
-        return
-    for i, member in enumerate(members):
-        if member not in instances:
-            r.add("F12", f"{path}.members[{i}]",
-                  f"{member!r} is not a node in this graph")
