@@ -3,7 +3,7 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · 86 commits ahead of `main`.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · 89 commits ahead of `main`.
 
 ---
 
@@ -16,8 +16,8 @@ Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](e
 | VPS build | **not measured this session.** `curl localhost:8090/api/health` is the only answer — never read it off a doc |
 | Deployed from this branch | **nothing.** Everything below is local |
 
-Nothing in the Strategy OS work touches the running bot. `backend/app/ir/` is imported by its
-own tests and by one script.
+Nothing in the Strategy OS work touches the running bot. One read-only API route now imports
+`backend/app/ir/`; the engine still calls the hand-written strategy and no live path consumes IR.
 
 ---
 
@@ -35,8 +35,8 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Gen 2 started — vocabulary and proposer built; no search loop yet |
-| **Editor** | Library done both directions; **no UI** |
+| **Research** | Gen 2 functionally complete; remaining work is operational runs and explanations |
+| **Editor** | Read-only backend route done; **React view next** |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
 
@@ -53,6 +53,7 @@ that clause's implementation.
 | `app/ir/edit.py` | Mutation that cannot return a non-conforming artefact |
 | `app/ir/authoring.py` | Write a component in Python |
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
+| `app/api/ir_routes.py` | One read-only, fixed-catalogue route for the resolved graph view |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
@@ -87,12 +88,9 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**Research Plane Gen 2, step three: bind every run through `app/ir/experiment.py`, then add the
-search loop.** Bind from the first run — the retrofit is the cost this platform has already paid
-once, and every research finding before 2026-08 is unusable as a baseline because of it.
-
-Then, in dependency order: narrow each block's declared inputs · the editor frontend · the
-marketplace · production adoption.
+**WS-04 Editor: render the resolved `expanding_z_v4` graph in React.** Use the existing REST
+client and app shell; show authored instance paths, sockets, parameters, warmup, purity and cache
+identity. Keep this slice read-only. Layout persistence follows only after the viewer is real.
 
 ---
 
@@ -100,7 +98,7 @@ marketplace · production adoption.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q      # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,685 collected
+PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,700 collected
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0

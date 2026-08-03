@@ -1,16 +1,16 @@
 # WS-04 — Editor (visual computational graph)
 
-**Status:** not started
-**Owner surface:** none yet. When it starts: `frontend/src/views/GraphView.tsx` (or
-equivalent), plus whatever route serves a `GraphView` from the backend. The libraries it
-consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by WS-01**.
-**Last verified:** 2026-08-03 · commit `cdbe686`
+**Status:** active
+**Owner surface:** `backend/app/api/ir_routes.py`, `backend/tests/test_ir_routes.py`; next:
+`frontend/src/views/GraphView.tsx`. The libraries it consumes — `backend/app/ir/view.py`,
+`backend/app/ir/edit.py` — are **owned by WS-01**.
+**Last verified:** 2026-08-03 · commit `049b699`
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
-> its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. Today the plane
-> exists only as two pure Python libraries and a script that writes an SVG to disk. There is
-> no HTTP route and no React component, so nothing a user can click has ever touched the IR.
+> its five planes (RFC 0001 §1.2) — the plane that **produces** artefacts. The resolved view
+> model now has a read-only HTTP route. There is no React component yet, so the IR is
+> application-reachable but still has no workflow a user can click.
 
 ---
 
@@ -42,8 +42,8 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 
 - The **UI surface** for authoring and inspecting IR graphs: canvas, node rendering, edge
   rendering, selection, drag, parameter inspector, validation error presentation.
-- The **HTTP route(s)** that serve a `GraphView` to the browser and accept edits. None exist
-  today; designing them is this workstream's first real decision.
+- The **HTTP route(s)** that serve a `GraphView` to the browser and accept edits. The first
+  read-only route exists; write routes wait until the viewer and layout separation are proven.
 - **Presentation-state persistence** (F13): a side table keyed by `instance_id`, holding
   positions, group boxes, collapse state and viewport. Deciding where it lives (which DB, which
   key namespace, what happens to an entry whose node was removed) is this workstream's problem.
@@ -72,13 +72,11 @@ plane (C12), the picture is not a documentation artefact that can drift. It is t
 
 ## 3. Interfaces
 
-**Exports** — nothing yet. This workstream has shipped no symbol, no route and no component, so
-there is nothing another workstream may depend on. The first export will be the read-only graph
-route named in §5; it is listed here only once it exists.
+**Exports**
 
 | Export | Guarantee |
 |---|---|
-| — | nothing yet |
+| `GET /api/ir/graphs/{identifier}` and `/api/v1/ir/graphs/{identifier}` | Resolves only a fixed repository-owned graph catalogue and returns the complete `GraphView` contract under a closed response schema. It is read-only, validates with the real component library, and imports no engine, broker, provider, database or order surface. Unknown identifiers fail with 404 before `resolve()` is called. |
 
 **Consumes**
 
@@ -96,15 +94,23 @@ route named in §5; it is listed here only once it exists.
 **Depends on:** WS-01 (the whole consumed surface above), WS-08 (the app shell it will live in),
 WS-07 (the FastAPI app that would host a route).
 
-**Blocked by:** nothing external. The libraries it needs exist and are tested. What is missing is
-a decision, not a dependency — see §8.
+**Blocked by:** nothing external. The read-only route is committed and the React viewer is the
+next accepted slice; live-engine adoption remains separately owner-gated — see §8.
 
 **Currently blocking:** nothing. No workstream is waiting on the editor.
 
 ## 4. Completed
 
-**Nothing yet in this workstream.** Every artefact the editor would consume was built and is
-owned by WS-01:
+**Read-only application route — `049b699`, 2026-08-03.** One GET route exposes the repository's
+`expanding_z_v4` graph as the exact `GraphView` JSON contract: 18 resolved nodes, 35 resolved
+edges, six layers and 302 bars of composed warmup. It is mounted on `/api` and `/api/v1`, uses a
+closed response model, validates F7/F8 with the component mapping, and rejects unknown client
+identifiers before resolution. Audit removed catalogue and SVG endpoints from the first cut
+because the accepted slice requires one JSON route and neither extra endpoint had a consumer.
+Fourteen route tests cover registration, fixed-catalogue access, read-only graph identity,
+ordered serialization, errors, response schema and the fresh-process import closure.
+
+The underlying editor libraries remain owned by WS-01:
 
 - `app/ir/view.py` — read-only view model plus SVG renderer, with derived layout (WS-01).
 - `app/ir/edit.py` — eight validate-on-result edit functions plus `EditRejected` (WS-01).
@@ -117,22 +123,24 @@ owned by WS-01:
   display name **is** part of the artefact even though nothing references it (F2), so a rename
   does move the hash (WS-01).
 
-Verified 2026-08-03 at `cdbe686`: `grep -rn "app.ir" backend/app --include='*.py'` outside
-`backend/app/ir/` returns exactly one hit, a comment in
-`app/strategy/registry/expanding_z_v4.py`. `backend/app/api/routes.py` contains **zero**
-references to `app.ir`. The IR is not reachable from the running application by any path.
+Verified 2026-08-03 at `049b699`: `app.api.ir_routes` loads no `app.engine`, `app.providers`,
+`app.broker`, `app.db` or `app.options` module in a fresh process. The IR is reachable through a
+read-only application route, but the engine still does not consume it.
 
 ## 5. Active roadmap
 
-- [ ] **A read-only rendering of a `ResolvedGraph`.** One backend route that resolves a named
-      IR strategy, calls `graph_view()`, and returns JSON with the `ViewNode`/`ViewEdge` field
-      names verbatim; one React route that draws it. Per node show: instance path (`container`
+- [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
+      repository graph, calls `graph_view()`, and returns the complete `ViewNode`/`ViewEdge`
+      contract. Committed as `049b699`; full backend acceptance passed.
+- [ ] **React rendering of the `ResolvedGraph`.** Draw the JSON contract in the existing app.
+      Per node show: instance path (`container`
       + `label`), `definition` (`identifier v<version>`), bound `params`, `warmup` in bars, and
       `cache_id`. Distinguish `derived` nodes and non-`pure` nodes visually, as `to_svg` already
       does. No editing, no dragging, no persistence. **This is the item that first makes the IR
-      part of the running application** — today it is a library the app cannot see. Acceptance:
+      usable through the running application.** Acceptance:
       `expanding_z_v4` renders in the browser with node count, edge count and total warmup
-      matching `scripts/render_ir_graph.py` output for the same graph.
+      matching `scripts/render_ir_graph.py` output for the same graph. Use `lib/api.ts` and the
+      existing shadcn primitives; add no graph library in this read-only slice.
 - [ ] **The layout side table (F13).** Persist `instance_id → (x, y)` beside the graph, keyed by
       `(graph identifier, version)`, and feed it to `graph_view(graph, layout=...)`. The
       constraint is load-bearing and already has a test at the library level: dragging a node
@@ -195,12 +203,9 @@ Plus, specific to this workstream:
 
 ## 8. Blockers
 
-- **A deliberate decision, not an oversight: the IR is not wired into the running application.**
-  There is no route and no React. This is the constitutional position — adoption in a running
-  path is RFC 0001 Appendix C(d) and owner-blocked, and wiring the language into a production
-  trading app ahead of that would create exactly the shape this codebase has already been burned by (a mechanism that exists,
-  looks live, and is load-bearing before anyone agreed it should be). The first roadmap item is
-  the moment that changes, and it needs an owner decision, not an implementation.
+- **No blocker for the read-only editor workflow.** The owner explicitly authorised the
+  application-level viewer. It does not execute a graph or change live trading behaviour.
+  Adoption by the live engine remains a separate owner-gated migration under RFC Appendix C(d).
 - **RFC 0001 is accepted** (2026-08-02, `97d6bbb`); the grammar the editor edits now moves only by
   amendment under RFC §6, not freely.
 

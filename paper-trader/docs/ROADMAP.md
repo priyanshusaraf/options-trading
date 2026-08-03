@@ -7,7 +7,7 @@ an index and a sequencing decision. If you are implementing, go straight to your
 document — see [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
 **Last verified: 2026-08-03** · branch `feat/exec-completeness` · backend suites
-(`tests` + `research_tests`) **2,685 collected, PYTEST EXIT 0** · `dryrun.py 700` LEDGER OK ·
+(`tests` + `research_tests`) **2,700 collected, PYTEST EXIT 0** · `dryrun.py 700` LEDGER OK ·
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · VPS build **not measured** —
 `curl /api/health` is the only answer.
 
@@ -21,7 +21,7 @@ plane now builds on, and is complete as a language.
 
 | Priority | Workstream | Next item | Blocked? |
 |---|---|---|---|
-| 1 | [WS-04 Editor](engineering/workstreams/WS-04-editor.md) | read-only graph rendering in the app | no |
+| 1 | [WS-04 Editor](engineering/workstreams/WS-04-editor.md) | React graph view over the read-only API | no |
 | 2 | [WS-08 Cockpit UI](engineering/workstreams/WS-08-cockpit-ui.md) | typography and palette pass | **needs the owner's reference site** |
 | 3 | [WS-02 Execution](engineering/workstreams/WS-02-execution.md) | index-futures segment (E2) | **deploy blocked on owner** |
 | 4 | [WS-03 Research Plane](engineering/workstreams/WS-03-research-plane.md) | a week of unattended nightly runs on real candles | no |
