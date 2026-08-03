@@ -68,10 +68,13 @@ The existing versioned-router mechanism mirrors it under `/api/v1`. The response
 - executable `content_address`;
 - `authored_graph` from that immutable version;
 - `view` resolved from that exact authored graph;
+- `editable_nodes`, a backend-derived authored-node parameter contract;
 - `layout` for that exact identifier and version;
 - `command_receipt`, which is null on GET.
 
 The response is the only canonical frontend read model. The existing fixed-catalogue graph route remains as a compatibility route. Persistent and catalogue views share one field-by-field graph-view mapper.
+
+`editable_nodes` is required because resolved views flatten composite components. An authored node such as `n_atr` resolves into derived descendants and has no one-to-one resolved-view node. Each descriptor names the authored instance and pinned component version and lists the component's declared parameters, kind, declared default, current bound value, and explicit-override flag. The backend derives this metadata from the same component library and parameter references used by resolution. The frontend does not infer component interfaces or binding rules.
 
 Layout in the response is presentation state, not executable state. It remains excluded from graph and component hashing, content address, cache identity, experiment binding, runtime inputs, and runtime outputs.
 
@@ -121,6 +124,7 @@ The accepted codes are:
 - `DRAFT_REVISION_CONFLICT` with HTTP 409 and `current_revision`;
 - `EDITOR_NOT_PUBLISHED` with HTTP 409;
 - `EDITOR_HAS_UNPUBLISHED_DRAFT` with HTTP 409;
+- `EDITOR_ARCHIVED` with HTTP 409 for an archived owning project;
 - `REQUEST_VALIDATION_FAILED` with HTTP 422 for closed-envelope, batch, bounds, and JSON-value failures;
 - `IR_VALIDATION_FAILED` with HTTP 422 for primitive, graph, parameter, and resolution failures;
 - `EDITOR_DOCUMENT_FAILED` with HTTP 500 when a coherent response cannot be built.
@@ -184,7 +188,7 @@ The frontend never patches the resolved graph view. It replaces canonical author
 
 ## Accessible controls
 
-The display-name field has a persistent label, inherited current value, field-associated validation, submit status, and pending disabled state. Each authored node lists resolved parameter values and clearly labels whether each value is inherited/default or explicitly overridden. Override values use JSON input to retain types. Set and clear actions are keyboard operable and have screen-reader labels.
+The display-name field has a persistent label, inherited current value, field-associated validation, submit status, and pending disabled state. Each authored node uses the server's `editable_nodes` descriptor to list current parameter values and clearly labels whether each value is inherited/default or explicitly overridden. Override values use JSON input to retain types. Set and clear actions are keyboard operable and have screen-reader labels.
 
 Undo, redo, reload, conflicts, validation details, and save status use native buttons, disabled semantics, alert/status regions, and visible text. Derived nodes never receive override controls. Structural controls are absent.
 

@@ -201,7 +201,7 @@ Implement `layouts.load_layout_in_session(session, identifier, version, valid_in
 
 - [ ] **Step 7: Implement snapshot, receipt, and response factory**
 
-`load_editor_snapshot()` opens one session, verifies active project, ownership, current version, and `published_revision == draft_revision`, then reads the immutable graph and layout in that session. Define `EditorDocumentResponse` with the exact design fields.
+`load_editor_snapshot()` opens one session, verifies active project, ownership, current version, and `published_revision == draft_revision`, then reads the immutable graph and layout in that session. Define `EditorDocumentResponse` with the exact design fields, including backend-derived `editable_nodes` for composite authored components that have no one-to-one resolved-view node.
 
 Define the transform result before changing persistence:
 
@@ -383,7 +383,7 @@ Expected: the new exports do not exist.
 
 - [ ] **Step 3: Implement exact types and transport**
 
-Define authored node, authored graph, coherent document, receipt, error item, envelope, and this closed operation union:
+Define authored node, editable-node parameter descriptors, authored graph, coherent document, receipt, error item, envelope, and this closed operation union:
 
 ```typescript
 export type IrEditorOperation =
@@ -520,7 +520,7 @@ export function GraphEditControls({
 })
 ```
 
-Join authored nodes to non-derived resolved nodes by instance ID. Render resolved parameter values and explicit override presence separately. Parse override inputs as JSON into local command intent; invalid JSON becomes field validation without a request. Do not render structural controls.
+Render controls only from the server's `editable_nodes` descriptors. Use each descriptor's bound value, default, kind, and explicit-override flag; do not infer component interfaces from resolved descendants. Parse override inputs as JSON into local command intent; invalid JSON becomes field validation without a request. Do not render structural controls.
 
 - [ ] **Step 5: Integrate the coherent document**
 
