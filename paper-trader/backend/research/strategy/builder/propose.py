@@ -31,6 +31,9 @@ class Vocabulary:
     blocks: tuple[str, ...]
     bar_inputs: tuple[str, ...]
     defaults: Mapping[str, Mapping[str, Any]]
+    # Per-block declared inputs (F4). Falls back to `bar_inputs` for a block
+    # that has not declared, so a partial vocabulary still wires legally.
+    block_inputs: Mapping[str, tuple[str, ...]] = None  # type: ignore[assignment]
     families: Mapping[str, tuple[str, ...]] = None  # type: ignore[assignment]
 
 
@@ -79,7 +82,7 @@ def _place_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
     instance = _next_id(graph, "n")
     out = add_node(graph, instance, f"block.{block}", 1,
                    dict(vocabulary.defaults.get(block, {})))
-    for field in vocabulary.bar_inputs:
+    for field in (vocabulary.block_inputs or {}).get(block, vocabulary.bar_inputs):
         out = connect(out, ("io_in", field), (instance, field))
     return out, instance
 

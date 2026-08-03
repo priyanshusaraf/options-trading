@@ -464,10 +464,30 @@ that shaped it: `docs/research/ARCHITECTURE.md`.
       ≤ 0.30 fail-closed, N_eff breadth), feed accepted graphs back through `knowledge.py`,
       and keep the objective *outside* `propose.py` — C14 says the proposer proposes and does
       not score, and a test greps for that.
-- [ ] **Narrow each block's declared inputs.** Every derived component declares the whole
-      OHLCV frame because the adapter rebuilds it (`BAR_INPUTS` in `ir_components.py`).
-      Inferring per-block inputs from the body is exactly what F4 forbids, so the declaration
-      belongs in `BlockSpec` — a new field on the block, carried across by `derive()`.
+- [x] **Each block declares the inputs it reads — DONE 2026-08-03.** `BlockSpec` gained
+      `inputs` and `needs_clock`; `derive()` builds sockets from the declaration and the adapter
+      rebuilds only those columns. **45 declared sockets across 23 blocks, down from 115** — most
+      read `close` alone. F4 is respected: the declaration is authoritative and the
+      implementation is checked against it, never inferred from it.
+      - *Verified empirically, not by AST.* `regime_is` reaches through `research/regime.py` and
+        the opening-range blocks through helpers, so a syntactic check would have to chase every
+        call across every module and would still miss a dynamic one. Instead each block runs on a
+        frame containing only what it declared and must produce the identical series
+        (`research_tests/test_block_declared_inputs.py`).
+      - *Under-declaration is the failure that matters, and it is silent.* Several of these
+        blocks fail **closed** on a missing column — `volume_surge` reads False, `time_of_day`
+        returns all-False — so an under-declared block would not raise. It would quietly switch
+        a filter off, and a generated strategy would lose a condition somebody added on purpose.
+      - **The bar clock is not a socket.** F7's value types are float/int/bool and a datetime is
+        none of them, so declaring `date` as a wire would have needed a format amendment.
+        It is the series *index*: `needs_clock` says a block reads it, and the adapter supplies
+        it from the index. No amendment needed.
+      - *Two wrong tests written before the right one, both recorded in the file.* Perturbing a
+        column by a positive affine transform proves nothing — `close > EMA(close)` is invariant
+        under it. And a removal check calls `rsi_gt` over-declared at its sample args, because
+        `source=0` reads only `close` while `source=3` (ohlc4) reads all four; a declaration
+        covers the whole parameter domain, so choice-carrying blocks are checked across every
+        lawful choice value instead.
 - [ ] **Surface `strategy/explain.py` on the approval queue.** The plain-language explanation
       is already rendered into every run report by `report._render_explanation`; what remains
       is showing it where the human actually decides.

@@ -52,6 +52,7 @@ def bars(n=320):
         [1000 + math.sin(i / 9.0) * 8 + math.sin(i / 41.0) * 20 + (18 if i > 200 else 0)
          for i in range(n)], index=idx, dtype=float)
     return pd.DataFrame({
+        "date": idx,
         "open": close.shift(1).fillna(close.iloc[0]),
         "high": close + 2.0 + (pd.Series(range(n), index=idx) % 5) * 0.6,
         "low": close - 2.0 - (pd.Series(range(n), index=idx) % 7) * 0.5,
@@ -114,7 +115,7 @@ def _graph(name: str) -> dict:
     return {
         "format_version": 1, "kind": "graph",
         "identifier": f"probe.{name}", "version": 1, "display_name": name,
-        "interface": [*(sock(f, "input", bar) for f in BAR_INPUTS),
+        "interface": [*(sock(f, "input", bar) for f in BLOCKS[name].inputs),
                       sock("out", "output", w("bool", **BAR))],
         "nodes": [
             {"instance_id": "io_in",
@@ -126,7 +127,8 @@ def _graph(name: str) -> dict:
         ],
         "edges": [
             *({"source": {"instance": "io_in", "socket": f},
-               "target": {"instance": "n", "socket": f}} for f in BAR_INPUTS),
+               "target": {"instance": "n", "socket": f}}
+              for f in BLOCKS[name].inputs),
             {"source": {"instance": "n", "socket": "out"},
              "target": {"instance": "io_out", "socket": "out"}},
         ],

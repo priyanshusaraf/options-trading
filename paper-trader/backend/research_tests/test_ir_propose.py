@@ -62,6 +62,7 @@ def vocabulary():
         bar_inputs=BAR_INPUTS,
         defaults={name: dict(zip([p for p, _ in spec.params], spec.sample_args))
                   for name, spec in BLOCKS.items()},
+        block_inputs={name: tuple(spec.inputs) for name, spec in BLOCKS.items()},
         families=groups(),
     )
 
@@ -94,7 +95,8 @@ def seed_graph() -> dict:
     edges = [
         *({"source": {"instance": "io_in", "socket": f},
            "target": {"instance": n, "socket": f}}
-          for f in BAR_INPUTS for n in ("n_1", "n_2")),
+          for n, blk in (("n_1", "price_above_ema"), ("n_2", "zscore_gt"))
+          for f in BLOCKS[blk].inputs),
         {"source": {"instance": "n_1", "socket": "out"},
          "target": {"instance": "c_1", "socket": "a"}},
         {"source": {"instance": "n_2", "socket": "out"},

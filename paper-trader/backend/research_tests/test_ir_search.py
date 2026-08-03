@@ -37,6 +37,7 @@ def vocabulary():
     return Vocabulary(
         blocks=tuple(sorted(BLOCKS)),
         bar_inputs=BAR_INPUTS,
+        block_inputs={name: tuple(spec.inputs) for name, spec in BLOCKS.items()},
         defaults={name: dict(zip([p for p, _ in spec.params], spec.sample_args))
                   for name, spec in BLOCKS.items()},
         families=groups(),

@@ -24,7 +24,7 @@ def _bar_domain(instrument: str, timeframe: str) -> dict[str, str]:
     return {"instrument": instrument, "timeframe": timeframe}
 
 
-def _adapter(spec: BlockSpec, order: tuple[str, ...]):
+def _adapter(spec: BlockSpec, order: tuple[str, ...], fields: tuple[str, ...]):
     """One kernel for every block: rebuild the frame, call the block, name the output.
 
     `order` is captured, not read from `params`, so the positional call into
@@ -32,7 +32,9 @@ def _adapter(spec: BlockSpec, order: tuple[str, ...]):
     """
 
     def kernel(params, inputs):
-        frame = pd.DataFrame({name: inputs[name] for name in BAR_INPUTS})
+        frame = pd.DataFrame({name: inputs[name] for name in fields})
+        if spec.needs_clock and len(frame.index):
+            frame["date"] = frame.index
         return {"out": spec.fn(frame, *(params[name] for name in order))}
 
     return kernel
@@ -49,7 +51,7 @@ def derive(name: str, spec: BlockSpec, *, instrument: str = "*",
         f"block.{name}",
         display_name=name.replace("_", " "),
         interface=[
-            *(socket(field, "input", bar) for field in BAR_INPUTS),
+            *(socket(field, "input", bar) for field in spec.inputs),
             *(parameter(param_name, kind, defaults[param_name])
               for param_name, kind in spec.params),
             socket("out", "output",
@@ -60,8 +62,9 @@ def derive(name: str, spec: BlockSpec, *, instrument: str = "*",
             spec.warmup(tuple(p[param_name] for param_name in order))),
         # The adapter body is identical for every block; without this, all
         # blocks would share one body address and collide in the registry.
-        closes_over={"block": name, "fn": _block_source(spec)},
-    )(_adapter(spec, order))
+        closes_over={"block": name, "fn": _block_source(spec),
+                     "inputs": list(spec.inputs), "clock": spec.needs_clock},
+    )(_adapter(spec, order, tuple(spec.inputs)))
 
 
 def _block_source(spec: BlockSpec) -> str:

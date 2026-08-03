@@ -410,6 +410,11 @@ class BlockSpec:
     warmup: Callable       # (args) -> int  bars needed before the block is meaningful
     sample_args: tuple     # a representative valid arg tuple (tests + search seeds)
     group: str             # trend | momentum | volatility | confirmation
+    # F4: declared, never inferred. `inputs` names the OHLCV columns this block
+    # reads. `needs_clock` says it also reads bar timestamps, which are the
+    # series index rather than a value, so they are not an IR socket.
+    inputs: tuple = ("open", "high", "low", "close", "volume")
+    needs_clock: bool = False
 
 
 def _len_plus(extra=0):
@@ -418,31 +423,31 @@ def _len_plus(extra=0):
 
 BLOCKS: dict[str, BlockSpec] = {
     "ema_slope_up":     BlockSpec(ema_slope_up, (("length", "length"), ("lookback", "length")),
-                                  lambda a: int(a[0]) + int(a[1]), (50, 5), "trend"),
+                                  lambda a: int(a[0]) + int(a[1]), (50, 5), "trend", inputs=("close",)),
     "ema_slope_down":   BlockSpec(ema_slope_down, (("length", "length"), ("lookback", "length")),
-                                  lambda a: int(a[0]) + int(a[1]), (50, 5), "trend"),
+                                  lambda a: int(a[0]) + int(a[1]), (50, 5), "trend", inputs=("close",)),
     "price_above_ema":  BlockSpec(price_above_ema, (("length", "length"),),
-                                  _len_plus(), (50,), "trend"),
+                                  _len_plus(), (50,), "trend", inputs=("close",)),
     "price_below_ema":  BlockSpec(price_below_ema, (("length", "length"),),
-                                  _len_plus(), (50,), "trend"),
+                                  _len_plus(), (50,), "trend", inputs=("close",)),
     "zscore_gt":        BlockSpec(zscore_gt, (("length", "length"), ("thr", "thr")),
-                                  _len_plus(1), (50, 0.0), "momentum"),
+                                  _len_plus(1), (50, 0.0), "momentum", inputs=("close",)),
     "zscore_lt":        BlockSpec(zscore_lt, (("length", "length"), ("thr", "thr")),
-                                  _len_plus(1), (50, 0.0), "momentum"),
+                                  _len_plus(1), (50, 0.0), "momentum", inputs=("close",)),
     "zscore_cross_up":  BlockSpec(zscore_cross_up, (("length", "length"), ("thr", "thr")),
-                                  _len_plus(1), (50, 1.0), "momentum"),
+                                  _len_plus(1), (50, 1.0), "momentum", inputs=("close",)),
     "zscore_cross_down": BlockSpec(zscore_cross_down, (("length", "length"), ("thr", "thr")),
-                                   _len_plus(1), (50, 1.0), "momentum"),
+                                   _len_plus(1), (50, 1.0), "momentum", inputs=("close",)),
     "roc_gt":           BlockSpec(roc_gt, (("length", "length"), ("thr", "thr")),
-                                  _len_plus(1), (10, 0.0), "momentum"),
+                                  _len_plus(1), (10, 0.0), "momentum", inputs=("close",)),
     "roc_lt":           BlockSpec(roc_lt, (("length", "length"), ("thr", "thr")),
-                                  _len_plus(1), (10, 0.0), "momentum"),
+                                  _len_plus(1), (10, 0.0), "momentum", inputs=("close",)),
     "atr_pct_lt":       BlockSpec(atr_pct_lt, (("length", "length"), ("max_pct", "pct")),
-                                  _len_plus(), (14, 5.0), "volatility"),
+                                  _len_plus(), (14, 5.0), "volatility", inputs=("high", "low", "close")),
     "range_atr_lt":     BlockSpec(range_atr_lt, (("length", "length"), ("mult", "mult")),
-                                  _len_plus(), (14, 2.5), "volatility"),
+                                  _len_plus(), (14, 2.5), "volatility", inputs=("high", "low", "close")),
     "still_expanding_z": BlockSpec(still_expanding_z, (("length", "length"),),
-                                   _len_plus(1), (50,), "confirmation"),
+                                   _len_plus(1), (50,), "confirmation", inputs=("close",)),
     # Phase 2 — formula-level variants. `source`/`smooth` are bounded integer
     # CHOICE codes (see PRICE_SOURCES / SMOOTHINGS); code 0 is the conventional
     # reading, so the sample args describe a plain close-based Wilder-ish RSI.
@@ -451,33 +456,33 @@ BLOCKS: dict[str, BlockSpec] = {
     # perfectly lawful and would have been rejected by the wrong bound.
     "rsi_gt":           BlockSpec(rsi_gt, (("length", "length"), ("thr", "pct"),
                                            ("source", "choice"), ("smooth", "choice")),
-                                  _len_plus(1), (14, 55.0, 0, 2), "momentum"),
+                                  _len_plus(1), (14, 55.0, 0, 2), "momentum", inputs=("open", "high", "low", "close")),
     "rsi_lt":           BlockSpec(rsi_lt, (("length", "length"), ("thr", "pct"),
                                            ("source", "choice"), ("smooth", "choice")),
-                                  _len_plus(1), (14, 45.0, 0, 2), "momentum"),
+                                  _len_plus(1), (14, 45.0, 0, 2), "momentum", inputs=("open", "high", "low", "close")),
     "volume_surge":     BlockSpec(volume_surge, (("length", "length"), ("mult", "mult")),
-                                  _len_plus(), (20, 1.5), "confirmation"),
+                                  _len_plus(), (20, 1.5), "confirmation", inputs=("volume",)),
     "gap_up_pct":       BlockSpec(gap_up_pct, (("min_pct", "pct"),),
-                                  lambda a: 2, (0.5,), "momentum"),
+                                  lambda a: 2, (0.5,), "momentum", inputs=("open", "close")),
     "gap_down_pct":     BlockSpec(gap_down_pct, (("min_pct", "pct"),),
-                                  lambda a: 2, (0.5,), "momentum"),
+                                  lambda a: 2, (0.5,), "momentum", inputs=("open", "close")),
     "body_frac_gt":     BlockSpec(body_frac_gt, (("frac", "pct"),),
-                                  lambda a: 2, (0.5,), "confirmation"),
+                                  lambda a: 2, (0.5,), "confirmation", inputs=("open", "high", "low", "close")),
     # Phase 2 — session awareness. Warmup is session-local (the opening range is
     # rebuilt every day), so it is `bars`, not a multi-day history. `time_of_day`
     # needs no history at all: a bar knows its own clock.
     "time_of_day":      BlockSpec(time_of_day, (("start_min", "minute"),
                                                 ("end_min", "minute")),
-                                  lambda a: 0, (555, 690), "confirmation"),
+                                  lambda a: 0, (555, 690), "confirmation", inputs=("close",), needs_clock=True),
     "opening_range_break_up": BlockSpec(
         opening_range_break_up, (("bars", "length"), ("buffer_pct", "pct")),
-        _len_plus(), (4, 0.1), "momentum"),
+        _len_plus(), (4, 0.1), "momentum", inputs=("high", "low", "close"), needs_clock=True),
     "opening_range_break_down": BlockSpec(
         opening_range_break_down, (("bars", "length"), ("buffer_pct", "pct")),
-        _len_plus(), (4, 0.1), "momentum"),
+        _len_plus(), (4, 0.1), "momentum", inputs=("high", "low", "close"), needs_clock=True),
     # Phase 5 — regime conditioning. Warmup mirrors the labeller's own windows.
     "regime_is":        BlockSpec(regime_is, (("code", "choice"),),
-                                  lambda a: 220, (0,), "confirmation"),
+                                  lambda a: 220, (0,), "confirmation", inputs=("open", "high", "low", "close")),
 }
 
 
