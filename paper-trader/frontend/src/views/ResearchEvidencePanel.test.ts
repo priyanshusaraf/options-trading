@@ -8,6 +8,7 @@ import type {
   ResearchReview,
   ResearchReviewNote,
   ResearchReviewSavedView,
+  ResearchReviewSearch,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
@@ -171,6 +172,31 @@ const SAVED_VIEWS: ResearchReviewSavedView[] = [{
   created_at: '2026-08-03T02:00:00Z', updated_at: '2026-08-03T02:00:00Z',
 }]
 
+const REVIEW_SEARCH: ResearchReviewSearch = {
+  project_id: 'project.alpha',
+  query: 'breadth',
+  results: [{
+    result_id: 'note:note.1', kind: 'note', event_id: 'candidate:7',
+    event_type: 'candidate_created', text: 'Check the breadth before deciding.',
+    timestamp: '2026-08-03T02:00:00.000000Z', anchor_state: 'available',
+    reference: { run_id: null, finding_id: null, candidate_id: null },
+  }, {
+    result_id: 'event:run:12', kind: 'event', event_id: 'run:12',
+    event_type: 'experiment_run', text: 'Run 12 needs review',
+    timestamp: '2026-08-03T01:00:00.000000Z', anchor_state: 'available',
+    reference: { run_id: 12, finding_id: null, candidate_id: null },
+  }, {
+    result_id: 'note:note.2', kind: 'note', event_id: 'run:missing',
+    event_type: 'experiment_run', text: 'Retained human note',
+    timestamp: '2026-08-03T00:00:00.000000Z', anchor_state: 'missing',
+    reference: { run_id: null, finding_id: null, candidate_id: null },
+  }],
+  next_cursor: 'search-next',
+  source_errors: [{
+    source: 'graph_version', source_id: 'broken', code: 'GRAPH_VERSION_CORRUPT',
+  }],
+}
+
 describe('ResearchEvidenceSurface', () => {
   it('polling refresh retains loaded older events while updating current facts', () => {
     const old = REVIEW.timeline.events[0]
@@ -231,6 +257,31 @@ describe('ResearchEvidenceSurface', () => {
     expect(html).toContain('min-w-0')
     expect(html).toContain('break-all')
     expect(html).not.toContain('Start research')
+  })
+
+  it('renders accessible bounded search independently with exact feedback and links', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: null, comparison: null, reason: '', review: REVIEW,
+      searchQuery: 'keep this query', search: REVIEW_SEARCH,
+      searchError: 'review search query must contain 2 to 120 normalized characters',
+      onSearchQuery: () => undefined, onSearch: () => undefined,
+      onSearchClear: () => undefined, onSearchMore: () => undefined,
+      onSelect: () => undefined,
+    }))
+
+    expect(html).toContain('aria-label="Project review search"')
+    expect(html).toContain('for="project-review-search-query"')
+    expect(html).toContain('value="keep this query"')
+    expect(html).toContain('Search review')
+    expect(html).toContain('Clear search')
+    expect(html).toContain('review search query must contain 2 to 120 normalized characters')
+    expect(html).toContain('Check the breadth before deciding.')
+    expect(html).toContain('Open run 12')
+    expect(html).toContain('Source event unavailable')
+    expect(html).toContain('GRAPH_VERSION_CORRUPT')
+    expect(html).toContain('Load more search results')
+    expect(html).toContain('min-w-0')
+    expect(html).toContain('break-words')
   })
 
   it('shows explicit never-run state and a completed last receipt', () => {

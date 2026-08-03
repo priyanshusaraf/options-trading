@@ -854,6 +854,31 @@ export interface ResearchReviewSavedView {
   readonly updated_at: string
 }
 
+export interface ResearchReviewSearchResult {
+  readonly result_id: string
+  readonly kind: 'event' | 'note'
+  readonly event_id: string
+  readonly event_type: ResearchReviewEventType
+  readonly text: string
+  readonly timestamp: string
+  readonly anchor_state: 'available' | 'missing'
+  readonly reference: {
+    readonly run_id: number | null
+    readonly finding_id: number | null
+    readonly candidate_id: number | null
+  }
+}
+
+export interface ResearchReviewSearch {
+  readonly project_id: string
+  readonly query: string
+  readonly results: readonly ResearchReviewSearchResult[]
+  readonly next_cursor: string | null
+  readonly source_errors: readonly {
+    readonly source: string; readonly source_id: string; readonly code: string
+  }[]
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -887,6 +912,17 @@ export const getResearchReview = (
   })
   const suffix = query.toString()
   return researchFetch(`${researchPath(projectId)}/review${suffix ? `?${suffix}` : ''}`)
+}
+
+export const searchResearchReview = (
+  projectId: string,
+  query: { readonly q: string; readonly limit?: number; readonly cursor?: string },
+): Promise<ResearchReviewSearch> => {
+  const params = new URLSearchParams()
+  params.set('q', query.q)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.cursor !== undefined) params.set('cursor', query.cursor)
+  return researchFetch(`${researchPath(projectId)}/review/search?${params.toString()}`)
 }
 
 export const getResearchReviewNotes = (

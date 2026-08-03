@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.6c bounded project review search
-- **Next product checkpoint:** a user can find server-authored review facts and owner notes without
-  loading or indexing raw executable graphs, evidence or scorecards.
+- **Current slice:** S4.6d immutable project review snapshots
+- **Next product checkpoint:** a user can capture and reopen a bounded historical review without
+  turning a snapshot into executable identity, current queue truth or a restore command.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -86,7 +86,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | done — verified; publication in this slice commit |
 | S4.6a | Add a daily research review read model and actionable queues | S4.5 | done — verified and published in this slice commit |
 | S4.6b | Persist project review notes and saved filter views | S4.6a | done — schema checkpoint verified; publication in this slice commit |
-| S4.6c | Add bounded project review search | S4.6b | active — bounded checklist generated |
+| S4.6c | Add bounded project review search | S4.6b | done — verified; publication in this slice commit |
+| S4.6d | Capture immutable project review snapshots | S4.6c | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -548,16 +549,42 @@ with 6 skips, all 214 frontend tests, typecheck/build, `LEDGER OK`, 16/16 `SWEEP
 
 **S4.6c bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile the safe search corpus and reject raw graph JSON, evidence, scorecards, candidate
+1. [x] Reconcile the safe search corpus and reject raw graph JSON, evidence, scorecards, candidate
        reasons, global operations and other cross-project or sensitive text.
-2. [ ] Record deterministic query normalization, bounded matching/ranking, pagination interaction,
+2. [x] Record deterministic query normalization, bounded matching/ranking, pagination interaction,
        missing-note behavior and source-corruption containment before implementation.
-3. [ ] Add a closed server-authoritative search read over bounded project event summaries and active
+3. [x] Add a closed server-authoritative search read over bounded project event summaries and active
        owner notes without a new index/table or research/execution calls.
-4. [ ] Add an accessible search control with exact empty/invalid/source-error feedback, result links,
+4. [x] Add an accessible search control with exact empty/invalid/source-error feedback, result links,
        saved-view independence and lossless reload.
-5. [ ] Prove case/Unicode normalization, stable ordering, cross-project isolation, corpus exclusion,
+5. [x] Prove case/Unicode normalization, stable ordering, cross-project isolation, corpus exclusion,
        no write/recompute seams and narrow-screen containment; verify, publish and continue.
+
+**S4.6c completion evidence, 2026-08-03.** ADR 0009 limits search to verified project-event
+summaries and active normalized-owner note bodies. NFKC/case/whitespace normalization, literal
+substring matching, match-offset/newest/kind/id order, 2,000-document source bounds and a
+query-bound canonical keyset cursor are pure and deterministic. The closed project route accepts
+only query, limit and cursor, contains source errors, retains missing-anchor notes without copied
+summaries and returns no graph, evidence, scorecard, candidate-reason or global-operation text.
+The transient accessible UI keeps failures and pagination independent from timeline filters,
+saved views and polling. Thirteen focused backend guards and the 183-test WS-03/04/08 regression
+pass. All 216 frontend tests, typecheck and production build pass. The preceding S4.6b
+shared-persistence checkpoint remains current because S4.6c adds no schema, shared runtime,
+execution or safety-boundary change.
+
+**S4.6d bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile the historical-review purpose, exact frozen corpus, project ownership, retention,
+       note revisions and the lack of a cross-store atomic read before choosing persistence.
+2. [ ] Record a content-addressed immutable snapshot contract that distinguishes captured history
+       from current source truth and excludes raw graph/evidence/scorecard/global-operation content.
+3. [ ] Add closed server-derived capture/list/read APIs with bounded size, source-error policy,
+       optimistic duplicate handling and no client-supplied facts, restore or queue mutation.
+4. [ ] Add an accessible capture/history/open workflow that labels stale or missing sources and
+       never presents a snapshot as a current queue or executable state.
+5. [ ] Prove identity isolation, cross-project refusal, corruption detection, deterministic content
+       address, migration rollback and no research/execution/edit seams; run the persistence
+       checkpoint, publish and continue to a separately designed fork/restore boundary.
 
 ## 4. Medium-term sequence
 

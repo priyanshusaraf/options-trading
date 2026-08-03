@@ -12,6 +12,11 @@ from app.api.principal import Principal, get_principal, require
 from app.core import review_state
 from app.core.config import get_settings
 from app.core.review_aggregation import project_review_source
+from app.core.review_search import (
+    ReviewSearchRejected,
+    normalize_search_query,
+    search_review_documents,
+)
 from app.core.research_review import (
     ReviewQueryRejected,
     paginate_review_events,
@@ -33,6 +38,7 @@ router = APIRouter(prefix="/api/ir", dependencies=[Depends(_research_gate)])
 _QUERY_FIELDS = frozenset({
     "limit", "cursor", "event_type", "status", "after", "before"
 })
+_SEARCH_QUERY_FIELDS = frozenset({"q", "limit", "cursor"})
 
 
 class _ClosedModel(BaseModel):
@@ -271,6 +277,100 @@ def _view_response(view: review_state.ReviewSavedView) -> dict:
         "revision": view.revision,
         "created_at": _timestamp(view.created_at),
         "updated_at": _timestamp(view.updated_at),
+    }
+
+
+def _search_rejected(message: str, *, source_limit: bool = False) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={
+            "code": "REVIEW_SEARCH_SOURCE_LIMIT" if source_limit else "REVIEW_SEARCH_INVALID",
+            "message": message,
+        },
+    )
+
+
+@router.get("/projects/{project_id}/review/search")
+def search_project_review(
+    request: Request,
+    project_id: str,
+    q: str | None = Query(default=None),
+    limit: str = Query(default="25"),
+    cursor: str | None = Query(default=None),
+    principal: Principal = Depends(get_principal),
+):
+    """Search the closed project-summary and active-owner-note corpus."""
+    _owner(principal, "search project review", project_id)
+    unknown = sorted(set(request.query_params) - _SEARCH_QUERY_FIELDS)
+    duplicate = next((
+        key for key in _SEARCH_QUERY_FIELDS if len(request.query_params.getlist(key)) > 1
+    ), None)
+    if unknown:
+        return _search_rejected(f"unknown review search query field: {unknown[0]}")
+    if duplicate is not None:
+        return _search_rejected(f"duplicate review search query field: {duplicate}")
+    if q is None:
+        return _search_rejected("review search query is required")
+    try:
+        parsed_limit = int(limit)
+    except (TypeError, ValueError):
+        return _search_rejected("review search limit must be between 1 and 50")
+    if str(parsed_limit) != limit:
+        return _search_rejected("review search limit must be a canonical integer")
+    if not 1 <= parsed_limit <= 50:
+        return _search_rejected("review search limit must be between 1 and 50")
+    try:
+        normalized_query = normalize_search_query(q)
+    except ReviewSearchRejected as exc:
+        return _search_rejected(str(exc))
+
+    try:
+        source = project_review_source(project_id)
+        notes = review_state.list_notes(project_id)
+    except _STATE_EXCEPTIONS as exc:
+        return _state_error(exc)
+    event_types = {event["event_id"]: event["type"] for event in source["events"]}
+    note_documents = [{
+        "note_id": note.note_id,
+        "event_id": note.event_id,
+        "event_type": note.event_type,
+        "body": note.body,
+        "created_by": note.created_by,
+        "anchor_state": (
+            "available" if event_types.get(note.event_id) == note.event_type else "missing"
+        ),
+        "updated_at": _timestamp(note.updated_at),
+    } for note in notes]
+    source_errors = list(source["source_errors"])
+    try:
+        page = search_review_documents(
+            source["events"], note_documents,
+            query=normalized_query, limit=parsed_limit, cursor=cursor,
+        )
+    except ReviewSearchRejected as exc:
+        message = str(exc)
+        if "note source is invalid" in message:
+            source_errors.append({
+                "source": "review_note",
+                "source_id": "project_active_notes",
+                "code": "REVIEW_NOTE_SOURCE_CORRUPT",
+            })
+            try:
+                page = search_review_documents(
+                    source["events"], [],
+                    query=normalized_query, limit=parsed_limit, cursor=cursor,
+                )
+            except ReviewSearchRejected as retry_exc:
+                retry_message = str(retry_exc)
+                return _search_rejected(
+                    retry_message, source_limit="source exceeds" in retry_message
+                )
+        else:
+            return _search_rejected(message, source_limit="source exceeds" in message)
+    return {
+        "project_id": project_id,
+        **page,
+        "source_errors": source_errors,
     }
 
 

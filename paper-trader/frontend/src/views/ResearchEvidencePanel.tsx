@@ -10,6 +10,7 @@ import {
   getResearchReview,
   getResearchReviewNotes,
   getResearchReviewSavedViews,
+  searchResearchReview,
   getResearchRun,
   getResearchFindings,
   getResearchGraphVersions,
@@ -26,6 +27,8 @@ import {
   type ResearchReviewFilters,
   type ResearchReviewNote,
   type ResearchReviewSavedView,
+  type ResearchReviewSearch,
+  type ResearchReviewSearchResult,
   type ResearchRunDetail,
   type ResearchRunSummary,
   type ResearchVersionSelection,
@@ -103,6 +106,10 @@ export function ResearchEvidenceSurface({
   editingNoteId = null,
   noteDraft = '',
   savedViewName = '',
+  searchQuery = '',
+  search = null,
+  searchError = null,
+  searchBusy = false,
   reason,
   findingStatement = '',
   findingPolarity = 'negative',
@@ -130,6 +137,11 @@ export function ResearchEvidenceSurface({
   onSaveView,
   onApplyView,
   onDeleteView,
+  onSearchQuery,
+  onSearch,
+  onSearchClear,
+  onSearchMore,
+  onSearchResult,
 }: {
   runs: readonly ResearchRunSummary[]
   detail: ResearchRunDetail | null
@@ -147,6 +159,10 @@ export function ResearchEvidenceSurface({
   editingNoteId?: string | null
   noteDraft?: string
   savedViewName?: string
+  searchQuery?: string
+  search?: ResearchReviewSearch | null
+  searchError?: string | null
+  searchBusy?: boolean
   reason: string
   findingStatement?: string
   findingPolarity?: 'positive' | 'negative'
@@ -174,6 +190,11 @@ export function ResearchEvidenceSurface({
   onSaveView?: () => void
   onApplyView?: (view: ResearchReviewSavedView) => void
   onDeleteView?: (view: ResearchReviewSavedView) => void
+  onSearchQuery?: (query: string) => void
+  onSearch?: () => void
+  onSearchClear?: () => void
+  onSearchMore?: () => void
+  onSearchResult?: (result: ResearchReviewSearchResult) => void
 }) {
   const orderedVersions = versions.length > 0
     ? [...versions].sort((a, b) => a.version - b.version)
@@ -269,6 +290,57 @@ export function ResearchEvidenceSurface({
                 >Finding {item.finding_id} · run {item.evidence_run_id}</button>)}
               </div>
             </div>
+            <section aria-label="Project review search" className="min-w-0 space-y-2 rounded border border-edge p-2">
+              <p className="font-medium">Project review search</p>
+              <p className="text-muted">Search verified event summaries and active owner notes.</p>
+              <div className="flex min-w-0 flex-wrap items-end gap-2">
+                <label className="min-w-0 flex-1" htmlFor="project-review-search-query">
+                  Search text
+                  <input
+                    id="project-review-search-query" className="mt-1 w-full min-w-0"
+                    maxLength={120} value={searchQuery}
+                    onChange={(event) => onSearchQuery?.(event.target.value)}
+                  />
+                </label>
+                <button
+                  type="button" className="btn" disabled={searchBusy || !searchQuery.trim()}
+                  onClick={onSearch}
+                >Search review</button>
+                <button type="button" className="btn" disabled={searchBusy} onClick={onSearchClear}>
+                  Clear search
+                </button>
+              </div>
+              {searchError && <p role="alert" className="break-words text-amber-300">{searchError}</p>}
+              {search?.source_errors.map((item) => <p
+                role="alert" className="break-words text-amber-300"
+                key={`search:${item.source}:${item.source_id}`}
+              >{item.code}: {item.source} {item.source_id}</p>)}
+              {search && search.results.length === 0 && (
+                <p className="text-muted">No review text matches this query.</p>
+              )}
+              {search && search.results.length > 0 && <ol
+                aria-label="Project review search results" className="min-w-0 space-y-2"
+              >
+                {search.results.map((item) => <li
+                  key={item.result_id} className="min-w-0 rounded bg-panel2 p-2"
+                >
+                  <p className="break-words font-medium">{item.text}</p>
+                  <p className="break-all text-muted">{item.kind} · {item.timestamp}</p>
+                  {item.anchor_state === 'missing'
+                    ? <p className="text-amber-300">Source event unavailable · {item.event_id}</p>
+                    : item.reference.run_id !== null
+                      ? <button type="button" className="btn mt-1" onClick={() => onSelect?.(item.reference.run_id!)}>
+                        Open run {item.reference.run_id}
+                      </button>
+                      : <button type="button" className="btn mt-1" onClick={() => onSearchResult?.(item)}>
+                        {item.kind === 'note' ? 'Show note' : 'Show event'}
+                      </button>}
+                </li>)}
+              </ol>}
+              {search?.next_cursor && <button
+                type="button" className="btn" disabled={searchBusy} onClick={onSearchMore}
+              >Load more search results</button>}
+            </section>
             <section aria-label="Saved review views" className="space-y-2 rounded border border-edge p-2">
               <p className="font-medium">Saved review views</p>
               <div className="flex min-w-0 flex-wrap gap-2">
@@ -339,6 +411,8 @@ export function ResearchEvidenceSurface({
               ? <p className="text-muted">No project events match these filters.</p>
               : <ol aria-label="Project event timeline" className="space-y-2">
                 {review.timeline.events.map((item) => <li
+                  id={`review-event-${item.event_id}`}
+                  tabIndex={-1}
                   className="min-w-0 rounded border border-edge p-2" key={item.event_id}
                 >
                   <p className="break-words font-medium">{item.summary}</p>
@@ -360,7 +434,10 @@ export function ResearchEvidenceSurface({
                   }}>Use version {item.references.graph.version} in comparison</button>}
                   <div className="mt-2 space-y-1 border-t border-edge/50 pt-2">
                     {reviewNotes.filter((note) => note.event_id === item.event_id).map((note) => (
-                      <div key={note.note_id} className="rounded bg-panel2 p-2">
+                      <div
+                        id={`review-note-${note.note_id}`} tabIndex={-1} key={note.note_id}
+                        className="rounded bg-panel2 p-2"
+                      >
                         <p className="whitespace-pre-wrap break-words">{note.body}</p>
                         <button type="button" className="btn mt-1" onClick={() => onEditNote?.(note)}>
                           Edit note
@@ -384,7 +461,9 @@ export function ResearchEvidenceSurface({
             >
               <p className="font-medium">Notes with missing source events</p>
               {reviewNotes.filter((note) => note.anchor_state === 'missing').map((note) => <div
-                key={note.note_id} className="rounded border border-amber-500/40 p-2"
+                id={`review-note-${note.note_id}`} key={note.note_id}
+                tabIndex={-1}
+                className="rounded border border-amber-500/40 p-2"
               >
                 <p className="text-amber-300">Source event unavailable · {note.event_id}</p>
                 <p className="whitespace-pre-wrap break-words">{note.body}</p>
@@ -714,6 +793,11 @@ export default function ResearchEvidencePanel({
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [noteDraft, setNoteDraft] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [search, setSearch] = useState<ResearchReviewSearch | null>(null)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchBusy, setSearchBusy] = useState(false)
+  const searchRequest = useRef(0)
   const [reason, setReason] = useState('')
   const [findingStatement, setFindingStatement] = useState('')
   const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
@@ -761,6 +845,14 @@ export default function ResearchEvidencePanel({
     })
     void refreshReviewArtifacts()
   }, [projectId, graphIdentifier])
+
+  useEffect(() => {
+    searchRequest.current += 1
+    setSearchQuery('')
+    setSearch(null)
+    setSearchError(null)
+    setSearchBusy(false)
+  }, [projectId])
 
   const loadReview = async (
     filters: ResearchReviewFilters, append = false, preservePage = false,
@@ -916,6 +1008,35 @@ export default function ResearchEvidencePanel({
     } finally { setBusy(false) }
   }
 
+  const runSearch = async (append = false) => {
+    if (!searchQuery.trim()) return
+    const requestId = ++searchRequest.current
+    const currentSearch = search
+    const submittedQuery = append && currentSearch ? currentSearch.query : searchQuery
+    setSearchBusy(true); setSearchError(null)
+    if (!append) setSearch(null)
+    try {
+      const response = await searchResearchReview(projectId, {
+        q: submittedQuery, limit: 25,
+        cursor: append ? currentSearch?.next_cursor ?? undefined : undefined,
+      })
+      if (requestId !== searchRequest.current) return
+      if (append && currentSearch) {
+        const results = Array.from(new Map(
+          [...currentSearch.results, ...response.results].map((item) => [item.result_id, item]),
+        ).values())
+        setSearch({ ...response, results })
+      } else {
+        setSearch(response)
+      }
+    } catch (cause) {
+      if (requestId !== searchRequest.current) return
+      setSearchError(cause instanceof Error ? cause.message : 'Project review search failed')
+    } finally {
+      if (requestId === searchRequest.current) setSearchBusy(false)
+    }
+  }
+
   return <ResearchEvidenceSurface
     runs={runs}
     detail={detail}
@@ -933,6 +1054,10 @@ export default function ResearchEvidencePanel({
     editingNoteId={editingNoteId}
     noteDraft={noteDraft}
     savedViewName={savedViewName}
+    searchQuery={searchQuery}
+    search={search}
+    searchError={searchError}
+    searchBusy={searchBusy}
     reason={reason}
     findingStatement={findingStatement}
     findingPolarity={findingPolarity}
@@ -974,5 +1099,23 @@ export default function ResearchEvidencePanel({
       limit: view.filters.limit,
     })}
     onDeleteView={removeView}
+    onSearchQuery={(value) => {
+      searchRequest.current += 1
+      setSearchQuery(value); setSearch(null); setSearchError(null); setSearchBusy(false)
+    }}
+    onSearch={() => { void runSearch() }}
+    onSearchClear={() => {
+      searchRequest.current += 1
+      setSearchQuery(''); setSearch(null); setSearchError(null); setSearchBusy(false)
+    }}
+    onSearchMore={() => { void runSearch(true) }}
+    onSearchResult={(result) => {
+      const targetId = result.kind === 'note'
+        ? `review-note-${result.result_id.slice('note:'.length)}`
+        : `review-event-${result.event_id}`
+      const target = document.getElementById(targetId)
+      target?.scrollIntoView({ block: 'center' })
+      target?.focus()
+    }}
   />
 }

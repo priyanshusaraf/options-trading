@@ -9,6 +9,7 @@ import {
   decideResearchCandidate,
   getResearchOperationStatus,
   getResearchReview,
+  searchResearchReview,
   getResearchReviewNotes,
   getResearchRun,
   getResearchGraphVersions,
@@ -75,6 +76,22 @@ describe('research evidence transport', () => {
     })).resolves.toEqual(review)
     expect(request).toHaveBeenCalledWith(
       '/api/ir/projects/project%2Falpha/review?event_type=experiment_run&status=failed&after=2026-08-01&limit=25',
+      { headers: {} },
+    )
+  })
+
+  it('searches the closed project corpus with an encoded literal query and cursor', async () => {
+    const page = { project_id: 'project.alpha', query: 'alpha', results: [], next_cursor: null }
+    const request = vi.fn().mockResolvedValue({
+      ok: true, json: async () => page,
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await expect(searchResearchReview('project/alpha', {
+      q: 'Ａlpha context', limit: 12, cursor: 'sealed-position',
+    })).resolves.toEqual(page)
+    expect(request).toHaveBeenCalledWith(
+      '/api/ir/projects/project%2Falpha/review/search?q=%EF%BC%A1lpha+context&limit=12&cursor=sealed-position',
       { headers: {} },
     )
   })
