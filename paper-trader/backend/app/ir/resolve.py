@@ -1,37 +1,10 @@
 """
-RFC 0001 §4 — resolution.
+RFC 0001 §4 — resolution, by eager lowering.
 
-    "Resolution — the stage that transforms a specification into a fully bound
-    executable graph, resolving component references, versions, kernels and
-    dependencies."
-
-This module is that stage. It is the only one: C12 requires research and live to
-share **one** resolution, and the way to make that structural rather than tested
-is for there to be a single function and no second implementation to drift from
-it. `resolve()` takes a specification and a library, and nothing else — in
-particular it takes no plane, mode, or live flag, because a resolution that can
-be told which plane it is running in is a resolution that can differ between
-them.
-
-The RFC prescribes no mechanism (§1.3): "graph rewriting, lazy expansion,
-canonicalisation, optimisation passes, or a mechanism not yet invented are all
-conforming, provided the observable properties in §4 hold." What is implemented
-here is eager lowering — deterministic structural expansion of nested references
-— because it is the smallest thing that exhibits those properties, and because
-Blender, the most mature node system studied, lowers.
-
-**Two conventions live here rather than in §3, deliberately.**
-
-*Boundary nodes.* A subgraph body needs to say which of its internal nodes an
-interface socket connects to. That is expressed with two reserved component
-identifiers, `graph.input` and `graph.output`, which resolution elides and
-splices through. No grammar construct was added: a reserved identifier is a
-value, and §3 stays the size it was. Blender, Node-RED and ComfyUI all reached
-the same shape.
-
-*Instance identifiers.* C7 requires them to derive from the instance path. They
-are the path, joined by `/` — `n_fast/n_smooth`. There is no counter and no
-clock anywhere in this file, which is what makes re-resolution byte-identical.
+The single resolution shared by research and live (C12): `resolve()` takes a
+specification and a library and nothing else — no plane, mode, or live flag.
+Instance ids are the instance path joined by `/` (C7); there is no counter and
+no clock in this file, which is what makes re-resolution byte-identical.
 """
 from __future__ import annotations
 
@@ -43,24 +16,21 @@ from app.ir.hashing import content_address
 from app.ir.kernels import KernelSpec, check_warmup
 from app.ir.schema import is_parameter_reference
 
-# The two reserved identifiers. A body graph wires its interface through these;
-# resolution removes them, so no resolved graph ever contains one.
+# A body graph wires its interface through these; resolution removes them, so
+# no resolved graph ever contains one.
 BOUNDARY_INPUT = "graph.input"
 BOUNDARY_OUTPUT = "graph.output"
 BOUNDARY_IDENTIFIERS = (BOUNDARY_INPUT, BOUNDARY_OUTPUT)
 
 PATH_SEPARATOR = "/"
 
-# C4 — an element resolution inserted, rather than one the author placed, is
-# named so it can never be mistaken for authored work in a diagnostic.
 DEFAULT_SOURCE_SUFFIX = "@default"
 
 
 class ResolutionError(Exception):
     """A specification that cannot be resolved, named by the clause it fails.
 
-    The path is the *authored* graph's path (C4): diagnostics speak the
-    vocabulary the author wrote, never the resolved graph's.
+    `path` is the *authored* graph's path (C4), never the resolved graph's.
     """
 
     def __init__(self, clause: str, path: str, message: str) -> None:
@@ -70,16 +40,11 @@ class ResolutionError(Exception):
         self.message = message
 
 
-# ── the library ───────────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class Library:
     """Everything resolution is allowed to read.
 
-    C2 (no side effects) and C6 (no hidden state) are structural here: this is
-    the whole world. Resolution opens no file, reads no clock, and consults no
-    global, so a resolved graph is a function of `(spec, library)` and of
-    nothing else.
+    C2/C6: a resolved graph is a function of `(spec, library)` and nothing else.
     """
 
     components: Mapping[tuple[str, int], Mapping[str, Any]] = field(default_factory=dict)
@@ -87,14 +52,11 @@ class Library:
     kernels: Mapping[str, KernelSpec] = field(default_factory=dict)
 
 
-# ── the resolved graph ────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class ResolvedNode:
     """One leaf of the resolved graph.
 
-    `path` and `definition` are C4's back-references: where the author put it,
-    and what it was expanded from. `instance_id` is C7's — the path, joined.
+    `path`/`definition` are C4 back-references; `instance_id` is the joined path.
     """
 
     instance_id: str
@@ -110,7 +72,7 @@ class ResolvedNode:
 
     @property
     def authored_root(self) -> str:
-        """The authored node this leaf came from — `n_fast`, never `n_fast/n_smooth`."""
+        """The authored node this leaf came from — `n_fast`, not `n_fast/n_smooth`."""
         return self.path[0] if self.path else self.instance_id
 
 
@@ -124,12 +86,7 @@ class ResolvedEdge:
 
 @dataclass(frozen=True)
 class ResolvedGraph:
-    """The output of resolution.
-
-    C3: "Never authored, never edited, never a source of truth." Frozen, with
-    read-only mappings inside, so that is a property of the object rather than a
-    convention someone remembers.
-    """
+    """The output of resolution. Never authored, never edited (C3)."""
 
     identifier: str
     version: int
@@ -141,7 +98,7 @@ class ResolvedGraph:
 
     @property
     def warmup(self) -> int:
-        """C10 — the graph's warmup is the deepest chain in it."""
+        """C10 — the deepest chain in the graph."""
         return max((n.warmup for n in self.nodes), default=0)
 
     def node(self, instance_id: str) -> ResolvedNode | None:
@@ -151,16 +108,12 @@ class ResolvedGraph:
         return None
 
 
-# ── the single entry point ────────────────────────────────────────────────
-
 def resolve(spec: Mapping[str, Any], library: Library,
             parameters: Mapping[str, Any] | None = None) -> ResolvedGraph:
     """Resolve `spec` against `library` into a fully bound graph.
 
-    `parameters` supplies values for the specification's own top-level
-    parameters — one value each. That is a searcher's job (C14): a searcher
-    calls this once per candidate, and the component never learns that a search
-    is happening.
+    `parameters` binds the spec's top-level parameters — one value each; a
+    searcher calls this once per candidate (C14).
     """
     ctx = _Context(library)
 
@@ -182,28 +135,16 @@ def resolve(spec: Mapping[str, Any], library: Library,
         version=int(spec.get("version", 0)),
         nodes=nodes,
         edges=tuple(ctx.edges),
-        # C5 — every resolved (identifier, version) pair, recorded. Sorted so
-        # the record is a function of what was resolved, not of visit order.
         versions=tuple(sorted(ctx.versions)),
         inputs=MappingProxyType({k: tuple(v) for k, v in ports.inputs.items()}),
         outputs=MappingProxyType(dict(ports.outputs)),
     )
 
 
-# ── C15 — publishing a subgraph is a mechanical derivation ────────────────
-
 def publish(graph: Mapping[str, Any]) -> dict[str, Any]:
-    """Derive a component-def from a graph-def.
+    """Derive a component-def from a graph-def (C15: mechanical, no options).
 
-    C15: "Publishing a subgraph as a component MUST be a mechanical derivation
-    from its declared interface, introducing no information the interface does
-    not already carry." So this function asks no questions and takes no options.
-    Everything it writes is copied from the graph or computed from it: the
-    interface verbatim, the identity verbatim, and a body that is the graph's
-    own content address.
-
-    Returns the component; `body_for(graph)` gives the entry its body needs in
-    `Library.bodies`.
+    `body_for(graph)` gives the entry its body needs in `Library.bodies`.
     """
     if graph.get("kind") != "graph":
         raise ResolutionError("C15", "$.kind", "only a graph can be published as a component")
@@ -226,8 +167,6 @@ def body_for(graph: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
     """The `(content address, body)` pair `publish(graph)` refers to."""
     return content_address(graph), graph
 
-
-# ── expansion ─────────────────────────────────────────────────────────────
 
 @dataclass
 class _Ports:
@@ -258,9 +197,8 @@ class _Context:
         self.nodes: list[_Pending] = []
         self.edges: list[ResolvedEdge] = []
         self.versions: set[tuple[str, int]] = set()
-        # Sockets fed by a graph's own interface rather than by an edge. They
-        # are wired — the value arrives from one level up — but no ResolvedEdge
-        # records them, so F8 has to be told about them separately.
+        # Wired from one level up, so no ResolvedEdge records them; F8 has to
+        # be told about them separately.
         self.interface_bound: set[tuple[str, str]] = set()
 
 
@@ -283,8 +221,6 @@ def _expand(graph: Mapping[str, Any], path: tuple[str, ...],
 
         component = ctx.library.components.get((identifier, version))
         if component is None:
-            # C5 — a version identity that cannot be resolved cannot be
-            # recorded, and an unversioned resolution is not reproducible.
             raise ResolutionError(
                 "C5", here,
                 f"({identifier!r}, {version!r}) is not in the library")
@@ -332,8 +268,6 @@ def _emit_leaf(component: Mapping[str, Any], path: tuple[str, ...],
     ref = component["body"]["ref"]
     spec = ctx.library.kernels.get(ref)
     if spec is None:
-        # C10 — warmup is derived per component. A kernel with no registry
-        # entry has no warmup to derive, so the graph's warmup would be a guess.
         raise ResolutionError(
             "C10", here,
             f"no kernel is registered at {ref} for {component['identifier']!r}; "
@@ -351,8 +285,6 @@ def _emit_leaf(component: Mapping[str, Any], path: tuple[str, ...],
     ))
 
 
-# ── parameter binding ─────────────────────────────────────────────────────
-
 def _bind(component: Mapping[str, Any], overrides: Mapping[str, Any],
           params_env: Mapping[str, Any], here: str, ctx: _Context) -> dict[str, Any]:
     """Declared defaults, then overrides. F10: overrides carry values only."""
@@ -365,7 +297,6 @@ def _bind(component: Mapping[str, Any], overrides: Mapping[str, Any],
                 f"{component.get('identifier')!r} declares no parameter {name!r}; "
                 "an override that binds to nothing changes the specification's meaning")
         if isinstance(value, list):
-            # C14 — components compute; searchers search.
             raise ResolutionError(
                 "C14", f"{here}.overrides.{name}",
                 "an override is one value, not a set of candidates; sweeping is "
@@ -385,7 +316,7 @@ def _bind(component: Mapping[str, Any], overrides: Mapping[str, Any],
 
 
 def _declared_defaults(component: Mapping[str, Any]) -> dict[str, Any]:
-    """F4 — the interface is a recursive tree, so defaults come from all of it."""
+    """F4 — the interface is a recursive tree; defaults come from all of it."""
     out: dict[str, Any] = {}
 
     def walk(items: Sequence[Any]) -> None:
@@ -400,8 +331,6 @@ def _declared_defaults(component: Mapping[str, Any]) -> dict[str, Any]:
     walk(component.get("interface", ()))
     return out
 
-
-# ── wiring ────────────────────────────────────────────────────────────────
 
 def _wire(edge: Mapping[str, Any], here: str, local: dict, path: tuple[str, ...],
           ports: _Ports, ctx: _Context) -> None:
@@ -445,8 +374,6 @@ def _producer(ref: Mapping[str, Any], here: str, local: dict) -> tuple[Any, str]
         return (entry[1], socket)
     produced = entry[1].outputs.get(socket)
     if produced is None:
-        # C3 — the authored edge said a value comes out here. If nothing
-        # inside produces it, resolution would silently drop the connection.
         raise ResolutionError(
             "C3", here,
             f"nothing inside {instance!r} produces the interface output {socket!r}")
@@ -477,21 +404,12 @@ def _lookup(instance: Any, here: str, local: dict):
     return entry
 
 
-# ── F8 — default input sources, inserted with a back-reference ────────────
-
 def _apply_default_sources(ctx: _Context) -> None:
-    """Insert the source an unwired input declares.
+    """Insert the source an unwired input declares (F8).
 
-    F8: "A graph whose unwired inputs all declare sources MUST be valid." The
-    inserted node is a derived element, so C4 applies to it — it carries a
-    back-reference naming the socket it was inserted for, and an identifier
-    derived from that socket's path rather than from a counter (C7).
-
-    This runs once, after the whole specification is expanded, and not at the
-    end of each graph. An input of a nested node is wired by an edge in the
-    *enclosing* graph, which does not exist yet while that node's own graph is
-    being expanded — inserting per graph would fill sockets the author wired a
-    level up.
+    Runs once, after the whole specification is expanded: a nested node's input
+    is wired by an edge in the enclosing graph, so a per-graph pass would fill
+    sockets the author wired a level up.
     """
     wired = {(e.target[0], e.target[1]) for e in ctx.edges} | ctx.interface_bound
 
@@ -543,8 +461,6 @@ def _input_sockets(component: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return out
 
 
-# ── C8 / C10 — cache identity and warmup, in dependency order ─────────────
-
 def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
     order = _topological(ctx)
     upstream: dict[str, list[tuple[str, str]]] = {}
@@ -558,10 +474,8 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
         pending = by_id[instance_id]
         feeds = sorted(upstream.get(instance_id, ()))
 
-        # C10 — warmup composes: a node needs its own history plus everything
-        # its deepest input needed before it could produce a first value. Its
-        # own share is derived from *this node's* bound parameters, so a 200-bar
-        # EMA warms up in 200 bars even where the component's default is 50.
+        # C10: a node's own share is derived from *this node's* bound params,
+        # not the component's defaults.
         own = check_warmup(pending.spec.warmup_for(pending.params),
                            f"{pending.definition[0]} at {pending.instance_id}")
         warmup = own + max(
@@ -573,12 +487,8 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
             "domain": pending.domain,
         }
         if pending.spec.cache_identity == "declared":
-            # C8 — "MAY be declared per component", for components whose
-            # identity genuinely is not their inputs.
             identity["declared"] = pending.spec.cache_key
         else:
-            # C8 — transitive by default, so correctness under composition is
-            # automatic rather than remembered.
             identity["upstream"] = [
                 [socket, resolved[src].cache_id] for socket, src in feeds
                 if src in resolved
@@ -597,9 +507,8 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
             derived_from=pending.derived_from,
         )
 
-    # Document order, not topological order: the resolved graph's node list is
-    # a function of the specification, and visit order is an implementation
-    # detail that must not leak into it (C1).
+    # Document order, not topological: visit order must not leak into the
+    # resolved node list (C1).
     return tuple(resolved[n.instance_id] for n in ctx.nodes)
 
 
@@ -611,9 +520,8 @@ def topological_order(ids: Sequence[str],
                       edges: Sequence[ResolvedEdge]) -> list[str]:
     """Dependency order over `ids`, deterministically.
 
-    Public because the runtime needs the same order and deriving it twice is
-    how `candles.py` happened. Ties break on the specification's node order, so
-    the result is a function of the input rather than of dict iteration.
+    Public because the runtime needs the same order — a second implementation
+    would drift. Ties break on the specification's node order.
     """
     incoming: dict[str, set[str]] = {i: set() for i in ids}
     outgoing: dict[str, list[str]] = {i: [] for i in ids}
@@ -637,13 +545,9 @@ def topological_order(ids: Sequence[str],
 
     if len(order) != len(ids):
         cycle = sorted(set(ids) - set(order))
-        # C10 — warmup "MUST compose through the graph", and composition over a
-        # cycle is not defined. A value that is its own input has no first bar.
         raise ResolutionError("C10", "$", f"the graph has a cycle through {cycle}")
     return order
 
-
-# ── small helpers ─────────────────────────────────────────────────────────
 
 def _body_kind(component: Mapping[str, Any], here: str) -> str:
     body = component.get("body")

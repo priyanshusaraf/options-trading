@@ -1,28 +1,9 @@
 """
-The editor plane, read-only: a resolved graph, made visible.
+The editor plane, read-only: a `ResolvedGraph` turned into a view model and an
+SVG.
 
-Of RFC 0001's five planes (§1.2) the **Editor** is the one with nothing behind
-it. This module is its first half — the direction that only reads. It turns a
-`ResolvedGraph` into a view model and an SVG, so the structure of a strategy can
-be looked at rather than only asserted about.
-
-**Layout is derived, never stored.** F13 says presentation state persists
-*beside* the graph, keyed by stable identifier, and is not part of the artefact
-grammar — "without this separation, dragging a node changes its hash and
-silently defeats cache identity". The conforming default, and the one taken
-here, is to not have presentation state at all: position is a pure function of
-the graph's dependency structure. When an editor later lets a human drag a node,
-what it persists goes in a side table keyed by `instance_id`, and this function
-stays the fallback for every graph nobody has arranged by hand.
-
-**The view speaks the authored vocabulary.** C4 requires diagnostics to name the
-graph the author wrote, not the resolved one, and a picture is a diagnostic.
-`n_atr/n_smooth` is drawn as *n_smooth* inside *n_atr* rather than as an opaque
-leaf, so a node that came from three levels down inside a subgraph is traceable
-to the node the author actually placed.
-
-Nothing here is wired into a route, a template or the frontend build. It is
-imported by its tests and by `scripts/render_ir_graph.py`.
+Layout is derived from dependency structure, never stored in the artefact (F13);
+labels use the authored vocabulary, not the resolved one (C4).
 """
 from __future__ import annotations
 
@@ -36,8 +17,8 @@ from app.ir.resolve import PATH_SEPARATOR, ResolvedGraph, topological_order
 @dataclass(frozen=True)
 class ViewNode:
     instance_id: str
-    label: str                  # the leaf's own authored name
-    container: str              # the authored node it came from, "" at top level
+    label: str
+    container: str              # authored node it came from, "" at top level
     definition: str             # "identifier v<version>"
     params: Mapping[str, object]
     warmup: int
@@ -46,8 +27,6 @@ class ViewNode:
     derived: bool
     layer: int
     row: int
-    # Set only when a human has arranged this node. F13 keeps it out of the
-    # artefact; it arrives from a `Layout` beside it.
     placed: tuple[int, int] | None = None
 
 
@@ -77,21 +56,9 @@ class GraphView:
 
 @dataclass(frozen=True)
 class Layout:
-    """Presentation state, stored **beside** the graph — F13, literally.
+    """F13: presentation state lives beside the graph, keyed by `instance_id`.
 
-    "Presentation state MUST persist beside the graph, keyed by stable
-    identifier, and is not part of the artefact grammar. Ephemeral state MUST
-    NOT be persisted. Without this separation, dragging a node changes its hash
-    and silently defeats cache identity."
-
-    So this is a separate object keyed by `instance_id`, and the graph does not
-    know it exists. A graph with a hand-arranged layout and the same graph
-    without one have the same content address — which is the invariant the
-    whole clause is for, and `test_ir_view.py` asserts it directly.
-
-    `positions` is sparse on purpose: a node nobody has moved keeps its derived
-    position, so an author who arranges two nodes does not thereby take
-    ownership of the other sixteen.
+    `positions` is sparse — an unmoved node keeps its derived position.
     """
 
     positions: Mapping[str, tuple[int, int]]
@@ -103,15 +70,12 @@ class Layout:
 def graph_view(graph: ResolvedGraph, layout: Layout | None = None) -> GraphView:
     """A layout for `graph`, derived from its dependency structure.
 
-    `layout` overrides the derived position of the nodes it names, and only
-    those. It is never read from or written to the artefact.
+    `layout` overrides the derived position of the nodes it names, and only those.
     """
     ids = [n.instance_id for n in graph.nodes]
     order = topological_order(ids, graph.edges)
 
-    # Longest-path layering: a node sits one column right of its deepest input.
-    # Longest rather than shortest so an edge never points backwards, which is
-    # what makes the picture readable as "time flows left to right".
+    # Longest-path layering, so no edge ever points backwards.
     incoming: dict[str, list[str]] = {i: [] for i in ids}
     for edge in graph.edges:
         if edge.source[0] in incoming and edge.target[0] in incoming:
@@ -122,9 +86,8 @@ def graph_view(graph: ResolvedGraph, layout: Layout | None = None) -> GraphView:
         layer[instance_id] = max(
             (layer[src] + 1 for src in incoming[instance_id] if src in layer), default=0)
 
-    # Rows break ties on the specification's node order, so the picture is a
-    # function of the graph and not of dict iteration (C1's spirit, applied to
-    # something a human looks at).
+    # Rows break ties on specification order, so the picture is a function of
+    # the graph and not of dict iteration.
     rows: dict[int, int] = {}
     view_nodes = []
     for node in graph.nodes:
@@ -168,10 +131,7 @@ GAP_X, GAP_Y = 90, 30
 PAD = 28
 HEADER = 54
 
-# Advance width per character, by font size, for the monospace stack above.
-# Approximate on purpose — it only has to be an over-estimate, because the
-# consequence of being wrong is text spilling out of a box, and
-# `test_no_label_overflows_its_box` is what stops that shipping.
+# Advance width per character, by font size. Must be an over-estimate.
 CHAR_W = {9: 5.6, 10: 6.2, 12: 7.4}
 
 
@@ -184,14 +144,8 @@ def fit(text: str, size: int, available: float) -> str:
 
 
 def to_svg(view: GraphView) -> str:
-    """A self-contained SVG. No external stylesheet, no script, no font file.
-
-    Theme-aware via `prefers-color-scheme`, because this is meant to be opened
-    in a browser and looked at, not embedded in an app that owns the palette.
-    """
+    """A self-contained SVG. No external stylesheet, no script, no font file."""
     at = {n.instance_id: _box(n) for n in view.nodes}
-    # Extents come from where the boxes actually are, so a hand-placed node
-    # cannot end up outside the canvas.
     width = int(max((x for x, _ in at.values()), default=0) + BOX_W + PAD)
     height = int(max((y for _, y in at.values()), default=0) + BOX_H + PAD)
 
@@ -238,8 +192,6 @@ def to_svg(view: GraphView) -> str:
             f'{html.escape(fit(node.label, 12, inner - len(badge) * CHAR_W[9] - 8))}'
             f'</text>')
         if badge:
-            # C4 — a node expanded from inside a subgraph says which authored
-            # node it came from, rather than appearing from nowhere.
             parts.append(f'<text class="in" x="{x + BOX_W - 10}" y="{y + 19}" '
                          f'text-anchor="end">{html.escape(badge)}</text>')
         parts.append(f'<text class="def" x="{x + 10}" y="{y + 35}">'

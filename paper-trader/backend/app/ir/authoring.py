@@ -1,41 +1,10 @@
 """
-Authoring a component in Python.
+Authoring a component in Python: interface, version, body address and kernel
+declaration from one decorator.
 
-Until now a kernel was a bare function that someone remembered to put in a dict
-under the right content address, with its interface written out by hand
-somewhere else and nothing checking the two agreed. This is the path from "here
-is my indicator" to a conforming component: interface, version, body address,
-kernel declaration, all from one place.
-
-**The interface is declared, not inferred (F4).** The author writes it out, and
-the decorator checks the *function* satisfies it rather than the other way
-round. Inferring an interface from a signature is tempting and wrong for exactly
-the reason F4 gives: "an inferred interface changes whenever internals change,
-which is catastrophic for a published component". Renaming a local parameter
-would silently republish a different contract. Here, a function that does not
-match its declared interface is refused at import.
-
-**The body address is the source's content address (F2).** "The body MUST be
-stored once and content-addressed." Two authors who write the same function get
-the same address; an author who reformats one gets a different one, which is
-the honest answer — the registry cannot know that a whitespace change is
-semantically empty, and claiming otherwise is how a cache lies.
-
-**Nothing records where a component came from (C13).** An authored component is
-a component. It carries no `source`, no `author`, no `is_python` — the executor
-must not be able to branch on provenance, and the way to guarantee that is for
-there to be nothing to branch on. `tests/test_ir_contract_c13.py` greps for
-exactly those names, and this is the first time that guard is load-bearing
-rather than precautionary: before today there was only one way to make a
-component.
-
-**What this deliberately does not do.** It does not sandbox. RFC 0001 Appendix
-C(f) puts sandboxing on the *kernel registry* — "sandboxing constrains what a
-component kernel may do, which is a property of the kernel registry rather than
-of the graph language" — and the platform already has an AST allow-list stronger
-than anything in the nine systems studied. Wiring that in is the marketplace's
-phase, triggered by third-party distribution. Locally-authored components are
-code the owner already runs.
+The interface is declared and the function checked against it, never inferred
+(F4); the body address is the source's content address (F2); nothing records
+provenance (C13). This does not sandbox — that belongs to the kernel registry.
 """
 from __future__ import annotations
 
@@ -51,9 +20,7 @@ from app.ir.validate import Violation, validate
 
 FORMAT_VERSION = 1
 
-# The signature every kernel has. It is deliberately not the author's parameter
-# names: a kernel is handed its bound parameters and its inputs, and nothing
-# else — not the graph, not its instance id, not where it came from.
+# A kernel is handed its bound parameters and its inputs, and nothing else.
 KERNEL_SIGNATURE = ("params", "inputs")
 
 
@@ -70,19 +37,13 @@ class AuthoringError(Exception):
 
 @dataclass(frozen=True)
 class AuthoredComponent:
-    """A component-def, its kernel declaration, and the function behind it.
-
-    The three travel together because they are three views of one thing, and
-    keeping them apart is what let the interface and the implementation drift.
-    """
+    """A component-def, its kernel declaration, and the function behind it."""
 
     definition: Mapping[str, Any]
     spec: KernelSpec
     kernel: Callable[..., Mapping[str, Any]]
-    # Which of ("inputs", "params") the interface check could not verify, because
-    # the kernel reaches them dynamically. Recorded rather than hidden: an
-    # unchecked thing that looks like a checked thing is how a validator lies,
-    # and this codebase already made that mistake once with F7.
+    # Which of ("inputs", "params") the interface check could not verify because
+    # the kernel reaches them dynamically.
     unchecked: tuple[str, ...] = ()
 
     @property
@@ -94,7 +55,7 @@ class AuthoredComponent:
         return self.definition["body"]["ref"]
 
 
-# ── interface items, so an author does not hand-write dictionaries ────────
+# ── interface items ───────────────────────────────────────────────────────
 
 def wire(value: str = "float", structure: str = "series", *,
          instrument: str, timeframe: str) -> dict[str, Any]:
@@ -141,19 +102,9 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
               closes_over: Any = None) -> Callable[[Callable], AuthoredComponent]:
     """Declare a component whose body is this function.
 
-    Returns an `AuthoredComponent`, not the function — the function alone was
-    never the thing, and returning it would let a caller register the kernel
-    without its interface, which is the drift this exists to stop.
-
-    `closes_over` is part of the body's content address, and a kernel built by a
-    factory **must** supply it. The address is a hash of the source this
-    decorator can read; a kernel whose behaviour also depends on a closed-over
-    value has, as far as the source goes, the same body as every one of its
-    siblings. That is not a hypothetical: deriving the research plane's
-    twenty-three blocks through one shared adapter produced twenty-three
-    components with **one** address between them, and a registry keyed by
-    address silently kept the last. Naming what a kernel closes over is how its
-    address stops lying. `library()` refuses the collision either way.
+    Returns an `AuthoredComponent`, not the function. `closes_over` is part of
+    the body's content address: a factory-built kernel must supply it, or every
+    sibling it produces shares one address.
     """
 
     def decorate(fn: Callable) -> AuthoredComponent:
@@ -202,8 +153,8 @@ def _check_signature(identifier: str, fn: Callable) -> None:
 def _body_address(identifier: str, fn: Callable, closes_over: Any = None) -> str:
     """F2 — the body, content-addressed.
 
-    The source is dedented before hashing so that moving a function into or out
-    of a class does not, by itself, mint a new body.
+    Dedented before hashing, so moving a function into or out of a class does
+    not by itself mint a new body.
     """
     try:
         source = textwrap.dedent(inspect.getsource(fn))
@@ -216,17 +167,10 @@ def _body_address(identifier: str, fn: Callable, closes_over: Any = None) -> str
 
 def _check_satisfies_interface(identifier: str, fn: Callable,
                                interface: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-    """F4 — the interface is the contract; the internals must satisfy it.
+    """F4 — the declaration is authoritative; the kernel must satisfy it.
 
-    Checked in the direction F4 requires. The declaration is authoritative, and
-    the function is what has to keep up — not the reverse, which would make a
-    rename inside the body a silent republication of a different contract.
-
-    What is checkable statically is that the function *reads* every input and
-    parameter it declared, and reads nothing it did not. A declared input the
-    kernel ignores is a lie in the interface; an undeclared one it reads is a
-    dependency no resolver can see, so no graph can wire it and no warmup can
-    account for it.
+    Statically checkable: the function reads every input and parameter it
+    declared, and reads nothing it did not.
     """
     declared_inputs, declared_params, declared_outputs = _declared(interface)
     if not declared_outputs:
@@ -241,12 +185,8 @@ def _check_satisfies_interface(identifier: str, fn: Callable,
     unchecked: list[str] = []
     for kind, declared in (("inputs", declared_inputs), ("params", declared_params)):
         if kind in dynamic:
-            # The kernel reaches this mapping with something other than a
-            # literal key — an adapter over a generated family, typically. A
-            # syntactic check cannot conclude anything, and guessing in either
-            # direction would be worse than saying so: passing silently is the
-            # failure mode this codebase already hit with F7, and failing would
-            # forbid mechanically-derived components outright.
+            # A syntactic check can conclude nothing here, so say so rather
+            # than guess in either direction.
             unchecked.append(kind)
             continue
         used = read.get(kind, set())
@@ -290,14 +230,8 @@ def _subscripts(source: str) -> tuple[dict[str, set[str]], set[str]]:
     """Which literal keys the source reads out of `inputs` and `params`, and
     which of the two it also reaches *dynamically*.
 
-    Deliberately syntactic rather than dynamic: an authoring check that had to
-    *run* the kernel to learn its interface would be inferring the interface,
-    which is what F4 forbids.
-
     A mapping counts as dynamic if it is subscripted with anything but a string
-    literal, or used bare — iterated, unpacked, passed on, `.get()`. That is the
-    shape of an adapter over a generated family, and no syntactic check can say
-    what such a kernel reads.
+    literal, or used bare — iterated, unpacked, passed on, `.get()`.
     """
     import ast
 
@@ -331,10 +265,8 @@ def library(components: Sequence[AuthoredComponent],
             extra: Library | None = None) -> tuple[Library, dict[str, Callable]]:
     """Build the `(Library, implementations)` pair the resolver and runtime want.
 
-    C13, structurally: the key is the body's content address and there is no
-    other. An authored component lands in the same two dicts a built-in lands
-    in, so by the time anything executes, there is no way to tell them apart —
-    which is the property, not a side effect of it.
+    C13: keyed by body address only, so an authored component is indistinguishable
+    from a built-in by the time anything executes.
     """
     seen: dict[tuple[str, int], AuthoredComponent] = {}
     bodies: dict[str, AuthoredComponent] = {}
@@ -346,11 +278,9 @@ def library(components: Sequence[AuthoredComponent],
                 "version name one body")
         seen[authored.key] = authored
 
-        # Two components may legitimately share a body — an alias is one. What
-        # they may not do is share an address while declaring *different* kernel
-        # properties, because the registry is keyed by that address and one of
-        # the two would silently win. That is what a factory-built kernel does
-        # if it does not declare what it closes over.
+        # Sharing a body is fine (an alias); sharing one while declaring a
+        # different kernel is not — the registry is keyed by address, so one
+        # would silently win.
         other = bodies.get(authored.body_ref)
         if other is not None and other.spec != authored.spec:
             raise AuthoringError(

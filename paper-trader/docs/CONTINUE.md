@@ -2,6 +2,9 @@
 
 Session handoff. Exactly four things. Rewritten on every stop.
 
+**For the one-page state of the project, read `PROGRESS.md` instead.** This file is the resume
+point, not the overview.
+
 ---
 
 ## 1. Current phase
@@ -35,9 +38,11 @@ because a correct mechanism wired to nothing is this repo's defining defect:
    and therefore the first time C13's guard is load-bearing rather than precautionary.
 8. **Two defects in what was already built:** warmup was a constant where C10 says derived, and
    the suite failed two runs in five.
-9. **Research Plane Gen 2, step one** (`research/strategy/builder/ir_components.py`) — all 23
-   blocks derived into IR components, each proven to compute *exactly* what calling the block
-   computes, bar for bar. Building it exposed a live defect: all 23 shared one body address.
+9. **Research Plane Gen 2** — all 23 blocks derived into IR components, each proven to compute
+   *exactly* what the block computes bar for bar (`ir_components.py`); and a structure proposer
+   with five graph mutations, 1,000 of which are asserted legal through
+   validate → resolve → evaluate (`propose.py`). Each step found a real defect: the 23
+   components shared one body address, and F8's converse was unenforced.
 
 **Nothing in production evaluates IR graphs.** The engine still calls `compute()`; `app/ir/` is
 imported only by its own tests. Adoption is RFC Appendix C(d) and stops for the owner.
@@ -50,7 +55,8 @@ deliberately lowest priority.
 
 ## 2. Last verified commit
 
-`0dd7a4d` — the block library as 23 IR components. Preceded by `c234e70` (Python
+`` — the structure proposer and the F8 converse. Preceded by `0dd7a4d` (the
+block library as 23 IR components). Preceded by `c234e70` (Python
 component authoring, and the second half of the flake fix).
 Preceded by `3b2b752` (warmup derived from bound parameters; the first half) and
 `49e9ded` (the editor plane, writing half). Preceded by `dec854b` (its reading half). Preceded by `baef1c2` (F14 enforced). Preceded by `110e978` (the derived-parameter gap closed) and
@@ -72,7 +78,7 @@ survived a week. `curl /api/health` on the box is the only answer.
 $ .venv/bin/python -m pytest tests research_tests -q
 PYTEST EXIT: 0
 FAIL/ERROR lines: 0          (grepped, not eyeballed)
-collected: 2,578             (--collect-only, summed per file)
+collected: 2,597             (--collect-only, summed per file)
 
 $ .venv/bin/python scripts/dryrun.py 700
   RECONCILE cash vs expected: 187,733.06 vs 187,733.06  (diff -0.0000)
@@ -145,45 +151,27 @@ still holds a checked-out connection no `dispose()` can reclaim (close your brok
 
 ## 4. Next concrete action
 
-**Research Plane Gen 2, step two: a mutation-based structure proposer over graphs.**
+**Research Plane Gen 2, step three: bind every run through `app/ir/experiment.py`, then the
+search loop.**
 
-The vocabulary is now typed, versioned and composable — 23 block components, each proven
-equivalent to the block it came from, and `test_two_blocks_compose_into_one_graph` shows two of
-them wired through a `logic.and` into one graph. What does not exist yet is anything that
-*proposes* such a graph.
+The vocabulary is typed and the proposer emits legal graphs. What does not exist is anything that
+records what was tried. Bind **before** the first search runs, not after: F14 is retrospective,
+and this platform has already paid the retrofit price once — every research finding before
+2026-08 is unusable as a baseline.
 
-The pieces are all in place and the design follows from them:
+Concretely: a runner that takes a seed graph, a vocabulary, bars and a seed; walks `lineage()`;
+evaluates each proposal; and calls `experiment.record()` per step so every result carries the
+graph version, every resolved component version, every node's cache identity and the data digest.
+Only then an objective, and only then selection.
 
-- `app/ir/edit.py` is the gate. A proposer emits edits — add a node, rewire an edge, drop a
-  branch — and `edit.py` refuses any that would not produce a conforming artefact, so the
-  proposer never needs to know §3. That is the whole reason the writing half of the editor plane
-  was built before this.
-- `groups()` in `ir_components.py` carries the `trend`/`momentum`/`volatility`/`confirmation`
-  families **beside** the components rather than on them, so a proposer can bias its choices
-  without the IR learning what a family means (C13).
-- `ResolvedNode.cache_id` is transitive (C8), so a mutation that changes one node recomputes only
-  what depends on it. Measured on the real strategy: moving `entry_pct` reuses the EMA, ATR,
-  z-score, drift and range. This is what makes structure search affordable rather than
-  quadratic — and it is the thing Generation 1 could not do at all.
-- `app/ir/experiment.py` binds each run to the versions that produced it (F14). **Bind from the
-  first run, not later** — that is the retrofit this platform has already paid for once.
+Two placeholders worth cleaning up when next touched: `Vocabulary.families` defaults to `None`
+with a type-ignore, and `DOMAIN` in `ir_components.py` is unused.
 
-Start with the proposer and its legality property: every graph it emits validates, resolves, and
-evaluates without raising, over a few thousand random mutations. Do not start with a search
-objective — a proposer that emits illegal graphs makes every downstream statistic meaningless,
-and legality is the property that is cheap to test now and impossible to retrofit confidence in
-later.
+Isolation still holds: `PT_RESEARCH_ENABLED=0`, `research/guards.py` fail-closed, and `research/`
+imports `app.ir` and never the reverse.
 
-Isolation still holds: `PT_RESEARCH_ENABLED=0`, `research/guards.py` fail-closed, read-only
-bridges only, and `research/` imports `app.ir` and never the reverse.
+Blocked on the owner, unchanged and now several sessions old — see `PROGRESS.md` §3:
 
-Two things are deliberately **not** next, and one of them needs the owner:
-
-1. **Adopting the runtime in a live path.** RFC Appendix C(d). A production change to a
-   real-money path; owner acknowledgement before any deploy, regardless of green tests. The
-   parity evidence it would need now exists.
-2. **Deploying the architecture migration.** Eight phases committed, verified, and not on the
-   box. `deploy.sh` refuses a dirty tree, which was the only reason they had not shipped; that
-   reason is gone. It touches sizing, exits and order routing — all three stop for owner
-   acknowledgement under the live-money rule. **This is the one item that genuinely needs the
-   owner and has needed them for three sessions.**
+1. **Deploying the architecture migration** (phases A–H). Committed, verified, not on the box.
+   Touches sizing, exits and order routing.
+2. **Adopting the IR runtime in a live path** (RFC Appendix C(d)). Parity evidence now exists.

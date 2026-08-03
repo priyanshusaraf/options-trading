@@ -1,24 +1,10 @@
 """
-The editor plane, writing half: mutation that cannot store an invalid artefact.
+The editor plane, writing half: graph mutation that cannot return an invalid
+artefact.
 
-`view.py` reads a graph. This writes one. It is the first thing in the platform
-that *changes* an artefact, and the discipline it establishes is the one the
-visual editor will inherit:
-
-**Every edit validates before it is returned.** `validate()` has existed since
-the format phase with nothing calling it on a write path, because there was no
-write path. There is now, and an edit whose result violates §3 raises rather
-than returning something storable. That is the difference between a validator
-and a gate.
-
-**Every edit returns a new artefact.** Nothing here mutates its input, for the
-same reason resolution does not (C2): a caller that still holds the old graph
-holds the old graph. Undo is then a matter of keeping references, not of
-inverting operations, which is the design that does not accumulate bugs.
-
-**Edits are expressed against instance identifiers, never display names.** F2:
-a display name "MUST NOT be referenced by anything". An editing API is exactly
-where that clause gets tested, because a UI knows a node by what the user sees.
+Every edit validates its result before returning, returns a new artefact rather
+than mutating its input (C2), and addresses nodes by instance identifier, never
+display name (F2).
 """
 from __future__ import annotations
 
@@ -29,11 +15,7 @@ from app.ir.validate import Violation, validate
 
 
 class EditRejected(Exception):
-    """An edit whose result would not be a conforming artefact.
-
-    Carries the violations, so an editor can say which clause the user's action
-    broke rather than "invalid".
-    """
+    """An edit whose result would not be a conforming artefact."""
 
     def __init__(self, action: str, violations: Sequence[Violation]) -> None:
         detail = "; ".join(str(v) for v in violations) or "no reason recorded"
@@ -86,9 +68,7 @@ def add_node(graph: Mapping[str, Any], instance_id: str, identifier: str,
 def remove_node(graph: Mapping[str, Any], instance_id: str) -> dict[str, Any]:
     """Remove a node, and every edge that touched it.
 
-    Leaving the edges would produce a graph referencing a node that is not
-    there — an F9 violation — so the two are one operation. A UI that offered
-    them separately would have an invalid intermediate state to store.
+    One operation: leaving the edges would reference a node that is gone (F9).
     """
     if _node(graph, instance_id) is None:
         raise EditRejected(
@@ -163,12 +143,12 @@ def disconnect(graph: Mapping[str, Any], source: tuple[str, str],
     return _result(action, out)
 
 
-# ── grouping and naming, which are not semantics ──────────────────────────
+# ── grouping and naming ───────────────────────────────────────────────────
 
 def group(graph: Mapping[str, Any], identifier: str, display_name: str,
           members: Sequence[str]) -> dict[str, Any]:
     """Box some nodes together. F12: a group is neither versionable nor
-    publishable, which is what keeps cosmetic tidying out of version history."""
+    publishable."""
     out = _copy(graph)
     out.setdefault("groups", []).append(
         {"identifier": identifier, "display_name": display_name,
@@ -179,14 +159,8 @@ def group(graph: Mapping[str, Any], identifier: str, display_name: str,
 def rename(graph: Mapping[str, Any], display_name: str) -> dict[str, Any]:
     """Change the graph's display name.
 
-    F2 makes this free of *references*: nothing points at a display name, so no
-    stored graph or experiment breaks. It is **not** free of the artefact's
-    content address, because F2 also requires the display name to be in the
-    artefact and F13 hashes the artefact's semantic content. Whether a rename
-    should therefore mint a new body address is a real question this API
-    surfaces and does not answer — `test_ir_edit.py` pins the current behaviour
-    so the decision is visible rather than accidental. Changing it would be an
-    amendment (§6), not an implementation detail.
+    Nothing references a display name (F2), but it is part of the artefact, so a
+    rename does change the content address. `test_ir_edit.py` pins that.
     """
     out = _copy(graph)
     out["display_name"] = display_name

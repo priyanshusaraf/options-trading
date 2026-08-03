@@ -1,32 +1,9 @@
 """
 Structure search, Generation 2: a proposer that mutates graphs.
 
-Generation 1 searched *parameters* over a fixed composition. RFC 0001 C14 names
-the ceiling that creates — "vectorbt builds parameter grids into the indicator
-contract itself, which silently defines *search = parameter sweeping* for
-everything downstream, and the research plane inherited that shape. **Structure
-search is not reachable from a design where components sweep themselves.**" With
-the block vocabulary expressed as components, the thing being searched can be
-the graph.
-
-**Legality is the property, and it is not checked here.** Every proposal goes
-through `app/ir/edit.py`, which refuses to return an artefact that violates §3.
-So this module contains no validation of its own and no knowledge of the format
-— a proposal is either an edit the gate accepted or it is nothing. That is why
-the writing half of the editor plane was built before this one: a proposer with
-its own idea of what a legal graph is would be a second implementation of §3,
-which is the defect C12 exists because of.
-
-**Determinism.** Every proposer takes a seed and derives its choices from it. A
-search whose proposals cannot be replayed produces findings that cannot be
-re-derived, and F14 binds findings to what produced them — a `Random` seeded
-from the clock would make that binding a fiction. There is no `Random()` without
-a seed anywhere in this file.
-
-**What this deliberately does not do.** It does not score, rank, or select. C14
-again: components compute, searchers search — and a *proposer* proposes. What to
-keep is the evaluator's decision, and mixing the two is how "search" quietly
-becomes "sweep" a second time.
+Legality is never checked here — every proposal goes through `app/ir/edit.py`,
+so this module knows nothing about the format. Every entry point takes a seed:
+no unseeded `Random` anywhere. C14: the proposer proposes, it does not select.
 """
 from __future__ import annotations
 
@@ -36,9 +13,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 from app.ir.edit import EditRejected, add_node, connect, disconnect, remove_node, set_override
 
-# The proposer only ever wires boolean predicates into a combiner, which is the
-# shape the current block vocabulary admits: every block returns Series[bool]
-# (Appendix A.2 records that as the library's limitation, not the IR's).
 COMBINER = "logic.and"
 
 
@@ -52,12 +26,7 @@ class Proposal:
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """What a proposer may reach for.
-
-    `blocks` are the predicate components it may place; `bar_inputs` are the
-    graph interface sockets every block consumes; `defaults` supplies a starting
-    override per block so a placed node is immediately meaningful.
-    """
+    """What a proposer may reach for."""
 
     blocks: tuple[str, ...]
     bar_inputs: tuple[str, ...]
@@ -77,12 +46,7 @@ def _combiner_nodes(graph: Mapping[str, Any]) -> list[str]:
 
 
 def _boolean_edges(graph: Mapping[str, Any], vocabulary: Vocabulary) -> list[dict]:
-    """Edges carrying a predicate result — the places structure can be spliced.
-
-    Bar inputs are excluded: they are plumbing, and rewiring `close` into a
-    different node is not a structural idea, it is a type error waiting to be
-    one.
-    """
+    """Edges carrying a predicate result — the places structure can be spliced."""
     carriers = set(_predicate_nodes(graph, vocabulary)) | set(_combiner_nodes(graph))
     return [e for e in graph["edges"]
             if e["source"]["instance"] in carriers and e["source"]["socket"] == "out"]
@@ -100,9 +64,8 @@ def _sources_into(graph: Mapping[str, Any], instance: str) -> dict[str, dict]:
 
 
 def _next_id(graph: Mapping[str, Any], stem: str) -> str:
-    """Instance ids derive from the graph's contents, never from a counter that
-    lives outside it — the same discipline C7 imposes on resolution, so two
-    proposers replaying the same seed against the same graph agree."""
+    """Instance ids derive from the graph's contents, never from an external
+    counter, so replaying a seed against a graph agrees."""
     existing = {n["instance_id"] for n in graph["nodes"]}
     n = 1
     while f"{stem}_{n}" in existing:
@@ -122,17 +85,13 @@ def _place_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
 
 
 # ── the mutations ─────────────────────────────────────────────────────────
-#
-# Every one of them preserves the graph's invariant: each node input is fed.
-# That is stricter than §3 requires and deliberately so — a graph with a
-# dangling input is a legal artefact that cannot be evaluated, and a proposer
-# emitting those would make the legality claim about the format rather than
-# about the thing being searched.
+# Every one preserves the invariant that each node input is fed — stricter than
+# §3, which admits dangling inputs that cannot be evaluated.
 
 def add_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
                   rng: random.Random) -> Proposal | None:
     """Splice a new combiner into an existing edge, with a new block on its
-    other input. Always applicable, and always fully fed."""
+    other input."""
     edges = _boolean_edges(graph, vocabulary)
     if not edges:
         return None
@@ -156,10 +115,9 @@ def add_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
 def drop_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
                    rng: random.Random) -> Proposal | None:
     """Remove a block and the combiner it fed, splicing that combiner's other
-    input through to where its output went. Nothing is left dangling."""
+    input through to where its output went."""
     predicates = _predicate_nodes(graph, vocabulary)
     if len(predicates) <= 1:
-        # A graph with no predicates is legal §3 and meaningless research.
         return None
 
     victim = rng.choice(predicates)
@@ -186,10 +144,8 @@ def swap_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
                    rng: random.Random) -> Proposal | None:
     """Replace one block with another, keeping its position in the structure.
 
-    Expressed as drop-then-add rather than an in-place identifier edit, because
-    the replacement's parameters are its own: an override that meant `length`
-    for an EMA does not mean `length` for a volume surge, and F10 gives an
-    override no way to say which it was.
+    Drop-then-add rather than an in-place identifier edit: the replacement's
+    overrides are its own and do not carry over.
     """
     predicates = _predicate_nodes(graph, vocabulary)
     if not predicates:
@@ -208,12 +164,8 @@ def swap_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
 
 def rewire(graph: Mapping[str, Any], vocabulary: Vocabulary,
            rng: random.Random) -> Proposal | None:
-    """Exchange where two predicates feed.
-
-    The mutation that is *only* possible once structure is the search space —
-    Generation 1 had no representation in which this is expressible. Expressed
-    as an exchange rather than a move, so every input stays fed.
-    """
+    """Exchange where two predicates feed — an exchange rather than a move, so
+    every input stays fed."""
     predicates = _predicate_nodes(graph, vocabulary)
     if len(predicates) < 2:
         return None
@@ -231,9 +183,7 @@ def rewire(graph: Mapping[str, Any], vocabulary: Vocabulary,
 
 def retune(graph: Mapping[str, Any], vocabulary: Vocabulary,
            rng: random.Random) -> Proposal | None:
-    """Move one parameter. Included so structure search subsumes Generation 1
-    rather than replacing it — but as *one* mutation among five, not as the
-    definition of search."""
+    """Move one parameter."""
     candidates = [n for n in graph["nodes"]
                   if n["instance_id"] in _predicate_nodes(graph, vocabulary)
                   and n.get("overrides")]
@@ -263,12 +213,8 @@ def propose(graph: Mapping[str, Any], vocabulary: Vocabulary, *, seed: int,
             attempts: int = 8) -> Proposal | None:
     """One legal mutation of `graph`, or `None` if none of the attempts landed.
 
-    A mutation that cannot apply — dropping the last predicate, rewiring with
-    one combiner — returns `None` and the next is tried. A mutation the **gate**
-    rejects is not caught: an `EditRejected` here means the proposer built
-    something the format forbids, which is a defect in this module rather than
-    an unlucky draw, and swallowing it would let the search quietly degrade to
-    whichever mutations happen to be legal.
+    An inapplicable mutation returns `None` and the next is tried; `EditRejected`
+    is deliberately not caught, since it means a defect in this module.
     """
     rng = random.Random(seed)
     for _ in range(attempts):
@@ -281,12 +227,7 @@ def propose(graph: Mapping[str, Any], vocabulary: Vocabulary, *, seed: int,
 
 def lineage(graph: Mapping[str, Any], vocabulary: Vocabulary, *, seed: int,
             steps: int) -> list[Proposal]:
-    """`steps` successive mutations, each applied to the last accepted graph.
-
-    Returned as the whole chain rather than only the endpoint, because a
-    finding about the endpoint is worth nothing without the path — the same
-    reason F14 binds a result to everything that produced it.
-    """
+    """`steps` successive mutations, each applied to the last accepted graph."""
     rng = random.Random(seed)
     out: list[Proposal] = []
     current = graph

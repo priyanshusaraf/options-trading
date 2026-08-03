@@ -1,36 +1,10 @@
 """
-RFC 0001 F14 — result binding.
+RFC 0001 F14 — result binding: an experiment record ties a result to the graph
+version, every resolved component version, every node's cache identity, and a
+digest of the input data.
 
-    "Every experiment and every finding MUST record the exact graph version and
-    every resolved component version that produced it."
-
-F14 carries the heaviest evidential weight in the RFC and was, until this
-module, the one clause recorded as **unenforceable**: there was no experiment
-artefact to validate. The RFC's note says it "becomes enforceable when the
-experiment system defines one" — the experiment system, not §3. Nothing here
-touches the grammar, and `format_version` does not move: an experiment record is
-not a component or a graph, and §3 stays the size it was.
-
-**The binding is derived, never supplied.** `record()` takes a `ResolvedGraph`
-and reads the versions off it. There is no parameter for passing them in, which
-is the point: F14's failure mode is not a missing field, it is a *stale* one —
-someone writes down the versions beside the run and they drift, or the run is
-re-parameterised and the record is not. Airflow reached `DagVersion` bound to
-task instances only after roughly a decade, by retrofit, and **this platform has
-already paid that exact price**: every research finding recorded before 2026-08
-is unusable as a baseline. The clause exists so it is not paid twice, and a
-constructor that cannot be told the wrong answer is how.
-
-What a record binds, and why each is needed to re-derive the result:
-
-- the **graph** `(identifier, version)` — what was run;
-- every **resolved component version** — what it was made of, including versions
-  reached only through a subgraph's body, which is why this comes from
-  resolution (C5) rather than from reading the specification;
-- every node's **cache identity** — which is transitive over its upstream (C8),
-  so two records with the same node identity really did compute the same thing;
-- a **data digest** of the inputs — the same graph over different bars is a
-  different result, and a record that omits this looks reproducible and is not.
+The binding is derived from a `ResolvedGraph`, never supplied — F14's failure
+mode is a stale field, not a missing one.
 """
 from __future__ import annotations
 
@@ -59,11 +33,7 @@ class ExperimentRecord:
 
     @property
     def binding(self) -> str:
-        """A single address for "this graph, these components, this data".
-
-        Two records with the same binding are the same experiment, and one that
-        differs anywhere differs here. This is what a finding points at.
-        """
+        """A single address for "this graph, these components, this data"."""
         return content_address({
             "graph": list(self.graph),
             "components": [list(v) for v in self.component_versions],
@@ -86,7 +56,7 @@ def data_digest(inputs: Mapping[str, pd.Series]) -> str:
     """A content address for the bars an experiment ran on.
 
     Hashed by value, per input, in name order — so the same data through a
-    different loader digests the same, and one changed bar does not.
+    different loader digests the same.
     """
     digest = hashlib.sha256()
     for name in sorted(inputs):
@@ -104,9 +74,8 @@ def record(experiment_id: str, graph: ResolvedGraph,
            result: Mapping[str, Any]) -> ExperimentRecord:
     """Bind `result` to everything that produced it.
 
-    Note what this signature does *not* accept: the component versions, the node
-    identities, and the data digest are all derived here. A caller cannot supply
-    a wrong one, which is the difference between a clause and a guarantee.
+    Component versions, node identities and the data digest are derived here —
+    there is deliberately no parameter for passing them in wrong.
     """
     return ExperimentRecord(
         experiment_id=experiment_id,
@@ -121,12 +90,7 @@ def record(experiment_id: str, graph: ResolvedGraph,
 
 def conclude(finding_id: str, experiment: ExperimentRecord,
              claim: Mapping[str, Any]) -> Finding:
-    """Draw a finding from an experiment, carrying its binding with it.
-
-    "Every experiment **and every finding**." A finding that outlives the record
-    it came from is exactly the unusable-baseline state this platform is in for
-    everything before 2026-08.
-    """
+    """Draw a finding from an experiment, carrying its binding with it."""
     return Finding(finding_id=finding_id, experiment_id=experiment.experiment_id,
                    binding=experiment.binding, claim=MappingProxyType(dict(claim)))
 
@@ -137,9 +101,7 @@ def validate_experiment(experiment: Any,
                         graph: ResolvedGraph | None = None) -> list[Violation]:
     """Every way an experiment record can fail F14.
 
-    Pass the `ResolvedGraph` to check the binding is not merely present but
-    *correct* — present-but-stale is the failure mode that matters, and it is
-    invisible without something to compare against.
+    Pass the `ResolvedGraph` to check the binding is correct, not merely present.
     """
     out: list[Violation] = []
 
