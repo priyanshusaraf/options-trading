@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S3.1 closed backend editing API over `app/ir/edit.py`
-- **Next product checkpoint:** each supported edit operation creates a validated immutable graph
-  version or returns its exact rejection clause without exposing raw draft replacement.
+- **Current slice:** S3.2a frontend rename/override editing with local history
+- **Next product checkpoint:** a user can rename a graph and set or clear a node override from the
+  viewer, see exact backend rejection detail and undo or redo without losing immutable history.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -75,9 +75,10 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | done — verified, documented and published |
 | S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | done — ADR 0001 accepted |
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | done — verified locally; publication in this slice commit |
-| S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | active |
-| S3.2 | Add typed visual mutations, validation feedback, undo/redo and accessible controls | S3.1 | later |
-| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2 | later |
+| S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | done — verified locally; publication in this slice commit |
+| S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | active |
+| S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | later |
+| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | later |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | later |
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | later |
 
@@ -280,11 +281,27 @@ bypassing `app/ir/edit.py` must make an architecture guard fail.
 
 **S3.1 bounded checklist.**
 
-1. [ ] Inventory the existing `app/ir/edit.py` primitives and define one closed request union.
-2. [ ] Apply each request to the owned draft through `app/ir/edit.py`, never by raw replacement.
-3. [ ] Validate and atomically publish the resulting server-versioned graph under `base_revision`.
-4. [ ] Return exact rejection clauses/paths and cover stale, ownership and arbitrary-input failures.
-5. [ ] Prove the no-bypass guard, run backend editor regressions, document, commit and push.
+1. [x] Inventory the existing `app/ir/edit.py` primitives and define one closed request union.
+2. [x] Apply each request to the owned draft through `app/ir/edit.py`, never by raw replacement.
+3. [x] Validate and atomically publish the resulting server-versioned graph under `base_revision`.
+4. [x] Return exact rejection clauses/paths and cover stale, ownership and arbitrary-input failures.
+5. [x] Prove the no-bypass guard, run backend editor regressions, document, commit and push.
+
+**S3.1 completion evidence, 2026-08-03.** The closed request union covers all eight existing edit
+primitives. A bounded batch keeps intermediate add/connect states out of persistence and publishes
+one fully validated, resolved graph version. The route accepts no graph/version source fields,
+returns exact F7/F9/C5 clause and path data, and hides cross-project artefacts. AST and runtime
+guards require `app.ir.edit` plus the single atomic repository method. Injected failure after the
+version insert rolls back the draft, revision and current-version pointer. Editor/IR regression and
+full backend/frontend acceptance pass; execution still reads none of these records.
+
+**S3.2a bounded checklist.**
+
+1. [ ] Add a typed frontend edit-batch transport and exact 409/422 error decoding.
+2. [ ] Add accessible graph-name and node-override controls backed by the server revision.
+3. [ ] Keep prior and next immutable editor states for deterministic undo/redo requests.
+4. [ ] Retain the current graph on conflict/failure and present exact clause/path feedback.
+5. [ ] Run focused/frontend regressions, build, document, commit and push.
 
 ## 4. Medium-term sequence
 

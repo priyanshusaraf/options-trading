@@ -112,6 +112,23 @@ def test_invalid_graph_duplicate_identity_and_archived_project_fail_closed(clien
     assert rejected.status_code == 422
     assert rejected.json()["detail"].startswith("F13 at $")
 
+    unresolved = _graph("strategy.unresolved")
+    unresolved["nodes"].append({
+        "instance_id": "n_missing",
+        "component": {"identifier": "component.missing", "version": 1},
+        "overrides": {},
+    })
+    assert client.post(
+        url,
+        json={"identifier": "strategy.unresolved", "graph": unresolved},
+    ).status_code == 201
+    unresolved_publish = client.post(
+        f"{url}/strategy.unresolved/versions",
+        json={"base_revision": 0},
+    )
+    assert unresolved_publish.status_code == 422
+    assert unresolved_publish.json()["detail"].startswith("C5 at n_missing:")
+
     assert client.post(
         url, json={"identifier": "strategy.desk", "graph": _graph()}
     ).status_code == 201

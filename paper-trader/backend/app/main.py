@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     backtest_routes,
+    ir_edit_routes,
     ir_layout_routes,
     ir_routes,
     portfolio_routes,
@@ -226,6 +227,7 @@ app.include_router(ledger_routes.router)
 app.include_router(ir_routes.router)
 app.include_router(ir_layout_routes.router)
 app.include_router(product_object_routes.router)
+app.include_router(ir_edit_routes.router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -235,7 +237,8 @@ app.include_router(product_object_routes.router)
 # registered at the bottom of this file.
 mount_versioned(app, routes.router, backtest_routes.router,
                 portfolio_routes.router, ledger_routes.router, ir_routes.router,
-                ir_layout_routes.router, product_object_routes.router)
+                ir_layout_routes.router, product_object_routes.router,
+                ir_edit_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:

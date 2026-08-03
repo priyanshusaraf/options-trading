@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.db.models import GraphArtifact, GraphVersion, Project
 from app.db.session import SessionLocal
 from app.ir.hashing import canonical_json, content_address
+from app.ir.resolve import ResolutionError, resolve
 from app.ir.strategies.expanding_z import GRAPH, LIBRARY
 from app.ir.validate import validate
 
@@ -49,6 +50,12 @@ class PublishedGraph:
     version: int
     content_address: str
     graph: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class EditPublication:
+    draft_revision: int
+    published: PublishedGraph
 
 
 class ProjectNotFound(Exception):
@@ -147,6 +154,15 @@ def _normalise_graph(
         first = violations[0]
         raise GraphRejected(f"{first.clause} at {first.path}: {first.message}")
     return document, canonical_json(document)
+
+
+def _require_resolvable(graph: Mapping[str, Any]) -> None:
+    try:
+        resolve(graph, LIBRARY)
+    except ResolutionError as exc:
+        raise GraphRejected(
+            f"{exc.clause} at {exc.path}: {exc.message}"
+        ) from exc
 
 
 def create_project(name: str, description: str = "") -> ProjectRecord:
@@ -280,6 +296,7 @@ def publish_draft(
             json.loads(artifact.draft_json),
             current_version=artifact.current_version,
         )
+        _require_resolvable(document)
         version = GraphVersion(
             graph_identifier=identifier,
             version=int(document["version"]),
@@ -299,6 +316,67 @@ def publish_draft(
         artifact.draft_json = encoded
         artifact.updated_at = version.created_at
         result = _published_record(project_id, version)
+    return result
+
+
+def apply_and_publish(
+    project_id: str,
+    identifier: str,
+    *,
+    base_revision: int,
+    transform: Callable[[dict[str, Any]], Mapping[str, Any]],
+) -> EditPublication:
+    """Apply one IR edit and publish its result in one transaction."""
+    with SessionLocal.begin() as session:
+        _active_project(session, project_id)
+        artifact = _owned_artifact(session, project_id, identifier)
+        if artifact.draft_revision != base_revision:
+            raise GraphConflict(artifact.draft_revision)
+
+        edited = transform(json.loads(artifact.draft_json))
+        document, encoded = _normalise_graph(
+            identifier, edited, current_version=artifact.current_version
+        )
+        _require_resolvable(document)
+        next_revision = base_revision + 1
+        version = GraphVersion(
+            graph_identifier=identifier,
+            version=int(document["version"]),
+            artifact_json=encoded,
+            content_address=content_address(document),
+            created_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+        )
+        session.add(version)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise GraphConflict(artifact.draft_revision) from exc
+        _after_version_insert(session, version)
+
+        claimed = session.execute(
+            update(GraphArtifact)
+            .where(
+                GraphArtifact.identifier == identifier,
+                GraphArtifact.project_id == project_id,
+                GraphArtifact.draft_revision == base_revision,
+            )
+            .values(
+                display_name=str(document["display_name"]),
+                draft_json=encoded,
+                draft_revision=next_revision,
+                published_revision=next_revision,
+                current_version=version.version,
+                updated_at=version.created_at,
+            )
+        )
+        if claimed.rowcount != 1:
+            session.expire_all()
+            current = _owned_artifact(session, project_id, identifier)
+            raise GraphConflict(current.draft_revision)
+        result = EditPublication(
+            draft_revision=next_revision,
+            published=_published_record(project_id, version),
+        )
     return result
 
 
