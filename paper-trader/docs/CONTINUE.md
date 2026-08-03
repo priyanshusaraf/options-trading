@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S3.2b is implemented and published.** Fail-closed CI is on the branch. Its first
+**Stage A through S3.3 is implemented and published.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -24,6 +24,8 @@ editor document plus revision-safe graph rename and parameter override interacti
 final-state semantic node/edge batches, separately revisioned visual groups, atomic presentation
 reconciliation, server-derived component/socket descriptors and accessible structural/group
 controls. Backend receipts restore both semantic and presentation state during undo/redo.
+S3.3 proves an equivalent closed structural history and hand-authored reference have identical
+canonical executable identity, and that graph plus presentation state reloads without loss.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -33,8 +35,8 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed implementation slice: S3.2b through frontend commit `0b3b784`
-- S3.2b backend/history commits: `4585f1a`, `934649b`, `46809bf`
+- Last completed/pushed product slice: S3.3 through `d596bee`
+- S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
 
@@ -80,6 +82,14 @@ different canonical JSON cannot claim one executable identity and routes cannot 
 `app.ir.edit.apply_batch()`. The full checkpoint first exposed the superseded public
 `carry_layout_forward()` wrapper; removing that dead surface made the no-unconsumed-mechanisms
 guard and complete acceptance green.
+
+S3.3's focused equivalence/reload proof and 187-test WS-04 regression pass. The proof uses a closed
+add/connect/disconnect/remove history and an independently built reference at the same immutable
+version. It disposes database connections before reload, compares the full coherent document, then
+replays the persisted inverse receipt. Presentation-contamination, semantic-content, node-order,
+edge-order and executable-identity diagnostics are pinned. S3.3 changes no schema, research gate or
+execution path, so the complete checkpoint was not repeated after S3.2b's immediately preceding
+green run.
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
 absent. Guard proof then removed `research_tests` from the backend command; the specific contract
@@ -140,13 +150,13 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S3.3 — prove visual/hand-authored equivalence and lossless reload.**
+**S4.1 — bind immutable graph versions to the existing research experiment flow.**
 
-Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: define one reference
-graph and equivalent closed command history, compare canonical executable identity at the same
-server version, prove graph/descriptors/positions/groups/revisions reload exactly, and add precise
-mismatch diagnostics. Keep raw replacement and client-selected immutable versions forbidden.
-Execution remains untouched.
+Start from the five-item checklist in `docs/engineering/EXECUTION_PLAN.md`: reconcile project-owned
+graph identity with the existing experiment contract, persist the minimum graph/data/cost binding,
+start research only from a published immutable version, and prove reload never follows a newer
+graph silently. Reuse the existing research ledger and statistical gates. Execution remains
+untouched, and live IR-runtime adoption remains owner-gated.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

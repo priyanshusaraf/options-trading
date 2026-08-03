@@ -3,10 +3,10 @@
 **Status:** active
 **Owner surface:** `backend/app/api/ir_routes.py`, `backend/app/api/ir_layout_routes.py`,
 `backend/app/editor/`, their backend tests, `frontend/src/views/GraphView.tsx` and its
-transport/tests. Next: S3.3 visual/hand-authored equivalence and lossless reload. The
+transport/tests. Next: support S4.1's immutable graph-version research binding. The
 libraries it consumes — `backend/app/ir/view.py`, `backend/app/ir/edit.py` — are **owned by
 WS-01**.
-**Last verified:** 2026-08-03 · S3.2b complete
+**Last verified:** 2026-08-03 · S3.3 complete
 
 > This workstream is the human authoring surface for the Component IR: a canvas on which a
 > strategy is a graph of boxes and wires rather than a Python file. The IR calls this one of
@@ -173,6 +173,15 @@ controls without inferring topology. Seven named negative guards passed after re
 acceptance passed 2,794 backend tests with 6 skips, 195 frontend tests, typecheck, production build
 and both deterministic smoke scripts.
 
+**Executable equivalence and reload — S3.3, 2026-08-03.** A closed structural history now proves
+byte-identical canonical JSON and content address against an independently hand-authored reference
+at the same immutable version. Presentation state is present during the proof but excluded from
+identity, then reconciled on node removal. A fresh database connection reloads exact graph bytes,
+descriptors, positions, groups and revisions, and the persisted inverse receipt restores both
+semantic and presentation state. Mismatch diagnostics distinguish semantic content, node/edge
+order, presentation contamination and executable identity. The focused proof and 187-test WS-04
+regression pass; S3.3 changes no persistence schema or execution path.
+
 ## 5. Active roadmap
 
 - [x] **Read-only backend route for a `ResolvedGraph`.** One backend route resolves a named
@@ -209,7 +218,7 @@ and both deterministic smoke scripts.
       not as a generic failure. Grouping remains subject to the F12 executable-versus-presentation
       boundary. S3.2b resolves groups as separately revisioned presentation state and publishes
       semantic changes with atomic presentation reconciliation.
-- [ ] **Round-trip proof.** Author a graph entirely through the UI that is byte-identical, by
+- [x] **Round-trip proof.** Author a graph entirely through the closed editor contract that is byte-identical, by
       content address, to a hand-written artefact for the same strategy. Until this passes, the
       editor is a viewer with buttons.
 

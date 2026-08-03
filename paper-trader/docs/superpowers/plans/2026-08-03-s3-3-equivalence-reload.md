@@ -13,41 +13,41 @@ rows; the client performs no topology, descriptor or group repair.
 
 ## Task 1: Add the executable equivalence oracle
 
-- [ ] Construct a hand-authored reference that removes `n_exit_fallback`, adds a disconnected
+- [x] Construct a hand-authored reference that removes `n_exit_fallback`, adds a disconnected
       `value.scalar` node, replaces the fallback edge with `n_exit_floor.out`, preserves authored
       array order and declares the next server version/parent.
-- [ ] Publish the equivalent closed batch through `/edits` and assert canonical JSON and content
+- [x] Publish the equivalent closed batch through `/edits` and assert canonical JSON and content
       address match exactly.
-- [ ] Assert the request carries revisions and operations only: no raw graph, immutable version or
+- [x] Assert the request carries revisions and operations only: no raw graph, immutable version or
       content address.
 
 ## Task 2: Prove presentation exclusion and reconciliation
 
-- [ ] Before publication, position and visually group the removed node.
-- [ ] Assert removal prunes its position and membership, while the expected executable identity is
+- [x] Before publication, position and visually group the removed node.
+- [x] Assert removal prunes its position and membership, while the expected executable identity is
       unchanged by whether that presentation setup exists.
-- [ ] Mutate the oracle to include visual groups in executable JSON and prove the equivalence guard
+- [x] Mutate the oracle to include visual groups in executable JSON and prove the equivalence guard
       fails before restoring it.
 
 ## Task 3: Prove lossless persisted reload
 
-- [ ] Persist a position, visual group and structural publication, dispose database connections,
+- [x] Persist a position, visual group and structural publication, dispose database connections,
       then load a fresh coherent editor snapshot.
-- [ ] Assert exact graph bytes, content address, graph/presentation revisions, descriptors,
+- [x] Assert exact graph bytes, content address, graph/presentation revisions, descriptors,
       positions and groups match the accepted response.
-- [ ] Replay the accepted inverse receipt after reload and prove semantic plus presentation state
+- [x] Replay the accepted inverse receipt after reload and prove semantic plus presentation state
       restores without client reconstruction.
 
 ## Task 4: Add precise mismatch diagnostics
 
-- [ ] Return or generate field-level diagnostics for semantic content, node/edge ordering,
+- [x] Return or generate field-level diagnostics for semantic content, node/edge ordering,
       executable identity and presentation contamination without accepting raw replacement.
-- [ ] Cover each diagnostic with one focused negative test.
+- [x] Cover each diagnostic with one focused negative test.
 
 ## Task 5: Verify, publish and continue
 
-- [ ] Run focused equivalence/reload tests during implementation and the WS-04 regression when the
+- [x] Run focused equivalence/reload tests during implementation and the WS-04 regression when the
       slice closes.
-- [ ] Run the full shared checkpoint only if S3.3 changes shared persistence or canonical identity.
-- [ ] Update `EXECUTION_PLAN.md`, `WS-04-editor.md` and `CONTINUE.md`, commit deliberately, push,
+- [x] Run the full shared checkpoint only if S3.3 changes shared persistence or canonical identity.
+- [x] Update `EXECUTION_PLAN.md`, `WS-04-editor.md` and `CONTINUE.md`, commit deliberately, push,
       inspect the exact-head Actions run and continue into the next unblocked slice.

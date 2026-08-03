@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S3.3 visual/hand-authored equivalence and lossless reload
-- **Next product checkpoint:** the closed editor can reproduce a hand-authored executable graph by
-  content address and reload its semantic and presentation state without loss.
+- **Current slice:** S4.1 immutable graph-version research binding
+- **Next product checkpoint:** an owned immutable graph version can start a reproducible experiment
+  through the existing research pipeline without entering an execution path.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -78,8 +78,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | done — verified locally; publication in this slice commit |
 | S3.2a | Add graph rename and parameter override editing, validation feedback and local history | S3.1 | done — backend `7cc6525`, frontend `197c4e9` |
 | S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | done — atomic semantic/presentation history published |
-| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | active — next bounded slice |
-| S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | later |
+| S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | done — canonical equivalence and fresh-connection reload proved |
+| S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | active — contract reconciliation next |
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | later |
 
 ### S0.3 — programme reconciliation and execution plan
@@ -343,8 +343,34 @@ frontend tests, typecheck, production build and both deterministic smoke scripts
        groups, revisions and deterministic undo/redo inputs without client reconstruction.
 4. [ ] Add explicit mismatch diagnostics for semantic, ordering and presentation-contamination
        failures while keeping raw graph replacement and client-selected versions forbidden.
-5. [ ] Run the S3.3 focused and WS-04 regressions, update the three coordination documents,
+5. [x] Run the S3.3 focused and WS-04 regressions, update the three coordination documents,
        commit deliberately, push, inspect Actions and continue into the next unblocked slice.
+
+**S3.3 completion evidence, 2026-08-03.** One independently constructed hand-authored reference
+and one closed add/connect/disconnect/remove history produce byte-identical canonical executable
+JSON and the same content address at the same server-issued version. Positions and visual groups
+are present before publication, reconcile when their node is removed and remain absent from the
+identity oracle. Disposing database connections and reloading preserves graph bytes, descriptors,
+positions, groups and revisions; the persisted receipt then restores semantic and presentation
+state without client reconstruction. Deterministic diagnostics distinguish semantic content,
+node order, edge order, presentation contamination and executable identity. The focused proof and
+187-test WS-04 regression pass; no shared persistence schema or runtime path changed, so the full
+checkpoint was not repeated after S3.2b's immediately preceding green checkpoint.
+
+**S4.1 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile immutable graph identity, project ownership and the existing research experiment
+       contract; write the S4.1 design record and test-first implementation plan.
+2. [ ] Define the minimum persisted binding from experiment to graph identifier, version, content
+       address, versioned dataset identity and explicit cost assumptions without duplicating the
+       research ledger or gate pipeline.
+3. [ ] Add a closed project-owned API that starts the existing experiment flow from a published
+       immutable graph version and rejects drafts, archived owners, unknown versions and raw graph
+       payloads with exact feedback.
+4. [ ] Prove persisted resolution, data, cost and statistical-gate evidence remains reproducible
+       across reload and cannot silently follow a newer graph version.
+5. [ ] Run focused WS-03/WS-04/WS-07 regressions, update the three coordination documents, commit,
+       push, inspect Actions and continue; do not adopt the IR runtime in live execution.
 
 ## 4. Medium-term sequence
 
