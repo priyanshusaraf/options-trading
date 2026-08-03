@@ -7,7 +7,7 @@ an index and a sequencing decision. If you are implementing, go straight to your
 document — see [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
 **Last verified: 2026-08-03** · branch `feat/exec-completeness` · backend suites
-(`tests` + `research_tests`) **2,700 collected, PYTEST EXIT 0** · `dryrun.py 700` LEDGER OK ·
+(`tests` + `research_tests`) **2,700 passed + 6 skipped, PYTEST EXIT 0** · `dryrun.py 700` LEDGER OK ·
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · VPS build **not measured** —
 `curl /api/health` is the only answer.
 

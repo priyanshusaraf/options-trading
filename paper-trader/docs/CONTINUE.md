@@ -10,11 +10,10 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A repository and programme stabilisation is active.** The WS-04 read-only graph stack is
-verified and pushed. Coordination documents now distinguish the 19 authored nodes/47 authored
-edges from the 18 resolved view nodes/35 resolved view edges, and the sequential full-product
-plan lives at `docs/engineering/EXECUTION_PLAN.md`. The next slice is fail-closed CI; F13 sparse
-layout persistence follows it.
+**Stage A repository and programme stabilisation is complete.** The WS-04 read-only graph stack
+is verified and pushed; coordination documents and the master execution plan agree; fail-closed
+CI now covers backend, research, migration/architecture guards, deterministic smoke, frontend
+tests, TypeScript and the production build. S1.1 F13 sparse layout persistence is active next.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -24,8 +23,8 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Verified product HEAD before this documentation slice: `071a1a1`
-- Latest verified remote before this documentation slice: `071a1a1`
+- Last completed/pushed slice before CI: `4c0eda2`
+- Latest verified remote before the CI commit: `4c0eda2`
 - Ahead/behind after that push: `0/0`
 - Working tree expected after publishing this handoff: clean
 
@@ -38,34 +37,30 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-Focused trust run on 2026-08-03 before publishing `071a1a1`:
+CI-equivalent acceptance run on 2026-08-03:
 
 ```
-$ .venv/bin/python -m pytest -q tests/test_ir_routes.py tests/test_ir_view.py tests/test_ir_edit.py
-48 passed · EXIT 0
-
-$ npm test -- --run src/lib/irGraphApi.test.ts src/views/GraphView.test.ts src/views/mobileLayout.test.ts
-13 passed · EXIT 0
-
-$ npm run typecheck && npm run build
-TYPECHECK OK · BUILD OK
-```
-
-The last full acceptance evidence remains:
-
-```
-$ .venv/bin/python -m pytest tests research_tests -q     # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR (grepped, both FAILED and ERROR) · 2,700 collected
+$ .venv/bin/python -m pytest tests research_tests --tb=short
+2,700 passed · 6 skipped · 1 deprecation warning · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
-RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK ✓ · EXIT 0
+RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
 
 $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
-$ npm test && npm run typecheck && npm run build          # from frontend/
-153 passed · TYPECHECK OK · BUILD OK
+$ npm ci && npm test && npm run typecheck && npm run build
+153 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
+
+CI was implemented test-first. The six contract tests first failed because the workflow was
+absent. Guard proof then removed `research_tests` from the backend command; the specific contract
+test failed on that missing root. A second mutation replaced official checkout with a SHA-pinned
+unapproved action; the action-origin guard failed. Both returned green after restoration.
+
+Known dependency risks: backend requirements use version floors rather than a lockfile; `npm ci`
+reports six audit findings (three moderate, two high, one critical). The frontend tests/build are
+green, but those findings remain open and must not be described as solved by CI.
 
 Live-browser acceptance used a dotenv-disabled mock/paper backend with temporary databases.
 Desktop and 390×844 rendered 18 node articles, 35 SVG paths and 35 connection rows with no
@@ -93,14 +88,7 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**Stage A — add fail-closed CI.** Start from S0.4 in
-`docs/engineering/EXECUTION_PLAN.md`. Inspect current requirements, lockfiles, test collection and
-deterministic scripts; write a workflow validation check that first fails because no workflow
-exists; then add backend, deterministic-smoke and frontend jobs. Run every workflow-equivalent
-command locally, prove the guard rejects a missing test directory or required command, update
-this handoff, commit and push.
-
-**After CI: WS-04 Editor — implement the F13 layout side table.**
+**WS-04 Editor — implement S1.1, the F13 layout side table and closed API.**
 
 Choose the presentation-state store and add a sparse record keyed by graph identifier/version
 and `instance_id`; store only positions the user has moved. Define what happens to orphaned rows
@@ -118,7 +106,6 @@ Blocked on the owner, several sessions old — `PROGRESS.md` §3 and `ROADMAP.md
 2. **Adopting the IR runtime in a live path.** RFC Appendix C(d); parity evidence now exists.
 3. **VPS OS reboot** and **droplet resize 1 GB → 2 GB**.
 
-> Environment notes: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`. Under
-> `-q` this suite's final "N passed" line does not reach the log, so the exit code plus
-> `grep -cE '^(FAILED|ERROR)'` is the evidence. Count **both**: a mutation that breaks a fixture
-> reports as ERROR, and a sweep grepping only FAILED reads it as vacuous.
+> Environment notes: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`. Capture
+> the pytest exit code and final summary, and inspect both `FAILED` and `ERROR`: a mutation that
+> breaks a fixture reports as ERROR, so a sweep grepping only FAILED reads it as vacuous.

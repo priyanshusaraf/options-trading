@@ -1,0 +1,88 @@
+name: Strategy OS CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strategy-os-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PT_DISABLE_DOTENV: "1"
+  PT_PROVIDER: mock
+  PT_EXECUTION: paper
+  PT_LIVE_ACK: ""
+  PT_RESEARCH_ENABLED: "0"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: paper-trader/backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: paper-trader/backend
+        run: python -m pip install -r requirements.txt
+      - name: Run backend and research suites
+        working-directory: paper-trader/backend
+        run: python -m pytest tests research_tests --tb=short
+
+  deterministic-smoke:
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: paper-trader/backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: paper-trader/backend
+        run: python -m pip install -r requirements.txt
+      - name: Prove ledger reconciliation
+        working-directory: paper-trader/backend
+        run: python scripts/dryrun.py 700
+      - name: Prove backtest invariants
+        working-directory: paper-trader/backend
+        run: python scripts/backtest_smoke.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: paper-trader/frontend/package-lock.json
+      - name: Install frontend dependencies from lockfile
+        working-directory: paper-trader/frontend
+        run: npm ci
+      - name: Run frontend tests
+        working-directory: paper-trader/frontend
+        run: npm test
+      - name: Check TypeScript
+        working-directory: paper-trader/frontend
+        run: npm run typecheck
+      - name: Build production frontend
+        working-directory: paper-trader/frontend
+        run: npm run build

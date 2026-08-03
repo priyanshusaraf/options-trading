@@ -18,7 +18,7 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S0.3 programme reconciliation and CI baseline
+- **Current slice:** S1.1 sparse layout persistence and API
 - **Next product checkpoint:** a user can move a graph node, save and reload the layout, and
   prove that executable identity did not change.
 
@@ -69,9 +69,9 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 |---|---|---|---|
 | S0.1 | Verify authoritative checkout, Git/worktree/remote state and WS-04 commits | none | done |
 | S0.2 | Independently verify and push the read-only graph API/viewer stack | S0.1 | done — remote at `071a1a1` |
-| S0.3 | Reconcile coordination documents and establish this master plan | S0.2 | active |
-| S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | ready |
-| S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | ready after S0.4 |
+| S0.3 | Reconcile coordination documents and establish this master plan | S0.2 | done — `4c0eda2` |
+| S0.4 | Add fail-closed CI for deterministic backend, frontend and migration checks | S0.3 | done — workflow and contract test in the current CI slice |
+| S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | active |
 | S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | later |
 | S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | later |
 | S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | later |
@@ -115,14 +115,14 @@ future pushes or integration work.
 **User-visible outcome.** Regressions in the Strategy OS, live-safety guards, migrations or the
 frontend block integration before review.
 
-**Boundary and likely files.** `.github/workflows/ci.yml`, small CI-safe scripts only if shell
-composition cannot express a non-vacuous check, and CI documentation in this plan/`CONTINUE.md`.
-Do not change product behaviour in this slice.
+**Boundary and likely files.** `.github/workflows/strategy-os-ci.yml`, a parsed contract test,
+and CI documentation in this plan/`CONTINUE.md`. Do not change product behaviour in this slice.
 
 **Acceptance and evidence.**
 
-- Backend job installs locked requirements, runs `tests` and `research_tests`, and fails when no
-  tests are collected. It includes architecture/import guards and migration/model equivalence.
+- Backend job installs the declared requirements, runs `tests` and `research_tests`, and fails
+  when no tests are collected. It includes architecture/import guards and migration/model
+  equivalence. The repository has no backend lockfile; locking remains a named hardening task.
 - Deterministic smoke job runs `scripts/dryrun.py 700` and `scripts/backtest_smoke.py` with mock
   provider and no secrets.
 - Frontend job uses the repository lockfile, then runs the complete Vitest suite, TypeScript

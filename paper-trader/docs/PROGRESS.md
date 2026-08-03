@@ -55,6 +55,7 @@ that clause's implementation.
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
 | `app/api/ir_routes.py` | One read-only, fixed-catalogue route for the resolved graph view |
 | `frontend/src/views/GraphView.tsx` | Read-only semantic HTML/SVG graph viewer in the existing tab shell |
+| `.github/workflows/strategy-os-ci.yml` | Fail-closed push/PR checks for backend, research, smoke, frontend, type and build contracts |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
@@ -100,8 +101,8 @@ content address. The viewer remains read-only until that separation is proven.
 ## 5. Verification state
 
 ```
-$ .venv/bin/python -m pytest tests research_tests -q      # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,700 collected
+$ .venv/bin/python -m pytest tests research_tests --tb=short  # from backend/
+2,700 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -112,6 +113,13 @@ SWEEP OK ✓ · EXIT 0
 $ npm test && npm run typecheck && npm run build          # from frontend/
 153 passed · TYPECHECK OK · BUILD OK
 ```
+
+CI contract proof: removing `research_tests` from the backend workflow command turns
+`test_ci_contract.py::test_backend_job_installs_requirements_and_names_both_test_roots` red for
+the missing root; replacing official checkout with a SHA-pinned unapproved action turns the
+action-origin guard red. Restoring both returns all six contract tests green. The current frontend
+lock resolves with six `npm audit` findings (three moderate, two high, one critical); that
+dependency-hardening slice remains open.
 
 Browser acceptance: desktop and 390×844 rendered 18 nodes, 35 edges and 35 connection rows with
 no console errors or page-level horizontal overflow. The wide canvas scrolls inside its own

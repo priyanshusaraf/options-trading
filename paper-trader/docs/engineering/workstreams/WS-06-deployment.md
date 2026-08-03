@@ -228,8 +228,15 @@ curl -sS -o /dev/null -w '%{http_code}' http://localhost:8090/   # must be 200
 - **`vps-snapshots/` is the only artifact in the repo reporting production state**, and the
   newest is from 2026-07-23 09:41. It does not reflect the running process and must never be
   read as if it does.
-- **No CI.** The suites gate a deploy, not a commit. A branch can accumulate red commits between
-  deploys and nothing says so until `deploy.sh` runs.
+- **Dependency reproducibility is incomplete.** CI now runs on every push and pull request, with
+  SHA-pinned actions and `npm ci`, but backend `requirements.txt` uses version floors rather than
+  a lockfile. A clean runner may resolve newer backend packages than the last verified local
+  environment. The first CI run should establish whether the current floors resolve cleanly;
+  introduce a reviewed lock/constraints workflow as a separate dependency-management slice.
+- **Frontend dependency audit is red.** `npm ci` on 2026-08-03 reported six vulnerabilities
+  (three moderate, two high, one critical). Tests and build pass, but that does not discharge the
+  supply-chain risk. Inspect `npm audit --json`, update the smallest safe dependency set, and do
+  not run a breaking `npm audit fix --force` as incidental cleanup.
 
 ## 8. Blockers
 
@@ -247,9 +254,9 @@ curl -sS -o /dev/null -w '%{http_code}' http://localhost:8090/   # must be 200
    Appendix C(d)).
 4. **Nothing committed since 2026-08-01 is deployed.** `4e9f125` — on this branch — went to the
    box on 2026-08-01 (§4); everything after it, including the Alembic baseline and the
-   architecture migration, is local. As of 2026-08-03 the branch is **80** commits ahead of
-   `main` (`git rev-list --count main..HEAD` → 80) and not pushed. The VPS build was not
-   measured this session — the only answer is `curl localhost:8090/api/health`, never a doc.
+   architecture migration, is local. At `4c0eda2` the branch was **93** commits ahead of local
+   `main` and fully pushed to `origin/feat/exec-completeness`. The VPS build was not measured this
+   session — the only answer is `curl localhost:8090/api/health`, never a doc.
 
 ## 9. Future work
 
@@ -257,8 +264,9 @@ curl -sS -o /dev/null -w '%{http_code}' http://localhost:8090/   # must be 200
   disarmed during market hours"). Trigger: the first session lost to a forgotten ARM.
 - **A staging box.** Trigger: the first change that genuinely cannot be validated by
   `dryrun.py` + replay mode and would otherwise be tested in production.
-- **CI on push.** Trigger: a second person, or a red commit reaching `deploy.sh` and costing a
-  session.
+- **Backend dependency constraints.** Triggered by adding CI: the frontend has a lockfile and the
+  backend does not. Choose and document a reviewed constraints/lock update workflow before treating
+  clean-runner dependency resolution as reproducible.
 - **Structured deploy log on the box** (append-only, machine-readable) so incident
   reconstruction does not depend on `deploy-history/` on one Mac. Trigger: the next incident
   where "when did this land" costs more than five minutes.
