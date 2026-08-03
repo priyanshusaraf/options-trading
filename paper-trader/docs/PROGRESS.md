@@ -56,6 +56,7 @@ that clause's implementation.
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
+| `research/…/ir_strategy.py`, `ir_evaluate.py` | Scores explored graphs through the existing Gen-1 gates |
 
 ### The two results worth knowing
 

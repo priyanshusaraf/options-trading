@@ -66,24 +66,29 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-03 — the Generation-2 search loop.** An agent is mid-flight on it. The design constraint
-is the whole point: score through the **existing** gate pipeline, `research/orchestrator/run.py
-::run_experiment` (qualify → walk-forward → DSR with `sibling_trials` → PBO fail-closed at 0.30
-→ N_eff). A second scoring path would be the `candles.py` defect, which is the recorded reason
-C12 exists.
+**WS-04 Editor — read-only graph rendering in the running application.**
 
-The bridge that needs building is an adapter presenting a resolved IR graph as a
-`Strategy` — `compute()` evaluating the graph and returning the four canonical boolean columns,
-with an absent signal all-False and never NaN. `sibling_trials` must reflect the lineage size,
-for the same reason Gen 1 sets it to the composition count: every candidate in a search is a
-trial for every other one, and scoring each as if it were the only attempt understates selection
-bias by exactly that factor.
+Research Plane Generation 2 is functionally complete as of 2026-08-03: typed vocabulary,
+structure proposer, F14 binding, and scoring through the existing Gen-1 gates. What is left
+there is operational (a week of unattended nightly runs on real Kite candles; `explain.py` on
+the approval queue), not architectural.
 
-If that agent's output is not on disk, restart it from this paragraph — nothing else is needed.
+The editor is now the highest-value unblocked item, and it is the **first thing that would make
+the IR part of the running application**. Everything it needs exists and is tested — `view.py`
+(`graph_view`, `to_svg`, `Layout`), `edit.py` (mutation that cannot return a non-conforming
+artefact), and `scripts/render_ir_graph.py` as a working reference. What does not exist is a
+route or any React.
 
-Then, in the owner's order: **WS-08 Cockpit UI** (typography and palette — needs the owner's
-reference site, so it is externally blocked), then **WS-04 Editor** (read-only graph rendering
-in the app; the libraries exist and are tested, there is no route and no React yet).
+Order: (1) a read-only API route serving a `ResolvedGraph` view model; (2) the React view —
+nodes by instance path, edges, per-node warmup and cache identity; (3) the layout side table,
+with the test that already matters: a stored layout must not change the graph's content address
+(F13). Only then mutation in the UI.
+
+Note that (1) is the moment `app/ir/` stops being imported only by its own tests. That is a
+deliberate threshold, not an accident — it does not touch execution, so it is not owner-gated,
+but it should be a conscious step.
+
+WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 
 Blocked on the owner, several sessions old — `PROGRESS.md` §3 and `ROADMAP.md` §2:
 
@@ -94,5 +99,5 @@ Blocked on the owner, several sessions old — `PROGRESS.md` §3 and `ROADMAP.md
 
 > Environment notes: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`. Under
 > `-q` this suite's final "N passed" line does not reach the log, so the exit code plus
-> `grep -cE '^(FAILED|ERROR)'` is the evidence. Count **both** FAILED and ERROR: a mutation that
-> breaks a fixture reports as ERROR, and a sweep grepping only FAILED reads it as vacuous.
+> `grep -cE '^(FAILED|ERROR)'` is the evidence. Count **both**: a mutation that breaks a fixture
+> reports as ERROR, and a sweep grepping only FAILED reads it as vacuous.

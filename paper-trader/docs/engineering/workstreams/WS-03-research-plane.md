@@ -459,35 +459,32 @@ that shaped it: `docs/research/ARCHITECTURE.md`.
       `from app.` in `backend/research/`). The work is to make the orchestrator record an
       `ExperimentRecord` per run and a `Finding` carrying that record's `binding`, and to make
       it impossible to persist a Finding without one.
-- [ ] **The Generation-2 search loop.** With binding in place: propose → resolve → evaluate →
-      score through the existing gates (qualify, walk-forward, DSR with `sibling_trials`, PBO
-      ≤ 0.30 fail-closed, N_eff breadth), feed accepted graphs back through `knowledge.py`,
-      and keep the objective *outside* `propose.py` — C14 says the proposer proposes and does
-      not score, and a test greps for that.
-- [x] **Each block declares the inputs it reads — DONE 2026-08-03.** `BlockSpec` gained
-      `inputs` and `needs_clock`; `derive()` builds sockets from the declaration and the adapter
-      rebuilds only those columns. **45 declared sockets across 23 blocks, down from 115** — most
-      read `close` alone. F4 is respected: the declaration is authoritative and the
-      implementation is checked against it, never inferred from it.
-      - *Verified empirically, not by AST.* `regime_is` reaches through `research/regime.py` and
-        the opening-range blocks through helpers, so a syntactic check would have to chase every
-        call across every module and would still miss a dynamic one. Instead each block runs on a
-        frame containing only what it declared and must produce the identical series
-        (`research_tests/test_block_declared_inputs.py`).
-      - *Under-declaration is the failure that matters, and it is silent.* Several of these
-        blocks fail **closed** on a missing column — `volume_surge` reads False, `time_of_day`
-        returns all-False — so an under-declared block would not raise. It would quietly switch
-        a filter off, and a generated strategy would lose a condition somebody added on purpose.
-      - **The bar clock is not a socket.** F7's value types are float/int/bool and a datetime is
-        none of them, so declaring `date` as a wire would have needed a format amendment.
-        It is the series *index*: `needs_clock` says a block reads it, and the adapter supplies
-        it from the index. No amendment needed.
-      - *Two wrong tests written before the right one, both recorded in the file.* Perturbing a
-        column by a positive affine transform proves nothing — `close > EMA(close)` is invariant
-        under it. And a removal check calls `rsi_gt` over-declared at its sample args, because
-        `source=0` reads only `close` while `source=3` (ohlc4) reads all four; a declaration
-        covers the whole parameter domain, so choice-carrying blocks are checked across every
-        lawful choice value instead.
+- [x] **The Generation-2 search loop — DONE 2026-08-03.**
+      `research/strategy/builder/ir_strategy.py` (the graph→`Strategy` adapter) +
+      `ir_evaluate.py` (the loop) + `research_tests/test_ir_evaluate.py`, 21 tests.
+      **Every explored graph is scored through the existing Generation-1 gates** —
+      `orchestrator/run.py::run_experiment`: qualify → walk-forward → DSR → PBO fail-closed →
+      N_eff. A second gate pipeline would be the `candles.py` defect that C12 exists to name, and
+      a test asserts `ir_evaluate.py` imports `run_experiment` and defines no gate of its own.
+      - *The output mapping is explicit and refuses to guess.* A canonically named output binds
+        to its column; a single unnamed output (what the proposer emits) binds to `longEntry`,
+        since it is an entry condition and such a graph states no exit; every unbound column is
+        `False` on every bar, never NaN and never True; warmup bars are False everywhere (C10).
+        A graph that half-names its outputs, or declares two unnamed ones, raises
+        `UnmappableGraph`.
+      - `compute()` **refuses non-empty params.** Parameters are bound at resolution, so running
+        one graph while the record describes another is exactly F14's stale-binding failure.
+      - *No report leaves without its binding.* `validate_experiment(record, resolved)` must
+        return `[]` or the candidate raises `UnboundResult`.
+      - `sibling_trials = len(exploration.steps)` — every candidate in a lineage is a trial for
+        every other one, the same argument `run_generated` makes with the composition count.
+        Scoring each as the only attempt would understate selection bias by exactly that factor.
+      - *The loop lives in `ir_evaluate.py`, not `ir_search.py`, on purpose.* `ir_search.py`
+        carries the C14 grep guard (no `sharpe`, `fitness`, `objective`, `rank`, `pnl`); putting
+        a scoring loop there would have meant weakening it. The guard now covers `propose.py`,
+        `ir_search.py` and `ir_strategy.py`.
+      - Ten suppressions, each target asserted present first, each turning its own test red, each
+        file byte-identical after.
 - [ ] **Surface `strategy/explain.py` on the approval queue.** The plain-language explanation
       is already rendered into every run report by `report._render_explanation`; what remains
       is showing it where the human actually decides.
