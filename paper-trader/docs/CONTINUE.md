@@ -25,7 +25,7 @@ and one script. The engine still calls `compute()`.
 
 ## 2. Last verified commit
 
-`` — the F14 run binding. Preceded by `1f0dade` (report triage), `daacb66` (the
+`b7e39a5` — the F14 run binding. Preceded by `1f0dade` (report triage), `daacb66` (the
 workstream reorganisation) and `cdbe686` (the comment trim).
 
 Preceded by `15125b6` (structure proposer + F8's converse), `0dd7a4d`
