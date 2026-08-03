@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, init_db
+from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.ir.experiment import record
 from app.ir.hashing import content_address
 from app.ir.resolve import resolve
@@ -20,6 +21,9 @@ from app.ir.view import Layout, graph_view
 IDENTIFIER = GRAPH["identifier"]
 VERSION = GRAPH["version"]
 LAYOUT_URL = f"/api/ir/graphs/{IDENTIFIER}/versions/{VERSION}/layout"
+EDIT_URL = (
+    f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/edits"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +63,81 @@ def test_sparse_layout_round_trips_and_revision_advances(client):
     assert saved.json()["revision"] == 1
     assert saved.json()["positions"] == [_position()]
     assert client.get(LAYOUT_URL).json() == saved.json()
+
+
+def test_missing_layout_carries_as_explicit_revision_one(client):
+    edited = client.post(
+        EDIT_URL,
+        json={
+            "base_revision": 0,
+            "edits": [{
+                "operation": "set_display_name",
+                "display_name": "Edited",
+            }],
+        },
+    )
+
+    assert edited.status_code == 201, edited.text
+    assert edited.json()["layout"] == {
+        "graph_identifier": IDENTIFIER,
+        "graph_version": VERSION + 1,
+        "revision": 1,
+        "positions": [],
+    }
+
+
+def test_saved_layout_carries_positions_but_not_its_revision_counter(client):
+    client.put(
+        LAYOUT_URL,
+        json={"base_revision": 0, "positions": [_position("n_ema", 1.0, 2.0)]},
+    )
+    client.put(
+        LAYOUT_URL,
+        json={"base_revision": 1, "positions": [_position("n_ema", 3.0, 4.0)]},
+    )
+
+    edited = client.post(
+        EDIT_URL,
+        json={
+            "base_revision": 0,
+            "edits": [{
+                "operation": "set_override",
+                "instance_id": "n_ema",
+                "parameter": "length",
+                "value": 60,
+            }],
+        },
+    )
+
+    assert edited.status_code == 201, edited.text
+    layout = edited.json()["layout"]
+    assert layout["revision"] == 1
+    assert layout["positions"] == [_position("n_ema", 3.0, 4.0)]
+    url = f"/api/ir/graphs/{IDENTIFIER}/versions/{VERSION + 1}/layout"
+    assert client.get(url).json() == layout
+    saved = client.put(
+        url,
+        json={"base_revision": 1, "positions": [_position("n_ema", 5.0, 6.0)]},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 2
+
+
+def test_source_layout_never_enters_new_graph_content_address(client):
+    payload = {
+        "base_revision": 0,
+        "edits": [{"operation": "set_display_name", "display_name": "Same edit"}],
+    }
+    without_layout = client.post(EDIT_URL, json=payload).json()["content_address"]
+
+    init_db(reset=True)
+    client.put(
+        LAYOUT_URL,
+        json={"base_revision": 0, "positions": [_position("n_ema", 44.0, 55.0)]},
+    )
+    with_layout = client.post(EDIT_URL, json=payload).json()["content_address"]
+
+    assert with_layout == without_layout
 
 
 def test_a_write_replaces_the_sparse_set_instead_of_merging(client):

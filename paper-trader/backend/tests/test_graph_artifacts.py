@@ -136,3 +136,34 @@ def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(mon
     assert artifact.current_version is None
     assert artifact.published_revision is None
     assert versions == ()
+
+
+def test_identity_changing_edit_does_not_infer_a_layout():
+    from app.ir import edit as ir_edit
+
+    def add_constant(graph):
+        edited = ir_edit.add_node(
+            graph,
+            "n_constant",
+            "value.scalar",
+            1,
+            {"value": 1.0},
+        )
+        return store.EditResult(
+            graph=edited,
+            applied_operations=({"operation": "add_node"},),
+            inverse_operations=({"operation": "remove_node"},),
+        )
+
+    publication, layout = store.apply_and_publish(
+        store.CATALOGUE_PROJECT_ID,
+        GRAPH["identifier"],
+        base_revision=0,
+        transform=add_constant,
+        response_factory=lambda published, carried: (published, carried),
+    )
+
+    assert publication.published.version == GRAPH["version"] + 1
+    assert layout.graph_version == publication.published.version
+    assert layout.revision == 0
+    assert layout.positions == ()

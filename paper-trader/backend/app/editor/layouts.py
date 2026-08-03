@@ -7,6 +7,7 @@ from typing import Iterable
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.db.models import IrGraphLayout, IrGraphLayoutPosition
 from app.db.session import SessionLocal
@@ -51,26 +52,80 @@ def load_layout(
     valid_instance_ids: frozenset[str],
 ) -> Layout:
     with SessionLocal() as session:
-        revision = session.scalar(
-            select(IrGraphLayout.revision).where(
-                IrGraphLayout.graph_identifier == graph_identifier,
-                IrGraphLayout.graph_version == graph_version,
-            )
+        return load_layout_in_session(
+            session, graph_identifier, graph_version, valid_instance_ids
         )
-        if revision is None:
-            return Layout(graph_identifier, graph_version, 0, ())
-        rows = session.scalars(
-            select(IrGraphLayoutPosition).where(
-                IrGraphLayoutPosition.graph_identifier == graph_identifier,
-                IrGraphLayoutPosition.graph_version == graph_version,
-            ).order_by(IrGraphLayoutPosition.instance_id)
-        )
-        positions = tuple(
+
+
+def load_layout_in_session(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    valid_instance_ids: frozenset[str],
+) -> Layout:
+    head = session.get(IrGraphLayout, (graph_identifier, graph_version))
+    if head is None:
+        return Layout(graph_identifier, graph_version, 0, ())
+    rows = session.scalars(
+        select(IrGraphLayoutPosition).where(
+            IrGraphLayoutPosition.graph_identifier == graph_identifier,
+            IrGraphLayoutPosition.graph_version == graph_version,
+        ).order_by(IrGraphLayoutPosition.instance_id)
+    )
+    return Layout(
+        graph_identifier,
+        graph_version,
+        head.revision,
+        tuple(
             Position(row.instance_id, row.x, row.y)
             for row in rows
             if row.instance_id in valid_instance_ids
+        ),
+    )
+
+
+def _after_layout_prepare(_session: Session, _layout: IrGraphLayout) -> None:
+    """Failure-injection seam proving graph and carried layout are atomic."""
+
+
+def carry_layout_forward(
+    session: Session,
+    graph_identifier: str,
+    from_version: int,
+    to_version: int,
+    valid_instance_ids: frozenset[str],
+) -> Layout:
+    """Create a fresh revision-one layout stream inside the caller's transaction."""
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    target = IrGraphLayout(
+        graph_identifier=graph_identifier,
+        graph_version=to_version,
+        revision=1,
+        updated_at=now,
+    )
+    session.add(target)
+    source_rows = session.scalars(
+        select(IrGraphLayoutPosition).where(
+            IrGraphLayoutPosition.graph_identifier == graph_identifier,
+            IrGraphLayoutPosition.graph_version == from_version,
+        ).order_by(IrGraphLayoutPosition.instance_id)
+    )
+    session.add_all([
+        IrGraphLayoutPosition(
+            graph_identifier=graph_identifier,
+            graph_version=to_version,
+            instance_id=row.instance_id,
+            x=row.x,
+            y=row.y,
         )
-    return Layout(graph_identifier, graph_version, revision, positions)
+        for row in source_rows
+        if row.instance_id in valid_instance_ids
+    ])
+    session.flush()
+    _after_layout_prepare(session, target)
+    return load_layout_in_session(
+        session, graph_identifier, to_version, valid_instance_ids
+    )
 
 
 def save_layout(

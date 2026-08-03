@@ -13,6 +13,8 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -165,6 +167,28 @@ class _PollingRouteFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(_PollingRouteFilter())
 
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def editor_request_validation_handler(
+    request: Request, exc: RequestValidationError
+):
+    """Give only editor mutations their closed error envelope.
+
+    Other routes retain FastAPI's established validation body. The versioned
+    mirror is normalized through ``unversioned_path`` before matching.
+    """
+    path = unversioned_path(request.url.path)
+    if (
+        path.startswith("/api/ir/projects/")
+        and "/graphs/" in path
+        and path.endswith("/edits")
+    ):
+        return JSONResponse(
+            status_code=422,
+            content=ir_edit_routes.request_validation_envelope(exc.errors()),
+        )
+    return await request_validation_exception_handler(request, exc)
 
 _AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/session"}
 

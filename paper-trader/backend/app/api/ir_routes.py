@@ -7,13 +7,13 @@ resolves on a caller's behalf from arbitrary input, or touches execution.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from app.ir.catalogue import catalogue
-from app.ir.resolve import ResolutionError, resolve
+from app.ir.resolve import Library, ResolutionError, resolve
 from app.ir.validate import validate
 from app.ir.view import graph_view
 
@@ -61,29 +61,16 @@ class IrGraphResponse(BaseModel):
     edges: list[IrEdgeResponse]
 
 
-def _resolved(identifier: str):
-    entry = catalogue().get(identifier)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"no IR graph named {identifier!r}")
-    graph, library = entry
+def graph_response(
+    graph: Mapping[str, Any], library: Library
+) -> IrGraphResponse:
     violations = validate(graph, library.components)
     if violations:
         violation = violations[0]
-        raise HTTPException(
-            status_code=500,
-            detail=f"{violation.clause} at {violation.path}: {violation.message}",
+        raise ValueError(
+            f"{violation.clause} at {violation.path}: {violation.message}"
         )
-    try:
-        return graph, graph_view(resolve(graph, library))
-    except ResolutionError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{exc.clause} at {exc.path}: {exc.message}") from exc
-
-
-@router.get("/graphs/{identifier}", response_model=IrGraphResponse)
-def get_graph(identifier: str) -> IrGraphResponse:
-    graph, view = _resolved(identifier)
+    view = graph_view(resolve(graph, library))
     return IrGraphResponse(
         identifier=view.identifier,
         version=view.version,
@@ -106,3 +93,15 @@ def get_graph(identifier: str) -> IrGraphResponse:
             target_socket=e.target_socket, derived=e.derived,
         ) for e in view.edges],
     )
+
+
+@router.get("/graphs/{identifier}", response_model=IrGraphResponse)
+def get_graph(identifier: str) -> IrGraphResponse:
+    entry = catalogue().get(identifier)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"no IR graph named {identifier!r}")
+    graph, library = entry
+    try:
+        return graph_response(graph, library)
+    except (ValueError, ResolutionError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

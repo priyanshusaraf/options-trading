@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.editor import graph_artifacts
 from app.editor import layouts as ir_layouts
-from app.ir.catalogue import catalogue
 
 
 router = APIRouter(prefix="/api/ir")
@@ -37,20 +37,20 @@ class IrLayoutResponse(BaseModel):
 
 
 def _graph(identifier: str, version: int):
-    entry = catalogue().get(identifier)
-    if entry is None or entry[0]["version"] != version:
+    try:
+        return graph_artifacts.load_published_graph(identifier, version).graph
+    except graph_artifacts.GraphNotFound as exc:
         raise HTTPException(
             status_code=404,
             detail=f"no IR graph named {identifier!r} at version {version}",
-        )
-    return entry[0]
+        ) from exc
 
 
 def _authored_ids(graph) -> frozenset[str]:
     return frozenset(node["instance_id"] for node in graph["nodes"])
 
 
-def _response(layout: ir_layouts.Layout) -> IrLayoutResponse:
+def layout_response(layout: ir_layouts.Layout) -> IrLayoutResponse:
     return IrLayoutResponse(
         graph_identifier=layout.graph_identifier,
         graph_version=layout.graph_version,
@@ -68,7 +68,7 @@ def _response(layout: ir_layouts.Layout) -> IrLayoutResponse:
 )
 def get_layout(identifier: str, version: int) -> IrLayoutResponse:
     graph = _graph(identifier, version)
-    return _response(ir_layouts.load_layout(
+    return layout_response(ir_layouts.load_layout(
         identifier,
         version,
         valid_instance_ids=_authored_ids(graph),
@@ -110,4 +110,4 @@ def put_layout(identifier: str, version: int, body: IrLayoutWrite):
                 "current_revision": exc.current_revision,
             },
         )
-    return _response(saved)
+    return layout_response(saved)

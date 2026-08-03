@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TypeVar
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import GraphArtifact, GraphVersion, Project
 from app.db.session import SessionLocal
+from app.editor import layouts
 from app.ir.hashing import canonical_json, content_address
 from app.ir.resolve import ResolutionError, resolve
 from app.ir.strategies.expanding_z import GRAPH, LIBRARY
@@ -56,6 +57,22 @@ class PublishedGraph:
 class EditPublication:
     draft_revision: int
     published: PublishedGraph
+    applied_operations: tuple[dict[str, Any], ...]
+    inverse_operations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class EditResult:
+    graph: dict[str, Any]
+    applied_operations: tuple[dict[str, Any], ...]
+    inverse_operations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class EditorSnapshot:
+    draft_revision: int
+    published: PublishedGraph
+    layout: layouts.Layout
 
 
 class ProjectNotFound(Exception):
@@ -78,6 +95,13 @@ class GraphRejected(Exception):
 
 class InvalidTransition(Exception):
     pass
+
+
+class EditorDocumentFailed(Exception):
+    pass
+
+
+T = TypeVar("T")
 
 
 def _project_record(project: Project) -> ProjectRecord:
@@ -234,6 +258,42 @@ def load_draft(project_id: str, identifier: str) -> GraphDraft:
         return _draft_record(_owned_artifact(session, project_id, identifier))
 
 
+def _authored_ids(graph: Mapping[str, Any]) -> frozenset[str]:
+    return frozenset(str(node["instance_id"]) for node in graph.get("nodes", ()))
+
+
+def load_editor_snapshot(project_id: str, identifier: str) -> EditorSnapshot:
+    """Read the published editor head and its presentation state coherently."""
+    with SessionLocal() as session:
+        _active_project(session, project_id)
+        artifact = _owned_artifact(session, project_id, identifier)
+        if artifact.current_version is None:
+            raise InvalidTransition("graph has no published version")
+        if artifact.published_revision != artifact.draft_revision:
+            raise InvalidTransition("graph has unpublished draft changes")
+        version = session.get(GraphVersion, (identifier, artifact.current_version))
+        if version is None:
+            raise GraphNotFound((project_id, identifier, artifact.current_version))
+        published = _published_record(project_id, version)
+        layout = layouts.load_layout_in_session(
+            session,
+            identifier,
+            version.version,
+            _authored_ids(published.graph),
+        )
+        return EditorSnapshot(artifact.draft_revision, published, layout)
+
+
+def load_published_graph(identifier: str, version: int) -> PublishedGraph:
+    """Load one globally identified immutable graph for presentation routes."""
+    with SessionLocal() as session:
+        artifact = session.get(GraphArtifact, identifier)
+        published = session.get(GraphVersion, (identifier, version))
+        if artifact is None or published is None:
+            raise GraphNotFound((identifier, version))
+        return _published_record(artifact.project_id, published)
+
+
 def save_draft(
     project_id: str,
     identifier: str,
@@ -324,18 +384,24 @@ def apply_and_publish(
     identifier: str,
     *,
     base_revision: int,
-    transform: Callable[[dict[str, Any]], Mapping[str, Any]],
-) -> EditPublication:
-    """Apply one IR edit and publish its result in one transaction."""
+    transform: Callable[[dict[str, Any]], EditResult],
+    response_factory: Callable[[EditPublication, layouts.Layout], T],
+) -> T:
+    """Apply an edit and build its canonical response before committing."""
     with SessionLocal.begin() as session:
         _active_project(session, project_id)
         artifact = _owned_artifact(session, project_id, identifier)
         if artifact.draft_revision != base_revision:
             raise GraphConflict(artifact.draft_revision)
+        if artifact.current_version is None:
+            raise InvalidTransition("graph has no published version")
+        if artifact.published_revision != artifact.draft_revision:
+            raise InvalidTransition("graph has unpublished draft changes")
 
-        edited = transform(json.loads(artifact.draft_json))
+        original = json.loads(artifact.draft_json)
+        edit_result = transform(original)
         document, encoded = _normalise_graph(
-            identifier, edited, current_version=artifact.current_version
+            identifier, edit_result.graph, current_version=artifact.current_version
         )
         _require_resolvable(document)
         next_revision = base_revision + 1
@@ -352,6 +418,18 @@ def apply_and_publish(
         except IntegrityError as exc:
             raise GraphConflict(artifact.draft_revision) from exc
         _after_version_insert(session, version)
+
+        valid_ids = _authored_ids(document)
+        if _authored_ids(original) == valid_ids:
+            layout = layouts.carry_layout_forward(
+                session,
+                identifier,
+                artifact.current_version,
+                version.version,
+                valid_ids,
+            )
+        else:
+            layout = layouts.Layout(identifier, version.version, 0, ())
 
         claimed = session.execute(
             update(GraphArtifact)
@@ -373,10 +451,16 @@ def apply_and_publish(
             session.expire_all()
             current = _owned_artifact(session, project_id, identifier)
             raise GraphConflict(current.draft_revision)
-        result = EditPublication(
+        publication = EditPublication(
             draft_revision=next_revision,
             published=_published_record(project_id, version),
+            applied_operations=edit_result.applied_operations,
+            inverse_operations=edit_result.inverse_operations,
         )
+        try:
+            result = response_factory(publication, layout)
+        except Exception as exc:
+            raise EditorDocumentFailed("editor document construction failed") from exc
     return result
 
 
