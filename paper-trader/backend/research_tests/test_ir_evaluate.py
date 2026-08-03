@@ -117,6 +117,19 @@ def test_warmup_bars_never_fire(lib, frame):
     assert not out[list(CANONICAL_COLUMNS)].iloc[:warmup].to_numpy().any()
 
 
+def test_a_nan_output_is_false_never_true():
+    """`astype(bool)` reads NaN as True. An indicator that could not be computed
+    would then place an order — the failure is silent and it is a real one."""
+    import numpy as np
+    import pandas as pd
+
+    from research.strategy.builder.ir_strategy import _flags
+
+    flags = _flags(pd.Series([np.nan, 1.0, 0.0]), pd.RangeIndex(3), 0)
+    assert flags.dtype == bool
+    assert list(flags) == [False, True, False]
+
+
 def test_the_column_mapping_is_explicit_and_refuses_to_guess():
     assert column_mapping(("out",)) == {"longEntry": "out"}
     assert column_mapping(("longEntry", "shortExit")) == {

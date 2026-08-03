@@ -25,14 +25,15 @@ and one script. The engine still calls `compute()`.
 
 ## 2. Last verified commit
 
-`b7e39a5` — the F14 run binding. Preceded by `1f0dade` (report triage), `daacb66` (the
-workstream reorganisation) and `cdbe686` (the comment trim).
+`5bf923d` — per-block declared inputs (45 sockets, was 115). Preceded by `b7e39a5`
+(the F14 run binding), `1f0dade` (report triage), `daacb66` (the workstream reorganisation) and `cdbe686` (the
+comment trim).
 
 Preceded by `15125b6` (structure proposer + F8's converse), `0dd7a4d`
 (block library as IR components), `c234e70` (Python authoring + the flake fix), `baef1c2` (F14),
 `dec854b`/`49e9ded` (editor plane), `df0bf6c` (runtime), `126c9cf` (resolver).
 
-Branch `feat/exec-completeness`, **not pushed**, ~80 commits ahead of `main`.
+Branch `feat/exec-completeness`, 86 commits ahead of `main`.
 
 The VPS build was **not measured this session.** `curl localhost:8090/api/health` on the box is
 the only answer — never read it off a document.
@@ -41,7 +42,7 @@ the only answer — never read it off a document.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q     # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR (grepped, both FAILED and ERROR) · 2,612 collected
+PYTEST EXIT: 0 · 0 FAILED/ERROR (grepped, both FAILED and ERROR) · 2,685 collected
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK ✓ · EXIT 0
@@ -65,23 +66,24 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**WS-03 Research Plane — the search loop.** F14 binding landed 2026-08-03
-(`research/strategy/builder/ir_search.py`): every explored graph is validated, resolved,
-evaluated and recorded with a binding derived from its own `ResolvedGraph`. Now an objective can
-be added on top, and only now — a run recorded without a binding is permanently unattributable.
+**WS-03 — the Generation-2 search loop.** An agent is mid-flight on it. The design constraint
+is the whole point: score through the **existing** gate pipeline, `research/orchestrator/run.py
+::run_experiment` (qualify → walk-forward → DSR with `sibling_trials` → PBO fail-closed at 0.30
+→ N_eff). A second scoring path would be the `candles.py` defect, which is the recorded reason
+C12 exists.
 
-Two things the binding work turned up, both in WS-03 §5:
-`ExperimentRecord.binding` covers identities, versions and the data digest but **no edges**; it
-survives a `rewire` only because `ResolvedNode.cache_id` folds in upstream cache ids. F14's
-wiring sensitivity is a property of *resolution*, not of the record. Setting any component's
-`cache_identity` to `"declared"` breaks that, and whoever does it should know.
+The bridge that needs building is an adapter presenting a resolved IR graph as a
+`Strategy` — `compute()` evaluating the graph and returning the four canonical boolean columns,
+with an absent signal all-False and never NaN. `sibling_trials` must reflect the lineage size,
+for the same reason Gen 1 sets it to the composition count: every candidate in a search is a
+trial for every other one, and scoring each as if it were the only attempt understates selection
+bias by exactly that factor.
 
-Then, in the owner's order:
+If that agent's output is not on disk, restart it from this paragraph — nothing else is needed.
 
-1. **WS-08 Cockpit UI** — typography and palette.
-3. **WS-04 Editor** — read-only graph rendering in the app. The libraries exist and are tested;
-   there is no route and no React yet, which is the first thing that would make the IR part of
-   the running application.
+Then, in the owner's order: **WS-08 Cockpit UI** (typography and palette — needs the owner's
+reference site, so it is externally blocked), then **WS-04 Editor** (read-only graph rendering
+in the app; the libraries exist and are tested, there is no route and no React yet).
 
 Blocked on the owner, several sessions old — `PROGRESS.md` §3 and `ROADMAP.md` §2:
 
@@ -92,4 +94,5 @@ Blocked on the owner, several sessions old — `PROGRESS.md` §3 and `ROADMAP.md
 
 > Environment notes: `python` is not on `PATH` — use `.venv/bin/python` from `backend/`. Under
 > `-q` this suite's final "N passed" line does not reach the log, so the exit code plus
-> `grep -cE '^(FAILED|ERROR)'` is the evidence.
+> `grep -cE '^(FAILED|ERROR)'` is the evidence. Count **both** FAILED and ERROR: a mutation that
+> breaks a fixture reports as ERROR, and a sweep grepping only FAILED reads it as vacuous.

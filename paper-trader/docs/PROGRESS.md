@@ -3,7 +3,7 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · 77 commits ahead of `main`, not pushed.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · 86 commits ahead of `main`.
 
 ---
 
@@ -55,6 +55,7 @@ that clause's implementation.
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
+| `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
 
 ### The two results worth knowing
 
@@ -98,7 +99,7 @@ marketplace · production adoption.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q      # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,612 collected
+PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,685 collected
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
