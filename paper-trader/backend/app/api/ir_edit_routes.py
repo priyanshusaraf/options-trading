@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api import ir_layout_routes, ir_routes
+from app.editor import descriptors
 from app.editor import graph_artifacts as store
 from app.editor import layouts
 from app.ir import edit as ir_edit
@@ -256,6 +257,35 @@ class EditableNodeResponse(_ClosedModel):
     component_identifier: str
     component_version: int
     parameters: list[EditableParameterResponse]
+    sockets: list["SocketDescriptorResponse"]
+
+
+class ParameterDescriptorResponse(_ClosedModel):
+    identifier: str
+    display_name: str
+    kind: str
+    default: Any
+    panel_path: list[str]
+
+
+class SocketDescriptorResponse(_ClosedModel):
+    identifier: str
+    display_name: str
+    direction: Literal["input", "output"]
+    wire_type: dict[str, Any]
+    has_default_source: bool
+
+
+class BoundarySocketDescriptorResponse(SocketDescriptorResponse):
+    instance_id: Literal["io_in", "io_out"]
+
+
+class ComponentDescriptorResponse(_ClosedModel):
+    identifier: str
+    version: int
+    display_name: str
+    parameters: list[ParameterDescriptorResponse]
+    sockets: list[SocketDescriptorResponse]
 
 
 class EditorDocumentResponse(_ClosedModel):
@@ -268,6 +298,8 @@ class EditorDocumentResponse(_ClosedModel):
     authored_graph: dict[str, Any]
     view: ir_routes.IrGraphResponse
     editable_nodes: list[EditableNodeResponse]
+    component_catalogue: list[ComponentDescriptorResponse]
+    graph_sockets: list[BoundarySocketDescriptorResponse]
     layout: ir_layout_routes.IrLayoutResponse
     command_receipt: CommandReceipt | None
 
@@ -501,13 +533,16 @@ def _editable_nodes(graph: dict[str, Any]) -> list[EditableNodeResponse]:
                 value=value,
                 overridden=parameter in overrides,
             ))
-        if parameters:
-            result.append(EditableNodeResponse(
-                instance_id=str(node["instance_id"]),
-                component_identifier=identifier,
-                component_version=version,
-                parameters=parameters,
-            ))
+        result.append(EditableNodeResponse(
+            instance_id=str(node["instance_id"]),
+            component_identifier=identifier,
+            component_version=version,
+            parameters=parameters,
+            sockets=[
+                SocketDescriptorResponse(**asdict(socket))
+                for socket in descriptors.sockets(component.get("interface", ()))
+            ],
+        ))
     return result
 
 
@@ -575,6 +610,28 @@ def _document(
         authored_graph=graph.graph,
         view=ir_routes.graph_response(graph.graph, LIBRARY),
         editable_nodes=_editable_nodes(graph.graph),
+        component_catalogue=[
+            ComponentDescriptorResponse(
+                identifier=item.identifier,
+                version=item.version,
+                display_name=item.display_name,
+                parameters=[
+                    ParameterDescriptorResponse(
+                        **{**asdict(parameter), "panel_path": list(parameter.panel_path)}
+                    )
+                    for parameter in item.parameters
+                ],
+                sockets=[
+                    SocketDescriptorResponse(**asdict(socket))
+                    for socket in item.sockets
+                ],
+            )
+            for item in descriptors.component_catalogue(LIBRARY)
+        ],
+        graph_sockets=[
+            BoundarySocketDescriptorResponse(**asdict(socket))
+            for socket in descriptors.graph_sockets(graph.graph)
+        ],
         layout=ir_layout_routes.layout_response(layout),
         command_receipt=receipt,
     )

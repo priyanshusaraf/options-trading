@@ -123,6 +123,36 @@ def test_editor_document_is_one_version_coherent_and_mirrored(client):
     assert mirrored.json() == body
 
 
+def test_editor_document_publishes_server_derived_component_and_socket_descriptors(
+    client,
+):
+    body = client.get(EDITOR_URL).json()
+
+    catalogue = {
+        (item["identifier"], item["version"]): item
+        for item in body["component_catalogue"]
+    }
+    absolute = catalogue[("math.abs", 1)]
+    assert [
+        (item["identifier"], item["direction"], item["wire_type"]["value"])
+        for item in absolute["sockets"]
+    ] == [("in", "input", "float"), ("out", "output", "float")]
+    assert absolute["sockets"][0]["has_default_source"] is False
+
+    boundaries = {
+        (item["instance_id"], item["identifier"]): item
+        for item in body["graph_sockets"]
+    }
+    assert boundaries[("io_in", "close")]["direction"] == "output"
+    assert boundaries[("io_out", "longEntry")]["direction"] == "input"
+
+    authored = {item["instance_id"]: item for item in body["editable_nodes"]}
+    assert {item["identifier"] for item in authored["n_atr"]["sockets"]} == {
+        "high", "low", "close", "atr"
+    }
+    assert all("/" not in instance_id for instance_id in authored)
+
+
 def test_visual_group_edit_advances_only_the_presentation_revision(client):
     before = client.get(EDITOR_URL).json()
 
