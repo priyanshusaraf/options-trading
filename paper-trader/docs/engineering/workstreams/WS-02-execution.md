@@ -3,7 +3,7 @@
 **Status:** active
 **Owner surface:** `backend/app/engine/` (except `readiness.py` → WS-06),
 `backend/app/providers/` (except `replay.py` → WS-07), `backend/app/options/`,
-`backend/app/strategy/`, `backend/app/backtest/`,
+`backend/app/strategy/`, `backend/app/backtest/`, `backend/app/api/`,
 `backend/scripts/dryrun.py`, `backend/scripts/backtest_smoke.py`, `backend/scripts/exit_sweep.py`
 
 `app/market_data/candles.py` is **consumed, not owned** — WS-07 owns the data seam. It is
@@ -73,7 +73,7 @@ given day, reproduce it exactly from recorded bars, and find the numbers agree.
 - **The backtester** — `app/backtest/` (sweep, engine, ratchet, premium, metrics,
   `live_equivalent.py`, `exit_sweep.py`), `scripts/backtest_smoke.py`.
 - **Market data into the engine** — `app/providers/` (the `MarketDataProvider` seam,
-  `safe_kite.py`, `live_kite.py`, `mock.py`, `replay.py`, `factory.py`) and
+  `safe_kite.py`, `live_kite.py`, `mock.py`, `factory.py`; `replay.py` is WS-07's) and
   `app/market_data/candles.py`.
 - **Options selection and pricing** — `app/options/picker.py`, `app/options/pricing.py`
   (index-only, lowest priority per the 2026-07 product direction).
@@ -84,11 +84,11 @@ given day, reproduce it exactly from recorded bars, and find the numbers agree.
 
 | Not here | Owned by |
 |---|---|
-| The Component IR language (`app/ir/`), RFC 0001, the resolver/runtime/editor, IR strategy parity | **WS-01 Strategy OS.** WS-02 owns the *adoption* decision only, and it is blocked (§8). |
+| The Component IR language (`app/ir/`), RFC 0001, the resolver/runtime/editor, IR strategy parity | **WS-01 Component IR.** WS-02 owns the *adoption* decision only, and it is blocked (§8). |
 | DB models, sessions, Alembic revisions, `runtime_config` storage mechanics, retention | **WS-07 Infrastructure.** WS-02 declares which columns the money record needs; WS-07 owns how they are stored and migrated. |
 | `scripts/deploy.sh`, the VPS, systemd, running `curl /api/health` against the box, droplet resize, OS reboot | **WS-06 Deployment.** WS-02 supplies the acceptance commands; WS-06 runs the deploy and measures the box. |
 | The research plane (`research/`), DSR/PBO/N_eff, strategy generation, the search loop | **WS-03 Research.** The isolation rule is a WS-02 safety invariant, but the plane itself is not ours. |
-| Frontend, cockpit, Settings UI, journal UI | **WS-05 UI.** |
+| Frontend, cockpit, Settings UI, journal UI | **WS-08 Cockpit UI.** |
 
 ## 3. Interfaces
 
@@ -97,6 +97,7 @@ change without notice.
 
 | Export | Guarantee |
 |---|---|
+| `app/strategy/registry/expanding_z_v4.py` — `zscore`, `adaptive_threshold`, `drift_score`, `range_in_atr`, `impulse`, `directional_entry`, `displacement_lost` | The seven pure steps `compute()` is built from, extracted 2026-08-02 so WS-01's IR kernels compose the same implementation rather than a second copy. **Their signatures are stable**: WS-01's bar-for-bar parity test binds to them, and changing one breaks it by design. That is the guarantee, and it is the reason they are exported rather than private. |
 | `app/strategy/registry/base.py::Strategy` + `CANONICAL_COLUMNS` | A strategy turns a candle DataFrame into **exactly four mandatory boolean columns** — `longEntry`, `shortEntry`, `longExit`, `shortExit`. Extra indicator columns are permitted and consumed by chart payloads; the four are enforced by `signals()`, which raises if any is missing. Direction/stop/target/sizing are **not** the strategy's job — the engine owns the risk layer. Auto-discovery is by module-level `STRATEGY`; default is `trend_impulse_v3`. |
 | `app/strategy/registry/base.py::Strategy.version` / `pin_version` | Immutable content address (sha256 over key, code or composition, default params, risk model) from `app/strategy/identity.py`. Deterministic across processes and `PYTHONHASHSEED`. `display_name` is deliberately excluded — a rename must not mint a new artifact. |
 | `app/strategy/identity.py::resolve_strategy(key)` | **Fail-closed** — raises `StrategyNotFound`. `get_strategy()` keeps a fail-open fallback for the legacy per-instrument path but logs (rate-limited) when it substitutes. `resolve_deployment_strategy` is fail-closed by design. |
@@ -107,7 +108,6 @@ change without notice.
 | `app/engine/decision_kernel.py::decide_exit` / `ExitPolicy` / `ExitDecision` | The single pure exit decision shared by live options, live equity and the backtester. Levels are `None`-means-unset — never a `±inf` sentinel whose meaning flips with direction. Any deliberate divergence must be declared via `ExitPolicy.no_protective_band(note=...)` and is reported by `divergences()`. |
 | `app/engine/risk_controls.py` (pure predicates) | Side-effect-free gate functions: `slots_available`, `in_reentry_cooldown`, `over_per_trade_cap`, `expiry_too_close`, `signal_already_evaluated`, `signal_too_old`, `before_entry_window`, `gap_halt_active`, `outside_trading_session`, `daily_loss_halt`, `round_trip_cap_reached`, `daily_profit_lock`. Pure in, pure out — testable without an engine. |
 | `app/engine/event_risk.py` | The scheduled-event blackout table (EIA gas Thu / crude Wed with US DST, NIFTY Tue, SENSEX Thu, BANKNIFTY Wed, bullion options into expiry, stock earnings). **One rule table shared by engine, backtester and `/api/event-risk`** — do not add a second. |
-| `app/engine/readiness.py::evaluate` / `lane_state` / `Thresholds` | Pure readiness verdict logic behind `/api/health`. Budgets are static `Settings` (`health_risk_stale_seconds`, `health_signal_stale_seconds`, `health_startup_grace_seconds`), deliberately **not** `runtime_config`-overridable so no DB row can silence a safety probe. |
 | `app/providers/base.py::MarketDataProvider` | The data seam. New optional methods must be **concrete with a safe default** (`get_futures_ltp` returns `None`), never abstract — an accidental abstract method broke provider construction in nine tests at once, and there is now a test pinning that. `None` means "I cannot price this"; the caller must refuse, never fall back to spot. |
 | `app/engine/broker_protocol.py::Broker` / `ExecutionVenue` | Domain verbs and 11 wire verbs, failure semantics declared rather than inherited. `kite_venue.py` is the only place `MIS`/`NRML`/GTT/SL-M are spelled. |
 | `scripts/dryrun.py`, `scripts/backtest_smoke.py`, `scripts/exit_sweep.py` | The headless acceptance proofs (§6). Both force the mock provider — no Kite, no network. |
@@ -122,13 +122,14 @@ change without notice.
 | `scripts/deploy.sh` and the box | WS-06 Deployment | Nothing in this workstream reaches production any other way. |
 | The strategy registry, read-only, via `research/evaluation/kernels.py` | WS-03 Research (reverse direction) | WS-03 consumes *our* exports; `research/guards.py` forbids it importing broker/runner/db.session. Keep that fail-closed. |
 
-**Depends on:** WS-07 (persistence, config), WS-06 (deploy path, build stamp)
+**Depends on:** WS-07 (persistence, config). *Not* WS-06 — deployment is downstream of this
+workstream, and "depends on" here means "consumes an export", not "cannot ship without".
 **Blocked by:** owner acknowledgement for the architecture migration deploy (WS-06 cannot run
 it without that); owner acknowledgement for IR runtime adoption (WS-01 supplies the runtime,
 the live-path change is ours); owner time for the five-session no-touch exit trial. See §8.
 **Currently blocking:** WS-01 (production adoption of the IR runtime lands in *our* engine
 paths); WS-03 (the strategy registry contract and backtest kernels it evaluates against);
-WS-05 (cockpit numbers, `ledger_drift`, health payload shapes).
+WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ## 4. Completed
 
@@ -138,8 +139,9 @@ Verified and committed work, newest first. Dates and SHAs are from `docs/ROADMAP
 **Architecture migration, phases A–H — `cc53bba`, 2026-08-02. Committed and verified.
 NOT DEPLOYED (§8).** Eight additive phases, every one leaving existing behaviour
 byte-identical and carrying a test that *asserts* that equivalence rather than claiming it.
-Working record: `docs/2026-08-02-architecture-migration.md` (note: that file's opening line
-"Nothing in this migration is committed" is stale — it was written before `cc53bba`).
+Working record: `docs/reports/2026-08-02-architecture-migration.md` — frozen, and carrying a
+stale-claim header since 2026-08-03: its opening line "Nothing in this migration is committed"
+was written before `cc53bba` and is false.
 Phases relevant to this workstream:
 - **Phase G — execution parity.** `engine/decision_kernel.py`: one pure exit decision for
   live, replay and backtest. Three implementations existed and had never been compared —
@@ -160,7 +162,7 @@ Phases relevant to this workstream:
   one from the paper simulator. Proven red by renaming `ensure_stop_protection`. **What it
   immediately found — a real latent defect:** `LiveBroker` inherits
   `open_futures_position`/`close_futures_position` from the **simulator**, and
-  `runner.py:1398` calls them; in live mode that would book a futures position into the
+  `runner.py:1411` calls them; in live mode that would book a futures position into the
   ledger with **no order behind it and no exchange stop**. Unreachable today only because
   `index_futures_enabled` defaults to `False` with no production override. Both facts are now
   pinned: declared in `KNOWN_UNIMPLEMENTED_VENUE_METHODS` (bidirectional — drift either way
@@ -181,7 +183,7 @@ Phases relevant to this workstream:
   misattributed write is a reporting error, a missed read is a position nobody exits.
 
 **Kill-switch defect found and fixed — `e273d54`, 2026-08-02.**
-`docs/2026-08-02-execution-determinism-audit.md`. `kill()` ran `cancel_working_entries()`
+`docs/reports/2026-08-02-execution-determinism-audit.md`. `kill()` ran `cancel_working_entries()`
 between the disarm and the square-off with no isolation; a throwing broker call at exactly
 the moment things are going wrong propagated to the API route and **the square-off never
 ran**, leaving the operator believing they had stopped the bot while positions stayed open.
@@ -194,7 +196,7 @@ position, and the ledger still reconciles afterwards) and arm/disarm asymmetry a
 *properties*, both of which held but had no test.
 
 **Backtester audit — `c7e5217`, 2026-08-01, deployed.**
-`docs/2026-08-01-backtester-audit.md`, all ten Phase-1 dimensions with verdicts cited to file
+`docs/reports/2026-08-01-backtester-audit.md`, all ten Phase-1 dimensions with verdicts cited to file
 and line. Came out well: **no look-ahead** (next-bar-open fills, exit decisions start the bar
 after the fill, every strategy shift backward, no `shift(-1)`/`center=True`/backfill
 anywhere), full direction-aware charge stack on both legs, statistics that label their own
@@ -221,7 +223,7 @@ evidence either way.** Verification still outstanding: next trading session, aft
 Kite, `ledger_drift` should appear in `/api/status` and sit near zero.
 
 **Exit sweep and give-back retune — `eafd7bc`, 2026-08-01.**
-`docs/2026-08-01-exit-sweep.md`, Workstream C P2. `scripts/exit_sweep.py` replays real trades
+`docs/reports/2026-08-01-exit-sweep.md`, Workstream C P2. `scripts/exit_sweep.py` replays real trades
 against candidate parameters off MFE/MAE telemetry. **The answer: the target was
 UNREACHABLE** — the largest favourable excursion ever recorded is 1.216% of notional against
 a 1.5% target, so zero `TARGET` exits was *structural, not tuning*. The give-back lock is the
@@ -429,7 +431,7 @@ last clause first: **nothing in this workstream deploys without owner acknowledg
       rollovers, never hold to delivery** (owner, 2026-07-24).
 - [ ] **Close the `LiveBroker` futures-venue gap.** `open_futures_position` /
       `close_futures_position` are inherited from the paper simulator and called at
-      `runner.py:1398`; in live mode that books a position with no order and no exchange
+      `runner.py:1411`; in live mode that books a position with no order and no exchange
       stop. Declared and guarded, not fixed.
 - [ ] **Wire `KiteVenue` into the live path.** It is a checked translation table today and
       says so in its own docstring. Rewiring every protective-stop call site sits behind
@@ -526,8 +528,9 @@ sizing, exits and order routing, so the live-money rule stops it regardless of t
 *Cost of leaving it:* every subsequent WS-02 change is written against a code shape the box
 does not run, and the divergence grows with each session. *Trigger:* owner acknowledgement,
 then WS-06 runs `scripts/deploy.sh` in a market-closed window. Note also that
-`docs/2026-08-02-architecture-migration.md` still opens with "Nothing in this migration is
-committed", which was true when written and is now stale — correct it when the deploy lands.
+`docs/reports/2026-08-02-architecture-migration.md` still opens with "Nothing in this migration is
+committed", which was true when written and is now false. That report is frozen; a stale-claim
+header was prepended 2026-08-03 rather than editing the body.
 
 **The ten `runtime_config` overrides that differ from code defaults are deliberate owner
 decisions. They are not drift and they are not a defect list. Do not "reconcile" them.** They

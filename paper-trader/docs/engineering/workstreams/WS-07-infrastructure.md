@@ -94,7 +94,9 @@ WS-08 consume it, not the reverse. (An earlier draft declared a dependency on WS
 that calls into all of this"; that is a *consumer*, and declaring it as a dependency would put a
 cycle in the graph.)
 **Blocked by:** nothing inside this workstream. The 1 GB droplet constraint is WS-06 §8 and shapes decisions here but does not block them.
-**Currently blocking:** nothing. Retention, session hygiene, feed validation, replay and the migration framework are all landed.
+**Currently blocking:** WS-03's sector seeding of the nightly plan, which needs sector metadata on
+`Instrument` as data rather than prose (WS-03 §8). Nothing else — retention, session hygiene, feed
+validation, replay and the migration framework are all landed.
 
 ## 4. Completed
 

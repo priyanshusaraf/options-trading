@@ -75,8 +75,11 @@ document is incomplete — that is a defect to fix, not a reason to read the who
 The dependency graph in `DEPENDENCIES.md` produces this order. It is a consequence of the
 declared edges, not a preference:
 
-1. **WS-01 Component IR** — foundation. Complete as a language; every RFC clause enforced.
-   Only WS-01 can unblock WS-04 and WS-05, and it already has.
+1. **WS-01 Component IR** — foundation. Every RFC clause has an enforcement point, which is
+   not the same as "fully checked": F7 and F8 are only checked when a component library is
+   supplied and are reported *unchecked* otherwise, and F14 is enforced by the experiment
+   system rather than the artefact validator. WS-01's own §5 and §7 are the authority on what
+   remains. Only WS-01 could unblock WS-04 and WS-05, and it already has.
 2. **WS-03 Research Plane** — the largest consumer of WS-01, and unblocked. Currently the
    highest-value active stream.
 3. **WS-07 Infrastructure** — substrate; work here is triggered by the others' needs.
@@ -110,8 +113,24 @@ the other's, and the second workstream's agent will not know it happened.
 | `app/market_data/candles.py` | **WS-07** | It is the data seam, and WS-07 built its validation. WS-02 consumes it — and holds the two thin aliases (`runner._to_df`, `backtest._candles_to_df`) that were once byte-identical copies, so WS-02's document names the re-fork risk even though it does not own the file |
 | `app/engine/readiness.py` | **WS-06** | The verdict logic *is* the probe contract `deploy.sh` polls. Carved out of WS-02's `app/engine/` |
 | `app/providers/replay.py` | **WS-07** | Deterministic replay is a data-plane capability, not an execution one. Carved out of WS-02's `app/providers/` |
+| `app/api/` | **WS-02** | It had no owner at all, while three workstreams consumed routes from it — so nobody owed the REST payload shapes a guarantee. The public surface of the execution plane is an execution concern |
+| `app/engine/readiness.py` **and its exports** | **WS-06** | Previously WS-06 owned the file while WS-02 also exported its symbols. WS-06 owns both. WS-02 owns the `/api/health` *route*, WS-06 specifies what it must report, because `deploy.sh` polls it |
 
-## 7. Open coordination items
+## 7. What "Depends on" means
+
+**Consumes an export.** Not "cannot ship without". Under the looser reading the graph had three
+cycles (WS-02↔WS-06, WS-08↔WS-06, and WS-01→WS-02 against the pending adoption edge) and
+`DEPENDENCIES.md`'s roots-and-sink statement was simply wrong. WS-02 and WS-08 no longer declare
+WS-06: deployment is downstream of them and consumes their output.
+
+One consequence is worth stating rather than discovering later. **WS-01 consumes from WS-02**
+today — its reference artefact composes the seven pure functions extracted out of
+`expanding_z_v4`. The pending adoption edge points the other way, WS-01 → WS-02. Both at once
+would be a cycle. So adoption must either invert that dependency or the reference artefact must
+stop reaching into WS-02, and whichever it is should be decided *before* adoption starts, not
+during it.
+
+## 8. Open coordination items
 
 | Item | Between | State |
 |---|---|---|
@@ -120,7 +139,7 @@ the other's, and the second workstream's agent will not know it happened.
 | Does a display-name change mint a new body address? | WS-01 | Open question, pinned by a test. Resolving it is an RFC amendment |
 | Narrow per-block declared inputs | WS-03 → WS-01 | WS-03's derived components declare the whole OHLCV frame |
 
-## 8. Health checks for this layer
+## 9. Health checks for this layer
 
 Run when the structure feels wrong, and after any interface change:
 

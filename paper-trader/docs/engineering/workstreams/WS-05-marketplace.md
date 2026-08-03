@@ -91,7 +91,12 @@ start; a transport without a sandbox is the fastest available way to lose the ac
 | `validate(graph)` and the `Violation` type (`app/ir/validate.py`) | WS-01 | An arriving artefact is validated by the same validator a locally authored one is. No second validator. |
 | `content_address()` (`app/ir/hashing.py`) | WS-01 | Integrity of a package body is the content address that F2 already assigns it. Do not invent a second digest scheme. |
 | `resolve()` / `Library` (`app/ir/resolve.py`) | WS-01 | A marketplace component is a `Library` entry. That is the entire integration point, by design. |
-| The AST allow-list + no-builtins exec pattern (`backend/research/strategy/builder/validate.py`, `load.py`) | WS-03 | Prior art to copy, not to import. `compile_composition` emits source, validates against an allow-list, then `exec`s it in a namespace containing only the vetted block callables and an **empty** `__builtins__` — so generated code cannot import, open files, call `eval`, or reach any name outside the grammar even if validation missed something. RFC Appendix C(f): this is stronger than anything in the nine systems studied, none of which sandbox user code at all. |
+
+> **On the AST allow-list.** WS-03 owns `research/strategy/builder/validate.py` and `load.py`
+> and deliberately exports neither. This workstream treats them as **prior art, not an import** —
+> the sandbox a marketplace needs constrains a *kernel*, which is the kernel registry's concern
+> (RFC Appendix C(f)), and copying a proven design is not a dependency. If it ever becomes one,
+> WS-03 must declare the export first.
 
 **Depends on:** WS-01 (registry seam, validator, hashing, resolver), WS-03 (the sandboxing
 prior art), WS-07 (any OS-level isolation primitive the policy ends up needing).
@@ -193,8 +198,9 @@ Plus, specific to this workstream and non-negotiable:
   it did not author, on a box holding a live broker session and real money. That is a risk
   decision, not an engineering one, and the answer may legitimately be no forever — in which
   case this document's value is the boundary it records, not the software it describes.
-- **RFC 0001 has not passed its acceptance gate**, so C13 and C15 — the two clauses this
-  workstream is built entirely around — are proposed rather than ratified.
+- **RFC 0001 is accepted** (Gates 1–3 recorded 2026-08-02, `97d6bbb`), so C13 and C15 — the two
+  clauses this workstream is built entirely around — are ratified; an amendment to either is an
+  RFC §6 matter, not a marketplace decision.
 
 ## 9. Future work
 

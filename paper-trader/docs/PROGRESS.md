@@ -98,7 +98,7 @@ marketplace · production adoption.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q      # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,597 collected
+PYTEST EXIT: 0 · 0 FAILED/ERROR · 2,612 collected
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -134,4 +134,5 @@ whatever that workstream declares under *Depends on*. Nothing else.
 | `ROADMAP.md` | cross-workstream order and owner blockers only |
 | `CONTINUE.md` | session handoff: last verified commit, acceptance run, next action |
 | `rfcs/0001-component-ir.md` | the constitution |
+| `reports/` | point-in-time audits and reviews, indexed in `reports/README.md`. Five are flagged as containing stale claims — read the header before acting on one |
 | `../CLAUDE.md` | how to work in this repo; live-money invariants |

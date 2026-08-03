@@ -139,9 +139,10 @@ engine (§8).
 **Depends on:** WS-02 only for the strategy functions named above, and only in the reference
 artefact and its test.
 **Blocked by:** nothing, for the items in §5. The final adoption step is blocked — see §8.
-**Currently blocking:** WS-04 Editor (has no other source of graph read/write); WS-03 Research
-Plane (its block components, proposer, and the not-yet-done F14 binding of research runs all sit
-on these exports).
+**Currently blocking:** WS-03 Research Plane (its block components, proposer, and the not-yet-done
+F14 binding of research runs all sit on these exports; WS-03 §8 names `app/ir/experiment.py` as
+WS-01's to change). WS-04 Editor consumes `view.py`/`edit.py` and has no other source of graph
+read/write, but declares itself unblocked — the exports it needs already exist.
 
 ## 4. Completed
 

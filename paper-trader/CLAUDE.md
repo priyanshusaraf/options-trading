@@ -128,7 +128,7 @@ cp .env.example .env                          # set PT_PROVIDER, KITE_API_KEY, K
 npm install
 npm run dev          # :5173, proxies /api + /ws to :8090
 npm run typecheck    # tsc --noEmit
-npm test             # vitest — 116 tests (settings docs, journal walkthrough, ledger domain)
+npm test             # vitest — 143 tests (settings docs, journal walkthrough, ledger domain)
 npm run build
 ```
 

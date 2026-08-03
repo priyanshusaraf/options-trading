@@ -196,13 +196,13 @@ Plus, specific to this workstream:
 ## 8. Blockers
 
 - **A deliberate decision, not an oversight: the IR is not wired into the running application.**
-  There is no route and no React. This is the constitutional position — RFC 0001 has not passed
-  its acceptance gate, and wiring an unaccepted language into a production trading app would
-  create exactly the shape this codebase has already been burned by (a mechanism that exists,
+  There is no route and no React. This is the constitutional position — adoption in a running
+  path is RFC 0001 Appendix C(d) and owner-blocked, and wiring the language into a production
+  trading app ahead of that would create exactly the shape this codebase has already been burned by (a mechanism that exists,
   looks live, and is load-bearing before anyone agreed it should be). The first roadmap item is
   the moment that changes, and it needs an owner decision, not an implementation.
-- **RFC 0001 acceptance is pending the owner.** Until then the grammar the editor edits can still
-  move.
+- **RFC 0001 is accepted** (2026-08-02, `97d6bbb`); the grammar the editor edits now moves only by
+  amendment under RFC §6, not freely.
 
 ## 9. Future work
 

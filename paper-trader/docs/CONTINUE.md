@@ -25,10 +25,10 @@ and one script. The engine still calls `compute()`.
 
 ## 2. Last verified commit
 
-`daacb66` — the workstream reorganisation (documentation only).
+`` — the F14 run binding. Preceded by `1f0dade` (report triage), `daacb66` (the
+workstream reorganisation) and `cdbe686` (the comment trim).
 
-Code last verified at `cdbe686` (the comment trim), which is the commit the acceptance run in
-§3 was produced against. Preceded by `15125b6` (structure proposer + F8's converse), `0dd7a4d`
+Preceded by `15125b6` (structure proposer + F8's converse), `0dd7a4d`
 (block library as IR components), `c234e70` (Python authoring + the flake fix), `baef1c2` (F14),
 `dec854b`/`49e9ded` (editor plane), `df0bf6c` (runtime), `126c9cf` (resolver).
 
@@ -41,7 +41,7 @@ the only answer — never read it off a document.
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q     # from backend/
-PYTEST EXIT: 0 · 0 FAILED/ERROR (grepped, both FAILED and ERROR) · 2,597 collected
+PYTEST EXIT: 0 · 0 FAILED/ERROR (grepped, both FAILED and ERROR) · 2,612 collected
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK ✓ · EXIT 0
@@ -65,17 +65,20 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**Two verification agents are mid-flight on the reorganisation** — one auditing cross-document
-consistency (interface pairing, ownership collisions, contradictions of fact), one triaging the
-loose reports in `docs/` into `docs/reports/` with stale-claim headers. Land their output first;
-neither changes code.
+**WS-03 Research Plane — the search loop.** F14 binding landed 2026-08-03
+(`research/strategy/builder/ir_search.py`): every explored graph is validated, resolved,
+evaluated and recorded with a binding derived from its own `ResolvedGraph`. Now an objective can
+be added on top, and only now — a run recorded without a binding is permanently unattributable.
 
-Then the implementation queue, in the owner's order:
+Two things the binding work turned up, both in WS-03 §5:
+`ExperimentRecord.binding` covers identities, versions and the data digest but **no edges**; it
+survives a `rewire` only because `ResolvedNode.cache_id` folds in upstream cache ids. F14's
+wiring sensitivity is a property of *resolution*, not of the record. Setting any component's
+`cache_identity` to `"declared"` breaks that, and whoever does it should know.
 
-1. **WS-03 Research Plane** — bind every run through `app/ir/experiment.py` (F14) **before**
-   adding a search objective. F14 is retrospective and this platform has paid the retrofit price
-   once: every research finding before 2026-08 is unusable as a baseline. Then the search loop.
-2. **WS-08 Cockpit UI** — typography and palette.
+Then, in the owner's order:
+
+1. **WS-08 Cockpit UI** — typography and palette.
 3. **WS-04 Editor** — read-only graph rendering in the app. The libraries exist and are tested;
    there is no route and no React yet, which is the first thing that would make the IR part of
    the running application.

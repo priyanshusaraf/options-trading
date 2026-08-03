@@ -77,7 +77,9 @@ No prose in any document is evidence of what is running.
 
 **Depends on:** WS-02 (heartbeats, the suites that gate a deploy), WS-07 (DB reachability check, feed quality), WS-08 (SPA build)
 **Blocked by:** owner actions — VPS OS reboot and the 1 GB → 2 GB resize (§8). Also blocked, for the *next* production deploy, by WS-02's eight-phase architecture migration awaiting owner acknowledgement (§8).
-**Currently blocking:** WS-02 and WS-01 — anything they build is local until a deploy is authorised. Nothing on branch `feat/exec-completeness` is on the box.
+**Currently blocking:** nothing of its own — anything WS-02 and WS-01 build stays local until the
+owner authorises a deploy, and both record that blocker as the owner's, not this workstream's
+(WS-02 §8.1-2, WS-01 §8). Nothing committed since `4e9f125` (2026-08-01) is on the box.
 
 ## 4. Completed
 
@@ -243,9 +245,11 @@ curl -sS -o /dev/null -w '%{http_code}' http://localhost:8090/   # must be 200
    and the next production deploy. Green tests do not authorise it; the live-money rule does.
    Same standing applies to adopting the IR runtime in a live path (**WS-01**, RFC 0001
    Appendix C(d)).
-4. **Nothing on `feat/exec-completeness` is deployed.** As of 2026-08-03 the branch is 77
-   commits ahead of `main` and not pushed. The VPS build was not measured this session — the
-   only answer is `curl localhost:8090/api/health`, never a doc.
+4. **Nothing committed since 2026-08-01 is deployed.** `4e9f125` — on this branch — went to the
+   box on 2026-08-01 (§4); everything after it, including the Alembic baseline and the
+   architecture migration, is local. As of 2026-08-03 the branch is **80** commits ahead of
+   `main` (`git rev-list --count main..HEAD` → 80) and not pushed. The VPS build was not
+   measured this session — the only answer is `curl localhost:8090/api/health`, never a doc.
 
 ## 9. Future work
 

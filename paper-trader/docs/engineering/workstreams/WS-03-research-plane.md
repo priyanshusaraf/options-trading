@@ -100,8 +100,8 @@ finding that is not bound to what produced it.
 |---|---|---|
 | The Component IR **language** — schema, validate, resolve, edit, hashing, runtime, `experiment.py` | **WS-01 (Component IR)**, `backend/app/ir/`, RFC `docs/rfcs/0001-component-ir.md` | WS-03 *consumes* it. `ir_components.py` uses `app.ir.authoring`; `propose.py` routes every mutation through `app.ir.edit` and owns **no** opinion about the format (a second implementation of §3 is the defect C12 exists to prevent; a test greps for one). |
 | Anything that **moves capital** — engine, broker, sizing, exits, orders, the live ledger | **WS-02 (Execution)** | Structural, fail-closed boundary. See the isolation rule above. Research proposes; a human commits a strategy file into `app/strategy/registry/` and re-arms. |
-| The database — schema, migrations, retention, storage budget | **WS-07 (Data & DB)** | `research.db` has its own `Base` (`research/domain/base.py`) and is deliberately not the execution schema, but DB *policy* is WS-07's. |
-| The approval **UI** / research cockpit screens | UI workstream | The read-only bridge already exposes the promotion queue; no React route renders it. |
+| The database — schema, migrations, retention, storage budget | **WS-07 (Infrastructure & Persistence)** | `research.db` has its own `Base` (`research/domain/base.py`) and is deliberately not the execution schema, but DB *policy* is WS-07's. |
+| The approval **UI** / research cockpit screens | **WS-08 (Cockpit UI)** | The read-only bridge already exposes the promotion queue; no React route renders it. |
 | Auto-deploying an approved strategy to production Python | **Parked by the owner.** | Composition *generation* stays core; the UI→deployed-Python auto-bridge is deprioritised. Approved strategies are hand-coded into `app/strategy/registry/`. |
 
 ## 3. Interfaces
@@ -417,6 +417,32 @@ hash, the watchlist-eligibility rule and the permanent commodity sandbox
 that shaped it: `docs/research/ARCHITECTURE.md`.
 
 ## 5. Active roadmap
+
+- [x] **Every run binds to what produced it (F14) — DONE 2026-08-03.**
+      `research/strategy/builder/ir_search.py` + `research_tests/test_ir_search.py`, 15 tests.
+      `explore()` walks `propose.lineage()` and, for the seed graph and every proposal,
+      validates → resolves → evaluates → `experiment.record()`. The binding is derived from
+      *that step's* `ResolvedGraph`; nothing is passed in. Deterministic — one seed threaded
+      through, no RNG, clock or uuid in the module.
+      - Built **before** any search objective, deliberately: a run recorded without a binding is
+        permanently unattributable, and this repository already owns a corpus with that defect.
+      - Seven suppressions, each with its mutation target asserted present first, each turning
+        its own test red: the legality check, pairing a record with the wrong step's graph,
+        dropping the inputs from the digest, ignoring the seed, a constant experiment id,
+        dropping the observation, and planting a `SHARPE_FLOOR` (C14 guard).
+      - *Named `ir_search.py`, not `search.py`.* `search.py` already exists and is Generation 1's
+        live composition sampler, imported by `orchestrator/generate.py` and six test modules.
+        Overwriting it would have deleted the generator the nightly runs on.
+      - **Two findings worth carrying.** A lineage returns to earlier structures (add a
+        predicate, drop it again), so bindings are *not* all-distinct across a walk — that is the
+        address being correct rather than colliding, and the test asserts the converse (one
+        binding never covers two different graphs) over a canonical node/edge form, because
+        `edit.py` leaves edge *list order* differing between otherwise identical graphs. And
+        `ExperimentRecord.binding` covers identities, versions and the data digest but **no
+        edges** — it survives a `rewire` only because `ResolvedNode.cache_id` folds in upstream
+        cache ids. F14's wiring sensitivity is therefore a property of *resolution*, not of the
+        record shape. Anyone setting a component's `cache_identity` to `"declared"` breaks that
+        transitivity and should know it.
 
 - [ ] **Bind every research run through `app/ir/experiment.py` (F14).** *This comes before a
       search objective, and the ordering is not stylistic.* F14 requires every experiment and

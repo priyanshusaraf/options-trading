@@ -3,7 +3,7 @@
 The inter-workstream graph, derived from what each workstream declares in its §3. If an edge
 here is not declared in both documents, one of the three is wrong.
 
-Maintained by the executive layer. See [`EXECUTIVE.md`](EXECUTIVE.md) §7 for the checks.
+Maintained by the executive layer. See [`EXECUTIVE.md`](EXECUTIVE.md) §9 for the checks.
 
 ---
 
@@ -33,12 +33,22 @@ graph TD
   WS07 --> WS06
   WS08 --> WS06
   WS08 -.future shell.-> WS04
+  WS02 --> WS01
+  WS07 -.when it starts.-> WS04
+  WS07 -.when it starts.-> WS05
+  WS03 -.when it starts.-> WS05
 
   classDef blocked stroke-dasharray: 5 5
 ```
 
-An arrow means *the target consumes from the source*. Acyclic: WS-01 and WS-07 are roots,
-WS-06 is a sink.
+An arrow means *the target consumes from the source* — see
+[`EXECUTIVE.md`](EXECUTIVE.md) §7 for why that is the definition. Dashed edges are declared but
+not yet live.
+
+**Acyclic today**, and one edge away from not being. WS-01 consumes from WS-02 (its reference
+artefact composes the seven pure functions extracted out of `expanding_z_v4`), while the pending
+adoption edge points WS-01 → WS-02. Both at once is a cycle. Decide which direction survives
+before adoption starts.
 
 ## 2. Edges, and what actually crosses them
 
@@ -52,11 +62,15 @@ WS-06 is a sink.
 | WS-02 | WS-08 | the REST + WS API, the money record |
 | WS-07 | WS-02, WS-03, WS-08 | DB, sessions, `Settings`/`runtime_config`, the WS hub, test isolation |
 | WS-02, WS-07, WS-08 | WS-06 | what gets deployed, and what `/api/health` reports |
-| WS-08 | WS-04 | the app shell the editor will live in — a future edge, declared now so it is not discovered late |
+| WS-08 | WS-04 | the app shell the editor will live in — future, declared now so it is not discovered late |
+| WS-02 | WS-01 | the seven pure `expanding_z_v4` steps the reference artefact's kernels compose. Live today, and the edge that makes adoption a cycle risk |
+| WS-07 | WS-04, WS-05 | future — persistence for stored layouts and for a package store |
+| WS-03 | WS-05 | future — the AST allow-list as prior art, *not* an import (WS-05 §3) |
 
 ## 3. Roots and sinks
 
-**Roots** (depend on nothing internal): WS-01, WS-07.
+**Roots** (depend on nothing internal): WS-07 only. WS-01 was a root until its reference
+artefact began composing WS-02's extracted functions; that is the edge above.
 Changing an export in either is the most expensive kind of change here — check both before
 touching them.
 

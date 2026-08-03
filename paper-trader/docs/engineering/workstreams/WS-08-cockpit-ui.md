@@ -93,10 +93,10 @@ numbers were made correct first.
 | `/ws` broadcast | WS-07 (`app/ws/manager.py`) | Live engine state. The hub coalesces and bounds its queues; the client must tolerate dropped intermediate frames. |
 | The `dist/` mount and tailnet URL | WS-06 | The app is only reachable because the backend mounts the SPA. A broken mount is invisible from `/api/health` — that is exactly how the `.env` outage hid — so a post-deploy check must curl `/`, not only `/api/health`. |
 
-**Depends on:** WS-02 (REST payloads, readiness semantics, settings), WS-07 (`/ws` hub, the
-FastAPI app), WS-06 (build + serve).
+**Depends on:** WS-02 (REST payloads and the `/api/health` route, settings), WS-06 (the
+`/api/health` *contract*, which WS-06 specifies because `deploy.sh` polls it), WS-07 (`/ws` hub).
 
-**Blocked by:** WS-06/owner, for one item only — the **typography and palette extraction**. The
+**Blocked by:** the owner, for one item only — the **typography and palette extraction**. The
 reference site `ag-website-git-main-match-up.vercel.app` sits behind Vercel deployment
 protection, so the font names and palette values cannot be read without either a browser
 extension with access or the owner simply supplying them. Nothing else is blocked.
