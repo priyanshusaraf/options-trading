@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type {
   ResearchComparison,
+  ResearchFinding,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
@@ -59,13 +60,47 @@ const COMPARISON: ResearchComparison = {
   }],
 }
 
+const FINDINGS: ResearchFinding[] = [{
+  finding_id: 21,
+  statement: 'Initial narrow interpretation',
+  polarity: 'negative',
+  confidence: 0.52,
+  evidence_run_id: 12,
+  superseded_by: 22,
+  status: 'superseded',
+  created_at: '2026-08-03T00:00:00',
+  binding: {
+    run_id: 12,
+    spec_id: 'spec-12',
+    evidence_content_address: 'sha256:evidence-12',
+    graph: RUN.graph,
+  },
+}, {
+  finding_id: 22,
+  statement: 'Revised exact interpretation',
+  polarity: 'positive',
+  confidence: 0.52,
+  evidence_run_id: 12,
+  superseded_by: null,
+  status: 'active',
+  created_at: '2026-08-03T00:01:00',
+  binding: {
+    run_id: 12,
+    spec_id: 'spec-12',
+    evidence_content_address: 'sha256:evidence-12',
+    graph: RUN.graph,
+  },
+}]
+
 describe('ResearchEvidenceSurface', () => {
   it('surfaces persisted rejection, gates, provenance, comparison, and accessible decisions', () => {
     const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
       runs: [RUN, { ...RUN, run_id: 11 }],
       detail: DETAIL,
       comparison: COMPARISON,
+      findings: FINDINGS,
       reason: 'Reviewed evidence',
+      findingStatement: 'A new interpretation',
       onSelect: () => undefined,
       onCompare: () => undefined,
       onReason: () => undefined,
@@ -81,6 +116,13 @@ describe('ResearchEvidenceSurface', () => {
     expect(html).toContain('for="candidate-decision-reason"')
     expect(html).toContain('Approve research candidate')
     expect(html).toContain('Reject research candidate')
+    expect(html).toContain('Initial narrow interpretation')
+    expect(html).toContain('Superseded by finding 22')
+    expect(html).toContain('Revised exact interpretation')
+    expect(html).toContain('sha256:evidence-12')
+    expect(html).toContain('Record an interpretation')
+    expect(html).toContain('Record finding')
+    expect(html).toContain('Revise finding 22')
   })
 
   it('shows the persisted terminal reason without offering another decision', () => {
@@ -130,5 +172,27 @@ describe('ResearchEvidenceSurface', () => {
 
     expect(html).toContain('RESEARCH_VALIDATION_FAILED')
     expect(html).toContain('research validation failed (validation)')
+  })
+
+  it('retains revision intent while showing exact server conflict feedback', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN],
+      detail: DETAIL,
+      comparison: null,
+      findings: FINDINGS,
+      reason: '',
+      findingStatement: 'Keep this revised interpretation',
+      findingPolarity: 'positive',
+      editingFindingId: 22,
+      error: 'finding was already superseded',
+    }))
+
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('finding was already superseded')
+    expect(html).toContain('Keep this revised interpretation')
+    expect(html).toContain('Revise finding 22')
+    expect(html).toContain('Save finding revision')
+    expect(html).toContain('Cancel revision')
+    expect(html).toContain('overflow-x-auto')
   })
 })

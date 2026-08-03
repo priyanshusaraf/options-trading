@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
   compareResearchRuns,
+  createResearchFinding,
   decideResearchCandidate,
   getResearchRun,
+  getResearchFindings,
   getResearchRuns,
+  reviseResearchFinding,
   type ResearchComparison,
+  type ResearchFinding,
   type ResearchRunDetail,
   type ResearchRunSummary,
 } from '../lib/api'
@@ -16,24 +20,42 @@ export function ResearchEvidenceSurface({
   runs,
   detail,
   comparison,
+  findings = [],
   reason,
+  findingStatement = '',
+  findingPolarity = 'negative',
+  editingFindingId = null,
   busy = false,
   error = null,
   onSelect,
   onCompare,
   onReason,
   onDecision,
+  onFindingStatement,
+  onFindingPolarity,
+  onStartRevision,
+  onCancelRevision,
+  onFindingSubmit,
 }: {
   runs: readonly ResearchRunSummary[]
   detail: ResearchRunDetail | null
   comparison: ResearchComparison | null
+  findings?: readonly ResearchFinding[]
   reason: string
+  findingStatement?: string
+  findingPolarity?: 'positive' | 'negative'
+  editingFindingId?: number | null
   busy?: boolean
   error?: string | null
   onSelect?: (runId: number) => void
   onCompare?: (leftRunId: number, rightRunId: number) => void
   onReason?: (reason: string) => void
   onDecision?: (decision: 'approved' | 'rejected') => void
+  onFindingStatement?: (statement: string) => void
+  onFindingPolarity?: (polarity: 'positive' | 'negative') => void
+  onStartRevision?: (finding: ResearchFinding) => void
+  onCancelRevision?: () => void
+  onFindingSubmit?: () => void
 }) {
   const [left, setLeft] = useState<number | null>(runs[0]?.run_id ?? null)
   const [right, setRight] = useState<number | null>(runs[1]?.run_id ?? runs[0]?.run_id ?? null)
@@ -55,6 +77,9 @@ export function ResearchEvidenceSurface({
   const rejected = Array.isArray(results?.rejected) ? results.rejected : []
   const failure = results?.failure
   const candidate = detail?.candidate
+  const selectedFindings = detail
+    ? findings.filter((finding) => finding.evidence_run_id === detail.run_id)
+    : []
 
   return (
     <Card aria-label="Research evidence" className="mb-4 border-sky-700/40">
@@ -140,6 +165,79 @@ export function ResearchEvidenceSurface({
               </details>
             )}
 
+            <section aria-label="Finding history" className="space-y-2 border-t border-edge/50 pt-3">
+              <div className="stat-label">Finding history</div>
+              {selectedFindings.length === 0 && (
+                <p className="text-muted">No persisted interpretations for this run.</p>
+              )}
+              <ol className="space-y-2">
+                {selectedFindings.map((finding) => (
+                  <li key={finding.finding_id} className="rounded border border-edge p-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>Finding {finding.finding_id}</span>
+                      <span className="badge bg-zinc-700/40">{finding.polarity}</span>
+                      <span className="badge bg-zinc-700/40">{finding.status}</span>
+                      <span>confidence {finding.confidence.toFixed(3)}</span>
+                    </div>
+                    <p className="my-1 text-zinc-300">{finding.statement}</p>
+                    <code className="break-all text-[10px] text-muted">
+                      {finding.binding.evidence_content_address}
+                    </code>
+                    {finding.superseded_by !== null && (
+                      <p className="text-muted">Superseded by finding {finding.superseded_by}</p>
+                    )}
+                    {finding.status === 'active' && (
+                      <button className="btn mt-2" onClick={() => onStartRevision?.(finding)}>
+                        Revise finding {finding.finding_id}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {detail.status === 'completed' && detail.evidence_state === 'verified' && (
+                <div className="space-y-2 rounded border border-edge p-2">
+                  <label className="block font-medium" htmlFor="finding-statement">
+                    {editingFindingId === null
+                      ? 'Record an interpretation'
+                      : `Revise finding ${editingFindingId}`}
+                  </label>
+                  <textarea
+                    id="finding-statement"
+                    className="min-h-20 w-full rounded border border-edge bg-panel2 p-2"
+                    maxLength={4000}
+                    value={findingStatement}
+                    onChange={(event) => onFindingStatement?.(event.target.value)}
+                  />
+                  <label>Polarity {' '}
+                    <select
+                      aria-label="Finding polarity"
+                      value={findingPolarity}
+                      onChange={(event) => onFindingPolarity?.(
+                        event.target.value as 'positive' | 'negative',
+                      )}
+                    >
+                      <option value="positive">Positive</option>
+                      <option value="negative">Negative</option>
+                    </select>
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn"
+                      disabled={busy || !findingStatement.trim()}
+                      onClick={onFindingSubmit}
+                    >
+                      {editingFindingId === null ? 'Record finding' : 'Save finding revision'}
+                    </button>
+                    {editingFindingId !== null && (
+                      <button className="btn" disabled={busy} onClick={onCancelRevision}>
+                        Cancel revision
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+
             {candidate?.status === 'pending' && (
               <div className="space-y-2 rounded border border-edge p-2">
                 <label className="block font-medium" htmlFor="candidate-decision-reason">
@@ -214,7 +312,11 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
   const [runs, setRuns] = useState<ResearchRunSummary[]>([])
   const [detail, setDetail] = useState<ResearchRunDetail | null>(null)
   const [comparison, setComparison] = useState<ResearchComparison | null>(null)
+  const [findings, setFindings] = useState<ResearchFinding[]>([])
   const [reason, setReason] = useState('')
+  const [findingStatement, setFindingStatement] = useState('')
+  const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
+  const [editingFindingId, setEditingFindingId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -228,9 +330,12 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
   }
 
   const refresh = async (preferredRunId?: number) => {
-    const response = await getResearchRuns(projectId)
-    setRuns(response.runs)
-    const runId = preferredRunId ?? detail?.run_id ?? response.runs[0]?.run_id
+    const [runResponse, findingResponse] = await Promise.all([
+      getResearchRuns(projectId), getResearchFindings(projectId),
+    ])
+    setRuns(runResponse.runs)
+    setFindings(findingResponse.findings)
+    const runId = preferredRunId ?? detail?.run_id ?? runResponse.runs[0]?.run_id
     if (runId) await loadDetail(runId)
   }
 
@@ -261,16 +366,59 @@ export default function ResearchEvidencePanel({ projectId }: { projectId: string
     } finally { setBusy(false) }
   }
 
+  const startRevision = (finding: ResearchFinding) => {
+    setEditingFindingId(finding.finding_id)
+    setFindingStatement(finding.statement)
+    setFindingPolarity(finding.polarity)
+    setError(null)
+  }
+
+  const cancelRevision = () => {
+    setEditingFindingId(null)
+    setFindingStatement('')
+    setFindingPolarity('negative')
+  }
+
+  const submitFinding = async () => {
+    if (!detail || !findingStatement.trim()) return
+    setBusy(true); setError(null)
+    try {
+      if (editingFindingId === null) {
+        await createResearchFinding(
+          projectId, detail.run_id, findingStatement.trim(), findingPolarity,
+        )
+      } else {
+        await reviseResearchFinding(
+          projectId, editingFindingId, findingStatement.trim(), findingPolarity,
+        )
+      }
+      cancelRevision()
+      const response = await getResearchFindings(projectId)
+      setFindings(response.findings)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Finding request failed')
+    } finally { setBusy(false) }
+  }
+
   return <ResearchEvidenceSurface
     runs={runs}
     detail={detail}
     comparison={comparison}
+    findings={findings}
     reason={reason}
+    findingStatement={findingStatement}
+    findingPolarity={findingPolarity}
+    editingFindingId={editingFindingId}
     busy={busy}
     error={error}
     onSelect={loadDetail}
     onCompare={compare}
     onReason={setReason}
     onDecision={decide}
+    onFindingStatement={setFindingStatement}
+    onFindingPolarity={setFindingPolarity}
+    onStartRevision={startRevision}
+    onCancelRevision={cancelRevision}
+    onFindingSubmit={submitFinding}
   />
 }

@@ -695,6 +695,23 @@ export interface ResearchComparison {
   readonly differences: readonly ResearchComparisonDifference[]
 }
 
+export interface ResearchFinding {
+  readonly finding_id: number
+  readonly statement: string
+  readonly polarity: 'positive' | 'negative'
+  readonly confidence: number
+  readonly evidence_run_id: number
+  readonly superseded_by: number | null
+  readonly status: 'active' | 'superseded'
+  readonly created_at: string | null
+  readonly binding: {
+    readonly run_id: number
+    readonly spec_id: string
+    readonly evidence_content_address: string
+    readonly graph: ResearchRunSummary['graph']
+  }
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -748,6 +765,38 @@ export const decideResearchCandidate = (
   method: 'POST',
   body: JSON.stringify({ expected_status: 'pending', decision, reason }),
 })
+
+export const getResearchFindings = (
+  projectId: string,
+): Promise<{ findings: ResearchFinding[] }> => researchFetch(
+  `${researchPath(projectId)}/findings`,
+)
+
+export const createResearchFinding = (
+  projectId: string,
+  runId: number,
+  statement: string,
+  polarity: 'positive' | 'negative',
+): Promise<ResearchFinding> => researchFetch(
+  `${researchPath(projectId)}/experiments/${runId}/findings`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ statement, polarity }),
+  },
+)
+
+export const reviseResearchFinding = (
+  projectId: string,
+  findingId: number,
+  statement: string,
+  polarity: 'positive' | 'negative',
+): Promise<{ superseded: ResearchFinding; successor: ResearchFinding }> => researchFetch(
+  `${researchPath(projectId)}/findings/${findingId}/revisions`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ expected_superseded_by: null, statement, polarity }),
+  },
+)
 
 // ── Portfolio: promotions (approve→deploy), watchlists, strategy archive ──────
 export interface Promotion {

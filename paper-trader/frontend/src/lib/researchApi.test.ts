@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   compareResearchRuns,
+  createResearchFinding,
   decideResearchCandidate,
   getResearchRun,
+  reviseResearchFinding,
 } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -77,5 +79,38 @@ describe('research evidence transport', () => {
     await expect(
       decideResearchCandidate('project.alpha', 8, 'approved', 'Reviewed'),
     ).rejects.toThrow('candidate is not pending at the expected status')
+  })
+
+  it('submits finding interpretation and revision intent without identity claims', async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ finding_id: 4 }),
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await createResearchFinding('project.alpha', 12, 'Evidence is narrow', 'negative')
+    await reviseResearchFinding('project.alpha', 4, 'Evidence is broader', 'positive')
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      '/api/ir/projects/project.alpha/experiments/12/findings',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ statement: 'Evidence is narrow', polarity: 'negative' }),
+      },
+    )
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      '/api/ir/projects/project.alpha/findings/4/revisions',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_superseded_by: null,
+          statement: 'Evidence is broader',
+          polarity: 'positive',
+        }),
+      },
+    )
   })
 })

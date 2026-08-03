@@ -39,17 +39,17 @@ deployment state, execution, orders, Python input or live IR-runtime adoption.
 
 ## Task 4: Add the accessible finding surface
 
-1. Add typed finding list/create/revise transport that submits interpretation intent only.
-2. Show automated/authored active and superseded history beside the selected run's evidence.
-3. Add accessible statement/polarity creation and active-finding revision controls with exact
+1. [x] Add typed finding list/create/revise transport that submits interpretation intent only.
+2. [x] Show automated/authored active and superseded history beside the selected run's evidence.
+3. [x] Add accessible statement/polarity creation and active-finding revision controls with exact
    server feedback and retained input on failure.
-4. Prove lossless reload, narrow-screen containment and no client binding construction.
+4. [x] Prove lossless reload, narrow-screen containment and no client binding construction.
 
 ## Task 5: Verify, publish and continue
 
-1. Run focused tests during implementation and WS-03/04/07/08 regression at the slice boundary.
-2. Run the complete checkpoint only if implementation changes shared persistence/runtime/safety;
+1. [x] Run focused tests during implementation and WS-03/04/07/08 regression at the slice boundary.
+2. [x] Run the complete checkpoint only if implementation changes shared persistence/runtime/safety;
    otherwise rely on S4.2's immediately preceding full checkpoint plus focused workstream evidence.
-3. Update coordination once, commit deliberately, push, verify exact remote and inspect Actions.
-4. Generate the next bounded checklist from `EXECUTION_PLAN.md` and continue unless an owner-gated
+3. [x] Update coordination once, commit deliberately, push, verify exact remote and inspect Actions.
+4. [x] Generate the next bounded checklist from `EXECUTION_PLAN.md` and continue unless an owner-gated
    production boundary is reached.

@@ -140,6 +140,25 @@ finding that is not bound to what produced it.
 
 Newest first. Dates are the dates the work landed.
 
+### Project-owned findings and immutable interpretation history — S4.3
+
+- ADR 0004 retains the existing `Finding` row and uses `evidence_run_id` as the canonical
+  same-database lineage to immutable ExperimentSpec provenance and verified terminal evidence.
+  Reads derive run/spec/evidence/graph binding from persisted state and call no provider, resolver,
+  evaluator, gate or orchestrator.
+- Closed project-owned list/detail/create routes accept bounded statement and polarity intent only.
+  They reject client ids, hypothesis, confidence, graph/binding/evidence, timestamps and successor
+  claims, and require a completed run with verified terminal evidence.
+- Revision inserts a successor against the same run/hypothesis and compare-and-swaps the original
+  `superseded_by` in one transaction. The original statement, polarity, confidence and evidence run
+  never change. Stale and injected post-insert failures leave no orphan successor.
+- The research evidence panel shows automated and authored findings, active/superseded state,
+  exact evidence address and accessible create/revision controls. Conflict feedback retains the
+  user's statement and polarity.
+- The 570-test WS-03/API regression completed with 6 skips; all 204 frontend tests, typecheck and
+  build pass. No schema, execution, deployment or safety boundary changed after S4.2's full
+  checkpoint.
+
 ### Verified evidence, comparison and candidate decisions — S4.2
 
 - `ExperimentRun.checkpoint_json` now stores a bounded canonical envelope whose address is derived

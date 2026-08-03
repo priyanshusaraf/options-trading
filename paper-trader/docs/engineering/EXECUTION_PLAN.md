@@ -18,10 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.3 project-owned findings and decision history
-- **Next product checkpoint:** a user can record and revise an interpretation of verified run
-  evidence, then reload its complete finding and candidate-decision history without entering
-  execution.
+- **Current slice:** S4.4 research operations observability
+- **Next product checkpoint:** a user can see whether scheduled research collection and execution
+  ran, what bounded plan/data identity it used, and why it failed without reading process logs.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -82,7 +81,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | done — canonical equivalence and fresh-connection reload proved |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | done — exact immutable provenance and closed start API verified |
 | S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate decisions | S4.1 | done — verified and publication pending in the slice commit |
-| S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | active — bounded checklist generated |
+| S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | done — verified and publication pending in the slice commit |
+| S4.4 | Make bounded research operations and failures observable | S4.3 | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -415,16 +415,41 @@ checkpoint passed 2,856 tests plus 6 skips, all 202 frontend tests, typecheck, p
 
 **S4.3 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile the existing `Finding` lifecycle with graph-owned runs, terminal evidence and ADR
+1. [x] Reconcile the existing `Finding` lifecycle with graph-owned runs, terminal evidence and ADR
        0001; record a narrow test-first design without creating a parallel knowledge ledger.
-2. [ ] Add closed project-owned finding reads and creation from a verified terminal run; accept
+2. [x] Add closed project-owned finding reads and creation from a verified terminal run; accept
        interpretation intent only and derive all run/graph/evidence identity on the server.
-3. [ ] Implement revision by immutable successor plus `superseded_by`, preserving the original
+3. [x] Implement revision by immutable successor plus `superseded_by`, preserving the original
        finding and rejecting cross-project, legacy, running, corrupt and stale revision requests.
-4. [ ] Surface active and superseded finding history accessibly beside experiment and candidate
+4. [x] Surface active and superseded finding history accessibly beside experiment and candidate
        evidence, with lossless reload and no evidence recomputation or client identity claims.
-5. [ ] Run focused and WS-03/04/07/08 regressions, update coordination once, commit/push, inspect
+5. [x] Run focused and WS-03/04/07/08 regressions, update coordination once, commit/push, inspect
        exact-head CI and continue; do not create or activate a deployment or adopt the IR runtime.
+
+**S4.3 completion evidence, 2026-08-03.** ADR 0004 retains the existing Finding ledger and treats
+`evidence_run_id` as the canonical same-database lineage to immutable spec provenance and verified
+terminal evidence. Closed project-owned routes list, load and create interpretations from completed
+verified runs only. Revision inserts a successor and compare-and-swaps `superseded_by` in one
+transaction; stale and injected post-insert failures create no orphan and never rewrite the original
+semantic fields or evidence run. Reads are provider/resolver/evaluator/gate-free. The product shows
+automated and authored active/superseded history, exact evidence address and accessible create/
+revision controls with retained intent on conflict. The 570-test WS-03/API regression completed with
+6 skips; all 204 frontend tests, typecheck and build pass. No schema/runtime/safety boundary changed,
+so S4.2's immediately preceding full checkpoint remains the major-checkpoint baseline.
+
+**S4.4 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile `run_nightly`, research CLI/plans, provider collection, run failure evidence and
+       current operational entry points; record a narrow design before changing behavior.
+2. [ ] Define one bounded server-owned operation receipt for scheduled/manual research attempts,
+       including plan identity, build, provider mode, start/end state and safe failure summary,
+       without duplicating ExperimentRun or accepting arbitrary executable plans.
+3. [ ] Add closed read/status APIs and deterministic mock-run coverage; expose collection/data-
+       quality and terminal pipeline failures without credentials, tracebacks or provider payloads.
+4. [ ] Surface last/active operation, per-experiment progress and exact safe failure feedback
+       accessibly; keep execution, deployment, arming and orders outside the surface.
+5. [ ] Prove restart/reload, concurrent-attempt, stale-status, raw-plan and research/execution
+       isolation guards; run applicable regressions, publish, inspect CI and continue.
 
 ## 4. Medium-term sequence
 

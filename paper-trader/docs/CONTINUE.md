@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.2 is implemented; S4.2 is awaiting this slice publication.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.3 is implemented; S4.3 is awaiting this slice publication.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -31,6 +31,10 @@ S4.2 persists content-addressed success and controlled-failure evidence, exposes
 history/detail/comparison, records pending-only canonical candidate decisions with reasons, and
 renders the evidence and decisions accessibly. The superseded combined approval/deployment write
 is closed; preview remains read-only.
+S4.3 keeps the existing Finding ledger, derives exact graph/evidence binding through its verified
+run foreign key, creates interpretations from completed evidence only, and revises by atomic
+immutable successor. The UI shows automated/authored active and superseded history and retains
+revision intent on conflict.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -43,6 +47,8 @@ viewer and does not adopt the IR runtime in a live path.
 - Last completed/pushed bounded increment before this handoff: failed-run evidence through `6f474f0`
 - S4.2 comparison increment: `f809e2d`
 - S4.2 product-surface slice: current HEAD after this handoff is published
+- S4.3 backend lineage boundary: `c645b64`
+- S4.3 product-surface slice: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -97,6 +103,13 @@ replays the persisted inverse receipt. Presentation-contamination, semantic-cont
 edge-order and executable-identity diagnostics are pinned. S3.3 changes no schema, research gate or
 execution path, so the complete checkpoint was not repeated after S3.2b's immediately preceding
 green run.
+
+S4.3's focused and WS-03/API regression collected 570 tests and completed with 6 skips. All 204
+frontend tests, typecheck and production build pass. Negative proofs cover cross-project and raw
+identity input, non-completed/legacy/corrupt evidence, internally consistent but contradictory
+terminal envelopes, stale revision with no orphan successor, post-insert rollback, no recomputation
+on reads and lossless active/superseded reload. No schema/runtime/safety boundary changed after the
+immediately preceding S4.2 full checkpoint.
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
 absent. Guard proof then removed `research_tests` from the backend command; the specific contract
@@ -157,15 +170,13 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.3 — project-owned findings and immutable interpretation history.**
+**S4.4 — bounded research operations observability.**
 
-Continue from the new five-item S4.3 checklist in `docs/engineering/EXECUTION_PLAN.md`. Reconcile
-the existing `Finding` record and `superseded_by` lifecycle with verified graph-owned experiment
-runs before implementation. Create no parallel ledger: reads, creation and revision must use the
-existing record, derive project/run/graph/evidence identity on the server, reject legacy/running/
-corrupt/cross-project inputs, and preserve every superseded interpretation. Surface the history
-beside the S4.2 evidence panel. Do not create or activate deployments and do not adopt the IR
-runtime in live execution.
+Continue from the new five-item S4.4 checklist in `docs/engineering/EXECUTION_PLAN.md`. First
+reconcile `run_nightly`, CLI/plan entry points, provider collection and persisted run/failure state.
+Define server-owned bounded operation identity before adding status reads or controls. Do not accept
+raw executable plans, credentials or provider payloads, and do not cross into deployment, arming,
+orders or live IR-runtime adoption.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

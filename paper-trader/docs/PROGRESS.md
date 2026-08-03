@@ -3,7 +3,7 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.2 complete locally and awaiting its
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.3 complete locally and awaiting its
 slice publication.
 
 ---
@@ -36,7 +36,7 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Immutable graph runs, verified evidence, deterministic comparison and candidate decisions complete; findings history next |
+| **Research** | Immutable graph runs, verified evidence/comparison, candidate decisions and successor-based finding history complete; operations observability next |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
@@ -63,6 +63,7 @@ that clause's implementation.
 | `research/…/propose.py` | Structure search: five graph mutations |
 | `research/…/ir_search.py` | Explores a lineage and binds every run to what produced it (F14) |
 | `research/…/ir_strategy.py`, `ir_evaluate.py` | Scores explored graphs through the existing Gen-1 gates |
+| `research/domain/models.py::Finding`, project-owned finding routes | Verified run-bound interpretations with immutable successor history |
 
 ### The two results worth knowing
 
@@ -95,10 +96,9 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**S4.3: project-owned findings and interpretation history.** Reconcile the existing `Finding`
-record with verified graph-bound runs. Add closed create/read/revise contracts that derive evidence
-identity on the server, preserve superseded findings, and surface the history beside experiment
-and candidate evidence. Do not create deployment state or adopt the IR runtime in execution.
+**S4.4: research operations observability.** Reconcile the existing nightly runner, CLI plans,
+provider collection and failure evidence. Make bounded server-owned attempts, progress and safe
+failures visible without accepting raw executable plans or crossing into execution/deployment.
 
 ---
 
@@ -136,6 +136,11 @@ CI-shaped complete suite pass.
 Browser acceptance: desktop and 390×844 rendered 18 nodes, 35 edges and 35 connection rows with
 no console errors or page-level horizontal overflow. The wide canvas scrolls inside its own
 container on the phone.
+
+S4.3 followed S4.2's full checkpoint with a 570-test WS-03/API regression (6 skips), all 204
+frontend tests, typecheck and production build. Its successor insertion/CAS rollback proof and
+provider/resolver/evaluator/gate spies are green. It changes no schema, execution path or safety
+boundary, so the complete backend/runtime checkpoint was not repeated.
 
 Two things about this suite, both learned the hard way:
 
