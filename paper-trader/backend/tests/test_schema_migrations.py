@@ -16,7 +16,9 @@ two things stay true forever, and neither is checked by any other test:
 from __future__ import annotations
 
 import sqlalchemy as sa
+import pytest
 from alembic import command
+from sqlalchemy.exc import DatabaseError
 
 from app.db import migrate
 from app.db.models import Base
@@ -40,7 +42,13 @@ def _schema(engine) -> dict:
 
 
 def _fresh_engine(tmp_path, name: str):
-    return sa.create_engine(f"sqlite:///{tmp_path / name}")
+    engine = sa.create_engine(f"sqlite:///{tmp_path / name}")
+
+    @sa.event.listens_for(engine, "connect")
+    def _enforce_runtime_foreign_keys(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    return engine
 
 
 def _apply_baseline_ddl(engine) -> None:
@@ -103,17 +111,249 @@ def test_models_and_migrations_agree(tmp_path):
             f"index mismatch in {table!r}"
 
 
-def test_layout_schema_is_versioned_and_uses_sparse_child_rows(tmp_path):
+def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
 
-    assert migrate.head_revision() == "0005"
+    assert migrate.head_revision() == "0006"
+    assert set(schema["projects"]["columns"]) == {
+        "project_id", "name", "description", "status", "created_at", "updated_at",
+    }
+    assert set(schema["graph_artifacts"]["columns"]) == {
+        "identifier", "project_id", "display_name", "draft_json", "draft_revision",
+        "published_revision", "current_version", "created_at", "updated_at",
+    }
+    assert set(schema["graph_versions"]["columns"]) == {
+        "graph_identifier", "version", "artifact_json", "content_address", "created_at",
+    }
     assert set(schema["ir_graph_layouts"]["columns"]) == {
         "graph_identifier", "graph_version", "revision", "updated_at",
     }
     assert set(schema["ir_graph_layout_positions"]["columns"]) == {
         "graph_identifier", "graph_version", "instance_id", "x", "y",
     }
+    assert set(schema["ir_graph_layout_orphan_archive"]["columns"]) == {
+        "graph_identifier", "graph_version", "revision", "updated_at", "archived_at",
+    }
+    assert set(schema["ir_graph_layout_position_orphan_archive"]["columns"]) == {
+        "graph_identifier", "graph_version", "instance_id", "x", "y",
+    }
+
+    graph_version_fks = sa.inspect(engine).get_foreign_keys("ir_graph_layouts")
+    assert any(
+        fk["referred_table"] == "graph_versions"
+        and fk["constrained_columns"] == ["graph_identifier", "graph_version"]
+        for fk in graph_version_fks
+    )
+
+
+def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):
+    from app.ir.hashing import canonical_json, content_address
+    from app.ir.strategies.expanding_z import GRAPH
+
+    engine = _build_from_baseline(tmp_path)
+    with engine.connect() as connection:
+        artifact = connection.execute(sa.text(
+            "SELECT project_id, draft_json, draft_revision, published_revision, "
+            "current_version "
+            "FROM graph_artifacts WHERE identifier = :identifier"
+        ), {"identifier": GRAPH["identifier"]}).one()
+        version = connection.execute(sa.text(
+            "SELECT artifact_json, content_address FROM graph_versions "
+            "WHERE graph_identifier = :identifier AND version = :version"
+        ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
+
+    assert artifact.project_id
+    assert artifact.draft_json == canonical_json(GRAPH)
+    assert artifact.draft_revision == 0
+    assert artifact.published_revision == 0
+    assert artifact.current_version == GRAPH["version"]
+    assert version.artifact_json == canonical_json(GRAPH)
+    assert version.content_address == content_address(GRAPH)
+
+
+def test_graph_versions_refuse_direct_sql_update_and_delete(tmp_path):
+    from app.ir.strategies.expanding_z import GRAPH
+
+    engine = _build_from_baseline(tmp_path)
+    for statement in (
+        "UPDATE graph_versions SET artifact_json = '{}' "
+        "WHERE graph_identifier = :identifier AND version = :version",
+        "DELETE FROM graph_versions "
+        "WHERE graph_identifier = :identifier AND version = :version",
+    ):
+        with pytest.raises(DatabaseError, match="immutable"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(statement), {
+                    "identifier": GRAPH["identifier"],
+                    "version": GRAPH["version"],
+                })
+
+
+def test_graph_version_insert_requires_json_identity_to_match_row_identity(tmp_path):
+    from app.ir.hashing import canonical_json, content_address
+    from app.ir.strategies.expanding_z import GRAPH
+
+    engine = _build_from_baseline(tmp_path)
+    mismatched = dict(GRAPH)
+    mismatched["version"] = GRAPH["version"] + 1
+    for row_version, document in (
+        (GRAPH["version"] + 2, mismatched),
+        (GRAPH["version"] + 3, {}),
+    ):
+        with pytest.raises(DatabaseError, match="CHECK constraint"):
+            with engine.begin() as connection:
+                connection.execute(sa.text(
+                    "INSERT INTO graph_versions "
+                    "(graph_identifier, version, artifact_json, content_address, created_at) "
+                    "VALUES (:identifier, :version, :artifact_json, :address, "
+                    "'2026-08-03 10:00:00')"
+                ), {
+                    "identifier": GRAPH["identifier"],
+                    "version": row_version,
+                    "artifact_json": canonical_json(document),
+                    "address": content_address(document),
+                })
+
+
+def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_path):
+    from app.ir.strategies.expanding_z import GRAPH
+
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0005")
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+        ))
+        for identifier, version in (
+            (GRAPH["identifier"], GRAPH["version"]),
+            ("strategy.orphan", 99),
+        ):
+            connection.execute(sa.text(
+                "INSERT INTO ir_graph_layouts "
+                "(graph_identifier, graph_version, revision, updated_at) "
+                "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
+            ), {"identifier": identifier, "version": version})
+            connection.execute(sa.text(
+                "INSERT INTO ir_graph_layout_positions "
+                "(graph_identifier, graph_version, instance_id, x, y) "
+                "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
+            ), {"identifier": identifier, "version": version})
+
+    assert migrate.upgrade_to_head(engine) == "0006"
+    with engine.connect() as connection:
+        layouts = connection.execute(sa.text(
+            "SELECT graph_identifier, graph_version FROM ir_graph_layouts"
+        )).all()
+        positions = connection.execute(sa.text(
+            "SELECT graph_identifier, graph_version, instance_id "
+            "FROM ir_graph_layout_positions"
+        )).all()
+        capital = connection.execute(sa.text(
+            "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
+        )).one()
+        archived_layouts = connection.execute(sa.text(
+            "SELECT graph_identifier, graph_version, revision "
+            "FROM ir_graph_layout_orphan_archive"
+        )).all()
+        archived_positions = connection.execute(sa.text(
+            "SELECT graph_identifier, graph_version, instance_id, x, y "
+            "FROM ir_graph_layout_position_orphan_archive"
+        )).all()
+
+    assert layouts == [(GRAPH["identifier"], GRAPH["version"])]
+    assert positions == [(GRAPH["identifier"], GRAPH["version"], "n_ema")]
+    assert archived_layouts == [("strategy.orphan", 99, 1)]
+    assert archived_positions == [("strategy.orphan", 99, "n_ema", 10.0, 20.0)]
+    assert capital == (50000.0, 49000.0, -1000.0)
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0005")
+    with engine.connect() as connection:
+        restored_layout = connection.execute(sa.text(
+            "SELECT revision FROM ir_graph_layouts "
+            "WHERE graph_identifier = 'strategy.orphan' AND graph_version = 99"
+        )).one()
+        restored_position = connection.execute(sa.text(
+            "SELECT instance_id, x, y FROM ir_graph_layout_positions "
+            "WHERE graph_identifier = 'strategy.orphan' AND graph_version = 99"
+        )).one()
+    assert restored_layout == (1,)
+    assert restored_position == ("n_ema", 10.0, 20.0)
+
+
+def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO projects "
+            "(project_id, name, description, status, created_at, updated_at) "
+            "VALUES ('project.user', 'User project', '', 'active', "
+            "'2026-08-03 10:00:00', '2026-08-03 10:00:00')"
+        ))
+
+    with pytest.raises(RuntimeError, match="non-seed"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0005")
+
+    assert migrate.schema_version(engine) == "0006"
+
+    with engine.begin() as connection:
+        connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
+        connection.execute(sa.text(
+            "UPDATE graph_artifacts SET draft_revision = 1 "
+            "WHERE identifier = 'strategy.expanding_z_impulse'"
+        ))
+    with pytest.raises(RuntimeError, match="modified"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0005")
+
+    assert migrate.schema_version(engine) == "0006"
+
+
+def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
+    from app.ir.strategies.expanding_z import GRAPH
+
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layouts "
+            "(graph_identifier, graph_version, revision, updated_at) "
+            "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
+        ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_positions "
+            "(graph_identifier, graph_version, instance_id, x, y) "
+            "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
+        ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
+        command.downgrade(migrate.alembic_config(connection), "0005")
+
+    tables = set(sa.inspect(engine).get_table_names())
+    assert {"projects", "graph_artifacts", "graph_versions"}.isdisjoint(tables)
+    with engine.connect() as connection:
+        layout = connection.execute(sa.text(
+            "SELECT revision FROM ir_graph_layouts "
+            "WHERE graph_identifier = :identifier AND graph_version = :version"
+        ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
+        position = connection.execute(sa.text(
+            "SELECT instance_id, x, y FROM ir_graph_layout_positions "
+            "WHERE graph_identifier = :identifier AND graph_version = :version"
+        ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
+        capital = connection.execute(sa.text(
+            "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
+        )).one()
+    assert layout == (1,)
+    assert position == ("n_ema", 10.0, 20.0)
+    assert capital == (50000.0, 49000.0, -1000.0)
+
+    assert migrate.upgrade_to_head(engine) == "0006"
 
 
 def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
@@ -139,7 +379,7 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
         )).one()
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0005"
+    assert migrate.upgrade_to_head(engine) == "0006"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):

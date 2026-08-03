@@ -31,6 +31,7 @@ engine = create_engine(
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragma(dbapi_conn, _rec):
     cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys=ON")
     cur.execute("PRAGMA journal_mode=WAL")   # concurrent reads while engine writes
     cur.execute("PRAGMA synchronous=NORMAL")
     cur.execute("PRAGMA busy_timeout=10000") # P2: wait out a contended write (engine +
@@ -289,7 +290,9 @@ def init_db(reset: bool = False) -> None:
         # by migration 0002 for databases that were migrated — whichever happens
         # first, the other is a no-op.
         from app.core.deployments import ensure_legacy_deployment
+        from app.editor.graph_artifacts import ensure_catalogue_seed
         ensure_legacy_deployment(sess)
+        ensure_catalogue_seed(sess)
         if sess.get(CapitalState, 1) is None:
             sess.add(CapitalState(id=1, initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))

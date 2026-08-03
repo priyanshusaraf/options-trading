@@ -10,14 +10,15 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S1.2 is published; S2.1 is accepted locally.** Fail-closed CI is on the branch. Its first
+**Stage A through S2.1 is published; S2.2 is complete locally.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
 drains those workers before the broker session closes. F13 is published at `22a148f`. The React
 viewer now loads the sparse layout, moves authored nodes by pointer or keyboard, saves by revision,
 and retains local work on conflict or transport failure. ADR 0001 rejects duplicate product
-ledgers and accepts the minimum ownership, identity and lifecycle contract. S2.2 persistence is next.
+ledgers and accepts the minimum ownership, identity and lifecycle contract. S2.2 adds durable
+projects, optimistic graph drafts, append-only graph versions and reversible layout ownership.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -27,9 +28,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed slice: S1.2 conflict-safe layout editor through `1a27d39`
-- Latest verified remote before the S2.1 commit: `1a27d39`
-- Expected ahead/behind after publishing S2.1: `0/0`
+- Last completed/pushed slice: S2.1 product-object contract through `a8afe64`
+- Latest verified remote before the S2.2 commit: `a8afe64`
+- Expected ahead/behind after publishing S2.2: `0/0`
 - Working tree expected after publishing this handoff: clean
 
 The commit containing this handoff is the current HEAD after publication; resolve its SHA with
@@ -45,7 +46,7 @@ Latest acceptance run on 2026-08-03:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests --tb=short
-2,719 passed · 6 skipped · 1 deprecation warning · EXIT 0
+2,735 passed · 6 skipped · 71 warnings · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -56,6 +57,10 @@ net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 $ npm test && npm run typecheck && npm run build
 169 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
+
+S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
+41 tests, including `0006 → 0005 → 0006`, orphan quarantine/restore, direct-SQL immutability,
+stale draft conflicts and rollback after a flushed version insert.
 
 CI was implemented test-first. The six contract tests first failed because the workflow was
 absent. Guard proof then removed `research_tests` from the backend command; the specific contract
@@ -116,12 +121,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S2.2 — persist projects, editable graph artefacts and immutable graph versions.**
+**S3.1 — add the closed backend editing API over `app/ir/edit.py`.**
 
-Implement the application-database portion of ADR 0001 test-first: Project, optimistic-concurrency
-graph draft and append-only graph version. Seed the fixed catalogue version before attaching layout
-ownership, enforce immutable versions against direct SQL, and keep deployment/research extensions
-for their later gated slices. No runtime path adopts the new records.
+Define a discriminated request for the existing edit primitives, load the owned draft, apply only
+the named `app/ir/edit.py` operation, validate and atomically publish under `base_revision`. Return
+the existing clause/path rejections without inventing frontend validation semantics. Do not expose
+raw draft replacement, accept client version identity or adopt the IR runtime in execution.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

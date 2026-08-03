@@ -18,9 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S2.2 durable Project, graph artefact and immutable graph-version persistence
-- **Next product checkpoint:** a user can create a project, edit a graph draft and publish an
-  immutable version without changing prior versions or existing execution behaviour.
+- **Current slice:** S3.1 closed backend editing API over `app/ir/edit.py`
+- **Next product checkpoint:** each supported edit operation creates a validated immutable graph
+  version or returns its exact rejection clause without exposing raw draft replacement.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -74,8 +74,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S1.1 | Persist sparse layout records and expose closed layout read/write contracts | S0.4, F13, WS-07 migrations | done — verified, documented and published |
 | S1.2 | Load, drag and conflict-safe save node positions in the React viewer | S1.1 | done — verified, documented and published |
 | S2.1 | Accept the minimum product-object architecture and persistence contract | S1.1 evidence | done — ADR 0001 accepted |
-| S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | active |
-| S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | later |
+| S2.2 | Persist projects, graph artefacts and immutable graph versions | S2.1 | done — verified locally; publication in this slice commit |
+| S3.1 | Add a closed editing API over `app/ir/edit.py` with immutable version writes | S2.2 | active |
 | S3.2 | Add typed visual mutations, validation feedback, undo/redo and accessible controls | S3.1 | later |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2 | later |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | later |
@@ -248,11 +248,19 @@ all eight product identities/lifecycles, and fixes the S2.2 migration and rollba
 
 **S2.2 bounded checklist.**
 
-1. [ ] Add Project, graph artefact and immutable graph-version model/migration tests.
-2. [ ] Seed the fixed catalogue graph and attach existing layouts without touching money records.
-3. [ ] Implement draft revision and atomic publish repositories with direct-SQL immutability proof.
-4. [ ] Add closed Project/graph draft/version APIs and invalid ownership/conflict paths.
-5. [ ] Run persistence/workstream regressions, migration rollback, docs, bounded commit and push.
+1. [x] Add Project, graph artefact and immutable graph-version model/migration tests.
+2. [x] Seed the fixed catalogue graph and attach existing layouts without touching money records.
+3. [x] Implement draft revision and atomic publish repositories with direct-SQL immutability proof.
+4. [x] Add closed Project/graph draft/version APIs and invalid ownership/conflict paths.
+5. [x] Run persistence/workstream regressions, migration rollback, docs, bounded commit and push.
+
+**S2.2 completion evidence, 2026-08-03.** Revision `0006` seeds the fixed graph, gives layouts a
+real graph-version owner and quarantines pre-existing orphans for reversible downgrade. SQLite
+checks row/JSON identity and refuses graph-version UPDATE/DELETE. Repository tests prove stale
+draft rejection and rollback after a flushed version insert. The HTTP surface creates projects and
+initial drafts, publishes by base revision and reads immutable versions; it deliberately exposes
+no raw draft-replacement route. The IR/persistence workstream regression and full backend/frontend
+acceptance checkpoint pass. No execution or research path reads the new records.
 
 ### S3.1–S3.3 — real visual authoring
 
@@ -269,6 +277,14 @@ lossless. An entirely visual construction matches an equivalent hand-authored ar
 address; layout differences do not affect it; semantically identical operation orders do not create
 false executable differences; illegal edits fail before persistence. Suppressing validation or
 bypassing `app/ir/edit.py` must make an architecture guard fail.
+
+**S3.1 bounded checklist.**
+
+1. [ ] Inventory the existing `app/ir/edit.py` primitives and define one closed request union.
+2. [ ] Apply each request to the owned draft through `app/ir/edit.py`, never by raw replacement.
+3. [ ] Validate and atomically publish the resulting server-versioned graph under `base_revision`.
+4. [ ] Return exact rejection clauses/paths and cover stale, ownership and arbitrary-input failures.
+5. [ ] Prove the no-bypass guard, run backend editor regressions, document, commit and push.
 
 ## 4. Medium-term sequence
 

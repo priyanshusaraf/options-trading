@@ -16,14 +16,18 @@ import datetime as dt
 from app.core.version import get_build_sha
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
+    DDL,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -770,6 +774,106 @@ class RuntimeConfig(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 
+class Project(Base):
+    """An organisational editor container; never an execution root."""
+    __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'archived')", name="ck_projects_status"),
+    )
+
+    project_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="",
+                                              server_default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                        server_default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+class GraphArtifact(Base):
+    """One stable graph lineage with an optimistic-concurrency working draft."""
+    __tablename__ = "graph_artifacts"
+    __table_args__ = (
+        CheckConstraint("draft_revision >= 0", name="ck_graph_artifacts_draft_revision"),
+        CheckConstraint(
+            "published_revision IS NULL OR "
+            "(published_revision >= 0 AND published_revision <= draft_revision)",
+            name="ck_graph_artifacts_published_revision",
+        ),
+        CheckConstraint(
+            "(current_version IS NULL) = (published_revision IS NULL)",
+            name="ck_graph_artifacts_publication_state",
+        ),
+    )
+
+    identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    draft_json: Mapped[str] = mapped_column(Text, nullable=False)
+    draft_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    published_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+class GraphVersion(Base):
+    """An append-only executable IR artefact."""
+    __tablename__ = "graph_versions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["graph_identifier"], ["graph_artifacts.identifier"], ondelete="RESTRICT"
+        ),
+        CheckConstraint("version >= 1", name="ck_graph_versions_version"),
+        CheckConstraint(
+            "json_valid(artifact_json)", name="ck_graph_versions_valid_json"
+        ),
+        CheckConstraint(
+            "json_extract(artifact_json, '$.identifier') IS graph_identifier",
+            name="ck_graph_versions_identifier_matches_json",
+        ),
+        CheckConstraint(
+            "json_extract(artifact_json, '$.version') IS version",
+            name="ck_graph_versions_version_matches_json",
+        ),
+        Index("ix_graph_versions_content_address", "content_address"),
+    )
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+event.listen(
+    GraphVersion.__table__,
+    "after_create",
+    DDL(
+        "CREATE TRIGGER graph_versions_refuse_update "
+        "BEFORE UPDATE ON graph_versions BEGIN "
+        "SELECT RAISE(ABORT, 'graph versions are immutable'); END"
+    ).execute_if(dialect="sqlite"),
+)
+event.listen(
+    GraphVersion.__table__,
+    "after_create",
+    DDL(
+        "CREATE TRIGGER graph_versions_refuse_delete "
+        "BEFORE DELETE ON graph_versions BEGIN "
+        "SELECT RAISE(ABORT, 'graph versions are immutable'); END"
+    ).execute_if(dialect="sqlite"),
+)
+
+
 class IrGraphLayout(Base):
     """Revision head for sparse editor coordinates on one graph version.
 
@@ -778,6 +882,14 @@ class IrGraphLayout(Base):
     its position set is empty so optimistic concurrency still has a revision.
     """
     __tablename__ = "ir_graph_layouts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["graph_identifier", "graph_version"],
+            ["graph_versions.graph_identifier", "graph_versions.version"],
+            ondelete="RESTRICT",
+            name="fk_ir_graph_layouts_graph_version",
+        ),
+    )
 
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -796,6 +908,28 @@ class IrGraphLayoutPosition(Base):
             ondelete="CASCADE",
         ),
     )
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class IrGraphLayoutOrphanArchive(Base):
+    """Reversible quarantine for a pre-0006 layout with no graph version."""
+    __tablename__ = "ir_graph_layout_orphan_archive"
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    archived_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+
+class IrGraphLayoutPositionOrphanArchive(Base):
+    """Sparse positions quarantined with an orphan layout parent."""
+    __tablename__ = "ir_graph_layout_position_orphan_archive"
 
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)

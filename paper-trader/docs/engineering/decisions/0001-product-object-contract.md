@@ -92,9 +92,9 @@ position or trade. Organisational deletion is archive or tombstone state.
 3. Key graph versions by `(identifier, version)` and index, but do not globally uniquify, the
    content address. Two artefact lineages may begin from identical content.
 4. Enforce graph-version UPDATE and DELETE refusal in SQLite, not only in ORM code.
-5. Keep the existing layout tables. After catalogue seeding, remove only layout rows that cannot
-   name a real graph version, then rebuild/add the composite graph-version foreign key if SQLite
-   requires it.
+5. Keep the existing layout tables. After catalogue seeding, quarantine layout rows that cannot
+   name a real graph version, remove them from the active tables, then rebuild/add the composite
+   graph-version foreign key if SQLite requires it. Downgrade restores the quarantine.
 Deployment references and candidate provenance are not part of S2.2. A later WS-06-gated
 migration may extend the existing `deployments` table with nullable graph identifier/version and
 candidate provenance. Deployment 1 must remain null-bound and behaviour-preserving.
