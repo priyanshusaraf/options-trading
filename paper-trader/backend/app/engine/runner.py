@@ -181,6 +181,12 @@ class EngineRunner:
         # nothing in the entry, exit, sizing or accounting path reads them, and the lane
         # is off unless `params["ir_shadow_enabled"]` says otherwise.
         self.shadow_metrics = ShadowMetrics()
+        #: Per-instrument admission verdict, carrying the interval it was decided for, so a
+        #: live interval change re-decides instead of leaving a stale rejection that would
+        #: need a restart to clear.
+        self._shadow_admission: dict[str, object] = {}
+        #: Consecutive post-admission refusals per instrument, reset by any other outcome.
+        self._shadow_refusals: dict[str, int] = {}
         self._shadow_seconds = 0.0   # shadow cost accumulated within one signal iteration
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
@@ -499,6 +505,63 @@ class EngineRunner:
                 except Exception as e:
                     log.error(f"ratchet update failed: {e}", instrument=key)
 
+    def _shadow_admitted(self, key: str, pairing) -> bool:
+        """Decide once, per (instrument, live interval), whether this graph may be shadowed
+        at all — and make a refusal terminal and visible rather than repeated.
+
+        Without this the lane learns the answer from a refusal instead of from the
+        configuration, and an instrument whose interval can never satisfy the graph's
+        warmup refuses on every scan for the whole session: no signal, a log line every
+        2.5 s, and evaluation cost for a result that was knowable in advance.
+        """
+        from app.engine import ir_shadow
+
+        interval = self._interval_for(key)
+        cached = self._shadow_admission.get(key)
+        if cached is not None and cached.interval == interval:
+            return cached.ok
+
+        adapter = pairing.adapter()
+        verdict = ir_shadow.admit(
+            instrument_key=key, segment=get_instrument(key).segment, interval=interval,
+            history_days=int(self.settings.history_days),
+            warmup=int(getattr(adapter, "declared_warmup", 0) or 0))
+        self._shadow_admission[key] = verdict
+        self._shadow_refusals.pop(key, None)
+        if verdict.ok:
+            self.shadow_metrics.admitted(key)
+        else:
+            self.shadow_metrics.rejected(key, verdict.reason)
+            log.warn(f"IR shadow pairing REJECTED at admission — {verdict.reason}",
+                     instrument=key, event="IR_SHADOW_ADMISSION")
+        return verdict.ok
+
+    def _shadow_track_refusals(self, key: str, observation) -> None:
+        """Demote a pairing the feed keeps refusing, however confident admission was.
+
+        Admission reasons from configuration and can be right about the arithmetic while the
+        feed returns something else entirely. The contract is not "predict correctly", it is
+        "never repeat an in-hours refusal", so observation gets the last word.
+        """
+        from app.engine import ir_shadow
+
+        if observation.reason != ir_shadow.INSUFFICIENT_HISTORY:
+            self._shadow_refusals.pop(key, None)
+            return
+        refusals = self._shadow_refusals.get(key, 0) + 1
+        self._shadow_refusals[key] = refusals
+        if refusals < ir_shadow.REFUSALS_BEFORE_DEMOTION:
+            return
+        admission = self._shadow_admission.get(key)
+        if admission is None:
+            return
+        demoted = ir_shadow.demote(admission, observed_bars=observation.frame_bars,
+                                   refusals=refusals)
+        self._shadow_admission[key] = demoted
+        self.shadow_metrics.rejected(key, demoted.reason)
+        log.warn(f"IR shadow pairing DEMOTED — {demoted.reason}",
+                 instrument=key, event="IR_SHADOW_ADMISSION")
+
     def _observe_shadow(self, key: str, strat, signal_frame, sig) -> None:
         """L1 Stage 1 — evaluate the IR mirror of `strat` and record any disagreement.
 
@@ -515,8 +578,11 @@ class EngineRunner:
                 return
             from app.engine import ir_shadow, ir_shadow_store
 
-            if ir_shadow.pairing_for(strat.key) is None:
+            pairing = ir_shadow.pairing_for(strat.key)
+            if pairing is None:
                 self.shadow_metrics.skipped(key)
+                return
+            if not self._shadow_admitted(key, pairing):
                 return
             started = time.perf_counter()
             observation = ir_shadow.observe(
@@ -529,6 +595,7 @@ class EngineRunner:
             # `scan_signals` has already skipped the closed ones — so these are the
             # in-hours events Stage 1 criterion 8 is about.
             self.shadow_metrics.observe(observation, market_open=True)
+            self._shadow_track_refusals(key, observation)
             if observation.reason != ir_shadow.AGREEMENT:
                 if ir_shadow_store.record(observation, market_open=True):
                     log.warn(f"IR shadow disagreement: {observation.reason} — "

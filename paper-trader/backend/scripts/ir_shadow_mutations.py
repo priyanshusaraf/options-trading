@@ -30,6 +30,7 @@ CONFIG = BACKEND / "app" / "core" / "config.py"
 ADAPTER = BACKEND / "app" / "strategy" / "ir_adapter.py"
 
 ISOLATION = "tests/test_ir_shadow_isolation.py"
+ADMISSION = "tests/test_ir_shadow_admission.py"
 CORE = "tests/test_ir_shadow.py"
 
 
@@ -53,17 +54,17 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
     (
         "the shadow lane mutates shared execution parameters",
         RUNNER,
-        "            if ir_shadow.pairing_for(strat.key) is None:",
+        "            pairing = ir_shadow.pairing_for(strat.key)",
         '            self.params["intraday_max_positions"] = 0\n'
-        "            if ir_shadow.pairing_for(strat.key) is None:",
+        "            pairing = ir_shadow.pairing_for(strat.key)",
         f"{ISOLATION}::test_the_authoritative_state_is_identical_with_the_shadow_on_and_off",
     ),
     (
         "the shadow lane touches a broker seam",
         RUNNER,
-        "            if ir_shadow.pairing_for(strat.key) is None:",
+        "            pairing = ir_shadow.pairing_for(strat.key)",
         "            self.broker.commit()\n"
-        "            if ir_shadow.pairing_for(strat.key) is None:",
+        "            pairing = ir_shadow.pairing_for(strat.key)",
         f"{ISOLATION}::test_a_full_shadow_scan_reaches_no_broker_or_order_seam",
     ),
     (
@@ -110,6 +111,25 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         f"{CORE}::test_a_frame_shorter_than_the_graph_warmup_is_classified_not_silent",
     ),
     (
+        "the admission contract admits a configuration that cannot settle the warmup",
+        SHADOW,
+        "    if expected <= warmup:",
+        "    if False:",
+        f"{ADMISSION}::test_an_inadmissible_pairing_is_never_evaluated",
+    ),
+    (
+        # Mutating the CONSTANT here would hang: the test loops
+        # `REFUSALS_BEFORE_DEMOTION + 3` times, so raising it to 10**9 asks for a billion
+        # scans. Mutate the call site instead — same defect, bounded runtime. (That version
+        # was tried, ran past ten minutes, and had to be killed.)
+        "a pairing the feed keeps refusing is never demoted",
+        RUNNER,
+        "        if refusals < ir_shadow.REFUSALS_BEFORE_DEMOTION:\n            return",
+        "        if True:\n            return",
+        f"{ADMISSION}::"
+        "test_an_admitted_pairing_that_keeps_refusing_is_demoted_rather_than_left_to_repeat",
+    ),
+    (
         "a persistent cross-frame evaluation cache is reintroduced",
         SHADOW,
         "    def adapter(self) -> Any:",
@@ -122,6 +142,24 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
 ]
 
 
+#: Where a mutation's original text is parked while it is applied. `finally` covers an
+#: exception; it does NOT cover SIGKILL, and one killed run did leave a mutated constant in
+#: the tree. The sidecar makes recovery automatic instead of a thing to remember.
+BACKUP = BACKEND / ".ir_shadow_mutation_backup"
+
+
+def restore_any_orphan() -> None:
+    """Undo a mutation left behind by a run that was killed rather than finished."""
+    if not BACKUP.exists():
+        return
+    name, _, content = BACKUP.read_text().partition("\n")
+    target = pathlib.Path(name)
+    if target.exists() and target.read_text() != content:
+        target.write_text(content)
+        print(f"restored {target.name} from an interrupted previous run")
+    BACKUP.unlink()
+
+
 def run(test: str) -> bool:
     """True if the test passed."""
     result = subprocess.run(
@@ -131,6 +169,7 @@ def run(test: str) -> bool:
 
 
 def main() -> int:
+    restore_any_orphan()
     failures: list[str] = []
     print(f"{'guard':<62} {'clean':<8} {'mutated':<8} verdict")
     print("-" * 96)
@@ -142,10 +181,12 @@ def main() -> int:
             continue
         clean = run(test)
         try:
+            BACKUP.write_text(f"{path}\n{original}")
             path.write_text(original.replace(find, replace, 1))
             mutated = run(test)
         finally:
             path.write_text(original)
+            BACKUP.unlink(missing_ok=True)
         caught = clean and not mutated
         print(f"{name:<62} {'PASS' if clean else 'FAIL':<8} "
               f"{'PASS' if mutated else 'FAIL':<8} "

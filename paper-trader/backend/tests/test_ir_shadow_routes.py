@@ -119,3 +119,19 @@ def test_the_endpoint_offers_no_way_to_steer_the_lane():
     api, _ = client()
     for method in (api.post, api.put, api.delete, api.patch):
         assert method("/api/ir-shadow").status_code in (404, 405)
+
+
+def test_a_rejected_pairing_is_visible_beside_the_shadowed_ones():
+    """An instrument can be mirrored AND not observed — the admission contract refused it,
+    or the feed contradicted admission and it was demoted. Without this those two facts read
+    identically to "shadowed and agreeing"."""
+    api, runner = client()
+    runner.shadow_metrics.rejected("NIFTY", "NIFTY: 30minute on NSE yields about 273 bars")
+
+    body = api.get("/api/ir-shadow").json()
+
+    assert body["coverage"]["rejected"] == {
+        "NIFTY": "NIFTY: 30minute on NSE yields about 273 bars"}
+    assert body["metrics"]["rejected_pairings"] == 1
+    # Still listed as shadowed — it has a mirror. The two answer different questions.
+    assert body["coverage"]["shadowed"] == ["NIFTY"]

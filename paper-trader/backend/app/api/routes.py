@@ -928,6 +928,10 @@ def ir_shadow_observability(request: Request, limit: int = 50):
             "shadowed": shadowed,
             "unmirrored": unmirrored,
             "pairings": sorted(ir_shadow.PAIRING_BUILDERS),
+            # A pairing refused by the admission contract, or demoted after the feed
+            # contradicted it. Reported beside `shadowed` on purpose: an instrument can be
+            # mirrored AND not observed, and those two facts read identically without this.
+            "rejected": dict(getattr(runner.shadow_metrics, "rejections", {})),
         },
         "reasons": list(ir_shadow.DISAGREEMENT_REASONS),
         "recorded_by_reason": ir_shadow_store.counts_by_reason(),

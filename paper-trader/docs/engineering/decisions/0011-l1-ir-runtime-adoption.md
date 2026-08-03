@@ -1,8 +1,7 @@
 # ADR 0011: Staged adoption of the Component IR runtime in the live path
 
-- **Status:** **Stages 0 and 1 APPROVED and IMPLEMENTED (Stage 0 2026-08-03, Stage 1
-  2026-08-04). Stage 1 is implemented but NOT CLOSED. Stages 2–3 remain PROPOSED and
-  owner-gated.** The live hand-written strategy is still the sole execution authority; no
+- **Status:** **Stage 0 IMPLEMENTED (2026-08-03). Stage 1 ENGINEERING-CLOSED (2026-08-04).
+  Stages 2–3 remain PROPOSED and owner-gated.** The live hand-written strategy is still the sole execution authority; no
   order, paper or live path consumes the adapter. Stage 1 added a shadow lane that
   *observes* it — see §5 Stage 1 outcome.
 - **Date:** 2026-08-03
@@ -221,19 +220,31 @@ Structural criteria 1–5 are met, each with a mutation watched turning its guar
 met and comfortably: 36.6 ms p95 per eight-instrument iteration, **1.46% of the 2.5 s
 budget** against a 20% limit, zero missed cycles.
 
-**Three things remain open, and two of them are decisions rather than work.**
+**Criterion 8 was closed by an admission contract, not by changing the authoritative lane.**
+This ADR predicted the conflict (#2) and the measurement confirmed it: the graph's warmup is
+302 bars, and at `history_days = 30` an NSE name on a **30m or 60m** interval yields
+~286 / ~154 bars and can never settle. Both obvious remedies — more history, a shorter
+warmup — change what the authoritative lane is handed, and the owner ruled both out of
+scope. So the lane now decides admissibility from the **resolved IR contract** (the graph's
+own declared warmup) against the configured timeframe and history, **before** evaluating:
+an impossible pairing is rejected up front with a stable explicit reason, never evaluated,
+never able to emit all-False output, and never able to repeat an in-hours refusal. Because
+admission reasons from configuration and a feed can contradict it, three consecutive
+post-admission refusals demote the pairing, naming both the expected and the observed bar
+count. Verdicts are cached per `(instrument, interval)` and re-decided on an interval change,
+so criterion 5 still holds.
 
-- **Criterion 6/7's denominator.** 110 settled bars on three instruments agreed 100% with
-  zero unexplained disagreements. That is a sanity check, not ≥ 20 live sessions.
-- **Criterion 8 will fail as configured, and this ADR predicted it (conflict #2).** The
-  graph's warmup is 302 bars; at `history_days = 30` an NSE name on a **30m or 60m** live
-  interval yields ~286 / ~154 bars and can *never* settle, producing a permanent in-hours
-  `INSUFFICIENT_HISTORY`. Both remedies — more history, or a shorter warmup — change what
-  the authoritative lane is handed or what the graph computes, so neither belongs in a
-  shadow-only slice. **Owner decision before Stage 1 can close.**
-- **Coverage is zero in production.** The default `trend_impulse_v3` has no mirror, so the
-  lane observes nothing unless an instrument is deliberately assigned `expanding_z_v4` —
-  itself an authoritative-trading change. **Owner decision before any measurement exists.**
+**Deferred by owner decision (2026-08-04), and explicitly NOT closure criteria:** criterion 6
+(≥ 20 live sessions × ≥ 3 instruments), criterion 7's denominator, the resident-memory half
+of 9, richer recorded OHLCV and replay fidelity. The stored market data is temporary
+validation material; it will be re-exported or re-accumulated when more brokers and APIs are
+connected. **These must be revisited before authority promotion, production deployment or
+commercial validation.**
+
+**Coverage in production remains zero** — the default `trend_impulse_v3` has no mirror, and
+assigning `expanding_z_v4` to an instrument changes what it trades. `GET /api/ir-shadow`
+reports `coverage.shadowed`, `coverage.unmirrored` and `coverage.rejected` so absence can
+never be misread as agreement.
 
 ### Stage 2 — paper-mode adoption (no real money)
 

@@ -57,6 +57,13 @@ class ShadowMetrics:
         self.agreements = 0
         self.disagreements = 0
         self.skipped_no_pairing = 0
+        #: Pairings refused by the admission validator, and why. A rejection is terminal
+        #: for that (instrument, interval) — it is not a failure repeated every scan.
+        self.rejections: dict[str, str] = {}
+        #: An admitted pairing that refused anyway. Stage 1 criterion 9 is about exactly
+        #: these: pre-admission refusals are configuration, post-admission ones are a
+        #: defect in the validator and must not blend in with them.
+        self.insufficient_history_after_admission = 0
         self.insufficient_history_in_hours = 0
         self.insufficient_history_out_of_hours = 0
         self.by_reason: Counter[str] = Counter()
@@ -98,6 +105,8 @@ class ShadowMetrics:
             self.disagreements += 1
             self.by_reason[observation.reason] += 1
             if observation.reason == INSUFFICIENT_HISTORY:
+                # Reached the evaluator at all means admission said yes.
+                self.insufficient_history_after_admission += 1
                 if market_open:
                     self.insufficient_history_in_hours += 1
                 else:
@@ -108,6 +117,14 @@ class ShadowMetrics:
     def skipped(self, instrument_key: str) -> None:
         """An instrument whose authoritative strategy has no IR mirror."""
         self.skipped_no_pairing += 1
+
+    def rejected(self, instrument_key: str, reason: str) -> None:
+        """An instrument whose configuration cannot satisfy the graph's declared warmup."""
+        self.rejections[instrument_key] = reason
+
+    def admitted(self, instrument_key: str) -> None:
+        """Clear a rejection — the configuration changed and now clears the warmup."""
+        self.rejections.pop(instrument_key, None)
 
     def loop(self, *, iteration_seconds: float, shadow_seconds: float,
              budget_seconds: float) -> None:
@@ -139,7 +156,11 @@ class ShadowMetrics:
             "by_reason": dict(self.by_reason),
             "insufficient_history_in_hours": self.insufficient_history_in_hours,
             "insufficient_history_out_of_hours": self.insufficient_history_out_of_hours,
+            "insufficient_history_after_admission":
+                self.insufficient_history_after_admission,
             "skipped_no_pairing": self.skipped_no_pairing,
+            "rejected_pairings": len(self.rejections),
+            "rejections": dict(self.rejections),
             "instruments": sorted(self.instruments),
             "last_observed_at": (self.last_observed_at.isoformat()
                                  if self.last_observed_at else None),

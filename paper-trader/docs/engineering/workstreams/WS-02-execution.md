@@ -133,7 +133,7 @@ WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ## 4. Completed
 
-### L1 Stage 1 — the shadow lane (2026-08-04)
+### L1 Stage 1 — the shadow lane (2026-08-04, engineering-closed)
 
 Owner-approved as a **shadow-only integration**. `EngineRunner.scan_signals` now evaluates
 the Component IR mirror of an instrument's authoritative strategy on the *same* frame the
@@ -165,19 +165,29 @@ Measured: 110/110 settled bars agree (100%), zero unexplained disagreements, eva
 3.8 ms, and 36.6 ms p95 per eight-instrument iteration = **1.46% of the 2.5 s signal budget**
 against a 20% limit, with zero missed cycles.
 
-**Two things Stage 1 is NOT.** It is not closed — criteria 6 (≥ 20 live sessions × ≥ 3
-instruments), 8 (in-hours refusals) and the resident-memory half of 9 need live sessions.
-And it is not Stage 2: paper, staged or live adoption needs a separate owner approval.
+**The admission contract (added at closure).** The measurement confirmed ADR 0011 conflict
+#2: the graph's 302-bar warmup and the live admission guard disagree, and at
+`history_days = 30` an NSE name on a **30m or 60m** interval yields ~286 / ~154 bars and can
+never settle. Rather than shorten the warmup or widen the authoritative lane's history —
+both ruled out of scope — the lane now decides admissibility **before evaluating**:
+required history from the resolved IR contract, available history from the configured
+timeframe and `history_days` via the segment's session length, rejection with a stable
+explicit reason, no evaluation, no all-False output, no repeated in-hours refusal. Verdicts
+cache per `(instrument, interval)` and re-decide on an interval change, so no restart is
+needed. Admission is predictive, so three consecutive post-admission refusals **demote** the
+pairing, naming both the expected and the observed bar count. Unknown interval or segment
+fail closed.
 
-**The finding to act on** (full detail in `docs/reports/2026-08-04-l1-stage1-shadow.md`): the
-graph's 302-bar warmup and the live admission guard disagree. At `history_days = 30`, an NSE
-name on a **30-minute or 60-minute** live interval yields ~286 / ~154 bars and can never
-settle — a permanent in-hours `INSUFFICIENT_HISTORY`. Both remedies (more history, or a
-shorter warmup) change what the authoritative lane is handed, so neither was applied here.
-Separately, shadow coverage in production is currently **zero**: the default
-`trend_impulse_v3` has no mirror, and assigning `expanding_z_v4` to an instrument is an
-authoritative-trading change. `GET /api/ir-shadow` reports coverage so "no disagreements"
-cannot be misread as agreement when it is absence.
+**What Stage 1 is NOT.** It is not Stage 2: paper, staged or live adoption needs a separate
+owner approval. And engineering-closed is not operationally validated — ≥ 20 live sessions,
+richer recorded OHLCV, replay fidelity, long-duration shadow statistics and the
+resident-memory measurement are **deferred by owner decision** and must be revisited before
+authority promotion, production deployment or commercial validation.
+
+Shadow coverage in production is **zero**: the default `trend_impulse_v3` has no mirror, and
+assigning `expanding_z_v4` to an instrument is an authoritative-trading change. `GET
+/api/ir-shadow` reports `coverage.shadowed`, `unmirrored` and `rejected` so absence cannot be
+misread as agreement.
 
 **Known gap, deliberately deferred.** `ir_shadow_enabled` is in `runtime_config.OVERRIDABLE`
 but **not** in the frontend's `overridable.ts` snapshot or `settingsMeta.ts`, so it is a knob

@@ -5,11 +5,12 @@ Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](e
 
 **Updated 2026-08-04** · branch `feat/exec-completeness` · the M-band (M1–M6) is closed,
 **L1 Stage 0** shipped a shared IR strategy adapter with an honest parity claim, and
-**L1 Stage 1** shipped the shadow lane: the engine now *observes* the IR mirror of an
-instrument's authoritative strategy and records disagreements. **The hand-written strategy
-remains the sole execution authority — nothing binds a graph to an instrument, and no order
-path reaches the IR.** Stage 1 is implemented but **not closed**, and Stage 2 (paper
-adoption) needs a separate owner approval.
+**L1 Stage 1 is ENGINEERING-CLOSED**: the engine *observes* the IR mirror of an instrument's
+authoritative strategy, records disagreements, and refuses up front any graph/timeframe/
+history pairing that could never satisfy the graph's declared warmup. **The hand-written
+strategy remains the sole execution authority — nothing binds a graph to an instrument, and
+no order path reaches the IR.** Long-duration native-broker validation is **deferred by
+owner decision**, not pending. Stage 2 (paper adoption) needs a separate owner approval.
 
 ---
 
@@ -108,25 +109,27 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**Two owner decisions, then Stage 1 can close.** Stage 1 shipped 2026-08-04 (evidence:
-`reports/2026-08-04-l1-stage1-shadow.md`). Its structural criteria are met and its cost is
-1.46% of the 2.5 s signal budget against a 20% limit. What it cannot do by itself:
+**The next bounded slice is the Strategy-OS execution-state architecture** — reconciling the
+Deployment object and the deployment-candidate lifecycle with IR-backed strategies, and
+defining who owns execution state across immutable graph versions, approved research
+evidence, deployment candidates, deployments, the legacy authoritative strategy and the
+non-authoritative shadow lane. Non-authoritative, contracts and guards only; the existing
+engine stays authoritative until a later owner-approved authority transition.
 
-1. **Nothing is shadowed in production.** The default `trend_impulse_v3` has no IR mirror, so
-   the lane observes nothing until an instrument is deliberately assigned `expanding_z_v4` —
-   which changes what that instrument actually trades. Owner's call, not the slice's.
-2. **The 302-bar warmup and the live admission guard disagree.** At `history_days = 30`, an
-   NSE name on a 30m or 60m interval can never settle the graph, so it would log a permanent
-   in-hours `INSUFFICIENT_HISTORY`. Both fixes touch the authoritative lane's inputs.
+**Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
+market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,
+long-duration production shadow statistics, frontend settings controls, usability testing.
+Revisit before authority promotion, production deployment or commercial validation.
 
-After those, Stage 1 needs ≥ 20 live sessions on ≥ 3 instruments before Stage 2 (paper
-adoption) may even be *proposed* — and Stage 2 is a separate owner approval regardless.
+Still true and worth knowing: **nothing is shadowed in production.** The default
+`trend_impulse_v3` has no IR mirror, and assigning `expanding_z_v4` to an instrument changes
+what it trades — an owner decision, not a slice's.
 
 ## 5. Verification state
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q  # from backend/
-3,061 passed · 6 skipped · EXIT 0
+3,083 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -141,7 +144,7 @@ $ .venv/bin/python scripts/ir_shadow_replay.py     # L1 Stage 1 measurement
 110/110 settled bars agree · 0 unexplained · eval p95 3.8 ms · loop share 1.46% · EXIT 0
 
 $ .venv/bin/python scripts/ir_shadow_mutations.py  # L1 Stage 1 guard proofs
-all 9 guards reddened on their own defect and were restored · EXIT 0
+all 11 guards reddened on their own defect and were restored · EXIT 0
 ```
 
 CI contract proof: removing `research_tests` from the backend workflow command turns

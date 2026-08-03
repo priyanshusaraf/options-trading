@@ -73,6 +73,112 @@ DISAGREEMENT_REASONS = (
 _DETAIL_LIMIT = 400
 
 
+#: Candle minutes per live-interval string. An interval absent here is refused rather than
+#: guessed: an admission decision made on a guessed bar length is not a decision.
+INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 60}
+
+#: Sessions per calendar week, used to turn `history_days` into a session count. Floored,
+#: and holidays are not modelled, so the estimate is deliberately on the low side: an
+#: optimistic count admits a graph that then refuses in the middle of a session, which is
+#: the failure this validator exists to prevent.
+SESSIONS_PER_WEEK = 5
+
+#: Consecutive post-admission `INSUFFICIENT_HISTORY` refusals tolerated before the pairing
+#: is demoted to rejected. Admission reasons from *configuration*; a feed can still disagree
+#: with it (the mock provider returns 161 bars whatever it is asked for). Predicting
+#: correctly is not the contract — the contract is that a pairing cannot produce repeated
+#: in-hours refusals, so observation gets the last word. Small, because there is nothing to
+#: learn from the fourth identical refusal that the third did not already say.
+REFUSALS_BEFORE_DEMOTION = 3
+
+
+@dataclass(frozen=True)
+class Admission:
+    """Whether a graph's declared warmup can be satisfied by the configured history.
+
+    Decided from **configuration**, before any evaluation, because the alternative is to
+    learn it from a refusal — and a refusal repeated every 2.5 s for a whole session is
+    both useless and not free.
+    """
+
+    ok: bool
+    instrument_key: str
+    interval: str
+    warmup: int
+    expected_bars: int
+    sessions: int
+    bars_per_session: int
+    reason: str
+
+
+def bars_per_session(segment: str, interval: str) -> int:
+    """Completed bars one session of `segment` can print at `interval`.
+
+    Rounds **up**: the part-bar at the close is a bar the feed returns. An unknown segment
+    falls back to the *shortest* session (the equity window), never the longest — guessing
+    MCX's 14½ hours for something unrecognised would admit a configuration that cannot
+    settle.
+    """
+    from app.core.market_hours import _DEFAULT, SESSIONS
+
+    minutes = INTERVAL_MINUTES.get(interval)
+    if not minutes:
+        return 0
+    opens, closes = SESSIONS.get(segment, _DEFAULT)
+    span = (closes.hour * 60 + closes.minute) - (opens.hour * 60 + opens.minute)
+    return -(-span // minutes)
+
+
+def trading_sessions(history_days: int) -> int:
+    return max(0, int(history_days)) * SESSIONS_PER_WEEK // 7
+
+
+def admit(*, instrument_key: str, segment: str, interval: str, history_days: int,
+          warmup: int) -> Admission:
+    """Decide whether `instrument_key` may be shadowed at all under this configuration."""
+    per_session = bars_per_session(segment, interval)
+    sessions = trading_sessions(history_days)
+    expected = per_session * sessions
+
+    def verdict(ok: bool, reason: str) -> Admission:
+        return Admission(ok=ok, instrument_key=instrument_key, interval=interval,
+                         warmup=warmup, expected_bars=expected, sessions=sessions,
+                         bars_per_session=per_session, reason=reason)
+
+    if not per_session:
+        return verdict(False, f"{instrument_key}: live interval {interval!r} is not one this "
+                              f"validator knows how to size; refusing rather than guessing")
+    if expected <= warmup:
+        return verdict(False, (
+            f"{instrument_key}: {interval} on {segment} yields about {expected} bars in "
+            f"{history_days} days ({sessions} sessions x {per_session}), which cannot settle "
+            f"a graph whose declared warmup is {warmup}; at least {warmup + 1} are needed. "
+            f"Shadow evaluation is disabled for this instrument until the configuration "
+            f"changes."))
+    return verdict(True, (
+        f"{instrument_key}: {interval} on {segment} yields about {expected} bars, clearing "
+        f"a declared warmup of {warmup}"))
+
+
+def demote(admission: Admission, *, observed_bars: int, refusals: int) -> Admission:
+    """Turn an admitted pairing into a rejected one after the feed contradicts admission.
+
+    The reason names **both** numbers — what the configuration predicted and what the feed
+    actually returned — because the gap between them is the thing someone has to fix, and a
+    demotion that only said "not enough bars" would hide which of the two is wrong.
+    """
+    return Admission(
+        ok=False, instrument_key=admission.instrument_key, interval=admission.interval,
+        warmup=admission.warmup, expected_bars=admission.expected_bars,
+        sessions=admission.sessions, bars_per_session=admission.bars_per_session,
+        reason=(
+            f"{admission.instrument_key}: demoted after {refusals} consecutive refusals — "
+            f"admission expected about {admission.expected_bars} bars at "
+            f"{admission.interval} but the feed returned {observed_bars}, against a "
+            f"declared warmup of {admission.warmup}. Shadow evaluation is disabled for "
+            f"this instrument until the configuration or the feed changes."))
+
+
 @dataclass
 class ShadowPairing:
     """One hand-written strategy and the graph that mirrors it.
@@ -274,6 +380,8 @@ def observe(*, instrument_key: str, authoritative_key: str,
 
 
 __all__ = [
+    "INTERVAL_MINUTES", "SESSIONS_PER_WEEK", "Admission", "admit", "bars_per_session",
+    "trading_sessions",
     "ADAPTER_REFUSAL", "AGREEMENT", "AUTHORITATIVE_UNAVAILABLE", "DISAGREEMENT_REASONS",
     "EVALUATION_ERROR", "FLAG_DIVERGENCE", "INSUFFICIENT_HISTORY", "MISSING_GRAPH_INPUT",
     "PAIRING_BUILDERS", "ShadowObservation", "ShadowPairing", "UNEXPECTED_ERROR",

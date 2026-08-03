@@ -8,3 +8,4 @@ ledger-backup-*.sql
 # no override — so an untracked report here would block every future deploy.
 report_run_*.md
 report_generated_*.md
+.ir_shadow_mutation_backup
