@@ -3,10 +3,13 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · the M-band (M1–M6) is closed and
-**L1 Stage 0** is complete: a shared IR strategy adapter now exists with an honest parity
-claim. **Stage 1 (shadow) requires owner approval.** The live engine remains the sole
-execution authority — nothing binds a graph to an instrument.
+**Updated 2026-08-04** · branch `feat/exec-completeness` · the M-band (M1–M6) is closed,
+**L1 Stage 0** shipped a shared IR strategy adapter with an honest parity claim, and
+**L1 Stage 1** shipped the shadow lane: the engine now *observes* the IR mirror of an
+instrument's authoritative strategy and records disagreements. **The hand-written strategy
+remains the sole execution authority — nothing binds a graph to an instrument, and no order
+path reaches the IR.** Stage 1 is implemented but **not closed**, and Stage 2 (paper
+adoption) needs a separate owner approval.
 
 ---
 
@@ -105,24 +108,25 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**L1 Stage 1 — the shadow lane. Requires owner approval before implementation.**
+**Two owner decisions, then Stage 1 can close.** Stage 1 shipped 2026-08-04 (evidence:
+`reports/2026-08-04-l1-stage1-shadow.md`). Its structural criteria are met and its cost is
+1.46% of the 2.5 s signal budget against a 20% limit. What it cannot do by itself:
 
-Stage 0 is done: `app/strategy/ir_adapter.py` presents a resolved graph as a `Strategy`,
-with a parity claim rebuilt through the adapter itself rather than around it. Six silent-
-failure defects are closed — insufficient history now refuses instead of masking every
-signal, `risk_model` is carried instead of silently disabling the ATR ratchet, backtest and
-live agree on which bars are settled, graph-backed keys are stable across edits and never
-substitutable, and the frame contract follows the graph's declared inputs.
+1. **Nothing is shadowed in production.** The default `trend_impulse_v3` has no IR mirror, so
+   the lane observes nothing until an instrument is deliberately assigned `expanding_z_v4` —
+   which changes what that instrument actually trades. Owner's call, not the slice's.
+2. **The 302-bar warmup and the live admission guard disagree.** At `history_days = 30`, an
+   NSE name on a 30m or 60m interval can never settle the graph, so it would log a permanent
+   in-hours `INSUFFICIENT_HISTORY`. Both fixes touch the authoritative lane's inputs.
 
-Stage 1 adds a shadow lane that evaluates a graph alongside the authoritative hand-written
-strategy and records divergence, reaching no order. Its entry criteria — structural and
-quantitative — are in ADR 0011 §5. **Do not begin without owner approval.**
+After those, Stage 1 needs ≥ 20 live sessions on ≥ 3 instruments before Stage 2 (paper
+adoption) may even be *proposed* — and Stage 2 is a separate owner approval regardless.
 
 ## 5. Verification state
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q  # from backend/
-2,856 passed · 6 skipped · EXIT 0
+3,061 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -131,7 +135,13 @@ $ .venv/bin/python scripts/backtest_smoke.py
 SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build          # from frontend/
-202 passed · TYPECHECK OK · BUILD OK
+222 passed · TYPECHECK OK · BUILD OK          (frontend untouched by L1 Stage 1)
+
+$ .venv/bin/python scripts/ir_shadow_replay.py     # L1 Stage 1 measurement
+110/110 settled bars agree · 0 unexplained · eval p95 3.8 ms · loop share 1.46% · EXIT 0
+
+$ .venv/bin/python scripts/ir_shadow_mutations.py  # L1 Stage 1 guard proofs
+all 9 guards reddened on their own defect and were restored · EXIT 0
 ```
 
 CI contract proof: removing `research_tests` from the backend workflow command turns

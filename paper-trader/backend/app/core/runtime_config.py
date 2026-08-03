@@ -67,6 +67,9 @@ OVERRIDABLE = (
     "ledger_auto_reanchor", "ledger_reanchor_tolerance",
     # scheduled-event risk (EIA releases, index weekdays, bullion expiry, earnings)
     "event_risk_enabled", "event_risk_flatten", "event_risk_flatten_lead_minutes",
+    # L1 Stage 1 — the Component IR shadow lane. Observer only; overridable so it can be
+    # switched off on a live box without a deploy or a restart (ADR 0011 criterion 5).
+    "ir_shadow_enabled",
 )
 
 

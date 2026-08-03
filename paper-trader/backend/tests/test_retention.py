@@ -13,7 +13,8 @@ DOWNSAMPLED rather than deleted so history keeps its shape.
 import datetime as dt
 
 from app.db.models import (
-    CapitalState, EquitySnapshot, OptionData, OrderJournal, SignalEvent, Trade,
+    CapitalState, EquitySnapshot, IrShadowDivergence, OptionData, OrderJournal,
+    SignalEvent, Trade,
 )
 from app.db.session import SessionLocal, init_db
 from app.engine.retention import RetentionPolicy, prune
@@ -33,6 +34,14 @@ def _seed():
                              delta=0.5))
             s.add(SignalEvent(instrument_key="NIFTY", time=ts, signal="LONG_ENTRY",
                               close=24000.0, z=1.2, slope=1.0))
+            s.add(IrShadowDivergence(
+                observed_at=ts, bar_time=ts, instrument_key="NIFTY",
+                authoritative_strategy_key="expanding_z_v4",
+                shadow_strategy_key="ir.strategy.expanding_z_impulse",
+                graph_address="sha256:deadbeef", warmup_state="settled",
+                declared_warmup=302, frame_id="sha256:feed", frame_bars=400,
+                reason="FLAG_DIVERGENCE", detail="longEntry", eval_ms=8.0,
+                market_open=True))
         # equity: one row a minute for the last two hours, plus older days
         for i in range(120):
             s.add(EquitySnapshot(time=NOW - dt.timedelta(minutes=i), equity=50000.0,
@@ -68,6 +77,7 @@ def _counts():
             "trades": s.query(Trade).count(),
             "journal": s.query(OrderJournal).count(),
             "capital": s.query(CapitalState).count(),
+            "ir_shadow_divergences": s.query(IrShadowDivergence).count(),
         }
 
 
@@ -140,6 +150,7 @@ def test_a_zero_or_negative_window_disables_that_table_rather_than_deleting_ever
     assert c["option_data"] == before["option_data"]
     assert c["signal_events"] == before["signal_events"]
     assert c["equity"] == before["equity"]
+    assert c["ir_shadow_divergences"] == before["ir_shadow_divergences"]
 
 
 def test_report_names_every_table_it_touched():
@@ -148,5 +159,19 @@ def test_report_names_every_table_it_touched():
     _seed()
     report = prune(NOW, RetentionPolicy(option_data_days=90, signal_events_days=90,
                                         equity_full_days=7))
-    assert set(report) == {"option_data", "signal_events", "equity_snapshots"}
+    assert set(report) == {"option_data", "signal_events", "equity_snapshots",
+                           "ir_shadow_divergences"}
     assert all(isinstance(v, int) for v in report.values())
+
+
+def test_shadow_divergences_age_out_on_the_signal_telemetry_window():
+    """The shadow record is telemetry of the same class as `signal_events` and shares its
+    window deliberately — a separate knob would be a new setting invisible in the Settings
+    UI, and there is no reason to keep a disagreement longer than the signal it concerns."""
+    _seed()
+    assert _counts()["ir_shadow_divergences"] == 4
+
+    report = prune(NOW, RetentionPolicy(signal_events_days=90))
+
+    assert report["ir_shadow_divergences"] == 1        # the 120-day-old row only
+    assert _counts()["ir_shadow_divergences"] == 3

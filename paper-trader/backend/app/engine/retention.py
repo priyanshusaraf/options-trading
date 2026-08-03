@@ -24,7 +24,8 @@ from dataclasses import dataclass
 
 from sqlalchemy import delete, select
 
-from app.db.models import EquitySnapshot, OptionData, SignalEvent
+from app.db.models import (
+    EquitySnapshot, IrShadowDivergence, OptionData, SignalEvent)
 from app.db.session import SessionLocal
 
 
@@ -40,7 +41,8 @@ class RetentionPolicy:
 def prune(now: dt.datetime, policy: RetentionPolicy | None = None) -> dict[str, int]:
     """Apply `policy` and return {table: rows_removed}. Idempotent."""
     p = policy or RetentionPolicy()
-    report = {"option_data": 0, "signal_events": 0, "equity_snapshots": 0}
+    report = {"option_data": 0, "signal_events": 0, "equity_snapshots": 0,
+              "ir_shadow_divergences": 0}
     if not p.enabled:
         return report
 
@@ -53,6 +55,13 @@ def prune(now: dt.datetime, policy: RetentionPolicy | None = None) -> dict[str, 
             cutoff = now - dt.timedelta(days=p.signal_events_days)
             report["signal_events"] = s.execute(
                 delete(SignalEvent).where(SignalEvent.time < cutoff)).rowcount or 0
+            # L1 Stage 1 shadow disagreements share the signal-telemetry window on
+            # purpose: same class of row, and a disagreement is not worth keeping longer
+            # than the signal it concerns. Sharing the knob also avoids shipping a
+            # Settings field with no UI to show it.
+            report["ir_shadow_divergences"] = s.execute(
+                delete(IrShadowDivergence)
+                .where(IrShadowDivergence.observed_at < cutoff)).rowcount or 0
         if p.equity_full_days > 0 and p.equity_downsample_minutes > 0:
             report["equity_snapshots"] = _downsample_equity(
                 s, now - dt.timedelta(days=p.equity_full_days),

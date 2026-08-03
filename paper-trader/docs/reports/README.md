@@ -38,6 +38,7 @@ Status key:
 | [`2026-08-02-production-architecture-audit.md`](2026-08-02-production-architecture-audit.md) | 2026-08-02 | Architecture-only audit ahead of Phases 3/5/6/9/13; the five load-bearing identity decisions that get expensive later. Source of the migration below. | current |
 | [`2026-08-02-architecture-migration.md`](2026-08-02-architecture-migration.md) | 2026-08-02 | Working record of migration phases A–H, each additive with an equivalence test. | **stale** — opens "Nothing in this migration is committed"; false since `cc53bba` |
 | [`2026-08-02-monday-watch-list.md`](2026-08-02-monday-watch-list.md) | 2026-08-02 | Operational brief for the first trading session after a 60-commit window: what could break, the symptom, and the rollback. | current |
+| [`2026-08-04-l1-stage1-shadow.md`](2026-08-04-l1-stage1-shadow.md) | 2026-08-04 | L1 Stage 1 evidence: the shadow-only IR lane — isolation proofs, nine mutations watched turning guards red, measured agreement and loop cost, and the two owner decisions Stage 1 cannot close without. | current |
 | [`2026-08-02-openalgo-competitive-teardown.md`](2026-08-02-openalgo-competitive-teardown.md) | 2026-08-02 | Competitor architecture teardown of OpenAlgo (AGPL — ideas only, never code), read as a specification of what users expect. | current |
 | [`STATUS.html`](STATUS.html) | 2026-07-25 | Standalone HTML status board: KPIs, open items, gates. Was the at-a-glance view before `PROGRESS.md` existed. | **stale** — frozen 2026-07-25 snapshot; trade counts and deploy state are wrong |
 

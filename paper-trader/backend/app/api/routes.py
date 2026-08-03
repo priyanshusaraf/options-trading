@@ -904,6 +904,37 @@ def reset_setting(body: SettingKey, request: Request):
     return {"key": body.key, "reset": True}
 
 
+# ── L1 Stage 1: the Component IR shadow lane (read-only) ─────────────────────
+@router.get("/api/ir-shadow")
+def ir_shadow_observability(request: Request, limit: int = 50):
+    """What the shadow lane has seen. Observability only — there is deliberately **no**
+    write route here: the lane's on/off flag is the `ir_shadow_enabled` runtime_config key
+    and moves through `/api/settings`, so this cannot become a second way to steer it.
+
+    `coverage` matters as much as `metrics`. Production's default strategy has no IR
+    mirror, so "no disagreements" is usually a statement about how little is shadowed
+    rather than about how well the two lanes agree.
+    """
+    from app.engine import ir_shadow, ir_shadow_store
+
+    runner = _runner(request)
+    assignments = dict(getattr(runner, "strategy_keys", {}) or {})
+    shadowed = sorted(k for k, s in assignments.items() if ir_shadow.pairing_for(s))
+    unmirrored = sorted(k for k, s in assignments.items() if not ir_shadow.pairing_for(s))
+    return {
+        "enabled": bool(runner.params.get("ir_shadow_enabled", False)),
+        "metrics": runner.shadow_metrics.snapshot(),
+        "coverage": {
+            "shadowed": shadowed,
+            "unmirrored": unmirrored,
+            "pairings": sorted(ir_shadow.PAIRING_BUILDERS),
+        },
+        "reasons": list(ir_shadow.DISAGREEMENT_REASONS),
+        "recorded_by_reason": ir_shadow_store.counts_by_reason(),
+        "divergences": ir_shadow_store.recent(limit=limit),
+    }
+
+
 # ── intraday vs overnight analytics + option dataset ─────────────────────────
 @router.get("/api/analytics")
 def analytics_split(request: Request, segment: str | None = None):

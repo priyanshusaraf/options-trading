@@ -54,6 +54,7 @@ from app.engine.kite_order_client import exchange_for_segment, product_for_segme
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
+from app.engine.ir_shadow_metrics import ShadowMetrics
 from app.engine import readiness
 from app.market_data.candles import candles_to_df, frame_from, validate_candles
 from app.market_data.quality import FeedQuality
@@ -176,6 +177,11 @@ class EngineRunner:
         self._gap_cache: tuple | None = None   # (date, open, prev_close) — index gap, once/day (fix D)
         self._gap_logged_day = None            # de-dupe the daily gap-guard alert
         self.tick_count = 0
+        # L1 Stage 1 — the Component IR shadow lane's counters (ADR 0011). Observer only:
+        # nothing in the entry, exit, sizing or accounting path reads them, and the lane
+        # is off unless `params["ir_shadow_enabled"]` says otherwise.
+        self.shadow_metrics = ShadowMetrics()
+        self._shadow_seconds = 0.0   # shadow cost accumulated within one signal iteration
         self._idle_logged = False  # de-dupe the "markets closed" log line
         self._lock = asyncio.Lock()           # serialise risk vs signal lane DB mutations
         self.on_update = None                 # async callback(state) — signal-lane snapshot
@@ -445,8 +451,9 @@ class EngineRunner:
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
             strat = get_strategy(self.strategy_keys.get(key))
+            signal_frame = frame_from(candles)
             if strat.key == DEFAULT_STRATEGY_KEY:
-                sig = strat.signals(frame_from(candles), ema_length=s.ema_length,
+                sig = strat.signals(signal_frame, ema_length=s.ema_length,
                                     z_length=s.z_length, entry_z=s.entry_z,
                                     slope_lookback=s.slope_lookback)
                 # latest_state, NOT to_payload: the payload walks every bar to
@@ -454,8 +461,13 @@ class EngineRunner:
                 # strategy/signals.py — it was 76% of the scan's runtime.
                 latest = latest_state(sig, entry_z=s.entry_z)
             else:
-                sig = strat.signals(frame_from(candles))
+                sig = strat.signals(signal_frame)
                 latest = self._generic_latest(sig)
+            # L1 Stage 1 — observe the IR mirror on the SAME frame the authoritative
+            # strategy just consumed. Deliberately before the `if not latest` guard: a
+            # frame the authoritative lane found nothing in is exactly the case a shadow
+            # is meant to see. Nothing below reads its result.
+            self._observe_shadow(key, strat, signal_frame, sig)
             if not latest:
                 continue
             held = opens.get(key)
@@ -486,6 +498,45 @@ class EngineRunner:
                         self.state[key]["ratchet_exit"] = self._apply_ratchet(held, candles, rm)
                 except Exception as e:
                     log.error(f"ratchet update failed: {e}", instrument=key)
+
+    def _observe_shadow(self, key: str, strat, signal_frame, sig) -> None:
+        """L1 Stage 1 — evaluate the IR mirror of `strat` and record any disagreement.
+
+        **This method may not influence anything.** It returns None, writes nothing into
+        `self.state`, `self.params`, `self.strategy_keys` or the broker, and swallows every
+        failure: a shadow that can interrupt the authoritative lane would be a worse defect
+        than the one it exists to detect. Its cost is measured, not hidden.
+
+        The whole body is inside one `try` on purpose — including the flag read. Any way
+        this can fail is a way the lane fails closed and the engine carries on.
+        """
+        try:
+            if not self.params.get("ir_shadow_enabled", False):
+                return
+            from app.engine import ir_shadow, ir_shadow_store
+
+            if ir_shadow.pairing_for(strat.key) is None:
+                self.shadow_metrics.skipped(key)
+                return
+            started = time.perf_counter()
+            observation = ir_shadow.observe(
+                instrument_key=key, authoritative_key=strat.key,
+                authoritative_frame=sig, frame=signal_frame, now=self.provider.now())
+            self._shadow_seconds += time.perf_counter() - started
+            if observation is None:
+                return
+            # Every observation the live lane makes is taken on a tradable instrument —
+            # `scan_signals` has already skipped the closed ones — so these are the
+            # in-hours events Stage 1 criterion 8 is about.
+            self.shadow_metrics.observe(observation, market_open=True)
+            if observation.reason != ir_shadow.AGREEMENT:
+                if ir_shadow_store.record(observation, market_open=True):
+                    log.warn(f"IR shadow disagreement: {observation.reason} — "
+                             f"{observation.detail}", instrument=key,
+                             event="IR_SHADOW_DIVERGENCE")
+        except Exception as e:
+            log.error(f"IR shadow lane error (authoritative lane unaffected): {e}",
+                      instrument=key, event="IR_SHADOW")
 
     def _apply_ratchet(self, pos, candles, rm) -> bool:
         """H2 — drive the backtest-validated RatchetState on the underlying's COMPLETED
@@ -2250,6 +2301,8 @@ class EngineRunner:
         # terminal state (up to order_timeout_seconds). Runs OFF the event loop
         # (see _signal_iteration) so a slow entry never freezes the risk scheduler,
         # WS heartbeats, or the cockpit — the same guarantee the risk lane already has.
+        iteration_started = time.perf_counter()
+        self._shadow_seconds = 0.0     # L1 Stage 1 — per-iteration shadow cost
         self.refresh_params()          # pick up live Settings overrides
         self._maybe_refresh_funds()    # cache real account balance (live only)
         self._maybe_reconcile_orphans()
@@ -2263,6 +2316,16 @@ class EngineRunner:
         self._maybe_check_ledger()     # H10: periodic cash-invariant drift alarm
         self._maybe_prune_telemetry()  # bounded DB growth on a 1GB box (once a day, flat)
         self.tick_count += 1
+        # L1 Stage 1 — what this iteration cost and how much of it was the shadow. Last,
+        # so a measurement failure cannot skip any of the work above.
+        try:
+            self.shadow_metrics.loop(
+                iteration_seconds=time.perf_counter() - iteration_started,
+                shadow_seconds=self._shadow_seconds,
+                budget_seconds=float(self.params.get(
+                    "signal_loop_seconds", self.settings.signal_loop_seconds)))
+        except Exception:
+            pass
 
     async def _signal_iteration(self) -> None:
         # Offload the blocking body but keep the lock across it, so the single shared

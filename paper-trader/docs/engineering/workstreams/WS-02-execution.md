@@ -133,11 +133,71 @@ WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ## 4. Completed
 
+### L1 Stage 1 — the shadow lane (2026-08-04)
+
+Owner-approved as a **shadow-only integration**. `EngineRunner.scan_signals` now evaluates
+the Component IR mirror of an instrument's authoritative strategy on the *same* frame the
+authoritative strategy just consumed, compares the newest bar, and persists disagreements.
+**The hand-written strategy remains the sole execution authority**, and nothing reads the
+observation back.
+
+| Piece | Where |
+|---|---|
+| observer (pairing, comparison, classification, frame identity) | `app/engine/ir_shadow.py` |
+| record | `app/engine/ir_shadow_store.py`, `ir_shadow_divergences`, migration `0010` |
+| numbers | `app/engine/ir_shadow_metrics.py` |
+| read surface | `GET /api/ir-shadow` (no frontend — deliberately out of scope) |
+| flag | `Settings.ir_shadow_enabled = False`, `runtime_config`-overridable, fail-closed |
+| measurement / guard proofs | `scripts/ir_shadow_replay.py`, `scripts/ir_shadow_mutations.py` |
+
+Pairing is by **authoritative strategy key** (`expanding_z_v4` → the `expanding_z` graph): a
+graph run against an instrument on a different strategy would compare two different
+strategies and call the difference a divergence.
+
+Isolation is proven four ways — static transitive imports, every broker/order seam replaced
+with a trap during a real scan, engine state identical with the lane on and off, and failures
+injected at each layer leaving the authoritative output byte-identical. Nine mutations were
+watched turning those guards red (`scripts/ir_shadow_mutations.py`). The harness immediately
+earned itself: the obvious "leak into `self.state`" mutation is a no-op, because the observer
+runs *before* the state entry is built — a guard that looked green for the wrong reason.
+
+Measured: 110/110 settled bars agree (100%), zero unexplained disagreements, evaluation p95
+3.8 ms, and 36.6 ms p95 per eight-instrument iteration = **1.46% of the 2.5 s signal budget**
+against a 20% limit, with zero missed cycles.
+
+**Two things Stage 1 is NOT.** It is not closed — criteria 6 (≥ 20 live sessions × ≥ 3
+instruments), 8 (in-hours refusals) and the resident-memory half of 9 need live sessions.
+And it is not Stage 2: paper, staged or live adoption needs a separate owner approval.
+
+**The finding to act on** (full detail in `docs/reports/2026-08-04-l1-stage1-shadow.md`): the
+graph's 302-bar warmup and the live admission guard disagree. At `history_days = 30`, an NSE
+name on a **30-minute or 60-minute** live interval yields ~286 / ~154 bars and can never
+settle — a permanent in-hours `INSUFFICIENT_HISTORY`. Both remedies (more history, or a
+shorter warmup) change what the authoritative lane is handed, so neither was applied here.
+Separately, shadow coverage in production is currently **zero**: the default
+`trend_impulse_v3` has no mirror, and assigning `expanding_z_v4` to an instrument is an
+authoritative-trading change. `GET /api/ir-shadow` reports coverage so "no disagreements"
+cannot be misread as agreement when it is absence.
+
+**Known gap, deliberately deferred.** `ir_shadow_enabled` is in `runtime_config.OVERRIDABLE`
+but **not** in the frontend's `overridable.ts` snapshot or `settingsMeta.ts`, so it is a knob
+the Settings screen cannot show — the failure mode `settingsMeta.test.ts` exists to prevent.
+This is the cost of constraint 10 (no frontend in this slice), not an oversight: closing it
+is two data entries in `frontend/src/views/`.
+
 ### L1 Stage 0 — the shared IR strategy adapter (2026-08-03)
 
 `app/strategy/ir_adapter.py` presents a resolved Component IR graph behind the `Strategy`
 contract. **It changes nothing the engine executes**: no order, paper, shadow or live path
 consumes it, and a test asserts `app/engine/*` imports neither the adapter nor `app.ir`.
+
+> **Superseded by Stage 1 (2026-08-04)** on that last clause only. The engine now reaches the
+> IR through `app/engine/ir_shadow.py`, and the substring guard that phrase describes would
+> have gone on passing while meaning nothing — the shadow module's name contains neither
+> string. It was replaced by
+> `test_the_engine_reaches_the_ir_only_through_the_shadow_lane`, which asserts the narrower
+> thing that is still true: the shadow lane is the engine's only bridge to the IR, and the
+> order path has no bridge at all. Everything else in this section stands.
 
 Placement is deliberate. The adapter is *not* in `app/ir/`, because
 `app/ir/strategies/expanding_z.py` already imports `app.strategy.registry` — its kernels

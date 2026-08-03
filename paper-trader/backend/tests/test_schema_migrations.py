@@ -115,7 +115,7 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
 
-    assert migrate.head_revision() == "0009"
+    assert migrate.head_revision() == "0010"
     assert set(schema["projects"]["columns"]) == {
         "project_id", "name", "description", "status", "created_at", "updated_at",
     }
@@ -271,7 +271,7 @@ def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_pa
                 "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
             ), {"identifier": identifier, "version": version})
 
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
     with engine.connect() as connection:
         layouts = connection.execute(sa.text(
             "SELECT graph_identifier, graph_version FROM ir_graph_layouts"
@@ -327,7 +327,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0009"
+    assert migrate.schema_version(engine) == "0010"
 
     with engine.begin() as connection:
         connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
@@ -339,7 +339,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0009"
+    assert migrate.schema_version(engine) == "0010"
 
 
 def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
@@ -382,7 +382,7 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
     assert position == ("n_ema", 10.0, 20.0)
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
 
 
 def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
@@ -408,7 +408,7 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
         )).one()
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
 
 
 def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_path):
@@ -456,7 +456,7 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
             "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
         )).one() == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
 
 
 def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_path):
@@ -485,7 +485,7 @@ def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_pa
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
     assert capital == (50000.0, 49000.0, -1000.0)
     assert graph.content_address.startswith("sha256:")
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
 
 
 def test_review_state_migration_refuses_populated_downgrade(tmp_path):
@@ -504,7 +504,7 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0007")
 
-    assert migrate.schema_version(engine) == "0009"
+    assert migrate.schema_version(engine) == "0010"
 
 
 def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp_path):
@@ -534,7 +534,7 @@ def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp
         assert connection.execute(sa.text(
             "SELECT cash FROM capital_state WHERE id = 1"
         )).scalar_one() == 49000.0
-    assert migrate.upgrade_to_head(engine) == "0009"
+    assert migrate.upgrade_to_head(engine) == "0010"
 
 
 def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
@@ -565,7 +565,7 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0008")
 
-    assert migrate.schema_version(engine) == "0009"
+    assert migrate.schema_version(engine) == "0010"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):

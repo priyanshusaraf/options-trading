@@ -1,8 +1,10 @@
 # ADR 0011: Staged adoption of the Component IR runtime in the live path
 
-- **Status:** **Stage 0 APPROVED and IMPLEMENTED (2026-08-03). Stages 1–3 remain PROPOSED
-  and owner-gated.** The live engine is still the sole execution authority; nothing binds a
-  graph to an instrument, and no order, paper, shadow or live path consumes the adapter.
+- **Status:** **Stages 0 and 1 APPROVED and IMPLEMENTED (Stage 0 2026-08-03, Stage 1
+  2026-08-04). Stage 1 is implemented but NOT CLOSED. Stages 2–3 remain PROPOSED and
+  owner-gated.** The live hand-written strategy is still the sole execution authority; no
+  order, paper or live path consumes the adapter. Stage 1 added a shadow lane that
+  *observes* it — see §5 Stage 1 outcome.
 - **Date:** 2026-08-03
 - **Owners:** WS-02 execution, WS-01 Component IR, WS-03 research plane
 - **Depends on:** RFC 0001 (Appendix C(d)), ADR 0001, the S3.3 equivalence proof, S4.1–S4.6 research binding
@@ -205,6 +207,33 @@ shadow path reaches it.
 **Exit criterion:** N sessions of recorded divergence on real market data, with a report of
 per-bar agreement. `research/shadow.py`'s `MIN_SHADOW_SESSIONS = 5` is the existing precedent for
 what N should be, though live sessions warrant more.
+
+**Stage 1 outcome, 2026-08-04. Implemented; NOT closed.** Evidence and raw numbers:
+`docs/reports/2026-08-04-l1-stage1-shadow.md`. Built as `app/engine/ir_shadow.py` (observer),
+`ir_shadow_store.py` + `ir_shadow_divergences` + migration `0010` (record),
+`ir_shadow_metrics.py` (numbers), `GET /api/ir-shadow` (read surface), and
+`Settings.ir_shadow_enabled` (fail-closed, `runtime_config`-overridable, no deploy or
+restart). Pairing is by authoritative strategy key, so an instrument whose strategy has no
+mirror is skipped and counted rather than compared against a different strategy.
+
+Structural criteria 1–5 are met, each with a mutation watched turning its guard red
+(`scripts/ir_shadow_mutations.py`, nine mutations, all reverted). Criterion 9's cost half is
+met and comfortably: 36.6 ms p95 per eight-instrument iteration, **1.46% of the 2.5 s
+budget** against a 20% limit, zero missed cycles.
+
+**Three things remain open, and two of them are decisions rather than work.**
+
+- **Criterion 6/7's denominator.** 110 settled bars on three instruments agreed 100% with
+  zero unexplained disagreements. That is a sanity check, not ≥ 20 live sessions.
+- **Criterion 8 will fail as configured, and this ADR predicted it (conflict #2).** The
+  graph's warmup is 302 bars; at `history_days = 30` an NSE name on a **30m or 60m** live
+  interval yields ~286 / ~154 bars and can *never* settle, producing a permanent in-hours
+  `INSUFFICIENT_HISTORY`. Both remedies — more history, or a shorter warmup — change what
+  the authoritative lane is handed or what the graph computes, so neither belongs in a
+  shadow-only slice. **Owner decision before Stage 1 can close.**
+- **Coverage is zero in production.** The default `trend_impulse_v3` has no mirror, so the
+  lane observes nothing unless an instrument is deliberately assigned `expanding_z_v4` —
+  itself an authoritative-trading change. **Owner decision before any measurement exists.**
 
 ### Stage 2 — paper-mode adoption (no real money)
 

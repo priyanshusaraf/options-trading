@@ -1214,3 +1214,61 @@ class EarningsEvent(Base):
     purpose: Mapped[str] = mapped_column(String(128), default="")
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class IrShadowDivergence(Base):
+    """L1 Stage 1 — one recorded disagreement between the authoritative strategy and its
+    Component IR mirror.
+
+    **This table is telemetry, never a money record.** Nothing in the execution path reads
+    it; it exists so a disagreement observed weeks ago can be attributed to an exact graph
+    version, an exact bar and an exact input frame, which is the whole point of running a
+    shadow lane before adopting one.
+
+    Only *disagreements* land here. Agreeing bars are counted in memory
+    (`app/engine/ir_shadow_metrics.py`) — persisting every agreeing bar would add tens of
+    thousands of rows a week on a 1 GB box and tell you nothing you did not already know.
+
+    `ir_json` is nullable **on purpose**: NULL means the graph produced no verdict at all
+    (it refused — insufficient history, a missing input, a runtime error), which is a
+    different fact from a verdict of four `false` flags. Collapsing those two is the exact
+    silent-degradation shape ADR 0011 exists to prevent, so the column may not be given a
+    default.
+    """
+
+    __tablename__ = "ir_shadow_divergences"
+    __table_args__ = (
+        # The signal lane re-scans the same completed bar every 2.5 s until the next one
+        # prints, so one bar would otherwise arrive dozens of times. One (instrument, bar,
+        # graph, reason) is one row; `reason` is in the key because a bar that later fails
+        # a *different* way is a different fact worth keeping.
+        Index("uq_ir_shadow_divergence_bar", "instrument_key", "bar_time",
+              "graph_address", "reason", unique=True),
+        Index("ix_ir_shadow_divergences_observed", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, index=True)
+    bar_time: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    instrument_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    authoritative_strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    shadow_strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: The graph's content address — `(key, version)` is the execution artefact, and this
+    #: is the version half. A disagreement that cannot name its graph is unattributable.
+    graph_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    authoritative_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ir_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warmup_state: Mapped[str] = mapped_column(String(16), nullable=False, default="settled")
+    declared_warmup: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Content address of the exact bars the graph was given — same data, same identity.
+    frame_id: Mapped[str] = mapped_column(String(71), nullable=False, default="")
+    frame_bars: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    frame_first_ts: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    frame_last_ts: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    detail: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    eval_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    #: Whether the instrument's market was open when this was observed. Stage 1 closes on
+    #: "zero unexplained in-hours insufficient-history events", so out-of-hours events must
+    #: be distinguishable from in-hours ones rather than counted together.
+    market_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

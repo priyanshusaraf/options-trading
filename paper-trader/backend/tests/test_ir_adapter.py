@@ -413,22 +413,53 @@ def test_a_registered_ir_strategy_resolves_normally():
         _REGISTRY.pop(strategy.key, None)
 
 
-# ------------------------------------ Stage 0 changes nothing the live engine executes
+# ------------------------- Stage 1 changes nothing the live engine EXECUTES
 
-def test_stage_0_leaves_the_live_execution_path_untouched():
-    """Stage 0 adds a shared adapter and one warmup rule. It must not have altered the
-    engine, order lifecycle, accounting, reconciliation, exits, kill controls or the
-    deployment gate. The live lane still resolves and runs the hand-written strategy."""
+def test_the_engine_reaches_the_ir_only_through_the_shadow_lane():
+    """Stage 0's version of this test asserted that `runner.py` contained neither the
+    string `ir_adapter` nor `app.ir`. Stage 1 connects the two planes, and that guard
+    would have gone on passing while saying nothing: the runner reaches the IR through
+    `app.engine.ir_shadow`, whose name contains neither string. A guard that cannot fail
+    is worse than no guard, so it is replaced rather than relaxed.
+
+    What must hold now is narrower and checkable: the engine's only bridge to the IR is
+    the shadow lane, and the order path has no bridge at all.
+    """
+    import ast
     import inspect
 
-    from app.engine import broker_factory, runner
-    from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
+    from app.engine import broker_factory, equity_entry, execution_policy, runner
 
-    # No execution module imports the adapter or the IR language.
-    for module in (runner, broker_factory):
-        source = inspect.getsource(module)
-        assert "ir_adapter" not in source, f"{module.__name__} must not bind the adapter yet"
-        assert "app.ir" not in source, f"{module.__name__} must not import the IR runtime yet"
+    def imports(module) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                found.add(f"{node.module}.{node.names[0].name}")
+                found.add(node.module)
+            elif isinstance(node, ast.Import):
+                found.update(alias.name for alias in node.names)
+        return found
+
+    # The order path is not connected to the IR at all — not even through the shadow.
+    for module in (broker_factory, equity_entry, execution_policy):
+        reached = imports(module)
+        assert not [name for name in reached if name.startswith("app.ir")], module.__name__
+        assert "app.strategy.ir_adapter" not in reached, module.__name__
+        assert not [name for name in reached if "ir_shadow" in name], module.__name__
+
+    # The runner reaches the IR through the shadow lane and nothing else: it may not bind
+    # the adapter itself, which is what Stage 2 would be.
+    reached = imports(runner)
+    assert "app.engine.ir_shadow" in reached
+    assert "app.strategy.ir_adapter" not in reached
+    assert not [name for name in reached if name.startswith("app.ir.")]
+
+
+def test_stage_1_leaves_the_live_execution_path_untouched():
+    """The shadow lane observes. It must not have altered the order lifecycle, accounting,
+    reconciliation, exits, kill controls or the deployment gate, and the live lane still
+    resolves and runs the hand-written strategy."""
+    from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
 
     # The default live strategy is unchanged and still hand-written.
     live = get_strategy(DEFAULT_STRATEGY_KEY)

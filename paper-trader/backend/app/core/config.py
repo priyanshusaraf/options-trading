@@ -385,6 +385,15 @@ class Settings(BaseSettings):
     # research cache above are NOT part of the plane and ignore this flag.
     research_enabled: bool = False
 
+    # ── L1 Stage 1: the Component IR shadow lane (ADR 0011) ──
+    # OFF by default and fail-closed. When on, the signal lane additionally evaluates the
+    # IR mirror of an instrument's authoritative strategy on the same frame and records
+    # where the two disagree. It is an OBSERVER: it reaches no order, position, ledger or
+    # capital seam (tests/test_ir_shadow_isolation.py), and the hand-written strategy
+    # remains the sole execution authority. Runtime-overridable so it can be switched off
+    # on a live box without a deploy or a restart.
+    ir_shadow_enabled: bool = False
+
     # ── live execution gate (BOTH required, on top of kite-provider + ARM) ──
     # Settings-backed so the SINGLE source of truth is .env (no shell exports
     # needed each session). broker_factory still also honours a real exported
