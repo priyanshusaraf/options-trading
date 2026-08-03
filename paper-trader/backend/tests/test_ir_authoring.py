@@ -217,6 +217,65 @@ def test_declaring_one_identifier_and_version_twice_is_refused():
         library([rsi, rsi])
 
 
+# ── the collision a factory produces, and how it is refused ───────────────
+
+def _from_factory(identifier: str, length: int, *, declare_closure: bool):
+    """Two components from one factory. Their kernels have identical *source*;
+    only the closed-over value differs — which is exactly the shape the research
+    plane's block adapter has."""
+    def make(n):
+        def kernel(params, inputs):
+            return {"out": inputs["in"].rolling(n).mean()}
+        return kernel
+
+    return component(
+        identifier,
+        interface=[socket("in", "input", SERIES), socket("out", "output", SERIES)],
+        warmup=length,
+        closes_over={"length": length} if declare_closure else None,
+    )(make(length))
+
+
+def test_a_factory_that_does_not_declare_its_closure_collides():
+    """The defect this guard was written for, and it was a live one: deriving
+    the research plane's twenty-three blocks through one shared adapter gave
+    them **one** body address between them, and the registry kept the last.
+    Every warmup and every kernel but one was silently discarded.
+
+    A shared address is not itself illegal — an alias is legitimate — so the
+    guard fires on the thing that is actually wrong: the same address claiming
+    two different kernels."""
+    fast = _from_factory("factory.fast", 10, declare_closure=False)
+    slow = _from_factory("factory.slow", 50, declare_closure=False)
+
+    assert fast.body_ref == slow.body_ref, "identical source, so identical address"
+    with pytest.raises(AuthoringError) as exc:
+        library([fast, slow])
+    assert "closes_over" in str(exc.value)
+
+
+def test_declaring_the_closure_separates_them():
+    fast = _from_factory("factory.fast", 10, declare_closure=True)
+    slow = _from_factory("factory.slow", 50, declare_closure=True)
+
+    assert fast.body_ref != slow.body_ref
+    lib, impls = library([fast, slow])
+    assert len(lib.kernels) == len(impls) == 2
+    assert lib.kernels[fast.body_ref].warmup == 10
+    assert lib.kernels[slow.body_ref].warmup == 50
+
+
+def test_two_components_may_still_share_a_body_when_they_agree():
+    """An alias is legitimate. The guard must not forbid it, or it would forbid
+    the one case sharing an address is correct for."""
+    a = _from_factory("alias.one", 10, declare_closure=True)
+    b = _from_factory("alias.two", 10, declare_closure=True)
+
+    assert a.body_ref == b.body_ref
+    lib, impls = library([a, b])
+    assert len(lib.components) == 2 and len(lib.kernels) == 1 and len(impls) == 1
+
+
 # ── the whole path: authored → resolved → evaluated ───────────────────────
 
 GRAPH = {

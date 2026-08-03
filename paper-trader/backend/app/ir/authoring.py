@@ -79,6 +79,11 @@ class AuthoredComponent:
     definition: Mapping[str, Any]
     spec: KernelSpec
     kernel: Callable[..., Mapping[str, Any]]
+    # Which of ("inputs", "params") the interface check could not verify, because
+    # the kernel reaches them dynamically. Recorded rather than hidden: an
+    # unchecked thing that looks like a checked thing is how a validator lies,
+    # and this codebase already made that mistake once with F7.
+    unchecked: tuple[str, ...] = ()
 
     @property
     def key(self) -> tuple[str, int]:
@@ -132,12 +137,23 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
               parent_version: int | None = None,
               warmup: Any = 0, purity: str = "pure",
               cache_identity: str = "transitive",
-              cache_key: str | None = None) -> Callable[[Callable], AuthoredComponent]:
+              cache_key: str | None = None,
+              closes_over: Any = None) -> Callable[[Callable], AuthoredComponent]:
     """Declare a component whose body is this function.
 
     Returns an `AuthoredComponent`, not the function — the function alone was
     never the thing, and returning it would let a caller register the kernel
     without its interface, which is the drift this exists to stop.
+
+    `closes_over` is part of the body's content address, and a kernel built by a
+    factory **must** supply it. The address is a hash of the source this
+    decorator can read; a kernel whose behaviour also depends on a closed-over
+    value has, as far as the source goes, the same body as every one of its
+    siblings. That is not a hypothetical: deriving the research plane's
+    twenty-three blocks through one shared adapter produced twenty-three
+    components with **one** address between them, and a registry keyed by
+    address silently kept the last. Naming what a kernel closes over is how its
+    address stops lying. `library()` refuses the collision either way.
     """
 
     def decorate(fn: Callable) -> AuthoredComponent:
@@ -150,7 +166,8 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
             "version": version,
             "display_name": display_name or identifier,
             "interface": [dict(item) for item in interface],
-            "body": {"body": "kernel", "ref": _body_address(identifier, fn)},
+            "body": {"body": "kernel",
+                     "ref": _body_address(identifier, fn, closes_over)},
         }
         if parent_version is not None:
             definition["parent_version"] = parent_version
@@ -159,13 +176,14 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
         if violations:
             raise AuthoringError(identifier, "is not a conforming component", violations)
 
-        _check_satisfies_interface(identifier, fn, definition["interface"])
+        unchecked = _check_satisfies_interface(identifier, fn, definition["interface"])
 
         return AuthoredComponent(
             definition=definition,
             spec=kernel_spec(warmup=warmup, purity=purity,
                              cache_identity=cache_identity, cache_key=cache_key),
             kernel=fn,
+            unchecked=unchecked,
         )
 
     return decorate
@@ -181,7 +199,7 @@ def _check_signature(identifier: str, fn: Callable) -> None:
             "behave differently depending on where it was used")
 
 
-def _body_address(identifier: str, fn: Callable) -> str:
+def _body_address(identifier: str, fn: Callable, closes_over: Any = None) -> str:
     """F2 — the body, content-addressed.
 
     The source is dedented before hashing so that moving a function into or out
@@ -193,11 +211,11 @@ def _body_address(identifier: str, fn: Callable) -> str:
         raise AuthoringError(
             identifier,
             "has no readable source, so its body cannot be content-addressed") from exc
-    return content_address({"kernel": source})
+    return content_address({"kernel": source, "closes_over": closes_over})
 
 
 def _check_satisfies_interface(identifier: str, fn: Callable,
-                               interface: Sequence[Mapping[str, Any]]) -> None:
+                               interface: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     """F4 — the interface is the contract; the internals must satisfy it.
 
     Checked in the direction F4 requires. The declaration is authoritative, and
@@ -217,10 +235,20 @@ def _check_satisfies_interface(identifier: str, fn: Callable,
     try:
         source = textwrap.dedent(inspect.getsource(fn))
     except OSError:                                          # pragma: no cover
-        return
+        return ("inputs", "params")
 
-    read = _subscripts(source)
+    read, dynamic = _subscripts(source)
+    unchecked: list[str] = []
     for kind, declared in (("inputs", declared_inputs), ("params", declared_params)):
+        if kind in dynamic:
+            # The kernel reaches this mapping with something other than a
+            # literal key — an adapter over a generated family, typically. A
+            # syntactic check cannot conclude anything, and guessing in either
+            # direction would be worse than saying so: passing silently is the
+            # failure mode this codebase already hit with F7, and failing would
+            # forbid mechanically-derived components outright.
+            unchecked.append(kind)
+            continue
         used = read.get(kind, set())
         missing = sorted(declared - used)
         extra = sorted(used - declared)
@@ -234,6 +262,8 @@ def _check_satisfies_interface(identifier: str, fn: Callable,
                 identifier,
                 f"reads {kind} {extra} it does not declare; an undeclared dependency "
                 "is one no graph can wire and no warmup can account for")
+
+    return tuple(unchecked)
 
 
 def _declared(interface: Sequence[Mapping[str, Any]]
@@ -256,25 +286,43 @@ def _declared(interface: Sequence[Mapping[str, Any]]
     return inputs, params, outputs
 
 
-def _subscripts(source: str) -> dict[str, set[str]]:
-    """Which string keys the source reads out of `inputs` and `params`.
+def _subscripts(source: str) -> tuple[dict[str, set[str]], set[str]]:
+    """Which literal keys the source reads out of `inputs` and `params`, and
+    which of the two it also reaches *dynamically*.
 
     Deliberately syntactic rather than dynamic: an authoring check that had to
     *run* the kernel to learn its interface would be inferring the interface,
     which is what F4 forbids.
+
+    A mapping counts as dynamic if it is subscripted with anything but a string
+    literal, or used bare — iterated, unpacked, passed on, `.get()`. That is the
+    shape of an adapter over a generated family, and no syntactic check can say
+    what such a kernel reads.
     """
     import ast
 
-    found: dict[str, set[str]] = {"inputs": set(), "params": set()}
     tree = ast.parse(source)
+    names = {"inputs", "params"}
+    found: dict[str, set[str]] = {name: set() for name in names}
+    dynamic: set[str] = set()
+
+    subscript_bases = {id(node.value) for node in ast.walk(tree)
+                       if isinstance(node, ast.Subscript)}
+
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Subscript):
-            continue
-        base, key = node.value, node.slice
-        if isinstance(base, ast.Name) and base.id in found and \
-                isinstance(key, ast.Constant) and isinstance(key.value, str):
-            found[base.id].add(key.value)
-    return found
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
+                and node.value.id in names:
+            key = node.slice
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                found[node.value.id].add(key.value)
+            else:
+                dynamic.add(node.value.id)
+        elif isinstance(node, ast.Name) and node.id in names \
+                and id(node) not in subscript_bases \
+                and isinstance(node.ctx, ast.Load):
+            dynamic.add(node.id)
+
+    return found, dynamic
 
 
 # ── a library from authored components ────────────────────────────────────
@@ -289,6 +337,7 @@ def library(components: Sequence[AuthoredComponent],
     which is the property, not a side effect of it.
     """
     seen: dict[tuple[str, int], AuthoredComponent] = {}
+    bodies: dict[str, AuthoredComponent] = {}
     for authored in components:
         if authored.key in seen:
             raise AuthoringError(
@@ -296,6 +345,20 @@ def library(components: Sequence[AuthoredComponent],
                 f"version {authored.key[1]} is declared twice; an identifier and "
                 "version name one body")
         seen[authored.key] = authored
+
+        # Two components may legitimately share a body — an alias is one. What
+        # they may not do is share an address while declaring *different* kernel
+        # properties, because the registry is keyed by that address and one of
+        # the two would silently win. That is what a factory-built kernel does
+        # if it does not declare what it closes over.
+        other = bodies.get(authored.body_ref)
+        if other is not None and other.spec != authored.spec:
+            raise AuthoringError(
+                authored.key[0],
+                f"shares a body address with {other.key[0]!r} but declares a "
+                "different kernel; a kernel built by a factory must pass "
+                "`closes_over` so its address reflects what it actually computes")
+        bodies.setdefault(authored.body_ref, authored)
 
     return (
         Library(

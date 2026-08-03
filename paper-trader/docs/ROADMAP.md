@@ -8,7 +8,7 @@
 **Last verified: 2026-08-02** · Branch: `feat/exec-completeness` · VPS build **not measured this
 session** — this file said `8cee4e9` and CONTINUE.md said `4e9f125`, which is exactly why neither
 is repeated here. `curl /api/health` on the box is the only answer. Backend suites
-`tests` + `research_tests`: **2,539 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
+`tests` + `research_tests`: **2,578 collected, PYTEST EXIT 0**, `dryrun.py 700` LEDGER OK,
 `backtest_smoke.py` SWEEP OK · `PT_RESEARCH_ENABLED=0` · `index_futures_enabled=False`.
 
 ---
@@ -251,8 +251,44 @@ honest gaps).
         without it (a live session holds a checked-out connection, which `dispose()` cannot
         reclaim — that case is still "close your broker", as it always was).
       - Four consecutive clean full runs after both halves.
-- [ ] The five remaining Strategy-OS subsystems — Python component authoring, Research Plane
-      Gen 2, marketplace, deployment, production adoption — **each need their own spec → plan → build cycle.** That list is a
+### Research Plane Generation 2
+
+- [x] **The block library, expressed as IR components — DONE 2026-08-03.**
+      `research/strategy/builder/ir_components.py` + `research_tests/test_ir_block_components.py`,
+      36 tests. This is step one and it comes first for the reason C14 gives: Generation 1
+      searches *parameters* over a fixed grammar, and "structure search is not reachable from a
+      design where components sweep themselves". All **23 blocks** now derive into versioned,
+      typed, composable components.
+      - *The derivation is mechanical, as Appendix A.3 predicted.* Identifier from the block's
+        name, parameters and kinds from `BlockSpec.params`, defaults from `sample_args`, warmup
+        from `BlockSpec.warmup`. Nothing is invented; the tests read the expectations off
+        `BlockSpec` rather than restating them, so a block that gains a parameter fails until it
+        is carried across.
+      - **Equivalence, not resemblance:** each of the 23 components is asserted to compute
+        *exactly* what calling the block computes, bar for bar, on 320 real bars — plus a guard
+        that the fixture actually makes ≥60% of them fire, so it is not 23 comparisons of
+        all-False columns. The adapter calls `BlockSpec.fn`; a second implementation is the
+        `candles.py` defect and would show up here.
+      - **A live defect found and fixed: all 23 components shared one body address.** They are
+        built by one shared adapter, so their *source* is identical, and F2 addresses the body by
+        its content — a registry keyed by that address silently kept the last one, discarding 22
+        kernels and 22 warmups. `component(closes_over=...)` now makes what a factory-built
+        kernel closes over part of its address, and `library()` refuses two components claiming
+        one address with **different** kernel declarations. Sharing an address is still legal
+        where it is correct — an alias — and there is a test for that too.
+      - *An honesty guard rather than a weakened one:* one adapter serves all 23 blocks, so it
+        reaches `inputs` and `params` dynamically and the F4 interface check cannot conclude
+        anything. It reports `unchecked` rather than passing silently, and a control test asserts
+        hand-authored components are still fully checked. Same discipline as `unchecked_clauses()`.
+      - *`research/` imports `app.ir`, never the reverse.* The isolation rule is about capital;
+        the IR is a language, not an executor.
+- [ ] Structure search: a mutation-based proposer over graphs, using `app/ir/edit.py` as the gate.
+- [ ] Bind every research run through `app/ir/experiment.py` (F14).
+- [ ] Narrow each block's declared inputs — every derived component currently declares the whole
+      OHLCV frame because the adapter rebuilds it. Inferring per-block inputs from the body is
+      what F4 forbids, so this belongs in the blocks' own declarations.
+
+- [ ] The four remaining Strategy-OS subsystems — marketplace, deployment, production adoption — **each need their own spec → plan → build cycle.** That list is a
       programme, not a roadmap item. (The component runtime, the experiment system and both
       halves of the editor plane, which used to head this list, are done above. What the editor
       still lacks is a *frontend* — no route, no React; that is the first thing that would make
