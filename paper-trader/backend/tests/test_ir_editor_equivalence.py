@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.session import engine, init_db
+from app.editor.equivalence import executable_mismatches
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.ir.hashing import canonical_json, content_address
 from app.ir.strategies.expanding_z import GRAPH
@@ -152,4 +153,36 @@ def test_closed_history_matches_hand_authored_identity_and_reloads_losslessly(cl
     }]
     assert restored["layout"]["groups"][0]["members"] == [
         "n_exit_fallback", "n_exit_floor",
+    ]
+
+
+def test_equivalence_diagnostics_distinguish_order_and_presentation_contamination():
+    expected = _hand_authored_reference()
+    reordered = copy.deepcopy(expected)
+    reordered["nodes"][0], reordered["nodes"][1] = (
+        reordered["nodes"][1], reordered["nodes"][0]
+    )
+    reordered["edges"][0], reordered["edges"][1] = (
+        reordered["edges"][1], reordered["edges"][0]
+    )
+    reordered["groups"] = [{
+        "identifier": "g_visual", "display_name": "Visual", "members": ["n_ema"],
+    }]
+
+    mismatches = executable_mismatches(reordered, expected)
+
+    assert [(item.code, item.path) for item in mismatches] == [
+        ("PRESENTATION_CONTAMINATION", "$.groups"),
+        ("NODE_ORDER_MISMATCH", "$.nodes"),
+        ("EDGE_ORDER_MISMATCH", "$.edges"),
+        ("EXECUTABLE_IDENTITY_MISMATCH", "$"),
+    ]
+
+    semantic = copy.deepcopy(expected)
+    semantic["display_name"] = "Different"
+    assert [(item.code, item.path) for item in executable_mismatches(
+        semantic, expected
+    )] == [
+        ("SEMANTIC_CONTENT_MISMATCH", "$.display_name"),
+        ("EXECUTABLE_IDENTITY_MISMATCH", "$"),
     ]
