@@ -28,6 +28,7 @@ from sqlalchemy import (
     String,
     Text,
     event,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -914,6 +915,57 @@ class IrGraphLayoutPosition(Base):
     instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     x: Mapped[float] = mapped_column(Float, nullable=False)
     y: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class IrGraphLayoutGroup(Base):
+    """One visual group in the revisioned presentation document."""
+    __tablename__ = "ir_graph_layout_groups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["graph_identifier", "graph_version"],
+            ["ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
+            ondelete="CASCADE",
+            name="fk_ir_graph_layout_groups_layout",
+        ),
+        CheckConstraint("length(identifier) > 0", name="ck_ir_groups_identifier"),
+        CheckConstraint("length(display_name) > 0", name="ck_ir_groups_display_name"),
+        CheckConstraint("width > 0", name="ck_ir_groups_width"),
+        CheckConstraint("height > 0", name="ck_ir_groups_height"),
+    )
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+    width: Mapped[float] = mapped_column(Float, nullable=False)
+    height: Mapped[float] = mapped_column(Float, nullable=False)
+    collapsed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+
+
+class IrGraphLayoutGroupMember(Base):
+    """One authored instance included in a visual group."""
+    __tablename__ = "ir_graph_layout_group_members"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["graph_identifier", "graph_version", "group_identifier"],
+            [
+                "ir_graph_layout_groups.graph_identifier",
+                "ir_graph_layout_groups.graph_version",
+                "ir_graph_layout_groups.identifier",
+            ],
+            ondelete="CASCADE",
+            name="fk_ir_graph_layout_group_members_group",
+        ),
+    )
+
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
 
 
 class IrGraphLayoutOrphanArchive(Base):

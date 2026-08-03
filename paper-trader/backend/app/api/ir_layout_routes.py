@@ -27,6 +27,25 @@ class IrLayoutWrite(BaseModel):
     positions: list[IrLayoutPosition]
 
 
+class IrLayoutGroupFrame(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+class IrLayoutGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    identifier: str
+    display_name: str
+    frame: IrLayoutGroupFrame
+    collapsed: bool
+    members: list[str]
+
+
 class IrLayoutResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -34,6 +53,7 @@ class IrLayoutResponse(BaseModel):
     graph_version: int
     revision: int
     positions: list[IrLayoutPosition]
+    groups: list[IrLayoutGroup]
 
 
 def _graph(identifier: str, version: int):
@@ -58,6 +78,21 @@ def layout_response(layout: ir_layouts.Layout) -> IrLayoutResponse:
         positions=[
             IrLayoutPosition(instance_id=p.instance_id, x=p.x, y=p.y)
             for p in layout.positions
+        ],
+        groups=[
+            IrLayoutGroup(
+                identifier=group.identifier,
+                display_name=group.display_name,
+                frame=IrLayoutGroupFrame(
+                    x=group.frame.x,
+                    y=group.frame.y,
+                    width=group.frame.width,
+                    height=group.frame.height,
+                ),
+                collapsed=group.collapsed,
+                members=list(group.members),
+            )
+            for group in layout.groups
         ],
     )
 

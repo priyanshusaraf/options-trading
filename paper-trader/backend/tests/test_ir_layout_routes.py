@@ -50,6 +50,7 @@ def test_missing_layout_is_an_empty_revision_zero_document(client):
         "graph_version": VERSION,
         "revision": 0,
         "positions": [],
+        "groups": [],
     }
 
 
@@ -80,10 +81,11 @@ def test_missing_layout_carries_as_explicit_revision_one(client):
     assert edited.status_code == 201, edited.text
     assert edited.json()["layout"] == {
         "graph_identifier": IDENTIFIER,
-        "graph_version": VERSION + 1,
-        "revision": 1,
-        "positions": [],
-    }
+            "graph_version": VERSION + 1,
+            "revision": 1,
+            "positions": [],
+            "groups": [],
+        }
 
 
 def test_saved_layout_carries_positions_but_not_its_revision_counter(client):
