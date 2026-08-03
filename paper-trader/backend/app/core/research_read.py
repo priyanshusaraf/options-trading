@@ -22,6 +22,7 @@ import os
 
 from sqlalchemy import update
 
+from app.core.research_review import ReviewQueryRejected, make_review_event
 from app.ir.hashing import canonical_json, content_address
 
 from research.config import research_db_path
@@ -175,6 +176,237 @@ def get_graph_run(project_id: str, run_id: int) -> dict | None:
         if view is None or view["graph"].get("project_id") != project_id:
             return None
         return view
+
+
+def _review_graph_reference(graph: dict) -> dict:
+    return {
+        "identifier": graph["identifier"],
+        "version": graph["version"],
+        "content_address": graph["content_address"],
+    }
+
+
+def _verified_candidate_decision(candidate: PromotionCandidate) -> dict | None:
+    """Return a verified decision envelope, or None for a valid undecided row."""
+    try:
+        scorecard = json.loads(candidate.scorecard_json)
+    except (TypeError, ValueError) as exc:
+        raise StoredEvidenceCorrupt(candidate.id) from exc
+    if not isinstance(scorecard, dict):
+        raise StoredEvidenceCorrupt(candidate.id)
+    envelope = scorecard.get("decision")
+    if envelope is None:
+        if candidate.status not in {"pending", "shadow"}:
+            raise StoredEvidenceCorrupt(candidate.id)
+        return None
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "schema_version", "content_address", "evidence"
+    } or envelope.get("schema_version") != 1:
+        raise StoredEvidenceCorrupt(candidate.id)
+    evidence = envelope.get("evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "actor", "candidate_id", "decision", "decided_at", "expected_status",
+        "reason", "run_id",
+    }:
+        raise StoredEvidenceCorrupt(candidate.id)
+    try:
+        verified_address = content_address(evidence)
+    except (TypeError, ValueError) as exc:
+        raise StoredEvidenceCorrupt(candidate.id) from exc
+    if (
+        envelope.get("content_address") != verified_address
+        or evidence.get("actor") != "owner"
+        or evidence.get("candidate_id") != candidate.id
+        or evidence.get("run_id") != candidate.run_id
+        or evidence.get("expected_status") != "pending"
+        or evidence.get("decision") not in {"approved", "rejected"}
+        or candidate.status != evidence.get("decision")
+        or not isinstance(evidence.get("reason"), str)
+        or not evidence["reason"].strip()
+        or len(evidence["reason"]) > 400
+    ):
+        raise StoredEvidenceCorrupt(candidate.id)
+    try:
+        dt.datetime.fromisoformat(evidence["decided_at"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise StoredEvidenceCorrupt(candidate.id) from exc
+    return envelope
+
+
+def _empty_project_review_source() -> dict:
+    return {
+        "events": [],
+        "queues": {
+            "review_needed_runs": [],
+            "pending_candidates": [],
+            "active_findings": [],
+        },
+        "source_errors": [],
+    }
+
+
+def project_review_source(project_id: str) -> dict:
+    """Derive one project's review facts and queues in one research snapshot.
+
+    Corrupt rows are contained and identified without copying untrusted source text
+    into the response. This function never invokes research execution services.
+    """
+    result = _empty_project_review_source()
+    with _research_session() as session:
+        if session is None:
+            return result
+
+        run_contexts: dict[int, dict] = {}
+        for run in session.query(ExperimentRun).order_by(ExperimentRun.id.asc()).all():
+            view = _graph_run_view(session, run, include_evidence=False)
+            graph = view.get("graph") if view is not None else None
+            if not isinstance(graph, dict) or graph.get("project_id") != project_id:
+                continue
+            try:
+                graph_ref = _review_graph_reference(graph)
+                status = "needs_review" if run.decision == "needs_review" else run.status
+                result["events"].append(make_review_event(
+                    event_id=f"run:{run.id}",
+                    event_type="experiment_run",
+                    occurred_at=run.completed_at or run.started_at or run.created_at,
+                    status=status,
+                    summary=f"Experiment run {run.id}: {run.decision or run.status}",
+                    references={
+                        "graph": graph_ref, "run_id": run.id,
+                        "finding_id": None, "candidate_id": None,
+                    },
+                ))
+            except (KeyError, TypeError, ValueError, ReviewQueryRejected):
+                result["source_errors"].append({
+                    "source": "run", "source_id": str(run.id),
+                    "code": "RUN_BINDING_CORRUPT",
+                })
+                continue
+            run_contexts[run.id] = {"run": run, "view": view, "graph": graph_ref}
+            if (
+                run.decision == "needs_review" or run.status == "failed"
+                or view["evidence_state"] == "corrupt"
+            ):
+                result["queues"]["review_needed_runs"].append({
+                    "run_id": run.id,
+                    "status": status,
+                    "evidence_state": view["evidence_state"],
+                    "graph": graph_ref,
+                })
+
+        for finding in session.query(Finding).order_by(Finding.id.asc()).all():
+            if finding.evidence_run_id not in run_contexts:
+                continue
+            try:
+                context = _verified_finding_run(
+                    session, project_id, finding.evidence_run_id
+                )
+            except FindingEvidenceUnavailable:
+                result["source_errors"].append({
+                    "source": "finding", "source_id": str(finding.id),
+                    "code": "FINDING_EVIDENCE_UNAVAILABLE",
+                })
+                continue
+            except StoredEvidenceCorrupt:
+                result["source_errors"].append({
+                    "source": "finding", "source_id": str(finding.id),
+                    "code": "FINDING_EVIDENCE_CORRUPT",
+                })
+                continue
+            if context is None:
+                continue
+            graph_ref = run_contexts[finding.evidence_run_id]["graph"]
+            status = "superseded" if finding.superseded_by is not None else "active"
+            try:
+                result["events"].append(make_review_event(
+                    event_id=f"finding:{finding.id}",
+                    event_type="finding_created",
+                    occurred_at=finding.created_at,
+                    status=status,
+                    summary=f"Finding {finding.id}: {finding.polarity}",
+                    references={
+                        "graph": graph_ref, "run_id": finding.evidence_run_id,
+                        "finding_id": finding.id, "candidate_id": None,
+                    },
+                ))
+            except ReviewQueryRejected:
+                result["source_errors"].append({
+                    "source": "finding", "source_id": str(finding.id),
+                    "code": "FINDING_ROW_CORRUPT",
+                })
+                continue
+            if status == "active":
+                result["queues"]["active_findings"].append({
+                    "finding_id": finding.id,
+                    "evidence_run_id": finding.evidence_run_id,
+                    "polarity": finding.polarity,
+                    "confidence": finding.confidence,
+                    "graph": graph_ref,
+                })
+
+        candidates = (
+            session.query(PromotionCandidate)
+            .order_by(PromotionCandidate.id.asc()).all()
+        )
+        for candidate in candidates:
+            context = run_contexts.get(candidate.run_id)
+            if context is None:
+                continue
+            graph_ref = context["graph"]
+            try:
+                result["events"].append(make_review_event(
+                    event_id=f"candidate:{candidate.id}",
+                    event_type="candidate_created",
+                    occurred_at=candidate.created_at,
+                    status="created",
+                    summary=f"Candidate {candidate.id}: created",
+                    references={
+                        "graph": graph_ref, "run_id": candidate.run_id,
+                        "finding_id": None, "candidate_id": candidate.id,
+                    },
+                ))
+            except ReviewQueryRejected:
+                result["source_errors"].append({
+                    "source": "candidate", "source_id": str(candidate.id),
+                    "code": "CANDIDATE_ROW_CORRUPT",
+                })
+                continue
+            try:
+                decision = _verified_candidate_decision(candidate)
+            except StoredEvidenceCorrupt:
+                result["source_errors"].append({
+                    "source": "candidate", "source_id": str(candidate.id),
+                    "code": "CANDIDATE_DECISION_CORRUPT",
+                })
+                continue
+            if decision is None:
+                if candidate.status == "pending":
+                    result["queues"]["pending_candidates"].append({
+                        "candidate_id": candidate.id,
+                        "run_id": candidate.run_id,
+                        "status": candidate.status,
+                        "graph": graph_ref,
+                    })
+                continue
+            evidence = decision["evidence"]
+            try:
+                result["events"].append(make_review_event(
+                    event_id=f"candidate:{candidate.id}:decision",
+                    event_type="candidate_decided",
+                    occurred_at=evidence["decided_at"],
+                    status=evidence["decision"],
+                    summary=f"Candidate {candidate.id}: {evidence['decision']}",
+                    references={
+                        "graph": graph_ref, "run_id": candidate.run_id,
+                        "finding_id": None, "candidate_id": candidate.id,
+                    },
+                ))
+            except ReviewQueryRejected:
+                result["source_errors"].append({
+                    "source": "candidate", "source_id": str(candidate.id),
+                    "code": "CANDIDATE_DECISION_CORRUPT",
+                })
+    return result
 
 
 def _verified_finding_run(session, project_id: str, run_id: int) -> dict | None:

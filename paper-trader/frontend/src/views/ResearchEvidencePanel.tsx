@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   compareResearchVersions,
   createResearchFinding,
   decideResearchCandidate,
-  getResearchOperationStatus,
+  getResearchReview,
   getResearchRun,
   getResearchFindings,
   getResearchGraphVersions,
@@ -14,6 +14,9 @@ import {
   type ResearchGraphVersion,
   type ResearchOperationReceipt,
   type ResearchOperationStatus,
+  type ResearchReview,
+  type ResearchReviewEventType,
+  type ResearchReviewFilters,
   type ResearchRunDetail,
   type ResearchRunSummary,
   type ResearchVersionSelection,
@@ -21,6 +24,28 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 
 const readable = (value: unknown) => JSON.stringify(value, null, 2)
+
+export function mergeResearchReview(
+  current: ResearchReview,
+  response: ResearchReview,
+  mode: 'append' | 'preserve',
+): ResearchReview {
+  const incoming = [...current.timeline.events, ...response.timeline.events]
+  const events = Array.from(new Map(incoming.map((event) => [event.event_id, event])).values())
+    .sort((left, right) => (
+      right.occurred_at.localeCompare(left.occurred_at)
+      || right.event_id.localeCompare(left.event_id)
+    ))
+  return {
+    ...response,
+    timeline: {
+      events,
+      next_cursor: mode === 'append'
+        ? response.timeline.next_cursor
+        : current.timeline.next_cursor,
+    },
+  }
+}
 
 function OperationReceipt({
   label, receipt, onSelect,
@@ -60,6 +85,9 @@ export function ResearchEvidenceSurface({
   versions = [],
   operationStatus = null,
   operationError = null,
+  review = null,
+  reviewFilters = {},
+  reviewError = null,
   reason,
   findingStatement = '',
   findingPolarity = 'negative',
@@ -75,6 +103,8 @@ export function ResearchEvidenceSurface({
   onStartRevision,
   onCancelRevision,
   onFindingSubmit,
+  onReviewFilters,
+  onReviewMore,
 }: {
   runs: readonly ResearchRunSummary[]
   detail: ResearchRunDetail | null
@@ -83,6 +113,9 @@ export function ResearchEvidenceSurface({
   versions?: readonly ResearchGraphVersion[]
   operationStatus?: ResearchOperationStatus | null
   operationError?: string | null
+  review?: ResearchReview | null
+  reviewFilters?: ResearchReviewFilters
+  reviewError?: string | null
   reason: string
   findingStatement?: string
   findingPolarity?: 'positive' | 'negative'
@@ -98,6 +131,8 @@ export function ResearchEvidenceSurface({
   onStartRevision?: (finding: ResearchFinding) => void
   onCancelRevision?: () => void
   onFindingSubmit?: () => void
+  onReviewFilters?: (filters: ResearchReviewFilters) => void
+  onReviewMore?: () => void
 }) {
   const orderedVersions = versions.length > 0
     ? [...versions].sort((a, b) => a.version - b.version)
@@ -154,6 +189,116 @@ export function ResearchEvidenceSurface({
         </p>
       </CardHeader>
       <CardContent className="space-y-4 text-xs">
+        <section aria-label="Daily research review" className="space-y-3">
+          <div className="stat-label">Daily research review</div>
+          <p className="text-muted">Project facts and current queues derived from persisted server ledgers.</p>
+          {reviewError && <p role="alert" className="text-amber-300">{reviewError}</p>}
+          {review?.source_errors.map((item) => <p
+            role="alert" className="text-amber-300" key={`${item.source}:${item.source_id}`}
+          >{item.code}: {item.source} {item.source_id}</p>)}
+          {review && <>
+            <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded border border-edge p-2">
+                <p className="font-medium">Failed operation</p>
+                {review.queues.failed_operation
+                  ? <p role="alert" className="break-words text-amber-300">
+                    {review.queues.failed_operation.failure?.code} · {review.queues.failed_operation.stage}
+                  </p>
+                  : <p className="text-muted">None</p>}
+              </div>
+              <div className="rounded border border-edge p-2">
+                <p className="font-medium">Runs needing review · {review.queues.review_needed_runs.length}</p>
+                {review.queues.review_needed_runs.map((item) => <button
+                  type="button" className="btn mt-1" key={item.run_id}
+                  onClick={() => onSelect?.(item.run_id)}
+                >Run {item.run_id} · {item.status}</button>)}
+              </div>
+              <div className="rounded border border-edge p-2">
+                <p className="font-medium">Pending decisions · {review.queues.pending_candidates.length}</p>
+                {review.queues.pending_candidates.map((item) => <button
+                  type="button" className="btn mt-1" key={item.candidate_id}
+                  onClick={() => onSelect?.(item.run_id)}
+                >Candidate {item.candidate_id} · run {item.run_id}</button>)}
+              </div>
+              <div className="rounded border border-edge p-2">
+                <p className="font-medium">Active findings · {review.queues.active_findings.length}</p>
+                {review.queues.active_findings.map((item) => <button
+                  type="button" className="btn mt-1" key={item.finding_id}
+                  onClick={() => onSelect?.(item.evidence_run_id)}
+                >Finding {item.finding_id} · run {item.evidence_run_id}</button>)}
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <label>Event type <select
+                value={reviewFilters.event_type ?? ''}
+                onChange={(event) => onReviewFilters?.({
+                  ...reviewFilters,
+                  event_type: (event.target.value || undefined) as ResearchReviewEventType | undefined,
+                  cursor: undefined,
+                })}
+              >
+                <option value="">All event types</option>
+                <option value="graph_version_published">Graph publications</option>
+                <option value="experiment_run">Experiment runs</option>
+                <option value="finding_created">Findings</option>
+                <option value="candidate_created">Candidate creation</option>
+                <option value="candidate_decided">Candidate decisions</option>
+              </select></label>
+              <label>Status <select
+                value={reviewFilters.status ?? ''}
+                onChange={(event) => onReviewFilters?.({
+                  ...reviewFilters, status: event.target.value || undefined, cursor: undefined,
+                })}
+              >
+                <option value="">All statuses</option>
+                {['published', 'pending', 'running', 'failed', 'completed', 'needs_review',
+                  'active', 'superseded', 'created', 'shadow', 'approved', 'rejected'].map(
+                  (value) => <option key={value} value={value}>{value.replace('_', ' ')}</option>,
+                )}
+              </select></label>
+              <label>After (UTC) <input
+                type="datetime-local" value={reviewFilters.after ?? ''}
+                onChange={(event) => onReviewFilters?.({
+                  ...reviewFilters, after: event.target.value || undefined, cursor: undefined,
+                })}
+              /></label>
+              <label>Before (UTC) <input
+                type="datetime-local" value={reviewFilters.before ?? ''}
+                onChange={(event) => onReviewFilters?.({
+                  ...reviewFilters, before: event.target.value || undefined, cursor: undefined,
+                })}
+              /></label>
+            </div>
+            {review.timeline.events.length === 0
+              ? <p className="text-muted">No project events match these filters.</p>
+              : <ol aria-label="Project event timeline" className="space-y-2">
+                {review.timeline.events.map((item) => <li
+                  className="min-w-0 rounded border border-edge p-2" key={item.event_id}
+                >
+                  <p className="break-words font-medium">{item.summary}</p>
+                  <p className="break-all text-muted">{item.occurred_at} · {item.status}</p>
+                  {item.references.run_id !== null && <button
+                    type="button" className="btn mt-1"
+                    onClick={() => onSelect?.(item.references.run_id!)}
+                  >Open run {item.references.run_id}</button>}
+                  {item.references.graph && <p className="break-all text-muted">
+                    {item.references.graph.identifier} v{item.references.graph.version} · {' '}
+                    {item.references.graph.content_address}
+                  </p>}
+                  {item.references.graph && orderedVersions.some((version) => (
+                    version.identifier === item.references.graph?.identifier
+                    && version.version === item.references.graph.version
+                  )) && <button type="button" className="btn mt-1" onClick={() => {
+                    setRightVersion(item.references.graph!.version)
+                    setRightRun(null)
+                  }}>Use version {item.references.graph.version} in comparison</button>}
+                </li>)}
+              </ol>}
+            {review.timeline.next_cursor && <button
+              type="button" className="btn" onClick={onReviewMore}
+            >Load older events</button>}
+          </>}
+        </section>
         <section aria-label="Research operation status" className="space-y-2">
           <div className="stat-label">Research operation status</div>
           {operationError && <p role="alert" className="text-amber-300">{operationError}</p>}
@@ -442,8 +587,11 @@ export default function ResearchEvidencePanel({
   const [comparison, setComparison] = useState<ResearchComparison | null>(null)
   const [findings, setFindings] = useState<ResearchFinding[]>([])
   const [versions, setVersions] = useState<ResearchGraphVersion[]>([])
-  const [operationStatus, setOperationStatus] = useState<ResearchOperationStatus | null>(null)
-  const [operationError, setOperationError] = useState<string | null>(null)
+  const [review, setReview] = useState<ResearchReview | null>(null)
+  const reviewRef = useRef<ResearchReview | null>(null)
+  const reviewRequest = useRef(0)
+  const [reviewFilters, setReviewFilters] = useState<ResearchReviewFilters>({ limit: 25 })
+  const [reviewError, setReviewError] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [findingStatement, setFindingStatement] = useState('')
   const [findingPolarity, setFindingPolarity] = useState<'positive' | 'negative'>('negative')
@@ -478,28 +626,42 @@ export default function ResearchEvidencePanel({
     })
   }, [projectId, graphIdentifier])
 
+  const loadReview = async (
+    filters: ResearchReviewFilters, append = false, preservePage = false,
+  ) => {
+    const requestId = ++reviewRequest.current
+    setReviewError(null)
+    try {
+      const currentCount = reviewRef.current?.timeline.events.length ?? 0
+      const requestFilters = preservePage && currentCount > (filters.limit ?? 25)
+        ? { ...filters, limit: Math.min(100, currentCount) }
+        : filters
+      const response = await getResearchReview(projectId, requestFilters)
+      if (requestId !== reviewRequest.current) return
+      const next = reviewRef.current && (append || preservePage)
+        ? mergeResearchReview(reviewRef.current, response, append ? 'append' : 'preserve')
+        : response
+      reviewRef.current = next
+      setReview(next)
+    } catch (cause) {
+      if (requestId !== reviewRequest.current) return
+      setReviewError(cause instanceof Error ? cause.message : 'Daily review request failed')
+    }
+  }
+
   useEffect(() => {
     let disposed = false
-    const loadOperation = () => {
-      setOperationError(null)
-      getResearchOperationStatus().then((status) => {
-        if (!disposed) setOperationStatus(status)
-      }).catch((cause) => {
-        if (!disposed) {
-          setOperationStatus(null)
-          setOperationError(
-            cause instanceof Error ? cause.message : 'Research operation status request failed',
-          )
-        }
-      })
+    const poll = () => {
+      if (!disposed) void loadReview(reviewFilters, false, true)
     }
-    loadOperation()
-    const timer = window.setInterval(loadOperation, 10_000)
+    poll()
+    const timer = window.setInterval(poll, 10_000)
     return () => {
       disposed = true
       window.clearInterval(timer)
     }
-  }, [])
+  }, [projectId, reviewFilters.event_type, reviewFilters.status,
+    reviewFilters.after, reviewFilters.before, reviewFilters.limit])
 
   const compare = async (left: ResearchVersionSelection, right: ResearchVersionSelection) => {
     setBusy(true); setError(null); setComparison(null)
@@ -517,6 +679,7 @@ export default function ResearchEvidencePanel({
       )
       setReason('')
       await refresh(detail.run_id)
+      await loadReview(reviewFilters)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Candidate decision failed')
     } finally { setBusy(false) }
@@ -551,6 +714,7 @@ export default function ResearchEvidencePanel({
       cancelRevision()
       const response = await getResearchFindings(projectId)
       setFindings(response.findings)
+      await loadReview(reviewFilters)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Finding request failed')
     } finally { setBusy(false) }
@@ -562,8 +726,11 @@ export default function ResearchEvidencePanel({
     comparison={comparison}
     findings={findings}
     versions={versions}
-    operationStatus={operationStatus}
-    operationError={operationError}
+    operationStatus={review?.global_operations ?? null}
+    operationError={null}
+    review={review}
+    reviewFilters={reviewFilters}
+    reviewError={reviewError}
     reason={reason}
     findingStatement={findingStatement}
     findingPolarity={findingPolarity}
@@ -579,5 +746,10 @@ export default function ResearchEvidencePanel({
     onStartRevision={startRevision}
     onCancelRevision={cancelRevision}
     onFindingSubmit={submitFinding}
+    onReviewFilters={setReviewFilters}
+    onReviewMore={() => {
+      if (!review?.timeline.next_cursor) return
+      void loadReview({ ...reviewFilters, cursor: review.timeline.next_cursor }, true)
+    }}
   />
 }

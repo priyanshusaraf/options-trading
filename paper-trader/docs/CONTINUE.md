@@ -10,7 +10,8 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S4.5 is implemented; S4.6a daily review is the active slice.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.6a is implemented; S4.6b durable review notes and saved views is the active
+slice.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -41,6 +42,10 @@ without exposing remote run controls or invoking research during reads.
 S4.5 compares server-owned immutable graph documents by structure, components, parameters,
 interface, metadata and exact identity, then optionally composes verified persisted run evidence.
 The UI selects versions and paired evidence without supplying graph or evidence claims.
+S4.6a derives one project-owned timeline from verified immutable graph, run, finding and candidate
+facts and keeps the global operation receipt outside project identity and pagination. Closed filters,
+content-addressed cursors, current queues and source-error containment are exposed through one
+read-only route and accessible daily-review surface without invoking research or write seams.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -57,6 +62,7 @@ viewer and does not adopt the IR runtime in a live path.
 - S4.3 product-surface slice: current HEAD after this handoff is published
 - S4.4 operations observability: current HEAD after this handoff is published
 - S4.5 version/evidence comparison: current HEAD after this handoff is published
+- S4.6a daily review: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -116,6 +122,14 @@ S4.5's focused backend/API set passed 37 tests and the combined WS-03/04/API reg
 All 209 frontend tests, typecheck and production build pass. S4.5 changes no schema, runtime or
 safety boundary, so S4.4's 2,883-pass full checkpoint and exact-head green Actions run
 `30819757907` remain the shared baseline.
+
+S4.6a's final focused set passed 13 backend and 17 frontend tests. Its combined immutable-version,
+editor-equivalence, experiment, finding, project/API, operation and review regression passed 104
+tests. All 212 frontend tests, typecheck and production build pass. Guards cover stable/tamper-proof
+pagination, one-session research derivation, wrong-project exclusion, corrupt candidate/global
+receipt containment, global-operation non-attribution and no resolver/provider/orchestrator/write
+calls. It changes no schema, execution or shared-runtime boundary, so the S4.4 full checkpoint is
+not repeated.
 
 S4.3's focused and WS-03/API regression collected 570 tests and completed with 6 skips. All 204
 frontend tests, typecheck and production build pass. Negative proofs cover cross-project and raw
@@ -183,13 +197,12 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.4 — bounded research operations observability.**
+**S4.6b — durable review notes and saved views.**
 
-Continue from the new five-item S4.4 checklist in `docs/engineering/EXECUTION_PLAN.md`. First
-reconcile `run_nightly`, CLI/plan entry points, provider collection and persisted run/failure state.
-Define server-owned bounded operation identity before adding status reads or controls. Do not accept
-raw executable plans, credentials or provider payloads, and do not cross into deployment, arming,
-orders or live IR-runtime adoption.
+Continue from the new five-item S4.6b checklist in `docs/engineering/EXECUTION_PLAN.md`. First
+reconcile stable event anchors, project/principal ownership, retention and source-event disappearance.
+Reject any design where notes or saved views alter executable identity, mutate source facts, hide an
+authoritative queue or imply that an unresolved safety/research state has been acknowledged.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

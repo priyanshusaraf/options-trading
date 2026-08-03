@@ -28,6 +28,7 @@ from app.api import (
     portfolio_routes,
     product_object_routes,
     research_operation_routes,
+    research_review_routes,
     routes,
 )
 from app.api.principal import resolve_http_principal
@@ -281,6 +282,7 @@ app.include_router(product_object_routes.router)
 app.include_router(ir_edit_routes.router)
 app.include_router(ir_experiment_routes.router)
 app.include_router(research_operation_routes.router)
+app.include_router(research_review_routes.router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -292,7 +294,7 @@ mount_versioned(app, routes.router, backtest_routes.router,
                 portfolio_routes.router, ledger_routes.router, ir_routes.router,
                 ir_layout_routes.router, product_object_routes.router,
                 ir_edit_routes.router, ir_experiment_routes.router,
-                research_operation_routes.router)
+                research_operation_routes.router, research_review_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:

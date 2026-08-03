@@ -62,6 +62,15 @@ class PublishedGraphIdentity:
 
 
 @dataclass(frozen=True)
+class ProjectGraphVersionEvent:
+    project_id: str
+    identifier: str
+    version: int
+    content_address: str
+    created_at: dt.datetime
+
+
+@dataclass(frozen=True)
 class EditPublication:
     draft_revision: int
     published: PublishedGraph
@@ -579,6 +588,30 @@ def list_versions(project_id: str, identifier: str) -> tuple[PublishedGraphIdent
                 content_address=published.content_address,
             ))
         return tuple(identities)
+
+
+def list_project_version_events(project_id: str) -> tuple[ProjectGraphVersionEvent, ...]:
+    """Verified immutable versions owned by a project, including archived projects."""
+    with SessionLocal() as session:
+        if session.get(Project, project_id) is None:
+            raise ProjectNotFound(project_id)
+        rows = session.execute(
+            select(GraphVersion, GraphArtifact)
+            .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
+            .where(GraphArtifact.project_id == project_id)
+            .order_by(GraphVersion.created_at, GraphVersion.graph_identifier, GraphVersion.version)
+        ).all()
+        events = []
+        for version, artifact in rows:
+            published = _published_record(project_id, version)
+            events.append(ProjectGraphVersionEvent(
+                project_id=artifact.project_id,
+                identifier=published.identifier,
+                version=published.version,
+                content_address=published.content_address,
+                created_at=version.created_at,
+            ))
+        return tuple(events)
 
 
 def load_owned_version_for_experiment(

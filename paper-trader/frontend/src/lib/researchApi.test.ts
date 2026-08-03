@@ -5,6 +5,7 @@ import {
   createResearchFinding,
   decideResearchCandidate,
   getResearchOperationStatus,
+  getResearchReview,
   getResearchRun,
   getResearchGraphVersions,
   reviseResearchFinding,
@@ -13,6 +14,22 @@ import {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('research evidence transport', () => {
+  it('loads the project review with bounded server filters only', async () => {
+    const review = { project_id: 'project.alpha', timeline: { events: [] } }
+    const request = vi.fn().mockResolvedValue({
+      ok: true, json: async () => review,
+    } as Response)
+    vi.stubGlobal('fetch', request)
+
+    await expect(getResearchReview('project/alpha', {
+      event_type: 'experiment_run', status: 'failed', after: '2026-08-01', limit: 25,
+    })).resolves.toEqual(review)
+    expect(request).toHaveBeenCalledWith(
+      '/api/ir/projects/project%2Falpha/review?event_type=experiment_run&status=failed&after=2026-08-01&limit=25',
+      { headers: {} },
+    )
+  })
+
   it('loads operation receipts from the closed read-only status route', async () => {
     const status = { state: 'never_run', active: null, last: null }
     const request = vi.fn().mockResolvedValue({

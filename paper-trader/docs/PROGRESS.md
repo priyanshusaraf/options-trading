@@ -3,8 +3,8 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.5 immutable version/evidence
-comparison is complete in the current publication commit; S4.6a daily review is next.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.6a daily research review is complete
+in the current publication commit; S4.6b durable notes and saved views is next.
 
 ---
 
@@ -36,7 +36,7 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts and full version/evidence comparison complete; daily review aggregation next |
+| **Research** | Immutable graph runs, evidence/decisions/findings, operation receipts, version/evidence comparison and daily review aggregation complete |
 | **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
@@ -66,6 +66,7 @@ that clause's implementation.
 | `research/domain/models.py::Finding`, project-owned finding routes | Verified run-bound interpretations with immutable successor history |
 | `research/operations.py`, operation status route | Locked, canonical current/last research attempts with safe read-only cockpit status |
 | `app/editor/comparison.py`, version comparison route | Pure immutable graph structure/parameter/component diff composed with verified run evidence |
+| `app/core/research_review.py`, review route | Derived project timeline, closed cursor/filters, current queues and separate global operations lane |
 
 ### The two results worth knowing
 
@@ -98,9 +99,9 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**S4.4: research operations observability.** Reconcile the existing nightly runner, CLI plans,
-provider collection and failure evidence. Make bounded server-owned attempts, progress and safe
-failures visible without accepting raw executable plans or crossing into execution/deployment.
+**S4.6b: durable review notes and saved views.** Define project/principal ownership and stable event
+anchors first, then persist bounded non-executable annotations and reusable filters without hiding
+or mutating the authoritative timeline and queues.
 
 ---
 

@@ -18,10 +18,9 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.6a daily research review read model and queues
-- **Next product checkpoint:** a user can review one ordered project timeline and actionable queues
-  for operations, experiments, findings and candidate decisions without reconstructing state across
-  separate panels or triggering research during reads.
+- **Current slice:** S4.6b durable review notes and saved views
+- **Next product checkpoint:** a user can retain project-owned review context and repeat a bounded
+  review without weakening the server-derived timeline or current queues.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -85,7 +84,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | done — verified and published |
 | S4.4 | Make bounded research operations and failures observable | S4.3 | done — verified in the safety checkpoint; publication in this slice commit |
 | S4.5 | Compare immutable graph versions and their persisted experiment evidence | S4.4 | done — verified; publication in this slice commit |
-| S4.6a | Add a daily research review read model and actionable queues | S4.5 | active — bounded checklist generated |
+| S4.6a | Add a daily research review read model and actionable queues | S4.5 | done — verified and published in this slice commit |
+| S4.6b | Persist project review notes and saved filter views | S4.6a | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -493,16 +493,43 @@ S4.4's immediately preceding full checkpoint and fully green Actions run `308197
 
 **S4.6a bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile projects, bounded operation receipts, graph-bound runs, findings, candidate
+1. [x] Reconcile projects, bounded operation receipts, graph-bound runs, findings, candidate
        decisions and immutable version events; define which existing ledger owns each timeline fact.
-2. [ ] Record a closed project-owned daily-review read model with deterministic event identity,
+2. [x] Record a closed project-owned daily-review read model with deterministic event identity,
        ordering, cursor pagination, bounded date/type/status filters and actionable queue semantics.
-3. [ ] Add one read-only aggregation API that derives events and queues from existing stores without
+3. [x] Add one read-only aggregation API that derives events and queues from existing stores without
        copying evidence, accepting client state, recomputing research or mutating acknowledgements.
-4. [ ] Surface an accessible timeline plus failed-operation, review-needed, pending-decision and
+4. [x] Surface an accessible timeline plus failed-operation, review-needed, pending-decision and
        active-finding queues with exact links back to existing evidence/version views.
-5. [ ] Prove stable pagination, cross-project isolation, corrupt-source containment, no provider/
+5. [x] Prove stable pagination, cross-project isolation, corrupt-source containment, no provider/
        resolver/evaluator calls and narrow-screen behavior; verify, publish, inspect CI and continue.
+
+**S4.6a completion evidence, 2026-08-03.** ADR 0007 assigns only lineage-proven facts to the
+project timeline and keeps the canonical current/last operation receipt in a separately labeled
+global lane. The read model verifies immutable graph bytes, run/finding/candidate provenance and
+candidate decision addresses; derives current queues in one research session; and contains corrupt
+rows without copying raw evidence, scorecards or finding statements. Project events use closed UTC
+identities, deterministic descending ordering, a content-addressed opaque cursor and bounded
+type/status/date filters. The read-only `/api/ir/projects/{project_id}/review` route and `/api/v1`
+mirror reject unknown fields and never call resolution, data collection, research orchestration or
+write seams. The accessible product surface renders four queues, project events, exact run/version
+navigation, filters, polling and stable older-page continuation with narrow-screen containment.
+The final focused set passed 13 backend and 17 frontend tests; the combined WS-03/04/API regression
+passed 104 tests and all 212 frontend tests, typecheck and build pass. No schema, migration,
+execution or shared-runtime boundary changed, so S4.4's 2,883-pass checkpoint remains current.
+
+**S4.6b bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile event identity, project ownership, authenticated principal semantics, retention and
+       event disappearance before allowing review notes or saved views to persist.
+2. [ ] Record a closed contract that keeps notes and saved filters non-executable, separately
+       revisioned and unable to acknowledge, hide or mutate authoritative queues.
+3. [ ] Add reversible persistence plus optimistic APIs for bounded project notes and named saved
+       filter views; prove cross-project isolation, stale-write rejection and migration equivalence.
+4. [ ] Add accessible create/edit/delete note and save/apply/delete view workflows while preserving
+       exact server validation feedback and lossless reload.
+5. [ ] Prove annotations cannot change graph/evidence/cache/experiment identity or source events;
+       run the schema checkpoint, publish, inspect exact-head CI and continue to bounded search.
 
 ## 4. Medium-term sequence
 

@@ -5,10 +5,11 @@ import type {
   ResearchComparison,
   ResearchFinding,
   ResearchOperationStatus,
+  ResearchReview,
   ResearchRunDetail,
   ResearchRunSummary,
 } from '../lib/api'
-import { ResearchEvidenceSurface } from './ResearchEvidencePanel'
+import { mergeResearchReview, ResearchEvidenceSurface } from './ResearchEvidencePanel'
 
 const RUN: ResearchRunSummary = {
   run_id: 12,
@@ -110,7 +111,94 @@ const OPERATION: ResearchOperationStatus = {
   },
 }
 
+const REVIEW: ResearchReview = {
+  project_id: 'project.alpha',
+  as_of: '2026-08-03T02:00:00Z',
+  timeline: {
+    events: [{
+      event_id: 'candidate:7', type: 'candidate_created',
+      occurred_at: '2026-08-03T01:30:00Z', status: 'created',
+      summary: 'Candidate 7: created',
+      references: {
+        graph: { identifier: 'strategy.alpha', version: 4, content_address: 'sha256:graph' },
+        run_id: 12, finding_id: null, candidate_id: 7,
+      },
+    }],
+    next_cursor: 'opaque-next',
+  },
+  queues: {
+    review_needed_runs: [{
+      run_id: 12, status: 'needs_review', evidence_state: 'verified',
+      graph: { identifier: 'strategy.alpha', version: 4, content_address: 'sha256:graph' },
+    }],
+    pending_candidates: [{
+      candidate_id: 7, run_id: 12, status: 'pending',
+      graph: { identifier: 'strategy.alpha', version: 4, content_address: 'sha256:graph' },
+    }],
+    active_findings: [{
+      finding_id: 22, evidence_run_id: 12, polarity: 'positive', confidence: 0.52,
+      graph: { identifier: 'strategy.alpha', version: 4, content_address: 'sha256:graph' },
+    }],
+    failed_operation: {
+      operation_id: 'op-last', trigger: 'manual_script', stage: 'generation',
+      completed_at: '2026-08-02T01:05:00Z', failure: OPERATION.last!.failure,
+    },
+  },
+  global_operations: OPERATION,
+  source_errors: [{ source: 'candidate', source_id: '8', code: 'CANDIDATE_DECISION_CORRUPT' }],
+}
+
 describe('ResearchEvidenceSurface', () => {
+  it('polling refresh retains loaded older events while updating current facts', () => {
+    const old = REVIEW.timeline.events[0]
+    const current = {
+      ...REVIEW,
+      timeline: { events: [old], next_cursor: 'oldest-position' },
+    }
+    const response = {
+      ...REVIEW,
+      timeline: {
+        events: [
+          { ...old, status: 'approved', summary: 'Candidate 7: approved' },
+          { ...old, event_id: 'run:13', occurred_at: '2026-08-03T01:31:00Z', summary: 'Run 13' },
+        ],
+        next_cursor: 'new-page-cursor',
+      },
+    }
+
+    const merged = mergeResearchReview(current, response, 'preserve')
+
+    expect(merged.timeline.events.map((event) => event.event_id)).toEqual(['run:13', 'candidate:7'])
+    expect(merged.timeline.events[1].status).toBe('approved')
+    expect(merged.timeline.next_cursor).toBe('oldest-position')
+  })
+
+  it('renders accessible queues, closed filters, timeline links and contained source errors', () => {
+    const html = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
+      runs: [RUN], detail: null, comparison: null, reason: '', review: REVIEW,
+      reviewFilters: { event_type: 'candidate_created', status: 'created' },
+      onSelect: () => undefined, onReviewFilters: () => undefined, onReviewMore: () => undefined,
+    }))
+
+    expect(html).toContain('Daily research review')
+    expect(html).toContain('Failed operation')
+    expect(html).toContain('Runs needing review · 1')
+    expect(html).toContain('Pending decisions · 1')
+    expect(html).toContain('Active findings · 1')
+    expect(html).toContain('CANDIDATE_DECISION_CORRUPT')
+    expect(html).toContain('aria-label="Project event timeline"')
+    expect(html).toContain('Candidate 7: created')
+    expect(html).toContain('Open run 12')
+    expect(html).toContain('Use version 4 in comparison')
+    expect(html).toContain('Load older events')
+    expect(html).toContain('Event type')
+    expect(html).toContain('Status')
+    expect(html).toContain('grid-cols-1')
+    expect(html).toContain('min-w-0')
+    expect(html).toContain('break-all')
+    expect(html).not.toContain('Start research')
+  })
+
   it('shows explicit never-run state and a completed last receipt', () => {
     const never = renderToStaticMarkup(React.createElement(ResearchEvidenceSurface, {
       runs: [], detail: null, comparison: null, reason: '',

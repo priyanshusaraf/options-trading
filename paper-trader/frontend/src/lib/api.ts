@@ -766,6 +766,65 @@ export interface ResearchOperationStatus {
   readonly last: ResearchOperationReceipt | null
 }
 
+export type ResearchReviewEventType =
+  | 'graph_version_published' | 'experiment_run' | 'finding_created'
+  | 'candidate_created' | 'candidate_decided'
+
+export interface ResearchReviewEvent {
+  readonly event_id: string
+  readonly type: ResearchReviewEventType
+  readonly occurred_at: string
+  readonly status: string
+  readonly summary: string
+  readonly references: {
+    readonly graph: Omit<ResearchRunSummary['graph'], 'project_id'> | null
+    readonly run_id: number | null
+    readonly finding_id: number | null
+    readonly candidate_id: number | null
+  }
+}
+
+export interface ResearchReviewFilters {
+  readonly event_type?: ResearchReviewEventType
+  readonly status?: string
+  readonly after?: string
+  readonly before?: string
+  readonly cursor?: string
+  readonly limit?: number
+}
+
+export interface ResearchReview {
+  readonly project_id: string
+  readonly as_of: string
+  readonly timeline: {
+    readonly events: readonly ResearchReviewEvent[]
+    readonly next_cursor: string | null
+  }
+  readonly queues: {
+    readonly review_needed_runs: readonly {
+      readonly run_id: number; readonly status: string; readonly evidence_state: string
+      readonly graph: ResearchReviewEvent['references']['graph']
+    }[]
+    readonly pending_candidates: readonly {
+      readonly candidate_id: number; readonly run_id: number; readonly status: string
+      readonly graph: ResearchReviewEvent['references']['graph']
+    }[]
+    readonly active_findings: readonly {
+      readonly finding_id: number; readonly evidence_run_id: number
+      readonly polarity: string; readonly confidence: number
+      readonly graph: ResearchReviewEvent['references']['graph']
+    }[]
+    readonly failed_operation: {
+      readonly operation_id: string; readonly trigger: string; readonly stage: string
+      readonly completed_at: string; readonly failure: ResearchOperationReceipt['failure']
+    } | null
+  }
+  readonly global_operations: ResearchOperationStatus | null
+  readonly source_errors: readonly {
+    readonly source: string; readonly source_id: string; readonly code: string
+  }[]
+}
+
 const researchPath = (projectId: string) =>
   `/api/ir/projects/${encodeURIComponent(projectId)}`
 
@@ -789,6 +848,17 @@ const researchFetch = async <T>(url: string, init?: RequestInit): Promise<T> => 
 
 export const getResearchOperationStatus = (): Promise<ResearchOperationStatus> =>
   researchFetch('/api/research/operations/status')
+
+export const getResearchReview = (
+  projectId: string, filters: ResearchReviewFilters = {},
+): Promise<ResearchReview> => {
+  const query = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') query.append(key, String(value))
+  })
+  const suffix = query.toString()
+  return researchFetch(`${researchPath(projectId)}/review${suffix ? `?${suffix}` : ''}`)
+}
 
 export const getResearchRuns = (projectId: string): Promise<{ runs: ResearchRunSummary[] }> =>
   researchFetch(`${researchPath(projectId)}/experiments`)
