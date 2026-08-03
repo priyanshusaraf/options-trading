@@ -1,10 +1,11 @@
-"""Portfolio API — watchlists, the strategy archive, and the approve→deploy bridge.
+"""Portfolio API — watchlists, the strategy archive, and promotion preview.
 
 These endpoints expose the portfolio-management layer to the cockpit. Deploy WRITES
 DECLARATIVE CONFIG ONLY (a watchlist + memberships + an archive transition) and is STAGED:
 it takes effect on the next engine restart, after which the owner re-ARMs. Nothing here
-places an order or touches capital. Kept in its own router (like backtest_routes) so the
-new subsystem's surface stays cohesive.
+places an order or touches capital. Candidate decisions are project-owned research writes;
+the old combined approval/deploy commit is closed. Kept in its own router (like
+backtest_routes) so the subsystem's surface stays cohesive.
 """
 from __future__ import annotations
 
@@ -66,10 +67,12 @@ def get_promotions():
 
 @router.post("/api/portfolio/promotions/{candidate_id}/deploy")
 def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
-    """Approve a research candidate and STAGE its validated universe into a watchlist.
-    The instruments and their DSR (the conflict-resolution score) come straight from
-    the candidate; nothing here places an order. On commit the candidate is recorded
-    approved. `dry_run` previews the assignment/conflicts without writing."""
+    """Preview the legacy candidate-to-watchlist bridge without committing it.
+
+    S4.2 separates the research decision from any application deployment state. The
+    committed combined path is therefore closed; a later workflow may consume an
+    approved candidate to create a draft, disarmed deployment explicitly.
+    """
     cand = research_read.get_promotion(candidate_id)
     if cand is None:
         return JSONResponse(
@@ -90,29 +93,16 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
             return {"dry_run": True, "candidate_id": candidate_id,
                     "watchlist": prev.watchlist_name, "strategy_key": prev.strategy_key,
                     "accepted": prev.accepted, "rejected": prev.rejected}
-    if not research_read.approve_candidate(candidate_id, git_sha=""):
-        return JSONResponse(
-            status_code=409,
-            content={
-                "code": "PROMOTION_STATUS_CONFLICT",
-                "message": "promotion status changed before approval",
-            },
-        )
-    with SessionLocal() as s:
-        res = deploy(s, req)
-        # A generated strategy carries its composition across the plane boundary here,
-        # once, at the human-gated deploy — so the engine can reconstruct + run it at the
-        # next restart without ever reaching into research.db at runtime.
-        if cand.get("composition"):
-            import json as _json
-            from app.core.generated_strategies import save_generated
-            save_generated(s, cand["strategy_key"], _json.dumps(cand["composition"]),
-                           source=cand.get("generated_source") or "")
-        s.commit()
-    return {"dry_run": False, "candidate_id": candidate_id, "watchlist_id": res.watchlist_id,
-            "assigned": res.assigned, "rejected": res.rejected,
-            "generated": bool(cand.get("composition")),
-            "note": "staged — effective on next engine restart, then ARM"}
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": "PROMOTION_DECISION_REQUIRED",
+            "message": (
+                "record a project-owned research decision before entering a "
+                "separate deployment workflow"
+            ),
+        },
+    )
 
 
 @router.get("/api/portfolio/watchlists")

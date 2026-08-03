@@ -3,8 +3,8 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-03** · branch `feat/exec-completeness` · 98 commits ahead of `main` after the
-current layout slice is committed.
+**Updated 2026-08-03** · branch `feat/exec-completeness` · S4.2 complete locally and awaiting its
+slice publication.
 
 ---
 
@@ -36,8 +36,8 @@ that clause's implementation.
 | Plane (RFC §1.2) | State |
 |---|---|
 | **Language** | Done — format, resolver, runtime, experiment binding |
-| **Research** | Gen 2 functionally complete; remaining work is operational runs and explanations |
-| **Editor** | Read-only viewer and F13 sparse layout API done locally; **drag/save UI next** |
+| **Research** | Immutable graph runs, verified evidence, deterministic comparison and candidate decisions complete; findings history next |
+| **Editor** | Durable semantic authoring, separately revisioned presentation state, undo/redo and lossless reload complete |
 | **Runtime** | Evaluates graphs; **not adopted by the live engine** |
 | **Marketplace** | Not started |
 
@@ -54,10 +54,10 @@ that clause's implementation.
 | `app/ir/edit.py` | Mutation that cannot return a non-conforming artefact |
 | `app/ir/authoring.py` | Write a component in Python |
 | `app/ir/strategies/expanding_z.py` | The live strategy, as a graph |
-| `app/api/ir_routes.py` | One read-only, fixed-catalogue route for the resolved graph view |
+| `app/api/ir_routes.py`, `ir_experiment_routes.py` | Graph/editor reads plus closed graph-bound experiment, evidence, comparison and decision APIs |
 | `app/api/ir_layout_routes.py`, `app/editor/layouts.py` | Closed, revision-checked sparse layout API and transactional store |
 | `app/db/models.py`, migration `0005` | Layout head plus sparse authored-node coordinate rows |
-| `frontend/src/views/GraphView.tsx` | Read-only semantic HTML/SVG graph viewer in the existing tab shell |
+| `frontend/src/views/GraphView.tsx`, `ResearchEvidencePanel.tsx` | Accessible graph authoring plus persisted research evidence, comparison and decisions |
 | `.github/workflows/strategy-os-ci.yml` | Fail-closed push/PR checks for backend, research, smoke, frontend, type and build contracts |
 | `research/…/ir_components.py` | All 23 research blocks, as components |
 | `research/…/propose.py` | Structure search: five graph mutations |
@@ -95,18 +95,18 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**WS-04 Editor: implement S1.2 conflict-safe layout interaction.** Load the layout document into
-the React viewer, let pointer and keyboard users move authored nodes, and save the complete sparse
-set against its revision. Preserve local work on 409 or transport failure and prove reload uses
-the stored coordinates without changing any graph identity field.
+**S4.3: project-owned findings and interpretation history.** Reconcile the existing `Finding`
+record with verified graph-bound runs. Add closed create/read/revise contracts that derive evidence
+identity on the server, preserve superseded findings, and surface the history beside experiment
+and candidate evidence. Do not create deployment state or adopt the IR runtime in execution.
 
 ---
 
 ## 5. Verification state
 
 ```
-$ .venv/bin/python -m pytest tests research_tests --tb=short  # from backend/
-2,719 passed · 6 skipped · EXIT 0
+$ .venv/bin/python -m pytest tests research_tests -q  # from backend/
+2,856 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 LEDGER OK ✓ · EXIT 0
@@ -115,7 +115,7 @@ $ .venv/bin/python scripts/backtest_smoke.py
 SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build          # from frontend/
-153 passed · TYPECHECK OK · BUILD OK
+202 passed · TYPECHECK OK · BUILD OK
 ```
 
 CI contract proof: removing `research_tests` from the backend workflow command turns

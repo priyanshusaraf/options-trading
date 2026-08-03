@@ -10,6 +10,7 @@ from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.editor import graph_artifacts as graph_store
 from app.engine.runner import EngineRunner
 from app.ir.strategies.expanding_z import GRAPH
+from app.ir.hashing import canonical_json, content_address
 from research.config import research_db_path
 from research.domain.base import (
     ResearchBase,
@@ -17,7 +18,7 @@ from research.domain.base import (
     make_engine,
     make_sessionmaker,
 )
-from research.domain.models import ExperimentRun, ExperimentSpec
+from research.domain.models import ExperimentRun, ExperimentSpec, PromotionCandidate
 from research.evidence import decode_terminal_evidence, encode_terminal_evidence
 
 
@@ -257,6 +258,29 @@ def _set_run_status(run_id: int, status: str) -> None:
     engine.dispose()
 
 
+def _seed_pending_candidate(run_id: int, *, status: str = "pending") -> tuple[int, dict]:
+    scorecard = {
+        "best": {"instrument": "NIFTY", "dsr": 0.31},
+        "validated": [{"instrument": "NIFTY", "dsr": 0.31}],
+        "breadth": {"n_validated": 1},
+    }
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session.begin() as session:
+        candidate = PromotionCandidate(
+            run_id=run_id,
+            parameterization_hash="candidate-parameterization",
+            qualifying_universe_json='["NIFTY"]',
+            scorecard_json=json.dumps(scorecard),
+            status=status,
+        )
+        session.add(candidate)
+        session.flush()
+        candidate_id = candidate.id
+    engine.dispose()
+    return candidate_id, scorecard
+
+
 def test_project_owned_evidence_list_and_detail_return_persisted_results_only(
         client, monkeypatch):
     started = client.post(URL, json=_request()).json()
@@ -281,6 +305,7 @@ def test_project_owned_evidence_list_and_detail_return_persisted_results_only(
         "decision": "archive",
         "evidence_state": "verified",
         "graph": started["binding"]["graph"],
+        "candidate": None,
     }]
 
     detail = client.get(detail_url)
@@ -484,3 +509,99 @@ def test_comparison_rejects_corrupt_and_running_evidence(client):
     })
     assert unavailable.status_code == 409
     assert unavailable.json()["code"] == "EXPERIMENT_EVIDENCE_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("decision", ["approved", "rejected"])
+def test_candidate_decision_is_canonical_project_owned_and_research_only(
+        client, decision):
+    started = client.post(URL, json=_request()).json()
+    candidate_id, original_scorecard = _seed_pending_candidate(started["run_id"])
+    decision_url = (
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/candidates/"
+        f"{candidate_id}/decisions"
+    )
+
+    response = client.post(decision_url, json={
+        "expected_status": "pending",
+        "decision": decision,
+        "reason": "  Evidence reviewed against the stated gate.  ",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidate_id"] == candidate_id
+    assert body["status"] == decision
+    evidence = body["decision"]["evidence"]
+    assert evidence == {
+        "actor": "owner",
+        "candidate_id": candidate_id,
+        "decision": decision,
+        "decided_at": evidence["decided_at"],
+        "expected_status": "pending",
+        "reason": "Evidence reviewed against the stated gate.",
+        "run_id": started["run_id"],
+    }
+    assert body["decision"]["content_address"] == content_address(evidence)
+
+    engine = make_engine(research_db_path())
+    Session = make_sessionmaker(engine)
+    with Session() as session:
+        candidate = session.get(PromotionCandidate, candidate_id)
+        persisted = json.loads(candidate.scorecard_json)
+        assert candidate.status == decision
+        assert {key: persisted[key] for key in original_scorecard} == original_scorecard
+        assert persisted["decision"] == body["decision"]
+        assert candidate.scorecard_json == canonical_json(persisted)
+    engine.dispose()
+
+    # A research decision creates no application-side watchlist or deployment state.
+    assert client.get("/api/portfolio/watchlists").json()["watchlists"] == []
+
+
+def test_candidate_decision_rejects_stale_shadow_cross_project_and_raw_scorecard(client):
+    started = client.post(URL, json=_request()).json()
+    candidate_id, _ = _seed_pending_candidate(started["run_id"])
+    decision_url = (
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/candidates/"
+        f"{candidate_id}/decisions"
+    )
+    accepted = client.post(decision_url.replace("/api/", "/api/v1/", 1), json={
+        "expected_status": "pending",
+        "decision": "rejected",
+        "reason": "Insufficient breadth.",
+    })
+    assert accepted.status_code == 200
+
+    stale = client.post(decision_url, json={
+        "expected_status": "pending",
+        "decision": "approved",
+        "reason": "Overwrite the first decision.",
+    })
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "CANDIDATE_STATUS_CONFLICT"
+
+    shadow_id, _ = _seed_pending_candidate(started["run_id"], status="shadow")
+    shadow = client.post(decision_url.replace(str(candidate_id), str(shadow_id)), json={
+        "expected_status": "pending", "decision": "approved", "reason": "Bypass"
+    })
+    assert shadow.status_code == 409
+
+    other = client.post(
+        "/api/ir/projects", json={"name": "Other", "description": ""}
+    ).json()
+    hidden = client.post(decision_url.replace(
+        CATALOGUE_PROJECT_ID, other["project_id"]
+    ), json={
+        "expected_status": "pending", "decision": "approved", "reason": "Hidden"
+    })
+    assert hidden.status_code == 404
+    assert hidden.json()["code"] == "CANDIDATE_NOT_FOUND"
+
+    raw = client.post(decision_url, json={
+        "expected_status": "pending",
+        "decision": "approved",
+        "reason": "Client replacement",
+        "scorecard": {"best": "client claim"},
+    })
+    assert raw.status_code == 422
+    assert raw.json()["code"] == "EXPERIMENT_REQUEST_INVALID"

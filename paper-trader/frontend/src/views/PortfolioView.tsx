@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react'
 import * as api from '../lib/api'
 import type { Promotion, Watchlist, ArchiveStrategy } from '../lib/api'
 
-// The approve→deploy cockpit: review what research (and the code-gen builder) proposes,
-// read exactly what each strategy does, and stage a validated universe into a live
-// watchlist. Deploy writes declarative config only — it never places an order, and the
-// engine stays disarmed until you re-ARM after the next restart.
+// Legacy promotion preview. Project-owned approval/rejection now lives beside the
+// persisted experiment evidence in Strategy Graph; this view does not combine a
+// research decision with application deployment state.
 
 function Explanation({ ex }: { ex: Promotion['explanation'] }) {
   return (
@@ -46,15 +45,6 @@ function PromotionCard({ p, onChange }: { p: Promotion; onChange: () => void }) 
     const r = await api.deployPromotion(p.id, { watchlist_name: name, dry_run: true })
     setPreview(r); setBusy(false)
   }
-  const doDeploy = async () => {
-    setBusy(true); setMsg('')
-    const r = await api.deployPromotion(p.id, { watchlist_name: name })
-    setBusy(false)
-    if (r.error) { setMsg(r.error); return }
-    setMsg(`Staged → watchlist "${name}". ${r.note || ''}`)
-    onChange()
-  }
-
   return (
     <div className="card p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -103,9 +93,9 @@ function PromotionCard({ p, onChange }: { p: Promotion; onChange: () => void }) 
           value={name} onChange={(e) => setName(e.target.value)} placeholder="watchlist name"
         />
         <button className="btn" disabled={busy} onClick={doPreview}>Preview</button>
-        <button className="btn border-up/60 text-up" disabled={busy} onClick={doDeploy}>
-          Approve &amp; Deploy
-        </button>
+        <span className="text-[11px] text-muted">
+          Approve or reject with a reason in Strategy Graph → Research evidence.
+        </span>
       </div>
 
       {preview && (
@@ -207,10 +197,10 @@ export default function PortfolioView() {
   return (
     <div className="grid gap-4 max-w-5xl">
       <div className="card p-3 flex flex-col gap-2">
-        <div className="stat-label">Research promotions — awaiting your approval</div>
+        <div className="stat-label">Research promotion previews</div>
         <div className="text-[11px] text-muted">
-          Approving stages the validated universe into a watchlist. It writes config only — no
-          order is placed, and the engine stays disarmed until you restart and re-ARM.
+          Preview the proposed assignment here. Research decisions are recorded separately beside
+          their exact experiment evidence and do not create deployment or order state.
         </div>
         {loading && <div className="text-muted text-xs">Loading…</div>}
         {!loading && promotions.length === 0 && (

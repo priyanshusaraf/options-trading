@@ -5,9 +5,8 @@ This is the ONE intended coupling between the two planes, and it runs in this
 direction only — the API surfaces research output for a human to approve. The
 research process never reaches back the other way (its guards forbid importing any
 execution / order / broker / runner code). Nothing here touches capital: the only
-write is `approve_candidate`, which stamps the human's approval onto the candidate
-row (research bookkeeping), and the deploy that follows writes declarative config to
-the execution ledger, never an order.
+write is `decide_project_candidate`, which appends canonical research decision evidence.
+It does not write application configuration, deployment state or orders.
 
 research.db lives at `PT_RESEARCH_DB_PATH` (default `research.db`); if it does not
 exist yet (no nightly has run) every read degrades to empty and deploy reports the
@@ -17,10 +16,13 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import datetime as dt
 import json
 import os
 
 from sqlalchemy import update
+
+from app.ir.hashing import canonical_json, content_address
 
 from research.config import research_db_path
 from research.domain.base import make_engine, make_sessionmaker
@@ -70,10 +72,35 @@ class StoredEvidenceCorrupt(Exception):
     pass
 
 
+class CandidateDecisionConflict(Exception):
+    pass
+
+
 def _graph_for_recipe(recipe: dict) -> dict | None:
     provenance = recipe.get("graph_provenance")
     graph = provenance.get("graph") if isinstance(provenance, dict) else None
     return graph if isinstance(graph, dict) else None
+
+
+def _candidate_for_run(session, run_id: int) -> dict | None:
+    candidate = (
+        session.query(PromotionCandidate)
+        .filter_by(run_id=run_id)
+        .order_by(PromotionCandidate.id.desc())
+        .first()
+    )
+    if candidate is None:
+        return None
+    try:
+        scorecard = json.loads(candidate.scorecard_json)
+    except (TypeError, ValueError):
+        scorecard = {}
+    decision = scorecard.get("decision") if isinstance(scorecard, dict) else None
+    return {
+        "candidate_id": candidate.id,
+        "status": candidate.status,
+        "decision": decision if isinstance(decision, dict) else None,
+    }
 
 
 def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> dict | None:
@@ -105,6 +132,7 @@ def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> d
         "decision": run.decision,
         "evidence_state": evidence_state,
         "graph": graph,
+        "candidate": _candidate_for_run(session, run.id),
     }
     if include_evidence:
         view["evidence"] = evidence
@@ -220,30 +248,79 @@ def get_promotion(candidate_id: int) -> dict | None:
             return None
 
 
-def approve_candidate(candidate_id: int, git_sha: str = "") -> bool:
-    """Compare-and-swap one pending candidate to approved.
+def decide_project_candidate(
+    project_id: str,
+    candidate_id: int,
+    *,
+    expected_status: str,
+    decision: str,
+    reason: str,
+) -> dict | None:
+    """Record one canonical human decision without touching application state.
 
-    Returns False for absent, shadow, stale or terminal candidates. The status clause
-    is authorization, not merely optimistic concurrency: direct knowledge of a shadow
-    candidate id must never bypass prospective evidence.
+    None hides absent and cross-project ids. CandidateDecisionConflict covers every
+    stale, shadow or terminal state without revealing which one to a caller.
     """
     with _research_session() as session:
         if session is None:
-            return False
+            return None
+        if (
+            expected_status != "pending"
+            or decision not in {"approved", "rejected"}
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason) > 400
+        ):
+            raise CandidateDecisionConflict(candidate_id)
+        candidate = session.get(PromotionCandidate, candidate_id)
+        if candidate is None:
+            return None
+        recipe = _recipe_for(session, candidate.run_id)
+        graph = _graph_for_recipe(recipe)
+        if graph is None or graph.get("project_id") != project_id:
+            return None
+        if candidate.status != expected_status:
+            raise CandidateDecisionConflict(candidate_id)
         try:
-            claimed = session.execute(
-                update(PromotionCandidate)
-                .where(
-                    PromotionCandidate.id == candidate_id,
-                    PromotionCandidate.status == "pending",
-                )
-                .values(status="approved", approved_git_sha=git_sha or None)
+            scorecard = json.loads(candidate.scorecard_json)
+        except (TypeError, ValueError) as exc:
+            raise CandidateDecisionConflict(candidate_id) from exc
+        if not isinstance(scorecard, dict) or "decision" in scorecard:
+            raise CandidateDecisionConflict(candidate_id)
+        decided_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
+        evidence = {
+            "actor": "owner",
+            "candidate_id": candidate.id,
+            "decision": decision,
+            "decided_at": decided_at,
+            "expected_status": expected_status,
+            "reason": reason,
+            "run_id": candidate.run_id,
+        }
+        envelope = {
+            "schema_version": 1,
+            "content_address": content_address(evidence),
+            "evidence": evidence,
+        }
+        updated_scorecard = {**scorecard, "decision": envelope}
+        claimed = session.execute(
+            update(PromotionCandidate)
+            .where(
+                PromotionCandidate.id == candidate_id,
+                PromotionCandidate.status == expected_status,
+                PromotionCandidate.scorecard_json == candidate.scorecard_json,
             )
-            if claimed.rowcount != 1:
-                session.rollback()
-                return False
-            session.commit()
-            return True
-        except Exception:
+            .values(
+                status=decision,
+                scorecard_json=canonical_json(updated_scorecard),
+            )
+        )
+        if claimed.rowcount != 1:
             session.rollback()
-            return False
+            raise CandidateDecisionConflict(candidate_id)
+        session.commit()
+        return {
+            "candidate_id": candidate_id,
+            "status": decision,
+            "decision": envelope,
+        }

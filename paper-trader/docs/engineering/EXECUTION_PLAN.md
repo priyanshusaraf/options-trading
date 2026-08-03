@@ -18,9 +18,10 @@ TypeScript, Vite and Vitest.
 - **Plan owner:** engineering executive layer
 - **Status date:** 2026-08-03
 - **Branch:** `feat/exec-completeness`
-- **Current slice:** S4.2 evidence, rejection, comparison and candidate surface
-- **Next product checkpoint:** a user can inspect why an immutable-graph experiment passed or
-  failed, compare its exact provenance, and make a candidate decision without entering execution.
+- **Current slice:** S4.3 project-owned findings and decision history
+- **Next product checkpoint:** a user can record and revise an interpretation of verified run
+  evidence, then reload its complete finding and candidate-decision history without entering
+  execution.
 
 This is the sequential completion plan for the Strategy Operating System. It coordinates the
 workstreams; it does not replace their contracts or the Component IR RFC. Near-term slices are
@@ -80,7 +81,8 @@ Status values are `done`, `active`, `ready`, `blocked`, and `later`. `Blocked` n
 | S3.2b | Add structural node/edge/group editing and accessible connection controls | S3.2a | done — atomic semantic/presentation history published |
 | S3.3 | Prove visual/hand-authored content-address equivalence and lossless reload | S3.2b | done — canonical equivalence and fresh-connection reload proved |
 | S4.1 | Bind immutable graph versions to the existing research experiment flow | S3.3 | done — exact immutable provenance and closed start API verified |
-| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate creation | S4.1 | active — contract reconciliation next |
+| S4.2 | Surface evidence, rejection reasons, comparison and deployment-candidate decisions | S4.1 | done — verified and publication pending in the slice commit |
+| S4.3 | Add project-owned findings and immutable interpretation history | S4.2 | active — bounded checklist generated |
 
 ### S0.3 — programme reconciliation and execution plan
 
@@ -385,20 +387,44 @@ production build. Live execution and IR runtime adoption remain untouched.
 
 **S4.2 bounded checklist, generated from this plan on 2026-08-03.**
 
-1. [ ] Reconcile the existing ExperimentSpec/Run, Finding, PromotionCandidate and shadow-state
+1. [x] Reconcile the existing ExperimentSpec/Run, Finding, PromotionCandidate and shadow-state
        contracts with S4.2; write the evidence/decision design record and test-first plan.
-2. [ ] Add closed project-owned read APIs for experiment summary and detail that expose persisted
+2. [x] Add closed project-owned read APIs for experiment summary and detail that expose persisted
        qualification failures, walk-forward gates, DSR/PBO/N_eff, regimes, breadth, explanation,
        graph/data/cost provenance and terminal errors without recomputing evidence.
-3. [ ] Add deterministic comparison over two immutable experiment specs/runs: graph structure and
+3. [x] Add deterministic comparison over two immutable experiment specs/runs: graph structure and
        parameters, component versions, dataset identity, costs, gates and result deltas, with
        explicit incomparable reasons instead of inferred equivalence.
-4. [ ] Surface the evidence and exact rejection reasons accessibly in the product, and reconcile
+4. [x] Surface the evidence and exact rejection reasons accessibly in the product, and reconcile
        candidate creation/decision with the existing shadow and human-approval state machine; no
        approval may activate a deployment or bypass shadow evidence.
-5. [ ] Prove reload, ownership, legacy-unbound, pending/terminal decision, raw-evidence and stale
+5. [x] Prove reload, ownership, legacy-unbound, pending/terminal decision, raw-evidence and stale
        revision guards; run focused then workstream regression, update handoff once, commit/push,
        inspect exact-head CI and continue without adopting the IR runtime in live execution.
+
+**S4.2 completion evidence, 2026-08-03.** ADR 0003 accepts canonical content-addressed terminal
+evidence in the existing run checkpoint and canonical candidate decisions appended to the existing
+server scorecard. Completed and controlled-failed runs persist exact provenance and structured
+outcomes; running, failed, completed, corrupt and legacy-unbound states remain distinct. Closed
+project-owned list/detail/comparison/decision routes never recompute evidence, reject raw evidence
+or scorecards, and use pending-only compare-and-swap decisions with a bounded reason. The product
+surface shows exact failures, gates, DSR/PBO/N_eff, provenance, comparison and accessible decisions.
+The older combined approval/deployment write is closed; its preview remains read-only. The full
+checkpoint passed 2,856 tests plus 6 skips, all 202 frontend tests, typecheck, production build,
+`LEDGER OK` and 16/16 `SWEEP OK`. Execution, orders, arming and live IR adoption remain untouched.
+
+**S4.3 bounded checklist, generated from this plan on 2026-08-03.**
+
+1. [ ] Reconcile the existing `Finding` lifecycle with graph-owned runs, terminal evidence and ADR
+       0001; record a narrow test-first design without creating a parallel knowledge ledger.
+2. [ ] Add closed project-owned finding reads and creation from a verified terminal run; accept
+       interpretation intent only and derive all run/graph/evidence identity on the server.
+3. [ ] Implement revision by immutable successor plus `superseded_by`, preserving the original
+       finding and rejecting cross-project, legacy, running, corrupt and stale revision requests.
+4. [ ] Surface active and superseded finding history accessibly beside experiment and candidate
+       evidence, with lossless reload and no evidence recomputation or client identity claims.
+5. [ ] Run focused and WS-03/04/07/08 regressions, update coordination once, commit/push, inspect
+       exact-head CI and continue; do not create or activate a deployment or adopt the IR runtime.
 
 ## 4. Medium-term sequence
 

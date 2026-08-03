@@ -162,19 +162,27 @@ def test_promotions_empty_when_no_research_db(tmp_path, monkeypatch):
     assert c.get("/api/portfolio/promotions").json()["promotions"] == []
 
 
-def test_deploy_promotion_stages_watchlist_and_approves_candidate(client):
+def test_committed_candidate_bridge_is_closed_before_research_decision(client):
     c, cid = client
-    res = c.post(f"/api/portfolio/promotions/{cid}/deploy",
-                 json={"watchlist_name": "Bullion"}).json()
-    assert set(res["assigned"]) == {"SILVERM", "GOLDM"}
-    assert "staged" in res["note"]
-    # the validated universe is now a live watchlist bound to the candidate's strategy
-    wls = c.get("/api/portfolio/watchlists").json()["watchlists"]
-    bullion = next(w for w in wls if w["name"] == "Bullion")
-    assert set(bullion["instruments"]) == {"SILVERM", "GOLDM"}
-    assert bullion["strategy_key"] == "trend_impulse_v3"
-    # the candidate is recorded approved and no longer shows as pending
-    assert c.get("/api/portfolio/promotions").json()["promotions"] == []
+    response = c.post(
+        f"/api/portfolio/promotions/{cid}/deploy",
+        json={"watchlist_name": "Bullion"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROMOTION_DECISION_REQUIRED"
+    assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
+    assert c.get("/api/portfolio/promotions").json()["promotions"][0]["id"] == cid
+
+
+def test_candidate_bridge_preview_remains_read_only(client):
+    c, cid = client
+    response = c.post(
+        f"/api/portfolio/promotions/{cid}/deploy",
+        json={"watchlist_name": "Bullion", "dry_run": True},
+    )
+    assert response.status_code == 200
+    assert set(response.json()["accepted"]) == {"SILVERM", "GOLDM"}
+    assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
 
 
 def test_deploy_unknown_promotion_returns_error(client):
@@ -205,31 +213,6 @@ def test_direct_id_cannot_stage_a_candidate_outside_the_pending_queue(
     assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
 
 
-def test_status_race_before_approval_cannot_stage_application_state(client, monkeypatch):
-    c, cid = client
-    from app.core import research_read
-
-    monkeypatch.setattr(research_read, "approve_candidate", lambda *_args, **_kw: False)
-    response = c.post(
-        f"/api/portfolio/promotions/{cid}/deploy",
-        json={"watchlist_name": "Race"},
-    )
-
-    assert response.status_code == 409
-    assert response.json()["code"] == "PROMOTION_STATUS_CONFLICT"
-    assert c.get("/api/portfolio/watchlists").json()["watchlists"] == []
-
-
-def test_approval_compare_and_swap_refuses_shadow_and_terminal_rows(client):
-    _, cid = client
-    from app.core import research_read
-    from research.config import research_db_path
-
-    for status in ("shadow", "approved", "rejected"):
-        _set_candidate_status(research_db_path(), cid, status)
-        assert research_read.approve_candidate(cid) is False
-
-
 @pytest.fixture
 def gen_client(tmp_path, monkeypatch):
     rdb = str(tmp_path / "research.db")
@@ -257,16 +240,11 @@ def test_generated_promotion_surfaces_composition_and_exact_explanation(gen_clie
     assert "EMA(50)" in " ".join(p["explanation"]["rules"])
 
 
-def test_deploying_a_generated_candidate_persists_it_for_the_engine(gen_client):
-    from app.core.generated_strategies import register_all
-    from app.db.session import SessionLocal
-    from app.strategy.registry import get_strategy
-
-    res = gen_client.post("/api/portfolio/promotions/1/deploy",
-                          json={"watchlist_name": "GenBullion"}).json()
-    assert res["generated"] is True and res["assigned"] == ["GOLDM"]
-    # the composition was copied into the execution store; on the next startup the engine
-    # reconstructs it and the gen_* key resolves to the REAL generated strategy
-    with SessionLocal() as s:
-        assert register_all(s) >= 1
-    assert get_strategy("gen_api_test_v1").key == "gen_api_test_v1"
+def test_generated_candidate_cannot_cross_into_execution_before_decision(gen_client):
+    response = gen_client.post(
+        "/api/portfolio/promotions/1/deploy",
+        json={"watchlist_name": "GenBullion"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "PROMOTION_DECISION_REQUIRED"
+    assert gen_client.get("/api/portfolio/watchlists").json()["watchlists"] == []

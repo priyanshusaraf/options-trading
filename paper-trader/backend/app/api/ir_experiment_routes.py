@@ -92,6 +92,12 @@ EvidenceState = Literal[
 ]
 
 
+class GraphRunCandidate(_ClosedModel):
+    candidate_id: int
+    status: Literal["shadow", "pending", "approved", "rejected"]
+    decision: dict | None
+
+
 class GraphRunSummary(_ClosedModel):
     run_id: int
     spec_id: str
@@ -99,6 +105,7 @@ class GraphRunSummary(_ClosedModel):
     decision: str | None
     evidence_state: EvidenceState
     graph: dict
+    candidate: GraphRunCandidate | None
 
 
 class GraphRunListResponse(_ClosedModel):
@@ -125,6 +132,24 @@ class GraphComparisonResponse(_ClosedModel):
     equivalent: bool
     incomparable: list[str]
     differences: list[GraphComparisonDifference]
+
+
+class CandidateDecisionRequest(_ClosedModel):
+    expected_status: Literal["pending"]
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1, max_length=400)
+
+    @model_validator(mode="after")
+    def _meaningful_reason(self):
+        if not self.reason.strip():
+            raise ValueError("decision reason must not be blank")
+        return self
+
+
+class CandidateDecisionResponse(_ClosedModel):
+    candidate_id: int
+    status: Literal["approved", "rejected"]
+    decision: dict
 
 
 def request_validation_envelope(errors: list[dict]) -> dict:
@@ -316,6 +341,32 @@ def post_graph_experiment_comparison(
     return GraphComparisonResponse(
         **compare_experiment_evidence(left["evidence"], right["evidence"])
     )
+
+
+@router.post(
+    "/projects/{project_id}/candidates/{candidate_id}/decisions",
+    response_model=CandidateDecisionResponse,
+)
+def post_candidate_decision(
+    project_id: str, candidate_id: int, body: CandidateDecisionRequest
+) -> CandidateDecisionResponse:
+    try:
+        result = research_read.decide_project_candidate(
+            project_id,
+            candidate_id,
+            expected_status=body.expected_status,
+            decision=body.decision,
+            reason=body.reason.strip(),
+        )
+    except research_read.CandidateDecisionConflict as exc:
+        raise _error(
+            409,
+            "CANDIDATE_STATUS_CONFLICT",
+            "candidate is not pending at the expected status",
+        ) from exc
+    if result is None:
+        raise _error(404, "CANDIDATE_NOT_FOUND", "candidate not found")
+    return CandidateDecisionResponse(**result)
 
 
 @router.get(

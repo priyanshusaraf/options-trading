@@ -195,6 +195,7 @@ async def editor_request_validation_handler(
         and (
             ("/graphs/" in path and path.endswith("/experiments"))
             or path.endswith("/experiments/comparisons")
+            or path.endswith("/decisions")
         )
     ):
         return JSONResponse(

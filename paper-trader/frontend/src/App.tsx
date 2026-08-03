@@ -72,7 +72,7 @@ function Shell() {
         {tab === 'trades' && <TradesView />}
         {tab === 'calendar' && <CalendarView />}
         {tab === 'dashboard' && <DashboardView />}
-        {tab === 'graph' && <GraphView />}
+        {tab === 'graph' && <GraphView researchEnabled={researchEnabled} />}
         {tab === 'settings' && <SettingsView />}
       </main>
       {/* The journal renders OUTSIDE <main>: it is a full-bleed fixed sub-app

@@ -140,6 +140,30 @@ finding that is not bound to what produced it.
 
 Newest first. Dates are the dates the work landed.
 
+### Verified evidence, comparison and candidate decisions — S4.2
+
+- `ExperimentRun.checkpoint_json` now stores a bounded canonical envelope whose address is derived
+  from its evidence. Completed runs preserve exact provenance, structured qualification/
+  validation/score outcomes, regimes, breadth and explanation. Controlled failures preserve the
+  immutable recipe, stable stage/code and safe bounded message in the same transaction as failed
+  status; injected evidence-write failure cannot leave a run falsely completed.
+- Closed project-owned list/detail routes expose persisted evidence only. Spies prove reads never
+  call a provider, resolver, evaluator or gate. Running, failed, completed, corrupt and legacy
+  states are explicit; cross-project ids remain hidden.
+- The pure comparator reports graph, resolution, parameter, dataset, cost, gate, build and result
+  differences. Dataset, cost and gate changes are explicitly incomparable, including exact
+  materialized dataset snapshots that differ despite the same requested window.
+- Pending candidate decisions require an expected status and bounded non-empty reason. One
+  compare-and-swap appends a canonical content-addressed server actor/time/decision envelope to
+  the existing scorecard without replacing its original evidence. Shadow, stale, terminal,
+  cross-project and client-scorecard attempts fail closed. Approval/rejection creates no
+  application watchlist, deployment, arm or order state.
+- The Strategy Graph product surface renders exact rejection/failure feedback, gate and score
+  evidence, provenance, comparison and accessible approve/reject controls. The older combined
+  approval/deployment write is closed; its assignment preview remains read-only.
+- Full acceptance passed 2,856 backend/research tests plus 6 skips, 202 frontend tests, typecheck,
+  build, `LEDGER OK` and 16/16 `SWEEP OK`. No execution or live IR-runtime path changed.
+
 ### Immutable published-graph experiment binding — S4.1
 
 - **One accepted experiment ledger and gate pipeline.**

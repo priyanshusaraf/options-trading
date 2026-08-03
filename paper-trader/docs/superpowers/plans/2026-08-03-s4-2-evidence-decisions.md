@@ -82,19 +82,19 @@ deployment activation, arming, orders, Python or live IR-runtime adoption.
 - Extend: `backend/app/api/ir_experiment_routes.py`
 - Modify: relevant frontend API/state/view files and focused tests
 
-1. Add a pending-only decision request with expected status and bounded reason; reject stale,
+1. [x] Add a pending-only decision request with expected status and bounded reason; reject stale,
    shadow and terminal candidates without mutating scorecards.
-2. Persist canonical decision evidence while preserving the original server scorecard.
-3. Surface run evidence, exact rejection reasons, comparison and candidate state accessibly; keep
+2. [x] Persist canonical decision evidence while preserving the original server scorecard.
+3. [x] Surface run evidence, exact rejection reasons, comparison and candidate state accessibly; keep
    all final topology/evidence/state authority on the server.
-4. Prove approval records research intent only and creates no active/armed deployment or order.
+4. [x] Prove approval records research intent only and creates no active/armed deployment or order.
 
 ## Task 6: Regression, publication and continuation
 
-1. Run focused tests during each task and WS-03/04/07/08 regression at the slice boundary.
-2. Run the full checkpoint because terminal research persistence and the candidate safety boundary
+1. [x] Run focused tests during each task and WS-03/04/07/08 regression at the slice boundary.
+2. [x] Run the full checkpoint because terminal research persistence and the candidate safety boundary
    changed.
-3. Update the three coordination documents once with final evidence, commit deliberately, push,
+3. [x] Update the three coordination documents once with final evidence, commit deliberately, push,
    verify remote exact head and inspect GitHub Actions.
-4. Generate the next bounded checklist from `EXECUTION_PLAN.md` and continue unless an owner-gated
+4. [x] Generate the next bounded checklist from `EXECUTION_PLAN.md` and continue unless an owner-gated
    live-runtime boundary is reached.

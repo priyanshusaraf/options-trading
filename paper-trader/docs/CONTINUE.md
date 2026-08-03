@@ -10,7 +10,7 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
-**Stage A through S3.3 is implemented and published.** Fail-closed CI is on the branch. Its first
+**Stage A through S4.2 is implemented; S4.2 is awaiting this slice publication.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
 now remove the variable explicitly and the workflow retains its global safety guard. A follow-up
 Linux run exposed that cancelling a lane abandoned its active `asyncio.to_thread` worker; `b243b59`
@@ -26,6 +26,11 @@ reconciliation, server-derived component/socket descriptors and accessible struc
 controls. Backend receipts restore both semantic and presentation state during undo/redo.
 S3.3 proves an equivalent closed structural history and hand-authored reference have identical
 canonical executable identity, and that graph plus presentation state reloads without loss.
+S4.1 binds an exact project-owned immutable graph version to the existing research orchestrator.
+S4.2 persists content-addressed success and controlled-failure evidence, exposes project-owned
+history/detail/comparison, records pending-only canonical candidate decisions with reasons, and
+renders the evidence and decisions accessibly. The superseded combined approval/deployment write
+is closed; preview remains read-only.
 
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
 viewer and does not adopt the IR runtime in a live path.
@@ -35,7 +40,9 @@ viewer and does not adopt the IR runtime in a live path.
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
-- Last completed/pushed product slice: S3.3 through `d596bee`
+- Last completed/pushed bounded increment before this handoff: failed-run evidence through `6f474f0`
+- S4.2 comparison increment: `f809e2d`
+- S4.2 product-surface slice: current HEAD after this handoff is published
 - S3.2b structural frontend boundary: `0b3b784`
 - Expected ahead/behind after publishing this handoff: `0/0`
 - Working tree expected after publishing this handoff: clean
@@ -52,8 +59,8 @@ the only answer — never read it off a document.
 Latest acceptance run on 2026-08-03:
 
 ```
-$ .venv/bin/python -m pytest tests research_tests --tb=short
-2,794 passed · 6 skipped · 76 warnings · EXIT 0
+$ .venv/bin/python -m pytest tests research_tests -q
+2,856 passed · 6 skipped · EXIT 0
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
@@ -62,7 +69,7 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ npm test && npm run typecheck && npm run build
-195 passed · TYPECHECK OK · BUILD OK · EXIT 0
+202 passed · TYPECHECK OK · BUILD OK · EXIT 0
 ```
 
 S2.2's final editor/IR/persistence regression passed 337 tests. The focused persistence set passed
@@ -150,21 +157,15 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**S4.2 — surface evidence, rejection reasons, comparison and candidate decisions.**
+**S4.3 — project-owned findings and immutable interpretation history.**
 
-S4.1 is complete in the current slice: an exact project-owned immutable graph version now starts
-the existing research orchestrator through a closed API and persists graph, resolution, dataset,
-cost, gate, hypothesis and build provenance in the existing immutable ExperimentSpec. Full
-acceptance passed with 2,813 backend/research tests plus 6 skips, `LEDGER OK`, 16/16 `SWEEP OK`,
-195 frontend tests, typecheck and build. The prior exact-head Actions run `30811942113` was green;
-inspect the new exact-head run after this slice is pushed.
-
-Continue from the new five-item S4.2 checklist in `docs/engineering/EXECUTION_PLAN.md`. First
-reconcile the existing ExperimentSpec/Run, Finding, PromotionCandidate and shadow state before
-writing the detailed design. Surface persisted evidence and exact failure reasons without
-recomputing them, compare immutable experiment provenance deterministically, and keep every
-candidate decision behind the existing shadow/human gate. Do not activate deployments or adopt
-the IR runtime in live execution.
+Continue from the new five-item S4.3 checklist in `docs/engineering/EXECUTION_PLAN.md`. Reconcile
+the existing `Finding` record and `superseded_by` lifecycle with verified graph-owned experiment
+runs before implementation. Create no parallel ledger: reads, creation and revision must use the
+existing record, derive project/run/graph/evidence identity on the server, reject legacy/running/
+corrupt/cross-project inputs, and preserve every superseded interpretation. Surface the history
+beside the S4.2 evidence panel. Do not create or activate deployments and do not adopt the IR
+runtime in live execution.
 
 WS-08's typography item is **externally blocked**: it needs the owner's reference site.
 

@@ -33,6 +33,7 @@ import {
 import { GraphEditControls } from './GraphEditControls'
 import { GraphGroupControls } from './GraphGroupControls'
 import { GraphStructureControls } from './GraphStructureControls'
+import ResearchEvidencePanel from './ResearchEvidencePanel'
 import {
   acceptPublication,
   acceptReload,
@@ -552,7 +553,7 @@ export function GraphViewState({
   )
 }
 
-export default function GraphView() {
+export default function GraphView({ researchEnabled = false }: { researchEnabled?: boolean }) {
   const [graphEditor, setGraphEditor] = useState<GraphEditorState | null>(null)
   const [layoutEditor, setLayoutEditor] = useState<LayoutEditorState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -719,24 +720,27 @@ export default function GraphView() {
   const graph = graphEditor?.accepted?.view ?? null
 
   return (
-    <GraphViewState
-      graph={graph}
-      layout={layoutEditor?.layout ?? null}
-      graphEditor={graphEditor}
-      phase={layoutEditor?.phase}
-      message={layoutEditor?.message}
-      error={error}
-      onMove={moveNode}
-      onSave={saveLayout}
-      onReload={reloadLayout}
-      onDisplayName={updateDisplayName}
-      onSetOverride={setOverride}
-      onClearOverride={clearOverride}
-      onUndo={undo}
-      onRedo={redo}
-      onEditorReload={reloadEditor}
-      onSemantic={submitSemantic}
-      onPresentation={submitPresentation}
-    />
+    <>
+      {researchEnabled && <ResearchEvidencePanel projectId={PROJECT_ID} />}
+      <GraphViewState
+        graph={graph}
+        layout={layoutEditor?.layout ?? null}
+        graphEditor={graphEditor}
+        phase={layoutEditor?.phase}
+        message={layoutEditor?.message}
+        error={error}
+        onMove={moveNode}
+        onSave={saveLayout}
+        onReload={reloadLayout}
+        onDisplayName={updateDisplayName}
+        onSetOverride={setOverride}
+        onClearOverride={clearOverride}
+        onUndo={undo}
+        onRedo={redo}
+        onEditorReload={reloadEditor}
+        onSemantic={submitSemantic}
+        onPresentation={submitPresentation}
+      />
+    </>
   )
 }

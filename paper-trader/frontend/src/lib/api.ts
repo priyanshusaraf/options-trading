@@ -648,6 +648,107 @@ export const getSweepResult = (key: string, interval: string, runId?: number, st
   return j(`/api/backtest/result/${key}/${interval}${qs ? `?${qs}` : ''}`)
 }
 
+// ── Project-owned research evidence and decisions ────────────────────────────
+export interface ResearchRunCandidate {
+  readonly candidate_id: number
+  readonly status: 'shadow' | 'pending' | 'approved' | 'rejected'
+  readonly decision: {
+    readonly content_address: string
+    readonly evidence: {
+      readonly actor: string
+      readonly decision: 'approved' | 'rejected'
+      readonly decided_at: string
+      readonly reason: string
+    }
+  } | null
+}
+
+export interface ResearchRunSummary {
+  readonly run_id: number
+  readonly spec_id: string
+  readonly status: string
+  readonly decision: string | null
+  readonly evidence_state: 'verified' | 'legacy_unbound' | 'corrupt' | 'pending' | 'running'
+  readonly graph: {
+    readonly project_id: string
+    readonly identifier: string
+    readonly version: number
+    readonly content_address: string
+  }
+  readonly candidate: ResearchRunCandidate | null
+}
+
+export interface ResearchRunDetail extends ResearchRunSummary {
+  readonly evidence: Record<string, any> | null
+}
+
+export interface ResearchComparisonDifference {
+  readonly dimension: string
+  readonly path: readonly (string | number)[]
+  readonly left: unknown
+  readonly right: unknown
+}
+
+export interface ResearchComparison {
+  readonly equivalent: boolean
+  readonly incomparable: readonly string[]
+  readonly differences: readonly ResearchComparisonDifference[]
+}
+
+const researchPath = (projectId: string) =>
+  `/api/ir/projects/${encodeURIComponent(projectId)}`
+
+const researchFetch = async <T>(url: string, init?: RequestInit): Promise<T> => {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...editorHeaders(),
+      ...init?.headers,
+    },
+  })
+  const body = await response.json()
+  if (!response.ok) {
+    throw new Error(typeof body.message === 'string'
+      ? body.message
+      : `Research request failed (${response.status})`)
+  }
+  return body as T
+}
+
+export const getResearchRuns = (projectId: string): Promise<{ runs: ResearchRunSummary[] }> =>
+  researchFetch(`${researchPath(projectId)}/experiments`)
+
+export const getResearchRun = (
+  projectId: string, runId: number,
+): Promise<ResearchRunDetail> => researchFetch(
+  `${researchPath(projectId)}/experiments/${runId}`,
+)
+
+export const compareResearchRuns = (
+  projectId: string, leftRunId: number, rightRunId: number,
+): Promise<ResearchComparison> => researchFetch(
+  `${researchPath(projectId)}/experiments/comparisons`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ left_run_id: leftRunId, right_run_id: rightRunId }),
+  },
+)
+
+export const decideResearchCandidate = (
+  projectId: string,
+  candidateId: number,
+  decision: 'approved' | 'rejected',
+  reason: string,
+) => researchFetch<{
+  candidate_id: number
+  status: 'approved' | 'rejected'
+  decision: ResearchRunCandidate['decision']
+}>(`${researchPath(projectId)}/candidates/${candidateId}/decisions`, {
+  method: 'POST',
+  body: JSON.stringify({ expected_status: 'pending', decision, reason }),
+})
+
 // ── Portfolio: promotions (approve→deploy), watchlists, strategy archive ──────
 export interface Promotion {
   id: number; run_id: number; status: string
