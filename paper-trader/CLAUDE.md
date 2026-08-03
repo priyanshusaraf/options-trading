@@ -263,6 +263,9 @@ wrong; read the live value.
 
 ## The agenda
 
+**`docs/PROGRESS.md` is the one-page state — read it first.** What is built, what is running,
+what is blocked on the owner, what is next, and the current verification output.
+
 **`docs/ROADMAP.md` is the canonical, always-current agenda.** Read it at the start of every
 session and work the topmost unchecked item of the highest active workstream. Tick boxes only
 with verified evidence (tests green + the phase's stated acceptance), and update the tracker in
