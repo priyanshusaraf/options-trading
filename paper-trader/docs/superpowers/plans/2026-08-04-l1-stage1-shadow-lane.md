@@ -90,3 +90,29 @@ not a disagreement class.
 
 Paper adoption, staged authority, live adoption, per-instrument shadow assignment UI, any
 frontend, any change to which strategy an instrument runs.
+
+---
+
+## 6. Closure and what followed (2026-08-04)
+
+**Stage 1 is engineering-closed.** Steps 1–9 landed, plus the warmup/history admission
+contract that closed conflict #2: required history comes from the resolved IR contract, not a
+constant; available history from the configured interval and `history_days`; an impossible
+pairing is rejected *before* evaluation with a reason naming both numbers, so it can never
+emit a permanent all-False output or repeat an in-hours refusal. The graph warmup was not
+shortened and the authoritative history window was not widened.
+
+Two slices followed, both inside the shadow-only perimeter:
+
+- **ADR 0012 — execution-state ownership.** One binding contract reconciling the six
+  mechanisms that express "what runs where", plus one place authority is granted.
+  `ir_graph → shadow`, so every ADR 0011 owner gate begins at one reviewed line.
+- **The wiring.** `EngineRunner` now consults that contract for every strategy-selection
+  decision, proven equivalent to the resolution it replaced. Without this the contract was a
+  seventh mechanism: correct, tested, and consulted by nothing — the defect it was written to
+  fix.
+
+Section 5 still holds in full. Nothing here grants IR output any influence over orders,
+positions, accounting, sizing, routing, exits, reconciliation, risk controls or deployment
+authority; `AUTHORITY_BY_SOURCE` still reads `ir_graph → shadow`, and moving it is the
+owner's decision, not an implementation detail of a later slice.

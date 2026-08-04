@@ -169,10 +169,53 @@ layer.
 a seventh is a deliberate edit and a rename cannot leave the registry describing a schema
 nobody has.
 
-**Not done here, deliberately:** the engine does not call `resolve_binding` yet. Wiring it is
-a behaviour-preserving refactor with its own equivalence proof — the next slice — and not a
-change of authority. The smallest safe paper/shadow deployment architecture is *designed* in
-ADR 0012 §3 and unbuilt.
+### The engine consults the contract (2026-08-04, same ADR)
+
+The slice above shipped a contract with no production caller — the very defect it described.
+This closes that. `EngineRunner` now resolves **every** strategy-selection decision through
+`execution_binding.bind`, and holds no other path: an AST guard fails the build if
+`get_strategy` or `resolve_strategy` is called anywhere in `runner.py`, and a second guard
+fails if the call to the contract is deleted. Both are AST checks, not greps — the runner
+discusses these functions in prose, and a substring guard would be satisfied by a comment,
+which is a vacuous-guard shape recorded twice in this project already.
+
+**Equivalence first, authority second.** For every value `strategy_keys` can hold — unset,
+the default, another registered strategy, a stale key — the engine selects the same
+`Strategy` object as before. Only then does the gate change anything, and only for a case
+that cannot occur today (no `ir.*` key is registered).
+
+Three properties the wiring adds:
+
+- **The decision is split from the lookup.** `bind` decides over values already in memory;
+  `resolve_binding` is `bind` plus two DB reads. The engine resolves per instrument on a
+  ~2.5 s loop, so consulting the contract costs no round-trip. One decision, two entry
+  points, with a test that they agree.
+- **The deployment pin has a production caller for the first time.** Read once at boot.
+  `NULL` for the legacy deployment, so resolution is unchanged; deliberately not wrapped in
+  a `try`, because swallowing an unresolvable pin would settle a contradiction in favour of
+  the weaker claim.
+- **A refusal skips the instrument and substitutes nothing** — not the default (silent
+  substitution) and not an aborted scan (invariant 2). Every writer of an engine assignment
+  — the strategy route, universe add, watchlist create, deploy bridge — calls
+  `assert_may_execute`, and the API returns **409 with the reason** by catching the gate's
+  own exception type rather than testing for a namespace.
+
+**Found and left alone, deliberately:** selection goes through the binding, **attribution
+does not**. The intraday and futures entry paths still stamp the raw assigned key onto the
+position, so a stale assignment trades the default while the row records the key that failed
+to resolve. Fixing it changes what is written to money records, which is outside a
+behaviour-preserving slice — ADR 0012 §4.1, and the next candidate.
+
+**Still not done, deliberately:** the smallest safe paper/shadow deployment architecture is
+*designed* in ADR 0012 §3 and unbuilt. It needs owner approval before any of it becomes
+authoritative.
+
+Evidence: 18/18 mutations reddened and restored (six new: the runner call site, direct
+resolution, silent fallback after a refusal, registry fallback for a graph key, unreviewed
+source/authority pairing, the write-side gate). One of them exposed a **vacuous test** — the
+obvious "assign a graph key and watch the engine refuse" never reaches the authority
+re-check, because `bind` already refuses at resolution; the re-check is now proven against a
+*forged* binding from a drifted resolver, which is the only thing it actually defends.
 
 ### L1 Stage 1 — the shadow lane (2026-08-04, engineering-closed)
 

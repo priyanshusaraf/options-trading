@@ -22,6 +22,7 @@ from app.db.models import DailyAccountSnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
+from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
 from app.ws.manager import manager
@@ -690,7 +691,14 @@ class StrategyBody(BaseModel):
 def set_strategy(key: str, body: StrategyBody, request: Request):
     if key not in {i.key for i in all_instruments()}:
         return {"error": "unknown instrument"}
-    sk = _runner(request).set_strategy(key, body.strategy_key)
+    try:
+        sk = _runner(request).set_strategy(key, body.strategy_key)
+    except AuthorityNotGranted as e:
+        # The gate's verdict is consumed here, not re-derived: no namespace test lives in
+        # this route. 409 rather than 500 — the assignment is well-formed and the platform
+        # is healthy; the source is one that may not execute, and that is a state of the
+        # world the operator needs the reason for.
+        raise HTTPException(status_code=409, detail=str(e)) from e
     return {"key": key, "strategy_key": sk}
 
 

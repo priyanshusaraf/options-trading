@@ -68,7 +68,8 @@ from app.engine.risk_controls import (
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
-from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
+from app.core import execution_binding
+from app.strategy.registry import DEFAULT_STRATEGY_KEY
 from app.strategy.signals import latest_state, to_payload
 
 
@@ -126,6 +127,19 @@ class EngineRunner:
         self.entry_blocks: set[str] = self._load_entry_blocks()   # entries disabled
         # dual-segment / multi-strategy per-instrument config
         self.products, self.strategy_keys, self.priority_flags, self.overtrade_flags = self._load_instr_config()
+        # What this runner's deployment pins, if anything — the first mechanism the
+        # engine has ever consulted. The legacy deployment pins nothing
+        # (`strategy_key=NULL` by contract, and no production path writes it), so this is
+        # None today and resolution is per-instrument exactly as before. Resolved once at
+        # boot, not per tick: it changes only when a deployment does.
+        #
+        # Deliberately NOT wrapped in a try. `resolve_deployment_strategy` is fail-closed,
+        # and a deployment that pins a strategy the registry cannot resolve is a broken
+        # promise about what is trading. Swallowing it here would resolve the
+        # contradiction in favour of the weaker claim — fall through to the instrument row
+        # and trade something nobody chose — which is the exact failure the fail-closed
+        # split was introduced for.
+        self._deployment_pin = self._load_deployment_pin()
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
@@ -261,6 +275,49 @@ class EngineRunner:
             strategies.update(effective_strategy_map(s))
         return products, strategies, priority, overtrade
 
+    # ── strategy selection: one path, through the binding contract ────────
+    def _load_deployment_pin(self):
+        """The `Strategy` this runner's deployment pins, or None for the legacy
+        deployment, which pins nothing and resolves per instrument by design."""
+        from app.core.deployments import resolve_deployment_strategy
+        with SessionLocal() as s:
+            return resolve_deployment_strategy(s, self.deployment_id)
+
+    def _binding_for(self, key: str):
+        """What executes for `key`, and on whose say-so.
+
+        Every strategy-selection decision in the engine goes through here. Before this
+        the engine called `get_strategy(self.strategy_keys.get(key))` directly, which
+        answered the question correctly but privately: no version, no record of which
+        layer decided, no place to ask whether the strategy was even allowed to trade.
+
+        Note what this does *not* do, per RFC 0001 C13: the engine never asks where a
+        strategy came from. It asks the binding whether it may execute and consumes the
+        verdict. The one place that inspects a source lives in `core/`, outside the
+        executor perimeter, and is a single reviewed boundary by design. The contract in
+        `core/execution_binding.py` described that resolution and was called by nothing —
+        a mechanism wired to nothing, which is this codebase's recorded defining defect.
+
+        This is the decision half of the contract (`bind`), not the read half
+        (`resolve_binding`): the deployment pin and the assignment map are already in
+        memory, so consulting the contract costs no database round-trip on a ~2.5 s loop.
+        """
+        return execution_binding.bind(
+            deployment_id=self.deployment_id, instrument_key=key,
+            deployment_pin=self._deployment_pin,
+            assigned_key=self.strategy_keys.get(key))
+
+    def _strategy_for(self, key: str):
+        """The `Strategy` that may execute for `key`.
+
+        Authority is re-checked here, at the point of use, rather than trusted from the
+        binding's `authority` field — see `strategy_for_execution`. Raises
+        `AuthorityNotGranted` for a source that may not trade (today: any graph-backed
+        strategy) and `StrategyNotFound` for a graph-backed key that is not registered.
+        Neither is caught here: the caller decides what a refusal means for its lane.
+        """
+        return execution_binding.strategy_for_execution(self._binding_for(key))
+
     def _interval_for(self, key: str) -> str:
         return normalize_live_interval(self.intervals.get(key, DEFAULT_LIVE_INTERVAL))
 
@@ -369,8 +426,17 @@ class EngineRunner:
         log.info(f"OVERTRADE {'set' if flag else 'cleared'}", instrument=key)
 
     def set_strategy(self, key: str, strategy_key: str | None) -> str | None:
-        """Assign which registered strategy trades this instrument (None = default v3)."""
+        """Assign which registered strategy trades this instrument (None = default v3).
+
+        Raises `AuthorityNotGranted` if the key names a source that may not execute.
+        Without that check this route is the entire path from "a graph-backed strategy
+        exists" to "a graph-backed strategy trades real money": the registry resolves it,
+        so the membership test below passes, and the engine would then trade it. The
+        refusal is loud rather than a coercion to the default — silently assigning
+        something other than what was asked for is the failure mode, not the fix.
+        """
         from app.strategy.registry import strategy_keys as _keys
+        execution_binding.assert_may_execute(strategy_key)
         sk = strategy_key if (strategy_key and strategy_key in _keys()) else None
         with self._upsert_state(key) as r:
             r.strategy_key = sk
@@ -456,7 +522,21 @@ class EngineRunner:
                 continue
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
-            strat = get_strategy(self.strategy_keys.get(key))
+            try:
+                strat = self._strategy_for(key)
+            except execution_binding.AuthorityNotGranted as e:
+                # Fail closed on this instrument only. Two things this must NOT do:
+                # substitute the default (the silent-substitution class the registry
+                # split exists to prevent — the trade rows would name a strategy that
+                # never ran), or abort the scan (one refused instrument has no claim
+                # over the rest of the book, and invariant 2 forbids blocking exits).
+                # Rate-limited: the scan revisits every enabled key every ~2.5 s, and
+                # unthrottled per-tick errors buried the journal in the 2026-07-15
+                # autopsy. `error_ratelimited` re-surfaces after the window.
+                log.error_ratelimited(
+                    f"{key} is assigned a strategy that may not execute: {e}",
+                    key=key, event="authority_refused", window_seconds=300.0)
+                continue
             signal_frame = frame_from(candles)
             if strat.key == DEFAULT_STRATEGY_KEY:
                 sig = strat.signals(signal_frame, ema_length=s.ema_length,
@@ -1373,7 +1453,7 @@ class EngineRunner:
                     continue  # live order not filled — nothing recorded (already alerted)
                 # H2 — seed the ratchet for a risk_model strategy so this position is
                 # managed by the backtest-validated ratchet, not the legacy premium trail.
-                strat_e = get_strategy(self.strategy_keys.get(c.instrument_key))
+                strat_e = self._strategy_for(c.instrument_key)
                 rm_e = getattr(strat_e, "risk_model", None)
                 if rm_e:
                     self._seed_ratchet(pos, chain.spot, rm_e,

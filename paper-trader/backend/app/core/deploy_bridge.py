@@ -70,6 +70,11 @@ def deploy(session, req: DeployRequest) -> DeployResult:
     clear conflict resolution, and record the strategy as `running` in the archive.
     Idempotent — re-deploying the same request reuses the watchlist and reassigns the same
     winners in place."""
+    # Checked here as well as in `create_watchlist`: the reuse branch below reassigns an
+    # existing watchlist's strategy in place and never passes through the constructor, so
+    # a gate on creation alone would let a redeploy install what a first deploy refused.
+    from app.core.execution_binding import assert_may_execute
+    assert_may_execute(req.strategy_key)
     target = wl.get_watchlist(session, req.watchlist_name)
     if target is None:
         target = wl.create_watchlist(session, req.watchlist_name, req.strategy_key,

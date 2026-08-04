@@ -56,8 +56,23 @@ Unicode-stable literal matcher uses bounded sources, deterministic rank and quer
 cursors. The closed read route and accessible transient UI contain source failures and never load
 raw graph, evidence, scorecard, candidate-reason or global-operation text.
 
+L1 Stage 1 is **engineering-closed** with the warmup/history admission contract, and
+execution-state ownership is defined, gated and now **wired**: `EngineRunner` resolves every
+strategy through `execution_binding.bind`, proven equivalent to the resolution it replaced,
+with AST guards against both a second resolver appearing in the runner and the contract call
+being removed. `ir_graph` remains `shadow` in `AUTHORITY_BY_SOURCE`; a refusal skips the
+instrument and substitutes nothing; every writer of an engine assignment passes
+`assert_may_execute` and the API answers 409 with the reason.
+
 **Nothing in this session is deployed.** The engine still calls `compute()`; the route is a
-viewer and does not adopt the IR runtime in a live path.
+viewer and does not adopt the IR runtime in a live path. The wiring changed which code
+answers "what runs here", not what the answer is.
+
+**Next slice, already scoped:** route position attribution through the binding as well. Today
+selection goes through the contract and the `strategy_key` stamped onto a position does not,
+so a stale assignment trades the default while the money record names the key that failed to
+resolve (ADR 0012 §4.1). It was left out of this slice on purpose — it changes what is
+written to money records, which a behaviour-preserving refactor may not do.
 
 ## 2. Repository and remote state
 
@@ -88,24 +103,38 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-Latest acceptance run on 2026-08-03:
+Latest acceptance run on 2026-08-04, for the engine-binding wiring slice:
 
 ```
-$ PT_DISABLE_DOTENV=1 .venv/bin/python -m pytest tests research_tests
-2,959 passed · 6 skipped · EXIT 0
+$ .venv/bin/python -m pytest tests research_tests
+3,127 passed · 6 skipped · EXIT 0            (161s)
 
 $ .venv/bin/python scripts/dryrun.py 700
-RECONCILE diff -0.0000 · LEDGER OK · EXIT 0
+RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK · EXIT 0
 
 $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ .venv/bin/python -m app.db.migrate head
-0009 · EXIT 0
+0010 · EXIT 0                                 (no schema change in this slice)
+
+$ .venv/bin/python scripts/ir_shadow_mutations.py
+all 18 guards reddened on their own defect and were restored · EXIT 0
 
 $ npm test -- --run && npm run typecheck && npm run build
-222 passed · TYPECHECK OK · BUILD OK · EXIT 0
+222 passed · TYPECHECK OK · BUILD OK · EXIT 0      (no frontend files modified)
 ```
+
+The C13 conformance test went red on the first draft of the wiring — a runner docstring used
+the word "provenance", which executor paths may not name. The guard was right and the prose
+was wrong; the fix was the wording, not the allowlist. The authority gate does inspect a
+source, and it lives in `app/core/`, outside the executor perimeter, with the engine
+consuming only the verdict.
+
+One of the six new mutations exposed a **vacuous test**: "assign a graph key and watch the
+engine refuse" never reaches the authority re-check, because `bind` already refuses at
+resolution. The re-check is now proven against a *forged* binding from a drifted resolver,
+which is the only thing it defends against.
 
 Note this project's pytest config sets `addopts = -q` and suppresses the trailing count line;
 `-rs` or `--collect-only` is how you get exact numbers. An `EXIT 0` with no visible summary is

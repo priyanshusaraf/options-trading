@@ -692,7 +692,7 @@ Prioritise each by measured product value, dependency readiness and operational 
 | C1 Layout separation | Move/save/reload with identity-invariance and conflict/orphan proofs | done (S1.1–S1.2) |
 | C2 Durable authoring | Immutable versions, legal edits, undo/redo, lossless reload, hand-authored equivalence | done (S2.2, S3.1–S3.3) |
 | C3 Research decision | Versioned experiment, full evidence, comparison, approval/rejection, deployment candidate | pending M1–M5 |
-| C4 Reversible execution | Parity, replay, shadow, rollback and observability complete locally | pending L1; deployment owner-gated |
+| C4 Reversible execution | Parity, replay, shadow, rollback and observability complete locally | L1 Stage 1 shadow lane engineering-closed with its admission contract; execution-state ownership defined, gated and wired into `EngineRunner` (ADR 0012). Remaining: paper/shadow deployment architecture, designed and unbuilt. Deployment and any authority promotion owner-gated |
 | C5 Product operations | Cockpit and data identity support daily operation without prose reconstruction | pending L2–L3 |
 | C6 Ecosystem safety | Reproducible signed packages and explicit trust/commercial controls | pending L4–L5 |
 
@@ -708,6 +708,13 @@ Prioritise each by measured product value, dependency readiness and operational 
   cannot be repaired retrospectively; rerun any result that matters.
 - Display-name/content-address semantics remain pinned by current tests until the first persistent
   artefact/rename workflow supplies evidence for an RFC amendment.
+- Position **attribution** still stamps the raw assigned strategy key rather than the resolved
+  binding, so a stale assignment trades the default while the money record names the key that
+  failed to resolve (ADR 0012 §4.1). Deferred out of the wiring slice because correcting it
+  changes what is written to money records, which a behaviour-preserving refactor may not do.
+- Long-duration native-broker shadow validation, ≥ 20 genuine sessions, dataset cleaning and
+  native OHLCV replay fidelity remain deferred by owner decision (2026-08-04). Revisit before
+  authority promotion or commercial validation, not before.
 
 ## 9. Per-slice completion record
 

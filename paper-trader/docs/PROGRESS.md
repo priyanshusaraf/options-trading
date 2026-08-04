@@ -116,11 +116,21 @@ lane, plus one place — `AUTHORITY_BY_SOURCE` — where a source of logic is gr
 to execute. `ir_graph` is `shadow` there, so every ADR 0011 owner gate begins at one reviewed
 line, proven by a mutation.
 
-**The next bounded slice: wire the engine to the binding contract.** Behaviour-preserving,
-with an equivalence proof against today's per-instrument resolution — the contract currently
-describes the engine without being consulted by it, which is the same unconsumed-mechanism
-shape it was written to fix. After that, the paper/shadow deployment architecture designed in
-ADR 0012 §3, which needs owner approval before any of it becomes authoritative.
+**The engine now consults it.** Every strategy-selection decision in `EngineRunner` passes
+through `execution_binding.bind`, and an AST guard fails the build if the runner calls a
+resolver directly or stops calling the contract. Equivalence is proven across the whole space
+of assignments the engine can hold — unset, default, another strategy, a stale key — so the
+selection path changed and the selection did not. The deployment pin has a production caller
+for the first time (`NULL` today, so behaviour is unchanged). A refusal skips the instrument
+and substitutes nothing.
+
+**The next bounded slice: route attribution through the binding too.** Selection now goes
+through the contract; the `strategy_key` stamped onto a position does not, so a stale
+assignment trades the default while the money record names the key that failed to resolve
+(ADR 0012 §4.1). It was left alone deliberately — fixing it changes what is written to money
+records, which is outside a behaviour-preserving refactor. After that, the paper/shadow
+deployment architecture designed in ADR 0012 §3, which needs owner approval before any of it
+becomes authoritative.
 
 **Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
 market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,

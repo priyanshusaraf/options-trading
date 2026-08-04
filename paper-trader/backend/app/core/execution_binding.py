@@ -58,6 +58,14 @@ AUTHORITY_BY_SOURCE = {
     SOURCE_IR_GRAPH: SHADOW,
 }
 
+#: The same grant, as the set of **reviewed pairs**. A gate keyed on source alone cannot
+#: express ADR 0012 §3.2's smallest safe future step — "`ir_graph` is authoritative *in
+#: paper mode*" — so the reviewed unit is the pair, and anything not in this set is
+#: unreviewed and refused. This is what makes an `ExecutionBinding` unable to grant
+#: itself authority by asserting a field: `strategy_for_execution` checks membership
+#: here, at the point of use, rather than trusting where the binding came from.
+GRANTS = frozenset(AUTHORITY_BY_SOURCE.items())
+
 #: Which layer decided the binding. Narrowest that spoke, not narrowest that exists.
 ORIGIN_DEPLOYMENT = "deployment"
 ORIGIN_INSTRUMENT = "instrument"
@@ -126,8 +134,41 @@ def strategy_for(binding: ExecutionBinding):
     return resolve_strategy(binding.strategy_key)
 
 
-def _bind(*, deployment_id, instrument_key, strategy, origin, reason,
-          enforce_authority=True) -> ExecutionBinding:
+def strategy_for_execution(binding: ExecutionBinding):
+    """The `Strategy` a binding names, **for the purpose of executing it** — refused
+    unless its (source, authority) pair is one this project has reviewed.
+
+    Authority is re-checked here, where it is used, rather than trusted from where the
+    binding was produced. A binding is a plain dataclass: a resolver that drifted, a stub
+    in a test, or a future caller assembling one by hand could all set
+    `authority=AUTHORITATIVE` on a graph-backed key. Checking at the consumption point
+    means granting execution requires an edit to `GRANTS`, not an assignment to a field.
+    The key's own source is recomputed too, so an authoritative-looking label cannot
+    launder a graph key past the gate.
+    """
+    claimed, actual = binding.source, source_of(binding.strategy_key)
+    if claimed != actual or (actual, binding.authority) not in GRANTS \
+            or binding.authority != AUTHORITATIVE:
+        raise AuthorityNotGranted(binding.strategy_key, actual)
+    return resolve_strategy(binding.strategy_key)
+
+
+def assert_may_execute(strategy_key: str | None) -> None:
+    """Refuse, at the moment somebody asks, to record an assignment that could never
+    execute. `None` means "the platform default", which is not a claim about a source.
+
+    The read side already refuses, so this is not the gate — it is the gate saying no
+    once, at the write, instead of once per scan for the life of the row.
+    """
+    if strategy_key is None:
+        return
+    source = source_of(strategy_key)
+    if AUTHORITY_BY_SOURCE.get(source, SHADOW) != AUTHORITATIVE:
+        raise AuthorityNotGranted(strategy_key, source)
+
+
+def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
+              enforce_authority=True) -> ExecutionBinding:
     source = source_of(strategy.key)
     authority = AUTHORITY_BY_SOURCE.get(source, SHADOW)
     if enforce_authority and authority != AUTHORITATIVE:
@@ -138,30 +179,50 @@ def _bind(*, deployment_id, instrument_key, strategy, origin, reason,
         authority=authority, origin=origin, reason=reason)
 
 
-def resolve_binding(session, *, deployment_id: int, instrument_key: str) -> ExecutionBinding:
-    """What would execute for `instrument_key` under `deployment_id`, and why.
+def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
+         assigned_key: str | None) -> ExecutionBinding:
+    """The decision, with the reads already done — what executes, and on whose say-so.
+
+    Split out from `resolve_binding` because the engine resolves a strategy per instrument
+    on a ~2.5 s loop from an in-memory map it refreshes deliberately. If consulting the
+    canonical contract meant two database reads per instrument per tick, routing the
+    engine through it would mean slowing the engine down, and the wiring would be rejected
+    for a reason that has nothing to do with whether the contract is right. So the *reads*
+    live in `resolve_binding` and the *decision* lives here, and there is still exactly one
+    decision.
 
     Precedence is narrowest-that-spoke: a deployment that pins a strategy wins, then the
-    per-instrument assignment, then the platform default. This mirrors the engine rather
-    than replacing it — the difference is that the answer is typed, carries its version and
-    its provenance, and passes through the authority gate.
+    per-instrument assignment, then the platform default.
+
+    `deployment_pin` is the already-resolved `Strategy` a deployment pins, or `None` for
+    the legacy deployment, which pins nothing and resolves per instrument by design.
     """
+    if deployment_pin is not None:
+        return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
+                         strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
+                         reason=(f"deployment {deployment_id} pins "
+                                 f"{deployment_pin.key!r}, which overrides any "
+                                 f"per-instrument assignment"))
+    return _bind_assigned(deployment_id, instrument_key, assigned_key)
+
+
+def resolve_binding(session, *, deployment_id: int, instrument_key: str) -> ExecutionBinding:
+    """`bind`, with the deployment pin and the instrument assignment read from the
+    database. The entry point for callers that hold a session and no cached config."""
     from app.core.deployments import resolve_deployment_strategy
 
-    pinned = resolve_deployment_strategy(session, deployment_id)   # fail-closed
-    if pinned is not None:
-        return _bind(deployment_id=deployment_id, instrument_key=instrument_key,
-                     strategy=pinned, origin=ORIGIN_DEPLOYMENT,
-                     reason=(f"deployment {deployment_id} pins {pinned.key!r}, which "
-                             f"overrides any per-instrument assignment"))
+    return bind(deployment_id=deployment_id, instrument_key=instrument_key,
+                deployment_pin=resolve_deployment_strategy(session, deployment_id),
+                assigned_key=_assigned_strategy_key(session, instrument_key))
 
-    assigned = _assigned_strategy_key(session, instrument_key)
+
+def _bind_assigned(deployment_id, instrument_key, assigned) -> ExecutionBinding:
     if not assigned:
-        return _bind(deployment_id=deployment_id, instrument_key=instrument_key,
-                     strategy=resolve_strategy(DEFAULT_STRATEGY_KEY),
-                     origin=ORIGIN_DEFAULT,
-                     reason=(f"no deployment pin and no instrument assignment for "
-                             f"{instrument_key}; the platform default applies"))
+        return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
+                         strategy=resolve_strategy(DEFAULT_STRATEGY_KEY),
+                         origin=ORIGIN_DEFAULT,
+                         reason=(f"no deployment pin and no instrument assignment for "
+                                 f"{instrument_key}; the platform default applies"))
     try:
         strategy = resolve_strategy(assigned)
     except StrategyNotFound:
@@ -170,14 +231,14 @@ def resolve_binding(session, *, deployment_id: int, instrument_key: str) -> Exec
             # instrument row, the trade row and the experiment binding all name another.
             raise
         strategy = resolve_strategy(DEFAULT_STRATEGY_KEY)
-        return _bind(deployment_id=deployment_id, instrument_key=instrument_key,
-                     strategy=strategy, origin=ORIGIN_FALLBACK,
-                     reason=(f"instrument {instrument_key} is assigned {assigned!r}, which "
-                             f"is not registered; the legacy path substitutes "
-                             f"{strategy.key!r} so one stale row cannot stop the book"))
-    return _bind(deployment_id=deployment_id, instrument_key=instrument_key,
-                 strategy=strategy, origin=ORIGIN_INSTRUMENT,
-                 reason=f"instrument {instrument_key} is assigned {strategy.key!r}")
+        return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
+                         strategy=strategy, origin=ORIGIN_FALLBACK,
+                         reason=(f"instrument {instrument_key} is assigned {assigned!r}, "
+                                 f"which is not registered; the legacy path substitutes "
+                                 f"{strategy.key!r} so one stale row cannot stop the book"))
+    return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
+                     strategy=strategy, origin=ORIGIN_INSTRUMENT,
+                     reason=f"instrument {instrument_key} is assigned {strategy.key!r}")
 
 
 def resolve_shadow_binding(strategy_key: str,
@@ -187,10 +248,11 @@ def resolve_shadow_binding(strategy_key: str,
     Refusing authority must not refuse observation, or the gate would have undone the
     shadow lane it exists to protect.
     """
-    return _bind(deployment_id=0, instrument_key=instrument_key,
-                 strategy=resolve_strategy(strategy_key), origin=ORIGIN_INSTRUMENT,
-                 reason=f"{strategy_key!r} is observed by the shadow lane, never executed",
-                 enforce_authority=False)
+    return _describe(deployment_id=0, instrument_key=instrument_key,
+                     strategy=resolve_strategy(strategy_key), origin=ORIGIN_INSTRUMENT,
+                     reason=(f"{strategy_key!r} is observed by the shadow lane, "
+                             f"never executed"),
+                     enforce_authority=False)
 
 
 def _assigned_strategy_key(session, instrument_key: str) -> str | None:
@@ -202,8 +264,9 @@ def _assigned_strategy_key(session, instrument_key: str) -> str | None:
 
 __all__ = [
     "AUTHORITATIVE", "AUTHORITY_BY_SOURCE", "BINDING_MECHANISMS", "GENERATED_NAMESPACE",
-    "ORIGIN_DEFAULT", "ORIGIN_DEPLOYMENT", "ORIGIN_FALLBACK", "ORIGIN_INSTRUMENT",
-    "SHADOW", "SOURCE_GENERATED", "SOURCE_HANDWRITTEN", "SOURCE_IR_GRAPH",
-    "AuthorityNotGranted", "ExecutionBinding", "resolve_binding", "resolve_shadow_binding",
-    "source_of", "strategy_for",
+    "GRANTS", "ORIGIN_DEFAULT", "ORIGIN_DEPLOYMENT", "ORIGIN_FALLBACK",
+    "ORIGIN_INSTRUMENT", "SHADOW", "SOURCE_GENERATED", "SOURCE_HANDWRITTEN",
+    "SOURCE_IR_GRAPH", "AuthorityNotGranted", "ExecutionBinding", "assert_may_execute",
+    "bind", "resolve_binding", "resolve_shadow_binding", "source_of", "strategy_for",
+    "strategy_for_execution",
 ]

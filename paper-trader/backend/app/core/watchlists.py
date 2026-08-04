@@ -23,6 +23,11 @@ from app.db.models import Watchlist, WatchlistMembership
 
 def create_watchlist(session, name: str, strategy_key: str, *, status: str = "active",
                      interval: str | None = None, notes: str = "") -> Watchlist:
+    # An active watchlist's strategy overrides the per-instrument assignment for every
+    # member (`effective_strategy_map`, read straight into the engine's resolution), so
+    # this is an engine assignment by another name and passes the same authority gate.
+    from app.core.execution_binding import assert_may_execute
+    assert_may_execute(strategy_key)
     w = Watchlist(name=name, strategy_key=strategy_key, status=status,
                   interval=interval, notes=notes)
     session.add(w)

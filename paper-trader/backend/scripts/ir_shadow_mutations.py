@@ -34,6 +34,7 @@ ISOLATION = "tests/test_ir_shadow_isolation.py"
 ADMISSION = "tests/test_ir_shadow_admission.py"
 CORE = "tests/test_ir_shadow.py"
 BINDING_TESTS = "tests/test_execution_binding.py"
+ENGINE_BINDING = "tests/test_engine_binding.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -140,6 +141,74 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "    SOURCE_IR_GRAPH: AUTHORITATIVE,",
         f"{BINDING_TESTS}::"
         "test_binding_a_registered_graph_to_an_instrument_is_refused_not_silently_shadowed",
+    ),
+    (
+        # The wiring itself. `strategy_for` resolves the same key from the same binding
+        # and skips only the authority re-check — which is exactly the edit somebody makes
+        # when the gate is inconvenient and the two names look interchangeable.
+        "the engine takes a strategy without re-checking that it may execute",
+        RUNNER,
+        "        return execution_binding.strategy_for_execution(self._binding_for(key))",
+        "        return execution_binding.strategy_for(self._binding_for(key))",
+        # NB the obvious target — "assign a graph key, watch the engine refuse" — is
+        # VACUOUS here: `bind` already refuses at resolution, so the downstream re-check
+        # never runs and this mutation stayed green against it. The harness caught that.
+        # The re-check only earns its place against a binding that arrives already
+        # claiming authority, which is what the named test forges.
+        f"{ENGINE_BINDING}::test_the_engine_rejects_a_forged_binding_from_a_drifted_resolver",
+    ),
+    (
+        # A second resolution path reappearing in the engine is the contradiction this
+        # slice removed. The guard is an AST check, so a comment mentioning the resolver
+        # cannot satisfy it and a real call cannot escape it.
+        "the engine resolves a strategy directly again, bypassing the contract",
+        RUNNER,
+        "                strat = self._strategy_for(key)",
+        "                from app.strategy.registry import get_strategy\n"
+        "                strat = get_strategy(self.strategy_keys.get(key))",
+        f"{ENGINE_BINDING}::test_the_engine_never_calls_a_strategy_resolver_directly",
+    ),
+    (
+        # The failure that must never become a substitution: a refused instrument trading
+        # the platform default while every config row still names the graph.
+        "a refused instrument silently falls back to an executable strategy",
+        RUNNER,
+        '                    key=key, event="authority_refused", window_seconds=300.0)\n'
+        "                continue",
+        '                    key=key, event="authority_refused", window_seconds=300.0)\n'
+        "                strat = execution_binding.strategy_for(self._binding_for(key))",
+        f"{ENGINE_BINDING}::"
+        "test_the_engine_skips_a_refused_instrument_and_substitutes_nothing",
+    ),
+    (
+        # Registry fallback as the real authority decision: a graph key that cannot be
+        # resolved quietly becoming the default, which trades one logic and attributes
+        # another. The registry refuses this; so must the binding.
+        "an unresolvable graph key falls back to the default strategy",
+        BINDING,
+        "            raise\n        strategy = resolve_strategy(DEFAULT_STRATEGY_KEY)",
+        "            pass\n        strategy = resolve_strategy(DEFAULT_STRATEGY_KEY)",
+        f"{ENGINE_BINDING}::"
+        "test_an_unregistered_graph_assignment_fails_with_a_stable_explicit_error",
+    ),
+    (
+        # Source and authority stop being a reviewed *pair*, so a binding can grant itself
+        # execution by setting a field — the reason the check lives at consumption.
+        "an unreviewed source and authority pairing is accepted",
+        BINDING,
+        "    if claimed != actual or (actual, binding.authority) not in GRANTS \\",
+        "    if claimed != actual or False \\",
+        f"{BINDING_TESTS}::"
+        "test_a_binding_that_claims_an_unreviewed_pairing_is_refused_at_consumption",
+    ),
+    (
+        # The write-side gate opens, so every route that assigns a strategy — instrument,
+        # watchlist, universe add, deploy bridge — stops consulting the authority map.
+        "the write-side authority check becomes a no-op",
+        BINDING,
+        "    if strategy_key is None:\n        return",
+        "    if True:\n        return",
+        f"{ENGINE_BINDING}::test_assigning_a_graph_strategy_through_the_route_is_refused",
     ),
     (
         "a persistent cross-frame evaluation cache is reintroduced",

@@ -1,8 +1,10 @@
 # ADR 0012: Execution-state ownership across graphs, evidence, candidates and deployments
 
-- **Status:** **ACCEPTED for the non-authoritative half (2026-08-04).** The binding contract
-  and the authority gate are implemented; the engine's own resolution is unchanged. Every
-  transition that would let IR output reach an order remains **owner-gated** and unbuilt.
+- **Status:** **ACCEPTED and WIRED (2026-08-04).** The binding contract and the authority
+  gate are implemented, **and the engine now consults them** — every strategy-selection
+  decision in `EngineRunner` passes through `execution_binding.bind`, proven equivalent to
+  the resolution it replaced. Every transition that would let IR output reach an order
+  remains **owner-gated** and unbuilt.
 - **Date:** 2026-08-04
 - **Owners:** WS-02 execution, WS-01 Component IR, WS-03 research plane
 - **Depends on:** ADR 0011 (staged IR adoption; Stage 1 engineering-closed 2026-08-04),
@@ -45,10 +47,70 @@ it worse and would breach the standing "no second deployment model" rule.
 strategy key, at which content version, from which source, decided by which layer, with what
 reason — and whether that source is allowed to execute at all.
 
-It is a **description with a gate attached**, not a new resolver. The engine's own path is
-untouched, and an equivalence test pins that the contract's answer and `get_strategy`'s
-answer are the same object for every assignment the engine can hold. A description that
-drifts from what it describes is worse than none, so that test is the contract's spine.
+It began as a **description with a gate attached**. As of the wiring slice it is the
+selection path itself: `EngineRunner` holds no other. An equivalence test pins that the
+contract's answer and `get_strategy`'s answer are the same object for every assignment the
+engine can hold, which is what made replacing the call site acceptable in a live-money
+engine. A description that drifts from what it describes is worse than none, so that test
+is still the contract's spine.
+
+### 2.0 The wiring, and why the contract had to be split in two
+
+Shipping the contract without a caller reproduced the defect it was written to fix: a
+correct mechanism wired to nothing. Consulting it, however, could not mean two database
+reads per instrument per ~2.5 s tick — that would have made "route the engine through the
+contract" mean "slow the engine down", and the wiring would have been rejected for a reason
+unrelated to whether the contract is right.
+
+So the contract is split along **decision vs lookup**, and there is still exactly one
+decision:
+
+| | what it is | who calls it |
+|---|---|---|
+| `bind(...)` | the decision — precedence, resolution, authority — over values already in hand | `EngineRunner._binding_for`, from its in-memory config |
+| `resolve_binding(session, ...)` | the same decision, with the deployment pin and the instrument assignment read from the database | callers holding a session and no cached config |
+
+`resolve_binding` is now `bind` plus two reads, and a test pins that both produce an equal
+binding for the same inputs. Two entry points that could disagree would be two resolvers
+again.
+
+**Precedence, final form:** deployment pin → per-instrument assignment (including the active
+watchlist overlay) → platform default. Narrowest that *spoke*, not narrowest that exists.
+
+**The engine also consults the deployment pin now** — the first time mechanism #1 has had a
+production caller. It is resolved once at boot, not per tick. This is behaviour-preserving
+by contract and by measurement: the legacy deployment has `strategy_key = NULL`, no
+production path writes it (`create_deployment` is the only writer and the legacy row is
+seeded by `ensure_legacy_deployment`), so the pin is `None` and resolution falls through to
+the instrument exactly as before. It is deliberately **not** wrapped in a `try`: swallowing
+an unresolvable pin would resolve a contradiction in favour of the weaker claim.
+
+### 2.0b Two paths that must not converge, and one that must
+
+- **A refusal is not a substitution.** When the gate refuses an instrument, the scan skips
+  that instrument and logs (rate-limited). It does not fall back to the default — that is
+  the silent-substitution class the fail-closed registry split exists to prevent — and it
+  does not abort the scan, because one refused instrument has no claim over the rest of the
+  book and invariant 2 forbids blocking exits.
+- **Authority is re-checked where it is used.** `strategy_for_execution` recomputes the
+  source from the key and requires the `(source, authority)` pair to be in `GRANTS`. A
+  binding is a plain dataclass; without this, any resolver — drifted, stubbed, or written by
+  a future caller — could grant execution by assigning a field.
+- **Every writer of an engine assignment passes the same gate.** `set_strategy`,
+  `universe_resolver.add_instrument`, `watchlists.create_watchlist` and `deploy_bridge.deploy`
+  all call `assert_may_execute`. The read side already refuses; these make the refusal happen
+  once, when somebody asks, instead of once per scan for the life of the row. The API surfaces
+  it as **409 with the reason**, by catching `AuthorityNotGranted` — no route tests for a
+  namespace itself.
+
+### 2.0c RFC 0001 C13, and why this does not violate it
+
+C13 forbids executor paths branching on where a component came from. The authority gate
+*does* branch on source, so the boundary matters: it lives in `app/core/`, outside the
+executor perimeter (`engine/`, `backtest/`, `strategy/`), and the engine consumes only the
+verdict — it asks "may this execute", never "where did this come from". The C13 conformance
+test caught the first draft of the wiring on the vocabulary alone, which is the guard working
+as designed.
 
 ### 2.1 Ownership — who owns which fact
 
@@ -141,9 +203,33 @@ explicitly-approved authority transition.
 
 The order lifecycle, accounting, reconciliation, exits, kill controls, rollback and
 deployment authority are untouched. The hand-written strategy remains the sole execution
-authority. `resolve_binding` is not called by the engine — wiring the engine to it is the
-next slice and is a behaviour-preserving refactor with its own equivalence proof, not a
-change of authority.
+authority. The wiring changed **which code answers "what runs here"**, not what the answer
+is: the equivalence test covers the whole space of values `strategy_keys` can hold — unset,
+the default, another registered strategy, and a stale key that no longer resolves — and in
+every case the engine selects the same `Strategy` *object* it selected before.
+
+### 4.1 One divergence found and deliberately left alone
+
+Selection now goes through the binding; **attribution does not**. The intraday and futures
+entry paths still stamp `strategy_key=self.strategy_keys.get(key)` — the raw assigned key —
+onto the position. For a stale assignment those two disagree: the engine trades the default
+(fail-safe, deliberate) while the position row records the key that failed to resolve. That
+is the misattribution shape the registry docstring warns about, in the one place it survives.
+
+It is **not** fixed here, on purpose. This slice's licence was "behaviour-preserving", and
+routing attribution through the binding would change what is written to money records. It
+is recorded as the next candidate slice, with its own before/after evidence, rather than
+smuggled in under a refactor.
+
+### 4.2 Remaining unconsumed mechanisms
+
+- `strategy_lifecycle.deployed_watchlist_id` (#4) remains a record, not a resolver — by
+  design; it is named in `BINDING_MECHANISMS` so it cannot quietly become one.
+- `graph_artifacts.current_version` (#6) is consumed only by the shadow lane. It becomes a
+  binding input at Stage 2, which is owner-gated.
+- `deployments.strategy_key` (#1) now **has** a production caller for the first time, but
+  only ever resolves to `None` today, because no production path writes it. A deployment
+  that pins a strategy is exercised by tests, not by the running system.
 
 ## 5. Owner gates
 

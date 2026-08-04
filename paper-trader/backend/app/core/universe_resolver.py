@@ -56,6 +56,13 @@ def resolve_spec(key: str, provider) -> Instrument | None:
 def add_instrument(key: str, provider, on_home: bool = True,
                    interval: str | None = None, strategy_key: str | None = None,
                    product: str | None = None) -> dict:
+    # Before any write: this function assigns `InstrumentState.strategy_key` directly and
+    # validates only against the registry, so it is a second route from "a graph-backed
+    # strategy is registered" to "a graph-backed strategy is assigned". Raising here
+    # rather than dropping the key keeps the refusal visible — a silently ignored
+    # strategy would add the instrument under the default and report success.
+    from app.core.execution_binding import assert_may_execute
+    assert_may_execute(strategy_key)
     spec = resolve_spec(key, provider)
     if spec is None:
         return {"error": f"could not resolve instrument '{key}'"}
