@@ -16,8 +16,8 @@ from app.editor import graph_artifacts as store
 from app.editor import layouts
 from app.ir import edit as ir_edit
 from app.ir.kernels import KernelDeclarationError
+from app.ir.library import LIBRARY
 from app.ir.resolve import ResolutionError, resolve
-from app.ir.strategies.expanding_z import LIBRARY
 from app.ir.validate import Violation
 
 

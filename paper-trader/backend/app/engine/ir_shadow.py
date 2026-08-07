@@ -235,7 +235,9 @@ class ShadowObservation:
 # ── the pairing registry ──────────────────────────────────────────────────────────
 
 def _expanding_z_pairing() -> ShadowPairing:
-    from app.ir.strategies.expanding_z import GRAPH, IMPLEMENTATIONS, LIBRARY
+    # The graph is the strategy's; the library it resolves against is the platform's.
+    from app.ir.library import IMPLEMENTATIONS, LIBRARY
+    from app.ir.strategies.expanding_z import GRAPH
     return ShadowPairing(authoritative_key="expanding_z_v4", graph=GRAPH,
                          library=(LIBRARY, IMPLEMENTATIONS))
 
@@ -267,8 +269,8 @@ def declared_warmup_for_graph(document: dict) -> int:
     Resolution is topology, not data: no frame is touched and no cache is built, so this is
     safe to call from a control path.
     """
+    from app.ir.library import LIBRARY
     from app.ir.resolve import resolve
-    from app.ir.strategies.expanding_z import LIBRARY
 
     return int(resolve(document, LIBRARY).warmup)
 

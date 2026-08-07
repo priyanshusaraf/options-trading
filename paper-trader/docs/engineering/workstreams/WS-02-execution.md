@@ -131,6 +131,76 @@ the live-path change is ours); owner time for the five-session no-touch exit tri
 paths); WS-03 (the strategy registry contract and backtest kernels it evaluates against);
 WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
+### The execution lifecycle boundary — G-2 (2026-08-07)
+
+**This is a contract, not a plan.** Nothing here is scheduled, and no `ExecutionIntent` object
+is being built. It is written down because L1.4 and everything after it add order-lifecycle
+behaviour, and the boundary they are written across must be named *before* they harden it —
+not because today's collapsed form is wrong.
+
+The conceptual lifecycle, in full:
+
+```
+strategy evaluation                 a graph or a Strategy over a candle frame
+        ↓
+strategy decision                   the requested economic action
+        ↓
+execution planning                  contract selection, sizing, routing, allocation
+        ↓
+broker order(s)                     what is actually sent
+        ↓
+fill(s)                             what actually happened
+        ↓
+position / accounting state         the economic consequence
+```
+
+**Today several of these stages are collapsed, and that is acceptable.** A strategy emits four
+booleans (`CANONICAL_COLUMNS`); `runner.process_entries` goes from a `self.state` entry to a
+chosen contract, a size and a `broker.open_*_position` call; a fill writes one `positions` row.
+With one-leg strategies the decision, the plan and the order are genuinely the same object, and
+inventing three types to hold one value would be the unconsumed-mechanism defect this codebase
+is named for.
+
+**Three invariants make the collapse reversible.** These are what must not be eroded:
+
+1. **`Position` is economic state resulting from execution.** It must not become the universal
+   container for strategy intent, broker-order lifecycle, execution planning and fills. A row
+   in `positions` answers "what do we own and what is it worth", and order-lifecycle state
+   (working / acknowledged / partially filled / rejected / cancelled) belongs to the order and
+   fill records — `order_journal` already exists for exactly this — not to `Position`.
+   `gtt_trigger_id` is the standing counter-example and is already fenced behind
+   `broker_protocol.protective_order_id()` for that reason.
+2. **Strategy logic does not directly gain broker authority.** A strategy declares; the engine
+   owns the arithmetic and the venue. `StrategySpec`'s sizing policy is a *declaration* the
+   engine executes, and `PaperBinding`/`ShadowSource` deliberately carry identities only — no
+   strategy object, no broker, no callable — so that "non-authoritative" is a property of the
+   type rather than a naming convention.
+3. **A future structured intent must be able to sit between strategy output and broker orders
+   without replacing canonical execution authority.** `execution_binding.strategy_for_execution`
+   stays the one gate; an intent is what flows *through* it, never a second thing that decides.
+
+**What this forbids in practice.** Not features — assumptions. Reviewers of L1.4 and later
+slices should refuse code that hard-codes any of:
+
+| Assumption | Why it must not deepen |
+|---|---|
+| one signal ≡ one order | a spread is one decision and several orders |
+| one strategy action ≡ one `Position` | a two-leg intent produces two rows and one economic result |
+| all order-lifecycle state belongs to `Position` | it belongs to the order/fill stage; see invariant 1 |
+| an execution intent can only ever hold one leg | ratios, hedges and rolls are leg *sets* |
+
+**L1.4 was inspected against this list before it began (2026-08-07).** Its scope — restart and
+reload of paper-authority deployments, stale-binding withdrawal, pause/resume/retire/rollback,
+attribution and recovery — operates on the *binding* and the *deployment record*, both of which
+are already keyed on `(deployment, instrument, interval)` and carry identities rather than
+positions. It adds no per-order state to `Position` and no new signal→order coupling. **No code
+correction was required to preserve the seam; this contract is the deliverable.**
+
+**Not deferred out of neglect.** Multi-leg intent is a real product direction (2026-08-07
+architecture review, direction H / Drill 3) and the venue layer (`broker_protocol.py`) was
+already shaped for it. It is deferred because no strategy needs it yet, and building the object
+before the second leg exists would be speculative.
+
 ## 4. Completed
 
 ### Execution-state ownership — the binding contract (2026-08-04)

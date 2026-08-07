@@ -15,8 +15,9 @@ from app.db.models import GraphArtifact, GraphVersion, Project
 from app.db.session import SessionLocal
 from app.editor import layouts
 from app.ir.hashing import canonical_json, content_address
+from app.ir.library import LIBRARY
 from app.ir.resolve import ResolutionError, resolve
-from app.ir.strategies.expanding_z import GRAPH, LIBRARY
+from app.ir.strategies.expanding_z import GRAPH
 from app.ir.validate import validate
 
 

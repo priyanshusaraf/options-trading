@@ -109,6 +109,29 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
+**A pre-L1.4 architecture review was taken and its two corrections are closed (2026-08-07).**
+The review (`engineering/reference/architecture-extension-review-2026-08-07.md`) stress-tested
+twelve candidate product directions against the built code and found **no foundational
+contradiction** — the IR/research/execution spine is preserved. Two bounded corrections
+followed, and both are done:
+
+- **G-1** — `app/ir/library.py` is now the platform component library. Six production call
+  sites previously took their component vocabulary from one *strategy's* module, including
+  `paper_authority.adapter_for` on the paper-authoritative path; all six now go through the
+  platform boundary, which composes contributors and refuses disagreement. The correction is
+  provably mechanical: the reference artefact's canonical bytes, content address, component
+  body refs and every resolved node id, cache id and warmup are byte-identical before and
+  after (fingerprint `1077ee8c…`). No schema change.
+- **G-2** — the signal → intent → order lifecycle is now a written contract in
+  `WS-02-execution.md` §3. Documentation only; L1.4 was inspected against it first and
+  deepens none of the four assumptions it forbids.
+
+Deferred with named homes and explicitly **not** to be built early: multi-instrument runtime
+and multi-timeframe resolution (WS-01 §5), typed non-OHLCV data sources and dataset identity
+(L3), multi-leg intent (WS-02, when a second leg exists), component packaging and permissions
+(L4), auth/tenancy (L5), and the job/worker boundary that the process-global backtest sweep
+singleton will eventually need (G-3 — no queues, workers, Postgres or services now).
+
 **Execution-state ownership is now defined and gated** (ADR 0012,
 `app/core/execution_binding.py`): one typed binding contract across immutable graph versions,
 research evidence, candidates, deployments, the legacy authoritative strategy and the shadow

@@ -6,7 +6,7 @@ from typing import Any
 
 from app.ir.experiment import record, validate_experiment
 from app.ir.hashing import content_address
-from app.ir.strategies.expanding_z import IMPLEMENTATIONS, LIBRARY
+from app.ir.library import IMPLEMENTATIONS, LIBRARY
 from app.market_data.candles import candles_to_df
 from research.orchestrator.run import run_experiment
 from research.strategy.builder.ir_components import BAR_INPUTS

@@ -305,10 +305,15 @@ def adapter_for(session, binding: PaperBinding):
     deployment approved one artefact, identified by content address, and the adapter that
     trades must be that artefact or nothing. The address is re-derived here as well —
     the second of the three checks (activation, here, and the authority gate).
+
+    The *components* it resolves against are the platform library's, not one strategy's.
+    That distinction is what the 2026-08-07 G-1 correction established: the bytes come from
+    the deployment's approved artefact, and the vocabulary they resolve against belongs to
+    the platform.
     """
     import json
 
-    from app.ir.strategies.expanding_z import IMPLEMENTATIONS, LIBRARY
+    from app.ir.library import IMPLEMENTATIONS, LIBRARY
     from app.strategy.ir_adapter import IRGraphStrategy
 
     version = _graph_version(session, binding.graph_identifier, binding.graph_version)

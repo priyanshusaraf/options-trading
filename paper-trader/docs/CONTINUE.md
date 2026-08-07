@@ -322,6 +322,47 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
+**The pre-L1.4 architecture correction is CLOSED. L1.4 is the next slice.**
+
+An architecture and reuse audit was taken at `75809a3` and is recorded at
+[`engineering/reference/architecture-extension-review-2026-08-07.md`](engineering/reference/architecture-extension-review-2026-08-07.md).
+It stress-tested twelve candidate product directions against the built code, executed five
+extension drills against the real language, and concluded **outcome 2 — one small bounded
+correction first, then L1.4 unchanged in scope.** Both corrections are now done:
+
+1. **G-1 — the platform component library — SHIPPED.** `app/ir/library.py` composes the platform
+   `(Library, IMPLEMENTATIONS)` pair from an explicit `CONTRIBUTORS` tuple and refuses contributor
+   disagreement (conflicting component bytes, conflicting kernel declarations, one address with two
+   implementations, a declared kernel with none). All six production call sites now take their
+   library from it — `api/ir_edit_routes.py`, `editor/graph_artifacts.py`, `engine/ir_shadow.py`
+   (×2), `core/paper_authority.py`, `ir/catalogue.py` and
+   `research/orchestrator/graph_experiment.py`. **A strategy no longer serves as the platform
+   registry.** Identity is byte-identical across the correction, by fingerprint over the graph's
+   canonical JSON, its content address, every component body ref and every resolved node id, cache
+   id, body ref and warmup: `1077ee8cdb53641e9451956994b6800a5c48a8bce6c2625ba3ea44f07c853590`
+   before and after. No schema change; migration head stays `0013`.
+2. **G-2 — the signal → intent → order boundary — DOCUMENTED**, at `WS-02-execution.md` §3, "The
+   execution lifecycle boundary". Three invariants (`Position` is economic state, not the universal
+   container; strategy logic gains no broker authority; a future structured intent must fit between
+   strategy output and broker orders without replacing canonical authority) plus the four
+   assumptions later slices may not deepen. **No code was required** — L1.4 was inspected against
+   those four first and deepens none of them.
+
+The review itself was amended after owner review (its Amendments section): F7 proves that
+instrument identity participates in the type system and that *accidental* cross-domain wiring fails
+closed — **not** that multi-instrument composition is implemented; the ten-bar drill proves
+*data-derived* state is expressible, **not** that all stateful behaviour is (new gap G-8); and the
+"no external code" conclusion is scoped to G-1/G-2 and is **not** project reuse policy.
+
+What the audit found **healthy and not to be redesigned**: the one-resolver/one-validator/one-hash/
+one-binding-authority structure; authority re-checked at the point of use against `GRANTS`;
+provenance-blind execution (C13); paper/live book separation; and `publish()` already reproducing
+the shipped ATR body address exactly. Multi-instrument runtime, typed non-OHLCV sources, multi-leg
+intent, tenancy and the job/worker boundary (G-3) are all **safe to defer**, each with a named home
+(WS-01 §5, L3, L4, L5). `(ir_graph, live, authoritative)` is untouched and remains **NOT APPROVED**.
+
+---
+
 **L1 Stage 1 (shadow lane) — STOP for a second owner approval.**
 
 Stage 0 is complete and published. `app/strategy/ir_adapter.py` presents a resolved graph as
