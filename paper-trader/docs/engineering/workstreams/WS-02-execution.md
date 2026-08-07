@@ -201,6 +201,37 @@ architecture review, direction H / Drill 3) and the venue layer (`broker_protoco
 already shaped for it. It is deferred because no strategy needs it yet, and building the object
 before the second leg exists would be speculative.
 
+### Cockpit lifecycle capability — 2026-08-08 (backend contract frozen)
+
+`lifecycle_actions` was derived from `runner.paper_authority`, which holds only **active**
+bindings, and returned a hard-coded `("pause", "retire")`. A staged or paused deployment is not
+in that map, so it reported no actions at all — leaving a frontend to infer resume from
+`state`, which is precisely the transition logic the backend must own.
+
+Fixed by asking the owning services. `paper_authority.TRANSITIONS` and
+`shadow_deployments.TRANSITIONS` are capability tables sitting beside the guards they describe,
+with `permitted_transitions()` / `transition_requirements()` as pure accessors. The cockpit now
+reads the deployment **row** (via each service's own `listing`) rather than the in-memory active
+map, so every state reports truthfully and an instrument with only a staged or paused deployment
+still appears in the view.
+
+They are descriptions, not a second state machine, and that is proven rather than asserted: a
+parametrised test drives the real services from every state × every action and requires
+`IllegalTransition ⟺ not permitted`. The one deliberate divergence — `activate` is legal from
+`paused` but is named `resume` there, so an operator is not offered two buttons for one
+transition — is listed in the test as a documented synonym.
+
+Two tables, not one, because the planes differ: paper `retire` requires `restore_strategy_key`
+(where authority returns), shadow `retire` requires nothing. A shared table would have to
+over-promise on one of them. `lifecycle` and `shadow_lifecycle` are separate keys for the same
+reason.
+
+`entry.complete` stays **`false`** — unchanged and deliberate. Closing it needs the runner to
+record its skip reason, which touches the hot entry path and belongs to its own slice. The
+frontend contract for both is in
+[WS-08 §3a](WS-08-cockpit-ui.md); research status may raise operator attention and may **not**
+alter lifecycle capability.
+
 ## 4. Completed
 
 ### Execution-state ownership — the binding contract (2026-08-04)

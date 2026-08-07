@@ -553,3 +553,139 @@ class TestCurrentResearchIsNotAControlPath:
         assert item["authority"] == "authoritative"
         assert item["binding_error"] is None
         assert set(item["lifecycle_actions"]) == {"pause", "retire"}
+
+
+# ── 6. lifecycle capability: the backend declares, the frontend renders ──────────
+
+class TestLifecycleCapability:
+    """The defect this slice closes.
+
+    `lifecycle_actions` was derived from `runner.paper_authority`, which holds only
+    **active** bindings, and returned a hard-coded `("pause", "retire")`. A staged or paused
+    deployment is not in that map, so it reported *no actions at all* — leaving a frontend
+    with no way to offer resume except by inferring it from `state`, which is exactly the
+    transition logic the backend is supposed to own.
+    """
+
+    def _item(self, runner, key=INSTRUMENT):
+        with SessionLocal() as s:
+            return _instrument(cockpit.view(runner, s).to_dict(), key)
+
+    def _fresh_runner(self):
+        r = EngineRunner()
+        r.refresh_paper_authority()
+        return r
+
+    def test_staged_offers_activate_and_retire(self):
+        with SessionLocal() as s:
+            _deploy(s, activate=False)
+        r = self._fresh_runner()
+        try:
+            item = self._item(r)
+            assert item["lifecycle"]["state"] == pa.STAGED
+            assert set(item["lifecycle_actions"]) == {"activate", "retire"}
+        finally:
+            r.broker.close()
+
+    def test_active_offers_pause_and_retire(self):
+        with SessionLocal() as s:
+            _deploy(s)
+        r = self._fresh_runner()
+        try:
+            item = self._item(r)
+            assert item["lifecycle"]["state"] == pa.PAPER_ACTIVE
+            assert set(item["lifecycle_actions"]) == {"pause", "retire"}
+        finally:
+            r.broker.close()
+
+    def test_paused_offers_resume_without_the_frontend_inferring_it(self):
+        """**The headline case.** A paused deployment must declare its resume capability."""
+        with SessionLocal() as s:
+            row = _deploy(s)
+            pa.pause(s, row.id, revision=row.revision)
+            s.commit()
+        r = self._fresh_runner()
+        try:
+            item = self._item(r)
+            assert item["lifecycle"]["state"] == pa.PAUSED
+            assert "resume" in item["lifecycle_actions"], (
+                "a paused deployment must declare resume; a frontend deriving it from "
+                "state would be reproducing the transition rules")
+            assert set(item["lifecycle_actions"]) == {"resume", "retire"}
+            assert r.paper_authority == {}, "and it is correctly not authoritative"
+        finally:
+            r.broker.close()
+
+    def test_retired_exposes_no_resurrection_path(self):
+        with SessionLocal() as s:
+            row = _deploy(s)
+            pa.retire(s, row.id, revision=row.revision, restore_strategy_key=None)
+            s.commit()
+        r = self._fresh_runner()
+        try:
+            item = self._item(r)
+            assert item["lifecycle"]["state"] is None      # no live row remains
+            assert item["lifecycle_actions"] == []
+        finally:
+            r.broker.close()
+
+    def test_the_actions_carry_what_invoking_them_requires(self):
+        with SessionLocal() as s:
+            row = _deploy(s)
+            revision = row.revision
+        r = self._fresh_runner()
+        try:
+            lifecycle = self._item(r)["lifecycle"]
+            assert lifecycle["revision"] == revision
+            assert lifecycle["deployment_row_id"] is not None
+            assert lifecycle["plane"] == cockpit.PLANE_PAPER
+            by_action = {a["action"]: a for a in lifecycle["actions"]}
+            assert by_action["retire"]["requires"] == ["restore_strategy_key"]
+            assert by_action["pause"]["requires"] == []
+            assert all(a["requires_revision"] for a in lifecycle["actions"])
+        finally:
+            r.broker.close()
+
+    def test_the_capability_comes_from_the_owning_service(self):
+        """Not a table in the cockpit: the same answer the domain gives."""
+        with SessionLocal() as s:
+            row = _deploy(s)
+            pa.pause(s, row.id, revision=row.revision)
+            s.commit()
+        r = self._fresh_runner()
+        try:
+            actions = self._item(r)["lifecycle_actions"]
+            assert tuple(actions) == pa.permitted_transitions(pa.PAUSED)
+        finally:
+            r.broker.close()
+
+    def test_an_instrument_with_no_deployment_offers_nothing(self, runner):
+        item = self._item(runner, "NIFTY")
+        assert item["lifecycle"]["state"] is None
+        assert item["lifecycle_actions"] == []
+        assert item["shadow_lifecycle"]["state"] is None
+
+    def test_paper_and_shadow_capabilities_are_not_conflated(self, runner):
+        """Separate keys, separate services. `lifecycle_actions` remains the paper plane's,
+        so a shadow row can never put an action on the authoritative surface."""
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        item = self._item(runner)
+        assert item["lifecycle"]["plane"] == cockpit.PLANE_PAPER
+        assert item["shadow_lifecycle"]["plane"] is None
+        assert item["shadow_lifecycle"]["actions"] == []
+
+    def test_a_newer_rejection_does_not_remove_lifecycle_capability(
+            self, runner, monkeypatch):
+        """Research may raise attention. It may not take away resume, pause or retire —
+        only the execution-plane state decides capability."""
+        with SessionLocal() as s:
+            row = _deploy(s)
+            pa.pause(s, row.id, revision=row.revision)
+            s.commit()
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(9, "approved"), _decision(14, "rejected")])
+        item = self._item(runner)
+        assert set(item["lifecycle_actions"]) == {"resume", "retire"}
+        assert item["lifecycle"]["state"] == pa.PAUSED

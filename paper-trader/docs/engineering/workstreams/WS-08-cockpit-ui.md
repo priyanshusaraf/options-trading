@@ -104,6 +104,91 @@ extension with access or the owner simply supplying them. Nothing else is blocke
 **Currently blocking:** nothing. WS-04 now uses this SPA, `lib/api.ts` and `components/ui/` for
 its read-only graph viewer.
 
+## 3a. The execution-cockpit frontend contract (2026-08-08)
+
+`GET /api/execution/cockpit` is the single call a cockpit needs to understand operator-visible
+execution state. `GET /api/execution/cockpit/deployments` adds the full deployment history
+including retired rows. **Backend work on this contract is frozen** — read this section before
+implementing against it.
+
+### Lifecycle: the backend declares, the frontend renders
+
+> **The frontend may display and invoke lifecycle actions. It must not infer which
+> transitions are valid.**
+
+Each instrument carries `lifecycle` (paper plane) and `shadow_lifecycle` (observer plane):
+
+```
+lifecycle: {
+  plane, deployment_row_id, state, revision,
+  actions: [ { action, requires_revision, requires: [...] } ]
+}
+lifecycle_actions: ["resume", "retire"]      # the same action names, flat
+```
+
+`actions` comes from the owning service — `paper_authority.permitted_transitions` /
+`shadow_deployments.permitted_transitions` — each of which sits beside the guards it describes
+and is proven against them by driving the real services from every state. **Do not write
+`if state == "paused": show Resume`.** Render `actions`; if it is empty, offer nothing.
+
+State/action matrix, for reference only — the API is the source of truth:
+
+| State | Paper actions | Shadow actions |
+|---|---|---|
+| `staged` | `activate`, `retire` | `activate`, `retire` |
+| `paper_active` / `shadow_active` | `pause`, `retire` | `pause`, `retire` |
+| `paused` | `resume`, `retire` | `resume`, `retire` |
+| `retired` | — (terminal) | — (terminal) |
+
+Two things the shapes are telling you, and both matter:
+
+- **Every transition is revision-guarded.** Send the `revision` from `lifecycle`; a stale one
+  is refused with `409`, which is the system working. Re-read and re-present; never retry
+  blind.
+- **`requires` is not decoration.** Paper `retire` requires `restore_strategy_key` — where
+  authority returns — so it is a form, not a bare button. Shadow `retire` requires nothing.
+  The two planes are deliberately not interchangeable.
+
+Invoke through the existing routes: `POST /api/ir-paper/deployments/{id}/{activate|pause|resume}`,
+`POST /api/ir-paper/deployments/{id}/retire`. The cockpit route is read-only and adds no
+control operation.
+
+### Entry: `allowed` is not a prediction
+
+`entry.complete` is **`false`**, always, and the payload says so in `entry.note`.
+
+`entry.allowed == true` means only: *the standing gates the cockpit represents are clear.* The
+full entry decision lives in `process_entries` and applies further per-bar gates — signal
+freshness, the entry window, event blackouts, expiry proximity, re-entry cooldown, per-trade
+and round-trip caps, margin — that this read model has no bar to evaluate.
+
+**Do not label it** "will enter", "trade ready", "entry guaranteed", "armed to trade", or any
+equivalent definitive wording. Conceptually correct language:
+
+- `allowed: true`  → "Standing gates clear"
+- `allowed: false` → "Standing gate blocked" + the `blocked_by` reasons
+
+Show an explicit incomplete/limited indicator while `complete` is `false`. Visual design is
+the frontend's call; the semantic ceiling is not.
+
+### Current research: attention, never authority
+
+`graph.current_research` reports how research looks **now** versus the admission that granted
+authority. Three facts stay separate and must stay separate in the UI too: `graph.admission`
+(historical fact), `graph.current_research` (today's view), and the authority/lifecycle fields.
+
+`newer_rejected_decision` sets `operator_attention: true` and `affects_execution_authority:
+false`. Render it as *attention required*, never as *revoked* or *suspended* — the deployment
+is still authoritative and its lifecycle actions are unchanged. `unavailable` means the
+research plane could not be read; it is not "approved" and not "rejected", and the rest of the
+view is still valid. See [ADR 0013](../decisions/0013-research-approval-is-admission-not-a-lease.md).
+
+### What the backend will not do for you
+
+- It will not tell you the engine *will* trade (see Entry).
+- It will not decide which lifecycle control to show (see Lifecycle).
+- It will not surface live-book authority: `(ir_graph, live, authoritative)` is **not granted**.
+
 ## 4. Completed
 
 Newest first.

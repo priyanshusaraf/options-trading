@@ -58,6 +58,36 @@ AUTHORITY = "non_authoritative"
 #: index; kept beside it so a change to one is visibly a change to the other.
 LIVE_STATES = (STAGED, SHADOW_ACTIVE, PAUSED)
 
+#: **What this service permits from each state.** Same shape and same discipline as
+#: `paper_authority.TRANSITIONS` — descriptive metadata mirroring the guards below, proven
+#: against them by driving the real services from every state.
+#:
+#: Deliberately a **separate** table rather than a shared one. The two planes look alike and
+#: are not: retiring paper authority must name a rollback target, and retiring an observer
+#: has nothing to hand back. One table would have to be widened for the union, and a
+#: capability contract that over-promises on one plane is worse than two small tables.
+TRANSITIONS: dict[str, tuple[str, ...]] = {
+    STAGED: ("activate", "retire"),
+    SHADOW_ACTIVE: ("pause", "retire"),
+    PAUSED: ("resume", "retire"),
+    RETIRED: (),
+}
+
+#: A shadow transition needs nothing beyond the row id and its revision — there is no
+#: authority to hand back.
+TRANSITION_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    "activate": (), "pause": (), "resume": (), "retire": (),
+}
+
+
+def permitted_transitions(state: str) -> tuple[str, ...]:
+    """The lifecycle actions this service accepts from `state`. Pure."""
+    return TRANSITIONS.get(state, ())
+
+
+def transition_requirements(action: str) -> tuple[str, ...]:
+    return TRANSITION_ARGUMENTS.get(action, ())
+
 
 class ShadowDeploymentError(Exception):
     """Base for every refusal here, so a caller can catch the family."""

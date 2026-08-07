@@ -60,6 +60,45 @@ AUTHORITY = "authoritative"
 #: index; kept beside it so a change to one is visibly a change to the other.
 LIVE_STATES = (STAGED, PAPER_ACTIVE, PAUSED)
 
+#: **What this service permits from each state.** Descriptive capability metadata, not a
+#: second state machine: every entry mirrors a guard in `activate`/`pause`/`resume`/`retire`
+#: immediately below, and `test_paper_authority.py` drives the real services from every
+#: state to prove this table and those guards agree. If they ever disagree, the table is
+#: the defect and the guards are the truth.
+#:
+#: It exists so an operational surface can *render* lifecycle controls without reproducing
+#: the transition rules. `activate` is legal from `paused` too — `resume` is the same
+#: transition, and naming it once avoids offering an operator two buttons for one action.
+TRANSITIONS: dict[str, tuple[str, ...]] = {
+    STAGED: ("activate", "retire"),
+    PAPER_ACTIVE: ("pause", "retire"),
+    PAUSED: ("resume", "retire"),
+    RETIRED: (),
+}
+
+#: What a transition needs **beyond** the row id and its current revision. Retiring paper
+#: authority must name where authority returns — `restore_strategy_key` is a required
+#: argument with no default, and a contract that presented retire as a bare button would be
+#: lying to whoever had to press it. Shadow retirement takes no such argument, which is
+#: exactly why the two planes get their own tables.
+TRANSITION_ARGUMENTS: dict[str, tuple[str, ...]] = {
+    "activate": (),
+    "pause": (),
+    "resume": (),
+    "retire": ("restore_strategy_key",),
+}
+
+
+def permitted_transitions(state: str) -> tuple[str, ...]:
+    """The lifecycle actions this service accepts from `state`; empty for terminal or
+    unknown states. Pure — no session, nothing to mutate."""
+    return TRANSITIONS.get(state, ())
+
+
+def transition_requirements(action: str) -> tuple[str, ...]:
+    """Arguments `action` needs besides the row id and revision."""
+    return TRANSITION_ARGUMENTS.get(action, ())
+
 
 class PaperAuthorityError(Exception):
     """Base for every refusal here, so a caller can catch the family."""

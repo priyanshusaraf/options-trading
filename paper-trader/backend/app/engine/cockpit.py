@@ -117,6 +117,14 @@ class InstrumentExecutionView:
     execution_mode: str
     position: dict[str, Any] | None
     entry: dict[str, Any]
+    #: Full lifecycle capability for the paper-authority deployment on this instrument, as
+    #: its owning service defines it: state, revision and per-action requirements.
+    lifecycle: dict[str, Any]
+    #: The same for the shadow deployment. Separate, because the two planes do not support
+    #: identical transitions and conflating them would over-promise on one of them.
+    shadow_lifecycle: dict[str, Any]
+    #: The paper action names, flat. Retained for payload compatibility; `lifecycle` is the
+    #: complete contract.
     lifecycle_actions: tuple[str, ...]
 
     def to_dict(self) -> dict:
@@ -322,22 +330,68 @@ def _shadow_view(runner, key: str) -> dict[str, Any] | None:
             "execution_mode": found.execution_mode}
 
 
-def _lifecycle_actions(runner, key: str) -> tuple[str, ...]:
-    """Which lifecycle transitions the *existing* services would accept right now.
+#: The two deployment planes an operator sees, and the service that owns each one's
+#: lifecycle. Named so the cockpit asks the owner rather than deciding, and so paper and
+#: shadow capabilities can never be conflated by a shared code path.
+PLANE_PAPER = "paper_authority"
+PLANE_SHADOW = "shadow"
 
-    Derived from `paper_authority.STATES`, not invented: the cockpit offers what the domain
-    already implements and nothing else. No new control operation exists for the UI's
-    convenience.
+
+def _lifecycle(row: dict | None, plane: str) -> dict[str, Any]:
+    """The lifecycle capability of one deployment row, **as its owning service defines it**.
+
+    The cockpit does not decide which transitions are legal. It asks
+    `paper_authority.permitted_transitions` / `shadow_deployments.permitted_transitions`,
+    each of which sits beside the guards it describes and is proven against them. Building
+    a `state == "paused" → offer resume` rule here would be the second state machine this
+    module exists to avoid — and it would be the *frontend's* rule moved one layer down
+    rather than removed.
+
+    Each action carries what it needs beyond the row id: every transition is
+    revision-guarded (optimistic CAS, so a stale decision is refused rather than applied),
+    and paper retirement additionally requires a named rollback target. A contract that
+    presented retire as a bare button would be lying to whoever pressed it.
     """
-    binding = runner.paper_authority.get(key)
-    if binding is None:
-        return ()
-    return ("pause", "retire")          # an active binding; resume applies once paused
+    if row is None:
+        return {"plane": None, "deployment_row_id": None, "state": None,
+                "revision": None, "actions": []}
+
+    service = (paper_authority if plane == PLANE_PAPER
+               else __import__("app.core.shadow_deployments", fromlist=["x"]))
+    state = row.get("state")
+    return {
+        "plane": plane,
+        "deployment_row_id": row.get("id"),
+        "state": state,
+        "revision": row.get("revision"),
+        "actions": [
+            {"action": action,
+             "requires_revision": True,
+             "requires": list(service.transition_requirements(action))}
+            for action in service.permitted_transitions(state)
+        ],
+    }
 
 
-def instrument_view(runner, key: str, *, positions: dict, now) -> InstrumentExecutionView:
+def _lifecycle_actions(lifecycle: dict) -> tuple[str, ...]:
+    """The action names, kept as a flat list for payload compatibility. The richer
+    `lifecycle` object beside it carries the revision and per-action requirements."""
+    return tuple(a["action"] for a in lifecycle["actions"])
+
+
+def instrument_view(runner, key: str, *, positions: dict, now,
+                    deployments: dict | None = None) -> InstrumentExecutionView:
+    """One instrument's whole operational picture.
+
+    `deployments` maps an instrument to its live (non-retired) deployment row per plane.
+    Lifecycle capability comes from the **row**, not from the runner's in-memory map of
+    *active* bindings — that map is the reason a paused deployment previously reported no
+    actions at all, leaving a frontend with no way to offer resume except by inferring it.
+    """
     held = positions.get(key)
     binding = _binding_view(runner, key)
+    rows = (deployments or {}).get(key, {})
+    lifecycle = _lifecycle(rows.get(PLANE_PAPER), PLANE_PAPER)
     return InstrumentExecutionView(
         instrument_key=key,
         enabled=key in runner.enabled,
@@ -348,8 +402,34 @@ def instrument_view(runner, key: str, *, positions: dict, now) -> InstrumentExec
         execution_mode=execution_book.configured_execution_mode(),
         position=held.to_dict() if held is not None else None,
         entry=entry_eligibility(runner, key, held=held is not None, now=now).to_dict(),
-        lifecycle_actions=_lifecycle_actions(runner, key),
+        lifecycle=lifecycle,
+        shadow_lifecycle=_lifecycle(rows.get(PLANE_SHADOW), PLANE_SHADOW),
+        lifecycle_actions=_lifecycle_actions(lifecycle),
         **binding)
+
+
+def live_deployment_rows(session) -> dict[str, dict[str, dict]]:
+    """Live (non-retired) deployment rows, indexed by instrument then plane.
+
+    Read through each service's own listing — the cockpit maintains no second view of
+    deployment state. Retired rows are excluded here because they hold no slot and offer no
+    action; they remain visible in full on the deployments endpoint, which is where the
+    history of what once traded belongs.
+    """
+    from app.core import shadow_deployments
+
+    out: dict[str, dict[str, dict]] = {}
+    for plane, service in ((PLANE_PAPER, paper_authority),
+                           (PLANE_SHADOW, shadow_deployments)):
+        try:
+            rows = service.listing(session, include_retired=False)
+        except Exception:      # a read model may never break the cockpit
+            continue
+        for row in rows:
+            if row.get("state") == service.RETIRED:
+                continue
+            out.setdefault(row["instrument_key"], {})[plane] = row
+    return out
 
 
 # ── the whole view ───────────────────────────────────────────────────────────────
@@ -362,9 +442,14 @@ def view(runner, session) -> CockpitView:
     book = runner.book
     positions = {p.instrument_key: p for p in runner.broker.open_positions()}
 
+    deployments = live_deployment_rows(session)
+    # A staged or paused deployment names an instrument that may be in no other set. It
+    # must still appear, or its lifecycle controls are invisible to an operator.
     keys = sorted(set(runner.enabled) | set(runner.paper_authority)
-                  | set(getattr(runner, "shadow_deployments", {})) | set(positions))
-    instruments = [instrument_view(runner, key, positions=positions, now=now).to_dict()
+                  | set(getattr(runner, "shadow_deployments", {})) | set(positions)
+                  | set(deployments))
+    instruments = [instrument_view(runner, key, positions=positions, now=now,
+                                   deployments=deployments).to_dict()
                    for key in keys]
 
     try:

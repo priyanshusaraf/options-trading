@@ -479,3 +479,64 @@ def test_a_verified_evidence_envelope_is_recorded_not_recomputed_on_every_reload
             sd.verified_decision = original
         assert calls == []
         assert session.get(IrShadowDeployment, row.id).evidence_run_id == 7
+
+
+class TestPermittedTransitions:
+    """The shadow plane's capability table, proven against its own guards.
+
+    Deliberately a separate table from `paper_authority`'s, and this is where that pays:
+    the states differ (`shadow_active`, not `paper_active`) and retirement here hands
+    nothing back, so a shared table would have to over-promise on one plane.
+    """
+
+    SYNONYMS = {(sd.PAUSED, "activate")}      # `resume` names the same transition
+
+    def setup_method(self) -> None:
+        # `setup_function` above applies to module-level tests only, not to methods.
+        init_db(reset=True)
+
+    def _row_in(self, session, state: str):
+        row = staged(session)
+        session.commit()
+        if state == sd.STAGED:
+            return row
+        sd.activate(session, row.id, revision=row.revision)
+        session.commit()
+        if state == sd.SHADOW_ACTIVE:
+            return row
+        sd.pause(session, row.id, revision=row.revision)
+        session.commit()
+        if state == sd.PAUSED:
+            return row
+        sd.retire(session, row.id, revision=row.revision)
+        session.commit()
+        return row
+
+    @pytest.mark.parametrize("state", sd.STATES)
+    @pytest.mark.parametrize("action", ("activate", "pause", "resume", "retire"))
+    def test_the_table_agrees_with_the_guards(self, state, action):
+        with SessionLocal() as s:
+            row = self._row_in(s, state)
+            permitted = action in sd.permitted_transitions(state)
+            try:
+                getattr(sd, action)(s, row.id, revision=row.revision)
+                refused = False
+            except sd.IllegalTransition:
+                refused = True
+            s.rollback()
+
+        if (state, action) in self.SYNONYMS:
+            assert not refused and not permitted
+            return
+        assert refused == (not permitted), (
+            f"{action!r} from {state!r}: table says permitted={permitted}, service "
+            f"{'refused' if refused else 'accepted'}")
+
+    def test_the_matrix(self):
+        assert sd.permitted_transitions(sd.STAGED) == ("activate", "retire")
+        assert sd.permitted_transitions(sd.SHADOW_ACTIVE) == ("pause", "retire")
+        assert sd.permitted_transitions(sd.PAUSED) == ("resume", "retire")
+        assert sd.permitted_transitions(sd.RETIRED) == ()
+
+    def test_shadow_retirement_needs_no_rollback_target(self):
+        assert sd.transition_requirements("retire") == ()

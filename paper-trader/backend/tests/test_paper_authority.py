@@ -571,3 +571,93 @@ class TestAdmissionBindsTheExactGraphContent:
         monkeypatch.setattr(pa, "verified_decision", trap)
         with SessionLocal() as s:
             assert len(pa.active_bindings(s)) == 1
+
+
+# ── lifecycle capability, as a description of the guards below it ────────────────
+
+class TestPermittedTransitions:
+    """`TRANSITIONS` is capability metadata an operational surface renders from. It is only
+    worth anything if it agrees with the guards it describes, so this drives the **real
+    services** from every state and compares.
+
+    That agreement is what makes it a description rather than a second state machine.
+    """
+
+    #: `activate` is legal from `paused` — `resume` calls it — but the table names the
+    #: transition once, so an operator is not offered two buttons for one action. This is
+    #: the only permitted divergence between the table and the guards, and it is listed
+    #: here so it stays deliberate rather than becoming drift nobody notices.
+    SYNONYMS = {(pa.PAUSED, "activate")}
+
+    def _row_in(self, session, state: str):
+        row = staged(session)
+        session.commit()
+        if state == pa.STAGED:
+            return row
+        pa.activate(session, row.id, revision=row.revision)
+        session.commit()
+        if state == pa.PAPER_ACTIVE:
+            return row
+        pa.pause(session, row.id, revision=row.revision)
+        session.commit()
+        if state == pa.PAUSED:
+            return row
+        pa.retire(session, row.id, revision=row.revision, restore_strategy_key=None)
+        session.commit()
+        return row
+
+    def _attempt(self, session, row, action: str):
+        if action == "retire":
+            return pa.retire(session, row.id, revision=row.revision,
+                             restore_strategy_key=None)
+        return getattr(pa, action)(session, row.id, revision=row.revision)
+
+    @pytest.mark.parametrize("state", pa.STATES)
+    @pytest.mark.parametrize("action", ("activate", "pause", "resume", "retire"))
+    def test_the_table_agrees_with_the_guards(self, state, action):
+        with SessionLocal() as s:
+            row = self._row_in(s, state)
+            permitted = action in pa.permitted_transitions(state)
+            try:
+                self._attempt(s, row, action)
+                refused = False
+            except pa.IllegalTransition:
+                refused = True
+            s.rollback()
+
+        if (state, action) in self.SYNONYMS:
+            assert not refused and not permitted, (
+                f"{action!r} from {state!r} is a documented synonym: legal, deliberately "
+                f"not offered")
+            return
+        assert refused == (not permitted), (
+            f"{action!r} from {state!r}: the table says permitted={permitted} but the "
+            f"service {'refused' if refused else 'accepted'} it")
+
+    def test_the_matrix_is_what_an_operator_is_offered(self):
+        assert pa.permitted_transitions(pa.STAGED) == ("activate", "retire")
+        assert pa.permitted_transitions(pa.PAPER_ACTIVE) == ("pause", "retire")
+        assert pa.permitted_transitions(pa.PAUSED) == ("resume", "retire")
+        assert pa.permitted_transitions(pa.RETIRED) == ()
+        assert pa.permitted_transitions("nonsense") == ()
+
+    def test_retirement_is_terminal_and_offers_no_resurrection(self):
+        assert pa.permitted_transitions(pa.RETIRED) == ()
+        for action in ("activate", "resume", "pause", "retire"):
+            assert action not in pa.permitted_transitions(pa.RETIRED)
+
+    def test_paper_retirement_declares_its_rollback_argument(self):
+        """Retiring paper authority must name where authority returns. A contract that
+        presented it as a bare button would be lying to whoever pressed it."""
+        assert pa.transition_requirements("retire") == ("restore_strategy_key",)
+        for action in ("activate", "pause", "resume"):
+            assert pa.transition_requirements(action) == ()
+
+    def test_the_two_planes_are_not_conflated(self):
+        """Paper and shadow look alike and are not: shadow retirement hands nothing back."""
+        from app.core import shadow_deployments as sd
+
+        assert sd.transition_requirements("retire") == ()
+        assert pa.transition_requirements("retire") == ("restore_strategy_key",)
+        assert pa.PAPER_ACTIVE not in sd.TRANSITIONS
+        assert sd.SHADOW_ACTIVE not in pa.TRANSITIONS
