@@ -1202,6 +1202,49 @@ def list_paper_deployments(include_retired: bool = False):
             s, include_retired=include_retired)}
 
 
+@router.get("/api/execution/cockpit")
+def execution_cockpit(request: Request):
+    """The operational read model — one call that answers the cockpit's questions.
+
+    Assembled by `app/engine/cockpit.py` from the services that already own each answer;
+    this route adds no logic and makes no decision. It exists because the alternative is a
+    cockpit issuing eight calls and correlating them itself, which is how a second
+    operational model gets built by accident.
+
+    Read-only and structurally so. Lifecycle control stays on the existing routes
+    (`/api/ir-paper/deployments/{id}/{action}`, `/retire`, `/api/execution/arm`,
+    `/api/execution/kill`), each of which calls the existing domain service — no authority
+    logic is duplicated here, and no control operation was invented for a UI's convenience.
+
+    It answers, per instrument: what exact strategy is authorised, why (the canonical
+    binding's own reason and origin), which immutable graph is running and on what
+    admission evidence, in which book, what it currently holds, whether the standing gates
+    would let it open another entry and which ones would not, and which lifecycle actions
+    the domain would accept.
+
+    **No research database is opened.** Admission facts come from the deployment row, which
+    recorded them at activation — ADR 0013's model made visible.
+    """
+    from app.engine import cockpit
+
+    with SessionLocal() as s:
+        return cockpit.view(_runner(request), s).to_dict()
+
+
+@router.get("/api/execution/cockpit/deployments")
+def execution_cockpit_deployments(include_retired: bool = True):
+    """Every paper-authority deployment record with its lifecycle state and provenance.
+
+    Straight through to `paper_authority.listing` — the same rows
+    `/api/ir-paper/deployments` serves, defaulting to including retired ones because an
+    operational surface needs the history of what once traded here, not only what does now.
+    """
+    from app.engine import cockpit
+
+    with SessionLocal() as s:
+        return {"deployments": cockpit.paper_deployments(s)}
+
+
 @router.post("/api/ir-paper/deployments")
 def stage_paper_deployment(body: PaperDeploymentIn, request: Request):
     """Stage paper authority. Staging confers none — activation does, and it is a separate

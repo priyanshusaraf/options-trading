@@ -710,3 +710,37 @@ def pa_origin() -> str:
     from app.core.execution_binding import ORIGIN_PAPER_AUTHORITY
 
     return ORIGIN_PAPER_AUTHORITY
+
+
+class TestWithdrawalIdentityScope:
+    """§7 — withdrawal must remove what the withdrawn binding authored, and only that."""
+
+    def test_it_does_not_withdraw_a_signal_another_binding_authored(self):
+        """A paper deployment can be retired in a window where the instrument's pending
+        signal was authored by the *previous* authority, not by the graph. Dropping that
+        is over-withdrawal: it is safe (a dropped signal never opens a wrong position) but
+        it discards a valid signal the graph never touched."""
+        with SessionLocal() as s:
+            row = _deploy(s)
+        r = _runner()
+        try:
+            # A signal authored by a hand-written strategy, not by the graph.
+            handwritten = r._binding_for("GOLDM")
+            r.publish_signal(INSTRUMENT, handwritten, {
+                "signal": "LONG_ENTRY", "z": 2.0, "slope": 1.0, "close": 100.0,
+                "long_exit": False, "short_exit": False})
+            assert r._executed_binding(INSTRUMENT).strategy_key != IR_KEY
+
+            with SessionLocal() as s:
+                current = s.get(IrPaperDeployment, row.id)
+                pa.retire(s, current.id, revision=current.revision,
+                          restore_strategy_key=None)
+                s.commit()
+            r.refresh_paper_authority()
+
+            assert r.state.get(INSTRUMENT) is not None, (
+                "the graph did not author this signal; withdrawing the graph's authority "
+                "must not discard another binding's valid state")
+            assert r._executed_binding(INSTRUMENT) is not None
+        finally:
+            r.broker.close()

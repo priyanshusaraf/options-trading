@@ -119,12 +119,18 @@ market data or broker observation required.
 It found one real defect. `refresh_paper_authority` withdrew a deployment's *authority* but not
 the *signal it had already authored*, and those routes run between a scan and an entry pass —
 so a retired graph could still open a position carrying its identity. Fixed by
-`_withdraw_superseded_signals`; two mutations proved the guards red and were restored. Hard
-invariant 2 (exits are never gated) is proven to survive every form of withdrawal. **Known
-boundary carried forward:** reload re-verifies the content address but not the research
-decision, so an approval withdrawn while a deployment is active is not noticed until its next
-transition — the first thing to revisit before live authority. `(ir_graph, live,
-authoritative)` remains **NOT APPROVED** and is designed nowhere.
+`_withdraw_superseded_signals`; mutations proved the guards red and were restored. Hard
+invariant 2 (exits are never gated) is proven to survive every form of withdrawal.
+
+**The "evidence reload gap" L1.4 reported is not a defect.**
+[ADR 0013](engineering/decisions/0013-research-approval-is-admission-not-a-lease.md) settles the
+lifetime question: research approval is an **admission prerequisite consumed once at activation**,
+not a continuously evaluated lease. Evidence and decisions are immutable and write-once, so there
+is no "withdraw approval" operation — only a newer decision, which correctly blocks a *new*
+deployment and a *resume* while leaving an already-active one running until a human pauses or
+retires it. Restart is already research-independent, measured with every research door trapped.
+Newer contradicting research is an operator-visible **read**, never a control.
+`(ir_graph, live, authoritative)` remains **NOT APPROVED** and is designed nowhere.
 
 **A pre-L1.4 architecture review was taken and its two corrections are closed (2026-08-07).**
 The review (`engineering/reference/architecture-extension-review-2026-08-07.md`) stress-tested

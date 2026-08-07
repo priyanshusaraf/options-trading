@@ -336,8 +336,18 @@ fix. `_withdraw_superseded_signals` closes it: withdrawing authority withdraws t
 produced, scoped per instrument. Two mutations proven red and restored byte-for-byte.
 Hard invariant 2 is proven against every form of withdrawal — a graph-opened position is still
 marked, exited and squared off after pause, retirement, unverifiability and disarm.
-**Known boundary:** reload re-derives the content address but does not re-read the research
-decision; evidence is checked at activation and resume only. Revisit before live authority.
+**The "evidence reload gap" it reported was then investigated and is NOT a defect** —
+[ADR 0013](engineering/decisions/0013-research-approval-is-admission-not-a-lease.md) settles the
+semantics: research approval is an **admission prerequisite**, not an authority lease. Evidence
+and approval are immutable and write-once (a decided candidate can never be re-decided;
+`decide_project_candidate` refuses), so "withdrawing approval" is not an operation the system
+has — only a *newer* decision exists. Measured: with every research door trapped to raise, reload
+still loads the binding, rebuilds the adapter and verifies the content address three times, so
+restart is already independent of the research plane. `resume` re-verifies evidence, which covers
+the one boundary where stale approval was a real risk. **Do not implement an evidence re-read on
+reload.** §7's identity-scope review did find real over-withdrawal in
+`_withdraw_superseded_signals` — it discarded signals another binding had authored — now scoped to
+state the withdrawn binding actually authored, with a mutation guard.
 
 ---
 

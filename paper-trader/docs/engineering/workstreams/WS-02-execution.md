@@ -1173,12 +1173,16 @@ reachable partial-restore state). A dynamic trap over `KiteOrderClient` and `Liv
 a full stage → activate → reload → signal → entry → exit → square-off cycle reaches no live
 order seam.
 
-**Known boundary, not closed here.** `active_bindings` re-derives the content address on every
-reload but does **not** re-read the research decision; evidence is verified at activation and at
-resume. A decision withdrawn while a deployment is already active is therefore not noticed until
-the next transition. That is deliberate for now — the cross-plane read is the one door through
-the isolation boundary and putting it on the reload path makes every restart depend on the
-research plane being readable — but it is the first thing to revisit before live authority.
+**The "evidence reload gap" was investigated and is NOT a defect — see
+[ADR 0013](../decisions/0013-research-approval-is-admission-not-a-lease.md).** Research approval
+is an *admission prerequisite* consumed once at activation, not a continuously evaluated lease.
+Authority is created by activation and ends by an execution-plane lifecycle action (pause, retire,
+supersession) — never because research state changed elsewhere. Measured: with every research door
+trapped to raise, a reload still loads the binding, rebuilds the adapter and verifies the content
+address three times, so restart recovery is already independent of the research plane. `resume`
+*does* re-verify evidence, which is the only boundary where stale approval was a genuine risk.
+**Do not implement an evidence re-read on reload.** What newer contradicting research deserves is
+operator *visibility*, which is a read, not a control.
 
 No schema change; migration head stays `0013`. No sizing, routing, risk, live-order or frontend
 change. `(ir_graph, live, authoritative)` remains **NOT APPROVED**.

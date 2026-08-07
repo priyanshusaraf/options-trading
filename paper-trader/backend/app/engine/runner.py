@@ -415,15 +415,36 @@ class EngineRunner:
         **withdrawing authority withdraws the signal it produced.** Skipping the next
         evaluation is only a refusal if it also retracts the last answer.
 
-        Scoped to instruments this deployment *held*, and to a genuine change — a refresh
-        that changes nothing withdraws nothing, and an instrument the paper lane never
-        governed is left alone, because dropping the whole state map would be a different
-        defect wearing this fix's clothes.
+        Scoped three ways, and each one matters:
+
+        * to instruments this deployment *held* — dropping the whole state map would be a
+          different defect wearing this fix's clothes;
+        * to a genuine change — a refresh that re-verifies the same content address
+          withdraws nothing;
+        * to state **this binding actually authored**. A paper deployment can be retired in
+          a window where the instrument's pending signal came from the previous authority
+          instead, and discarding that is over-withdrawal: harmless (a dropped signal never
+          opens a wrong position, and the next scan republishes it) but wrong, because it
+          silences a binding that was never in question.
+
+        The attribution test is the recorded binding's own identity — its origin and the
+        exact content address it carried — recomputed here rather than assumed from the
+        instrument key. State with **no** recorded binding is withdrawn: it cannot open
+        anything (`process_entries` refuses a signal whose author is unknown) and an
+        unattributable pending signal is not something to leave lying next to a withdrawal.
         """
+        from app.core.execution_binding import ORIGIN_PAPER_AUTHORITY
+
         for key, binding in previous.items():
             still = current.get(key)
             if still is not None and still.content_address == binding.content_address:
                 continue
+            executed = self.executed_binding.get(key)
+            if executed is not None and not (
+                    executed.origin == ORIGIN_PAPER_AUTHORITY
+                    and executed.strategy_key == binding.strategy_key
+                    and executed.strategy_version == binding.content_address):
+                continue      # authored by something else; not this withdrawal's business
             # Both, unconditionally. An `or` here short-circuits: popping the state
             # returns a truthy value and the binding is left behind, still available to
             # attribute a fill. That is the whole defect, surviving the fix for it.
