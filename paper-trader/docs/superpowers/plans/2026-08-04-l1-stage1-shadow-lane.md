@@ -119,7 +119,7 @@ owner's decision, not an implementation detail of a later slice.
 
 ---
 
-## 7. L1.3 — execution attribution (2026-08-04)
+## 7. L1.2b — execution attribution (2026-08-04)
 
 **L1.2 canonicalised execution selection authority. This slice canonicalises execution
 attribution.**

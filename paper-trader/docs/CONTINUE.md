@@ -68,7 +68,7 @@ instrument and substitutes nothing; every writer of an engine assignment passes
 viewer and does not adopt the IR runtime in a live path. The wiring changed which code
 answers "what runs here", not what the answer is.
 
-**L1.3 closed execution attribution.** L1.2 canonicalised execution selection authority; L1.3
+**L1.2b closed execution attribution.** L1.2 canonicalised execution selection authority; L1.2b
 canonicalises execution attribution. The binding that produced a signal is carried from the
 scan to the fill, so a stale assignment no longer trades the default while the money record
 names the key that failed to resolve. `publish_signal` writes a signal and its binding through
@@ -76,7 +76,7 @@ one door; a state entry with no binding is a signal whose author is unknown and 
 paths refuse to open on one. No schema change and no migration — all 72 production live trades
 already carry a valid key or the documented `NULL` (ADR 0012 §4.1b).
 
-**Next slice:** managed shadow deployment binding (L1.4), strictly non-authoritative. ADR 0012
+**Next slice:** managed shadow deployment binding (L1.3), strictly non-authoritative. ADR 0012
 §3 designs it; every step that would grant paper or live authority is owner-gated and unbuilt.
 
 ## 2. Repository and remote state
@@ -108,7 +108,7 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-Latest acceptance run on 2026-08-04, for the execution-attribution slice (L1.3):
+Latest acceptance run on 2026-08-04, for the execution-attribution slice (L1.2b):
 
 ```
 $ .venv/bin/python -m pytest tests research_tests
@@ -136,7 +136,7 @@ was wrong; the fix was the wording, not the allowlist. The authority gate does i
 source, and it lives in `app/core/`, outside the executor perimeter, with the engine
 consuming only the verdict.
 
-Two guards had to be repaired before they counted as evidence in L1.3. A mutation
+Two guards had to be repaired before they counted as evidence in L1.2b. A mutation
 ("re-resolve the identity at the fill") stayed green against a test that flipped the
 assignment from inside `open_equity_position` — the attribution argument is evaluated before
 the call, so the window was never open; the test now drives the scan and the entry as
