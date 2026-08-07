@@ -385,7 +385,9 @@ class EngineRunner:
             log.error(f"could not load paper-authority deployments: {e}",
                       event="PAPER_AUTHORITY_LOAD_FAIL")
             return 0
+        previous = self.paper_authority
         self.paper_authority = {b.instrument_key: b for b in bindings}
+        self._withdraw_superseded_signals(previous, self.paper_authority)
         self.paper_authority_problems = problems
         for problem in problems:
             log.warn(f"paper-authority deployment dropped: {problem}",
@@ -396,6 +398,43 @@ class EngineRunner:
                                  f" v{b.graph_version}" for b in bindings),
                      event="PAPER_AUTHORITY_LOADED")
         return len(bindings)
+
+    def _withdraw_superseded_signals(self, previous: dict, current: dict) -> None:
+        """Withdraw the signals a no-longer-authoritative paper deployment already authored.
+
+        **The hazard.** `refresh_paper_authority` runs from the lifecycle routes, i.e. in
+        between a scan and an entry pass. `process_entries` opens from `self.state` and
+        attributes from `self.executed_binding`, neither of which the refresh touched — so
+        an operator retiring a deployment could still have the *previous* tick's signal
+        opened afterwards, and the money record would name a graph that is no longer
+        authorised. Measured, not theorised: before this, `test_a_withdrawn_deployment_
+        opens_no_position` opened one.
+
+        This is the same defect L1.2b closed in `scan_signals`, arriving through the other
+        door. The rule is the same, and it is the one that makes a refusal mean something:
+        **withdrawing authority withdraws the signal it produced.** Skipping the next
+        evaluation is only a refusal if it also retracts the last answer.
+
+        Scoped to instruments this deployment *held*, and to a genuine change — a refresh
+        that changes nothing withdraws nothing, and an instrument the paper lane never
+        governed is left alone, because dropping the whole state map would be a different
+        defect wearing this fix's clothes.
+        """
+        for key, binding in previous.items():
+            still = current.get(key)
+            if still is not None and still.content_address == binding.content_address:
+                continue
+            # Both, unconditionally. An `or` here short-circuits: popping the state
+            # returns a truthy value and the binding is left behind, still available to
+            # attribute a fill. That is the whole defect, surviving the fix for it.
+            dropped_state = self.state.pop(key, None)
+            dropped_binding = self.executed_binding.pop(key, None)
+            if dropped_state is not None or dropped_binding is not None:
+                log.info(
+                    f"withdrew the pending signal for {key}: the paper deployment that "
+                    f"authored it ({binding.graph_identifier} v{binding.graph_version}) is "
+                    f"no longer authoritative",
+                    instrument=key, event="PAPER_AUTHORITY_WITHDRAWN")
 
     def report_foreign_book_positions(self) -> list[str]:
         """Name the open positions belonging to the *other* execution book.

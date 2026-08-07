@@ -322,7 +322,26 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**The pre-L1.4 architecture correction is CLOSED. L1.4 is the next slice.**
+**L1.4 is CLOSED. The next gate is the live-authority design, which is owner-gated.**
+
+**L1.4 — paper-authority runtime hardening (2026-08-07).** 29 deterministic tests
+(`tests/test_paper_authority_runtime.py`) covering restart and exact reload, stale-binding
+withdrawal, exit ownership, kill-switch interaction, refused/failed entries, isolation,
+shadow/paper separation and evidence. **One real defect found and fixed:**
+`refresh_paper_authority` replaced the binding map but left `self.state` and
+`self.executed_binding` intact — and those lifecycle routes run *between* a scan and an entry
+pass, so retiring or pausing a deployment could still let the previous tick's signal open a
+position attributed to a graph that was no longer authorised. The test opened one before the
+fix. `_withdraw_superseded_signals` closes it: withdrawing authority withdraws the signal it
+produced, scoped per instrument. Two mutations proven red and restored byte-for-byte.
+Hard invariant 2 is proven against every form of withdrawal — a graph-opened position is still
+marked, exited and squared off after pause, retirement, unverifiability and disarm.
+**Known boundary:** reload re-derives the content address but does not re-read the research
+decision; evidence is checked at activation and resume only. Revisit before live authority.
+
+---
+
+**The pre-L1.4 architecture correction is CLOSED.**
 
 An architecture and reuse audit was taken at `75809a3` and is recorded at
 [`engineering/reference/architecture-extension-review-2026-08-07.md`](engineering/reference/architecture-extension-review-2026-08-07.md).

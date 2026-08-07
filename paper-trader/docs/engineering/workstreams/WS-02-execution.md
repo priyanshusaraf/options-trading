@@ -1136,3 +1136,49 @@ terminal and rewrites no money record.
 `strategy_version`, and `LiveBroker` would have raised `TypeError` on every real order once
 those parameters were added — the protocol guard only ever compared the paper implementation.
 All three are fixed, the last with a guard of its own.
+
+### Paper-authority runtime hardening — L1.4 (2026-08-07)
+
+L1.3C proved a graph *may* author a paper signal and that the money record names the approved
+artefact. L1.4 asks the operational question: does that hold **through failure and recovery**?
+29 deterministic tests (`tests/test_paper_authority_runtime.py`) cover restart and exact reload,
+withdrawal, exit ownership, the kill switch, refused and failed entries, isolation, shadow/paper
+separation and evidence. No position is waited for — every one is constructed — so nothing here
+depends on the mock feed admitting a fill on a particular bar.
+
+**One real defect found, and it could write a wrong money record.** `refresh_paper_authority`
+replaced the binding map but left `self.state` and `self.executed_binding` alone. Those routes
+run *between* a scan and an entry pass, so an operator retiring or pausing a deployment could
+still have the previous tick's signal opened afterwards — and `process_entries` attributes from
+`executed_binding`, so the `positions` row would name a graph that was no longer authorised.
+Measured, not theorised: the test opened one before the fix.
+
+`_withdraw_superseded_signals` closes it. **Withdrawing authority withdraws the signal it
+produced** — the same rule L1.2b applied in `scan_signals`, arriving through the other door.
+Scoped to instruments the deployment actually held and to a genuine change of content address,
+so an unaffected instrument keeps its signal and a no-op refresh withdraws nothing.
+
+*A second bug lived inside the first fix for about ten minutes:* `if state.pop(...) is not None
+or binding.pop(...) is not None` short-circuits, so the state went and the binding stayed —
+still available to attribute a fill. Both pops are now unconditional, and the mutation that
+restores the `or` reddens the exact assertion about attribution.
+
+**What the tests establish beyond the fix.** Hard invariant 2 holds against every form of
+withdrawal: a position opened by a graph is still marked, exited and squared off after its
+deployment is paused, retired, or made unverifiable — and after a disarm. Two database-level
+guarantees the runtime depends on are confirmed rather than assumed: published graph versions
+are immutable (so bytes cannot move under an active deployment), and the deployment's foreign
+key refuses a dangling graph version (so "the row survived and the artefact did not" is not a
+reachable partial-restore state). A dynamic trap over `KiteOrderClient` and `LiveBroker` proves
+a full stage → activate → reload → signal → entry → exit → square-off cycle reaches no live
+order seam.
+
+**Known boundary, not closed here.** `active_bindings` re-derives the content address on every
+reload but does **not** re-read the research decision; evidence is verified at activation and at
+resume. A decision withdrawn while a deployment is already active is therefore not noticed until
+the next transition. That is deliberate for now — the cross-plane read is the one door through
+the isolation boundary and putting it on the reload path makes every restart depend on the
+research plane being readable — but it is the first thing to revisit before live authority.
+
+No schema change; migration head stays `0013`. No sizing, routing, risk, live-order or frontend
+change. `(ir_graph, live, authoritative)` remains **NOT APPROVED**.

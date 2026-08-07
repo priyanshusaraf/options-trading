@@ -109,6 +109,23 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
+**L1.4 — paper-authority runtime hardening — is closed (2026-08-07).** Exact-version IR paper
+authority is now proven deterministic, isolated, attributable and recoverable through the
+operational conditions an operator actually creates: restart and exact reload, withdrawal
+mid-session, a position open under a paused/retired/unverifiable deployment, disarm, refused
+and failed entries, square-off, and paper/live book isolation. 29 deterministic tests; no
+market data or broker observation required.
+
+It found one real defect. `refresh_paper_authority` withdrew a deployment's *authority* but not
+the *signal it had already authored*, and those routes run between a scan and an entry pass —
+so a retired graph could still open a position carrying its identity. Fixed by
+`_withdraw_superseded_signals`; two mutations proved the guards red and were restored. Hard
+invariant 2 (exits are never gated) is proven to survive every form of withdrawal. **Known
+boundary carried forward:** reload re-verifies the content address but not the research
+decision, so an approval withdrawn while a deployment is active is not noticed until its next
+transition — the first thing to revisit before live authority. `(ir_graph, live,
+authoritative)` remains **NOT APPROVED** and is designed nowhere.
+
 **A pre-L1.4 architecture review was taken and its two corrections are closed (2026-08-07).**
 The review (`engineering/reference/architecture-extension-review-2026-08-07.md`) stress-tested
 twelve candidate product directions against the built code and found **no foundational
