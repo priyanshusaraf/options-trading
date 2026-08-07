@@ -19,6 +19,7 @@ import pytest
 
 from app.core import deployments as dep
 from app.core import execution_binding as binding
+from app.core.execution_book import LIVE as LIVE_BOOK
 from app.core.execution_book import configured_execution_mode
 from app.db.models import LEGACY_DEPLOYMENT_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
@@ -268,17 +269,25 @@ def test_a_binding_that_claims_an_unreviewed_pairing_is_refused_at_consumption(m
     graph_strategy = ir_shadow.pairing_for("expanding_z_v4").adapter()
     monkeypatch.setitem(_REGISTRY, graph_strategy.key, graph_strategy)
 
-    # Every field except the (source, mode) pairing is set to what a *legitimate* binding
-    # would carry — including the process's real execution mode. That is deliberate: with
-    # a blank `execution_mode` the mode check refuses first, the GRANTS lookup is never
-    # reached, and this test passes while proving nothing about it. The mutation harness
-    # caught exactly that and it was fixed here rather than by weakening the harness.
+    # EVERY field is set to what a legitimate binding would carry — a real graph key, its
+    # real content address, a paper-authority origin, and a mode that matches the process.
+    # The single unreviewed thing about it is the pairing itself: `(ir_graph, live)`.
+    #
+    # That precision is the point, and it took two corrections to reach. With a blank
+    # `execution_mode` the mode check refused first; once `(ir_graph, paper)` was granted
+    # in L1.3C, a paper-mode forgery was refused by the origin check instead. Both times
+    # the test passed while proving nothing about `GRANTS`, and both times the mutation
+    # harness said so. `(ir_graph, live)` is now the pairing this project has *not*
+    # reviewed, so membership is the only line that can refuse it.
+    from app.core import execution_binding as mod
+
+    monkeypatch.setattr(mod, "configured_execution_mode", lambda: LIVE_BOOK)
     forged = binding.ExecutionBinding(
         deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
         strategy_key=graph_strategy.key, strategy_version=graph_strategy.version,
         source=binding.SOURCE_IR_GRAPH, authority=binding.AUTHORITATIVE,
-        execution_mode=configured_execution_mode(),
-        origin=binding.ORIGIN_INSTRUMENT, reason="forged")
+        execution_mode=LIVE_BOOK,
+        origin=binding.ORIGIN_PAPER_AUTHORITY, reason="forged")
 
     with pytest.raises(binding.AuthorityNotGranted):
         binding.strategy_for_execution(forged)
@@ -343,9 +352,12 @@ def test_assigning_a_strategy_that_may_not_execute_is_refused_at_the_write(monke
 # ── L1.3B: the reviewed unit is (source, execution_mode) ─────────────────────────
 
 def test_the_reviewed_unit_is_a_source_and_a_mode():
-    """ADR 0012 §6.5. `(ir_graph, paper)` is the grant paper authority would need, and it
-    is deliberately absent — the point of naming the pair is that adding it is a visible,
-    reviewable edit here rather than a consequence of some other change."""
+    """ADR 0012 §6.5 and §7. Naming the pair is what made the paper grant a one-line,
+    reviewable edit — and what keeps the live one from arriving as a side effect of it.
+
+    `(ir_graph, paper)` was granted by the owner on 2026-08-07; the assertion moved with
+    the contract rather than being kept alongside it, because two tests pinning one
+    contract at different shapes means one of them describes code that no longer exists."""
     from app.core.execution_book import LIVE, PAPER
 
     assert binding.GRANTS == frozenset({
@@ -353,17 +365,16 @@ def test_the_reviewed_unit_is_a_source_and_a_mode():
         (binding.SOURCE_HANDWRITTEN, LIVE, binding.AUTHORITATIVE),
         (binding.SOURCE_GENERATED, PAPER, binding.AUTHORITATIVE),
         (binding.SOURCE_GENERATED, LIVE, binding.AUTHORITATIVE),
+        (binding.SOURCE_IR_GRAPH, PAPER, binding.AUTHORITATIVE),
     })
 
 
-def test_ir_graph_is_ungranted_in_every_mode():
-    """The owner gate, stated as a property rather than as a list. L1.3B makes authority
-    mode-aware *without* granting IR anything — that remains ADR 0012 §3.2's decision."""
-    from app.core.execution_book import BOOKS
-
-    for mode in BOOKS:
-        assert (binding.SOURCE_IR_GRAPH, mode, binding.AUTHORITATIVE) not in binding.GRANTS
-        assert (binding.SOURCE_IR_GRAPH, mode, binding.SHADOW) not in binding.GRANTS
+def test_ir_graph_is_ungranted_in_the_live_book():
+    """The owner gate that remains. Live IR authority is the next decision, and no edit
+    made for paper may imply it."""
+    assert (binding.SOURCE_IR_GRAPH, LIVE_BOOK,
+            binding.AUTHORITATIVE) not in binding.GRANTS
+    assert (binding.SOURCE_IR_GRAPH, LIVE_BOOK, binding.SHADOW) not in binding.GRANTS
 
 
 def test_an_unknown_execution_mode_is_refused_rather_than_treated_as_paper(monkeypatch):

@@ -125,10 +125,16 @@ class Broker(Protocol):
     def close(self) -> None: ...
 
     # fills
+    # `strategy_key`/`strategy_version` are the executed identity, passed down from the
+    # runner's canonical binding. Both are on every entry path as of L1.3C: the options
+    # path resolved the binding and refused to open without it, but did not carry it onto
+    # the row, so option positions were written unattributed.
     def open_position(self, inst, direction, q, reason, now, spot,
-                      params=None, plan=None): ...
+                      params=None, plan=None, strategy_key=None,
+                      strategy_version=None): ...
     def open_equity_position(self, inst, direction, price, qty, charge_segment,
                              reason, now, params=None, strategy_key=None,
+                             strategy_version=None,
                              margin=None, sl_pct=None, tp_pct=None): ...
     def close_position(self, pos, exit_premium, reason, now, spot,
                        exit_price_estimated: bool = False): ...

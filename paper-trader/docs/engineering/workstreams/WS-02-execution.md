@@ -1035,3 +1035,34 @@ recomputes the process's real mode at the point of use rather than trusting the 
 binding carries. `ir_shadow_deployments` was **not** widened into a paper deployment table
 — it stays an observer with no capital, no orders, no arm state and no authority. Paper
 authority, if granted, flows through the canonical Deployment/execution-binding path.
+
+
+### IR paper authority — L1.3C (2026-08-07, ADR 0012 §7)
+
+The owner granted `(ir_graph, paper, authoritative)`. An approved immutable graph version
+may now be authoritative for one instrument in the **paper** book; `(ir_graph, live,
+authoritative)` remains absent and is the next gate.
+
+**IR changes who may author the paper signal, and nothing after that point.** There is no IR
+paper trader: `publish_signal`, `process_entries`, sizing, routing, `PaperBroker`,
+`Position`/`Trade`, accounting, exits, reconciliation, risk, kill and restart recovery are
+the existing machinery, untouched.
+
+**The grant is necessary and not sufficient.** This slice registers graph adapters so
+`ir.<identifier>` resolves; if `GRANTS` membership were the whole test, an instrument
+assignment would become authoritative — the L1.2 hazard. A graph-backed binding must also
+carry `ORIGIN_PAPER_AUTHORITY` and match the approved content address, both recomputed at
+the point of use.
+
+**Exact version, three checks.** Activation, every reload, and the gate. A published edit
+does not inherit authority. A mismatch fails closed — the instrument stops trading rather
+than silently trading the default.
+
+**Rollback is named.** `restore_strategy_key` is a required argument with no default; `None`
+means "no previous authority". A target that cannot hold authority is refused. Retirement is
+terminal and rewrites no money record.
+
+**Found while building it:** option fills carried no `strategy_key`, no entry path carried
+`strategy_version`, and `LiveBroker` would have raised `TypeError` on every real order once
+those parameters were added — the protocol guard only ever compared the paper implementation.
+All three are fixed, the last with a guard of its own.

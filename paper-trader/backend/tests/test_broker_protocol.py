@@ -114,17 +114,44 @@ def test_both_brokers_satisfy_the_broker_protocol():
         assert isinstance(getattr(cls, "MODE", None), str)
 
 
+#: Every method the runner calls positionally or by keyword on whichever broker it built.
+_CONTRACT = ("open_position", "open_equity_position", "close_position",
+             "close_equity_position", "ensure_stop_protection",
+             "update_stop_protection", "reconcile_orphans")
+
+
 def test_broker_protocol_signatures_match_the_paper_implementation():
     """A Protocol whose parameter names have drifted from the implementation is a
     lie that type checkers believe. Compare the actual signatures."""
-    for name in ("open_position", "open_equity_position", "close_position",
-                 "close_equity_position", "ensure_stop_protection",
-                 "update_stop_protection", "reconcile_orphans"):
+    for name in _CONTRACT:
         proto = list(inspect.signature(getattr(Broker, name)).parameters)
         impl = list(inspect.signature(getattr(PaperBroker, name)).parameters)
         assert proto == impl, (
             f"Broker.{name}{tuple(proto)} does not match "
             f"PaperBroker.{name}{tuple(impl)}")
+
+
+def test_the_live_broker_accepts_everything_the_paper_broker_does():
+    """The gap this closes, found by L1.3C: adding `strategy_key`/`strategy_version` to
+    the entry paths updated `PaperBroker` and the Protocol, both of which this file
+    checked — and left `LiveBroker` unable to accept the arguments the runner had started
+    passing. Every real order would have raised `TypeError` at the fill.
+
+    Checking only the paper implementation is what made that invisible. `LiveBroker`
+    overrides these methods to place a real order and then delegates, so its signature is
+    a real interface, and it is the one nothing in the suite can exercise end to end.
+    """
+    from app.engine.live_broker import LiveBroker
+
+    for name in _CONTRACT:
+        paper = inspect.signature(getattr(PaperBroker, name)).parameters
+        live = inspect.signature(getattr(LiveBroker, name)).parameters
+        if getattr(LiveBroker, name) is getattr(PaperBroker, name):
+            continue   # inherited unchanged — nothing to drift
+        missing = [n for n in paper if n not in live]
+        assert not missing, (
+            f"LiveBroker.{name} cannot accept {missing} — the runner passes them to "
+            f"whichever broker it built, so this is a TypeError on a real order")
 
 
 # ── neutral vocabulary ────────────────────────────────────────────────────

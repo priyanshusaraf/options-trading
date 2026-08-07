@@ -76,10 +76,18 @@ GRANTS = frozenset({
     (SOURCE_HANDWRITTEN, LIVE, AUTHORITATIVE),
     (SOURCE_GENERATED, PAPER, AUTHORITATIVE),
     (SOURCE_GENERATED, LIVE, AUTHORITATIVE),
+    #: **Granted by the owner on 2026-08-07 (L1.3C).** An approved immutable graph version
+    #: may be authoritative for one instrument in the paper book. `(SOURCE_IR_GRAPH, LIVE,
+    #: AUTHORITATIVE)` is deliberately absent and is the next owner gate.
+    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),
 })
 
 #: Which layer decided the binding. Narrowest that spoke, not narrowest that exists.
 ORIGIN_DEPLOYMENT = "deployment"
+#: A verified paper-authority deployment (`core/paper_authority.py`). The **only** origin
+#: through which a graph-backed key may execute, which is why membership in `GRANTS` is
+#: necessary but not sufficient — see `strategy_for_execution`.
+ORIGIN_PAPER_AUTHORITY = "paper_authority_deployment"
 ORIGIN_INSTRUMENT = "instrument"
 ORIGIN_DEFAULT = "default"
 ORIGIN_FALLBACK = "fallback"
@@ -168,7 +176,43 @@ def strategy_for_execution(binding: ExecutionBinding):
             or (actual, mode, binding.authority) not in GRANTS \
             or binding.authority != AUTHORITATIVE:
         raise AuthorityNotGranted(binding.strategy_key, actual)
-    return resolve_strategy(binding.strategy_key)
+    strategy = resolve_strategy(binding.strategy_key)
+    if actual == SOURCE_IR_GRAPH:
+        _require_paper_authority(binding, strategy, mode)
+    return strategy
+
+
+def _require_paper_authority(binding, strategy, mode) -> None:
+    """The two extra proofs a graph-backed binding must pass, both recomputed here.
+
+    **Why the grant alone is not enough.** This slice registers graph adapters so they are
+    resolvable, which means `POST /api/instruments/NIFTY/strategy {ir.…}` now names
+    something the registry can find. If membership in `GRANTS` were the whole test, that
+    route would be an authoritative paper assignment — the exact hazard L1.2 closed. So the
+    grant says *a graph may execute in paper*, and these say *this one, decided this way*.
+
+    1. **Origin.** Only a verified paper-authority deployment may decide it. An instrument
+       row, a watchlist, the platform default and the fail-safe fallback all still refuse.
+    2. **Exact content address.** The adapter's `version` *is* the graph's content address,
+       so comparing it against the address the deployment approved is what makes authority
+       bind to bytes rather than to a name. A published edit re-registers the same stable
+       key with a different address, and the binding that named the old one stops matching
+       — authority is not inherited, it is re-granted or it is gone.
+
+    Both are recomputed rather than trusted, for the same reason `source_of` is: a binding
+    is a plain dataclass, and a field is a claim.
+
+    **The mode is deliberately not re-checked here.** `GRANTS` above already refuses
+    `(ir_graph, live, authoritative)`, and an earlier draft checked it in both places. That
+    looked like defence in depth and was not: with two lines refusing the same thing,
+    neither could be shown to work — disabling either left the other to catch it, and the
+    mutation harness reported both as vacuous. A layer nobody can watch fail is decoration,
+    not defence. One line, observable, is worth more than two that alibi each other.
+    """
+    if binding.origin != ORIGIN_PAPER_AUTHORITY:
+        raise AuthorityNotGranted(binding.strategy_key, SOURCE_IR_GRAPH)
+    if not binding.strategy_version or binding.strategy_version != strategy.version:
+        raise AuthorityNotGranted(binding.strategy_key, SOURCE_IR_GRAPH)
 
 
 def assert_may_execute(strategy_key: str | None) -> None:
@@ -199,7 +243,7 @@ def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
 
 
 def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
-         assigned_key: str | None) -> ExecutionBinding:
+         assigned_key: str | None, paper_authority=None) -> ExecutionBinding:
     """The decision, with the reads already done — what executes, and on whose say-so.
 
     Split out from `resolve_binding` because the engine resolves a strategy per instrument
@@ -216,6 +260,8 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
     `deployment_pin` is the already-resolved `Strategy` a deployment pins, or `None` for
     the legacy deployment, which pins nothing and resolves per instrument by design.
     """
+    if paper_authority is not None and configured_execution_mode() == PAPER:
+        return _describe_paper_authority(deployment_id, instrument_key, paper_authority)
     if deployment_pin is not None:
         return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                          strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
@@ -223,6 +269,41 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
                                  f"{deployment_pin.key!r}, which overrides any "
                                  f"per-instrument assignment"))
     return _bind_assigned(deployment_id, instrument_key, assigned_key)
+
+
+def _describe_paper_authority(deployment_id, instrument_key,
+                              record) -> ExecutionBinding:
+    """The binding a paper-authority deployment produces, verified as it is produced.
+
+    **Precedence: first.** A record that names *this instrument*, *this interval* and one
+    exact graph version is narrower than a deployment pin (which speaks for a whole book)
+    and narrower than an instrument assignment (which names only a key). Narrowest that
+    spoke wins, as everywhere else here.
+
+    **Only in paper.** The caller checks the mode before reaching this, so in a live
+    process the record is not consulted at all and the instrument resolves exactly as it
+    did before this slice — no refusal, no skipped scan, no change to live behaviour. The
+    gate refuses a forged paper binding separately, at consumption; the two are independent
+    and both are required.
+
+    **Fail closed on a version mismatch.** If the registry now resolves different bytes
+    than the deployment approved, this raises rather than substituting. That means the
+    instrument does not trade, which is the same posture a deployment pin already takes:
+    an authoritative binding that cannot be honoured is not an invitation to trade
+    something else.
+    """
+    strategy = resolve_strategy(record.strategy_key)
+    if not record.content_address or strategy.version != record.content_address:
+        raise AuthorityNotGranted(record.strategy_key, SOURCE_IR_GRAPH)
+    return ExecutionBinding(
+        deployment_id=deployment_id, instrument_key=instrument_key,
+        strategy_key=record.strategy_key, strategy_version=record.content_address,
+        source=SOURCE_IR_GRAPH, authority=AUTHORITATIVE,
+        execution_mode=PAPER, origin=ORIGIN_PAPER_AUTHORITY,
+        reason=(f"paper deployment {record.deployment_row_id} makes "
+                f"{record.graph_identifier!r} v{record.graph_version} "
+                f"({record.content_address[:19]}…) authoritative for {instrument_key} "
+                f"at {record.interval} in the paper book"))
 
 
 def resolve_binding(session, *, deployment_id: int, instrument_key: str) -> ExecutionBinding:
@@ -358,7 +439,8 @@ __all__ = [
     "AUTHORITATIVE", "AUTHORITY_BY_SOURCE", "BINDING_MECHANISMS", "GENERATED_NAMESPACE",
     "GRANTS", "ORIGIN_DEFAULT", "ORIGIN_DEPLOYMENT", "ORIGIN_FALLBACK",
     "ORIGIN_INSTRUMENT", "SHADOW", "SOURCE_GENERATED", "SOURCE_HANDWRITTEN",
-    "SOURCE_IR_GRAPH", "AuthorityNotGranted", "ExecutionBinding", "assert_may_execute",
+    "ORIGIN_PAPER_AUTHORITY", "SOURCE_IR_GRAPH", "AuthorityNotGranted",
+    "ExecutionBinding", "assert_may_execute",
     "bind", "resolve_binding", "resolve_shadow_binding", "source_of", "strategy_for",
     "strategy_for_execution",
 ]

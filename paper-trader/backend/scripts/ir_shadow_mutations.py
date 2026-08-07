@@ -30,6 +30,8 @@ CONFIG = BACKEND / "app" / "core" / "config.py"
 ADAPTER = BACKEND / "app" / "strategy" / "ir_adapter.py"
 BINDING = BACKEND / "app" / "core" / "execution_binding.py"
 BOOK = BACKEND / "app" / "core" / "execution_book.py"
+PAPER_AUTH = BACKEND / "app" / "core" / "paper_authority.py"
+LIVE_BROKER = BACKEND / "app" / "engine" / "live_broker.py"
 BROKER = BACKEND / "app" / "engine" / "broker.py"
 ANALYTICS = BACKEND / "app" / "engine" / "analytics.py"
 SESSION = BACKEND / "app" / "db" / "session.py"
@@ -46,6 +48,10 @@ DEPLOYMENTS = BACKEND / "app" / "core" / "shadow_deployments.py"
 BOOK_TESTS = "tests/test_execution_book.py"
 CAPITAL_TESTS = "tests/test_capital_books.py"
 ISOLATION_TESTS = "tests/test_book_isolation.py"
+PAPER_GATE_TESTS = "tests/test_paper_authority_gate.py"
+PAPER_TESTS = "tests/test_paper_authority.py"
+PAPER_ENGINE_TESTS = "tests/test_paper_authority_engine.py"
+PROTOCOL_TESTS = "tests/test_broker_protocol.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -228,9 +234,9 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "a position is attributed to the raw assignment instead of what executed",
         RUNNER,
         "                        strategy_key=executed.strategy_key,\n"
-        "                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)",
+        "                        strategy_version=executed.strategy_version,",
         "                        strategy_key=self.strategy_keys.get(pickk.instrument_key),\n"
-        "                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)",
+        "                        strategy_version=None,",
         f"{ATTRIBUTION}::"
         "test_a_stale_assignment_is_attributed_to_the_strategy_that_actually_traded",
     ),
@@ -239,8 +245,10 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         # have been covered by the intraday guard.
         "a futures position is attributed to the raw assignment",
         RUNNER,
-        "                strategy_key=executed.strategy_key)",
-        "                strategy_key=self.strategy_keys.get(key))",
+        "                strategy_key=executed.strategy_key,\n"
+        "                strategy_version=executed.strategy_version)",
+        "                strategy_key=self.strategy_keys.get(key),\n"
+        "                strategy_version=None)",
         f"{ATTRIBUTION}::test_the_futures_entry_path_attributes_what_executed",
     ),
     (
@@ -445,14 +453,6 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "::test_unknown_missing_or_malformed_input_fails_closed_to_live",
     ),
     (
-        "ir_graph is granted authority in paper mode",
-        BINDING,
-        "    (SOURCE_GENERATED, LIVE, AUTHORITATIVE),\n})",
-        "    (SOURCE_GENERATED, LIVE, AUTHORITATIVE),\n"
-        "    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),\n})",
-        f"{BINDING_TESTS}::test_ir_graph_is_ungranted_in_every_mode",
-    ),
-    (
         "the gate checks the source alone instead of source and mode",
         BINDING,
         "    if claimed != actual or binding.execution_mode != mode \\\n"
@@ -496,6 +496,123 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "    return []",
         f"{ISOLATION_TESTS}::TestOrphansFromTheOtherBookAreLoud"
         "::test_the_startup_boundary_reports_them",
+    ),
+    # ── L1.3C: IR paper authority ────────────────────────────────────────────────
+    (
+        "the (ir_graph, paper) grant is revoked",
+        BINDING,
+        "    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),\n})",
+        "})",
+        f"{PAPER_GATE_TESTS}::TestTheGrant::test_ir_graph_is_granted_in_paper_mode",
+    ),
+    (
+        "ir_graph is granted authority in the LIVE book",
+        BINDING,
+        "    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),\n})",
+        "    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),\n"
+        "    (SOURCE_IR_GRAPH, LIVE, AUTHORITATIVE),\n})",
+        f"{PAPER_GATE_TESTS}::TestTheGrant::test_ir_graph_is_not_granted_in_live_mode",
+    ),
+    (
+        "the gate stops requiring a paper-authority origin",
+        BINDING,
+        "    if binding.origin != ORIGIN_PAPER_AUTHORITY:",
+        "    if False:",
+        f"{PAPER_GATE_TESTS}::TestTheGrantIsNotSufficientOnItsOwn"
+        "::test_an_instrument_assignment_of_the_same_graph_is_still_refused",
+    ),
+    (
+        "exact content-address verification is bypassed at the gate",
+        BINDING,
+        "    if not binding.strategy_version or binding.strategy_version != strategy.version:",
+        "    if False:",
+        f"{PAPER_GATE_TESTS}::TestExactVersionAtTheMomentOfUse"
+        "::test_an_edited_graph_does_not_inherit_authority",
+    ),
+    (
+        "a newer graph version inherits authority at bind time",
+        BINDING,
+        "    if not record.content_address or strategy.version != record.content_address:",
+        "    if False:",
+        f"{PAPER_ENGINE_TESTS}::TestExactVersion"
+        "::test_a_binding_whose_adapter_no_longer_matches_refuses_rather_than_substituting",
+    ),
+    (
+        "a paper deployment is consulted in a live process",
+        BINDING,
+        "    if paper_authority is not None and configured_execution_mode() == PAPER:",
+        "    if paper_authority is not None:",
+        f"{PAPER_ENGINE_TESTS}::TestLiveModeIsUnaffected"
+        "::test_the_same_deployment_is_not_authoritative_in_a_live_process",
+    ),
+    (
+        "evidence approval is bypassed at activation",
+        PAPER_AUTH,
+        "    decision = _require_evidence(row)",
+        "    decision = verified_decision(project_id=row.project_id,\n"
+        "                                 graph_identifier=row.graph_identifier,\n"
+        "                                 graph_version=row.graph_version) or {}",
+        f"{PAPER_TESTS}::TestActivation::test_rejected_evidence_fails_closed",
+    ),
+    (
+        "the reload stops re-deriving the content address",
+        PAPER_AUTH,
+        "            if address != row.graph_content_address:\n"
+        "                raise BindingUnverifiable(",
+        "            if False:\n"
+        "                raise BindingUnverifiable(",
+        f"{PAPER_TESTS}::TestActiveBindings"
+        "::test_reload_drops_a_binding_whose_recorded_address_disagrees",
+    ),
+    (
+        "paused and retired deployments resurrect on restart",
+        PAPER_AUTH,
+        "        .where(IrPaperDeployment.state == PAPER_ACTIVE)",
+        "        .where(IrPaperDeployment.state != RETIRED)",
+        f"{PAPER_ENGINE_TESTS}::TestRestart::test_a_paused_deployment_does_not_resurrect",
+    ),
+    (
+        # Importing the shadow module in place of the paper one is a NO-OP defect: it has
+        # no `register_active_adapters`, so the call raises, the broad handler catches it
+        # and the runner ends up with no bindings — which is what the guard asserts anyway.
+        # The harness caught that as vacuous. The defect has to be the plausible one: a
+        # fallback that treats an observed graph as an authoritative one when no paper
+        # record exists.
+        "a shadow deployment is treated as a paper-authority record",
+        RUNNER,
+        "        self.paper_authority = {b.instrument_key: b for b in bindings}",
+        "        from app.core import shadow_deployments as _sd\n"
+        "        with SessionLocal() as _s:\n"
+        "            bindings = bindings or _sd.active_bindings(_s)\n"
+        "        self.paper_authority = {b.instrument_key: b for b in bindings}",
+        f"{PAPER_ENGINE_TESTS}::TestBindingThroughTheRunner"
+        "::test_a_shadow_deployment_does_not_confer_paper_authority",
+    ),
+    (
+        "the rollback target is inferred instead of named",
+        PAPER_AUTH,
+        "    _validate_rollback_target(restore_strategy_key)",
+        "    restore_strategy_key = restore_strategy_key or 'expanding_z_v4'",
+        f"{PAPER_TESTS}::TestRollback"
+        "::test_retiring_with_no_previous_authority_leaves_the_instrument_unassigned",
+    ),
+    (
+        "the executed identity is re-resolved at the fill instead of carried",
+        RUNNER,
+        "                    strategy_key=executed.strategy_key,\n"
+        "                    strategy_version=executed.strategy_version)",
+        "                    strategy_key=self.strategy_keys.get(c.instrument_key),\n"
+        "                    strategy_version=None)",
+        f"{PAPER_ENGINE_TESTS}::TestAttributionOnARealPaperFill"
+        "::test_the_position_records_the_exact_graph_that_produced_it",
+    ),
+    (
+        "the live broker cannot accept what the runner passes it",
+        LIVE_BROKER,
+        "                      params=None, plan=None, strategy_key=None,\n"
+        "                      strategy_version=None):",
+        "                      params=None, plan=None):",
+        f"{PROTOCOL_TESTS}::test_the_live_broker_accepts_everything_the_paper_broker_does",
     ),
 ]
 

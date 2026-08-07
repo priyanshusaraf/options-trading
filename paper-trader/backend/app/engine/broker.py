@@ -109,7 +109,9 @@ class PaperBroker:
     # ── fills ─────────────────────────────────────────────────────────────
     def open_position(self, inst: Instrument, direction: str, q: OptionQuote,
                       reason: str, now: dt.datetime, spot: float,
-                      params: dict | None = None, plan=None) -> Position:
+                      params: dict | None = None, plan=None,
+                      strategy_key: str | None = None,
+                      strategy_version: str | None = None) -> Position:
         # `plan` (routing decision) is used by LiveBroker to choose market/limit;
         # the paper broker ignores it and fills at the quote.
         qty, premium = q.lot_size, q.ltp
@@ -138,6 +140,13 @@ class PaperBroker:
             last_premium=premium, last_spot=spot,
             last_mark_time=now, high_water_premium=premium,
             mfe=0.0, mae=0.0,   # seeded at the 0 excursion at entry (E0.3)
+            # The identity of the logic that actually produced this fill, passed in from
+            # the runner's canonical binding. The options path resolved that binding and
+            # refused to open without it, but did not carry it onto the row — so every
+            # option position was written unattributed. Latent until L1.3C, because
+            # production runs `max_open_positions=0`; reachable the moment a graph became
+            # authoritative, which is the slice that found it.
+            strategy_key=strategy_key, strategy_version=strategy_version,
             mode=self.MODE,
         )
         self.s.add(pos)
@@ -155,6 +164,7 @@ class PaperBroker:
                              qty: int, charge_segment: str, reason: str,
                              now: dt.datetime, params: dict | None = None,
                              strategy_key: str | None = None,
+                             strategy_version: str | None = None,
                              margin: float | None = None,
                              sl_pct: float | None = None,
                              tp_pct: float | None = None) -> Position:
@@ -192,6 +202,7 @@ class PaperBroker:
             instrument_key=inst.key, direction=direction, option_type="EQ",
             tradingsymbol=getattr(inst, "spot_symbol", "") or inst.key,
             exchange=charge_segment, segment="equity_intraday", strategy_key=strategy_key,
+            strategy_version=strategy_version,
             strike=0.0, expiry=now.date(), lot_size=qty, qty=qty, entry_premium=price,
             entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
             entry_reason=reason, stop_price=stop, target_price=target,
@@ -237,6 +248,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
+            strategy_version=pos.strategy_version,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
@@ -338,7 +350,8 @@ class PaperBroker:
                               qty: int, charge_segment: str, reason: str,
                               now: dt.datetime, expiry: dt.date,
                               margin: float, params: dict | None = None,
-                              strategy_key: str | None = None) -> Position:
+                              strategy_key: str | None = None,
+                              strategy_version: str | None = None) -> Position:
         """Open an index-futures position of `qty` units at the FUTURES price.
 
         Deliberately a near-copy of `open_equity_position` rather than a shared
@@ -379,6 +392,7 @@ class PaperBroker:
             instrument_key=inst.key, direction=direction, option_type="FUT",
             tradingsymbol=getattr(inst, "option_name", "") or inst.key,
             exchange=charge_segment, segment="index_futures", strategy_key=strategy_key,
+            strategy_version=strategy_version,
             strike=0.0, expiry=expiry, lot_size=qty, qty=qty, entry_premium=price,
             entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
             entry_reason=reason, stop_price=stop, target_price=target,
@@ -419,6 +433,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="FUT", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="index_futures", strategy_key=pos.strategy_key,
+            strategy_version=pos.strategy_version,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
@@ -574,6 +589,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
+            strategy_version=pos.strategy_version,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=cost_slice,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,

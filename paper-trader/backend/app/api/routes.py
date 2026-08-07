@@ -1148,3 +1148,135 @@ def transition_shadow_deployment(row_id: int, action: str, body: ShadowTransitio
     # be a decision the operator can see and the loop cannot.
     _runner(request).refresh_shadow_deployments()
     return result
+
+
+class PaperDeploymentIn(BaseModel):
+    """What a client may say when staging paper authority.
+
+    Note what is absent and cannot be added by a caller: `execution_mode`, `authority`,
+    `runtime_source`, `strategy_key` and `graph_content_address`. The mode and authority are
+    the owner's reviewed grant, not a request field; the strategy key and the address are
+    *derived* from the artefact the request names, so a client cannot assert an identity the
+    bytes do not have.
+    """
+
+    project_id: str
+    graph_identifier: str
+    graph_version: int
+    instrument_key: str
+    interval: str
+    deployment_id: int | None = None
+    note: str = ""
+
+
+class PaperTransitionIn(BaseModel):
+    revision: int
+
+
+class PaperRetireIn(BaseModel):
+    """Retirement names where authority goes back to, explicitly.
+
+    `restore_strategy_key` has no default. Omitting it is a 422, and that is the point:
+    "roll back" without a named target is a request for the server to guess which strategy
+    should trade an instrument, and silent substitution is the failure this project has
+    closed twice. `null` is a valid, different answer — "there was no previous authority".
+    """
+
+    revision: int
+    restore_strategy_key: str | None
+
+
+@router.get("/api/ir-paper/deployments")
+def list_paper_deployments(include_retired: bool = False):
+    """Paper-authoritative IR deployments (L1.3C).
+
+    Typed contract only — no frontend here. Every row states its project, exact graph
+    version and content address, verified evidence lineage, instrument, interval, admission
+    verdict, rollback target and lifecycle state, so "what is trading paper, on whose
+    approval, at which version" needs no prose reconstruction.
+    """
+    from app.core import paper_authority
+
+    with SessionLocal() as s:
+        return {"deployments": paper_authority.listing(
+            s, include_retired=include_retired)}
+
+
+@router.post("/api/ir-paper/deployments")
+def stage_paper_deployment(body: PaperDeploymentIn, request: Request):
+    """Stage paper authority. Staging confers none — activation does, and it is a separate
+    call because it is the one that verifies evidence and admission."""
+    from app.core import paper_authority
+
+    with SessionLocal() as s:
+        try:
+            row = paper_authority.stage(
+                s, project_id=body.project_id, graph_identifier=body.graph_identifier,
+                graph_version=body.graph_version,
+                deployment_id=(body.deployment_id
+                               if body.deployment_id is not None
+                               else _runner(request).deployment_id),
+                instrument_key=body.instrument_key, interval=body.interval,
+                note=body.note)
+            s.commit()
+        except paper_authority.PaperAuthorityError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        return row.to_dict()
+
+
+@router.post("/api/ir-paper/deployments/{row_id}/{action}")
+def transition_paper_deployment(row_id: int, action: str, body: PaperTransitionIn,
+                                request: Request):
+    """Move a paper deployment through its lifecycle, revision-guarded.
+
+    Three verbs only. `retire` is deliberately not among them: it is the one transition
+    that hands authority back, and it needs a named target, so it has its own route with
+    its own body rather than sharing a shape that would let the target be omitted.
+
+    No field here can name a mode. Live authority is not reachable from an HTTP call.
+    """
+    from app.core import paper_authority
+
+    moves = {"activate": paper_authority.activate,
+             "pause": paper_authority.pause,
+             "resume": paper_authority.resume}
+    if action not in moves:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown transition {action!r}; expected one of "
+                                   f"{sorted(moves)} (retirement has its own route "
+                                   f"because it must name a rollback target)")
+    with SessionLocal() as s:
+        try:
+            row = moves[action](s, row_id, revision=body.revision)
+            s.commit()
+        except paper_authority.RevisionConflict as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        except paper_authority.PaperAuthorityError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        result = row.to_dict()
+    _runner(request).refresh_paper_authority()
+    return result
+
+
+@router.post("/api/ir-paper/deployments/{row_id}/retire")
+def retire_paper_deployment(row_id: int, body: PaperRetireIn, request: Request):
+    """Retire a paper deployment and hand authority to the named target.
+
+    Terminal. The engine is refreshed before this returns, so the operator's decision and
+    the running loop cannot disagree about who is authoritative.
+    """
+    from app.core import paper_authority
+
+    with SessionLocal() as s:
+        try:
+            row = paper_authority.retire(
+                s, row_id, revision=body.revision,
+                restore_strategy_key=body.restore_strategy_key)
+            s.commit()
+        except paper_authority.RevisionConflict as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        except paper_authority.PaperAuthorityError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        result = row.to_dict()
+    _runner(request).refresh_paper_authority()
+    return result

@@ -1294,6 +1294,137 @@ class IrShadowDivergence(Base):
     market_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class IrPaperDeployment(Base):
+    """A **paper-authoritative** deployment of one immutable graph version to one instrument.
+
+    L1.3C, and the first record in this codebase that lets IR output create execution
+    state. It states, durably and with lineage:
+
+        *this approved graph version is authoritative for this instrument at this interval
+        in the PAPER book, on this evidence, at this revision*
+
+    and it is structurally unable to state the same thing about the live book.
+
+    **Why this is not `ir_shadow_deployments` with a wider CHECK.** That object is an
+    observer: no capital, no orders, no arm state, no authority, and a service with no mode
+    parameter. Widening it would make one row mean either "watched" or "traded" depending
+    on a column, which is exactly the collapse ADR 0012 keeps refusing. Two tables, two
+    vocabularies, two locks.
+
+    **Why this is not a second deployment model either.** The `Deployment` row remains THE
+    execution object — it owns the account, the universe, the parameters, the allocation
+    and the arm. This record attaches to one, and adds only what a `Deployment` cannot
+    carry: which exact graph version, verified by what evidence, for which instrument and
+    interval. `deployment_id` is a column here for the same reason it is on `positions`.
+
+    **Why the lifecycle lives here rather than on `Deployment.status`.** The engine pins
+    `deployment_id = LEGACY_DEPLOYMENT_ID`; one deployment runs, and every instrument in
+    the book shares its status. Pausing one graph binding by pausing that deployment would
+    stop the whole book. The lifecycle is therefore per-binding, for the same reason
+    L1.3A's is (ADR 0012 §3.1a).
+
+    **Why `execution_mode` and `authority` are CHECK-constrained columns.** The owner
+    granted `(ir_graph, paper, authoritative)` and nothing else. A column the database
+    refuses to set to `live` cannot be widened by a route, a data fix, a restart path or a
+    mistaken service call — only by a reviewed schema change. `GRANTS` is the gate; this is
+    the lock on the same door; they fail closed independently.
+
+    **`rollback_strategy_key` is explicit and nullable.** Retiring a binding must restore a
+    *named* previous authority or none at all. Inferring the target at runtime — "whatever
+    the instrument row said before", "the default" — is the silent-substitution failure
+    this project has closed twice already. NULL means "there was no previous authority",
+    which is a different statement from "we will work it out later".
+    """
+
+    __tablename__ = "ir_paper_deployments"
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["graph_identifier", "graph_version"],
+                             ["graph_versions.graph_identifier", "graph_versions.version"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["deployment_id"], ["deployments.id"], ondelete="RESTRICT"),
+        # One live paper authority per (deployment, instrument, interval). Retired rows are
+        # excluded so superseding frees the slot without deleting what once traded there.
+        Index("uq_ir_paper_deployment_active", "deployment_id", "instrument_key",
+              "interval", unique=True,
+              sqlite_where=text("state IN ('staged','paper_active','paused')")),
+        Index("ix_ir_paper_deployments_state", "state"),
+        CheckConstraint("runtime_source = 'ir_graph'",
+                        name="ck_ir_paper_deployment_source"),
+        CheckConstraint("execution_mode = 'paper'",
+                        name="ck_ir_paper_deployment_mode"),
+        CheckConstraint("authority = 'authoritative'",
+                        name="ck_ir_paper_deployment_authority"),
+        CheckConstraint("state IN ('staged','paper_active','paused','retired')",
+                        name="ck_ir_paper_deployment_state"),
+        CheckConstraint("graph_version >= 1", name="ck_ir_paper_deployment_version"),
+        CheckConstraint("revision >= 0", name="ck_ir_paper_deployment_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: The exact immutable artefact. An edit mints a new version and cannot inherit this row.
+    graph_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    graph_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Recorded at activation, re-derived on every reload, and re-checked against the
+    #: resolved adapter at the authority gate. Three independent places, on purpose.
+    graph_content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_content_address: Mapped[str] = mapped_column(String(71), nullable=False,
+                                                          default="", server_default="")
+    evidence_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    deployment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    instrument_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    interval: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: The stable key the adapter registers under — identity across edits, not of a build.
+    strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Where authority returns when this binding retires. Explicit; NULL means "none".
+    rollback_strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    runtime_source: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                default="ir_graph",
+                                                server_default="ir_graph")
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                default="paper", server_default="paper")
+    authority: Mapped[str] = mapped_column(String(20), nullable=False,
+                                           default="authoritative",
+                                           server_default="authoritative")
+    admission_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                               server_default="0")
+    admission_reason: Mapped[str] = mapped_column(String(400), nullable=False,
+                                                  default="", server_default="")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="staged",
+                                       server_default="staged")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                          server_default="0")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "project_id": self.project_id,
+            "graph_identifier": self.graph_identifier,
+            "graph_version": self.graph_version,
+            "graph_content_address": self.graph_content_address,
+            "evidence_run_id": self.evidence_run_id,
+            "evidence_candidate_id": self.evidence_candidate_id,
+            "evidence_content_address": self.evidence_content_address,
+            "evidence_verified_at": (self.evidence_verified_at.isoformat()
+                                     if self.evidence_verified_at else None),
+            "deployment_id": self.deployment_id,
+            "instrument_key": self.instrument_key, "interval": self.interval,
+            "strategy_key": self.strategy_key,
+            "rollback_strategy_key": self.rollback_strategy_key,
+            "runtime_source": self.runtime_source,
+            "execution_mode": self.execution_mode, "authority": self.authority,
+            "admission_ok": self.admission_ok, "admission_reason": self.admission_reason,
+            "state": self.state, "revision": self.revision, "note": self.note,
+        }
+
+
 class IrShadowDeployment(Base):
     """A managed, **non-authoritative** shadow deployment of one immutable graph version.
 

@@ -124,6 +124,12 @@ class EngineRunner:
         # broker that was actually built rather than from configuration, because that
         # object is the one doing the writing (`core/execution_book.py`).
         self.book = execution_book.book_of(self.broker)
+        # Paper-authoritative IR deployments, by instrument. Loaded at the startup
+        # boundary rather than here, for the same reason the shadow deployments are —
+        # construction must not read the database. Empty until then, which is what an
+        # engine that has not started operating should believe.
+        self.paper_authority: dict = {}
+        self.paper_authority_problems: list[str] = []
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
@@ -322,7 +328,8 @@ class EngineRunner:
         return execution_binding.bind(
             deployment_id=self.deployment_id, instrument_key=key,
             deployment_pin=self._deployment_pin,
-            assigned_key=self.strategy_keys.get(key))
+            assigned_key=self.strategy_keys.get(key),
+            paper_authority=self.paper_authority.get(key))
 
     def _execution_for(self, key: str):
         """The binding and the `Strategy` it authorises, together.
@@ -345,6 +352,50 @@ class EngineRunner:
         Neither is caught here: the caller decides what a refusal means for its lane.
         """
         return self._execution_for(key)[1]
+
+    def refresh_paper_authority(self) -> int:
+        """Reload the paper-authoritative IR deployments, re-verifying and registering each.
+
+        A controlled boundary — process start, and whenever an operator changes a binding —
+        never a per-tick read. Two things happen here and both are deliberate:
+
+        * every active binding's content address is re-derived from the stored artefact
+          bytes, and a mismatch drops the binding and is reported rather than repaired;
+        * each surviving graph's adapter is registered in the ONE strategy registry, so a
+          graph-backed key resolves like any other strategy.
+
+        Registration confers nothing. `execution_binding` still refuses a graph-backed key
+        unless the binding came from one of these records *and* the adapter's address still
+        matches — resolvability and authority are different questions, and answering them
+        with the same lookup is the L1.2 hazard.
+
+        A live process loads these too. It has to: `/api/health` should be able to say what
+        is deployed, and the refusal must come from the authority boundary rather than from
+        an absence. `bind` does not consult them when the mode is not paper, so live
+        selection is byte-for-byte what it was.
+        """
+        from app.core import paper_authority
+
+        problems: list[str] = []
+        try:
+            with SessionLocal() as s:
+                bindings = paper_authority.register_active_adapters(
+                    s, on_problem=problems.append)
+        except Exception as e:
+            log.error(f"could not load paper-authority deployments: {e}",
+                      event="PAPER_AUTHORITY_LOAD_FAIL")
+            return 0
+        self.paper_authority = {b.instrument_key: b for b in bindings}
+        self.paper_authority_problems = problems
+        for problem in problems:
+            log.warn(f"paper-authority deployment dropped: {problem}",
+                     event="PAPER_AUTHORITY_DROPPED")
+        if bindings:
+            log.info(f"{len(bindings)} paper-authoritative IR deployment(s) loaded: "
+                     + ", ".join(f"{b.instrument_key}={b.graph_identifier}"
+                                 f" v{b.graph_version}" for b in bindings),
+                     event="PAPER_AUTHORITY_LOADED")
+        return len(bindings)
 
     def report_foreign_book_positions(self) -> list[str]:
         """Name the open positions belonging to the *other* execution book.
@@ -1589,8 +1640,11 @@ class EngineRunner:
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
                          + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
-                pos = self.broker.open_position(inst, direction, pick.chosen,
-                                                pick.reason, now, chain.spot, self.params, plan=plan)
+                pos = self.broker.open_position(
+                    inst, direction, pick.chosen, pick.reason, now, chain.spot,
+                    self.params, plan=plan,
+                    strategy_key=executed.strategy_key,
+                    strategy_version=executed.strategy_version)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
                 # H2 — seed the ratchet for a risk_model strategy so this position is
@@ -1663,6 +1717,7 @@ class EngineRunner:
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
                         strategy_key=executed.strategy_key,
+                        strategy_version=executed.strategy_version,
                         margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)
                     if pos is None:
                         continue
@@ -1767,7 +1822,8 @@ class EngineRunner:
                 inst, direction, float(price), qty, "NFO_FUT",
                 f"FUTURES {direction}", now, expiry, margin=margin,
                 params=self.params,
-                strategy_key=executed.strategy_key)
+                strategy_key=executed.strategy_key,
+                strategy_version=executed.strategy_version)
             if pos is None:
                 continue
             slots -= 1
@@ -2684,6 +2740,7 @@ class EngineRunner:
         # — a flake that pointed at the wrong code entirely. Startup is the restart
         # boundary the requirement names, and it is where the read belongs.
         self.refresh_shadow_deployments()
+        self.refresh_paper_authority()
         self.report_foreign_book_positions()
         log.info(f"engine started — provider={self.provider.name}, "
                  f"enabled={sorted(self.enabled)}")

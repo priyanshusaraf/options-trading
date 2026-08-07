@@ -198,7 +198,8 @@ class LiveBroker(PaperBroker):
         return {"kind": "equity", "order_id": row.order_id, "inst": inst,
                 "direction": ctx["direction"], "charge_segment": ctx.get("charge_segment", ""),
                 "reason": ctx.get("reason", "recovered"), "params": ctx.get("params"),
-                "strategy_key": ctx.get("strategy_key")}
+                "strategy_key": ctx.get("strategy_key"),
+                "strategy_version": ctx.get("strategy_version")}
 
     def recover_journal(self, now) -> list:
         """H13: on startup, replay WORKING journal rows — the in-memory in-flight
@@ -406,7 +407,8 @@ class LiveBroker(PaperBroker):
         return 0, 0.0
 
     def open_position(self, inst, direction, q, reason, now, spot,
-                      params=None, plan=None):
+                      params=None, plan=None, strategy_key=None,
+                      strategy_version=None):
         # never two working bot orders on one contract — resolve any prior in-flight
         # order for this symbol first (cancel a stuck one; abort if one already filled).
         if not self._ensure_no_inflight(q.tradingsymbol):
@@ -439,7 +441,9 @@ class LiveBroker(PaperBroker):
         # book the ACTUAL filled qty at the ACTUAL fill price (not the snapshot ltp).
         pos = super().open_position(inst, direction,
                                     replace(q, ltp=avg, lot_size=filled),
-                                    reason, now, spot, params)
+                                    reason, now, spot, params,
+                                    strategy_key=strategy_key,
+                                    strategy_version=strategy_version)
         pos.lot_size = q.lot_size   # qty reflects the real fill; lot_size stays the true lot
         self.s.commit()
         if filled < q.lot_size:
@@ -455,7 +459,8 @@ class LiveBroker(PaperBroker):
         return pos
 
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
-                             now, params=None, strategy_key=None, margin=None,
+                             now, params=None, strategy_key=None,
+                             strategy_version=None, margin=None,
                              sl_pct=None, tp_pct=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
@@ -473,7 +478,8 @@ class LiveBroker(PaperBroker):
                          tag=TAG, product=product_for_segment(charge_segment)),
             intent="ENTRY", kind="equity",
             context={"inst_key": inst.key, "direction": direction, "charge_segment": charge_segment,
-                     "reason": reason, "params": params, "strategy_key": strategy_key})
+                     "reason": reason, "params": params, "strategy_key": strategy_key,
+                     "strategy_version": strategy_version})
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(tsym, res)
@@ -484,7 +490,8 @@ class LiveBroker(PaperBroker):
                     "kind": "equity",
                     "order_id": res.order_id, "inst": inst, "direction": direction,
                     "charge_segment": charge_segment, "reason": reason, "params": params,
-                    "strategy_key": strategy_key, "sl_pct": sl_pct, "tp_pct": tp_pct}
+                    "strategy_key": strategy_key, "strategy_version": strategy_version,
+                    "sl_pct": sl_pct, "tp_pct": tp_pct}
             log.error(f"LIVE EQUITY OPEN not filled [{res.status}] {tsym} — {res.reason}",
                       instrument=inst.key, event="LIVE_EQUITY_OPEN_FAIL")
             self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} {res.status}: {res.reason}")
@@ -493,6 +500,7 @@ class LiveBroker(PaperBroker):
         fill_margin = (margin * filled / qty) if (margin and margin > 0 and qty) else None
         pos = super().open_equity_position(inst, direction, avg, filled, charge_segment,
                                            reason, now, params, strategy_key,
+                                           strategy_version,
                                            margin=fill_margin, sl_pct=sl_pct, tp_pct=tp_pct)
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
@@ -1110,7 +1118,9 @@ class LiveBroker(PaperBroker):
                         q = ctx["q"]
                         pos = super().open_position(
                             inst, ctx["direction"], replace(q, ltp=avg, lot_size=filled),
-                            ctx["reason"], now, ctx["spot"], ctx["params"])
+                            ctx["reason"], now, ctx["spot"], ctx["params"],
+                            strategy_key=ctx.get("strategy_key"),
+                            strategy_version=ctx.get("strategy_version"))
                         pos.lot_size = q.lot_size
                         self.s.commit()
                         self._place_gtt(pos, avg)
@@ -1118,6 +1128,7 @@ class LiveBroker(PaperBroker):
                         pos = super().open_equity_position(
                             inst, ctx["direction"], avg, filled, ctx["charge_segment"],
                             ctx["reason"], now, ctx["params"], ctx["strategy_key"],
+                            ctx.get("strategy_version"),
                             sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"))
                         self._place_equity_stop(pos, avg)
                     log.warn(f"ADOPTED late fill {sym} {filled}@{avg:.2f} — was untracked; "

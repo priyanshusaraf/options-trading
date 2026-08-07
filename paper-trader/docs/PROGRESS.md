@@ -167,9 +167,34 @@ granting IR paper authority later is one visible line rather than a side effect.
 recomputes both source and mode at the point of use, so a hand-built binding cannot launder
 itself past it.
 
-**The live owner gate: ADR 0012 §3.2, paper authority.** Designed, unbuilt. Nothing may let
-IR output influence simulated or live orders, positions, accounting, sizing, routing, exits,
-reconciliation or risk without explicit approval.
+**L1.3C granted `(ir_graph, paper, authoritative)`.** An approved immutable graph version
+can now be authoritative for one instrument **in the paper book** — the first slice where IR
+output creates execution state. `ir_paper_deployments` (migration `0013`) +
+`app/core/paper_authority.py`: eleven identities, staged / paper-active / paused / retired,
+revision-guarded, evidence verified through the read-only bridge, and the content address
+checked in three independent places (activation, every reload, and the authority gate
+against the adapter the registry resolves).
+
+The grant is **not sufficient on its own**. Because this slice registers graph adapters, a
+plain instrument assignment would otherwise become authoritative — so a graph-backed binding
+must also carry `ORIGIN_PAPER_AUTHORITY` and match the approved content address exactly. A
+published edit therefore does not inherit authority; it is re-granted or it is gone.
+
+Rollback names its target: `retire(..., restore_strategy_key=...)` is required, `None` means
+"no previous authority", and nothing is inferred at runtime. Money records are never
+rewritten.
+
+**Two defects the slice found and fixed.** Option fills were written with
+`strategy_key=NULL` (the path resolved the binding, refused without it, then dropped it), and
+`strategy_version` was stamped on no entry path at all. And `LiveBroker` would have raised
+`TypeError` on every real order once those parameters were added, because the protocol guard
+compared only the *paper* implementation — now closed by
+`test_the_live_broker_accepts_everything_the_paper_broker_does`.
+
+**The live owner gate: `(ir_graph, live, authoritative)`.** Absent, unbuilt, and reachable
+only through three independent reviewed changes — the grant, a table whose CHECK permits it,
+and a service able to write it. Live authority additionally reaches `LiveBroker`,
+`KiteOrderClient` and the real order seam, none of which paper authority touches.
 
 **Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
 market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,

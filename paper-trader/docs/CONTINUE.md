@@ -99,8 +99,17 @@ broker can only fake a live close — so `foreign_book_positions` reports the ot
 open rows at startup and on `/api/health`. Authority is now a reviewed
 `(source, execution_mode)` pair; `(ir_graph, paper)` is **absent**.
 
-**Owner gate, now the live one:** ADR 0012 §3.2 — paper authority as a source-and-mode pair
-— is designed and **not built**. Nothing may let IR output influence simulated or live
+**L1.3C shipped IR paper authority.** `(ir_graph, paper, authoritative)` is granted;
+`(ir_graph, live, authoritative)` is not. `ir_paper_deployments` (migration `0013`) +
+`app/core/paper_authority.py` bind an approved graph version to one instrument and interval
+in the paper book, with verified evidence, a staged/paper-active/paused/retired lifecycle,
+and an explicit named rollback target. The grant alone does not confer authority — a
+graph-backed binding must also come from a paper-authority record and match the approved
+content address, recomputed at the gate. Attribution now carries `strategy_key` **and**
+`strategy_version` on all three entry paths and onto the `Trade` row.
+
+**Owner gate, now the live one:** `(ir_graph, live, authoritative)` — designed nowhere and
+**not built**. Nothing may let IR output influence simulated or live
 orders, positions, accounting, sizing, routing, exits, reconciliation or risk without
 explicit approval. The design is presented separately.
 
