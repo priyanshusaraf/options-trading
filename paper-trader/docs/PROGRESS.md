@@ -124,13 +124,17 @@ selection path changed and the selection did not. The deployment pin has a produ
 for the first time (`NULL` today, so behaviour is unchanged). A refusal skips the instrument
 and substitutes nothing.
 
-**The next bounded slice: route attribution through the binding too.** Selection now goes
-through the contract; the `strategy_key` stamped onto a position does not, so a stale
-assignment trades the default while the money record names the key that failed to resolve
-(ADR 0012 §4.1). It was left alone deliberately — fixing it changes what is written to money
-records, which is outside a behaviour-preserving refactor. After that, the paper/shadow
-deployment architecture designed in ADR 0012 §3, which needs owner approval before any of it
-becomes authoritative.
+**And attribution follows selection.** L1.2 canonicalised execution selection authority; the
+next slice canonicalised execution attribution. The binding that produced a signal is carried
+from the scan to the fill, so a stale assignment no longer trades the default while the money
+record names the key that failed to resolve. `publish_signal` writes the signal and its
+binding through one door — a state entry with no binding is a signal whose author is unknown,
+and the entry paths refuse to open on one. No schema change and no migration: all 72
+production live trades already carry a valid key or the documented `NULL`, so the defect was
+latent (ADR 0012 §4.1b).
+
+**The next bounded slice: managed shadow deployment binding** — strictly non-authoritative,
+per ADR 0012 §3, which needs owner approval before any of it becomes authoritative.
 
 **Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
 market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,

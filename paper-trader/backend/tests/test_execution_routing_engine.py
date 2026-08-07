@@ -15,8 +15,9 @@ def _runner():
 
 
 def _long_signal(r):
-    r.state["NIFTY"] = {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
-                        "close": 100.0, "long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
+                                           "close": 100.0, "long_exit": False, "short_exit": False})
 
 
 def test_engine_skips_entry_when_router_says_skip(monkeypatch):

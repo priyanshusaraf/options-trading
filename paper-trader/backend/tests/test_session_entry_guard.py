@@ -21,8 +21,9 @@ def _intraday_runner(key="NIFTY", bar=None):
     r.products[key] = "equity_intraday"
     r.params = {**r.params, "intraday_enabled": True}
     r.armed = True
-    r.state[key] = {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0,
-                    "close": 100.0, "time": ist_epoch(bar) if bar else None}
+    r.publish_signal(
+        key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0,
+                                   "close": 100.0, "time": ist_epoch(bar) if bar else None})
     return r, key
 
 

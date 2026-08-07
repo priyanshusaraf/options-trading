@@ -26,8 +26,9 @@ def _armed_runner(streak: int, threshold: int = 3, key="NIFTY"):
     r.armed = True
     r.broker.order_fail_streak = streak
     bar = dt.datetime(2026, 7, 3, 10, 45)                     # completes 11:00 — fresh
-    r.state[key] = {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
-                    "time": ist_epoch(bar)}
+    r.publish_signal(
+        key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
+                                   "time": ist_epoch(bar)})
     r.provider.now = lambda: dt.datetime(2026, 7, 3, 11, 1)   # Friday, mid-session
     return r, key
 

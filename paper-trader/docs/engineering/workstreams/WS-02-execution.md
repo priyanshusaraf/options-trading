@@ -169,6 +169,60 @@ layer.
 a seventh is a deliberate edit and a rename cannot leave the registry describing a schema
 nobody has.
 
+### Execution attribution (2026-08-04, ADR 0012 §4.1)
+
+**L1.2 canonicalised execution selection authority. This slice canonicalises execution
+attribution.**
+
+The defect: a stale assignment traded the default — the deliberate fail-safe — while the
+position, and every trade row descending from it, recorded the key that *failed to resolve*.
+Selection had been canonicalised; the money record had not. Demonstrated before the fix:
+
+```
+assert position.strategy_key == 'trend_impulse_v3'
+E  AssertionError: assert 'a_strategy_that_was_withdrawn' == 'trend_impulse_v3'
+```
+
+The binding that produced a signal is now carried from the scan to the fill and is what the
+position is attributed to, at both the intraday and futures write sites; the options path
+already went through the resolved strategy. `Trade.strategy_key` derives from
+`pos.strategy_key` at close, so the money record follows without a second change.
+
+Three structural consequences:
+
+- **`publish_signal` is the only door.** A signal state and the binding that produced it are
+  written together. `process_entries` opens from `self.state` and attributes from the binding,
+  so a state entry with no binding is a signal whose author is unknown — the entry paths refuse
+  to open on one rather than guessing. Nineteen test call sites moved to this door; they had
+  been constructing a state the engine cannot reach, and only line 597 of `runner.py` creates
+  one in production.
+- **A refusal withdraws the previous answer.** `self.state` survives a skipped scan, so
+  refusing to evaluate without also dropping the last signal would let a refused instrument
+  open on one produced while it was still authorised.
+- **The identity is captured at the signal, never re-resolved at the fill.** The assignment can
+  change in between; re-resolving would name logic that did not produce the trade.
+
+**No schema change, no migration, no repair tool** — measured rather than assumed. All 72
+production live trades carry either `NULL` (the documented "the default produced this"
+encoding) or a registered key; none carries an unregistered one, so the defect was latent and
+never fired. Where a row *could* be wrong the correct identity is not deterministically
+derivable, so history is left untouched. Full evidence and the query in ADR 0012 §4.1b.
+
+Evidence: 24/24 mutations reddened and restored (six new: raw-assignment attribution on the
+intraday path and on the futures path, re-resolution at the fill, propagation dropped, a
+refusal that keeps openable state, and authority inferred from the key's namespace). One of
+the six was **vacuous on the first attempt** — it flipped the assignment from inside
+`open_equity_position`, but the attribution argument is evaluated *before* that call, so
+re-resolving at the write site still produced the right answer. Driving the scan and the
+entry as separate halves of the tick is what actually exercises the window.
+
+**A shared-state leak this slice uncovered:** five wiring test files pin a session time with
+`r.provider.now = lambda: ...` on the process-wide provider singleton, at sixteen sites, none
+restoring — so the last writer froze the clock at 09:20 and every later entry was refused by
+the 09:30 window gate. Ten tests failed in the suite and passed alone, pointing at the
+innocent test. Fixed once in the rootdir `conftest.py`; the leak is the shape, not the site
+(ADR 0012 §4.1a).
+
 ### The engine consults the contract (2026-08-04, same ADR)
 
 The slice above shipped a contract with no production caller — the very defect it described.
@@ -200,11 +254,8 @@ Three properties the wiring adds:
   `assert_may_execute`, and the API returns **409 with the reason** by catching the gate's
   own exception type rather than testing for a namespace.
 
-**Found and left alone, deliberately:** selection goes through the binding, **attribution
-does not**. The intraday and futures entry paths still stamp the raw assigned key onto the
-position, so a stale assignment trades the default while the row records the key that failed
-to resolve. Fixing it changes what is written to money records, which is outside a
-behaviour-preserving slice — ADR 0012 §4.1, and the next candidate.
+**Found here, closed in the next slice:** selection went through the binding, attribution did
+not — see below.
 
 **Still not done, deliberately:** the smallest safe paper/shadow deployment architecture is
 *designed* in ADR 0012 §3 and unbuilt. It needs owner approval before any of it becomes

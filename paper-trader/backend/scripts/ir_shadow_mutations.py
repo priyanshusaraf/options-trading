@@ -35,6 +35,7 @@ ADMISSION = "tests/test_ir_shadow_admission.py"
 CORE = "tests/test_ir_shadow.py"
 BINDING_TESTS = "tests/test_execution_binding.py"
 ENGINE_BINDING = "tests/test_engine_binding.py"
+ATTRIBUTION = "tests/test_execution_attribution.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -148,8 +149,8 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         # when the gate is inconvenient and the two names look interchangeable.
         "the engine takes a strategy without re-checking that it may execute",
         RUNNER,
-        "        return execution_binding.strategy_for_execution(self._binding_for(key))",
-        "        return execution_binding.strategy_for(self._binding_for(key))",
+        "        return execution, execution_binding.strategy_for_execution(execution)",
+        "        return execution, execution_binding.strategy_for(execution)",
         # NB the obvious target — "assign a graph key, watch the engine refuse" — is
         # VACUOUS here: `bind` already refuses at resolution, so the downstream re-check
         # never runs and this mutation stayed green against it. The harness caught that.
@@ -163,7 +164,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         # cannot satisfy it and a real call cannot escape it.
         "the engine resolves a strategy directly again, bypassing the contract",
         RUNNER,
-        "                strat = self._strategy_for(key)",
+        "                execution, strat = self._execution_for(key)",
         "                from app.strategy.registry import get_strategy\n"
         "                strat = get_strategy(self.strategy_keys.get(key))",
         f"{ENGINE_BINDING}::test_the_engine_never_calls_a_strategy_resolver_directly",
@@ -173,9 +174,9 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         # the platform default while every config row still names the graph.
         "a refused instrument silently falls back to an executable strategy",
         RUNNER,
-        '                    key=key, event="authority_refused", window_seconds=300.0)\n'
+        "                self.state.pop(key, None)\n"
+        "                self.executed_binding.pop(key, None)\n"
         "                continue",
-        '                    key=key, event="authority_refused", window_seconds=300.0)\n'
         "                strat = execution_binding.strategy_for(self._binding_for(key))",
         f"{ENGINE_BINDING}::"
         "test_the_engine_skips_a_refused_instrument_and_substitutes_nothing",
@@ -209,6 +210,77 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "    if strategy_key is None:\n        return",
         "    if True:\n        return",
         f"{ENGINE_BINDING}::test_assigning_a_graph_strategy_through_the_route_is_refused",
+    ),
+    (
+        # The defect this slice closed, restored. Before the fix this was the production
+        # line: a stale assignment traded the default and the position claimed the key
+        # that failed to resolve. The pre-fix run is recorded in the L1 plan.
+        "a position is attributed to the raw assignment instead of what executed",
+        RUNNER,
+        "                        strategy_key=executed.strategy_key,\n"
+        "                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)",
+        "                        strategy_key=self.strategy_keys.get(pickk.instrument_key),\n"
+        "                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)",
+        f"{ATTRIBUTION}::"
+        "test_a_stale_assignment_is_attributed_to_the_strategy_that_actually_traded",
+    ),
+    (
+        # The same defect on the futures path, which has its own write site and would not
+        # have been covered by the intraday guard.
+        "a futures position is attributed to the raw assignment",
+        RUNNER,
+        "                strategy_key=executed.strategy_key)",
+        "                strategy_key=self.strategy_keys.get(key))",
+        f"{ATTRIBUTION}::test_the_futures_entry_path_attributes_what_executed",
+    ),
+    (
+        # Re-resolution at the write site: the identity stops being "the strategy whose
+        # output produced this signal" and becomes "whatever the configuration says at the
+        # moment of the fill". The two differ whenever the assignment changed in between.
+        "the executed identity is re-resolved at the fill instead of carried",
+        RUNNER,
+        "                        strategy_key=executed.strategy_key,",
+        "                        strategy_key=self._binding_for(\n"
+        "                            pickk.instrument_key).strategy_key,",
+        f"{ATTRIBUTION}::"
+        "test_the_executed_identity_is_the_one_that_produced_the_signal_not_the_latest",
+    ),
+    (
+        # Binding propagation dropped: every fill falls back to the None encoding, which
+        # reads as "the default produced this" whether or not it did.
+        "the binding is never carried from the scan to the fill",
+        RUNNER,
+        "        return self.executed_binding.get(key)",
+        "        return None",
+        f"{ATTRIBUTION}::"
+        "test_every_assignment_the_engine_can_hold_attributes_what_it_ran",
+    ),
+    (
+        # A refusal that skips evaluation without withdrawing the previous tick's signal
+        # lets `process_entries` open on state nothing currently authorises.
+        "a refused instrument keeps the signal state that can still open a position",
+        RUNNER,
+        "                self.state.pop(key, None)\n"
+        "                self.executed_binding.pop(key, None)",
+        "                pass",
+        f"{ATTRIBUTION}::test_a_refused_binding_produces_no_position_and_no_attribution",
+    ),
+    (
+        # Authority inferred from the key's shape at the write site instead of consumed
+        # from the binding — the "just check the namespace" edit that puts the decision
+        # back in six places.
+        "attribution infers authority from the key instead of the binding verdict",
+        RUNNER,
+        "                    executed = self._executed_binding(pickk.instrument_key)\n"
+        "                    if executed is None:",
+        "                    executed = self._executed_binding(pickk.instrument_key)\n"
+        "                    _raw = self.strategy_keys.get(pickk.instrument_key)\n"
+        '                    if executed is not None and _raw and not _raw.startswith("ir."):\n'
+        "                        executed = execution_binding.ExecutionBinding(\n"
+        '                            **{**executed.__dict__, "strategy_key": _raw})\n'
+        "                    if executed is None:",
+        f"{ATTRIBUTION}::"
+        "test_a_stale_assignment_is_attributed_to_the_strategy_that_actually_traded",
     ),
     (
         "a persistent cross-frame evaluation cache is reintroduced",

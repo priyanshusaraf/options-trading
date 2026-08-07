@@ -124,3 +124,34 @@ def _forbid_live_execution():
 # Skip macOS/iCloud "… 2.py" Desktop-sync duplicate files (a space + digit before
 # .py) — they otherwise break collection with import-file-mismatch.
 collect_ignore_glob = ["* [0-9].py", "* [0-9][0-9].py"]
+
+
+@pytest.fixture(autouse=True)
+def restore_the_shared_provider_clock():
+    """Undo any per-test override of the market clock on the shared provider.
+
+    `get_provider()` returns a **process-wide singleton**, so `r.provider.now = lambda:
+    <fixed datetime>` — the idiom sixteen call sites across five wiring tests use to pin a
+    session time — does not end with the test that wrote it. It stays for the rest of the
+    run, and the last writer wins.
+
+    Nothing depended on that until an entry test needed the clock to be inside a trading
+    session: with `now` frozen at 09:20 by an unrelated file, every subsequent entry is
+    refused by the 09:30 entry-window gate and the failure reads as "no position opened",
+    pointing at the innocent test rather than the leak. Ten tests failed in the suite and
+    passed in isolation.
+
+    Restoring here rather than at the sixteen sites: the leak is the shape, not the site,
+    and a fixture makes the next one harmless too. Deletes the instance attribute when the
+    test added one, so the class's real `now` is what remains.
+    """
+    from app.providers.factory import get_provider
+
+    provider = get_provider()
+    had = "now" in provider.__dict__
+    was = provider.__dict__.get("now")
+    yield
+    if had:
+        provider.__dict__["now"] = was
+    else:
+        provider.__dict__.pop("now", None)

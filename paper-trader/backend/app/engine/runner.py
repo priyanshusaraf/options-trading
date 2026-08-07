@@ -140,6 +140,12 @@ class EngineRunner:
         # and trade something nobody chose — which is the exact failure the fail-closed
         # split was introduced for.
         self._deployment_pin = self._load_deployment_pin()
+        # The binding that produced each instrument's current signal, carried from the
+        # scan to the fill. This is what a position and its trade row are attributed to:
+        # the identity of the strategy whose output actually produced the entry, not the
+        # raw assignment, which for a stale row names logic the registry could not resolve
+        # and which therefore never ran. Rebuilt every scan; never persisted.
+        self.executed_binding: dict = {}
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
@@ -307,6 +313,17 @@ class EngineRunner:
             deployment_pin=self._deployment_pin,
             assigned_key=self.strategy_keys.get(key))
 
+    def _execution_for(self, key: str):
+        """The binding and the `Strategy` it authorises, together.
+
+        Both, because the entry paths need both and must not derive one from the other by
+        a second lookup: what a money record claims about which strategy traded it has to
+        be the identity of the strategy whose output produced *that* signal. Resolving
+        again at the fill would name whatever the configuration says by then.
+        """
+        execution = self._binding_for(key)
+        return execution, execution_binding.strategy_for_execution(execution)
+
     def _strategy_for(self, key: str):
         """The `Strategy` that may execute for `key`.
 
@@ -316,7 +333,35 @@ class EngineRunner:
         strategy) and `StrategyNotFound` for a graph-backed key that is not registered.
         Neither is caught here: the caller decides what a refusal means for its lane.
         """
-        return execution_binding.strategy_for_execution(self._binding_for(key))
+        return self._execution_for(key)[1]
+
+    def publish_signal(self, key: str, execution, state: dict) -> None:
+        """Publish a signal and the binding that produced it — together, through one door.
+
+        These two must not be settable independently. `process_entries` opens positions
+        from `self.state`, and the money record it writes is attributed to the binding; a
+        state entry with no binding is a signal whose author is unknown, and the entry
+        paths refuse to open on one. Keeping the pair behind a single method is what makes
+        that invariant hold by construction rather than by everyone remembering.
+
+        Callers that simulate a scan — the entry, futures, guard and circuit-breaker
+        tests — use this rather than assigning `self.state[key]`, so they exercise a state
+        the engine can actually reach.
+        """
+        self.state[key] = state
+        self.executed_binding[key] = execution
+
+    def _executed_binding(self, key: str):
+        """The binding that produced `key`'s current signal, or None if the scan did not
+        resolve one this tick.
+
+        None is unreachable by construction — every entry candidate descends from a
+        `self.state` entry, and that entry is written immediately after the binding is
+        recorded — so a caller seeing None is looking at a defect, and the only safe
+        response is to not open. A position that never opened is recoverable; a money
+        record attributing logic that did not run is not.
+        """
+        return self.executed_binding.get(key)
 
     def _interval_for(self, key: str) -> str:
         return normalize_live_interval(self.intervals.get(key, DEFAULT_LIVE_INTERVAL))
@@ -523,7 +568,7 @@ class EngineRunner:
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
             try:
-                strat = self._strategy_for(key)
+                execution, strat = self._execution_for(key)
             except execution_binding.AuthorityNotGranted as e:
                 # Fail closed on this instrument only. Two things this must NOT do:
                 # substitute the default (the silent-substitution class the registry
@@ -536,6 +581,13 @@ class EngineRunner:
                 log.error_ratelimited(
                     f"{key} is assigned a strategy that may not execute: {e}",
                     key=key, event="authority_refused", window_seconds=300.0)
+                # Drop the earlier tick's signal with it. `process_entries` reads
+                # `self.state`, which survives a skipped scan — so leaving it would let a
+                # refused instrument open on a signal produced while it was still
+                # authorised, and stamp an identity nothing authorises now. Skipping the
+                # evaluation is only a refusal if it also withdraws the last answer.
+                self.state.pop(key, None)
+                self.executed_binding.pop(key, None)
                 continue
             signal_frame = frame_from(candles)
             if strat.key == DEFAULT_STRATEGY_KEY:
@@ -557,7 +609,7 @@ class EngineRunner:
             if not latest:
                 continue
             held = opens.get(key)
-            self.state[key] = {
+            self.publish_signal(key, execution, {
                 "instrument": key, "name": inst.name, "segment": inst.segment,
                 "interval": self._interval_for(key),
                 "time": latest["time"], "close": latest["close"], "ema": latest["ema"],
@@ -570,7 +622,7 @@ class EngineRunner:
                 "product": self.products.get(key, "options"),
                 "strategy": strat.key,
                 "priority_flag": self.priority_flags.get(key, False),
-            }
+            })
             # H2 — ratchet management for strategies that declare a risk_model: stash the
             # latest completed-bar ATR (for seeding a new entry) and, for a held
             # ratchet-managed position, advance its spot ratchet + flag a close-confirmed hit.
@@ -1444,6 +1496,17 @@ class EngineRunner:
                              instrument=c.instrument_key, event="MAX_POS_SKIP")
                     continue
                 inst, direction, pick, chain, plan = meta[c.instrument_key]
+                # Before the order, not after: the options path stamps its identity via
+                # `_seed_ratchet` once the position exists, so a check placed there would
+                # come too late to prevent an unattributable fill. All three entry paths
+                # refuse on the same condition, at the last moment they still can.
+                executed = self._executed_binding(c.instrument_key)
+                if executed is None:
+                    log.error(f"no execution binding for {c.instrument_key} at fill — not "
+                              f"opening rather than attributing a trade to logic that may "
+                              f"not have produced it",
+                              instrument=c.instrument_key, event="ATTRIBUTION_MISSING")
+                    continue
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
                          + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
@@ -1453,12 +1516,12 @@ class EngineRunner:
                     continue  # live order not filled — nothing recorded (already alerted)
                 # H2 — seed the ratchet for a risk_model strategy so this position is
                 # managed by the backtest-validated ratchet, not the legacy premium trail.
-                strat_e = self._strategy_for(c.instrument_key)
+                strat_e = execution_binding.strategy_for_execution(executed)
                 rm_e = getattr(strat_e, "risk_model", None)
                 if rm_e:
                     self._seed_ratchet(pos, chain.spot, rm_e,
                                        self.state.get(c.instrument_key, {}).get("_ratchet_atr"),
-                                       strat_e.key)
+                                       executed.strategy_key)
                 opened += 1
                 if self.params.get("notify_enabled", True):
                     self.notifier.opened(pos)
@@ -1509,10 +1572,18 @@ class EngineRunner:
                              f"{pickk.qty}@{pickk.price:.2f} (margin ₹{pickk.margin:,.0f}"
                              f"{', purple' if pickk.is_purple else ''})",
                              instrument=pickk.instrument_key, event="INTRADAY_ENTRY")
+                    executed = self._executed_binding(pickk.instrument_key)
+                    if executed is None:
+                        log.error(f"no execution binding for {pickk.instrument_key} at "
+                                  f"fill — not opening rather than attributing a trade to "
+                                  f"logic that may not have produced it",
+                                  instrument=pickk.instrument_key,
+                                  event="ATTRIBUTION_MISSING")
+                        continue
                     pos = self.broker.open_equity_position(
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
-                        strategy_key=self.strategy_keys.get(pickk.instrument_key),
+                        strategy_key=executed.strategy_key,
                         margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)
                     if pos is None:
                         continue
@@ -1607,11 +1678,17 @@ class EngineRunner:
             qty, margin = sized
             if margin < floor or margin > self.deployable_cash():
                 continue
+            executed = self._executed_binding(key)
+            if executed is None:
+                log.error(f"no execution binding for {key} at fill — not opening rather "
+                          f"than attributing a trade to logic that may not have produced "
+                          f"it", instrument=key, event="ATTRIBUTION_MISSING")
+                continue
             pos = self.broker.open_futures_position(
                 inst, direction, float(price), qty, "NFO_FUT",
                 f"FUTURES {direction}", now, expiry, margin=margin,
                 params=self.params,
-                strategy_key=self.strategy_keys.get(key))
+                strategy_key=executed.strategy_key)
             if pos is None:
                 continue
             slots -= 1

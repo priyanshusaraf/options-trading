@@ -97,8 +97,9 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
     live_spot = round(candle_close * 0.90, 2)        # a 10% gap down since the candle closed
     r.provider.get_ltp = lambda i: live_spot if i.key == key else None
     # a fresh SHORT signal sitting in engine state with the (stale) candle close
-    r.state[key] = {"signal": "SHORT_ENTRY", "close": candle_close, "z": -2.0,
-                    "slope": -1.0, "long_exit": False, "short_exit": False}
+    r.publish_signal(
+        key, r._binding_for(key), {"signal": "SHORT_ENTRY", "close": candle_close, "z": -2.0,
+                                   "slope": -1.0, "long_exit": False, "short_exit": False})
 
     r.process_entries()
 

@@ -22,8 +22,9 @@ def _runner(key="NIFTY", product="equity_intraday", bar: dt.datetime | None = No
     r.params = {**r.params, "intraday_enabled": True,
                 "intraday_block_weekday": -1}   # isolate: no weekday block here
     r.armed = True
-    r.state[key] = {"signal": signal, "z": 2.5, "slope": 1.0, "close": 100.0,
-                    "time": ist_epoch(bar) if bar else None}
+    r.publish_signal(
+        key, r._binding_for(key), {"signal": signal, "z": 2.5, "slope": 1.0, "close": 100.0,
+                                   "time": ist_epoch(bar) if bar else None})
     return r, key
 
 

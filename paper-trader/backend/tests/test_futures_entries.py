@@ -36,7 +36,8 @@ def runner(monkeypatch):
     cap.initial_capital = 1_000_000.0
     cap.cash = 1_000_000.0
     r.broker.s.commit()
-    r.state["NIFTY"] = {"long_entry": True, "short_entry": False, "close": 24_000.0}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"long_entry": True, "short_entry": False, "close": 24_000.0})
     monkeypatch.setattr(r.provider, "get_futures_ltp",
                         lambda inst, expiry: 24_000.0, raising=False)
     yield r
@@ -135,14 +136,16 @@ def test_a_margin_below_the_dust_floor_is_skipped(runner):
 
 def test_no_signal_no_position(runner):
     _enable(runner)
-    runner.state["NIFTY"] = {"long_entry": False, "short_entry": False}
+    runner.publish_signal(
+        "NIFTY", runner._binding_for("NIFTY"), {"long_entry": False, "short_entry": False})
     runner._process_futures_entries(NOW)
     assert _futs(runner) == []
 
 
 def test_a_short_signal_opens_short(runner):
     _enable(runner)
-    runner.state["NIFTY"] = {"long_entry": False, "short_entry": True, "close": 24_000.0}
+    runner.publish_signal(
+        "NIFTY", runner._binding_for("NIFTY"), {"long_entry": False, "short_entry": True, "close": 24_000.0})
     runner._process_futures_entries(NOW)
     assert _futs(runner)[0].direction == "SHORT"
 

@@ -116,3 +116,58 @@ Section 5 still holds in full. Nothing here grants IR output any influence over 
 positions, accounting, sizing, routing, exits, reconciliation, risk controls or deployment
 authority; `AUTHORITY_BY_SOURCE` still reads `ir_graph → shadow`, and moving it is the
 owner's decision, not an implementation detail of a later slice.
+
+---
+
+## 7. L1.3 — execution attribution (2026-08-04)
+
+**L1.2 canonicalised execution selection authority. This slice canonicalises execution
+attribution.**
+
+### The defect, as it stood
+
+Selection went through `execution_binding.bind`; the `strategy_key` stamped onto a position
+came from `self.strategy_keys.get(key)` — the raw instrument assignment. Those disagree in
+exactly the case the fail-safe fallback exists for. Recorded here because the test that
+demonstrated it is not kept: a permanent test asserting wrong behaviour is a trap.
+
+```
+$ .venv/bin/python -m pytest tests/test_execution_attribution.py -q --tb=short
+    assert position.strategy_key == DEFAULT_STRATEGY_KEY
+E   AssertionError: assert 'a_strategy_that_was_withdrawn' == 'trend_impulse_v3'
+E     - trend_impulse_v3
+E     + a_strategy_that_was_withdrawn
+```
+
+An instrument assigned `a_strategy_that_was_withdrawn` traded `trend_impulse_v3` — correct,
+deliberate, unchanged — and the position claimed the withdrawn key. Two mutations restore
+this exact line (intraday and futures write sites) and both redden.
+
+### What changed
+
+- The binding that produced a signal is carried from scan to fill (`executed_binding`) and is
+  the attribution at both write sites. The options path already used the resolved strategy.
+- `publish_signal(key, execution, state)` is the only writer of a signal state, so the state
+  and its binding cannot fall out of step. Nineteen test call sites moved to it.
+- A refusal drops the instrument's previous signal state, so it cannot open on a signal
+  produced while it was still authorised.
+- No schema change, no migration, no repair tool — ADR 0012 §4.1b has the production
+  measurement that justifies leaving history alone.
+
+### Boundaries held
+
+Which strategy executes, the signal, orders, fills, sizing, routing, exits, reconciliation,
+risk controls and authority are all unchanged; `test_only_the_attribution_changed_the_economics_did_not`
+compares a stale-assignment fill against a clean one field by field. Section 5 still holds in
+full: `AUTHORITY_BY_SOURCE` still reads `ir_graph → shadow`.
+
+### Two guards that had to be repaired before they were evidence
+
+- **A vacuous mutation.** "Re-resolve the identity at the fill" stayed green against a test
+  that flipped the assignment from inside `open_equity_position` — the attribution argument
+  is evaluated before the call, so the window was never open. The test now drives the scan
+  and the entry as separate halves of a tick.
+- **A shared-state leak in the suite, not the slice.** Sixteen sites across five wiring files
+  set `r.provider.now` on the process-wide provider singleton and never restore it, freezing
+  the market clock for everything that follows. Ten attribution tests failed in the suite and
+  passed alone. Fixed once, in the rootdir `conftest.py`.

@@ -708,10 +708,10 @@ Prioritise each by measured product value, dependency readiness and operational 
   cannot be repaired retrospectively; rerun any result that matters.
 - Display-name/content-address semantics remain pinned by current tests until the first persistent
   artefact/rename workflow supplies evidence for an RFC amendment.
-- Position **attribution** still stamps the raw assigned strategy key rather than the resolved
-  binding, so a stale assignment trades the default while the money record names the key that
-  failed to resolve (ADR 0012 §4.1). Deferred out of the wiring slice because correcting it
-  changes what is written to money records, which a behaviour-preserving refactor may not do.
+- Position attribution: **closed 2026-08-04.** The binding that produced a signal is carried
+  to the fill and is what the money record records (ADR 0012 §4.1). Historical rows are left
+  unchanged — measured, not assumed: no production row carries an unregistered key, and where
+  one could the correct identity is not deterministically derivable (§4.1b).
 - Long-duration native-broker shadow validation, ≥ 20 genuine sessions, dataset cleaning and
   native OHLCV replay fidelity remain deferred by owner decision (2026-08-04). Revisit before
   authority promotion or commercial validation, not before.

@@ -35,8 +35,9 @@ def _stub_snapshot(r, premium):
 def test_notifies_on_auto_open():
     r, sent = _runner_with_capture()
     r.armed = True                       # must be armed to auto-execute
-    r.state["NIFTY"] = {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
-                        "close": 100.0, "long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
+                                           "close": 100.0, "long_exit": False, "short_exit": False})
     r.process_entries()
     assert r.broker.position_for("NIFTY") is not None
     assert any("OPEN" in m for m in sent)
@@ -46,7 +47,8 @@ def test_notifies_when_nearing_stop_without_closing():
     r, sent = _runner_with_capture()
     inst, chain, q = _nearest_ce(r)
     pos = r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot, r.params)
-    r.state["NIFTY"] = {"long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"long_exit": False, "short_exit": False})
     # premium just above the stop (within the proximity zone) -> warn, don't close
     _stub_snapshot(r, premium=pos.stop_price * 1.05)
     r.mark_and_exit_positions()
@@ -58,7 +60,8 @@ def test_notifies_on_stop_loss_close():
     r, sent = _runner_with_capture()
     inst, chain, q = _nearest_ce(r)
     pos = r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot, r.params)
-    r.state["NIFTY"] = {"long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"long_exit": False, "short_exit": False})
     _stub_snapshot(r, premium=pos.stop_price * 0.9)         # below the stop -> exit
     r.mark_and_exit_positions()
     assert r.broker.position_for("NIFTY") is None

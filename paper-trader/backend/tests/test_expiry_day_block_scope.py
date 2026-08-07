@@ -107,8 +107,9 @@ def _runner(key, product, bar, block_keys):
     r.params = {**r.params, "intraday_enabled": True,
                 "intraday_block_weekday": 1, "expiry_day_block_keys": block_keys}
     r.armed = True
-    r.state[key] = {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
-                    "time": ist_epoch(bar)}
+    r.publish_signal(
+        key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
+                                   "time": ist_epoch(bar)})
     return r
 
 

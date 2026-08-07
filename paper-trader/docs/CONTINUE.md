@@ -68,11 +68,16 @@ instrument and substitutes nothing; every writer of an engine assignment passes
 viewer and does not adopt the IR runtime in a live path. The wiring changed which code
 answers "what runs here", not what the answer is.
 
-**Next slice, already scoped:** route position attribution through the binding as well. Today
-selection goes through the contract and the `strategy_key` stamped onto a position does not,
-so a stale assignment trades the default while the money record names the key that failed to
-resolve (ADR 0012 §4.1). It was left out of this slice on purpose — it changes what is
-written to money records, which a behaviour-preserving refactor may not do.
+**L1.3 closed execution attribution.** L1.2 canonicalised execution selection authority; L1.3
+canonicalises execution attribution. The binding that produced a signal is carried from the
+scan to the fill, so a stale assignment no longer trades the default while the money record
+names the key that failed to resolve. `publish_signal` writes a signal and its binding through
+one door; a state entry with no binding is a signal whose author is unknown and the entry
+paths refuse to open on one. No schema change and no migration — all 72 production live trades
+already carry a valid key or the documented `NULL` (ADR 0012 §4.1b).
+
+**Next slice:** managed shadow deployment binding (L1.4), strictly non-authoritative. ADR 0012
+§3 designs it; every step that would grant paper or live authority is owner-gated and unbuilt.
 
 ## 2. Repository and remote state
 
@@ -103,11 +108,11 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-Latest acceptance run on 2026-08-04, for the engine-binding wiring slice:
+Latest acceptance run on 2026-08-04, for the execution-attribution slice (L1.3):
 
 ```
 $ .venv/bin/python -m pytest tests research_tests
-3,127 passed · 6 skipped · EXIT 0            (161s)
+3,141 passed · 6 skipped · EXIT 0            (181s)
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK · EXIT 0
@@ -119,7 +124,7 @@ $ .venv/bin/python -m app.db.migrate head
 0010 · EXIT 0                                 (no schema change in this slice)
 
 $ .venv/bin/python scripts/ir_shadow_mutations.py
-all 18 guards reddened on their own defect and were restored · EXIT 0
+all 24 guards reddened on their own defect and were restored · EXIT 0
 
 $ npm test -- --run && npm run typecheck && npm run build
 222 passed · TYPECHECK OK · BUILD OK · EXIT 0      (no frontend files modified)
@@ -131,8 +136,17 @@ was wrong; the fix was the wording, not the allowlist. The authority gate does i
 source, and it lives in `app/core/`, outside the executor perimeter, with the engine
 consuming only the verdict.
 
-One of the six new mutations exposed a **vacuous test**: "assign a graph key and watch the
-engine refuse" never reaches the authority re-check, because `bind` already refuses at
+Two guards had to be repaired before they counted as evidence in L1.3. A mutation
+("re-resolve the identity at the fill") stayed green against a test that flipped the
+assignment from inside `open_equity_position` — the attribution argument is evaluated before
+the call, so the window was never open; the test now drives the scan and the entry as
+separate halves of a tick. And ten attribution tests failed in the suite while passing alone,
+because five wiring files pin `provider.now` on the process-wide singleton at sixteen sites
+and never restore it, freezing the market clock past the 09:30 entry gate. Fixed once in the
+rootdir `conftest.py` (ADR 0012 §4.1a).
+
+Earlier, in L1.2: one of the six mutations exposed a **vacuous test**: "assign a graph key and
+watch the engine refuse" never reaches the authority re-check, because `bind` already refuses at
 resolution. The re-check is now proven against a *forged* binding from a drifted resolver,
 which is the only thing it defends against.
 

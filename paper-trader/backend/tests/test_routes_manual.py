@@ -60,8 +60,9 @@ def test_signals_staleness_is_per_instrument():
     now = r.provider.now()
     # seed two instruments with state so the 'no state -> stale' path is bypassed
     for key in ("NIFTY", "BANKNIFTY"):
-        r.state[key] = {"instrument": key, "signal": "NONE", "time": 0,
-                        "close": 100.0, "z": 0.0, "trend": "flat", "position": None}
+        r.publish_signal(
+            key, r._binding_for(key), {"instrument": key, "signal": "NONE", "time": 0,
+                                       "close": 100.0, "z": 0.0, "trend": "flat", "position": None})
     r.last_scan_ok["NIFTY"] = now                       # fresh
     r.last_scan_ok["BANKNIFTY"] = now - dt.timedelta(hours=1)  # long stale
 

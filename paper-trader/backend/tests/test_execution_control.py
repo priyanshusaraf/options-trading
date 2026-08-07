@@ -15,8 +15,9 @@ def _runner():
 
 
 def _long_signal(r):
-    r.state["NIFTY"] = {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
-                        "close": 100.0, "long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0,
+                                           "close": 100.0, "long_exit": False, "short_exit": False})
 
 
 def _open_nifty(r):
@@ -47,7 +48,8 @@ def test_armed_opens():
 def test_disarmed_still_exits_existing_position():
     r = _runner()
     pos = _open_nifty(r)                                # opened manually while disarmed
-    r.state["NIFTY"] = {"long_exit": False, "short_exit": False}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"long_exit": False, "short_exit": False})
     assert r.armed is False
 
     def fake(insts, positions):

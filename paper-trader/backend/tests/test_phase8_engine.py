@@ -23,7 +23,8 @@ def test_reinforcement_applied_via_engine():
     base_stop = pos.stop_price
     r.broker.mark(pos, premium=q.ltp * 1.25, spot=chain.spot, now=r.provider.now())
     r.broker.commit()
-    r.state["NIFTY"] = {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0, "close": chain.spot}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"signal": "LONG_ENTRY", "z": 1.5, "slope": 1.0, "close": chain.spot})
     r.process_entries()
     p = r.broker.position_for("NIFTY")
     assert p.reinforcement_count == 1

@@ -44,7 +44,8 @@ def runner(monkeypatch):
                 # is evaluated. That behaviour has its own tests; here the subject
                 # is the ledger across a plain open -> mark -> SL/TP -> close.
                 "intraday_lockstep_enabled": False}
-    r.state["NIFTY"] = {"long_entry": True, "short_entry": False, "close": 24_000.0}
+    r.publish_signal(
+        "NIFTY", r._binding_for("NIFTY"), {"long_entry": True, "short_entry": False, "close": 24_000.0})
     monkeypatch.setattr(r.provider, "get_futures_ltp",
                         lambda inst, expiry: 24_000.0, raising=False)
     yield r
@@ -104,7 +105,8 @@ def test_a_losing_round_trip_also_reconciles(runner, monkeypatch):
 
 
 def test_a_short_round_trip_reconciles(runner, monkeypatch):
-    runner.state["NIFTY"] = {"long_entry": False, "short_entry": True, "close": 24_000.0}
+    runner.publish_signal(
+        "NIFTY", runner._binding_for("NIFTY"), {"long_entry": False, "short_entry": True, "close": 24_000.0})
     runner._process_futures_entries(NOW)
     pos = _futs(runner)[0]
     assert pos.direction == "SHORT"
