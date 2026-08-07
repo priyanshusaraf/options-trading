@@ -73,7 +73,9 @@ def evidence_bridge(monkeypatch):
     def bridge(**asked):
         return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
                 "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
-                "content_address": "sha256:" + "e" * 64,
+                # Content, not name: the admission binding requires the approved
+                # address to be the address receiving authority.
+                "content_address": content_address(_graph_document(asked["graph_version"])),
                 "decision": state["decision"]}
 
     monkeypatch.setattr(pa, "verified_decision", bridge)

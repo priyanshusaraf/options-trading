@@ -418,6 +418,34 @@ def _require_known_interval(interval: str) -> None:
 
 
 def _require_evidence(row: IrPaperDeployment) -> dict:
+    """The admission check: does research approve **these bytes**, not merely this name?
+
+    The lookup is keyed on `(project, identifier, version)` — a *name*. Until 2026-08-08
+    every comparison here was also on the name, so a research decision that approved one
+    artefact could admit a different artefact carrying the same identifier and version.
+    That is reachable across an independently restored `research.db`, and it was proven
+    reachable through this service before the address comparison below was added: research
+    approved graph A, graph B took authority, activation succeeded, and the row recorded
+    both addresses without ever comparing them.
+
+    So the binding is now on content. The invariant:
+
+        the immutable graph content receiving deployment authority must be the same
+        immutable graph content bound into the research evidence used to admit it.
+
+    `row.graph_content_address` is re-derived from the stored artefact bytes by the caller
+    immediately before this runs; `decision["content_address"]` is the address research
+    recorded when the experiment was bound, itself re-derived at that time by
+    `research/orchestrator/graph_experiment.build_graph_provenance`. Two independent
+    derivations of the same artefact, now required to agree.
+
+    **This is an admission check and stays one** (ADR 0013). It runs at activation and at
+    resume — the two moments authority is granted or re-granted — and never on the runtime
+    reload path, which must not depend on the research plane being readable.
+
+    A decision that names no content address is refused rather than waved through: an
+    approval that cannot say which bytes it approved has not admitted anything.
+    """
     decision = verified_decision(project_id=row.project_id,
                                  graph_identifier=row.graph_identifier,
                                  graph_version=row.graph_version)
@@ -425,6 +453,7 @@ def _require_evidence(row: IrPaperDeployment) -> dict:
         raise EvidenceUnverified(
             f"no verified research decision approves {row.graph_identifier!r} v"
             f"{row.graph_version} for project {row.project_id!r}")
+    approved_address = decision.get("content_address") or ""
     named = [m for m in (
         f"project {decision.get('project_id')!r} != {row.project_id!r}"
         if decision.get("project_id") != row.project_id else "",
@@ -434,6 +463,12 @@ def _require_evidence(row: IrPaperDeployment) -> dict:
         if decision.get("graph_version") != row.graph_version else "",
         f"decision is {decision.get('decision')!r}, not 'approved'"
         if decision.get("decision") != "approved" else "",
+        "the decision names no graph content address, so it cannot say which bytes it "
+        "approved" if not approved_address else "",
+        f"the approved content {approved_address!r} is not the content receiving authority "
+        f"({row.graph_content_address!r}); one identifier and version named two different "
+        f"artefacts"
+        if approved_address and approved_address != row.graph_content_address else "",
     ) if m]
     if named:
         raise EvidenceUnverified(

@@ -45,6 +45,31 @@ GATE_AUTHORITY_REFUSED = "authority_refused"
 
 BOOK_LEVEL_GATES = (GATE_DISARMED, GATE_DAILY_LOSS_HALT, GATE_GAP_GUARD, GATE_NO_SLOTS)
 
+#: How the *current* research view relates to the admission that granted authority.
+#: Observability only — ADR 0013 §5.3. None of these may pause, retire, refuse or
+#: downgrade anything; a change here is an operator's cue, never a control.
+#:
+#: The vocabulary reuses `research_read.CANDIDATE_DECISIONS` rather than inventing a
+#: parallel status model, and it deliberately distinguishes "nothing newer" from
+#: "unreadable" — collapsing them would hand an operator an inference the data does not
+#: support in either direction.
+RESEARCH_NO_NEWER = "no_newer_decision"
+RESEARCH_NEWER_APPROVED = "newer_approved_decision"
+RESEARCH_NEWER_REJECTED = "newer_rejected_decision"
+RESEARCH_UNAVAILABLE = "unavailable"
+#: The admitting decision is no longer visible in the research plane at all — most likely
+#: `research.db` was replaced. Not "rejected": nothing rejected it, we simply cannot see it.
+RESEARCH_ADMISSION_NOT_VISIBLE = "admission_decision_not_visible"
+
+CURRENT_RESEARCH_STATUSES = (
+    RESEARCH_NO_NEWER, RESEARCH_NEWER_APPROVED, RESEARCH_NEWER_REJECTED,
+    RESEARCH_UNAVAILABLE, RESEARCH_ADMISSION_NOT_VISIBLE,
+)
+
+#: Statuses an operator should look at. Attention is not authority: every one of these
+#: leaves the deployment exactly as authoritative as it was.
+ATTENTION_STATUSES = (RESEARCH_NEWER_REJECTED, RESEARCH_ADMISSION_NOT_VISIBLE)
+
 
 @dataclass(frozen=True)
 class EntryEligibility:
@@ -200,13 +225,88 @@ def _graph_view(runner, key: str) -> dict[str, Any] | None:
         "execution_mode": binding.execution_mode,
         "authority": binding.authority,
         # ADR 0013: admission facts, recorded at activation and held by the execution
-        # plane. Pointers into research, never a research read.
+        # plane. Pointers into research, never a research read. Since 2026-08-08
+        # `evidence_content_address` is required to equal the graph's own address at
+        # activation, so these two lines naming the same address is the binding, not
+        # redundancy.
         "admission": {
             "evidence_run_id": binding.evidence_run_id,
             "evidence_candidate_id": binding.evidence_candidate_id,
             "evidence_content_address": binding.evidence_content_address,
             "model": "admission-prerequisite",
         },
+        # The *current* research view, kept in its own key so it can never be mistaken for
+        # the admission basis above or for the authority beside it. Read-only.
+        "current_research": current_research(binding),
+    }
+
+
+def current_research(binding) -> dict[str, Any]:
+    """How the research view now compares to the admission that granted authority.
+
+    **The three facts stay separate** (ADR 0013 §5.3): the *admission basis* is a historical
+    fact recorded on the deployment row; the *current research view* is what research says
+    today; *execution authority* is the lifecycle state. This function computes only the
+    middle one and touches neither of the others — it takes a binding, returns a dict, and
+    has no session, no runner and no way to transition anything.
+
+    Newer is by candidate id, which is the ordering the research bridge already uses
+    (`_candidate_for_run` takes the newest candidate per run). A newer decision is **not
+    assumed negative**: it is reported as whatever research actually recorded, so a
+    re-approval reads as a re-approval.
+
+    Research being unreadable yields `unavailable` and nothing else. It never yields
+    "still approved" and never yields "rejected" — an operator must not be handed either
+    inference, and execution authority is unaffected either way.
+    """
+    from app.core import research_read
+
+    basis = {"evidence_run_id": binding.evidence_run_id,
+             "evidence_candidate_id": binding.evidence_candidate_id,
+             "graph_content_address": binding.content_address}
+
+    try:
+        history = research_read.graph_decision_history(
+            project_id=binding.project_id,
+            graph_identifier=binding.graph_identifier,
+            graph_version=binding.graph_version)
+    except Exception as exc:      # observability may never break the execution view
+        return _research(RESEARCH_UNAVAILABLE, basis,
+                         detail=f"{type(exc).__name__}: {exc}")
+    if history is None:
+        return _research(RESEARCH_UNAVAILABLE, basis,
+                         detail="the research plane could not be read")
+
+    admitted_by = binding.evidence_candidate_id
+    if admitted_by is None or not any(d["candidate_id"] == admitted_by for d in history):
+        return _research(RESEARCH_ADMISSION_NOT_VISIBLE, basis,
+                         detail=("the decision this deployment was admitted on is not "
+                                 "visible in the research plane"))
+
+    newer = sorted((d for d in history
+                    if isinstance(d.get("candidate_id"), int)
+                    and d["candidate_id"] > admitted_by),
+                   key=lambda d: d["candidate_id"])
+    if not newer:
+        return _research(RESEARCH_NO_NEWER, basis)
+
+    latest = newer[-1]
+    status = (RESEARCH_NEWER_REJECTED if latest["decision"] == "rejected"
+              else RESEARCH_NEWER_APPROVED)
+    return _research(status, basis, latest=latest, newer_count=len(newer))
+
+
+def _research(status: str, basis: dict, *, detail: str = "",
+              latest: dict | None = None, newer_count: int = 0) -> dict[str, Any]:
+    return {
+        "admission_basis": basis,
+        "status": status,
+        "detail": detail,
+        "latest_decision": latest,
+        "newer_decision_count": newer_count,
+        "operator_attention": status in ATTENTION_STATUSES,
+        # Stated in the payload because it is the whole point: this section is a read.
+        "affects_execution_authority": False,
     }
 
 

@@ -1371,6 +1371,20 @@ class IrPaperDeployment(Base):
     graph_content_address: Mapped[str] = mapped_column(String(71), nullable=False)
     evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     evidence_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: **The graph content address the research decision approved** — not the address of
+    #: the decision envelope, which the name might suggest. It is the address research
+    #: recorded for the artefact its experiment ran on, derived independently of this plane
+    #: by `research/orchestrator/graph_experiment.build_graph_provenance`.
+    #:
+    #: Load-bearing since 2026-08-08 rather than decorative: `_require_evidence` requires
+    #: it to equal `graph_content_address` at activation and resume, which is what binds
+    #: admission to *bytes* rather than to an identifier and version. Before that check the
+    #: two were both stored and never compared, and a decision approving one artefact could
+    #: admit another of the same name — proven reachable, not theorised.
+    #:
+    #: The name is retained deliberately: renaming would be a migration for naming alone on
+    #: a table carrying live paper authority, and the contract is stated unambiguously here,
+    #: in `_require_evidence`, and in ADR 0013 instead.
     evidence_content_address: Mapped[str] = mapped_column(String(71), nullable=False,
                                                           default="", server_default="")
     evidence_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

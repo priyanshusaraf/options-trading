@@ -62,7 +62,11 @@ def seed_graph(session, version: int = 1) -> GraphVersion:
 def approved_evidence(**overrides):
     return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
             "graph_identifier": GRAPH, "graph_version": 1,
-            "content_address": "sha256:" + "e" * 64, "decision": "approved",
+            # Content, not name. The admission binding requires the address research
+            # approved to be the address receiving authority, so a stub that invents an
+            # address would be asserting a contract the service no longer offers.
+            "content_address": content_address(_graph_document(1)),
+            "decision": "approved",
             **overrides}
 
 
@@ -452,3 +456,118 @@ class TestActiveBindings:
                 assert not callable(value)
             assert b.execution_mode == "paper"
             assert b.authority == "authoritative"
+
+
+# ── admission binds CONTENT, not a name ─────────────────────────────────────────
+
+class TestAdmissionBindsTheExactGraphContent:
+    """The 2026-08-08 provenance correction.
+
+    Evidence is looked up by `(project, identifier, version)` — a **name**. Until this
+    check existed, every comparison was also on the name, so a research decision that
+    approved one artefact could admit a *different* artefact carrying the same identifier
+    and version. That is reachable across an independently restored `research.db`, and it
+    was proven reachable through this service before the fix: research approved graph A,
+    graph B took authority, activation succeeded, and the row recorded both addresses
+    without ever comparing them.
+
+    The invariant now enforced:
+
+        the immutable graph content receiving deployment authority must be the same
+        immutable graph content bound into the research evidence used to admit it.
+
+    It is an **admission** check (ADR 0013) — activation and resume, never runtime reload.
+    """
+
+    def test_exact_matching_lineage_still_activates(self):
+        """The success case, kept first so a regression that refuses everything is not
+        mistaken for the guard working."""
+        with SessionLocal() as s:
+            row = staged(s)
+            s.commit()
+            pa.activate(s, row.id, revision=row.revision)
+            s.commit()
+            assert row.state == pa.PAPER_ACTIVE
+            assert row.evidence_content_address == row.graph_content_address
+
+    def test_another_graphs_approval_cannot_admit_this_one(self, monkeypatch):
+        """**The adversarial case.** Graph A has a valid approval. Graph B is independently
+        valid — it is a real, published, immutable version. An attempt is made to activate
+        B on A's research lineage: same project, same identifier, same version number,
+        genuine `approved` decision, different bytes."""
+        graph_a = _graph_document(1)
+        graph_b = _graph_document(2)
+        address_a, address_b = content_address(graph_a), content_address(graph_b)
+        assert address_a != address_b, "the two artefacts must genuinely differ"
+
+        # Research approves A's content, under the name B is deployed as.
+        monkeypatch.setattr(pa, "verified_decision", lambda **asked: approved_evidence(
+            graph_version=asked["graph_version"], content_address=address_a))
+
+        with SessionLocal() as s:
+            row = staged(s, graph_version=2)          # B is what is being deployed
+            s.commit()
+            assert row.graph_content_address == address_b
+            with pytest.raises(pa.EvidenceUnverified, match="two different artefacts"):
+                pa.activate(s, row.id, revision=row.revision)
+
+    def test_the_refusal_leaves_no_authority_behind(self, monkeypatch):
+        """A refused admission must not half-happen: no active state, no recorded evidence
+        lineage, nothing for a reload to pick up."""
+        monkeypatch.setattr(pa, "verified_decision", lambda **asked: approved_evidence(
+            graph_version=asked["graph_version"],
+            content_address=content_address(_graph_document(1))))
+        with SessionLocal() as s:
+            row = staged(s, graph_version=2)
+            s.commit()
+            with pytest.raises(pa.EvidenceUnverified):
+                pa.activate(s, row.id, revision=row.revision)
+            s.rollback()
+            current = s.get(IrPaperDeployment, row.id)
+            assert current.state == pa.STAGED
+            assert current.evidence_content_address == ""
+            assert pa.active_bindings(s) == []
+
+    def test_resume_re_checks_the_content_binding(self, monkeypatch):
+        """Resume re-establishes admission, so it must apply the same test. A pause is a
+        window in which the research plane can be restored from somewhere else."""
+        with SessionLocal() as s:
+            row = staged(s)
+            s.commit()
+            pa.activate(s, row.id, revision=row.revision)
+            s.commit()
+            pa.pause(s, row.id, revision=row.revision)
+            s.commit()
+
+            monkeypatch.setattr(pa, "verified_decision", lambda **asked: approved_evidence(
+                graph_version=asked["graph_version"],
+                content_address=content_address(_graph_document(2))))
+            current = s.get(IrPaperDeployment, row.id)
+            with pytest.raises(pa.EvidenceUnverified, match="two different artefacts"):
+                pa.resume(s, current.id, revision=current.revision)
+
+    def test_a_decision_naming_no_content_is_refused(self, monkeypatch):
+        """An approval that cannot say which bytes it approved has admitted nothing."""
+        monkeypatch.setattr(pa, "verified_decision", lambda **asked: approved_evidence(
+            graph_version=asked["graph_version"], content_address=""))
+        with SessionLocal() as s:
+            row = staged(s)
+            s.commit()
+            with pytest.raises(pa.EvidenceUnverified, match="names no graph content"):
+                pa.activate(s, row.id, revision=row.revision)
+
+    def test_reload_does_not_apply_the_admission_check(self, monkeypatch):
+        """ADMISSION-ONLY, preserved. The binding check belongs where authority is granted;
+        putting it on reload would make every restart depend on the research plane."""
+        with SessionLocal() as s:
+            row = staged(s)
+            s.commit()
+            pa.activate(s, row.id, revision=row.revision)
+            s.commit()
+
+        def trap(**asked):
+            raise AssertionError("reload consulted the research plane")
+
+        monkeypatch.setattr(pa, "verified_decision", trap)
+        with SessionLocal() as s:
+            assert len(pa.active_bindings(s)) == 1

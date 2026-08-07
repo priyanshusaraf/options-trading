@@ -786,3 +786,60 @@ def verified_graph_decision(*, project_id: str, graph_identifier: str,
             "decision": "approved",
         }
     return None
+
+
+#: The candidate decision vocabulary, as `decide_project_candidate` writes it. Named here
+#: so an observability caller reuses it instead of inventing a parallel status model.
+CANDIDATE_DECISIONS = frozenset({"approved", "rejected"})
+
+
+def graph_decision_history(*, project_id: str, graph_identifier: str,
+                           graph_version: int) -> list[dict] | None:
+    """Every verified decision recorded about one exact graph version, newest run first.
+
+    The narrow read the execution cockpit needs to tell an operator "the research view has
+    moved since this was admitted". It is deliberately raw: it reports what research says
+    and classifies nothing. Comparing a decision against the one that admitted a deployment
+    is an execution-plane question and is answered there (`app/engine/cockpit.py`), because
+    this bridge must not learn what a deployment is.
+
+    **Read-only, and observability only.** ADR 0013: research approval is an admission
+    prerequisite consumed at activation. Nothing derived from this function may pause,
+    retire, refuse or downgrade an active deployment.
+
+    Returns `None` — not `[]` — when the research plane cannot be read, so a caller can say
+    *unavailable* rather than inferring "nothing contradicts this". The two are different
+    facts and collapsing them is exactly the inference an operator must not be handed.
+    A candidate whose stored decision fails verification is skipped rather than reported: an
+    unverifiable envelope is not evidence of anything, in either direction.
+    """
+    if not os.path.exists(research_db_path()):
+        return None
+    try:
+        views = list_graph_runs(project_id)
+    except Exception:
+        return None
+
+    out: list[dict] = []
+    for view in views:
+        graph = view.get("graph") or {}
+        if (graph.get("identifier") != graph_identifier
+                or graph.get("version") != graph_version):
+            continue
+        candidate = view.get("candidate") or {}
+        envelope = candidate.get("decision") or {}
+        evidence = envelope.get("evidence") if isinstance(envelope, dict) else None
+        verdict = envelope.get("decision") if isinstance(envelope, dict) else None
+        if verdict is None and isinstance(evidence, dict):
+            verdict = evidence.get("decision")
+        if verdict not in CANDIDATE_DECISIONS:
+            continue
+        out.append({
+            "run_id": view.get("run_id"),
+            "candidate_id": candidate.get("candidate_id") or candidate.get("id"),
+            "decision": verdict,
+            "decided_at": (evidence or {}).get("decided_at"),
+            "reason": (evidence or {}).get("reason"),
+            "graph_content_address": graph.get("content_address"),
+        })
+    return out

@@ -212,36 +212,104 @@ Reclassified: **a deliberate consequence of plane separation**, with an **observ
 requirement attached. The L1.4 documents that called it a gap and named it "the first thing to
 revisit before live authority" are corrected. Do not implement an evidence re-read on reload.
 
-### 5.2 One genuine imprecision, recorded and not fixed here
+### 5.2 Admission must bind the exact graph *content* — closed 2026-08-08
 
-`ir_paper_deployments.evidence_content_address` does **not** hold what its name implies. It is set
-from `verified_decision()["content_address"]` (`paper_authority.py:_require_evidence`), which
-`verified_graph_decision` populates from `graph.get("content_address")` — the **graph** address
-recorded in the research recipe's `graph_provenance`, not the address of the decision envelope.
+**Superseding the "recorded and not fixed" note that stood here.** The imprecision was
+investigated and turned out to be a real provenance defect, so it was fixed.
 
-Two observations follow, and neither is a runtime defect:
+The evidence lookup is keyed on `(project, identifier, version)` — a **name**. Until
+2026-08-08 every comparison in `_require_evidence` was also on the name, so a research
+decision approving one artefact could admit a *different* artefact carrying the same
+identifier and version. Reachable across an independently restored `research.db`, and
+**proven reachable through the real service**, not theorised:
 
-- The column name is misleading in a provenance record, which is the worst place for a misleading
-  name.
-- The row therefore holds *two* independently-derived addresses for the same artefact — research's
-  (from the immutable experiment recipe, itself re-derived at binding time by
-  `graph_experiment.build_graph_provenance`) and the deployment's (from `graph_versions`) — and
-  **never compares them**. Comparing them at activation would prove that the bytes research
-  experimented on are the bytes about to trade. Within one consistent pair of databases they cannot
-  differ; across an independently restored `research.db` they could.
+```
+graph A address = sha256:9b2ea801986694093b3...
+graph B address = sha256:fb2968b78ff4ed552b2...
+RESULT: activation SUCCEEDED
+  graph_content_address    = sha256:fb2968b78ff4ed552b2...  (B — trades)
+  evidence_content_address = sha256:9b2ea801986694093b3...  (A — approved)
+  addresses equal          = False
+```
 
-**Recommended as its own small admission-time hardening slice**, not done here: rename the column
-to `evidence_graph_content_address` and compare it against `graph_content_address` at activation
-and resume. It strengthens admission, which is exactly the direction this ADR points — make
-admission prove more, so runtime needs research less. It is explicitly *not* an argument for
-reading research at reload.
+The row held both addresses and never compared them. The correction is that comparison, in
+`_require_evidence`:
 
-### 5.3 Newer contradicting research is an operator-visible fact
+> **The immutable graph content receiving deployment authority must be the same immutable
+> graph content bound into the research evidence used to admit it.**
 
-A cockpit should be able to show, for an active deployment: the approval it was admitted on, and
-whether newer research now contradicts it. That is a **read**, computed on demand, never a control.
-Keeping research read-only from the execution cockpit is a requirement of this ADR, not a
-convention.
+`row.graph_content_address` is re-derived from the stored artefact bytes immediately
+before; `decision["content_address"]` is what research recorded when the experiment was
+bound, itself re-derived then by `graph_experiment.build_graph_provenance`. Two independent
+derivations, now required to agree. A decision naming *no* content address is refused —
+an approval that cannot say which bytes it approved has admitted nothing.
+
+**It is an admission check and stays one.** It runs at activation and at resume — the two
+moments authority is granted or re-granted — and **never on the runtime reload path**. That
+is the model in §2, unchanged: research is required to grant or re-grant authority; ordinary
+restart must not require research to be readable.
+
+`evidence_content_address` **keeps its name**, which is imprecise — it holds the *graph*
+address research approved, not the address of the decision envelope. Renaming it would be a
+migration for naming alone on a table carrying live paper authority. The contract is stated
+instead where it is used: the column docstring in `db/models.py`, `_require_evidence`, and
+here. It is now load-bearing rather than decorative.
+
+### 5.3 Newer contradicting research is an operator-visible fact — built 2026-08-08
+
+Three facts, never collapsed, each in its own key of the cockpit payload:
+
+| Fact | Where it comes from | Can it change authority? |
+|---|---|---|
+| **Admission basis** — the lineage that justified authority when it was granted | the deployment row, recorded at activation | it already did, once |
+| **Current research view** — what research says *now* about this exact graph version | read on demand through the bridge | **never** |
+| **Execution authority** — the lifecycle state | the execution plane | only via pause / retire / supersession |
+
+`app/engine/cockpit.current_research(binding)` computes the middle one. It takes a binding and
+returns a dict: no session, no runner, no transition verb — enforced by a test that parses its
+body. The statuses reuse the existing candidate vocabulary
+(`research_read.CANDIDATE_DECISIONS` = `approved | rejected`) rather than inventing a parallel
+model:
+
+- `no_newer_decision`
+- `newer_approved_decision` — **a newer decision is not assumed negative**
+- `newer_rejected_decision` — the attention case
+- `unavailable`
+- `admission_decision_not_visible` — the admitting decision cannot be seen at all, most likely a
+  replaced `research.db`. Not "rejected": nothing rejected it
+
+"Newer" is by candidate id, the ordering the bridge already uses. The read is served by one narrow
+addition to the existing bridge, `research_read.graph_decision_history` — no second research
+resolver, no independent database access, no duplicated candidate-selection semantics. It returns
+`None`, not `[]`, when research cannot be read, so *unavailable* and *nothing contradicts this*
+stay distinguishable.
+
+**This is not a safety interlock and must never be described as one.** A newer rejection sets
+`operator_attention: true` and `affects_execution_authority: false`. It does not pause, retire,
+withdraw, refuse or downgrade anything. The correct shape is:
+
+```
+admission:           VALID HISTORICAL FACT
+current research:    NOW NEGATIVE
+execution authority: STILL ACTIVE
+attention:           REQUIRED
+```
+
+not `execution authority: automatically revoked`.
+
+### 5.3a Research availability affects observability, not authority
+
+The cockpit *may* query research, because observability is not execution. If the read fails the
+section degrades to `unavailable` with a detail, and the rest of the execution view still
+assembles — what is running, why it was admitted, which graph version is authoritative, which
+book, what money state exists, whether authority currently exists. Unavailability never infers
+"still approved", never infers "rejected", and never removes authority.
+
+### 5.3b Operator response
+
+A newer contradictory decision creates operator *attention*. Acting on it is a human decision
+executed through the existing lifecycle controls. Nothing automates it, and nothing should: the
+point of the admission-only model is that a research row is not a kill switch.
 
 ### 5.4 The withdrawal invariant is strengthened, not weakened
 

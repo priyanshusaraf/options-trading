@@ -37,6 +37,12 @@ INTERVAL = "30minute"
 IR_KEY = f"ir.{GRAPH}"
 
 
+def _graph_document(version: int = 1) -> dict:
+    from app.ir.strategies.expanding_z import GRAPH as DOCUMENT
+
+    return {**DOCUMENT, "version": version}
+
+
 @pytest.fixture(autouse=True)
 def a_fresh_database():
     init_db(reset=True)
@@ -48,7 +54,8 @@ def evidence_bridge(monkeypatch):
     monkeypatch.setattr(pa, "verified_decision", lambda **asked: {
         "run_id": 41, "candidate_id": 9, "project_id": PROJECT,
         "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
-        "content_address": "sha256:" + "e" * 64, "decision": "approved"})
+        "content_address": content_address(_graph_document(asked["graph_version"])),
+        "decision": "approved"})
 
 
 @pytest.fixture(autouse=True)
@@ -62,15 +69,13 @@ def a_clean_registry():
 
 
 def _deploy(session, *, activate: bool = True) -> IrPaperDeployment:
-    from app.ir.strategies.expanding_z import GRAPH as DOCUMENT
-
     if session.get(Project, PROJECT) is None:
         session.add(Project(project_id=PROJECT, name="cockpit"))
     if session.get(GraphArtifact, GRAPH) is None:
         session.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
                                   display_name="m", draft_json="{}", draft_revision=0))
     session.flush()
-    document = {**DOCUMENT, "version": 1}
+    document = _graph_document(1)
     if session.get(GraphVersion, (GRAPH, 1)) is None:
         session.add(GraphVersion(graph_identifier=GRAPH, version=1,
                                  artifact_json=canonical_json(document),
@@ -274,21 +279,27 @@ class TestItIsNotASecondOpinion:
 # ── 3. it is a read model ────────────────────────────────────────────────────────
 
 class TestReadOnly:
-    def test_assembling_the_view_opens_no_research_database(self, runner, monkeypatch):
-        """ADR 0013: admission facts are held by the execution plane. A cockpit that
-        reached into research would reintroduce the coupling that ADR refuses."""
+    def test_admission_facts_never_come_from_a_research_read(self, runner, monkeypatch):
+        """ADR 0013: the *admission basis* is held by the execution plane and is a
+        historical fact. Observability may query research (that is Phase 2's whole point),
+        but the admitting lineage must still be readable with research completely dead —
+        otherwise the admission-only model is a claim rather than a property."""
         import app.core.research_read as rr
 
         def trap(*a, **k):
-            raise AssertionError("the cockpit reached the research plane")
+            raise AssertionError("the admission basis was read from the research plane")
 
         monkeypatch.setattr(rr, "_research_session", trap, raising=True)
         monkeypatch.setattr(rr, "verified_graph_decision", trap, raising=True)
+        monkeypatch.setattr(rr, "graph_decision_history", trap, raising=True)
         with SessionLocal() as s:
             _deploy(s)
         runner.refresh_paper_authority()
         with SessionLocal() as s:
-            assert cockpit.view(runner, s).to_dict()["instruments"]
+            graph = _instrument(cockpit.view(runner, s).to_dict())["graph"]
+        assert graph["admission"]["evidence_run_id"] == 41
+        assert graph["admission"]["evidence_candidate_id"] == 9
+        assert graph["current_research"]["status"] == cockpit.RESEARCH_UNAVAILABLE
 
     def test_assembling_the_view_changes_no_state(self, runner):
         with SessionLocal() as s:
@@ -358,3 +369,187 @@ class TestTheRoute:
                 verb in inspect.getsource(fn)
                 for verb in ("paper_authority.pause", "paper_authority.retire",
                              "paper_authority.activate", ".arm(", ".kill("))
+
+
+# ── 5. current research: observability, never authority (ADR 0013 §5.3) ──────────
+
+def _history(monkeypatch, entries):
+    """State what research currently says, at the one door the cockpit uses."""
+    import app.core.research_read as rr
+
+    monkeypatch.setattr(rr, "graph_decision_history",
+                        lambda **asked: entries, raising=True)
+
+
+def _decision(candidate_id: int, verdict: str) -> dict:
+    return {"run_id": 41, "candidate_id": candidate_id, "decision": verdict,
+            "decided_at": "2026-08-08T00:00:00Z", "reason": "because",
+            "graph_content_address": "sha256:" + "c" * 64}
+
+
+class TestCurrentResearchView:
+    """Three facts, kept apart: admission basis, current research, execution authority."""
+
+    def _graph(self, runner):
+        with SessionLocal() as s:
+            return _instrument(cockpit.view(runner, s).to_dict())["graph"]
+
+    def test_no_newer_decision(self, runner, monkeypatch):
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(9, "approved")])
+        research = self._graph(runner)["current_research"]
+        assert research["status"] == cockpit.RESEARCH_NO_NEWER
+        assert research["operator_attention"] is False
+        assert research["newer_decision_count"] == 0
+
+    def test_a_newer_rejection_raises_attention_without_touching_authority(
+            self, runner, monkeypatch):
+        """The headline case. Research now says no; the deployment keeps authority."""
+        with SessionLocal() as s:
+            row = _deploy(s)
+            approved = row.graph_content_address
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(9, "approved"), _decision(14, "rejected")])
+
+        graph = self._graph(runner)
+        research = graph["current_research"]
+        assert research["status"] == cockpit.RESEARCH_NEWER_REJECTED
+        assert research["latest_decision"]["candidate_id"] == 14
+        assert research["operator_attention"] is True
+        assert research["affects_execution_authority"] is False
+        # ...and the other two facts are untouched.
+        assert research["admission_basis"]["evidence_candidate_id"] == 9
+        assert graph["content_address"] == approved
+        with SessionLocal() as s:
+            item = _instrument(cockpit.view(runner, s).to_dict())
+        assert item["authority"] == "authoritative"
+        assert item["strategy_key"] == IR_KEY
+
+    def test_a_newer_decision_is_not_assumed_negative(self, runner, monkeypatch):
+        """A re-approval must read as a re-approval, not as contradiction."""
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(9, "approved"), _decision(20, "approved")])
+        research = self._graph(runner)["current_research"]
+        assert research["status"] == cockpit.RESEARCH_NEWER_APPROVED
+        assert research["operator_attention"] is False
+        assert research["newer_decision_count"] == 1
+
+    def test_the_newest_decision_wins_when_several_are_newer(self, runner, monkeypatch):
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(9, "approved"), _decision(14, "rejected"),
+                               _decision(21, "approved")])
+        research = self._graph(runner)["current_research"]
+        assert research["status"] == cockpit.RESEARCH_NEWER_APPROVED
+        assert research["latest_decision"]["candidate_id"] == 21
+        assert research["newer_decision_count"] == 2
+
+    def test_research_unavailable_is_stated_not_inferred(self, runner, monkeypatch):
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        _history(monkeypatch, None)
+        research = self._graph(runner)["current_research"]
+        assert research["status"] == cockpit.RESEARCH_UNAVAILABLE
+        assert research["latest_decision"] is None
+        assert research["affects_execution_authority"] is False
+
+    def test_a_research_read_that_raises_degrades_rather_than_failing_the_view(
+            self, runner, monkeypatch):
+        """The rest of the execution view must still assemble — what is running, in which
+        book, on what admission, with what authority."""
+        import app.core.research_read as rr
+
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+
+        def boom(**asked):
+            raise RuntimeError("research plane on fire")
+
+        monkeypatch.setattr(rr, "graph_decision_history", boom, raising=True)
+        with SessionLocal() as s:
+            view = cockpit.view(runner, s).to_dict()
+        item = _instrument(view)
+        assert item["strategy_key"] == IR_KEY
+        assert item["authority"] == "authoritative"
+        assert item["graph"]["graph_identifier"] == GRAPH
+        assert view["book"] == PAPER
+        assert item["graph"]["current_research"]["status"] == cockpit.RESEARCH_UNAVAILABLE
+        assert "research plane on fire" in item["graph"]["current_research"]["detail"]
+
+    def test_an_invisible_admission_decision_is_not_reported_as_rejected(
+            self, runner, monkeypatch):
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        _history(monkeypatch, [_decision(99, "approved")])   # ours (9) is not here
+        research = self._graph(runner)["current_research"]
+        assert research["status"] == cockpit.RESEARCH_ADMISSION_NOT_VISIBLE
+        assert research["operator_attention"] is True
+
+    def test_every_status_is_declared(self):
+        assert set(cockpit.CURRENT_RESEARCH_STATUSES) == {
+            cockpit.RESEARCH_NO_NEWER, cockpit.RESEARCH_NEWER_APPROVED,
+            cockpit.RESEARCH_NEWER_REJECTED, cockpit.RESEARCH_UNAVAILABLE,
+            cockpit.RESEARCH_ADMISSION_NOT_VISIBLE}
+
+
+class TestCurrentResearchIsNotAControlPath:
+    """The critical invariant: a change in the research view mutates nothing."""
+
+    def test_a_newer_rejection_changes_no_deployment_state(self, runner, monkeypatch):
+        with SessionLocal() as s:
+            row = _deploy(s)
+        runner.refresh_paper_authority()
+        with SessionLocal() as s:
+            before = s.get(IrPaperDeployment, row.id).to_dict()
+
+        _history(monkeypatch, [_decision(9, "approved"), _decision(14, "rejected")])
+        for _ in range(3):                       # repeated reads must stay inert
+            with SessionLocal() as s:
+                cockpit.view(runner, s).to_dict()
+
+        with SessionLocal() as s:
+            after = s.get(IrPaperDeployment, row.id).to_dict()
+        assert after == before
+        assert after["state"] == pa.PAPER_ACTIVE
+        assert runner.paper_authority[INSTRUMENT].content_address == \
+            before["graph_content_address"]
+        assert runner.state.get(INSTRUMENT) is None or True   # unchanged either way
+
+    def test_the_reader_holds_no_transition_verb(self):
+        """`current_research` takes a binding and returns a dict — no session, no runner,
+        nothing it could transition even if a later edit tried."""
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(cockpit.current_research)))
+        fn = tree.body[0]
+        if (fn.body and isinstance(fn.body[0], ast.Expr)
+                and isinstance(fn.body[0].value, ast.Constant)):
+            fn.body = fn.body[1:]          # the prose may discuss what the code may not do
+        body = ast.unparse(fn)
+        for verb in ("pause", "retire", "activate", "resume", "commit", "flush",
+                     "session", "runner"):
+            assert verb not in body, f"the research reader must not reference {verb!r}"
+        assert [a.arg for a in fn.args.args] == ["binding"], \
+            "it takes a binding and nothing it could mutate"
+
+    def test_research_status_never_reaches_the_authority_fields(self, runner, monkeypatch):
+        _history(monkeypatch, [_decision(9, "approved"), _decision(14, "rejected")])
+        with SessionLocal() as s:
+            _deploy(s)
+        runner.refresh_paper_authority()
+        with SessionLocal() as s:
+            item = _instrument(cockpit.view(runner, s).to_dict())
+        # authority/lifecycle are decided by the execution plane alone
+        assert item["authority"] == "authoritative"
+        assert item["binding_error"] is None
+        assert set(item["lifecycle_actions"]) == {"pause", "retire"}
