@@ -245,7 +245,32 @@ def _expanding_z_pairing() -> ShadowPairing:
 #: pay for it when the lane is switched off.
 PAIRING_BUILDERS: dict[str, Any] = {"expanding_z_v4": _expanding_z_pairing}
 
+#: graph identifier -> the authoritative key whose builder produces it. The reverse of
+#: `PAIRING_BUILDERS`, and the lookup a *managed* deployment needs: it names a graph, not a
+#: hand-written strategy. A managed deployment naming a graph absent here has no runtime
+#: pairing and is reported at reload rather than silently skipped.
+PAIRING_BUILDERS_BY_GRAPH: dict[str, str] = {
+    "strategy.expanding_z_impulse": "expanding_z_v4",
+}
+
 _PAIRINGS: dict[str, ShadowPairing] = {}
+
+
+def declared_warmup_for_graph(document: dict) -> int:
+    """The settled-history a stored graph artefact declares, resolved from its own bytes.
+
+    A managed shadow deployment must decide admissibility *before* it is activated, and the
+    only honest source for "how much history does this graph need" is the graph. Reading it
+    off a registered adapter would only work for graphs that happen to be registered, which
+    is precisely the runtime-convention pairing L1.3A replaces.
+
+    Resolution is topology, not data: no frame is touched and no cache is built, so this is
+    safe to call from a control path.
+    """
+    from app.ir.resolve import resolve
+    from app.ir.strategies.expanding_z import LIBRARY
+
+    return int(resolve(document, LIBRARY).warmup)
 
 
 def pairing_for(authoritative_key: str | None) -> ShadowPairing | None:

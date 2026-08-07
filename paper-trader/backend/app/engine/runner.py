@@ -146,6 +146,13 @@ class EngineRunner:
         # raw assignment, which for a stale row names logic the registry could not resolve
         # and which therefore never ran. Rebuilt every scan; never persisted.
         self.executed_binding: dict = {}
+        # L1.3A — managed, non-authoritative shadow deployments, keyed by instrument.
+        # Loaded once here and at explicit refresh boundaries, never per instrument per
+        # tick: a database round-trip inside the ~2.5 s scan is the shape that took the box
+        # down in July. Verification happens at load, so what the loop holds has already
+        # been checked.
+        self.shadow_deployments: dict = {}
+        self.shadow_deployment_problems: list[str] = []
         self.health = HealthTracker()
         self.params: dict = self._effective_params()   # runtime-overridable knobs
         self.position_ticks: dict[str, dict] = {}   # latest marks for open positions (fast UI feed)
@@ -334,6 +341,36 @@ class EngineRunner:
         Neither is caught here: the caller decides what a refusal means for its lane.
         """
         return self._execution_for(key)[1]
+
+    def refresh_shadow_deployments(self) -> int:
+        """Reload the managed shadow deployments, re-verifying each one.
+
+        A controlled boundary — process start, and whenever an operator changes a binding —
+        rather than a per-tick read. A deployment whose graph no longer hashes to its
+        recorded address is dropped and the reason retained in
+        `shadow_deployment_problems`: silently rebinding to whatever bytes are there now is
+        the silent-substitution failure this project keeps closing one plane at a time, and
+        a shadow that quietly observes the wrong graph produces evidence nobody can trust.
+
+        Never raises. The shadow lane may not be able to stop the engine booting.
+        """
+        problems: list[str] = []
+        loaded: dict = {}
+        try:
+            from app.core import shadow_deployments
+
+            with SessionLocal() as session:
+                for found in shadow_deployments.active_bindings(
+                        session, on_problem=problems.append):
+                    loaded[found.instrument_key] = found
+        except Exception as e:      # noqa: BLE001 — see the docstring
+            problems.append(f"could not load managed shadow deployments: {e}")
+        self.shadow_deployments = loaded
+        self.shadow_deployment_problems = problems
+        for problem in problems:
+            log.warn(f"managed shadow deployment disabled: {problem}",
+                     event="IR_SHADOW_DEPLOYMENT")
+        return len(loaded)
 
     def publish_signal(self, key: str, execution, state: dict) -> None:
         """Publish a signal and the binding that produced it — together, through one door.
@@ -710,7 +747,17 @@ class EngineRunner:
                 return
             from app.engine import ir_shadow, ir_shadow_store
 
-            pairing = ir_shadow.pairing_for(strat.key)
+            # One question, one boundary. A managed deployment outranks the Stage 1 runtime
+            # pairing; `shadow_source_for` states that order in one place so the observer
+            # never has to know there are two sources.
+            source = execution_binding.shadow_source_for(
+                instrument_key=key, authoritative_key=strat.key,
+                managed=self.shadow_deployments.get(key),
+                interval=self._interval_for(key))
+            if source is None:
+                self.shadow_metrics.skipped(key)
+                return
+            pairing = ir_shadow.pairing_for(source.pairing_key)
             if pairing is None:
                 self.shadow_metrics.skipped(key)
                 return
@@ -2593,6 +2640,13 @@ class EngineRunner:
     async def run_signal_loop(self) -> None:
         """Slow lane: recompute strategy on completed candles, open new entries."""
         self.running = True
+        # Managed shadow deployments are loaded when the lane *starts*, not in the
+        # constructor. Building an `EngineRunner` must not read the database: the suite
+        # constructs hundreds of them around `init_db(reset=True)`, and adding a read to
+        # every construction made an unrelated options-entry test fail three runs in four
+        # — a flake that pointed at the wrong code entirely. Startup is the restart
+        # boundary the requirement names, and it is where the read belongs.
+        self.refresh_shadow_deployments()
         log.info(f"engine started — provider={self.provider.name}, "
                  f"enabled={sorted(self.enabled)}")
         try:

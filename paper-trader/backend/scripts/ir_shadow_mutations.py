@@ -36,6 +36,9 @@ CORE = "tests/test_ir_shadow.py"
 BINDING_TESTS = "tests/test_execution_binding.py"
 ENGINE_BINDING = "tests/test_engine_binding.py"
 ATTRIBUTION = "tests/test_execution_attribution.py"
+SHADOW_DEPLOY = "tests/test_shadow_deployments.py"
+SHADOW_ENGINE = "tests/test_shadow_deployment_engine.py"
+DEPLOYMENTS = BACKEND / "app" / "core" / "shadow_deployments.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -58,17 +61,17 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
     (
         "the shadow lane mutates shared execution parameters",
         RUNNER,
-        "            pairing = ir_shadow.pairing_for(strat.key)",
+        "            pairing = ir_shadow.pairing_for(source.pairing_key)",
         '            self.params["intraday_max_positions"] = 0\n'
-        "            pairing = ir_shadow.pairing_for(strat.key)",
+        "            pairing = ir_shadow.pairing_for(source.pairing_key)",
         f"{ISOLATION}::test_the_authoritative_state_is_identical_with_the_shadow_on_and_off",
     ),
     (
         "the shadow lane touches a broker seam",
         RUNNER,
-        "            pairing = ir_shadow.pairing_for(strat.key)",
+        "            pairing = ir_shadow.pairing_for(source.pairing_key)",
         "            self.broker.commit()\n"
-        "            pairing = ir_shadow.pairing_for(strat.key)",
+        "            pairing = ir_shadow.pairing_for(source.pairing_key)",
         f"{ISOLATION}::test_a_full_shadow_scan_reaches_no_broker_or_order_seam",
     ),
     (
@@ -281,6 +284,106 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "                    if executed is None:",
         f"{ATTRIBUTION}::"
         "test_a_stale_assignment_is_attributed_to_the_strategy_that_actually_traded",
+    ),
+    (
+        # L1.3A. The single edit that would turn a managed *shadow* deployment into
+        # something else. ADR 0012 §3.2 reserves that decision to the owner; this proves
+        # the service cannot make it quietly.
+        "a managed shadow deployment is written in an authoritative mode",
+        DEPLOYMENTS,
+        'MODE = "shadow"',
+        'MODE = "paper"',
+        f"{SHADOW_DEPLOY}::test_the_database_refuses_any_mode_but_shadow",
+    ),
+    (
+        "a managed shadow deployment claims execution authority",
+        DEPLOYMENTS,
+        'AUTHORITY = "non_authoritative"',
+        'AUTHORITY = "authoritative"',
+        f"{SHADOW_DEPLOY}::test_the_database_refuses_any_authority_but_non_authoritative",
+    ),
+    (
+        # The row records an address; without re-deriving it, the binding believes its own
+        # column forever and keeps naming a graph whose bytes moved.
+        "activation trusts the recorded content address instead of re-deriving it",
+        DEPLOYMENTS,
+        "    if address != row.graph_content_address:",
+        "    if False:",
+        f"{SHADOW_DEPLOY}::test_activation_reverifies_the_graph_content_address",
+    ),
+    (
+        "activation accepts a graph no research decision approves",
+        DEPLOYMENTS,
+        "    if not decision:",
+        "    if False:",
+        f"{SHADOW_DEPLOY}::test_activation_without_evidence_is_refused",
+    ),
+    (
+        "evidence for a different artefact is accepted as approval",
+        DEPLOYMENTS,
+        "    named = [m for m in mismatches if m]",
+        "    named = []",
+        f"{SHADOW_DEPLOY}::test_evidence_for_a_different_graph_version_is_refused",
+    ),
+    (
+        # A retired binding that can be revived lets a graph nobody re-approved come back,
+        # most likely across a restart, which is where nobody is watching.
+        "a retired deployment can be activated again",
+        DEPLOYMENTS,
+        "    if row.state not in (STAGED, PAUSED):",
+        "    if False:",
+        f"{SHADOW_DEPLOY}::test_retirement_is_terminal",
+    ),
+    (
+        "paused and retired deployments are reloaded and evaluated",
+        DEPLOYMENTS,
+        "        .where(IrShadowDeployment.state == SHADOW_ACTIVE)",
+        "        .where(IrShadowDeployment.state != 'nothing-matches-this')",
+        f"{SHADOW_DEPLOY}::test_only_active_bindings_are_reloaded",
+    ),
+    (
+        "a stale revision silently overwrites somebody else's decision",
+        DEPLOYMENTS,
+        "    if row.revision != revision:",
+        "    if False:",
+        f"{SHADOW_DEPLOY}::test_a_stale_revision_is_rejected",
+    ),
+    (
+        "warmup admission is skipped before activation",
+        DEPLOYMENTS,
+        "    if not admission.ok:",
+        "    if False:",
+        f"{SHADOW_DEPLOY}::"
+        "test_an_interval_that_can_never_settle_the_warmup_is_refused_at_activation",
+    ),
+    (
+        # Reload is the second half of verification: checking only at activation is a claim
+        # about the past, and a restart is exactly when the past stops being evidence.
+        "reload stops re-verifying, so a moved graph is observed silently",
+        DEPLOYMENTS,
+        "            if address != row.graph_content_address:\n"
+        "                raise BindingUnverifiable(",
+        "            if False:\n"
+        "                raise BindingUnverifiable(",
+        f"{SHADOW_ENGINE}::test_a_binding_whose_graph_moved_is_dropped_and_reported",
+    ),
+    (
+        # The observer must consume the boundary's answer, including its refusals.
+        #
+        # NB the obvious version of this mutation — swapping `source.pairing_key` back to
+        # `strat.key` — is VACUOUS today: exactly one graph exists, so both resolve to the
+        # same pairing and nothing observable changes. The harness caught that. What *is*
+        # observable now is whether a refusal is honoured, so that is what this breaks.
+        "the observer ignores the boundary's refusal to name a shadow source",
+        RUNNER,
+        "            if source is None:\n"
+        "                self.shadow_metrics.skipped(key)\n"
+        "                return",
+        "            if False:\n"
+        "                self.shadow_metrics.skipped(key)\n"
+        "                return",
+        f"{SHADOW_ENGINE}::"
+        "test_the_runner_consumes_a_boundary_refusal_rather_than_evaluating",
     ),
     (
         "a persistent cross-frame evaluation cache is reintroduced",

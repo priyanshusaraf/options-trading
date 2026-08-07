@@ -169,6 +169,57 @@ layer.
 a seventh is a deliberate edit and a rename cannot leave the registry describing a schema
 nobody has.
 
+### Managed shadow deployment — L1.3A (2026-08-07, ADR 0012 §3.1)
+
+The IR shadow pairing was runtime machinery: whichever graph happened to mirror an
+instrument's authoritative strategy key, decided per scan, recorded nowhere, gone on
+restart. Fine for one experiment, useless as a platform statement. It is now a server-owned
+record, so the system can say — durably, after a restart, with every identity separately
+attributable:
+
+> this approved immutable graph version is deployed to this instrument at this interval in
+> shadow mode, with this evidence lineage and this admission state
+
+and it remains structurally unable to say the graph may influence an order.
+
+| piece | where |
+|---|---|
+| record | `ir_shadow_deployments`, migration `0011` |
+| lifecycle | `app/core/shadow_deployments.py` — staged / shadow-active / paused / retired |
+| selection boundary | `execution_binding.shadow_source_for` |
+| engine | `EngineRunner.shadow_deployments`, `refresh_shadow_deployments()` |
+| contract | `GET|POST /api/ir-shadow/deployments`, `POST …/{id}/{activate\|pause\|resume\|retire}` |
+
+**Authority is refused three times over, independently.** `AUTHORITY_BY_SOURCE` maps
+`ir_graph → shadow`; the table CHECK-constrains `execution_mode` and `authority` so the
+database will not widen them; and the service has no mode or authority parameter at all.
+Any one alone is a convention a later edit could relax without anyone noticing. ADR 0012
+§3.2 — paper authority — is **not built** and needs three reviewed changes to become
+possible.
+
+**Verified, not declared.** Activation re-derives the graph's content address from the
+stored artefact bytes and re-checks the research decision through the read-only bridge;
+every reload re-derives the address again. A binding whose graph moved is **dropped and
+reported**, never repaired — silently rebinding to whatever bytes are there now is the
+silent-substitution failure already closed in the registry, in selection and in attribution.
+Evidence is verified once and recorded rather than re-read per reload, because the lineage
+lives in the research plane's own database and a control-loop boundary is the wrong place
+for a cross-plane read.
+
+**One boundary, two sources, stated precedence.** `shadow_source_for` answers "what should
+be observed here" from a managed deployment when one exists and the legacy key pairing
+otherwise. The legacy pairing is kept and *named*, not silently retained: retiring it before
+anything replaced it would take shadow coverage to zero, which is a worse outcome than
+having a fallback somebody can see.
+
+**Not a second deployment model.** The table has a foreign key to `deployments` and
+describes an observer attached to a book, not a book: no orders, no capital, no arm state,
+and the engine's authoritative selection never consults it. ADR 0012 §3.1a records why
+overloading `deployments.strategy_key` — the original sketch — was the wrong shape.
+
+Loaded at startup and at explicit refresh boundaries, never per instrument per tick; a test
+pins that a full scan performs zero deployment reads.
+
 ### Execution attribution (2026-08-04, ADR 0012 §4.1)
 
 **L1.2 canonicalised execution selection authority. This slice canonicalises execution

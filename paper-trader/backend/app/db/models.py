@@ -1272,3 +1272,135 @@ class IrShadowDivergence(Base):
     #: "zero unexplained in-hours insufficient-history events", so out-of-hours events must
     #: be distinguishable from in-hours ones rather than counted together.
     market_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class IrShadowDeployment(Base):
+    """A managed, **non-authoritative** shadow deployment of one immutable graph version.
+
+    L1.3A turns the IR shadow pairing from runtime machinery into a server-owned record.
+    It lets the platform state, durably and with lineage:
+
+        *this approved graph version is deployed to this instrument at this interval in
+        shadow mode, with this evidence and this admission state*
+
+    and it is structurally unable to state that the graph may influence an order.
+
+    **Why the identities are separate columns.** Project, graph identifier, graph version,
+    content address, evidence lineage, deployment, instrument, interval and strategy key
+    are nine different facts. The recorded defect class in this codebase is one layer
+    asserting another's fact, and the cheapest way to commit it is to encode several of
+    them in the strategy key and parse it back out. `strategy_key` here is the *stable
+    execution identity* only — it survives a graph edit, which is exactly why it cannot
+    identify the version that ran.
+
+    **Why `execution_mode` and `authority` are columns with CHECK constraints rather than
+    application logic.** ADR 0012 §3.2 reserves paper authority to the owner. A column the
+    database refuses to set to anything but `shadow`/`non_authoritative` cannot be widened
+    by a route, a migration data-fix, a restart path or a mistaken service call — only by a
+    reviewed schema change. `AUTHORITY_BY_SOURCE` is the gate; this is the lock on the same
+    door, and the two fail closed independently.
+
+    **Why evidence is recorded rather than foreign-keyed.** The approval lineage lives in
+    the research plane's own database (hard invariant 5: isolated, read-only bridges only).
+    A cross-database foreign key is impossible and a cross-database write would breach the
+    isolation, so activation *verifies* the lineage through the read-only bridge and
+    records the verified identity. The row therefore states what was checked and when, and
+    re-verification on reload is what keeps that claim honest rather than historical.
+    """
+
+    __tablename__ = "ir_shadow_deployments"
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["graph_identifier", "graph_version"],
+                             ["graph_versions.graph_identifier", "graph_versions.version"],
+                             ondelete="RESTRICT"),
+        ForeignKeyConstraint(["deployment_id"], ["deployments.id"], ondelete="RESTRICT"),
+        # One live shadow evaluator per (deployment, instrument, interval). Retired and
+        # paused rows are excluded so a retirement frees the slot without deleting the
+        # history that says what once ran there.
+        Index("uq_ir_shadow_deployment_active", "deployment_id", "instrument_key",
+              "interval", unique=True,
+              sqlite_where=text("state IN ('staged','shadow_active','paused')")),
+        Index("ix_ir_shadow_deployments_state", "state"),
+        CheckConstraint("runtime_source = 'ir_graph'",
+                        name="ck_ir_shadow_deployment_source"),
+        CheckConstraint("execution_mode = 'shadow'",
+                        name="ck_ir_shadow_deployment_mode"),
+        CheckConstraint("authority = 'non_authoritative'",
+                        name="ck_ir_shadow_deployment_authority"),
+        CheckConstraint("state IN ('staged','shadow_active','paused','retired')",
+                        name="ck_ir_shadow_deployment_state"),
+        CheckConstraint("graph_version >= 1", name="ck_ir_shadow_deployment_version"),
+        CheckConstraint("revision >= 0", name="ck_ir_shadow_deployment_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: Which project owns the logic. Not derivable from the graph identifier.
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    #: The exact immutable artefact. `(identifier, version)` is the executable identity;
+    #: an edit mints a new version and therefore cannot inherit this row.
+    graph_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    graph_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Recorded at activation and re-verified on every reload. A content address that stops
+    #: matching its version means the bytes moved under a row that claims to name them.
+    graph_content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    #: Verified research lineage, recorded rather than foreign-keyed (see the class
+    #: docstring). NULL run id means "staged without evidence", which may not activate.
+    evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_content_address: Mapped[str] = mapped_column(String(71), nullable=False,
+                                                          default="", server_default="")
+    evidence_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    #: Which book this observes. It observes it; it never writes to it.
+    deployment_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    instrument_key: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    interval: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: The stable key the adapter registers under — identity across edits, not of a build.
+    strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_source: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                default="ir_graph",
+                                                server_default="ir_graph")
+    execution_mode: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                default="shadow",
+                                                server_default="shadow")
+    authority: Mapped[str] = mapped_column(String(20), nullable=False,
+                                           default="non_authoritative",
+                                           server_default="non_authoritative")
+    #: The warmup/history verdict from the Stage 1 admission contract, decided before
+    #: activation so an impossible pairing is refused rather than discovered per-scan.
+    admission_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                               server_default="0")
+    admission_reason: Mapped[str] = mapped_column(String(400), nullable=False,
+                                                  default="", server_default="")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="staged",
+                                       server_default="staged")
+    #: Optimistic concurrency. Every transition names the revision it believes it is
+    #: acting on, so two operators cannot silently overwrite one another's decision.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                          server_default="0")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "project_id": self.project_id,
+            "graph_identifier": self.graph_identifier,
+            "graph_version": self.graph_version,
+            "graph_content_address": self.graph_content_address,
+            "evidence_run_id": self.evidence_run_id,
+            "evidence_candidate_id": self.evidence_candidate_id,
+            "evidence_content_address": self.evidence_content_address,
+            "evidence_verified_at": (self.evidence_verified_at.isoformat()
+                                     if self.evidence_verified_at else None),
+            "deployment_id": self.deployment_id,
+            "instrument_key": self.instrument_key, "interval": self.interval,
+            "strategy_key": self.strategy_key, "runtime_source": self.runtime_source,
+            "execution_mode": self.execution_mode, "authority": self.authority,
+            "admission_ok": self.admission_ok, "admission_reason": self.admission_reason,
+            "state": self.state, "revision": self.revision, "note": self.note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

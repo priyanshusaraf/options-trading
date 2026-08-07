@@ -746,3 +746,43 @@ def decide_project_candidate(
             "status": decision,
             "decision": envelope,
         }
+
+
+def verified_graph_decision(*, project_id: str, graph_identifier: str,
+                            graph_version: int) -> dict | None:
+    """The verified approval for one exact graph version, or None.
+
+    The single cross-plane read a managed shadow deployment makes, and it makes it once —
+    at activation — never on a control-loop boundary. Read-only, through the same session
+    seam as every other bridge here (hard invariant 5: the research plane is isolated and
+    only read-only bridges cross it).
+
+    "Verified" is load-bearing. A run's terminal evidence and a candidate's decision are
+    both content-addressed envelopes; `_graph_run_view` and `_verified_candidate_decision`
+    re-derive those addresses rather than trusting the stored fields, and anything that
+    fails to verify raises rather than being reported as an approval. So a caller that
+    receives a dict here has been told something checked, not something claimed.
+
+    Returns None — rather than raising — when nothing approves the artefact, because "no
+    approval exists" is an ordinary answer for a graph nobody has decided on yet. The
+    caller decides what to do about it; `shadow_deployments.activate` refuses.
+    """
+    for view in list_graph_runs(project_id):
+        graph = view.get("graph") or {}
+        if (graph.get("identifier") != graph_identifier
+                or graph.get("version") != graph_version):
+            continue
+        candidate = view.get("candidate") or {}
+        decision = candidate.get("decision") or {}
+        if decision.get("decision") != "approved":
+            continue
+        return {
+            "run_id": view.get("run_id"),
+            "candidate_id": candidate.get("candidate_id") or candidate.get("id"),
+            "project_id": graph.get("project_id"),
+            "graph_identifier": graph.get("identifier"),
+            "graph_version": graph.get("version"),
+            "content_address": graph.get("content_address"),
+            "decision": "approved",
+        }
+    return None

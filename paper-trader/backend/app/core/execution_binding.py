@@ -255,6 +255,79 @@ def resolve_shadow_binding(strategy_key: str,
                      enforce_authority=False)
 
 
+#: Which layer decided what gets *observed*. Two sources, one boundary, stated precedence —
+#: a managed deployment is a durable, evidence-backed record and outranks a runtime
+#: convention. `ORIGIN_LEGACY_PAIRING` is the Stage 1 mechanism, kept because retiring it
+#: before anything replaces it would take shadow coverage to zero, and named because a
+#: fallback nobody can see is a fallback nobody reviews.
+ORIGIN_MANAGED_DEPLOYMENT = "managed_shadow_deployment"
+ORIGIN_LEGACY_PAIRING = "legacy_key_pairing"
+
+
+@dataclass(frozen=True)
+class ShadowSource:
+    """What to observe on one instrument, and on whose say-so.
+
+    Carries identities only — no strategy object, no adapter, no callable. The observer
+    resolves what it needs from the graph identifier; handing it something invocable would
+    make "non-authoritative" a naming convention rather than a property of the type.
+    """
+
+    instrument_key: str
+    graph_identifier: str
+    content_address: str
+    strategy_key: str
+    pairing_key: str
+    interval: str
+    origin: str
+    runtime_source: str
+    execution_mode: str
+    authority: str
+    deployment_row_id: int | None
+
+
+def shadow_source_for(*, instrument_key: str, authoritative_key: str | None,
+                      managed, interval: str) -> ShadowSource | None:
+    """The one place that answers "what should be shadowed here".
+
+    Precedence: a managed shadow deployment, then the legacy key pairing, then nothing.
+    Both sources come through this function so the observer has a single question to ask —
+    two independent pairing mechanisms is exactly what L1.3A removes, while two *sources*
+    behind one boundary with a stated order is not the same thing.
+
+    Returns None rather than raising: having nothing to shadow on an instrument is an
+    ordinary state, not a failure.
+    """
+    from app.engine.ir_shadow import PAIRING_BUILDERS_BY_GRAPH, pairing_for
+
+    if managed is not None and managed.instrument_key == instrument_key:
+        # The interval is part of the binding. A graph admitted for 30-minute bars has not
+        # been admitted for 5-minute ones, and evaluating it there would produce refusals
+        # the admission contract already ruled out.
+        if managed.interval != interval:
+            return None
+        pairing_key = PAIRING_BUILDERS_BY_GRAPH.get(managed.graph_identifier)
+        if pairing_key is None:
+            return None
+        return ShadowSource(
+            instrument_key=instrument_key, graph_identifier=managed.graph_identifier,
+            content_address=managed.content_address, strategy_key=managed.strategy_key,
+            pairing_key=pairing_key, interval=managed.interval,
+            origin=ORIGIN_MANAGED_DEPLOYMENT, runtime_source=managed.runtime_source,
+            execution_mode=managed.execution_mode, authority=SHADOW,
+            deployment_row_id=managed.deployment_row_id)
+
+    pairing = pairing_for(authoritative_key)
+    if pairing is None:
+        return None
+    return ShadowSource(
+        instrument_key=instrument_key,
+        graph_identifier=str(pairing.graph.get("identifier") or ""),
+        content_address="", strategy_key="", pairing_key=authoritative_key or "",
+        interval=interval, origin=ORIGIN_LEGACY_PAIRING, runtime_source=SOURCE_IR_GRAPH,
+        execution_mode="shadow", authority=SHADOW, deployment_row_id=None)
+
+
 def _assigned_strategy_key(session, instrument_key: str) -> str | None:
     from app.db.models import InstrumentState
 

@@ -171,3 +171,39 @@ full: `AUTHORITY_BY_SOURCE` still reads `ir_graph → shadow`.
   set `r.provider.now` on the process-wide provider singleton and never restore it, freezing
   the market clock for everything that follows. Ten attribution tests failed in the suite and
   passed alone. Fixed once, in the rootdir `conftest.py`.
+
+---
+
+## 8. L1.3A — managed non-authoritative shadow deployment (2026-08-07)
+
+The shadow pairing stops being runtime machinery and becomes a server-owned record with
+lineage. ADR 0012 §3.1, built; §3.2 (paper authority) deliberately not.
+
+**Nine identities, nine columns**, because collapsing any of them into the strategy key is
+§2.1's forbidden move. The key is stable across edits *on purpose* — persisted rows must keep
+resolving — which is exactly why it cannot identify the artefact that ran.
+
+**Lifecycle:** staged → shadow-active ⇄ paused, and retired (terminal). Four states, each
+one an operator can act on differently. Retirement is one-way: a revivable retired binding
+would let a graph nobody re-approved come back across a restart, which is when nobody is
+watching. Every transition is revision-guarded.
+
+**Three independent refusals of authority** — `AUTHORITY_BY_SOURCE`, database CHECK
+constraints, and a service with no mode parameter. The point is not redundancy for its own
+sake: any one alone is a convention that a later edit could relax silently.
+
+**Verification vs. recording**, deliberately split: the graph address is re-derived on
+every reload (local, cheap, and the thing that moves), and the research decision is verified
+once at activation and recorded (cross-plane, and a control loop is the wrong place for it).
+
+### Corrections this slice made to its own plan
+
+- ADR 0012 §3.1 originally proposed overloading `deployments.strategy_key`. Building it
+  showed a `Deployment` row has nowhere to put the lineage, that the two lifecycles differ
+  (there is nothing to *arm* about an observer), and that a separate table lets the refusal
+  be a schema constraint rather than a runtime check. Recorded as §3.1a rather than quietly
+  changed.
+- The first draft of the tests used a hand-rolled minimal graph document. Admission resolves
+  the graph to read its declared warmup, so it failed resolution — and working around that
+  with a fake warmup would have meant asserting a number the test invented. They use the
+  shipped `expanding_z` artefact.

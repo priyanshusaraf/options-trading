@@ -76,8 +76,20 @@ one door; a state entry with no binding is a signal whose author is unknown and 
 paths refuse to open on one. No schema change and no migration — all 72 production live trades
 already carry a valid key or the documented `NULL` (ADR 0012 §4.1b).
 
-**Next slice:** managed shadow deployment binding (L1.3), strictly non-authoritative. ADR 0012
-§3 designs it; every step that would grant paper or live authority is owner-gated and unbuilt.
+**L1.3A shipped managed shadow deployment binding.** The IR shadow pairing is now a
+server-owned record (`ir_shadow_deployments`, migration `0011`,
+`app/core/shadow_deployments.py`) rather than runtime machinery, with staged /
+shadow-active / paused / retired lifecycle, revision-guarded transitions, verified graph
+content address and research lineage, warmup admission checked before activation, and
+deterministic reload after restart. `execution_binding.shadow_source_for` is the one
+boundary the observer asks; managed deployments outrank the legacy key pairing, which is
+kept and named as the fallback. Authority is refused three times independently — the
+authority map, database CHECK constraints, and a service with no mode parameter.
+
+**Owner gate, now the live one:** ADR 0012 §3.2 — paper authority as a source-and-mode pair
+— is designed and **not built**. Nothing may let IR output influence simulated or live
+orders, positions, accounting, sizing, routing, exits, reconciliation or risk without
+explicit approval. The design is presented separately.
 
 ## 2. Repository and remote state
 

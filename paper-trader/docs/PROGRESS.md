@@ -133,8 +133,21 @@ and the entry paths refuse to open on one. No schema change and no migration: al
 production live trades already carry a valid key or the documented `NULL`, so the defect was
 latent (ADR 0012 §4.1b).
 
-**The next bounded slice: managed shadow deployment binding** — strictly non-authoritative,
-per ADR 0012 §3, which needs owner approval before any of it becomes authoritative.
+**L1.3A made the shadow pairing a server-owned record.** `ir_shadow_deployments`
+(migration `0011`) + `app/core/shadow_deployments.py`: an approved immutable graph version
+bound to an instrument and interval in shadow mode, with verified evidence lineage, a
+staged / shadow-active / paused / retired lifecycle, revision-guarded transitions, warmup
+admission checked before activation, and deterministic reload after restart.
+`execution_binding.shadow_source_for` is the single boundary the observer asks — managed
+deployments outrank the legacy key pairing, which stays as the *named* fallback. Loading
+happens at the `run_signal_loop` startup boundary, not in the constructor.
+
+**Authority is refused three times, independently:** `AUTHORITY_BY_SOURCE`, database CHECK
+constraints on `execution_mode`/`authority`, and a service with no mode parameter.
+
+**The live owner gate: ADR 0012 §3.2, paper authority.** Designed, unbuilt. Nothing may let
+IR output influence simulated or live orders, positions, accounting, sizing, routing, exits,
+reconciliation or risk without explicit approval.
 
 **Deferred by owner decision (2026-08-04), and not on the critical path:** ≥ 20 genuine
 market sessions, cleaning or expanding the recorded dataset, native OHLCV replay fidelity,

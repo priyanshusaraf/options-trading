@@ -1046,3 +1046,89 @@ async def ws_instrument(ws: WebSocket, key: str):
         return
     except Exception:
         return
+
+
+class ShadowDeploymentIn(BaseModel):
+    project_id: str
+    graph_identifier: str
+    graph_version: int
+    instrument_key: str
+    interval: str
+    deployment_id: int | None = None
+    note: str = ""
+
+
+class ShadowTransitionIn(BaseModel):
+    revision: int
+
+
+@router.get("/api/ir-shadow/deployments")
+def list_shadow_deployments(include_retired: bool = False):
+    """Managed, non-authoritative shadow deployments (L1.3A).
+
+    Typed contract only — there is deliberately no frontend here. Every row states its
+    project, exact graph version and content address, verified evidence lineage, instrument,
+    interval, admission verdict and lifecycle state, so the answer to "what is being
+    observed, on whose approval" needs no prose reconstruction.
+    """
+    from app.core import shadow_deployments
+
+    with SessionLocal() as s:
+        return {"deployments": shadow_deployments.listing(
+            s, include_retired=include_retired)}
+
+
+@router.post("/api/ir-shadow/deployments")
+def stage_shadow_deployment(body: ShadowDeploymentIn, request: Request):
+    """Stage a shadow deployment. Staging never starts evaluation — activation does, and it
+    is a separate call because it is the one that verifies evidence and admission."""
+    from app.core import shadow_deployments
+
+    with SessionLocal() as s:
+        try:
+            row = shadow_deployments.stage(
+                s, project_id=body.project_id, graph_identifier=body.graph_identifier,
+                graph_version=body.graph_version,
+                deployment_id=(body.deployment_id
+                               if body.deployment_id is not None
+                               else _runner(request).deployment_id),
+                instrument_key=body.instrument_key, interval=body.interval,
+                note=body.note)
+            s.commit()
+        except shadow_deployments.ShadowDeploymentError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        return row.to_dict()
+
+
+@router.post("/api/ir-shadow/deployments/{row_id}/{action}")
+def transition_shadow_deployment(row_id: int, action: str, body: ShadowTransitionIn,
+                                 request: Request):
+    """Move a shadow deployment through its lifecycle, revision-guarded.
+
+    The verbs are exactly the four the service exposes. There is no verb here that could
+    grant authority, and no field on the request that could name a mode — ADR 0012 §3.2 is
+    the owner's decision and is not reachable from an HTTP call.
+    """
+    from app.core import shadow_deployments
+
+    moves = {"activate": shadow_deployments.activate,
+             "pause": shadow_deployments.pause,
+             "resume": shadow_deployments.resume,
+             "retire": shadow_deployments.retire}
+    if action not in moves:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown transition {action!r}; "
+                                   f"expected one of {sorted(moves)}")
+    with SessionLocal() as s:
+        try:
+            row = moves[action](s, row_id, revision=body.revision)
+            s.commit()
+        except shadow_deployments.RevisionConflict as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        except shadow_deployments.ShadowDeploymentError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        result = row.to_dict()
+    # The engine holds its bindings in memory, so a transition that did not reach it would
+    # be a decision the operator can see and the loop cannot.
+    _runner(request).refresh_shadow_deployments()
+    return result
