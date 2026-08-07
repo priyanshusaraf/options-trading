@@ -78,8 +78,9 @@ def _sync_seed_universe(sess) -> None:
 
 def _repair_open_position_lot_sizes(sess) -> int:
     """Repair old open fills that were recorded as one unit instead of one lot."""
-    cap = sess.get(CapitalState, 1)
-    if cap is None:
+    from app.core.execution_book import capital_for_book, resolve_book
+
+    if sess.scalar(select(CapitalState).limit(1)) is None:
         return 0
     fixed = 0
     rows = {r.key: r for r in sess.scalars(select(UniverseInstrument))}
@@ -103,7 +104,10 @@ def _repair_open_position_lot_sizes(sess) -> int:
         pos.entry_charges = compute_charges(
             pos.exchange, "BUY", pos.entry_premium, pos.qty)["total"]
         pos.entry_cost = pos.entry_premium * pos.qty + pos.entry_charges
-        cap.cash -= pos.entry_cost - old_cost
+        # Debit the ledger of the book that OWNS this position, not row 1. Repairing a
+        # paper position used to move the live book's cash — the exact contamination
+        # L1.3B exists to prevent, in a path that runs on every startup.
+        capital_for_book(sess, resolve_book(pos.mode)).cash -= pos.entry_cost - old_cost
         fixed += 1
     return fixed
 

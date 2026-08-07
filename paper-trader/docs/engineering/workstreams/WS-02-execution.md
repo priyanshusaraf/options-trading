@@ -986,3 +986,52 @@ Named, deliberately not scheduled.
 *This document follows `docs/engineering/TEMPLATE.md`. §3 is a contract: changing an export
 requires updating every workstream that lists it under Consumes, in the same commit. Tick a
 box in §5 only with verified evidence, in the same commit as the work.*
+
+
+### Execution-book isolation — L1.3B (2026-08-07, ADR 0012 §6)
+
+**The question this answers:** can paper execution create positions, trades, P&L, journal
+records, reconciliation state and recovery state without contaminating live execution or
+live accounting? Before this slice the answer was no, and the reason was not subtle — the
+`mode` column was stamped on every fill and consulted by **no** position query, and it did
+not exist on `capital_state` or `equity_snapshots` at all.
+
+**The book is the execution mode.** No new abstraction was introduced; `app/core/
+execution_book.py` gives the existing discriminator a name, a resolver and reach.
+`resolve_book` fails closed to `live` — the book with the strictest rules — so an unset,
+malformed or missing mode never inherits paper's permissions. `getattr(broker, "MODE",
+"paper")`, the shape it replaces, had that backwards.
+
+**Why a migration was needed at all.** `capital_state.cash` and `realized_pnl` are
+aggregates mutated in place on a single row, so no `WHERE` clause could stop a paper fill
+debiting the live ledger. A predicate cannot partition a number. Migration `0012` adds
+`book` to `capital_state` (with a partial unique index) and `equity_snapshots`, and
+back-stamps nothing: the one pre-slice ledger is attributed exactly once, from the `mode`
+already stamped on the money rows it produced, and left alone when that evidence
+contradicts itself.
+
+**The chokepoint.** `broker.open_positions()` / `position_for()` are how all ~35 production
+call sites reach a position — every square-off, every stop, every restart reconstruction,
+every risk read. Scoping those two methods scoped all of them.
+
+**Isolated vs cross-book, stated rather than assumed.** Isolated: position lookup, open
+positions, exits, restart, deployable capital, the daily-loss breaker, the round-trip cap,
+`capital_dict`, `account_pnl`, re-anchor, ledger drift. Cross-book on purpose:
+`universe_resolver`'s in-use guard, the reporting surfaces, the journal feeds, and
+`daily_account_snapshot` (which describes the real account, not a book). The equity curve
+stays unscoped by default because pre-slice points carry no book and scoping would drop the
+entire history from the cockpit.
+
+**The one deliberate regression, and its compensating control.** Book-scoping the exit lane
+means a live position left open while the paper book runs is managed by nobody — and hard
+invariant 2 says not getting out is the worst failure there is. It is still correct: a
+paper broker cannot close a live contract, only fake the close. So the orphan is made loud
+instead — `foreign_book_positions`, reported at the `run_signal_loop` startup boundary and
+on `/api/health` as descriptive context, never as part of the verdict.
+
+**Authority became a `(source, execution_mode)` pair, and IR gained nothing.** `GRANTS` now
+holds triples; `(ir_graph, paper)` and `(ir_graph, live)` are both absent. The gate
+recomputes the process's real mode at the point of use rather than trusting the field the
+binding carries. `ir_shadow_deployments` was **not** widened into a paper deployment table
+— it stays an observer with no capital, no orders, no arm state and no authority. Paper
+authority, if granted, flows through the canonical Deployment/execution-binding path.

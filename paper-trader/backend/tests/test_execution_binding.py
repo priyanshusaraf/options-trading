@@ -19,6 +19,7 @@ import pytest
 
 from app.core import deployments as dep
 from app.core import execution_binding as binding
+from app.core.execution_book import configured_execution_mode
 from app.db.models import LEGACY_DEPLOYMENT_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
 from app.strategy.registry import DEFAULT_STRATEGY_KEY, StrategyNotFound
@@ -250,16 +251,10 @@ def test_resolve_binding_is_that_same_decision_plus_the_database_reads():
 
 # ── source alone is not authority ────────────────────────────────────────────────
 
-def test_authority_is_a_reviewed_source_and_mode_pair_not_a_source_alone():
-    """ADR 0012 §3.2: the smallest safe future grant is not "`ir_graph` is authoritative"
-    but "`ir_graph` is authoritative *in paper mode*". A gate keyed on source alone cannot
-    express that, so the reviewed unit is the pair. Today exactly three pairs are granted;
-    anything else is unreviewed and fails closed."""
-    assert binding.GRANTS == frozenset({
-        (binding.SOURCE_HANDWRITTEN, binding.AUTHORITATIVE),
-        (binding.SOURCE_GENERATED, binding.AUTHORITATIVE),
-        (binding.SOURCE_IR_GRAPH, binding.SHADOW),
-    })
+#: The (source, authority) form of this assertion lived here until L1.3B replaced it with
+#: `test_the_reviewed_unit_is_a_source_and_a_mode` below. It is gone rather than kept
+#: alongside: two tests pinning the same contract at different shapes means one of them is
+#: asserting a contract the code no longer has.
 
 
 def test_a_binding_that_claims_an_unreviewed_pairing_is_refused_at_consumption(monkeypatch):
@@ -273,10 +268,16 @@ def test_a_binding_that_claims_an_unreviewed_pairing_is_refused_at_consumption(m
     graph_strategy = ir_shadow.pairing_for("expanding_z_v4").adapter()
     monkeypatch.setitem(_REGISTRY, graph_strategy.key, graph_strategy)
 
+    # Every field except the (source, mode) pairing is set to what a *legitimate* binding
+    # would carry — including the process's real execution mode. That is deliberate: with
+    # a blank `execution_mode` the mode check refuses first, the GRANTS lookup is never
+    # reached, and this test passes while proving nothing about it. The mutation harness
+    # caught exactly that and it was fixed here rather than by weakening the harness.
     forged = binding.ExecutionBinding(
         deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
         strategy_key=graph_strategy.key, strategy_version=graph_strategy.version,
         source=binding.SOURCE_IR_GRAPH, authority=binding.AUTHORITATIVE,
+        execution_mode=configured_execution_mode(),
         origin=binding.ORIGIN_INSTRUMENT, reason="forged")
 
     with pytest.raises(binding.AuthorityNotGranted):
@@ -337,3 +338,71 @@ def test_assigning_a_strategy_that_may_not_execute_is_refused_at_the_write(monke
 
     binding.assert_may_execute("expanding_z_v4")        # the incumbent is unaffected
     binding.assert_may_execute(None)                    # "the default" is not a claim
+
+
+# ── L1.3B: the reviewed unit is (source, execution_mode) ─────────────────────────
+
+def test_the_reviewed_unit_is_a_source_and_a_mode():
+    """ADR 0012 §6.5. `(ir_graph, paper)` is the grant paper authority would need, and it
+    is deliberately absent — the point of naming the pair is that adding it is a visible,
+    reviewable edit here rather than a consequence of some other change."""
+    from app.core.execution_book import LIVE, PAPER
+
+    assert binding.GRANTS == frozenset({
+        (binding.SOURCE_HANDWRITTEN, PAPER, binding.AUTHORITATIVE),
+        (binding.SOURCE_HANDWRITTEN, LIVE, binding.AUTHORITATIVE),
+        (binding.SOURCE_GENERATED, PAPER, binding.AUTHORITATIVE),
+        (binding.SOURCE_GENERATED, LIVE, binding.AUTHORITATIVE),
+    })
+
+
+def test_ir_graph_is_ungranted_in_every_mode():
+    """The owner gate, stated as a property rather than as a list. L1.3B makes authority
+    mode-aware *without* granting IR anything — that remains ADR 0012 §3.2's decision."""
+    from app.core.execution_book import BOOKS
+
+    for mode in BOOKS:
+        assert (binding.SOURCE_IR_GRAPH, mode, binding.AUTHORITATIVE) not in binding.GRANTS
+        assert (binding.SOURCE_IR_GRAPH, mode, binding.SHADOW) not in binding.GRANTS
+
+
+def test_an_unknown_execution_mode_is_refused_rather_than_treated_as_paper(monkeypatch):
+    """Fail-closed in the direction that matters. A blank or malformed `PT_EXECUTION` must
+    never inherit paper's permissions — it resolves to `live`, which is granted for
+    handwritten strategies and would be refused for anything paper-only."""
+    from app.core import config, execution_book
+
+    class S:
+        execution = "!!not-a-mode!!"
+
+    monkeypatch.setattr(config, "get_settings", lambda: S())
+    assert execution_book.configured_execution_mode() == execution_book.LIVE
+
+
+def test_the_mode_recorded_on_a_binding_cannot_launder_it_past_the_gate(monkeypatch):
+    """The same defence the source already had. A binding is a plain dataclass, so its
+    `execution_mode` field is a claim; the gate recomputes the process's real mode and
+    refuses when they disagree, rather than trusting what it was handed."""
+    from app.core.execution_book import LIVE
+
+    forged = binding.ExecutionBinding(
+        deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
+        strategy_key=DEFAULT_STRATEGY_KEY, strategy_version=None,
+        source=binding.SOURCE_HANDWRITTEN, authority=binding.AUTHORITATIVE,
+        execution_mode=LIVE,   # the process is running paper (conftest forces it)
+        origin=binding.ORIGIN_INSTRUMENT, reason="forged")
+
+    with pytest.raises(binding.AuthorityNotGranted):
+        binding.strategy_for_execution(forged)
+
+
+def test_authority_is_not_inferred_from_the_strategy_key_or_the_deployment():
+    """Requirement: mode must not be inferred from namespace, key, deployment source or
+    graph type. Two bindings differing only in deployment and origin resolve identically,
+    because neither is an input to the gate."""
+    a = binding.bind(deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
+                     deployment_pin=None, assigned_key=None)
+    b = binding.bind(deployment_id=999, instrument_key="BANKNIFTY",
+                     deployment_pin=None, assigned_key=DEFAULT_STRATEGY_KEY)
+    assert a.execution_mode == b.execution_mode
+    assert binding.strategy_for_execution(a).key == binding.strategy_for_execution(b).key

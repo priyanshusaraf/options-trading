@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from app.api.routes import _instrument_payload
+from app.core.execution_book import PAPER
 from app.db.session import init_db
 from app.providers.mock import MockProvider
 
@@ -12,7 +13,7 @@ from app.providers.mock import MockProvider
 def test_instrument_payload_returns_the_tick_shape():
     init_db(reset=True)
     prov = MockProvider()
-    p = _instrument_payload(prov, "NIFTY")
+    p = _instrument_payload(prov, "NIFTY", PAPER)
     assert p["instrument"] == "NIFTY"
     assert "time" in p and "spot" in p
     assert "option_premium" in p and "tradingsymbol" in p
@@ -41,7 +42,7 @@ async def _probe(prov):
             ticks["n"] += 1
 
     t = asyncio.create_task(ticker())
-    await asyncio.to_thread(_instrument_payload, prov, "NIFTY")   # the handler's per-tick call
+    await asyncio.to_thread(_instrument_payload, prov, "NIFTY", PAPER)   # the handler's per-tick call
     during = ticks["n"]
     stop["v"] = True
     await t

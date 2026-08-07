@@ -68,7 +68,7 @@ from app.engine.risk_controls import (
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
 from app.providers.factory import get_provider
-from app.core import execution_binding
+from app.core import execution_binding, execution_book
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
 from app.strategy.signals import latest_state, to_payload
 
@@ -120,6 +120,10 @@ class EngineRunner:
         # PaperBroker unless the live-execution flags are set (then LiveBroker).
         self.broker = make_broker(self.provider, self.notifier,
                                   deployment_id=self.deployment_id)
+        # Which execution book this runner's money state belongs to. Taken from the
+        # broker that was actually built rather than from configuration, because that
+        # object is the one doing the writing (`core/execution_book.py`).
+        self.book = execution_book.book_of(self.broker)
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
@@ -341,6 +345,34 @@ class EngineRunner:
         Neither is caught here: the caller decides what a refusal means for its lane.
         """
         return self._execution_for(key)[1]
+
+    def report_foreign_book_positions(self) -> list[str]:
+        """Name the open positions belonging to the *other* execution book.
+
+        The compensating control for L1.3B. `broker.open_positions()` is book-scoped now,
+        so a live position left open while this process runs the paper book is marked by
+        nobody, ratcheted by nobody and exited by nobody — and hard invariant 2 says not
+        getting out is the worst failure there is.
+
+        Widening the read back out is not the answer: this broker cannot close the other
+        book's contract, it can only write a close that never happened. So the orphan is
+        made impossible to miss instead, here at the startup boundary and on
+        `/api/health`. Returns the instrument keys so the caller can surface them.
+        """
+        try:
+            with SessionLocal() as s:
+                keys = sorted({p.instrument_key
+                               for p in execution_book.foreign_book_positions(s, self.book)})
+        except Exception as e:
+            log.error(f"could not check for foreign-book positions: {e}",
+                      event="FOREIGN_BOOK_CHECK_FAIL")
+            return []
+        if keys:
+            log.warn(f"{len(keys)} open position(s) belong to the other execution book "
+                     f"and are managed by nobody in this process: {', '.join(keys)}. "
+                     f"This process runs the {self.book!r} book.",
+                     event="FOREIGN_BOOK_POSITIONS")
+        return keys
 
     def refresh_shadow_deployments(self) -> int:
         """Reload the managed shadow deployments, re-verifying each one.
@@ -1954,18 +1986,20 @@ class EngineRunner:
 
     # ── daily-loss circuit breaker ────────────────────────────────────────
     def _today_net_realized(self, today) -> float:
-        from app.db.models import Trade
+        """This book's net realised P&L today — drives the daily-loss circuit breaker.
+
+        Book-scoped (L1.3B): a paper loss must not halt the live book, and a paper win
+        must not mask a live loss. A risk control counting the wrong book's money is not
+        a conservative approximation — it is wrong in both directions."""
+        from app.engine.analytics import realized_on
         with SessionLocal() as s:
-            return sum(t.net_pnl for t in s.scalars(select(Trade))
-                       if t.exit_time and t.exit_time.date() == today)
+            return realized_on(s, today, self.book)
 
     def _today_round_trips(self, today) -> int:
-        """Count of completed round trips (closed trades) today — drives the hard
-        daily round-trip cap (#10)."""
-        from app.db.models import Trade
+        """This book's completed round trips today — the hard daily round-trip cap (#10)."""
+        from app.engine.analytics import round_trips_on
         with SessionLocal() as s:
-            return sum(1 for t in s.scalars(select(Trade))
-                       if t.exit_time and t.exit_time.date() == today)
+            return round_trips_on(s, today, self.book)
 
     def _open_unrealized(self) -> float:
         """Mark-to-market P&L across all currently open positions (can be negative).
@@ -2373,7 +2407,9 @@ class EngineRunner:
             internal_equity = cap.cash + sum(p.mtm_value() for p in self.broker.open_positions())
             anchored = getattr(cap, "anchored_at", None)
             ok, why = should_reanchor(
-                is_live=(getattr(self.broker, "MODE", "paper") == "live"),
+                # Fail-closed book resolution: `getattr(broker, "MODE", "paper")` treated
+                # a broker that could not name its book as harmless, which is backwards.
+                is_live=(self.book == execution_book.LIVE),
                 real_equity=net or None,
                 internal_equity=internal_equity,
                 open_entry_cost=open_entry_cost,
@@ -2416,6 +2452,7 @@ class EngineRunner:
         try:
             with SessionLocal() as s:
                 return int(s.query(func.count(Trade.id)).filter(
+                    Trade.mode == self.book,
                     Trade.exit_time >= dt.datetime.combine(today, dt.time.min),
                     Trade.exit_time < dt.datetime.combine(today, dt.time.max)).scalar() or 0)
         except Exception:
@@ -2647,6 +2684,7 @@ class EngineRunner:
         # — a flake that pointed at the wrong code entirely. Startup is the restart
         # boundary the requirement names, and it is where the read belongs.
         self.refresh_shadow_deployments()
+        self.report_foreign_book_positions()
         log.info(f"engine started — provider={self.provider.name}, "
                  f"enabled={sorted(self.enabled)}")
         try:

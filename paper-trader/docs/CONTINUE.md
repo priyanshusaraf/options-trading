@@ -86,6 +86,19 @@ boundary the observer asks; managed deployments outrank the legacy key pairing, 
 kept and named as the fallback. Authority is refused three times independently — the
 authority map, database CHECK constraints, and a service with no mode parameter.
 
+**L1.3B separated the execution books.** `app/core/execution_book.py` answers "whose money
+is this", and the answer is the execution mode — no new abstraction, because
+`positions.mode` and `trades.mode` already named it. What was missing was reach: the
+discriminator was read by *no* position query and did not exist on `capital_state` (one
+row, mutated in place) or `equity_snapshots`. Migration `0012` adds it to both and
+back-stamps nothing. `broker.open_positions`/`position_for` scope ~35 call sites from one
+chokepoint; the daily-loss breaker, round-trip cap, re-anchor, drift, restart and the
+startup lot-size repair each count only their own book. Resolution fails closed to `live`.
+Scoping the exit lane makes an orphan possible — chosen deliberately, because a paper
+broker can only fake a live close — so `foreign_book_positions` reports the other book's
+open rows at startup and on `/api/health`. Authority is now a reviewed
+`(source, execution_mode)` pair; `(ir_graph, paper)` is **absent**.
+
 **Owner gate, now the live one:** ADR 0012 §3.2 — paper authority as a source-and-mode pair
 — is designed and **not built**. Nothing may let IR output influence simulated or live
 orders, positions, accounting, sizing, routing, exits, reconciliation or risk without

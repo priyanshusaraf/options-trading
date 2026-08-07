@@ -29,6 +29,10 @@ METRICS = BACKEND / "app" / "engine" / "ir_shadow_metrics.py"
 CONFIG = BACKEND / "app" / "core" / "config.py"
 ADAPTER = BACKEND / "app" / "strategy" / "ir_adapter.py"
 BINDING = BACKEND / "app" / "core" / "execution_binding.py"
+BOOK = BACKEND / "app" / "core" / "execution_book.py"
+BROKER = BACKEND / "app" / "engine" / "broker.py"
+ANALYTICS = BACKEND / "app" / "engine" / "analytics.py"
+SESSION = BACKEND / "app" / "db" / "session.py"
 
 ISOLATION = "tests/test_ir_shadow_isolation.py"
 ADMISSION = "tests/test_ir_shadow_admission.py"
@@ -39,6 +43,9 @@ ATTRIBUTION = "tests/test_execution_attribution.py"
 SHADOW_DEPLOY = "tests/test_shadow_deployments.py"
 SHADOW_ENGINE = "tests/test_shadow_deployment_engine.py"
 DEPLOYMENTS = BACKEND / "app" / "core" / "shadow_deployments.py"
+BOOK_TESTS = "tests/test_execution_book.py"
+CAPITAL_TESTS = "tests/test_capital_books.py"
+ISOLATION_TESTS = "tests/test_book_isolation.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -200,8 +207,8 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         # execution by setting a field — the reason the check lives at consumption.
         "an unreviewed source and authority pairing is accepted",
         BINDING,
-        "    if claimed != actual or (actual, binding.authority) not in GRANTS \\",
-        "    if claimed != actual or False \\",
+        "            or (actual, mode, binding.authority) not in GRANTS \\",
+        "            or False \\",
         f"{BINDING_TESTS}::"
         "test_a_binding_that_claims_an_unreviewed_pairing_is_refused_at_consumption",
     ),
@@ -394,6 +401,101 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "        return Cache()\n\n"
         "    def adapter(self) -> Any:",
         f"{CORE}::test_the_lane_never_constructs_a_persistent_evaluation_cache",
+    ),
+    # ── L1.3B: execution-mode and accounting isolation ───────────────────────────
+    (
+        "position lookup drops the book predicate",
+        BROKER,
+        "        stmt = select(Position).where(Position.instrument_key == key,\n"
+        "                                      Position.mode == self.book)",
+        "        stmt = select(Position).where(Position.instrument_key == key)",
+        f"{ISOLATION_TESTS}::TestPositionsCannotCrossBooks"
+        "::test_the_same_instrument_can_be_open_in_both_books_at_once",
+    ),
+    (
+        "the open-position scan drops the book predicate",
+        BROKER,
+        "        stmt = select(Position).where(Position.mode == self.book)",
+        "        stmt = select(Position)",
+        f"{ISOLATION_TESTS}::TestPositionsCannotCrossBooks"
+        "::test_a_live_position_is_never_returned_as_a_paper_position",
+    ),
+    (
+        "paper trades are mixed into the live book's realised P&L",
+        ANALYTICS,
+        "    return [t for t in s.scalars(select(Trade).where(Trade.mode == book))",
+        "    return [t for t in s.scalars(select(Trade))",
+        f"{ISOLATION_TESTS}::TestTradeAggregatesDeclareTheirBook"
+        "::test_the_daily_loss_breaker_counts_only_its_own_books_trades",
+    ),
+    (
+        "restart rebuilds the wrong book",
+        BROKER,
+        "        self.book = book_of(self)",
+        '        self.book = "paper"',
+        f"{ISOLATION_TESTS}::TestRestartAndLegacyBehaviour"
+        "::test_restart_rebuilds_only_the_requested_book",
+    ),
+    (
+        "an unknown execution mode defaults to paper",
+        BOOK,
+        "    if not isinstance(raw, str):\n        return LIVE",
+        "    if not isinstance(raw, str):\n        return PAPER",
+        f"{BOOK_TESTS}::TestResolvingABook"
+        "::test_unknown_missing_or_malformed_input_fails_closed_to_live",
+    ),
+    (
+        "ir_graph is granted authority in paper mode",
+        BINDING,
+        "    (SOURCE_GENERATED, LIVE, AUTHORITATIVE),\n})",
+        "    (SOURCE_GENERATED, LIVE, AUTHORITATIVE),\n"
+        "    (SOURCE_IR_GRAPH, PAPER, AUTHORITATIVE),\n})",
+        f"{BINDING_TESTS}::test_ir_graph_is_ungranted_in_every_mode",
+    ),
+    (
+        "the gate checks the source alone instead of source and mode",
+        BINDING,
+        "    if claimed != actual or binding.execution_mode != mode \\\n"
+        "            or (actual, mode, binding.authority) not in GRANTS \\",
+        "    if claimed != actual \\\n"
+        "            or (actual, binding.authority) not in "
+        "{(s, a) for s, _m, a in GRANTS} \\",
+        f"{BINDING_TESTS}::"
+        "test_the_mode_recorded_on_a_binding_cannot_launder_it_past_the_gate",
+    ),
+    (
+        # Suppressing the *warning* alone is a no-op — the `elif` still refuses to claim,
+        # so a fresh ledger is created either way and the guard stays green. The harness
+        # caught that as vacuous, which is what it is for. The defect has to be the one
+        # that matters: claiming the row despite contradictory evidence.
+        "the legacy ledger is guessed onto a book when the evidence contradicts itself",
+        BOOK,
+        "        if len(owners) > 1:\n"
+        "            log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,\n"
+        "                                                    owners=sorted(owners), book=book),\n"
+        '                     event="LEDGER_UNATTRIBUTED")\n'
+        "        elif not owners or owners == {book}:",
+        "        if True:",
+        f"{CAPITAL_TESTS}::TestClaimingTheLegacyLedger"
+        "::test_a_ledger_with_rows_from_both_books_is_left_unattributed",
+    ),
+    (
+        "the startup repair debits row 1 whichever book owns the position",
+        SESSION,
+        "        capital_for_book(sess, resolve_book(pos.mode)).cash -= "
+        "pos.entry_cost - old_cost",
+        "        capital_for_book(sess, 'live').cash -= pos.entry_cost - old_cost",
+        f"{ISOLATION_TESTS}::TestOrphansFromTheOtherBookAreLoud"
+        "::test_the_repair_path_debits_the_owning_books_ledger",
+    ),
+    (
+        "an orphan in the other book is silently dropped instead of reported",
+        BOOK,
+        "    return [p for p in session.scalars(select(Position))\n"
+        "            if resolve_book(p.mode) != book]",
+        "    return []",
+        f"{ISOLATION_TESTS}::TestOrphansFromTheOtherBookAreLoud"
+        "::test_the_startup_boundary_reports_them",
     ),
 ]
 

@@ -12,6 +12,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.execution_book import capital_for_book, configured_execution_mode
 from app.db.models import CapitalState, EquitySnapshot, Position, SignalEvent, Trade
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
 
@@ -91,15 +92,16 @@ def bot_vs_you(account_equity_now: float | None, account_baseline: float | None,
     }
 
 
-def account_pnl(s: Session, provider) -> dict:
+def account_pnl(s: Session, provider, book: str | None = None) -> dict:
     """Bot-vs-you split from a caller-owned session + the live provider. Records the
     account baseline once, on the first successful live equity read."""
-    cap = s.get(CapitalState, 1)
+    book = book or configured_execution_mode()
+    cap = capital_for_book(s, book)
     eq = provider.account_equity() if getattr(provider, "name", "") == "kite" else None
     if eq is not None and not cap.account_baseline:
         cap.account_baseline = eq
         s.commit()
-    opens = list(s.scalars(select(Position)))
+    opens = open_positions(s, book)
     # E8: defer to the direction-aware Position.unrealized_pnl() — the inlined
     # (last - entry) * qty formula inverted the sign of an open equity SHORT, showing a
     # winning short as a loss and mis-attributing the gap to the owner's own trades.
@@ -107,10 +109,16 @@ def account_pnl(s: Session, provider) -> dict:
     return bot_vs_you(eq, cap.account_baseline, cap.realized_pnl, bot_unrealized)
 
 
-def capital_dict(s: Session) -> dict:
-    """Capital snapshot from a caller-owned session (thread-safe for API use)."""
-    cap = s.get(CapitalState, 1)
-    opens = list(s.scalars(select(Position)))
+def capital_dict(s: Session, book: str | None = None) -> dict:
+    """Capital snapshot from a caller-owned session (thread-safe for API use).
+
+    `book` names the execution book. It is optional only so that a caller with no
+    broker to hand keeps working; when omitted the process's own book is used, which
+    is what every production caller means. It is never "both": cash and realised P&L
+    from two ledgers cannot be summed into one meaningful figure."""
+    book = book or configured_execution_mode()
+    cap = capital_for_book(s, book)
+    opens = open_positions(s, book)
     # segment-aware: leveraged MIS contributes margin + unrealized P&L, not full
     # notional (raw last × qty), which double-counts leverage and inflates equity.
     mtm = sum(p.mtm_value() for p in opens)
@@ -123,20 +131,50 @@ def capital_dict(s: Session) -> dict:
     }
 
 
-def open_positions(s: Session) -> list[Position]:
-    return list(s.scalars(select(Position)))
+def open_positions(s: Session, book: str | None = None) -> list[Position]:
+    """One book's open positions. Isolated, not cross-book: an open position is a claim
+    on one ledger's cash, and mixing the two makes every figure derived from it wrong."""
+    book = book or configured_execution_mode()
+    return list(s.scalars(select(Position).where(Position.mode == book)))
 
 
-def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = None) -> list[dict]:
+def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = None,
+                 book: str | None = None) -> list[dict]:
     # Filter + tail-limit in SQL: this feeds /api/dashboard's 5s poll, and the old
     # version materialized the whole table (~72k rows on the live VPS) per call —
     # the second allocator-churn leak of the 2026-07-23 outage (with signal_counts).
     q = select(EquitySnapshot).order_by(EquitySnapshot.time.desc(), EquitySnapshot.id.desc())
+    # Book is opt-in here and only here among the isolated queries: points written before
+    # 2026-08-07 carry no book (ADR 0012 §6.3), so defaulting to one would silently drop
+    # the entire pre-slice curve. Callers plotting a single book pass it explicitly.
+    if book is not None:
+        q = q.where(EquitySnapshot.book == book)
     if since is not None:
         cut = since.replace(tzinfo=None) if since.tzinfo else since
         q = q.where(EquitySnapshot.time >= cut)
     snaps = list(s.scalars(q.limit(limit)))
     return [sn.to_dict() for sn in reversed(snaps)]
+
+
+def _closed_on(s: Session, day, book: str):
+    """One book's trades closed on `day`. The shared half of the two risk controls below.
+
+    Both were `select(Trade)` with a Python-side date filter and no book predicate, so a
+    paper loss could halt the live book and a paper win could mask a live loss. A risk
+    control that counts the wrong book's money is not a conservative approximation — it
+    is wrong in both directions."""
+    return [t for t in s.scalars(select(Trade).where(Trade.mode == book))
+            if t.exit_time and t.exit_time.date() == day]
+
+
+def realized_on(s: Session, day, book: str) -> float:
+    """Net realised P&L booked by `book` on `day` — the daily-loss circuit breaker."""
+    return sum(t.net_pnl for t in _closed_on(s, day, book))
+
+
+def round_trips_on(s: Session, day, book: str) -> int:
+    """Completed round trips booked by `book` on `day` — the daily round-trip cap (#10)."""
+    return len(_closed_on(s, day, book))
 
 
 def per_instrument_curves(s: Session, segment: str | None = None,

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.execution_book import LIVE, PAPER, configured_execution_mode
 from app.strategy.registry import (
     DEFAULT_STRATEGY_KEY,
     IR_NAMESPACE,
@@ -58,13 +59,24 @@ AUTHORITY_BY_SOURCE = {
     SOURCE_IR_GRAPH: SHADOW,
 }
 
-#: The same grant, as the set of **reviewed pairs**. A gate keyed on source alone cannot
-#: express ADR 0012 §3.2's smallest safe future step — "`ir_graph` is authoritative *in
-#: paper mode*" — so the reviewed unit is the pair, and anything not in this set is
-#: unreviewed and refused. This is what makes an `ExecutionBinding` unable to grant
-#: itself authority by asserting a field: `strategy_for_execution` checks membership
-#: here, at the point of use, rather than trusting where the binding came from.
-GRANTS = frozenset(AUTHORITY_BY_SOURCE.items())
+#: **The reviewed grants, as (source, execution_mode, authority) triples.** A gate keyed
+#: on source alone cannot express ADR 0012 §3.2's smallest safe future step — "`ir_graph`
+#: is authoritative *in paper mode*" — so the reviewed unit is the pair of source and
+#: mode, and anything not in this set is unreviewed and refused.
+#:
+#: `(ir_graph, paper)` is **absent, deliberately**. L1.3B made authority mode-aware
+#: precisely so that granting it later is one visible line here rather than a side effect
+#: of some unrelated change; the decision itself stays with the owner.
+#:
+#: This is also what makes an `ExecutionBinding` unable to grant itself authority by
+#: asserting a field: `strategy_for_execution` checks membership here, at the point of
+#: use, and recomputes both the source and the mode rather than trusting the binding.
+GRANTS = frozenset({
+    (SOURCE_HANDWRITTEN, PAPER, AUTHORITATIVE),
+    (SOURCE_HANDWRITTEN, LIVE, AUTHORITATIVE),
+    (SOURCE_GENERATED, PAPER, AUTHORITATIVE),
+    (SOURCE_GENERATED, LIVE, AUTHORITATIVE),
+})
 
 #: Which layer decided the binding. Narrowest that spoke, not narrowest that exists.
 ORIGIN_DEPLOYMENT = "deployment"
@@ -118,6 +130,10 @@ class ExecutionBinding:
     authority: str
     origin: str
     reason: str
+    #: The execution mode in force when this binding was described. Recorded so the
+    #: decision is auditable, and **never trusted** — the gate recomputes it. Defaulted
+    #: so a hand-built binding that omits it is refused rather than accidentally allowed.
+    execution_mode: str = ""
 
 
 def source_of(strategy_key: str | None) -> str:
@@ -147,7 +163,9 @@ def strategy_for_execution(binding: ExecutionBinding):
     launder a graph key past the gate.
     """
     claimed, actual = binding.source, source_of(binding.strategy_key)
-    if claimed != actual or (actual, binding.authority) not in GRANTS \
+    mode = configured_execution_mode()
+    if claimed != actual or binding.execution_mode != mode \
+            or (actual, mode, binding.authority) not in GRANTS \
             or binding.authority != AUTHORITATIVE:
         raise AuthorityNotGranted(binding.strategy_key, actual)
     return resolve_strategy(binding.strategy_key)
@@ -176,7 +194,8 @@ def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
     return ExecutionBinding(
         deployment_id=deployment_id, instrument_key=instrument_key,
         strategy_key=strategy.key, strategy_version=strategy.version, source=source,
-        authority=authority, origin=origin, reason=reason)
+        authority=authority, origin=origin, reason=reason,
+        execution_mode=configured_execution_mode())
 
 
 def bind(*, deployment_id: int, instrument_key: str, deployment_pin,

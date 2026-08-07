@@ -387,9 +387,23 @@ def _readiness_payload() -> dict:
         "present": True,
         "armed": bool(getattr(runner, "armed", False)),
         "provider": getattr(getattr(runner, "provider", None), "name", "unknown"),
+        "book": getattr(runner, "book", None),
+        # Open positions belonging to the OTHER execution book. Descriptive, never part
+        # of the verdict: this process cannot close them, so failing the probe would take
+        # down the book it *can* manage without helping the one it can't. Reported so the
+        # orphan L1.3B makes possible is visible rather than silent (ADR 0012 §6.4).
+        "foreign_book_positions": _foreign_book_positions(runner),
     }
     payload["provider_health"] = provider_health
     return payload
+
+
+def _foreign_book_positions(runner) -> list[str]:
+    """Never raise: the readiness probe answering is more important than this field."""
+    try:
+        return runner.report_foreign_book_positions()
+    except Exception:
+        return []
 
 
 @app.get("/api/health")

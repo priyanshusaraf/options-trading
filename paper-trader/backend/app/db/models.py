@@ -150,8 +150,24 @@ class Deployment(Base):
 
 
 class CapitalState(Base):
+    """One ledger per execution book. `cash` and `realized_pnl` are aggregates mutated
+    in place, so a paper fill debiting the live book's cash could not be prevented by
+    filtering a query — this table needed a row per book, not a predicate.
+
+    `book` is NULL on exactly one row: the single pre-L1.3B ledger, whose owning book is
+    decided once from the `mode` already stamped on the money rows it produced
+    (`core/execution_book.capital_for_book`). NULL therefore means "written before
+    2026-08-07 and not yet attributed", never "shared"."""
+
     __tablename__ = "capital_state"
+    __table_args__ = (
+        # Two rows for one book would silently split a ledger in half. Partial so the
+        # unclaimed legacy row is exempt rather than blocking the constraint entirely.
+        Index("uq_capital_state_book", "book", unique=True,
+              sqlite_where=text("book IS NOT NULL")),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
+    book: Mapped[str | None] = mapped_column(String(8), nullable=True)
     initial_capital: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
@@ -469,6 +485,10 @@ class EquitySnapshot(Base):
     invested: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float)
     open_count: Mapped[int] = mapped_column(Integer)
+    # Which execution book this point belongs to (L1.3B). NULL = written before the
+    # books were separated; those points belong to whichever book the ledger they were
+    # derived from is later attributed to, which is why they are not back-stamped.
+    book: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
     # optional segment/strategy partition (null = global portfolio snapshot)
     segment: Mapped[str | None] = mapped_column(String(16), nullable=True)
     strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -111,6 +111,9 @@ class EngineHealth(_Dto):
     present: bool
     armed: bool | None = None
     provider: str | None = None
+    book: str | None = None
+    #: Instrument keys open in the *other* execution book — descriptive, never fatal.
+    foreign_book_positions: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(_Dto):

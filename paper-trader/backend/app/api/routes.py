@@ -63,7 +63,11 @@ def status(request: Request):
     r = _runner(request)
     p = r.provider
     with SessionLocal() as s:
-        cap = analytics.capital_dict(s)
+        # `r.book`, not the configured mode: `make_broker` returns a PaperBroker whenever
+        # the live gates or the Kite provider are absent, so the setting and the broker
+        # that was actually built can disagree. The cockpit must report the book the
+        # engine is writing.
+        cap = analytics.capital_dict(s, book=r.book)
     return {
         "provider": p.name,
         "authenticated": p.is_authenticated(),
@@ -297,7 +301,11 @@ def option_candles(key: str, request: Request):
     across recent underlying candles — feeds the option chart toggle."""
     r = _runner(request)
     with SessionLocal() as s:
-        pos = s.scalar(select(Position).where(Position.instrument_key == key))
+        # Book-scoped like every other position read (ADR 0012 §6.3): with two books the
+        # same instrument can be open in both, and an unscoped read would show whichever
+        # row SQLite returned first.
+        pos = s.scalar(select(Position).where(Position.instrument_key == key,
+                                              Position.mode == r.book))
         if not pos:
             return {"candles": [], "tradingsymbol": None}
         tsym, strike, expiry, otype = pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type
@@ -334,7 +342,7 @@ def account_pnl_route(request: Request):
     """Bot-vs-you split on the shared real account (live only)."""
     r = _runner(request)
     with SessionLocal() as s:
-        return analytics.account_pnl(s, r.provider)
+        return analytics.account_pnl(s, r.provider, book=r.book)
 
 
 @router.get("/api/dashboard")
@@ -345,19 +353,23 @@ def dashboard(request: Request, segment: str | None = None, strategy: str | None
     mark-to-market series when unfiltered; for a slice it's the realized-P&L curve."""
     seg = segment or None
     strat = strategy or None
-    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
+    r = _runner(request)
+    since = _period_since(period, r.provider.now()) if (period and period != "all") else None
     with SessionLocal() as s:
+        # The equity curve stays unfiltered on purpose: points written before 2026-08-07
+        # carry no book, so scoping it would drop the entire pre-slice history from the
+        # cockpit (ADR 0012 §6.3). Everything derived from live rows is book-scoped.
         equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
                   else analytics.realized_curve(s, seg, strat, since))
         return {
-            "capital": analytics.capital_dict(s),
+            "capital": analytics.capital_dict(s, book=r.book),
             "summary": analytics.summary(s, seg, strat, since),
             "equity_curve": equity,
             "instrument_curves": analytics.per_instrument_curves(s, seg, strat, since),
             "segment_curves": analytics.segment_curves(s, since),
             "strategy_curves": analytics.strategy_curves(s, seg, since),
             "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat, since=since),
-            "open_positions": [p.to_dict() for p in analytics.open_positions(s)],
+            "open_positions": [p.to_dict() for p in analytics.open_positions(s, r.book)],
             "segment": seg, "strategy": strat, "period": period or "all",
         }
 
@@ -1008,7 +1020,7 @@ async def ws_main(ws: WebSocket):
         manager.disconnect(ws)
 
 
-def _instrument_payload(provider, key: str) -> dict:
+def _instrument_payload(provider, key: str, book: str) -> dict:
     """H1: the blocking per-tick fetch for /ws/instrument — synchronous Kite calls
     (get_live_price, option_ltp) plus a DB read. Kept as a plain function so the WS
     handler can run it OFF the event loop via asyncio.to_thread; called directly on the
@@ -1017,7 +1029,11 @@ def _instrument_payload(provider, key: str) -> dict:
     inst = get_instrument(key)
     spot = provider.get_live_price(inst)
     with SessionLocal() as s:
-        pos = s.scalar(select(Position).where(Position.instrument_key == key))
+        # Book-scoped (ADR 0012 §6.3). `book` is passed from the runner rather than read
+        # from configuration, because `make_broker` can build a paper broker under a live
+        # setting — the tile must show the book the engine actually writes.
+        pos = s.scalar(select(Position).where(Position.instrument_key == key,
+                                              Position.mode == book))
         contract = (pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type) if pos else None
     opt = provider.option_ltp(inst, *contract) if contract else None
     return {
@@ -1039,7 +1055,7 @@ async def ws_instrument(ws: WebSocket, key: str):
     r = _runner(ws)
     try:
         while True:
-            payload = await asyncio.to_thread(_instrument_payload, r.provider, key)
+            payload = await asyncio.to_thread(_instrument_payload, r.provider, key, r.book)
             await ws.send_json(payload)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:

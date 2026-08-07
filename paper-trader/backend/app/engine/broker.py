@@ -25,6 +25,7 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal
 from app.core.runtime_config import effective
+from app.core.execution_book import book_of, capital_for_book
 from app.engine.charges import compute_charges, legs_for
 from app.engine.equity_entry import equity_stop_target
 from app.providers.base import MarketDataProvider, OptionQuote
@@ -44,43 +45,60 @@ class PaperBroker:
         # Defaults to the legacy deployment, which is what the single existing book
         # is — so this changes nothing until a second deployment exists.
         self.deployment_id = deployment_id
+        # Which *book* this broker reads and writes. Distinct from `deployment_id`:
+        # a deployment says which strategy configuration is trading, a book says whose
+        # money it is. Resolved from the object actually built, and fail-closed to live
+        # (`core/execution_book.py`) — a broker that cannot say which book it writes to
+        # must not be assumed harmless.
+        self.book = book_of(self)
+        # Attribute this book's ledger once, here, at construction. Doing it lazily on
+        # the first `capital()` call would put a bootstrap write in the middle of a fill.
+        capital_for_book(self.s, self.book)
 
     # ── ledger ────────────────────────────────────────────────────────────
     def capital(self) -> CapitalState:
-        return self.s.get(CapitalState, 1)
+        """This book's ledger row, claimed or created on first use.
+
+        Was `self.s.get(CapitalState, 1)`. One row for both books made hard invariant 1
+        (`cash == initial + realized − Σ open`) unprovable the moment a second book
+        existed, because a paper fill debited the live book's cash."""
+        return capital_for_book(self.s, self.book)
 
     def cash(self) -> float:
         return self.capital().cash
 
     def open_positions(self, deployment_id: int | None = None) -> list[Position]:
-        """Open positions. UNSCOPED by default, and that is deliberate.
+        """This book's open positions. **Book-scoped always; deployment-scoped on ask.**
 
-        Reads stay unscoped while writes are stamped, because the two carry
-        opposite risks. A write attributed to the wrong deployment is a reporting
-        error. A read that *misses* a position is a position nobody marks, ratchets
-        or exits — and hard invariant 2 says the risk lane must manage every
-        persisted position regardless of arm state, precisely because not getting
-        out is worse than any other failure.
+        The two scopes are not the same kind of thing, and only one of them is optional.
 
-        So: the filter exists (a per-deployment risk lane will want it), it is
-        opt-in, and nothing in the exit path passes it today.
+        *Deployment* stays opt-in for the reason it always did: a read that misses a
+        position is a position nobody marks, ratchets or exits, and hard invariant 2 says
+        not getting out is worse than any other failure.
+
+        *Book* is mandatory, and it is the one place this slice knowingly makes such a
+        miss possible. It is still right, because the alternative is worse: this broker
+        can only act on positions it can actually close. A `PaperBroker` holds no order
+        client, so "exiting" a live position writes a close into the ledger while the
+        contract stays open at Zerodha — a visible orphan becomes an invisible one. The
+        residual is made loud instead of silent by
+        `execution_book.foreign_book_positions`, reported at startup and on `/api/health`.
         """
-        stmt = select(Position)
+        stmt = select(Position).where(Position.mode == self.book)
         if deployment_id is not None:
             stmt = stmt.where(Position.deployment_id == deployment_id)
         return list(self.s.scalars(stmt))
 
     def position_for(self, key: str, deployment_id: int | None = None) -> Position | None:
-        """The open position for `key`. Unscoped by default — see `open_positions`.
+        """This book's open position for `key` — see `open_positions` for the scoping.
 
-        Note what the unscoped form assumes: at most ONE open position per
-        instrument across the whole system. That was structurally true before
-        deployments (audit finding C1) and stays true while only the legacy
-        deployment exists. It stops being true the moment two deployments trade the
-        same underlying, which is why the parameter is here now: the call sites that
-        must become deployment-scoped are exactly the ones that will pass it.
+        The unscoped form assumed at most ONE open position per instrument across the
+        whole system. That was structurally true before deployments (audit finding C1) and
+        it stops being true the moment paper and live coexist: the same instrument may be
+        open in both books at once, holding different contracts at different prices.
         """
-        stmt = select(Position).where(Position.instrument_key == key)
+        stmt = select(Position).where(Position.instrument_key == key,
+                                      Position.mode == self.book)
         if deployment_id is not None:
             stmt = stmt.where(Position.deployment_id == deployment_id)
         return self.s.scalar(stmt)
@@ -615,7 +633,7 @@ class PaperBroker:
         # last × qty double-counts MIS leverage and inflates the persisted equity curve.
         mtm = sum(p.mtm_value() for p in opens)
         cap = self.capital()
-        snap = EquitySnapshot(deployment_id=self.deployment_id,
+        snap = EquitySnapshot(deployment_id=self.deployment_id, book=self.book,
                               time=now, equity=cap.cash + mtm, cash=cap.cash,
                               invested=invested, realized_pnl=cap.realized_pnl,
                               open_count=len(opens))

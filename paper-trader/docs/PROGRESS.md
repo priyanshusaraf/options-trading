@@ -145,6 +145,28 @@ happens at the `run_signal_loop` startup boundary, not in the constructor.
 **Authority is refused three times, independently:** `AUTHORITY_BY_SOURCE`, database CHECK
 constraints on `execution_mode`/`authority`, and a service with no mode parameter.
 
+**L1.3B separated the execution books.** `app/core/execution_book.py` is the one place that
+answers "whose money is this", and the answer is the execution mode — no new abstraction,
+because `positions.mode` and `trades.mode` already named it correctly. What was missing was
+reach: the discriminator was written on every fill and read by *no* position query, and it
+did not exist at all on `capital_state` (one row, `id=1`, mutated in place) or
+`equity_snapshots`. Migration `0012` adds it to both; `broker.open_positions`/`position_for`
+scope every one of ~35 call sites from one chokepoint; the daily-loss breaker, the
+round-trip cap, re-anchor, ledger drift, restart reconstruction and the startup lot-size
+repair each count only their own book. Resolution fails closed to `live` — the strictest
+book — so a blank or malformed `PT_EXECUTION` can never inherit paper's permissions.
+
+Scoping the exit lane makes an orphan possible, and that was chosen deliberately: a paper
+broker holds no order client, so "closing" a live position writes a close that never
+happened. `foreign_book_positions` reports the other book's open rows at engine startup and
+on `/api/health` — loud instead of silent (ADR 0012 §6.4).
+
+**Authority is now a reviewed `(source, execution_mode)` pair.** `GRANTS` carries triples,
+and `(ir_graph, paper)` is **absent** — L1.3B made the gate mode-aware precisely so that
+granting IR paper authority later is one visible line rather than a side effect. The gate
+recomputes both source and mode at the point of use, so a hand-built binding cannot launder
+itself past it.
+
 **The live owner gate: ADR 0012 §3.2, paper authority.** Designed, unbuilt. Nothing may let
 IR output influence simulated or live orders, positions, accounting, sizing, routing, exits,
 reconciliation or risk without explicit approval.

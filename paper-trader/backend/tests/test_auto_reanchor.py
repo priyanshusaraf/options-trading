@@ -10,17 +10,30 @@ still a paper ledger and must keep its synthetic base.
 """
 import datetime as dt
 
+import pytest
+
 from app.db.models import CapitalState, Position, Trade
 from app.db.session import SessionLocal, init_db
+from app.engine.broker import PaperBroker
 from app.engine.runner import EngineRunner
+
+
+@pytest.fixture(autouse=True)
+def restore_the_broker_class():
+    """`_runner` promotes the broker CLASS, so put it back — a leaked `MODE` would make
+    every later test in the session write the live book."""
+    yield
+    PaperBroker.MODE = "paper"
 
 
 def _runner(live=True):
     init_db(reset=True)
-    r = EngineRunner()
-    if live:
-        r.broker.MODE = "live"    # instance attr — the real LiveBroker sets this on the class
-    return r
+    # Promoted before construction, on the class, which is where the real LiveBroker sets
+    # it. Since L1.3B, construction attributes this broker's ledger to its book — so a
+    # post-hoc instance flip would leave the broker live and its `capital_state` row
+    # paper, which is not a state any real broker can be in.
+    PaperBroker.MODE = "live" if live else "paper"
+    return EngineRunner()
 
 
 class _KiteFunds:
@@ -50,6 +63,7 @@ def _closed_trade(exit_time):
         exit_time=exit_time, exit_reason="TARGET",
         gross_pnl=500.0, charges_total=10.0, net_pnl=490.0,
         return_pct=9.8, holding_minutes=60.0, win=True,
+        mode="live",   # the LIVE book's trade — see the note on the open position below
     )
 
 
@@ -135,6 +149,8 @@ def test_does_not_reanchor_when_position_open():
             entry_premium=100.0, entry_charges=5.0, entry_cost=5005.0,
             entry_spot=20000.0, entry_time=dt.datetime(2026, 1, 1),
             stop_price=65.0, target_price=160.0,
+            mode="live",   # the LIVE book's position — `mode` defaults to paper, and
+                           # since L1.3B the live broker only sees its own book
         ))
         s.commit()
 
