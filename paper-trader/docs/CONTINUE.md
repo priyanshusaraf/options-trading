@@ -120,11 +120,11 @@ the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
 
-Latest acceptance run on 2026-08-04, for the execution-attribution slice (L1.2b):
+Latest acceptance run on 2026-08-07, for the L1.3A managed shadow deployment slice:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests
-3,141 passed · 6 skipped · EXIT 0            (181s)
+3,184 passed · 6 skipped · EXIT 0            (209s)
 
 $ .venv/bin/python scripts/dryrun.py 700
 RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK · EXIT 0
@@ -133,10 +133,10 @@ $ .venv/bin/python scripts/backtest_smoke.py
 net<gross where charged : OK ✓ · SWEEP OK ✓ · EXIT 0
 
 $ .venv/bin/python -m app.db.migrate head
-0010 · EXIT 0                                 (no schema change in this slice)
+0011 · EXIT 0                                 (ir_shadow_deployments, model/migration parity green)
 
 $ .venv/bin/python scripts/ir_shadow_mutations.py
-all 24 guards reddened on their own defect and were restored · EXIT 0
+all 35 guards reddened on their own defect and were restored · EXIT 0
 
 $ npm test -- --run && npm run typecheck && npm run build
 222 passed · TYPECHECK OK · BUILD OK · EXIT 0      (no frontend files modified)
