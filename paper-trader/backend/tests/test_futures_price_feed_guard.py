@@ -27,14 +27,27 @@ from app.providers.mock import MockProvider
 from app.providers.replay import ReplayProvider
 
 
-def test_no_provider_can_currently_price_a_futures_contract():
-    """The premise of the guard, pinned. If someone implements `get_futures_ltp` and declares
-    the capability, this test fails and is the reminder to re-evaluate the guard rather than
-    leaving it refusing a segment that now works."""
-    for cls in (KiteProvider, MockProvider, ReplayProvider):
-        assert caps.FUTURES_QUOTES not in cls.CAPABILITIES, (
-            f"{cls.name} now declares FUTURES_QUOTES — re-check the runner guard and this test"
-        )
+def test_the_guard_still_has_providers_to_protect_against():
+    """The guard's premise, re-pinned after Kite gained a real feed on 2026-08-09.
+
+    The earlier version of this test asserted that NO provider could price futures, and said
+    that implementing one should make it fail as a reminder to re-evaluate the guard. That is
+    exactly what happened: `KiteProvider.get_futures_ltp` is now implemented and the capability
+    is honestly declared, so Kite is allowed through.
+
+    The guard is not obsolete. Mock and replay still cannot price a dated contract, and a
+    future adapter starts with no capabilities at all — so the segment must still refuse rather
+    than open a position it could never mark. If this ever ends up with nothing to protect
+    against, the guard has become dead code and should be removed rather than left as decoration.
+    """
+    assert caps.FUTURES_QUOTES in KiteProvider.CAPABILITIES, (
+        "Kite implements get_futures_ltp — it should declare the capability"
+    )
+    incapable = [cls for cls in (MockProvider, ReplayProvider)
+                 if caps.FUTURES_QUOTES not in cls.CAPABILITIES]
+    assert incapable, (
+        "every provider can now price futures — the guard protects nobody and is dead code"
+    )
 
 
 class _StubProvider:

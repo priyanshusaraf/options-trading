@@ -70,10 +70,7 @@ class KiteProvider(MarketDataProvider):
     # order client. GTT/slicing/postbacks exist at Zerodha but are not wired here, so they are
     # deliberately NOT declared — a declaration is a promise, not an aspiration.
     CAPABILITIES = frozenset({
-        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN,
-        # NOT caps.FUTURES_QUOTES: `get_futures_ltp` is the base no-op returning None.
-        # No provider implements it, yet runner.py calls it at three sites to mark and
-        # force-close futures positions. See the index-futures guard in app/core/config.py.
+        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN, caps.FUTURES_QUOTES,
         caps.ACCOUNT_FUNDS, caps.ACCOUNT_POSITIONS, caps.ACCOUNT_EQUITY, caps.ORDER_MARGIN,
         caps.LIVE_EXECUTION, caps.MARKET_ORDERS, caps.LIMIT_ORDERS, caps.STOP_ORDERS,
         caps.INSTRUMENT_UNIVERSE,
@@ -394,6 +391,49 @@ class KiteProvider(MarketDataProvider):
         return [Candle(ts=r["date"].replace(tzinfo=None), open=r["open"], high=r["high"],
                        low=r["low"], close=r["close"], volume=float(r.get("volume", 0)))
                 for r in raw]
+
+    def _future_for_expiry(self, inst: Instrument, expiry) -> dict | None:
+        """The FUT contract for one EXACT expiry, not the nearest one.
+
+        `_near_future` deliberately returns the front month; a held position is in the series
+        it was opened in, and marking it against the front month after a rollover would price
+        a different contract. So this matches the expiry exactly and returns None otherwise —
+        refusing beats marking the wrong series.
+        """
+        want = _as_date(expiry)
+        if want is None:
+            return None
+        names = set(self._name_candidates(inst))
+        for row in self._instruments(inst.spot_exchange):
+            if (row.get("name") in names
+                    and row.get("instrument_type") == "FUT"
+                    and _as_date(row.get("expiry")) == want):
+                return row
+        return None
+
+    def get_futures_ltp(self, inst: Instrument, expiry) -> float | None:
+        """Last traded price of a dated futures contract.
+
+        Until 2026-08-09 this was the base class no-op returning None, while `runner.py` called
+        it at three sites to mark futures positions, judge staleness, and price the
+        delivery-window force close — so a futures position could never mark on a real price and
+        would have been force-closed at its ENTRY price. The segment is fenced behind the
+        `FUTURES_QUOTES` capability, which is what made leaving it unimplemented safe.
+
+        `None` still means "I cannot price this" and the caller must refuse; it must never fall
+        back to spot, which is a different economic instrument at a different basis.
+        """
+        row = self._future_for_expiry(inst, expiry)
+        if not row:
+            log.warn("no futures contract resolved for expiry",
+                     instrument=inst.key)
+            return None
+        key = f"{inst.spot_exchange}:{row['tradingsymbol']}"
+        try:
+            return self._ltp([key]).get(key, {}).get("last_price")
+        except Exception as e:                       # noqa: BLE001 — an unpriceable contract
+            log.error(f"futures ltp failed: {e}", instrument=inst.key)
+            return None
 
     def get_ltp(self, inst: Instrument) -> float | None:
         key = self._underlying_quote_key(inst)
