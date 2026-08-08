@@ -1,0 +1,272 @@
+# Backend hardening phase — 2026-08-08
+
+**Scope.** Repo-wide backend security, data-integrity, quant-leakage, performance and
+provider-architecture review, with fixes rather than a report. Started from exact head
+`b47e8f5` (migration head `0013`), branch `feat/exec-completeness`.
+
+**Status:** in progress. Four commits landed. This document is the continuity record —
+what was inspected, what was found, what changed, and what is next.
+
+**Standing state after the commits below:** full backend + research suite **EXIT 0, no
+failures** (it was not, at `b47e8f5` — see §3.1), `dryrun.py 700` **LEDGER OK**,
+`backtest_smoke.py` **SWEEP OK**, migration head unchanged at `0013`. No schema change, no
+migration, no execution-path change, nothing deployed.
+
+---
+
+## 1. Commits
+
+| Commit | What |
+|---|---|
+| `e01bdcc` | docs: the V1 guidance review (previous phase's deliverable, not adopted) |
+| `837febe` | fix: bound reporting reads at the query and at the request |
+| `e6b9bbf` | fix: restore the shared market cursor, not just the pinned clock |
+| `ce72249` | test: prove the hand-written strategies cannot read the future |
+
+---
+
+## 2. Security
+
+### 2.1 Auth posture — accurate, deliberate, and untenable for V1 (no fix; owner gate)
+
+`app/api/auth.py` is **one shared bearer token** (`PT_API_TOKEN`); empty disables auth
+entirely, and empty is the shipped default and the production posture on a tailnet-only
+box. `app/api/principal.py` resolves an explicit `ANONYMOUS_OWNER` rather than `None`, and
+`is_allowed()` is honestly "the owner may do everything".
+
+The middleware itself is well reasoned and was **not** found defective: exemptions are
+matched on the unversioned path (so `/api/v1/health` is exempt for the same reason
+`/api/health` is), `resolve_http_principal` returns `None` for exactly one condition (a
+credential presented and refused), the fallback in `get_principal` re-checks rather than
+defaulting to anonymous, and CORS is registered outermost on purpose so a 401 still
+carries its headers.
+
+**What is genuinely missing for multi-user V1**, and is a slice rather than a patch:
+
+- No object ownership. `Project` has no owner column; `graph_artifacts.identifier` is a
+  **global primary key** (gap G-5). Only `research_review_routes.py` references `principal`
+  at all — the other ten route modules do not.
+- Cross-project isolation *is* enforced and tested; cross-**principal** isolation does not
+  exist because there is only one principal.
+
+**Not a defect today. It is the V1 blocker**, and it is sequenced in the V1 proposal
+(`docs/agent-guidance-review/v1-proposal-2026-08/02-v1-classification.md` §1.5). The free
+hedge — namespacing identifiers per owner — remains untaken and still costs nothing.
+
+### 2.2 Generated-strategy sandbox — audited, found sound (no change)
+
+`research/strategy/builder/` is the only `exec()` in the tree. It was audited as a
+potential arbitrary-code-execution path and is **tight**:
+
+- `validate.py` runs a global AST **node-type allow-list** that excludes `Import`,
+  `Attribute`, `Subscript`, `Lambda`, comprehensions, control flow and f-strings, plus a
+  ban on any identifier or string containing `__`;
+- then a structural pass requiring exactly one `def compute(df, **params)` whose body is
+  block-call assignments and a canonical dict return;
+- `load.py` execs in a namespace containing only whitelisted block callables and an
+  **empty `__builtins__`**.
+
+The only reachable calls are whitelisted block functions with `df` or numeric-literal
+arguments. `validate_source` is called on the single exec path. No bypass found.
+
+### 2.3 Injection and unsafe-primitive sweep — clean
+
+`eval` / `exec` / `pickle` / `marshal` / `yaml.load`: one hit, the sandbox above.
+Raw-SQL interpolation: three hits (`app/ledger/db.py:37`, `app/db/session.py:243,248`), all
+interpolating **internal table/column constants**, never request data. `subprocess`: one
+hit (`research/nightly.py`, a `git` invocation with a fixed argv, no shell).
+
+### 2.4 Unbounded reads — REAL, FIXED (`837febe`)
+
+See §4.1. Classified here too because it is a denial-of-service surface, not only a
+performance defect: on a tailnet box any device, and after V1 any user, could turn a
+reporting endpoint into a full-table dump.
+
+---
+
+## 3. Data integrity and test-evidence integrity
+
+### 3.1 The suite was order-dependent — FIXED (`e6b9bbf`)
+
+At `b47e8f5` the full suite was **not green**: `test_notifies_on_auto_open` failed under
+`pytest tests research_tests`, passed under `pytest tests`, and passed in isolation. It was
+neither flaky nor about notifications.
+
+`MockProvider.now()` is `self._times[self._cursor]`, and `advance()` mutates that cursor on
+the **process-wide singleton**. The rootdir conftest already restored a pinned `now`
+attribute (ADR 0012 §4.1a) but not the cursor. Measured:
+
+```
+cursor=1149 -> now = 2025-03-05 15:15   (after the 09:30 gate — entry taken, test passes)
+cursor=1150 -> now = 2025-03-06 09:15   (before it — "ENTRY WINDOW closed", test fails)
+```
+
+The cursor sat exactly on a session boundary, so **one extra `advance()` anywhere earlier
+in the run** rolled the clock into the next morning. Suite greenness was a function of test
+order, which an exact-head CI contract cannot tolerate.
+
+Fixed at the same seam. `advance()` remains observable within a test and stops being
+observable between them. `tests/test_shared_provider_isolation.py` pins both halves as
+ordered pairs; both proven able to go red.
+
+### 3.2 A vacuous test caught in my own work — worth recording
+
+The first draft of the analytics equivalence test was **vacuous**, and the mutation sweep is
+what found it. `Trade(segment=None)` does **not** store NULL: the column carries a
+Python-side default, so the ORM substitutes `"options"` and the legacy shape is never
+created. A mutation deleting the segment normalisation stayed green.
+
+Two consequences, both now in the test file:
+
+- unset shapes must be written by **direct SQL**, bypassing the ORM default;
+- `trades.segment` is `NOT NULL`, so NULL is unreachable there and the **empty string** is
+  the only reachable unset segment.
+
+That second point exposed a **real bug in the fix itself**: `_seg`/`_strat` used Python's
+`or`, which is falsy for `""` as well as `None`, while a plain `COALESCE` matches only
+NULL. `NULLIF(col, '')` inside the COALESCE is load-bearing, not decoration.
+
+Also: the oracle must not be written in the implementation's own SQL, or it agrees with a
+wrong implementation. It computes the expected count in Python from raw column bytes.
+
+---
+
+## 4. Performance — measured
+
+All numbers from this machine, mock provider, temp databases. Scripts lived in the session
+scratchpad and are not in the tree.
+
+### 4.1 `recent_trades` — the 2026-07-23 outage shape, in a second place (FIXED)
+
+The outage post-mortem fixed `equity_curve` and `signal_counts`. `recent_trades` sat 100
+lines below `equity_curve` with the identical shape and was not fixed: it selected **every**
+`Trade` row, filtered in Python, and applied `limit` with a list slice — so `limit` bounded
+the response and never the read.
+
+At **72,000 trades** (the row count the outage note cites for the live VPS):
+
+| Call | Before | After | Speedup | Peak alloc before → after |
+|---|---|---|---|---|
+| `/api/trades?limit=100` | 1398.4 ms | 2.1 ms | **658×** | 310.7 MB → **0.5 MB** |
+| dashboard, filtered, limit=50 | 1296.3 ms | 1.3 ms | **980×** | 310.7 MB → **0.3 MB** |
+
+Output byte-identical at scale, filtered and unfiltered. 310 MB of allocation per call, on
+a 1 GB droplet, under a 5-second dashboard poll, is the outage mechanism precisely.
+
+Two independent bounds now, because either alone leaves a path back: the query is bounded
+(`analytics._narrow` pushes filters and `LIMIT` into SQL) and the request is bounded
+(`app/api/paging.py::MAX_PAGE`). Negative limits mattered: SQLite reads `LIMIT -1` as no
+limit at all.
+
+`instrument_stats` stays deliberately unlimited — a statistic over a subset of its own
+population is wrong rather than partial — and is bounded by its indexed key instead.
+
+### 4.2 The connection pool has a measured cliff (NOT yet changed — see §6)
+
+`create_engine` sets `pool_pre_ping` and `pool_timeout=10` but **leaves pool sizing at the
+SQLAlchemy default**: `pool_size=5`, `max_overflow=10` → **15 connections**. FastAPI runs
+every `def` route (which is nearly all of them) in anyio's worker threadpool — **40 threads**
+by default. The pool is the binding constraint, not SQLite.
+
+Measured, 40 concurrent DB-touching workers:
+
+| Per-request connection hold | Result |
+|---|---|
+| 50 ms | 40/40 ok, p95 181 ms |
+| 1 s | 40/40 ok, 3.0 s wall |
+| 3 s | 40/40 ok, 9.0 s wall — at the `pool_timeout` edge |
+| **5 s** | **30/40 ok, 10 failed** with `QueuePool limit ... TimeoutError`, p95 10 s |
+
+So any query holding a connection **≳4 s** under full threadpool concurrency starts
+**failing requests**. Before §4.1, `recent_trades` held one for **1.4 s** at production row
+counts — within reach, and the 2026-07-23 outage's terminal symptom was DB-pool collapse.
+
+`/api/health` does genuinely touch the pool (`_probe_db`), so total exhaustion surfaces as
+503 rather than a lying 200. What is missing is a **leading** indicator: saturation is only
+visible once it is total.
+
+---
+
+## 5. Quant / research leakage
+
+### 5.1 Causality of the hand-written strategies — audited, no defect, now guarded (`ce72249`)
+
+The IR proves causality for graphs (C11). Nothing did for the hand-written strategies,
+which are what the live engine executes and what every backtest number is measured on.
+`trend_impulse_v3` — the default — had no causality proof at all.
+
+This matters because of a deliberate design choice: `compute_signals` computes the signal
+frame over the **full** candle series and only then cuts walk-forward folds, so
+path-dependent EMA/ATR seeds stay consistent. Correct **iff** every indicator is causal;
+otherwise each out-of-sample fold is scored using information from its own future and the
+leak is invisible — the equity curve simply looks better.
+
+**Result: both `expanding_z_v4` and `trend_impulse_v3` are causal**, on real recorded
+series across four prefix lengths, asserted over every column they emit rather than only
+the four canonical ones. The comparison is proven able to fail by injecting a one-bar
+look-ahead.
+
+### 5.2 Look-ahead discipline elsewhere — inspected, healthy
+
+`backtest/engine.py` fills at **next bar open**, applies **adverse** slippage on both legs
+direction-aware, shares the **same** event-blackout table as the live engine (so backtests
+are not flattered by bars the live bot refuses), and trims warmup by declared count for
+graph strategies so the two planes agree on which bars exist.
+
+### 5.3 Not yet audited
+
+Cache key dimensionality (does the `(instrument, interval)` backtest cache carry data and
+parameter identity?); DSR/PBO deflation correctness — memory records `var_sr` computed
+nowhere and the benchmark pinned at 0, making pre-2026-08 findings unusable as baselines,
+and that has **not** been re-verified in this phase; survivorship in the sweep's visible
+set (there is a disclosure mechanism — `skipped_breakdown` — but its completeness is
+unverified); cross-instrument timestamp alignment (does not exist yet).
+
+---
+
+## 6. Architecture conclusions so far
+
+| Decision | Verdict | Evidence |
+|---|---|---|
+| Python + FastAPI for the API | **Stay** | No measured bottleneck is language-shaped. The two real ones found so far were a query shape and a pool size; both are Python-agnostic. Do not revisit without a measurement that indicts the runtime |
+| SQLite + WAL | **Stay with hardening** | Not the binding constraint at the concurrency measured; the 15-connection pool is. Migration trigger remains a measured lock-wait, not a headcount |
+| Sync `def` routes on the anyio threadpool | **Stay, but size the pool to it** | §4.2 — 40 workers against 15 connections is an accidental default, not a decision |
+| Process-wide provider singleton | **Refactor for V1** | Already a correctness hazard in tests (§3.1) and the concrete blocker for multiple connections per account |
+| Process-global backtest sweep | **Unchanged, seam only** | G-3. Second concurrent user is refused outright; do not build queues now |
+| The authority / execution-binding spine | **Preserve** | Nothing found in this phase argues against it. Not touched |
+
+**Deliberately NOT changed: the connection pool.** Raising it is the obvious move and it is
+not obviously safe. Each additional SQLite connection carries its own page cache, and the
+target box is the 1 GB droplet that has OOM'd twice with the engine running — trading a
+request-timeout ceiling for a memory ceiling on the machine that holds real positions is
+not a change to make unilaterally. It is written up here as an owner-visible decision with
+its measurement attached.
+
+---
+
+## 7. What is next
+
+1. **Pool sizing + saturation telemetry.** Make the pool explicitly configured rather than
+   an accidental default, and report utilisation on `/api/health` so saturation is visible
+   before it is total. The sizing value itself is the owner decision above.
+2. **Provider/connection capability model.** The seams already exist and are already
+   separate (`MarketDataProvider` vs `Broker`/`ExecutionVenue`) — the missing concept is a
+   `Connection` that declares capabilities, plus resolution of which connection serves
+   which role for a deployment. C13 applies: capability checks resolve in `app/core/`,
+   never under `app/engine/`.
+3. **Canonical instrument identity**, which everything in (2) depends on and which must
+   land before a second broker, or symbol handling forks per adapter.
+4. **Finish the leakage audit** — §5.3, starting with cache key dimensionality and the DSR
+   deflation claim, which is the one with a known prior defect.
+5. **Ownership columns and identifier namespacing** — §2.1.
+
+## 8. Method notes worth keeping
+
+- **Mutation-prove every guard, including the ones that pass before and after.** A test
+  that is green on both sides of a change proves nothing until a wrong change is shown to
+  redden it. That is what caught the vacuous seed in §3.2.
+- **Settle "did I break this" with a worktree at HEAD.** Used here to separate a
+  pre-existing red from a new one; both the isolated run and the full-suite run at HEAD
+  were needed, because the failure only existed in the second.
+- **An oracle written in the implementation's own idiom agrees with a wrong
+  implementation.** Compute expected values by a different route.
