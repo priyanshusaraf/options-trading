@@ -16,6 +16,7 @@ from app.db.models import CapitalState, Position, Trade
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine.runner import EngineRunner
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +39,7 @@ def _runner(live=True):
 
 class _KiteFunds:
     name = "kite"
+    CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     def __init__(self, net=73_250.0, available=70_000.0):
         self.net = net

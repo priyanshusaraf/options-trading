@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.execution_book import capital_for_book, configured_execution_mode
 from app.db.models import CapitalState, EquitySnapshot, Position, SignalEvent, Trade
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
+from app.providers import capabilities as caps
 
 
 def _seg(t: Trade) -> str:
@@ -97,7 +98,8 @@ def account_pnl(s: Session, provider, book: str | None = None) -> dict:
     account baseline once, on the first successful live equity read."""
     book = book or configured_execution_mode()
     cap = capital_for_book(s, book)
-    eq = provider.account_equity() if getattr(provider, "name", "") == "kite" else None
+    eq = (provider.account_equity()
+          if caps.provider_supports(provider, caps.ACCOUNT_EQUITY) else None)
     if eq is not None and not cap.account_baseline:
         cap.account_baseline = eq
         s.commit()

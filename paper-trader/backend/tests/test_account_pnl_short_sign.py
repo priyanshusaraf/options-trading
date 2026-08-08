@@ -9,11 +9,13 @@ from app.core.instruments import get_instrument
 from app.db.session import init_db, SessionLocal
 from app.engine.analytics import account_pnl
 from app.engine.runner import EngineRunner
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 class FakeKite:
     """`account_pnl` only computes the split for the live Kite provider."""
     name = "kite"
+    CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     def account_equity(self):
         return 100_000.0

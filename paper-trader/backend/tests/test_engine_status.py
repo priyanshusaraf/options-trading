@@ -12,6 +12,7 @@ import datetime as dt
 
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 def _runner():
@@ -151,6 +152,8 @@ def test_capital_dict_surfaces_real_funds_in_live_mode(monkeypatch):
     shows the actual free funds (~the bot's real capital), not the paper 50k seed."""
     r = _runner()
     monkeypatch.setattr(r.provider, "name", "kite")
+    monkeypatch.setattr(r.provider, "CAPABILITIES",
+                        _KiteForCaps.CAPABILITIES, raising=False)
     r._account_funds = {"available": 30000.0, "net": 41250.0}
     cap = r.capital_dict()
     assert cap["account_available"] == 30000.0
@@ -168,6 +171,10 @@ def test_maybe_refresh_funds_caches_and_throttles(monkeypatch):
         return {"available": 30000.0, "net": 41250.0}
 
     monkeypatch.setattr(r.provider, "name", "kite")
+
+    monkeypatch.setattr(r.provider, "CAPABILITIES",
+
+                        _KiteForCaps.CAPABILITIES, raising=False)
     monkeypatch.setattr(r.provider, "account_funds", fake_funds)
     r._next_funds_epoch = 0.0
     r._maybe_refresh_funds()

@@ -127,3 +127,30 @@ def validate(declared: frozenset[str]) -> frozenset[str]:
             f"add them to app/providers/capabilities.py rather than inventing a name"
         )
     return frozenset(declared)
+
+
+def provider_supports(provider: object, capability: str) -> bool:
+    """Does this connection declare `capability`?
+
+    Defensive by design. Several call sites reach this through `getattr(provider, "name", "")`
+    because they may be handed a duck-typed stub rather than a `MarketDataProvider` — a test
+    double, or a partially constructed provider during startup. Preserving that tolerance keeps
+    the migration from the name comparisons behaviour-identical: an object that cannot answer
+    is treated as not capable, which is the same fail-closed answer `name == "kite"` gave it.
+
+    The declaration is checked FIRST, deliberately. Reading `CAPABILITIES` works for an
+    instance and for a class; calling `supports()` works only for an instance, because it is an
+    unbound function on a class and the capability argument would silently bind to `self`. An
+    earlier version called first and swallowed the resulting failure into `False`, which is the
+    exact silent-wrong-branch behaviour this module exists to remove.
+    """
+    declared = getattr(provider, "CAPABILITIES", None)
+    if declared is not None:
+        return capability in declared
+    supports = getattr(provider, "supports", None)
+    if callable(supports):
+        try:
+            return bool(supports(capability))
+        except Exception:            # noqa: BLE001 — an unanswerable provider is not capable
+            return False
+    return False

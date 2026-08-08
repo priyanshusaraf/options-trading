@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 
 from app.ledger.lane import _tick_guarded, run_manual_detect_loop, should_run_now
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 BASE = datetime(2026, 7, 31, 10, 0, 0)
 
@@ -60,6 +61,7 @@ def test_the_lane_no_ops_off_kite():
 def test_the_lane_no_ops_when_disabled():
     class _Kite:
         name = "kite"
+        CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     class _Settings:
         manual_detect_enabled = False

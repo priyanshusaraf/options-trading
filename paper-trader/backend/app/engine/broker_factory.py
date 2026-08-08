@@ -18,6 +18,7 @@ import os
 from app.core.config import get_settings
 from app.core.logging import log
 from app.engine.broker import PaperBroker
+from app.providers import capabilities as caps
 
 _ACK = "I_UNDERSTAND_REAL_MONEY"
 
@@ -74,7 +75,7 @@ def make_broker(provider, notifier=None, deployment_id=None):
     `deployment_id=None` means "the legacy deployment" — resolved inside the broker
     rather than here, so the default lives in exactly one place (models.LEGACY_
     DEPLOYMENT_ID) and callers that predate deployments keep working unchanged."""
-    if live_execution_enabled() and getattr(provider, "name", "") == "kite":
+    if live_execution_enabled() and caps.provider_supports(provider, caps.LIVE_EXECUTION):
         from app.engine.kite_order_client import KiteOrderClient
         from app.engine.live_broker import LiveBroker
         from app.providers.live_kite import LiveExecutionKite

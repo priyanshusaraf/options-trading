@@ -18,6 +18,7 @@ import pytest
 
 from app.engine.equity_entry import (
     IntradayCandidate, equity_qty, qty_for_margin, select_intraday_entries)
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 def _c(key, price, purple=False, direction="LONG"):
@@ -87,6 +88,7 @@ def test_no_sizer_keeps_legacy_leverage_math():
 class _KiteStub:
     """Minimal live-provider stand-in: quotes ₹`per_share`/share of real MIS margin."""
     name = "kite"
+    CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     def __init__(self, per_share=50.0):
         self.per_share = per_share

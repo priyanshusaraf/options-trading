@@ -5,10 +5,12 @@ from sqlalchemy.orm import sessionmaker
 from app.ledger.db import init_ledger_db, make_engine
 from app.ledger.detect import detect_manual_fills
 from app.ledger.models import LedgerManualFill
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 class _Provider:
     name = "kite"
+    CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     def __init__(self, orders, trades=None):
         self._o, self._t = orders, trades or []

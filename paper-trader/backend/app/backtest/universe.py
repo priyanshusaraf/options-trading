@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from app.core.instruments import Instrument, all_instruments
 from app.core.logging import log
+from app.providers import capabilities as caps
 
 # Index option `name` -> NSE/BSE spot tradingsymbol (indices don't trade as the
 # bare name; their spot series lives under these symbols).
@@ -88,7 +89,8 @@ def liquid_universe(provider) -> list[Instrument]:
     curated seed list otherwise."""
     authed = False
     try:
-        authed = provider.name == "kite" and provider.is_authenticated()
+        authed = (caps.provider_supports(provider, caps.INSTRUMENT_UNIVERSE)
+                  and provider.is_authenticated())
     except Exception:
         authed = False
 
@@ -113,7 +115,7 @@ def full_universe(provider) -> list[Instrument]:
     """Opt-in: liquid set + all NSE/BSE cash equities (no options → tracking/
     backtest only). Large and slow."""
     base = {i.key: i for i in liquid_universe(provider)}
-    authed = getattr(provider, "name", "") == "kite"
+    authed = caps.provider_supports(provider, caps.INSTRUMENT_UNIVERSE)
     if not authed:
         return list(base.values())
     for exch in ("NSE", "BSE"):

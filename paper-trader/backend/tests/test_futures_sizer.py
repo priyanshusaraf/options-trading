@@ -17,6 +17,7 @@ import pytest
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 @pytest.fixture
@@ -80,6 +81,8 @@ def test_live_mode_refuses_when_the_broker_cannot_quote(runner, monkeypatch):
     model — there is NO fallback here: guessing SPAN would put a fabricated
     number straight into the ledger."""
     monkeypatch.setattr(runner.provider, "name", "kite", raising=False)
+    monkeypatch.setattr(runner.provider, "CAPABILITIES",
+                        _KiteForCaps.CAPABILITIES, raising=False)
     monkeypatch.setattr(runner.provider, "is_authenticated", lambda: True, raising=False)
     monkeypatch.setattr(runner.provider, "order_margin", lambda orders: 0.0,
                         raising=False)
@@ -89,6 +92,8 @@ def test_live_mode_refuses_when_the_broker_cannot_quote(runner, monkeypatch):
 
 def test_live_mode_sizes_from_the_real_quote(runner, monkeypatch):
     monkeypatch.setattr(runner.provider, "name", "kite", raising=False)
+    monkeypatch.setattr(runner.provider, "CAPABILITIES",
+                        _KiteForCaps.CAPABILITIES, raising=False)
     monkeypatch.setattr(runner.provider, "is_authenticated", lambda: True, raising=False)
     monkeypatch.setattr(runner.provider, "order_margin", lambda orders: 120_000.0,
                         raising=False)
@@ -103,6 +108,8 @@ def test_the_live_quote_is_cached_per_symbol_and_side(runner, monkeypatch):
     quote per (symbol, side)."""
     calls = []
     monkeypatch.setattr(runner.provider, "name", "kite", raising=False)
+    monkeypatch.setattr(runner.provider, "CAPABILITIES",
+                        _KiteForCaps.CAPABILITIES, raising=False)
     monkeypatch.setattr(runner.provider, "is_authenticated", lambda: True, raising=False)
     monkeypatch.setattr(runner.provider, "order_margin",
                         lambda orders: (calls.append(1), 120_000.0)[1], raising=False)

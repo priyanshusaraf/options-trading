@@ -5,6 +5,7 @@ from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import live_execution_enabled, make_broker
 from app.providers.mock import MockProvider
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 def _open_the_live_gate(monkeypatch, *, execution="live", ack="I_UNDERSTAND_REAL_MONEY"):
@@ -71,6 +72,7 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"            # look like the live provider
+    prov.CAPABILITIES = _KiteForCaps.CAPABILITIES
     prov.access_token = "tok"
     monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
                         lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
@@ -100,6 +102,7 @@ def test_make_broker_passes_configured_market_protection_to_order_client(monkeyp
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
+    prov.CAPABILITIES = _KiteForCaps.CAPABILITIES
     prov.access_token = "tok"
     monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
                         lambda **k: types.SimpleNamespace(set_access_token=lambda t: None))
@@ -128,6 +131,7 @@ def test_make_broker_wires_the_provider_tick_size_as_the_tick_source(monkeypatch
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
+    prov.CAPABILITIES = _KiteForCaps.CAPABILITIES
     prov.access_token = "tok"
     prov.tick_size = lambda tradingsymbol, exchange: 0.10   # stands in for KiteProvider.tick_size
     monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",
@@ -154,6 +158,7 @@ def test_make_broker_tick_source_is_none_when_the_provider_has_no_tick_size(monk
     init_db(reset=True)
     prov = MockProvider()
     prov.name = "kite"
+    prov.CAPABILITIES = _KiteForCaps.CAPABILITIES
     prov.access_token = "tok"
     assert not hasattr(prov, "tick_size")
     monkeypatch.setattr("app.providers.live_kite.LiveExecutionKite",

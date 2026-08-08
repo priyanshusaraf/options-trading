@@ -22,6 +22,7 @@ import pytest
 import app.engine.broker_factory as bf
 from app.engine.broker import PaperBroker
 from app.providers.mock import MockProvider
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 # ── .env is out of the resolution chain entirely ────────────────────────────
@@ -117,6 +118,7 @@ def test_live_ack_is_empty_not_absent():
 def _kite_looking_provider():
     p = MockProvider()
     p.name = "kite"              # satisfies the provider half of the live gate
+    p.CAPABILITIES = _KiteForCaps.CAPABILITIES
     p.access_token = "tok"
     return p
 

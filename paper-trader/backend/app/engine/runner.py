@@ -1355,7 +1355,7 @@ class EngineRunner:
         prov = self.provider
         pct = float(self.params.get("index_futures_margin_pct",
                                     self.settings.index_futures_margin_pct))
-        is_live = (prov.name == "kite"
+        is_live = (caps.provider_supports(prov, caps.ORDER_MARGIN)
                    and getattr(prov, "is_authenticated", lambda: False)())
         cache: dict[tuple, float] = {}
 
@@ -2110,7 +2110,7 @@ class EngineRunner:
     def deployable_cash(self) -> float:
         cap_state = self.broker.capital()
         bot_deployed = sum(p.entry_cost for p in self.broker.open_positions())
-        is_live = self.provider.name == "kite"
+        is_live = caps.provider_supports(self.provider, caps.ACCOUNT_FUNDS)
         funds = self.provider.account_funds() if is_live else None
         return deployable_capital(
             ledger_base=cap_state.cash + bot_deployed,
@@ -2967,7 +2967,7 @@ class EngineRunner:
         # (not locked in your securities); net = total account equity. Paper mode omits
         # these and the UI keeps showing the ledger equity/cash.
         f = self._account_funds
-        if self.provider.name == "kite" and f:
+        if caps.provider_supports(self.provider, caps.ACCOUNT_FUNDS) and f:
             d["account_available"] = round(f.get("available", 0.0), 2)
             d["account_net"] = round(f.get("net", 0.0), 2)
             # Ledger honesty: the difference between what the bot BELIEVES it is worth and

@@ -5,6 +5,7 @@ only. Pure helper here; the runner supplies the index open + prior close."""
 import datetime as dt
 
 from app.engine.risk_controls import gap_halt_active
+from app.providers.kite import KiteProvider as _KiteForCaps
 
 
 def _now(hh, mm):
@@ -80,6 +81,7 @@ class _CandleStub:
 class _KiteCandleProvider:
     """Non-mock provider stub that serves 3 daily candles and counts get_candles hits."""
     name = "kite"
+    CAPABILITIES = _KiteForCaps.CAPABILITIES  # a double impersonating Kite must declare what Kite declares
 
     def __init__(self):
         self.calls = 0
