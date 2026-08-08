@@ -281,7 +281,7 @@ Deliberately **not** migrated: the three `name == "mock"` sites. `SIMULATED_CLOC
 `ReplayProvider` also has an advanceable clock — so migrating them is a behaviour change for
 replay, not a refactor. Guarded rather than done quietly.
 
-### Found: the index-futures segment has no price feed (latent P1, isolated)
+### Found AND fixed: the index-futures segment had no price feed (latent P1)
 
 The capability honesty check rejected Kite's `FUTURES_QUOTES` declaration on its first run:
 **no provider implements `get_futures_ltp`** — not Kite, not mock, not replay. Meanwhile
@@ -292,11 +292,21 @@ would never mark on a real price, would read permanently stale, and would be for
 
 `index_futures_enabled` defaults False and the segment is documented as "fully built and switched
 OFF", so this was latent. It stops being latent the moment that flag is flipped, and nothing
-would have raised. `_process_futures_entries` now refuses to open without the capability, with an
-operator-visible alert. **Implementing Kite futures quotes is open work**, and the guard is what
-makes leaving it open safe.
+would have raised.
 
-### Next: canonical instrument identity — evidenced, not yet built
+Two-part fix. `_process_futures_entries` refuses to open without the capability (`553d871`), and
+`KiteProvider.get_futures_ltp` is now implemented (`a23157a`), so Kite declares the capability
+honestly and the guard opens for it. The load-bearing behaviour is **exact expiry matching**:
+`_near_future` returns the front month, and marking a September position against the August
+contract prices a different instrument at a different basis — silently, and flatteringly. Mock and
+replay still cannot price futures, so the guard still has something to protect against; a test
+asserts it would be dead code if it ever did not.
+
+`index_futures_enabled` remains False. **Live verification against a real Kite session is
+outstanding** — the tests stub the dump and the quote call, so they prove the mapping and the
+refusals, not the feed.
+
+### Done: instrument identity has a seam, and Kite is behind it (`0a55b3a`)
 
 **Strategy OS does not own instrument identity today; the canonical `Instrument` carries one
 provider's symbology inline.** Measured:
@@ -313,20 +323,34 @@ So a second provider with different symbology has **nowhere to put its mapping**
 reuse Kite's strings (wrong instrument) or fork the `Instrument` model (breaks "one of anything").
 This blocks provider switching, data/execution separation and cross-instrument strategies at once.
 
-**Shape of the fix** (a real slice, touching schema and the live symbol-resolution path):
-a canonical instrument holding only economics — key, name, segment, lot size, tick size — plus a
-per-provider mapping `(provider, canonical_key) → {symbol, token, exchange, lot_size, tick_size}`
-behind an `InstrumentResolver` seam that Kite implements first. It must land **before** an actual
-second adapter, or symbol handling forks per adapter.
+`app/providers/instrument_resolver.py` is that somewhere. `ResolvedInstrument` carries the
+canonical key as the **only** cross-provider identifier, plus provider-scoped symbol, exchange and
+token, plus the connection that produced them — provenance, because a mapping applied against the
+wrong broker resolves to a different contract while looking entirely valid.
 
-**Do not build the resolver without migrating Kite onto it in the same slice.** A resolver with
-no consumer is the unconsumed-mechanism defect this codebase is named for.
+It shipped with a consumer rather than as a mechanism wired to nothing: `KiteProvider` implements
+`resolve_underlying`, and **both** `_underlying_token` and `_underlying_quote_key` now derive from
+it. They previously duplicated the index-vs-future branch, which is the `candles.py` shape (two
+hand-written implementations of one idea) this project has already paid for once.
+
+Observable success: a fake Upstox resolver maps the same canonical instrument to a different
+symbol, exchange and token space — reading only `inst.key` — with no change to `Instrument`.
+Proven non-tautological by poisoning the Kite-specific fields; a resolver that read them would
+surface the poison.
+
+**What is still outstanding, stated plainly.** `spot_symbol` and `option_name` still live on
+`Instrument`. Relocating them is a schema and seed change on the live symbol-resolution path, and
+it needs a second real mapping to hold plus a way to prove Kite's resolution is preserved exactly.
+Until then `KiteInstrumentResolver` is the only thing permitted to read those fields as symbology,
+and a test enforces that a non-Kite resolver does not. **That relocation lands with adapter #2.**
 
 ## 7. What is next
 
-1. **Canonical instrument identity** (§6a) — the prerequisite for a real second adapter.
-2. **Kite futures quotes** — `get_futures_ltp` is unimplemented and the segment is fenced
-   behind a capability guard until it exists.
+1. **Adapter #2 (recommend Upstox).** The abstraction is now testable rather than theoretical:
+   capabilities, an instrument-resolver seam, and a second-broker reachability suite exist. The
+   adapter is what proves them, and it carries the `spot_symbol`/`option_name` relocation with it.
+2. **A conformance suite both adapters pass** — and that fails an adapter which lies about a
+   capability. Today's tests prove the seam; they do not yet hold two adapters to one contract.
 3. **Pool sizing + saturation telemetry.** Make the pool explicitly configured rather than
    an accidental default, and report utilisation on `/api/health` so saturation is visible
    before it is total. The sizing value itself is the owner decision above.
