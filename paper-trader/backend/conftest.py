@@ -144,14 +144,38 @@ def restore_the_shared_provider_clock():
     Restoring here rather than at the sixteen sites: the leak is the shape, not the site,
     and a fixture makes the next one harmless too. Deletes the instance attribute when the
     test added one, so the class's real `now` is what remains.
+
+    **The cursor is the same leak by a second mechanism, and it is not optional.**
+    `MockProvider.now()` is `self._times[self._cursor]` and `advance()` mutates that cursor
+    on the same singleton, so every test that steps the synthetic market moves the clock
+    for every test after it — permanently, and without ever touching the `now` attribute
+    this fixture originally guarded.
+
+    That is not theoretical. Measured on 2026-08-08, `test_notifies_on_auto_open` passed
+    under `pytest tests` and failed under `pytest tests research_tests` on a **one-position**
+    difference in the shared cursor:
+
+        cursor=1149 -> now = 2025-03-05 15:15   (after the 09:30 gate — entry taken)
+        cursor=1150 -> now = 2025-03-06 09:15   (before it — "ENTRY WINDOW closed")
+
+    The cursor sat exactly on a session boundary, so a single extra `advance()` anywhere
+    earlier in the run rolled the clock to the next morning and refused the entry. The
+    failure named the innocent test, and suite greenness became a function of which tests
+    ran before it — which is precisely what an exact-head CI contract cannot tolerate.
+
+    Restoring the cursor keeps `advance()` observable *within* a test (nothing here stops a
+    test stepping the market and asserting on it) while making it invisible *between* them.
     """
     from app.providers.factory import get_provider
 
     provider = get_provider()
     had = "now" in provider.__dict__
     was = provider.__dict__.get("now")
+    cursor = getattr(provider, "_cursor", None)
     yield
     if had:
         provider.__dict__["now"] = was
     else:
         provider.__dict__.pop("now", None)
+    if cursor is not None and getattr(provider, "_cursor", None) != cursor:
+        provider._cursor = cursor
