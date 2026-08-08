@@ -31,6 +31,7 @@ from app.core.instruments import Instrument
 from app.core.logging import WarnGate, log
 from app.engine.gtt import TICK_SIZE
 from app.providers import capabilities as caps
+from app.providers.instrument_resolver import ResolvedInstrument
 from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
@@ -342,16 +343,37 @@ class KiteProvider(MarketDataProvider):
         return futs[0]
 
     def _underlying_token(self, inst: Instrument) -> int | None:
-        if inst.spot_exchange in ("NSE", "BSE"):
-            return self._index_token(inst)
-        fut = self._near_future(inst)
-        return fut["instrument_token"] if fut else None
+        resolved = self.resolve_underlying(inst)
+        return resolved.token if resolved else None
 
     def _underlying_quote_key(self, inst: Instrument) -> str | None:
+        resolved = self.resolve_underlying(inst)
+        return resolved.quote_key() if resolved else None
+
+    # ── instrument identity (the InstrumentResolver role) ─────────────────
+    def resolve_underlying(self, inst: Instrument) -> ResolvedInstrument | None:
+        """Kite's names for a canonical Strategy OS instrument.
+
+        This is the ONE place allowed to read `inst.spot_symbol` / `inst.option_name` as
+        symbology: those fields are Kite's mapping data that still lives on the canonical
+        object (see `instrument_resolver.py`). A second provider supplies its own mapping here
+        and must not read them.
+
+        Index/cash underlyings are addressed directly; derivative underlyings resolve through
+        the near future, because that is the series Kite actually quotes.
+        """
         if inst.spot_exchange in ("NSE", "BSE"):
-            return f"{inst.spot_exchange}:{inst.spot_symbol}"
+            token = self._index_token(inst)
+            return ResolvedInstrument(
+                canonical_key=inst.key, provider=self.name,
+                symbol=inst.spot_symbol, exchange=inst.spot_exchange, token=token)
         fut = self._near_future(inst)
-        return f"{inst.spot_exchange}:{fut['tradingsymbol']}" if fut else None
+        if not fut:
+            return None
+        return ResolvedInstrument(
+            canonical_key=inst.key, provider=self.name,
+            symbol=fut["tradingsymbol"], exchange=inst.spot_exchange,
+            token=fut.get("instrument_token"))
 
     # ── market data ───────────────────────────────────────────────────────
     def get_candles(self, inst: Instrument, interval: str, days: int) -> list[Candle]:

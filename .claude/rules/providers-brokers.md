@@ -43,8 +43,17 @@ cross-instrument strategies at once.
 Do not pretend every provider has identical capabilities. A connection declares what it can do —
 execution, market/limit/stop orders, GTT, slicing, positions, funds, historical data, streaming,
 option chains, depth, postbacks — and a deployment should eventually validate its required
-capabilities before activation. Capability resolution belongs in `app/core/`, never under
-`app/engine/` (C13).
+capabilities before activation. The vocabulary and the resolution both live in
+`app/providers/capabilities.py`; shared code asks `provider.supports(...)` or
+`caps.provider_supports(provider, ...)` and consumes the verdict.
+
+**A capability check is not a C13 violation.** C13 forbids branching on *provenance* — where a
+component came from — and is enforced subtractively: there is nothing under `app/engine/` to
+branch on. Asking an injected connection what it can do is a property query on a dependency, not
+a provenance branch, and the engine is where several of those decisions must be made (whether to
+size against real funds, whether a futures position can be marked). What must NOT appear under
+`app/engine/` is a branch on a provider's *identity* — `name == "kite"` — which is what the
+capability model exists to remove.
 
 ## Adapters stay thin
 
