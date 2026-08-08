@@ -4,8 +4,8 @@
 provider-architecture review, with fixes rather than a report. Started from exact head
 `b47e8f5` (migration head `0013`), branch `feat/exec-completeness`.
 
-**Status:** in progress. Four commits landed. This document is the continuity record —
-what was inspected, what was found, what changed, and what is next.
+**Status:** in progress. Eight commits landed (2026-08-08 → 09). This document is the
+continuity record — what was inspected, what was found, what changed, and what is next.
 
 **Standing state after the commits below:** full backend + research suite **EXIT 0, no
 failures** (it was not, at `b47e8f5` — see §3.1), `dryrun.py 700` **LEDGER OK**,
@@ -22,6 +22,11 @@ migration, no execution-path change, nothing deployed.
 | `837febe` | fix: bound reporting reads at the query and at the request |
 | `e6b9bbf` | fix: restore the shared market cursor, not just the pinned clock |
 | `ce72249` | test: prove the hand-written strategies cannot read the future |
+| `d383326` | docs: this record |
+| `4a09c02` | chore: rebuild the Claude Code engineering harness (§6b) |
+| `553d871` | feat: declare provider capabilities; fail closed on futures with no price feed |
+| `7442e69` | refactor: ask capabilities, not the provider's name |
+| `323c865` | docs: record the provider slices and the instrument-identity finding |
 
 ---
 
