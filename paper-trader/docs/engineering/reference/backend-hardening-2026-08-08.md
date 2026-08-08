@@ -244,21 +244,93 @@ its measurement attached.
 
 ---
 
+## 6a. Provider architecture — 2026-08-09
+
+### Done: capabilities replace provider-name branching (`553d871`, `7442e69`)
+
+**The finding.** Ten sites in shared engine/backtest/analytics code branched on
+`provider.name == "kite"` or `== "mock"`. Each is really a capability question, and each would
+have answered False for a second broker — silently, on the safe-looking branch:
+
+| Site | Consequence for a non-Kite connection |
+|---|---|
+| `broker_factory.py` | no live order client is ever constructed |
+| `runner.py` deployable capital | no account funds read → sizing fails closed to ₹0 |
+| `runner.py` futures margin | no real margin quote → sizing refuses |
+| `runner.py` cockpit payload | account funds never surfaced |
+| `analytics.py` | account equity reported as unavailable |
+| `universe.py` (×2) | refuses to build a real instrument universe |
+
+None of them raises. `app/providers/capabilities.py` now carries a role-separated vocabulary
+(market data / account / execution / instrument identity / determinism), every provider declares
+its set, and all seven kite-gated sites ask the capability instead.
+
+Migration safety was proven **before** the migration: an equivalence table asserts the capability
+answer is identical to the name answer, for every provider that exists, at every migrated site —
+and a deliberately wrong mapping is shown to fail it. `test_second_broker_is_reachable.py` then
+proves what equivalence cannot: a connection named `"upstox"` declaring Kite's capabilities now
+passes every gate, while a **data-only** connection is still refused the account and execution
+questions. That is the Upstox-data/Zerodha-execution split, asserted.
+
+Deliberately **not** migrated: the three `name == "mock"` sites. `SIMULATED_CLOCK` is broader —
+`ReplayProvider` also has an advanceable clock — so migrating them is a behaviour change for
+replay, not a refactor. Guarded rather than done quietly.
+
+### Found: the index-futures segment has no price feed (latent P1, isolated)
+
+The capability honesty check rejected Kite's `FUTURES_QUOTES` declaration on its first run:
+**no provider implements `get_futures_ltp`** — not Kite, not mock, not replay. Meanwhile
+`runner.py` calls it at three sites to mark futures positions, decide staleness, and price the
+delivery-window force close. With the feed unimplemented, `fut` is always `None`, so a position
+would never mark on a real price, would read permanently stale, and would be force-closed at
+`pos.last_premium` — the **entry** price.
+
+`index_futures_enabled` defaults False and the segment is documented as "fully built and switched
+OFF", so this was latent. It stops being latent the moment that flag is flipped, and nothing
+would have raised. `_process_futures_entries` now refuses to open without the capability, with an
+operator-visible alert. **Implementing Kite futures quotes is open work**, and the guard is what
+makes leaving it open safe.
+
+### Next: canonical instrument identity — evidenced, not yet built
+
+**Strategy OS does not own instrument identity today; the canonical `Instrument` carries one
+provider's symbology inline.** Measured:
+
+- `app/core/instruments.py` — `spot_symbol` is a Kite tradingsymbol; `option_name` is documented
+  as "`name` used to find option contracts in **the instruments dump**", a Kite concept;
+  `lot_size`/`strike_step` are "re-resolved from the instruments dump each day".
+- `app/providers/kite.py:352` builds a Kite quote key directly out of canonical fields:
+  `f"{inst.spot_exchange}:{inst.spot_symbol}"`.
+- `kite.py:310` tries `(inst.option_name, inst.spot_symbol, inst.key)` as Kite dump lookups.
+- `kite.py:297` matches the dump on `row["tradingsymbol"] == inst.spot_symbol`.
+
+So a second provider with different symbology has **nowhere to put its mapping**. It would either
+reuse Kite's strings (wrong instrument) or fork the `Instrument` model (breaks "one of anything").
+This blocks provider switching, data/execution separation and cross-instrument strategies at once.
+
+**Shape of the fix** (a real slice, touching schema and the live symbol-resolution path):
+a canonical instrument holding only economics — key, name, segment, lot size, tick size — plus a
+per-provider mapping `(provider, canonical_key) → {symbol, token, exchange, lot_size, tick_size}`
+behind an `InstrumentResolver` seam that Kite implements first. It must land **before** an actual
+second adapter, or symbol handling forks per adapter.
+
+**Do not build the resolver without migrating Kite onto it in the same slice.** A resolver with
+no consumer is the unconsumed-mechanism defect this codebase is named for.
+
 ## 7. What is next
 
-1. **Pool sizing + saturation telemetry.** Make the pool explicitly configured rather than
+1. **Canonical instrument identity** (§6a) — the prerequisite for a real second adapter.
+2. **Kite futures quotes** — `get_futures_ltp` is unimplemented and the segment is fenced
+   behind a capability guard until it exists.
+3. **Pool sizing + saturation telemetry.** Make the pool explicitly configured rather than
    an accidental default, and report utilisation on `/api/health` so saturation is visible
    before it is total. The sizing value itself is the owner decision above.
-2. **Provider/connection capability model.** The seams already exist and are already
-   separate (`MarketDataProvider` vs `Broker`/`ExecutionVenue`) — the missing concept is a
-   `Connection` that declares capabilities, plus resolution of which connection serves
-   which role for a deployment. C13 applies: capability checks resolve in `app/core/`,
-   never under `app/engine/`.
-3. **Canonical instrument identity**, which everything in (2) depends on and which must
-   land before a second broker, or symbol handling forks per adapter.
-4. **Finish the leakage audit** — §5.3, starting with cache key dimensionality and the DSR
+4. **Connection objects.** Capabilities now exist per provider; the remaining piece is a
+   `Connection` record (a user's credentialed link) so one account can hold several, and a
+   deployment can validate its required capabilities before activation.
+5. **Finish the leakage audit** — §5.3, starting with cache key dimensionality and the DSR
    deflation claim, which is the one with a known prior defect.
-5. **Ownership columns and identifier namespacing** — §2.1.
+6. **Ownership columns and identifier namespacing** — §2.1.
 
 ## 8. Method notes worth keeping
 
