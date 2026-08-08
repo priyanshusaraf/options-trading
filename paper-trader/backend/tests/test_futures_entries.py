@@ -23,7 +23,7 @@ NOW = dt.datetime(2026, 8, 3, 11, 0)
 
 
 @pytest.fixture
-def runner(monkeypatch):
+def runner(monkeypatch, give_futures_price_feed):
     init_db(reset=True)
     r = EngineRunner()
     r.armed = True
@@ -38,8 +38,8 @@ def runner(monkeypatch):
     r.broker.s.commit()
     r.publish_signal(
         "NIFTY", r._binding_for("NIFTY"), {"long_entry": True, "short_entry": False, "close": 24_000.0})
-    monkeypatch.setattr(r.provider, "get_futures_ltp",
-                        lambda inst, expiry: 24_000.0, raising=False)
+    give_futures_price_feed(r.provider,
+                           lambda inst, expiry: 24_000.0)
     yield r
     try:
         r.broker.s.close()
@@ -87,12 +87,12 @@ def test_the_concurrency_cap_is_respected(runner):
     assert len(_futs(runner)) == 1, "cap of 1 was exceeded"
 
 
-def test_no_futures_price_means_no_trade(runner, monkeypatch):
+def test_no_futures_price_means_no_trade(runner, monkeypatch, give_futures_price_feed):
     """Opening at spot when the contract cannot be priced would enter at a price
     the future never traded at."""
     _enable(runner)
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: None, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: None)
     runner._process_futures_entries(NOW)
     assert _futs(runner) == []
 

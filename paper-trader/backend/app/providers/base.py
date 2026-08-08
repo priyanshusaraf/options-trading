@@ -99,6 +99,16 @@ class OptionChain:
 class MarketDataProvider(ABC):
     name: str = "base"
 
+    # What this connection can actually do. Shared code must ask this rather than compare
+    # `name` to a brand — see `app/providers/capabilities.py` for why, and for the role
+    # separation (market data / account / execution / instrument identity) it exists to keep.
+    # The default is empty: a provider earns a capability by declaring it, and
+    # `test_provider_capabilities.py` checks the declaration against the method behind it.
+    CAPABILITIES: frozenset[str] = frozenset()
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.CAPABILITIES
+
     # ── auth ──────────────────────────────────────────────────────────────
     @abstractmethod
     def is_authenticated(self) -> bool: ...

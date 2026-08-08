@@ -28,6 +28,7 @@ import numpy as np
 from app.core.config import get_settings
 from app.core.instruments import Instrument, all_instruments
 from app.options.pricing import bs_price
+from app.providers import capabilities as caps
 from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
 
 _MONTH = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -48,6 +49,12 @@ def _oi_base(inst: Instrument) -> int:
 
 class MockProvider(MarketDataProvider):
     name = "mock"
+    # A synthetic market. It serves data and has an advanceable clock, and it deliberately has
+    # NO account capabilities: the base defaults return None/[] and callers must fail closed on
+    # that rather than treat a mock as a funded account.
+    CAPABILITIES = frozenset({
+        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN, caps.SIMULATED_CLOCK,
+    })
 
     def __init__(self) -> None:
         self.s = get_settings()

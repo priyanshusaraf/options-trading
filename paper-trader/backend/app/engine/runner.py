@@ -40,6 +40,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 from app.core.config import DEFAULT_LIVE_INTERVAL, normalize_live_interval
 from app.engine.allocator import Candidate, allocate
+from app.providers import capabilities as caps
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import make_broker
 from app.engine.capital import deployable_capital
@@ -1801,6 +1802,25 @@ class EngineRunner:
         """
         if not self.params.get("index_futures_enabled",
                                self.settings.index_futures_enabled):
+            return
+        # Fail closed if the connection cannot price a futures contract.
+        #
+        # `get_futures_ltp` is the base no-op returning None and NO provider implements it —
+        # including Kite. This segment is "fully built and switched OFF", so today that is
+        # latent. The moment `index_futures_enabled` is flipped it stops being latent: `fut`
+        # is None at every mark (`_mark_exit_futures`), so a position would never mark on a
+        # real futures price, would read permanently stale, and the delivery-window force
+        # close would exit at `pos.last_premium` — the entry price — instead of the market.
+        #
+        # Opening a position that cannot be marked is worse than not opening it, so this
+        # refuses to open rather than trading blind. Removing the guard requires implementing
+        # the capability, which is the point.
+        if not self.provider.supports(caps.FUTURES_QUOTES):
+            self._alert_infra(
+                "futures_no_price_feed",
+                f"index_futures_enabled is ON but the {self.provider.name!r} connection does "
+                f"not declare {caps.FUTURES_QUOTES!r} — it cannot price a futures contract, so "
+                f"a position could not be marked or exited at market. No futures entries taken.")
             return
         from app.core import market_hours
         from app.engine.delivery_calendar import (CashSettledCalendar,

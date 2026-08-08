@@ -30,6 +30,7 @@ from app.core.config import get_settings
 from app.core.instruments import Instrument
 from app.core.logging import WarnGate, log
 from app.engine.gtt import TICK_SIZE
+from app.providers import capabilities as caps
 from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
@@ -64,6 +65,18 @@ class _Throttle:
 
 class KiteProvider(MarketDataProvider):
     name = "kite"
+    # A real Zerodha connection: it serves market data, account/portfolio and can back a live
+    # order client. GTT/slicing/postbacks exist at Zerodha but are not wired here, so they are
+    # deliberately NOT declared — a declaration is a promise, not an aspiration.
+    CAPABILITIES = frozenset({
+        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN,
+        # NOT caps.FUTURES_QUOTES: `get_futures_ltp` is the base no-op returning None.
+        # No provider implements it, yet runner.py calls it at three sites to mark and
+        # force-close futures positions. See the index-futures guard in app/core/config.py.
+        caps.ACCOUNT_FUNDS, caps.ACCOUNT_POSITIONS, caps.ACCOUNT_EQUITY, caps.ORDER_MARGIN,
+        caps.LIVE_EXECUTION, caps.MARKET_ORDERS, caps.LIMIT_ORDERS, caps.STOP_ORDERS,
+        caps.INSTRUMENT_UNIVERSE,
+    })
 
     def __init__(self) -> None:
         from app.providers.safe_kite import SafePaperKite

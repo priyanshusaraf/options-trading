@@ -179,3 +179,25 @@ def restore_the_shared_provider_clock():
         provider.__dict__.pop("now", None)
     if cursor is not None and getattr(provider, "_cursor", None) != cursor:
         provider._cursor = cursor
+
+
+@pytest.fixture
+def give_futures_price_feed(monkeypatch):
+    """Give a provider a futures price feed the way a real adapter would: the method AND the
+    capability declaration.
+
+    `runner._process_futures_entries` refuses to open when the connection does not declare
+    `FUTURES_QUOTES`, because no shipped provider implements `get_futures_ltp` and a position
+    that cannot be marked is worse than no position. Tests that inject the method are
+    simulating a connection that CAN price futures, so they must say so — otherwise the
+    declaration stops being the contract and the guard grows a second source of truth.
+    """
+    from app.providers import capabilities as caps
+
+    def _give(provider, fn):
+        monkeypatch.setattr(provider, "get_futures_ltp", fn, raising=False)
+        monkeypatch.setattr(provider, "CAPABILITIES",
+                            frozenset(provider.CAPABILITIES) | {caps.FUTURES_QUOTES},
+                            raising=False)
+
+    return _give

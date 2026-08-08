@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+from app.providers import capabilities as caps
 from app.providers.base import Candle, MarketDataProvider
 
 
@@ -54,6 +55,10 @@ def load_session(path: str) -> dict:
 
 
 class ReplayProvider(MarketDataProvider):
+    # Deterministic replay of recorded candles: data plus an advanceable clock, no account.
+    CAPABILITIES = frozenset({
+        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.SIMULATED_CLOCK,
+    })
     """Deterministic bar-by-bar replay of a recorded session."""
 
     name = "replay"

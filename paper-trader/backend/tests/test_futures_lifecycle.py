@@ -25,7 +25,7 @@ NOW = dt.datetime(2026, 8, 3, 11, 0)
 
 
 @pytest.fixture
-def runner(monkeypatch):
+def runner(monkeypatch, give_futures_price_feed):
     init_db(reset=True)
     r = EngineRunner()
     r.armed = True
@@ -46,8 +46,8 @@ def runner(monkeypatch):
                 "intraday_lockstep_enabled": False}
     r.publish_signal(
         "NIFTY", r._binding_for("NIFTY"), {"long_entry": True, "short_entry": False, "close": 24_000.0})
-    monkeypatch.setattr(r.provider, "get_futures_ltp",
-                        lambda inst, expiry: 24_000.0, raising=False)
+    give_futures_price_feed(r.provider,
+                           lambda inst, expiry: 24_000.0)
     yield r
     try:
         r.broker.s.close()
@@ -65,7 +65,7 @@ def _futs(r):
     return [p for p in r.broker.open_positions() if p.segment == "index_futures"]
 
 
-def test_the_full_lifecycle_keeps_the_ledger_exact(runner, monkeypatch):
+def test_the_full_lifecycle_keeps_the_ledger_exact(runner, monkeypatch, give_futures_price_feed):
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6)
 
     runner._process_futures_entries(NOW)
@@ -73,14 +73,14 @@ def test_the_full_lifecycle_keeps_the_ledger_exact(runner, monkeypatch):
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6), "entry broke the invariant"
 
     pos = _futs(runner)[0]
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: 24_120.0, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: 24_120.0)
     runner._mark_exit_futures(pos, "NIFTY", NOW, {}, {"NIFTY": pos})
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6), "marking moved cash"
 
     # Drive it to the target so the exit is the strategy's, not a force-flat.
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: pos.target_price + 1.0, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: pos.target_price + 1.0)
     runner._mark_exit_futures(pos, "NIFTY", NOW, {}, {"NIFTY": pos})
     assert _futs(runner) == [], "the target did not close the position"
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6), "exit broke the invariant"
@@ -91,27 +91,27 @@ def test_the_full_lifecycle_keeps_the_ledger_exact(runner, monkeypatch):
     assert tr.charges_total > 0, "a round trip with no charges is not a real trade"
 
 
-def test_a_losing_round_trip_also_reconciles(runner, monkeypatch):
+def test_a_losing_round_trip_also_reconciles(runner, monkeypatch, give_futures_price_feed):
     """Profit paths are the ones people test. The loss path moves cash the other
     way and is exactly as able to break the invariant."""
     runner._process_futures_entries(NOW)
     pos = _futs(runner)[0]
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: pos.stop_price - 1.0, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: pos.stop_price - 1.0)
     runner._mark_exit_futures(pos, "NIFTY", NOW, {}, {"NIFTY": pos})
     assert _futs(runner) == []
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6)
     assert runner.broker.s.query(Trade).all()[-1].net_pnl < 0
 
 
-def test_a_short_round_trip_reconciles(runner, monkeypatch):
+def test_a_short_round_trip_reconciles(runner, monkeypatch, give_futures_price_feed):
     runner.publish_signal(
         "NIFTY", runner._binding_for("NIFTY"), {"long_entry": False, "short_entry": True, "close": 24_000.0})
     runner._process_futures_entries(NOW)
     pos = _futs(runner)[0]
     assert pos.direction == "SHORT"
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: pos.target_price - 1.0, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: pos.target_price - 1.0)
     runner._mark_exit_futures(pos, "NIFTY", NOW, {}, {"NIFTY": pos})
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6)
     assert runner.broker.s.query(Trade).all()[-1].net_pnl > 0

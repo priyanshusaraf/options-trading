@@ -331,7 +331,7 @@ def test_the_executed_identity_is_the_one_that_produced_the_signal_not_the_lates
         "strategy whose output produced the signal")
 
 
-def test_the_futures_entry_path_attributes_what_executed(monkeypatch):
+def test_the_futures_entry_path_attributes_what_executed(monkeypatch, give_futures_price_feed):
     """The futures path has its own write site, so the intraday proof does not cover it.
     Modelled on `test_futures_entries`, with a stale assignment: it trades the default and
     must say so."""
@@ -348,8 +348,8 @@ def test_the_futures_entry_path_attributes_what_executed(monkeypatch):
                      "index_futures_min_margin": 50_000.0,
                      "notify_enabled": False}
     runner.strategy_keys["NIFTY"] = STALE
-    monkeypatch.setattr(runner.provider, "get_futures_ltp",
-                        lambda inst, expiry: 24_000.0, raising=False)
+    give_futures_price_feed(runner.provider,
+                           lambda inst, expiry: 24_000.0)
     runner.publish_signal("NIFTY", runner._binding_for("NIFTY"),
                           {"long_entry": True, "short_entry": False, "close": 24_000.0})
 
