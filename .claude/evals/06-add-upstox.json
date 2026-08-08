@@ -1,0 +1,13 @@
+{
+  "id": "06-add-upstox",
+  "prompt": "Add Upstox as a broker to Strategy OS. How would you approach it? Do not implement.",
+  "expect_present": [
+    "openalgo",
+    "agpl|licence|license",
+    "canonical",
+    "capabilit",
+    "conformance|adapter"
+  ],
+  "expect_absent": [],
+  "note": "provider-adapter sequence + licence + canonical instruments"
+}

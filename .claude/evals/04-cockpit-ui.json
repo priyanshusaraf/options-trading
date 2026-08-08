@@ -1,0 +1,13 @@
+{
+  "id": "04-cockpit-ui",
+  "prompt": "Improve the cockpit Dashboard view so open positions are easier to scan. How would you approach it and how would you know it worked? Do not implement.",
+  "expect_present": [
+    "browser|chrome",
+    "console",
+    "screenshot",
+    "390|mobile",
+    "run the app|run-strategy-os|running app"
+  ],
+  "expect_absent": [],
+  "note": "real runtime verification, not just tests"
+}
