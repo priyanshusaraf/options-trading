@@ -14,8 +14,10 @@ import csv
 import io
 import json
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
+
+from app.api.paging import MAX_PAGE
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -107,7 +109,7 @@ def status(run_id: int | None = None):
 
 
 @router.get("/runs")
-def runs(limit: int = 100):
+def runs(limit: int = Query(default=100, ge=1, le=MAX_PAGE)):
     """Every past sweep, newest first — so no completed run is ever lost or
     silently overwritten. Each row carries a result count so the UI can show
     'NIFTY×6 · 312 cells · done · 19 Jun'."""
@@ -160,7 +162,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             strategy: str | None = None,
             min_win_rate: float = 0.0, min_profit_factor: float = 0.0,
             max_drawdown: float = 100.0, min_return: float = -1e9,
-            min_trades: int = 10, sort: str = "return_pct", limit: int = 500):
+            min_trades: int = 10, sort: str = "return_pct",
+            limit: int = Query(default=500, ge=1, le=MAX_PAGE)):
             # H9: default raised 1 -> 10 so a 1-lucky-trade cell is never surfaced as
             # promotable by default (grid selection bias across the sweep). Overridable.
     budget = _budget(request)

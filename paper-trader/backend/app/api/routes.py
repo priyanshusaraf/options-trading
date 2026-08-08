@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
+
+from app.api.paging import MAX_PAGE
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -393,7 +395,8 @@ def instrument_detail(key: str, request: Request, segment: str | None = None,
 
 
 @router.get("/api/trades")
-def trades(request: Request, limit: int = 100, mode: str | None = None):
+def trades(request: Request, limit: int = Query(default=100, ge=1, le=MAX_PAGE),
+           mode: str | None = None):
     # mode="paper"|"live" filters the log to one ledger; omitted returns both
     # (each row still carries its own `mode` so the UI can split them).
     with SessionLocal() as s:
@@ -401,7 +404,7 @@ def trades(request: Request, limit: int = 100, mode: str | None = None):
 
 
 @router.get("/api/logs")
-def logs(limit: int = 300):
+def logs(limit: int = Query(default=300, ge=1, le=MAX_PAGE)):
     from app.core.logging import log
     return {"logs": log.recent(limit)}
 
@@ -926,7 +929,7 @@ def reset_setting(body: SettingKey, request: Request):
 
 # ── L1 Stage 1: the Component IR shadow lane (read-only) ─────────────────────
 @router.get("/api/ir-shadow")
-def ir_shadow_observability(request: Request, limit: int = 50):
+def ir_shadow_observability(request: Request, limit: int = Query(default=50, ge=1, le=MAX_PAGE)):
     """What the shadow lane has seen. Observability only — there is deliberately **no**
     write route here: the lane's on/off flag is the `ir_shadow_enabled` runtime_config key
     and moves through `/api/settings`, so this cannot become a second way to steer it.

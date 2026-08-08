@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.execution_book import capital_for_book, configured_execution_mode
@@ -253,23 +253,56 @@ def summary(s: Session, segment: str | None = None, strategy: str | None = None,
     }
 
 
+def _narrow(q, segment: str | None, strategy: str | None, since: "dt.datetime | None"):
+    """`_apply`'s predicates, expressed in SQL rather than over a materialised list.
+
+    The normalisation is the whole reason this filtering used to live in Python: an unset
+    `segment` means options and an unset `strategy_key` means the engine default, and both
+    are legacy shapes in the money record.
+
+    `NULLIF(col, '')` inside the COALESCE is load-bearing, not decoration. `_seg`/`_strat`
+    used Python's `or`, which is falsy for the **empty string** as well as for None. A
+    plain `COALESCE(segment, 'options')` matches only NULL, so a row with `segment = ''`
+    would have normalised to "options" under the old code and to "" under the new — a
+    silent behaviour change in a money-reporting filter. `trades.segment` is NOT NULL
+    today, so the empty string is in fact the *only* reachable unset shape for it.
+    `test_analytics_scan_bounds.py` compares every filter combination against the old
+    implementation over both shapes so the two cannot drift.
+    """
+    if since is not None:
+        q = q.where(Trade.exit_time >= (since.replace(tzinfo=None) if since.tzinfo else since))
+    if segment:
+        q = q.where(func.coalesce(func.nullif(Trade.segment, ""), "options") == segment)
+    if strategy:
+        q = q.where(
+            func.coalesce(func.nullif(Trade.strategy_key, ""), DEFAULT_STRATEGY_KEY) == strategy)
+    return q
+
+
 def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
                   segment: str | None = None, strategy: str | None = None,
                   since: "dt.datetime | None" = None) -> list[dict]:
+    # Filter AND limit in SQL. This used to select every `Trade` row, filter in Python and
+    # slice — so `limit` bounded the response and not the read. That is the same shape as
+    # the `equity_curve`/`signal_counts` leaks of the 2026-07-23 outage (see the note at
+    # `equity_curve`); this one survived that fix and is the reporting surface behind
+    # /api/trades and the dashboard's 5s poll.
     q = select(Trade).order_by(Trade.exit_time.desc())
     if mode in ("paper", "live"):
         q = q.where(Trade.mode == mode)   # keep paper and real trades cleanly separated
-    # segment/strategy filtered in Python so legacy NULLs normalise to options/v3
-    trades = _apply(list(s.scalars(q)), segment, strategy, since)
-    return [t.to_dict() for t in trades[:limit]]
+    trades = list(s.scalars(_narrow(q, segment, strategy, since).limit(limit)))
+    return [t.to_dict() for t in trades]
 
 
 def instrument_stats(s: Session, key: str, segment: str | None = None,
                      strategy: str | None = None, since: "dt.datetime | None" = None) -> dict:
-    """Full stat block for one instrument (segment/strategy/period aware)."""
-    trades = _apply(list(s.scalars(select(Trade).where(Trade.instrument_key == key))),
-                    segment, strategy, since)
-    return _stat_block(trades)
+    """Full stat block for one instrument (segment/strategy/period aware).
+
+    Deliberately unlimited: a statistic over a subset of its own population is wrong, not
+    merely partial. The scan is bounded by `instrument_key` instead, which is indexed.
+    """
+    q = select(Trade).where(Trade.instrument_key == key)
+    return _stat_block(list(s.scalars(_narrow(q, segment, strategy, since))))
 
 
 def instrument_trades(s: Session, key: str, segment: str | None = None,
@@ -277,8 +310,8 @@ def instrument_trades(s: Session, key: str, segment: str | None = None,
                       limit: int = 500) -> list[dict]:
     """That instrument's trades, newest first (segment/strategy/period aware)."""
     q = select(Trade).where(Trade.instrument_key == key).order_by(Trade.exit_time.desc())
-    trades = _apply(list(s.scalars(q)), segment, strategy, since)
-    return [t.to_dict() for t in trades[:limit]]
+    trades = list(s.scalars(_narrow(q, segment, strategy, since).limit(limit)))
+    return [t.to_dict() for t in trades]
 
 
 def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7) -> dict[str, dict]:
