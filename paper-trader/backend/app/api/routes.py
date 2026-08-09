@@ -24,6 +24,7 @@ from app.db.models import DailyAccountSnapshot, Position, Trade
 from app.db.session import SessionLocal
 from app.engine import analytics
 from app.options.pricing import bs_price, implied_vol
+from app.providers.base import ProviderReadError
 from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
@@ -284,8 +285,13 @@ def candles(key: str, request: Request, interval: str | None = None):
     iv = interval or r._interval_for(key)   # detail chart defaults to the live interval
     try:
         cs = r.provider.get_candles(inst, iv, settings.history_days)
-    except Exception:
-        cs = []  # provider not ready (e.g. Kite not authenticated) — degrade gracefully
+    except ProviderReadError:
+        # A DATA failure degrades to an empty panel: the operator is looking at a chart, and a
+        # 500 is not an improvement on "no bars yet". Narrowed from bare `Exception` once the
+        # provider gained a failure channel — a `TypeError` in the signal path used to render
+        # here as a blank chart with a 200, indistinguishable from an unauthenticated
+        # connection, so the defect never surfaced.
+        cs = []
     if not cs:
         return {"candles": [], "ema": [], "zscore": [], "markers": [], "latest": None,
                 "name": inst.name}
@@ -315,11 +321,8 @@ def option_candles(key: str, request: Request):
     inst = get_instrument(key)
     try:
         cs = r.provider.get_candles(inst, r._interval_for(key), settings.history_days)
-    except Exception:
-        # `get_candles` now raises on a failed read rather than reporting no data. This route
-        # is a chart; an empty panel is the right degradation and a 500 is not. The sibling
-        # route above has always done this — it was only reachable here once the adapter
-        # gained a failure channel to raise through.
+    except ProviderReadError:
+        # Same narrowing as the sibling route above, and for the same reason.
         cs = []
     if not cs:
         return {"candles": [], "tradingsymbol": tsym}

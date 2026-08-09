@@ -11,7 +11,7 @@
 
 Strategy OS now has a strong graph, research-lineage, paper-authority, and single-owner trading core. It is not ready for a multi-user commercial V1, a second data provider paired with Zerodha execution, or live futures/MTF/delivery trading.
 
-The next step is not to write the Upstox adapter. The runtime must first stop treating one process-global provider as market data, execution credentials, account state, instrument identity, and broker selection at the same time. The Upstox design document correctly describes Upstox wire formats and symbology, but its claim that the first adapter will prove “Upstox data, Zerodha execution” is false under the current factory wiring.
+The next step is not to write the Upstox adapter. The runtime must first stop treating one process-global provider as market data, execution credentials, account state, instrument identity, and broker selection at the same time. A concurrent correction to the Upstox design note now acknowledges that the current factory cannot represent Upstox data plus Zerodha execution. This supervisor record puts explicit runtime role composition before the adapter because an unselectable adapter does not prove the intended topology.
 
 The project should continue on the current architecture with targeted hardening. Do not rewrite the IR, research store, ledger, frontend, or runtime language. Do not add microservices, Kafka, Rust, or Kubernetes. The present bottlenecks and risks come from missing identity dimensions, collapsed lifecycle stages, process-global selection, and repeated I/O.
 
