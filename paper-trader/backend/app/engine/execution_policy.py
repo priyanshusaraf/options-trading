@@ -1,5 +1,4 @@
-"""
-Adaptive order routing — decide HOW to send an order based on the live book.
+"""Entry order routing — decide how to submit without collapsing purpose into side.
 
 A MARKET order on a wide bid-ask spread (illiquid contracts — the COPPER options
 the owner flagged) fills deep in the spread and bleeds money instantly. So for an
@@ -11,8 +10,8 @@ ENTRY (BUY) we look at the order-time spread and top-of-book depth:
                                                 worst price we'll pay)
   - too wide (COPPER-like)         -> SKIP      (don't get caught)
 
-A protective EXIT (SELL on a stop/target) always goes MARKET: not getting out is
-worse than the slippage, and it mirrors the GTT safety-net stop.
+A short entry is a SELL too, so side cannot tell us whether an order reduces risk.
+Callers state ``ENTRY`` or ``EXIT`` separately. Protective exits always go MARKET.
 
 Pure + side-effect free so it is fully unit-tested without any live broker.
 """
@@ -44,19 +43,34 @@ def _spread_pct(bid: float, ask: float, ltp: float) -> tuple[float, float]:
     return (ltp if ltp > 0 else 0.0), 1.0
 
 
-def plan_order(side: str, bid: float, ask: float, ltp: float,
+def _entry_mode(params: dict) -> str:
+    return str(params.get("entry_order_mode", "AUTO")).strip().upper()
+
+
+def _capped_limit(reference: float, side: str, slip: float) -> float:
+    factor = 1 + slip if side == "BUY" else 1 - slip
+    return _round_tick(reference * factor)
+
+
+def plan_order(purpose: str, side: str, bid: float, ask: float, ltp: float,
                top_qty: float | None, lot_qty: int, params: dict) -> OrderPlan:
+    purpose = str(purpose).upper()
+    side = str(side).upper()
     mid, spread = _spread_pct(bid, ask, ltp)
     market_max = params["exec_market_max_spread_pct"]
     limit_max = params["exec_limit_max_spread_pct"]
     slip = params["exec_max_slippage_pct"]
 
     # Protective exit: always market — guarantee the fill.
-    if side == "SELL":
+    if purpose == "EXIT":
         return OrderPlan("MARKET", None,
                          "protective exit — market to guarantee the fill", spread)
+    if purpose != "ENTRY":
+        raise ValueError(f"unknown order purpose {purpose!r}")
+    if side not in ("BUY", "SELL"):
+        raise ValueError(f"unknown order side {side!r}")
 
-    # Entry (BUY).
+    # Entry. The hard quote veto applies regardless of the operator's preferred type.
     if mid <= 0:
         return OrderPlan("SKIP", None, "no usable quote to price the order", spread)
     if spread > limit_max:
@@ -64,11 +78,50 @@ def plan_order(side: str, bid: float, ask: float, ltp: float,
                          f"spread {spread:.1%} > {limit_max:.0%} max — too illiquid "
                          f"to enter safely", spread)
     thin = top_qty is not None and top_qty < params["exec_min_top_qty_lots"] * lot_qty
+    mode = _entry_mode(params)
+    if mode not in ("AUTO", "MARKET", "LIMIT"):
+        return OrderPlan("SKIP", None, f"invalid entry order mode {mode!r}", spread)
+    if mode == "MARKET":
+        if thin:
+            return OrderPlan("SKIP", None,
+                             "known thin top-of-book — refusing forced market entry",
+                             spread)
+        return OrderPlan("MARKET", None,
+                         f"operator selected market (spread {spread:.1%})", spread)
+    if mode == "LIMIT":
+        limit_price = _capped_limit(mid, side, slip)
+        return OrderPlan("LIMIT", limit_price,
+                         f"operator selected capped limit @ {limit_price:.2f}", spread)
     if spread <= market_max and not thin:
         return OrderPlan("MARKET", None,
                          f"tight book (spread {spread:.1%}) — market", spread)
     # moderate spread or thin top-of-book -> capped marketable limit
-    limit_price = _round_tick(mid * (1 + slip))
+    limit_price = _capped_limit(mid, side, slip)
     why = "thin top-of-book" if thin else f"spread {spread:.1%}"
     return OrderPlan("LIMIT", limit_price,
                      f"{why} — capped limit @ {limit_price:.2f} (≤ +{slip:.0%})", spread)
+
+
+def plan_reference_entry(side: str, reference_price: float, params: dict) -> OrderPlan:
+    """Plan an entry when the caller has a reference price but no order-book snapshot.
+
+    This is the present equity-candidate boundary. ``AUTO`` deliberately preserves its
+    legacy MARKET behavior; pretending the reference is both bid and ask would fabricate
+    liquidity. An explicit LIMIT still caps the requested price in the correct direction.
+    """
+    side = str(side).upper()
+    if side not in ("BUY", "SELL"):
+        raise ValueError(f"unknown order side {side!r}")
+    if reference_price <= 0:
+        return OrderPlan("SKIP", None, "no usable reference price", 1.0)
+    mode = _entry_mode(params)
+    if mode not in ("AUTO", "MARKET", "LIMIT"):
+        return OrderPlan("SKIP", None, f"invalid entry order mode {mode!r}", 1.0)
+    if mode == "LIMIT":
+        price = _capped_limit(reference_price, side,
+                              params["exec_max_slippage_pct"])
+        return OrderPlan("LIMIT", price,
+                         f"operator selected capped reference limit @ {price:.2f}", 0.0)
+    why = "automatic equity routing has no book snapshot" if mode == "AUTO" \
+        else "operator selected market"
+    return OrderPlan("MARKET", None, why, 0.0)
