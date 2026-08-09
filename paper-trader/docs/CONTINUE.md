@@ -335,9 +335,15 @@ history, not as an agenda.
    fixed; `scripts/provider_conformance_mutations.py` proves 8/8 guards can go red. Full account
    in [`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md)
    §9, including five gaps left explicitly open.
-2. **Settle `get_candles`'s missing failure channel — do this BEFORE Upstox.** `[]` currently
-   means both "no history" and "the read failed"; a second provider doubles the ways a read
-   fails, and no caller can fail closed on one today.
+2. **Settle `get_candles`'s missing failure channel — do this BEFORE Upstox, and start here.**
+   `[]` means both "no history" and "the read failed". Verified consequence: `runner.py:725`
+   already handles the failure — health failure, `_mark_token_bad` auth latch, break the scan —
+   but `kite.py` swallows every exception, so on a live token expiry the engine records
+   `record_ok("candle")` every tick, refreshes `last_scan_ok`, silently skips each instrument on
+   the short-frame check, and the token-bad latch never fires. The health surface reports a
+   healthy feed while nothing is arriving. Degrades toward no new entries (the safe direction),
+   so it is not an emergency — but the signal is not measuring what it claims. Detail in the
+   hardening record §9.4.1.
 3. **Upstox, data-only** (historical + live quotes). It proves Upstox-data/Zerodha-execution,
    canonical instrument mapping and provider provenance without new execution authority. Do
    **not** declare `STREAMING` in that slice: Upstox's live feed is protobuf over WebSocket, not

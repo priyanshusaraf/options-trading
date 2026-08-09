@@ -457,10 +457,27 @@ and were fixed.
 
 ### 9.4 Still open — named, not solved
 
-1. **`get_candles` has no failure channel.** `kite.py` returns `[]` on exception, so "the API
-   500'd" and "this instrument has no history" are the same answer. Callers cannot fail closed on
-   a read failure the way `account_positions` lets them. This must be settled *before* Upstox,
-   because a second provider doubles the ways a read can fail.
+1. **`get_candles` has no failure channel — and the engine's own failure handling is
+   consequently unreachable for Kite.** This is the next slice, and it is larger than it looked.
+
+   `kite.py` catches every exception around `_historical` and returns `[]`, so "the API 500'd",
+   "the token expired" and "this instrument has no history" are one answer. But
+   `runner.py:725` is written on the opposite assumption — it wraps the call in `try/except`
+   and, on an exception, records a `candle` health failure, latches `_mark_token_bad` for an
+   auth error so the remaining instruments are skipped rather than re-failing, and breaks the
+   scan.
+
+   None of that can fire. The adapter never raises, so on a live token expiry the engine calls
+   `health.record_ok("candle")` and refreshes `last_scan_ok[key]` on every tick, then falls to
+   `if len(candles) < ema_length + 5: continue` and skips the instrument silently. The operator's
+   health surface reports a healthy feed while the connection is returning nothing, and the
+   token-bad latch built for exactly this case never engages.
+
+   It degrades toward *no new entries*, which is the safe direction, so this is not an
+   emergency — but it means the data-health signal is not measuring what it claims. Settle it
+   before Upstox: a second provider doubles the ways a read can fail, and the conformance
+   contract's `check_market_data_under_failure` currently has to accept `[]` as a refusal
+   because that is the only vocabulary available.
 2. **A stale futures position skips its exit check entirely.** `_mark_exit_futures` sets
    `pos_stale` and returns without evaluating the exit, so a position that cannot be marked
    cannot leave. Unreachable today — no futures entry can open — but it is the "nothing may
