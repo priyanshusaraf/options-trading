@@ -22,6 +22,18 @@ from app.engine.venue import INTRADAY_EQUITY_CHARGE_SEGMENTS
 # venue.py as the *neutral* classification, with the Kite spelling in kite_venue.
 EQUITY_INTRADAY_SEGMENTS = INTRADAY_EQUITY_CHARGE_SEGMENTS
 
+LEGACY_BOT_TAG = "pt-bot"
+INTENT_TAG_PREFIX = "pti-"
+
+
+def is_strategy_os_tag(tag: object) -> bool:
+    """Recognise only the legacy bot tag or a durable 20-character intent tag."""
+    if tag == LEGACY_BOT_TAG:
+        return True
+    if not isinstance(tag, str) or len(tag) != 20 or not tag.startswith(INTENT_TAG_PREFIX):
+        return False
+    return all(ch in "0123456789abcdef" for ch in tag[len(INTENT_TAG_PREFIX):])
+
 
 def product_for_segment(segment: str, default: str = "NRML") -> str:
     """Kite product code for a charge-segment: MIS for intraday equity, else the

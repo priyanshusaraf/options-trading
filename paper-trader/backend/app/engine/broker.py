@@ -111,7 +111,8 @@ class PaperBroker:
                       reason: str, now: dt.datetime, spot: float,
                       params: dict | None = None, plan=None,
                       strategy_key: str | None = None,
-                      strategy_version: str | None = None) -> Position:
+                      strategy_version: str | None = None,
+                      entry_intent_id: str | None = None) -> Position:
         # `plan` (routing decision) is used by LiveBroker to choose market/limit;
         # the paper broker ignores it and fills at the quote.
         qty, premium = q.lot_size, q.ltp
@@ -130,6 +131,7 @@ class PaperBroker:
 
         pos = Position(
             deployment_id=self.deployment_id,
+            entry_intent_id=entry_intent_id,
             instrument_key=inst.key, direction=direction, option_type=q.option_type,
             tradingsymbol=q.tradingsymbol, exchange=inst.segment, strike=q.strike,
             expiry=q.expiry, lot_size=qty, qty=qty, entry_premium=premium,
@@ -167,7 +169,8 @@ class PaperBroker:
                              strategy_version: str | None = None,
                              margin: float | None = None,
                              sl_pct: float | None = None,
-                             tp_pct: float | None = None) -> Position:
+                             tp_pct: float | None = None,
+                             entry_intent_id: str | None = None) -> Position:
         """Open an intraday equity (MIS) position of `qty` shares at `price`.
 
         MIS is leveraged: only the MARGIN leaves cash, not the full notional — but P&L
@@ -199,6 +202,7 @@ class PaperBroker:
 
         pos = Position(
             deployment_id=self.deployment_id,
+            entry_intent_id=entry_intent_id,
             instrument_key=inst.key, direction=direction, option_type="EQ",
             tradingsymbol=getattr(inst, "spot_symbol", "") or inst.key,
             exchange=charge_segment, segment="equity_intraday", strategy_key=strategy_key,
@@ -245,6 +249,7 @@ class PaperBroker:
 
         tr = Trade(
             deployment_id=self.deployment_id,
+            entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
@@ -430,6 +435,7 @@ class PaperBroker:
 
         tr = Trade(
             deployment_id=self.deployment_id,
+            entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="FUT", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="index_futures", strategy_key=pos.strategy_key,
@@ -473,6 +479,7 @@ class PaperBroker:
 
         tr = Trade(
             deployment_id=self.deployment_id,
+            entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
             exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
@@ -529,6 +536,7 @@ class PaperBroker:
 
         tr = Trade(
             deployment_id=self.deployment_id,
+            entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
             exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
@@ -586,6 +594,7 @@ class PaperBroker:
 
         tr = Trade(
             deployment_id=self.deployment_id,
+            entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,

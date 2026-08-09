@@ -97,3 +97,22 @@ def test_timeout_reason_carries_the_last_raw_status_for_reconciliation():
     r = execute_order(c, _buy(), poll_seconds=1.0, timeout_seconds=2.0, sleep_fn=_noslp)
     assert r.status == "TIMEOUT"
     assert "SOME_NEW_STATUS" in r.reason
+
+
+def test_ack_callback_failure_returns_known_order_id_and_never_replaces():
+    """A failed durable ack happens after submit, so retrying place would duplicate it."""
+    c = FakeClient([{"status": "COMPLETE", "filled_qty": 75, "avg_price": 101.2}])
+
+    def fail_ack(_order_id):
+        raise RuntimeError("database unavailable")
+
+    r = execute_order(c, _buy(), sleep_fn=_noslp, on_placed=fail_ack)
+
+    assert r.status == "ERROR"
+    assert r.order_id == "OID-1"
+    assert r.filled_qty == 0
+    assert r.avg_price == 0.0
+    assert r.reconciliation_required is True
+    assert "acknowledgement persistence failed" in r.reason
+    assert c.places == 1
+    assert c.status_calls == 0

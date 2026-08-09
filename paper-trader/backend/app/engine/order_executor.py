@@ -40,6 +40,7 @@ class OrderResult:
     filled_qty: int
     avg_price: float
     reason: str
+    reconciliation_required: bool = False
 
 
 class OrderClient(Protocol):
@@ -64,14 +65,18 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
     except Exception as e:
         return OrderResult("ERROR", None, 0, 0.0, f"place failed: {e}")
 
-    # H13 — stamp the order id into the journal the instant placement acks, so a crash
-    # in the poll window below is recoverable. Wrapped: a journal write must never
-    # disturb a real, already-placed order.
+    # Placement has already happened. If the acknowledgement cannot be made durable,
+    # preserve the known broker id and stop: polling or retrying through a caller can
+    # otherwise turn an uncertain submit into a duplicate real order.
     if on_placed is not None:
         try:
             on_placed(order_id)
-        except Exception:
-            pass
+        except Exception as e:
+            return OrderResult(
+                "ERROR", order_id, 0, 0.0,
+                f"acknowledgement persistence failed: {e}",
+                reconciliation_required=True,
+            )
 
     waited = 0.0
     last: dict = {}
