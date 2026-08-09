@@ -104,11 +104,15 @@ both cost and latency.
 - **Connection count is a non-issue.** 500 concurrent WebSockets is small. A single uvicorn
   process handles thousands; the per-connection memory is tens of kilobytes, so roughly 25 MB
   total. This is not what makes real-time expensive.
-- **Payload volume is the actual cost.** At a 2 KB state push per second per user, 500 users is
-  ~1 MB/s sustained, or **~2.6 TB/month**. DigitalOcean bundles 1–2 TB per droplet and charges
-  ~$0.01/GB beyond it, so this is the line item that grows without anyone noticing. The control
-  is payload discipline: push **deltas, not full state**, coalesce updates into a tick rather
-  than emitting per-event, and never serialise a collection whose size grows with history.
+- **Payload volume is measurable, and it has now been measured** — hardening record §11. The
+  estimate below was written before that measurement and the measurement corrected it in an
+  important way, so read §11 rather than this bullet. Summary: at 50 instruments a push is
+  25.9 KiB and 500 users is ~2.7 TB/month, which is only ~$17/month of DigitalOcean overage.
+  **The bandwidth is not the problem.** The problem is that `manager.py` sends with
+  `ws.send_json` *per client*, so the same dict is JSON-encoded once per connected browser —
+  ~24 MB/s of encoding at 500 users to transmit ~10 MB/s. That is a CPU cliff wearing a
+  bandwidth costume, and it is the 2026-07-23 outage shape. Serialise once and `send_text` the
+  same string to every client; then push **deltas, not full state**.
 - **The precedent is on record and it was not infrastructure.** The 2026-07-23 outage was a
   dashboard-open leak at +100 MB/min that took a 1 GB droplet into OOM and collapsed the DB
   pool. Two causes, both application-level: the WebSocket hub, and analytics routes doing

@@ -582,3 +582,64 @@ Two conclusions, both already in the plan:
 Peak allocation is 2.10 MB per dataset for frame + signals, so 50,000 datasets held at once
 would be ~105 GB. The sweep must stream datasets, never accumulate them — this constrains the
 fan-out design.
+
+## 11. WebSocket fan-out cost at 500 users (2026-08-09)
+
+The owner named hosting cost at 500 users as a blocker and WebSockets as the part they have
+been stuck on before. This is the first measurement rather than an opinion.
+
+**Method and its limit.** Payload sizes are computed from the state entry shape built at
+`runner.py:817-831` plus the ratchet keys at 839/841 and a held `Position.to_dict()`,
+serialised compactly. This is a **reconstructed** payload, not a capture from a running
+server — treat it as the right order of magnitude, and re-measure against a live process
+before it becomes a deployment gate.
+
+`main.py` `on_update` broadcasts `{"type": "state", "data": runner.state}` — the **whole**
+state dict, every instrument, to every client, on every update.
+
+| Instruments | Bytes/push | MB/user/hour @ 2.5 s tick |
+|---:|---:|---:|
+| 20 | 11,025 (10.8 KiB) | 15.9 |
+| 50 | 26,545 (25.9 KiB) | 38.2 |
+| 100 | 49,145 (48.0 KiB) | 70.8 |
+
+At 50 instruments, 6.5 h/day, 22 days: **5.5 GB/user/month**, so **2,733 GB/month at 500
+users**. Dashboards left open around the clock take that to ~13.8 TB.
+
+### The bandwidth is not the problem. The serialisation is.
+
+DigitalOcean bundles 1–2 TB per droplet and charges ~$0.01/GB beyond, so 2.7 TB/month is
+roughly **$17/month** of overage — real but not the thing to fear. Even the always-on case
+is ~$130.
+
+The cliff is CPU. `manager.py:102` sends with `ws.send_json(msg)` **per client**, so the
+same dict is JSON-encoded once per connected browser:
+
+```
+500 clients x 49 KB every 2.5 s = ~24 MB/s of JSON encoding, to send ~10 MB/s
+```
+
+That is the 2026-07-23 outage shape exactly — an application-level fan-out cost that grows
+with users while looking like a bandwidth question. The manager is otherwise well built: it
+already coalesces per client (`_COALESCE`, `client.latest` keeps only the newest message of
+each type), so a slow consumer cannot accumulate a backlog. That part of the July rewrite
+holds.
+
+### Two corrections, neither of them "use polling"
+
+1. **Serialise once, send bytes to many.** Encode the message a single time and `send_text`
+   the identical string to every client. This is a small change to `_sender` and removes
+   essentially all of the per-client CPU. Do this first; it is cheap and it is the whole
+   cliff.
+2. **Push deltas, not full state.** A 2.5 s tick changes a handful of fields on a handful of
+   instruments, yet every push carries all of them, including `_ratchet_atr` — an
+   underscore-prefixed engine internal already flagged in `api/dto.py`'s docstring as
+   leaking to browsers. A delta protocol shrinks the payload by roughly the ratio of changed
+   to total fields and closes that leak on the way.
+
+Polling is strictly worse on both axes and is not proposed.
+
+**Not yet measured, and still required before this is a gate:** bytes/user/hour captured
+from a live process, accounts-per-core under a real session, resident memory per active
+account, peak concurrent live accounts versus connected, and DB write throughput at peak
+entries.
