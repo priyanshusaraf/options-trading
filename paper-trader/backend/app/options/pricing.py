@@ -11,7 +11,24 @@ import math
 from typing import Optional
 
 from scipy.optimize import brentq
+from scipy.special import ndtr
 from scipy.stats import norm
+
+# `scipy.stats.norm.cdf` computes its answer by calling `scipy.special.ndtr`, then
+# wraps it in the generic `rv_continuous` machinery — argsreduce, broadcast_arrays and
+# support masks — which costs ~24 us per scalar call against ndtr's ~0.1 us.
+#
+# `bs_price` runs ~7,600 times per synthetic-premium backtest cell, twice per price, so
+# profiling the 10,000 x 5 sweep tier found 74% of premium replay time inside that
+# wrapper rather than in any arithmetic. Calling `ndtr` directly is the SAME function
+# with the wrapper removed, not an approximation of it: bit-identity against
+# `norm.cdf` over 600k samples (tails, body, denormals, both infinities) is pinned by
+# `tests/test_options_pricing_identity.py`.
+#
+# Do not replace this with a `math.erf` expression. That is *nearly* identical, which
+# is the worst possible property here — it would move every backtested option price
+# without failing anything loudly.
+_normal_cdf = ndtr
 
 
 def bs_price(S: float, K: float, T: float, r: float, sigma: float, flag: str) -> float:
@@ -21,8 +38,8 @@ def bs_price(S: float, K: float, T: float, r: float, sigma: float, flag: str) ->
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
     d2 = d1 - sigma * math.sqrt(T)
     if flag == "c":
-        return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
-    return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        return S * _normal_cdf(d1) - K * math.exp(-r * T) * _normal_cdf(d2)
+    return K * math.exp(-r * T) * _normal_cdf(-d2) - S * _normal_cdf(-d1)
 
 
 def implied_vol(
@@ -52,15 +69,15 @@ def bs_greeks(S: float, K: float, T: float, r: float, sigma: float, flag: str) -
     gamma = norm.pdf(d1) / (S * sigma * math.sqrt(T))
     vega = S * norm.pdf(d1) * math.sqrt(T) / 100
     if flag == "c":
-        delta = norm.cdf(d1)
+        delta = _normal_cdf(d1)
         theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 - r * K * math.exp(-r * T) * norm.cdf(d2)) / 365
-        rho = K * T * math.exp(-r * T) * norm.cdf(d2) / 100
+                 - r * K * math.exp(-r * T) * _normal_cdf(d2)) / 365
+        rho = K * T * math.exp(-r * T) * _normal_cdf(d2) / 100
     else:
-        delta = norm.cdf(d1) - 1
+        delta = _normal_cdf(d1) - 1
         theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365
-        rho = -K * T * math.exp(-r * T) * norm.cdf(-d2) / 100
+                 + r * K * math.exp(-r * T) * _normal_cdf(-d2)) / 365
+        rho = -K * T * math.exp(-r * T) * _normal_cdf(-d2) / 100
     return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega, "rho": rho}
 
 
