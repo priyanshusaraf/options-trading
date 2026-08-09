@@ -79,10 +79,14 @@ Recorded so this is a judgement, not a reflex:
   `deploy.sh`'s problem. That is real, and it is the strongest form of the "better deployment
   options" argument. It costs roughly $15–60/month and is worth paying *when there is something
   to fail over to.*
-- **Concurrency headroom.** MVCC removes the single-writer ceiling. Relevant if the backtest
-  sweep's write path turns out to be the constraint — **currently being measured** (sweep plan
-  Task 5 reports SQLite write throughput at 16,000 and 50,000 rows). That measurement is the one
-  result that could overturn this ADR on efficiency grounds alone.
+- **Concurrency headroom.** MVCC removes the single-writer ceiling. This was the one result
+  that could have overturned the ADR on efficiency grounds alone, and it has now been
+  **measured (`c47acc9`) — it does not.** With batched writes, one SQLite writer in WAL mode
+  persists **16,000 rows in 2.64 s (6,056 rows/s)** and **50,000 rows in 9.69 s**, at
+  1.5–1.9 ms/transaction. Against ~22 minutes of compute for the same workload, persistence is
+  0.2% of the run. (Unbatched, one row per transaction, the same tiers cost 11.99 s and 54.02 s —
+  still not a ceiling, which is why batching was worth doing on its own merits rather than as
+  Postgres preparation.)
 - **It is not free on latency.** SQLite is in-process; Postgres adds a network round-trip per
   query. For the risk loop, which issues many small reads per tick, a migration makes the live
   path *slower*, not faster. "More efficient" is not unconditionally true and should not be
@@ -109,8 +113,9 @@ Any one of these, and the answer changes:
 
 - Execution is decided to run on **more than one host** (failover, or account-isolated workers
   spread for resilience). This is the primary trigger and it is a topology decision.
-- A **measured** lock-wait or write-throughput ceiling — Task 5's number, or `busy_timeout=10000`
-  actually being reached under real load rather than in theory.
+- A **measured** lock-wait ceiling — `busy_timeout=10000` actually being reached under real load
+  rather than in theory. ~~Write throughput~~ is **settled**: see §5, SQLite sustains the
+  50,000-row tier with room to spare, so this trigger is now only about *contention*, not volume.
 - Tenancy lands and the schema settles, at which point the port is a normal slice against a
   stable shape.
 - More than one application replica is needed for availability.
