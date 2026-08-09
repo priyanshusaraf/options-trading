@@ -121,6 +121,37 @@ class ExecutionState:
     last_fill_price: float | None = None
 
 
+def execution_metrics(intent: Any, state: ExecutionState) -> dict[str, Any]:
+    """Return execution telemetry using only the persisted intent and reduced facts."""
+    intent_id = getattr(intent, "client_intent_id", None)
+    if intent_id is not None and intent_id != state.client_intent_id:
+        raise ValueError(
+            f"intent/state mismatch: {intent_id} != {state.client_intent_id}")
+    requested_qty = int(intent.requested_qty)
+    fill_ratio = (state.filled_qty / requested_qty) if requested_qty > 0 else 0.0
+    return {
+        "client_intent_id": state.client_intent_id,
+        "status": state.status,
+        "terminal": state.terminal,
+        "reconciliation_required": state.reconciliation_required,
+        "requested_qty": requested_qty,
+        "filled_qty": state.filled_qty,
+        "booked_qty": state.booked_qty,
+        "protected_qty": state.protected_qty,
+        "remaining_qty": state.remaining_qty,
+        "fill_ratio": round(fill_ratio, 8),
+        "decision_price": intent.decision_price,
+        "average_fill_price": state.avg_price if state.filled_qty else None,
+        "slippage_amount": state.slippage_amount,
+        "slippage_bps": state.slippage_bps,
+        "signal_to_intent_ms": state.signal_to_intent_ms,
+        "intent_to_submit_ms": state.intent_to_submit_ms,
+        "submit_to_ack_ms": state.submit_to_ack_ms,
+        "ack_to_fill_ms": state.ack_to_fill_ms,
+        "anomalies": list(state.anomalies),
+    }
+
+
 def _latency_ms(
     name: str,
     start: dt.datetime | None,
