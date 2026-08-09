@@ -1,10 +1,16 @@
 """
 Sweep orchestrator — runs the strategy backtest across the universe × intervals.
 
-Runs in a background thread (Kite calls are blocking + throttled). Progress is
-written to the BacktestRun row so the UI can poll a progress bar. Each
+Runs in a background thread (Kite calls are blocking + throttled). Each
 (instrument, interval) result is cached in BacktestResult so reruns are instant
 and the UI can filter/sort without recomputation.
+
+Computation returns serialized values; it never writes. Results and the run's
+progress are persisted together in transactions of at most `BATCH_SIZE` cells,
+and progress is DERIVED from the durable result count rather than incremented —
+so a result can never be counted before its row exists. That same split is what
+lets the cell arithmetic run in worker processes (`workers`), which have no
+database session, with output gated bit-identical against the serial path.
 """
 from __future__ import annotations
 
@@ -30,6 +36,13 @@ from app.core.market_hours import ist_epoch
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
+from sqlalchemy import func, select
+
+# Results and progress are persisted together, in transactions of at most this
+# many cells. Two things depend on the number being small and fixed: a crash can
+# lose at most this much completed work, and the single SQLite writer is held for
+# at most this many inserts while the next cell simulates.
+BATCH_SIZE = 10
 
 # Kite's documented max lookback per interval (days). We pull as much as allowed.
 # This is the hard ceiling: a requested range is silently CLAMPED to it (and the
@@ -246,7 +259,7 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                 lookback_days: int | None = None,
                 start_date: str | None = None, end_date: str | None = None,
                 strategies: list[str] | None = None,
-                pinned_datasets=None) -> int:
+                pinned_datasets=None, workers: int | None = None) -> int:
     """Create a run row, resolve the universe, launch the background thread.
     Returns the new run id. Raises if a sweep is already in flight.
 
@@ -262,10 +275,21 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                      provider reads; a cell whose pin is missing, corrupt, or
                      describes another series fails closed with an explanatory
                      error rather than falling back to a fetch. Omit it and the
-                     sweep behaves exactly as before, provider reads included."""
+                     sweep behaves exactly as before, provider reads included.
+    `workers`      — cell fan-out across processes. None = `backtest_sweep_workers`
+                     (default 1 = the serial reference path). Bounded by
+                     `MAX_SWEEP_WORKERS` and the CPU count. Output is gated
+                     bit-identical against serial."""
     from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
     global _running, _worker
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
+    worker_count = _worker_count(workers)
+    # A run left `running` by a dead process is a phantom nothing is driving.
+    # Repair it before adding another, so the status endpoint never shows two.
+    # Deliberately BEFORE `_running` is set: the guard inside protects a live
+    # sweep's own row, and this must not be skipped by the flag we are about to
+    # raise ourselves.
+    reconcile_stale_runs()
     with _state_lock:
         if _running:
             raise RuntimeError("a sweep is already running")
@@ -302,16 +326,19 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                               strategies=",".join(st.key for st in strat_objs),
                               note=f"{len(specs)} instruments × {len(intervals)} intervals "
                                    f"× {len(strat_objs)} strategies · {win['label']}"
-                                   + (" · pinned" if pinned else ""))
+                                   + (" · pinned" if pinned else "")
+                                   + (f" · {worker_count} workers"
+                                      if worker_count > 1 else ""))
             s.add(run)
             s.commit()
             run_id = run.id
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
                  f"window={win['label']}, strategies={strat_label}"
-                 + (f", PINNED to {len(pinned)} stored datasets" if pinned else ""))
+                 + (f", PINNED to {len(pinned)} stored datasets" if pinned else "")
+                 + (f", {worker_count} worker processes" if worker_count > 1 else ""))
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
-                                   strat_objs, pinned),
+                                   strat_objs, pinned, worker_count),
                              daemon=True)
         _worker = t
         t.start()
@@ -322,28 +349,206 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None) -> None:
+         pinned=None, workers=None) -> None:
     global _running
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
         from app.strategy.registry import get_strategy
         strategies = [get_strategy(None)]
+    batch: list[dict] = []
     try:
+        for values in _cell_values(provider, specs, intervals, capital,
+                                   win, strategies, pinned, workers):
+            batch.append(values)
+            if len(batch) >= BATCH_SIZE:
+                _commit_batch(run_id, batch)
+                batch = []
+        # The terminal status rides the final batch: results, progress and the
+        # run's completion are one transaction, so a run can never be `done`
+        # while its last ten rows are missing.
+        _commit_batch(run_id, batch, status="done")
+        log.info(f"backtest sweep #{run_id} complete")
+    except Exception as e:  # never let the thread die silently
+        # `batch` is deliberately dropped: those cells were never durable, and
+        # progress is derived from what IS durable, so nothing over-reports.
+        _commit_batch(run_id, [], status="error", note=str(e))
+        log.error(f"backtest sweep #{run_id} failed: {e}")
+    finally:
+        _running = False
+
+
+def _cell_values(provider, specs, intervals, capital, win, strategies,
+                 pinned, workers):
+    """Yield one serialized result payload per cell, in request order.
+
+    Serial by default and by reference: `workers <= 1` walks the cells in this
+    process, which is the implementation every parallel result is compared
+    against (`tests/test_backtest_parallel.py`).
+    """
+    count = _worker_count(workers)
+    if count > 1:
+        yield from _parallel_cell_values(
+            provider, specs, intervals, capital, win, strategies, pinned, count)
+        return
+    for inst in specs:
+        for interval in intervals:
+            prepared = _prepare_dataset(provider, inst, interval, win,
+                                        pinned=pinned)
+            for strat in strategies:
+                yield _one(provider, inst, interval, capital, win, strat,
+                           prepared=prepared)
+
+
+# ── multiprocess fan-out (Task 6) ────────────────────────────────────────────
+# Justified by measurement: a cell is 84.7 ms and the owner's full-universe warm
+# pass is 16,000 cells, so serial is 22 minutes against a 1.4-minute target.
+#
+# What crosses a process boundary is a candle tuple in and a dict of already-
+# serialized column values out. Nothing shared, nothing mutable, no database
+# session, no provider handle. The parent keeps everything that is not pure
+# arithmetic: the throttled provider read, the dataset address, the store write
+# and the reusable-result lookup. That bounds the achievable speedup (see the
+# measured table in the hardening record) and it is the honest trade — moving the
+# result-cache lookup into workers would make their visibility of already-written
+# rows depend on batch timing, which is exactly the class of difference the
+# bit-identity gate exists to forbid.
+
+MAX_SWEEP_WORKERS = 32
+
+
+def _worker_count(workers=None) -> int:
+    """Resolve and BOUND the worker count. 1 means the serial reference path."""
+    import os
+    if workers is None:
+        workers = get_settings().backtest_sweep_workers
+    try:
+        n = int(workers)
+    except (TypeError, ValueError):
+        n = 1
+    if n <= 1:
+        return 1
+    return max(1, min(n, MAX_SWEEP_WORKERS, os.cpu_count() or 1))
+
+
+def _worker_task(payload: dict) -> list[dict]:
+    """Compute every un-cached strategy for ONE dataset. Runs in a worker process.
+
+    The dataset is the unit of work, not the cell, so the canonical frame is still
+    built exactly once per dataset (the Task-2 invariant) and the candles cross
+    the boundary once rather than once per strategy.
+
+    Strategy resolution is FAIL-CLOSED here and the version is checked against the
+    parent's. `get_strategy` would silently substitute the default strategy in a
+    worker whose registry differs from the parent's — a runtime-registered
+    generated strategy does not exist in a spawned process — and the run would
+    finish green with a different strategy's numbers under the requested key.
+    """
+    from app.strategy.registry import resolve_strategy
+    candles = payload["candles"]
+    inst, interval = payload["inst"], payload["interval"]
+    meta = dict(bars=payload["bars"], first_ts=payload["first_ts"],
+                last_ts=payload["last_ts"],
+                effective_days=payload["effective_days"],
+                clamped=payload["clamped"])
+    frame = None
+    out: list[dict] = []
+    for cell in payload["cells"]:
+        try:
+            strat = resolve_strategy(cell["strategy_key"])
+            if strat.version != cell["strategy_version"]:
+                raise RuntimeError(
+                    f"strategy {cell['strategy_key']!r} is version "
+                    f"{strat.version[:12]}… in this worker but "
+                    f"{cell['strategy_version'][:12]}… in the sweep")
+        except Exception as exc:
+            out.append(_result_values(
+                inst, interval, None, [], meta["bars"],
+                clamped=meta["clamped"], strategy_key=cell["strategy_key"],
+                error=f"parallel worker: {exc}"))
+            continue
+        if frame is None:
+            frame = prepare_signal_frame(candles)
+        out.append(_compute_values(
+            candles, inst, interval, payload["capital"], strat, cell["params"],
+            payload["slippage_pct"], cell["phash"], frame=frame, **meta))
+    return out
+
+
+def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared):
+    """Split one dataset's cells into values this process already has and cells a
+    worker must compute — keeping the ORDER the serial path would produce."""
+    slots: list[tuple[str, dict | None]] = []
+    cells: list[dict] = []
+    slippage_pct = float(get_settings().backtest_slippage_pct)
+    for strat in strategies:
+        if prepared.error:
+            slots.append(("ready", _result_values(
+                inst, interval, None, [], prepared.bars,
+                clamped=prepared.clamped, strategy_key=strat.key,
+                error=prepared.error)))
+            continue
+        phash = _execution_address(prepared, inst, interval, capital, win, strat,
+                                   slippage_pct)
+        cached = _reusable_values(inst, interval, phash, prepared.last_ts)
+        if cached is not None:
+            slots.append(("ready", cached))
+            continue
+        slots.append(("worker", None))
+        cells.append({"strategy_key": strat.key,
+                      "strategy_version": strat.version,
+                      "params": dict(strat.default_params),
+                      "phash": phash})
+    payload = None
+    if cells:
+        payload = {"candles": prepared.candles, "inst": inst,
+                   "interval": interval, "capital": capital,
+                   "slippage_pct": slippage_pct, "bars": prepared.bars,
+                   "first_ts": prepared.first_ts, "last_ts": prepared.last_ts,
+                   "effective_days": prepared.effective_days,
+                   "clamped": prepared.clamped, "cells": cells}
+    return slots, payload
+
+
+def _merge(slots, computed) -> list[dict]:
+    it = iter(computed)
+    return [value if kind == "ready" else next(it) for kind, value in slots]
+
+
+def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
+                          pinned, workers):
+    """Yield the same values as the serial path, in the same order, computed in
+    `workers` processes.
+
+    Datasets are STREAMED: at most `workers * 2` are in flight at once, so peak
+    memory is bounded by the worker count and not by the cell count. At the
+    measured 2.10 MB/dataset, holding all 50,000 would be ~105 GB.
+    """
+    import multiprocessing
+    from collections import deque
+    from concurrent.futures import ProcessPoolExecutor
+
+    max_inflight = max(2, workers * 2)
+    pending: deque = deque()
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         for inst in specs:
             for interval in intervals:
                 prepared = _prepare_dataset(provider, inst, interval, win,
                                             pinned=pinned)
-                for strat in strategies:
-                    _one(run_id, provider, inst, interval, capital, win, strat,
-                         prepared=prepared)
-                    _bump(run_id)
-        _finish(run_id, "done")
-        log.info(f"backtest sweep #{run_id} complete")
-    except Exception as e:  # never let the thread die silently
-        _finish(run_id, "error", str(e))
-        log.error(f"backtest sweep #{run_id} failed: {e}")
-    finally:
-        _running = False
+                slots, payload = _plan_dataset(
+                    provider, inst, interval, capital, win, strategies, prepared)
+                future = pool.submit(_worker_task, payload) if payload else None
+                pending.append((future, slots))
+                # `prepared` (and its lazily-built frame) is dropped here: the
+                # parent never holds a dataset past its submission.
+                del prepared, payload
+                while len(pending) >= max_inflight:
+                    future, slots = pending.popleft()
+                    yield from _merge(
+                        slots, future.result() if future else ())
+        while pending:
+            future, slots = pending.popleft()
+            yield from _merge(slots, future.result() if future else ())
 
 
 def _prepare_dataset(provider, inst, interval, win, *,
@@ -509,54 +714,93 @@ def _pin_mismatch(stored, *, provider, inst, interval, win) -> str:
     return ""
 
 
-def _one(run_id, provider, inst, interval, capital, win, strat=None,
-         *, prepared: _PreparedDataset | None = None) -> None:
+def _one(provider, inst, interval, capital, win, strat=None,
+         *, prepared: _PreparedDataset | None = None) -> dict:
+    """Resolve one cell to a serialized result payload. Writes nothing.
+
+    Returning values instead of writing them is what makes both Task 5 and Task 6
+    possible: persistence moves into a batched transaction the caller owns, and
+    the arithmetic below can run in a process that has no database session at all.
+    Everything that needs the database — the reusable-result lookup — stays here,
+    in the parent.
+    """
     if strat is None:
         from app.strategy.registry import get_strategy
         strat = get_strategy(None)
-    from app.backtest import cache
     prepared = prepared or _prepare_dataset(provider, inst, interval, win)
     if prepared.error:
-        return _store(
-            run_id, inst, interval, None, [], prepared.bars,
+        return _result_values(
+            inst, interval, None, [], prepared.bars,
             clamped=prepared.clamped, strategy_key=strat.key,
             error=prepared.error)
-
-    candles = prepared.candles
-    first_ts = prepared.first_ts
-    last_ts = prepared.last_ts
-    effective_days = prepared.effective_days
-    clamped = prepared.clamped
     slippage_pct = float(get_settings().backtest_slippage_pct)
-    phash = ""
-    if prepared.dataset_address:
-        try:
-            phash = execution_result_address(
-                dataset_address=prepared.dataset_address,
-                instrument=inst,
-                strategy=strat,
-                parameters=dict(strat.default_params),
-                capital=capital,
-                window=win,
-                slippage_pct=slippage_pct,
-                implementation_maps=(),
-            ) or ""
-        except Exception as exc:
-            # Identity failure disables reuse for this cell; it never disables the run.
-            log.warn(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
-            phash = ""
-    if phash:
-        expected_premium_error = ("" if getattr(inst, "has_options", True)
-                                  else NO_OPTIONS_PREMIUM_ERROR)
-        with SessionLocal() as s:
-            hit = cache.find_reusable(
-                s, inst.key, interval, phash, last_ts,
-                expected_premium_error=expected_premium_error)
-            if hit is not None:
-                _copy_from_cache(s, run_id, hit)
-                return
-    params = dict(strat.default_params)
-    signals = compute_signals(candles, strat, params, frame=prepared.frame)
+    phash = _execution_address(prepared, inst, interval, capital, win, strat,
+                               slippage_pct)
+    cached = _reusable_values(inst, interval, phash, prepared.last_ts)
+    if cached is not None:
+        return cached
+    return _compute_values(
+        prepared.candles, inst, interval, capital, strat,
+        dict(strat.default_params), slippage_pct, phash,
+        bars=prepared.bars, first_ts=prepared.first_ts, last_ts=prepared.last_ts,
+        effective_days=prepared.effective_days, clamped=prepared.clamped,
+        frame=prepared.frame)
+
+
+def _execution_address(prepared, inst, interval, capital, win, strat,
+                       slippage_pct) -> str:
+    if not prepared.dataset_address:
+        return ""
+    try:
+        return execution_result_address(
+            dataset_address=prepared.dataset_address,
+            instrument=inst,
+            strategy=strat,
+            parameters=dict(strat.default_params),
+            capital=capital,
+            window=win,
+            slippage_pct=slippage_pct,
+            implementation_maps=(),
+        ) or ""
+    except Exception as exc:
+        # Identity failure disables reuse for this cell; it never disables the run.
+        log.warn(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
+        return ""
+
+
+def _reusable_values(inst, interval, phash: str, last_ts: int) -> dict | None:
+    """The refresh-warm hit: an identical execution address already has a row.
+
+    This is the ONLY database read in the per-cell path, and it stays in the
+    parent process deliberately — a worker with its own session would be a second
+    reader of the result table whose visibility depends on batch timing.
+    """
+    if not phash:
+        return None
+    from app.backtest import cache
+    expected_premium_error = ("" if getattr(inst, "has_options", True)
+                              else NO_OPTIONS_PREMIUM_ERROR)
+    with SessionLocal() as s:
+        hit = cache.find_reusable(
+            s, inst.key, interval, phash, last_ts,
+            expected_premium_error=expected_premium_error)
+        if hit is None:
+            return None
+        from app.backtest.cache import cached_result_values
+        return dict(cached_result_values(hit), from_cache=True)
+
+
+def _compute_values(candles, inst, interval, capital, strat, params,
+                    slippage_pct, phash, *, bars, first_ts, last_ts,
+                    effective_days, clamped, frame=None) -> dict:
+    """The pure cell: candles in, serialized result values out.
+
+    No database, no provider, no module-level mutable state — which is exactly
+    what lets a worker process run it (Task 6). Every input that could differ
+    between two processes is passed in explicitly rather than resolved from
+    settings here; `slippage_pct` and `params` in particular.
+    """
+    signals = compute_signals(candles, strat, params, frame=frame)
     trades, m = simulate(
         candles, inst, interval, capital=capital, strategy=strat, params=params,
         slippage_pct=slippage_pct, signals=signals)
@@ -574,11 +818,12 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None,
             premium_error = ""
         except Exception as e:
             p_trades, p_metrics, premium_error = [], BTMetrics(), str(e)
-    _store(run_id, inst, interval, m, trades, prepared.bars, strategy_key=strat.key,
-           params_hash=phash, last_candle_ts=last_ts,
-           first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
-           clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
-           premium_error=premium_error)
+    return _result_values(
+        inst, interval, m, trades, bars, strategy_key=strat.key,
+        params_hash=phash, last_candle_ts=last_ts,
+        first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
+        clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
+        premium_error=premium_error)
 
 
 def _supports_end(provider) -> bool:
@@ -592,21 +837,26 @@ def _supports_end(provider) -> bool:
         return False
 
 
-def _copy_from_cache(session, run_id, src) -> None:
-    from app.backtest.cache import cached_result_values
-    session.add(BacktestResult(
-        run_id=run_id, from_cache=True, **cached_result_values(src)))
-    session.commit()
+def _result_values(inst, interval, m, trades, bars, error="",
+                   params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
+                   effective_days=0, clamped=False, strategy_key="trend_impulse_v3",
+                   premium_trades=None, premium_metrics=None,
+                   premium_error="") -> dict:
+    """Every stored column for one cell, already serialized. Writes nothing.
 
-
-def _store(run_id, inst, interval, m, trades, bars, error="",
-           params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
-           effective_days=0, clamped=False, strategy_key="trend_impulse_v3",
-           premium_trades=None, premium_metrics=None, premium_error="") -> None:
+    JSON encoding happens HERE rather than at the transaction, so a batch commit
+    is pure I/O and — for a worker — so the value that crosses the process
+    boundary is the exact string that will be stored. Float formatting drift
+    between processes would show up in these strings first, which is why the
+    bit-identity gate compares them.
+    """
     import datetime as dt
     from app.backtest import cache
     seg = backtest_charge_segment(inst)
-    common = dict(run_id=run_id, instrument_key=inst.key, name=inst.name,
+    # `run_id` is deliberately absent: it is run-local identity, applied by
+    # `_commit_batch` at insert time. A payload that carried it could not be
+    # computed in a worker before the run existed, nor compared across runs.
+    common = dict(instrument_key=inst.key, name=inst.name,
                   segment=seg, strategy_key=strategy_key, interval=interval, bars=bars,
                   params_hash=params_hash, last_candle_ts=last_candle_ts,
                   first_ts=first_ts, last_ts=last_ts_span,
@@ -631,12 +881,9 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
         premium_expectancy=pm.expectancy, premium_charges=pm.charges,
         premium_trades_json=ptrades_json,
         premium_error=premium_error)
-    with SessionLocal() as s:
-        if m is None:
-            s.add(BacktestResult(error=error, **premium_common, **common))
-        else:
-            s.add(BacktestResult(
-                trades=m.trades, wins=m.wins, win_rate=m.win_rate,
+    if m is None:
+        return dict(error=error, **premium_common, **common)
+    return dict(trades=m.trades, wins=m.wins, win_rate=m.win_rate,
                 profit_factor=m.profit_factor, max_drawdown_pct=m.max_drawdown_pct,
                 return_pct=m.return_pct, net_pnl=m.net_pnl, gross_pnl=m.gross_pnl,
                 charges=m.charges, expectancy=m.expectancy, cagr=m.cagr,
@@ -650,23 +897,64 @@ def _store(run_id, inst, interval, m, trades, bars, error="",
                 worst_mae_pct=m.worst_mae_pct,
                 curve_json=json.dumps(m.equity_curve),
                 trades_json=json.dumps([t.to_dict() for t in trades]),
-                bh_curve_json=json.dumps(m.bh_curve), **premium_common, **common))
+                bh_curve_json=json.dumps(m.bh_curve), **premium_common, **common)
+
+
+# ── persistence ──────────────────────────────────────────────────────────────
+
+def _durable_result_count(session, run_id) -> int:
+    """How many result rows this run has, counted inside the caller's transaction.
+
+    This — not a counter — is progress. An incrementing counter is written by a
+    different transaction than the one that made the row durable, so a crash
+    between the two leaves a run reporting work it cannot show.
+    """
+    return int(session.scalar(
+        select(func.count()).select_from(BacktestResult)
+        .where(BacktestResult.run_id == run_id)) or 0)
+
+
+def _commit_batch(run_id, values: list[dict], *, status: str = "",
+                  note: str = "") -> None:
+    """Persist up to `BATCH_SIZE` results, their progress, and any terminal
+    status as ONE transaction. It changes all of them or none of them."""
+    if len(values) > BATCH_SIZE:
+        raise RuntimeError(
+            f"batch of {len(values)} exceeds BATCH_SIZE={BATCH_SIZE}")
+    with SessionLocal() as s:
+        for v in values:
+            s.add(BacktestResult(run_id=run_id, **v))
+        s.flush()          # rows are visible to the count below, still uncommitted
+        run = s.get(BacktestRun, run_id)
+        if run is not None:
+            run.done = _durable_result_count(s, run_id)
+            if status:
+                run.status = status
+            if note:
+                run.note = note[:400]
         s.commit()
 
 
-def _bump(run_id) -> None:
-    with SessionLocal() as s:
-        run = s.get(BacktestRun, run_id)
-        if run:
-            run.done += 1
-            s.commit()
+def reconcile_stale_runs() -> int:
+    """Repair runs left `running` by a process that died mid-sweep.
 
-
-def _finish(run_id, status, note="") -> None:
+    Nothing in-process is driving them: `_running` is a module global and does not
+    survive a restart, so the row is a phantom the status endpoint reports forever
+    and `start_sweep` would contradict. `done` is reset from the durable row count
+    rather than trusted, because a run written by the pre-batch incrementing
+    counter can be arbitrarily ahead of its rows. Returns how many were repaired.
+    """
+    if _running:            # a live sweep owns its own row; never touch it
+        return 0
+    repaired = 0
     with SessionLocal() as s:
-        run = s.get(BacktestRun, run_id)
-        if run:
-            run.status = status
-            if note:
-                run.note = note[:400]
+        for run in s.scalars(select(BacktestRun)
+                             .where(BacktestRun.status == "running")):
+            run.status = "error"
+            run.done = _durable_result_count(s, run.id)
+            run.note = ("interrupted: the process ended before this sweep "
+                        "finished; progress reset to its durable results")
+            repaired += 1
+        if repaired:
             s.commit()
+    return repaired

@@ -151,7 +151,13 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
         expected = {name: getattr(source, name) for name in exact_columns}
         source_id = source.id
 
-        sweep._copy_from_cache(s, 202, source)
+        # The warm copy is now a two-step: the reusable row becomes a values
+        # payload (which a worker could equally have produced), and the batch
+        # transaction binds it to a run. The guarantee is unchanged — every
+        # mapped value verbatim, only row/run identity rebound.
+        sweep._commit_batch(202, [dict(cache.cached_result_values(source),
+                                       from_cache=True)])
+    with SessionLocal() as s:
         copied = s.scalar(select(BacktestResult).where(BacktestResult.run_id == 202))
 
         assert copied is not None

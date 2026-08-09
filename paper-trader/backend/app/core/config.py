@@ -430,6 +430,18 @@ class Settings(BaseSettings):
     # paper_trader.db. The store owns its own request index inside this directory.
     backtest_dataset_dir: str = "backtest_datasets"
 
+    # Sweep fan-out (env PT_BACKTEST_SWEEP_WORKERS). Cells are independent — no
+    # cross-cell reduction — so the cell arithmetic is identical whichever process
+    # runs it, and `tests/test_backtest_parallel.py` gates that as bit-identity.
+    #
+    # The default is 1 — the SERIAL reference path — on purpose, and it is not
+    # timidity. The process that runs sweeps today is the live trading backend on
+    # a 1 GB VPS, where a spawned worker costs ~200 MB of resident pandas/scipy
+    # before it does any work; 8 of them is the 2026-07-23 OOM again, this time
+    # taking the money path down with it. Raise it where the sweep has a box of
+    # its own. Bounded by `sweep.MAX_SWEEP_WORKERS` and the CPU count.
+    backtest_sweep_workers: int = 1
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

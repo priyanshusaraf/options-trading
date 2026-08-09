@@ -103,11 +103,40 @@ the Task-3 store and makes **zero** provider reads.
 
 ### Task 5: Atomic batch persistence (was Task 3)
 
-- [ ] Add transaction-budget tests at 500, 5,000, and 50,000 cells without expensive simulation.
-- [ ] Add rollback, terminal-consistency, and interrupted-run reconciliation tests.
-- [ ] Return serialized result values from computation and persist batches of at most ten.
-- [ ] Update progress from durable result count in the same transaction.
-- [ ] Measure whether one SQLite writer sustains the 50,000-row tier; report, do not assume.
+- [x] Add transaction-budget tests at 500, 5,000, and 50,000 cells without expensive simulation.
+- [x] Add rollback, terminal-consistency, and interrupted-run reconciliation tests.
+- [x] Return serialized result values from computation and persist batches of at most ten.
+- [x] Update progress from durable result count in the same transaction.
+- [x] Measure whether one SQLite writer sustains the 50,000-row tier; report, do not assume.
+
+> `_one` returns a values dict and writes nothing; `_commit_batch` inserts up to ten rows,
+> sets `run.done` from `_durable_result_count` and applies any terminal status in ONE
+> transaction. Progress is **derived, never incremented** — the old `_bump` was a second
+> transaction, so a crash between the two left a run reporting rows it could not show
+> (`test_an_interrupted_run_never_reports_more_than_it_stored` was red at `rows=0 done=33`).
+> Cost is `floor(cells/10) + 1` transactions for the run phase, inside the `ceil(cells/10) + 1`
+> budget, plus one for run creation.
+>
+> **Measured, one SQLite writer** (this Mac, WAL, `synchronous=NORMAL`, compute stubbed,
+> realistic row payloads):
+>
+> | rows | txns | seconds | rows/s | ms/txn |
+> |---:|---:|---:|---:|---:|
+> | 500 | 51 | 0.09 | 5,880 | 1.67 |
+> | 5,000 | 501 | 0.76 | 6,582 | 1.52 |
+> | 16,000 | 1,601 | 2.64 | 6,056 | 1.65 |
+> | 50,000 | 5,001 | 9.69 | 5,158 | 1.94 |
+>
+> It sustains both tiers with room to spare: 2.64 s of persistence against 22 min of compute
+> for the 16,000-cell universe, and 9.69 s against 70 min at 50,000. One row per transaction
+> measures 11.99 s / 54.02 s for the same tiers — 4.5–5.6× worse — and the pre-change code
+> issued **two** transactions per cell.
+>
+> `reconcile_stale_runs()` (called by `start_sweep`) repairs a run left `running` by a dead
+> process: status `error`, `done` reset to its durable row count.
+
+> Found on the way: `test_backtest_cache.py`'s warm-copy guarantee moved from
+> `_copy_from_cache` to `cached_result_values` + `_commit_batch`; the assertion is unchanged.
 
 ### Task 6: Measured multiprocess fan-out (new)
 
@@ -116,9 +145,57 @@ Justified by measurement, not preference: the provider throttle is known, and th
 allocation is 2.10 MB/dataset, so workers must stream datasets, never accumulate them:
 50,000 held at once would be ~105 GB.
 
-- [ ] Prove byte-identical results between serial and parallel execution on a frozen dataset.
-- [ ] Bound worker count and prove no worker observes another's frame.
-- [ ] Measure speedup per core count; keep serial as the reference implementation.
+- [x] Prove byte-identical results between serial and parallel execution on a frozen dataset.
+- [x] Bound worker count and prove no worker observes another's frame.
+- [x] Measure speedup per core count; keep serial as the reference implementation.
+
+> **Design.** The parent keeps everything that is not pure arithmetic — the throttled provider
+> read, `ordered_dataset_address`, the store write/read, and the reusable-result lookup. A
+> worker receives a frozen candle tuple plus resolved params and returns already-serialized
+> column values. No shared state, no DB session, no provider handle. The unit of work is a
+> DATASET (not a cell), so the canonical frame is still built once per dataset. Results are
+> re-sequenced into request order, so row ids do not depend on which core was free.
+> `backtest_sweep_workers` defaults to **1** — the serial reference path — because the process
+> that runs sweeps today is the live backend on a 1 GB VPS and a spawned worker costs ~200 MB
+> resident before doing any work.
+>
+> **Bit-identity is the gate**, over every mapped column including `curve_json`, `bh_curve_json`,
+> `trades_json` and `premium_trades_json`. It is proven non-vacuous: rounding candle prices to
+> two decimals inside the worker reddens it on `curve_json` first — but only against
+> `FullPrecisionMockProvider`. **The plain mock rounds OHLC to two decimals, so that suppression
+> was a no-op against it and the gate would have been blind to exactly the drift it exists to
+> catch.** Any future numerical guard on mock candles needs the same treatment.
+>
+> **Measured speedup — pinned/warm, 500 cells × 5,000 bars, one strategy** (M1 Pro, 4 P + 4 E
+> cores; the same box does 3.78× on pure CPU fan-out at 4 workers, so that is the machine's
+> ceiling, not 8×):
+>
+> | workers | seconds | ms/cell | speedup | efficiency |
+> |---:|---:|---:|---:|---:|
+> | 1 | 48.65 | 97.3 | 1.00× | 100% |
+> | 2 | 24.50 | 49.0 | 1.99× | 99% |
+> | 4 | 23.35 | 46.7 | 2.08× | 52% |
+> | 8 | 26.76 | 53.5 | 1.82× | 23% |
+>
+> **The plateau is the parent, and it is measured.** Profiling the parent thread during a
+> 4-worker pinned run: `_prepare_dataset` **37.9 ms/cell (73% of wall time)**, `_plan_dataset`
+> 2.7 ms, waiting on workers only 7.9 ms. In a pinned run `_prepare_dataset` is the dataset-store
+> read — decompress, recompute the address, check the manifest — 22.5 ms/cell uncontended. Cold
+> runs add `dataset_store.put` at 23.9 ms/cell on top.
+>
+> **So the 16-core / 1.4-minute target is NOT reached by this change alone**, and the next lever
+> is identified and sized: move the store read into the worker (send the address, not the
+> candles), taking the parent from ~41 ms/cell to ~3.5 ms/cell. That is a change to the pinned
+> fail-closed contract — five refusal paths in `_pinned_dataset` would have to be reproduced
+> worker-side — and it belongs with the `dataset_store` owner.
+>
+> Streaming is proven: at most `workers × 2` datasets in flight, and parent RSS over a 400-cell
+> 4-worker run moved 193.9 → 196.5 MB (6.3 KB/cell). Accumulating would have been 2.10 MB/cell.
+>
+> Fail-closed, worker-side: strategy resolution uses `resolve_strategy` and checks the parent's
+> `strategy.version`. `get_strategy` in a spawned worker would silently substitute the DEFAULT
+> strategy for a runtime-`register()`ed one — the run finishes green with the wrong logic's
+> numbers filed under the requested key.
 
 ### Task 7: Tiered benchmark and evidence
 
