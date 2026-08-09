@@ -80,20 +80,29 @@ not threaten this, because no result is a reduction across cells — each cell's
 performed in the same order regardless of which worker runs it. That must still be *proven*
 byte-identical (Task 6's gate), not assumed.
 
-**The real hazard is that a window is resolved against `date.today()`.** `sweep._fetch_days`
-computes the fetch span from the current date, and `"max"` means "whatever exists now". So the
-same request, with no parameter changed, resolves to a **different dataset tomorrow** — more
-bars, a different address, different results. That is precisely the case the owner named, and
-today it is unguarded:
+**The real hazard was that a window's IDENTITY resolved against `date.today()` — FIXED,
+`b2ee7d0`.** `_requested_window` is the request half of a dataset address and it carried
+`fetch_days`, which for a custom window is `(today - start).days + 2`, because the provider only
+sells trailing history. Identical caller parameters therefore addressed a **different dataset
+tomorrow**: an unpinned rerun quietly produced different numbers (indistinguishable from strategy
+drift) and a pin from yesterday failed closed, turning a "pinned rerun" into a run of all-error
+cells.
 
-- a pin resolved yesterday for a custom-window run mismatches today and fails closed, so the
-  "pinned rerun" silently becomes a run of all-error cells;
-- an unpinned rerun quietly produces different numbers and looks like strategy drift.
+`fetch_days` describes *how* we reached the data, not what was asked for, and what actually came
+back is already recorded separately in the effective window. Identity now carries only the
+caller's request; the fetch mechanic still computes the same span and still reaches back just as
+far. Pinned by `tests/test_backtest_request_identity_is_dateless.py`, which also pins the
+converse — a `"max"` or trailing-lookback window legitimately grows as the market produces bars
+and must keep minting a new address. This fixed request identity, not data identity.
 
-**Required:** a run must record the window it actually resolved to, and be re-runnable against
-that resolution rather than against "today". A result should be reproducible from
-`(dataset addresses, execution manifest)` alone, with wall-clock date participating nowhere.
-This is a correctness gate on any reproducibility claim and it outranks the performance work.
+Worth recording how nearly it was missed: the first version of that test **passed against the
+unfixed code**, because it used a start date 219 days back, which clamps to the 200-day ceiling
+and is accidentally stable. The defect only bites inside the ceiling.
+
+**Still required** for a full reproducibility claim: a run should be re-runnable from
+`(dataset addresses, execution manifest)` alone, with wall-clock date participating nowhere at
+all. The identity fix removes the silent-drift case; recording the resolved window per run
+remains open.
 
 Two related gaps already recorded against the store, both of which weaken a reproducibility
 claim and neither of which is closed:
