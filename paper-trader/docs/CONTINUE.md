@@ -344,10 +344,16 @@ history, not as an agenda.
    healthy feed while nothing is arriving. Degrades toward no new entries (the safe direction),
    so it is not an emergency — but the signal is not measuring what it claims. Detail in the
    hardening record §9.4.1.
-3. **Upstox, data-only** (historical + live quotes). It proves Upstox-data/Zerodha-execution,
-   canonical instrument mapping and provider provenance without new execution authority. Do
-   **not** declare `STREAMING` in that slice: Upstox's live feed is protobuf over WebSocket, not
-   a variation on Kite's tick format (`engineering/reference/multiverse-index.md` §7).
+3. **Upstox, data-only** (historical + live quotes) — **designed, not built**. The API is
+   already read and recorded in
+   [`engineering/reference/upstox-data-adapter-design.md`](engineering/reference/upstox-data-adapter-design.md):
+   instrument keys are `SEGMENT|ISIN` and cannot be derived from a tradingsymbol (which is what
+   makes the `spot_symbol` relocation in item 4 provable); candles are arrays, documented
+   newest-first, `+05:30`-aware; and the interval vocabulary is not Kite's — our live `15minute`
+   is absent from v2 entirely. Four obligations in the conformance contract already cover those.
+   Four things are **not** pinned (§5) and must be before it ships. Declaring `STREAMING` is out
+   of scope: the live feed is protobuf over WebSocket. **Live verification needs Upstox
+   credentials — an owner gate (§6).**
 4. **Relocate `spot_symbol` / `option_name` off canonical `Instrument`**, using the second real
    mapping, proving Kite's resolution unchanged.
 5. **Tenancy as a V1 blocker** — owner-scoped graphs, identifiers, deployments, research,
