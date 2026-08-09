@@ -186,6 +186,26 @@ class MarketDataProvider(ABC):
         """
         return None
 
+    def front_month_expiry(self, inst: Instrument) -> date | None:
+        """Which dated contract this connection would trade for `inst` right now.
+
+        A futures order is an order in a *series*, and until 2026-08-09 nothing in the system
+        could name one. `runner._process_futures_entries` read `getattr(inst, "expiry", None)`
+        — but `Instrument` is the economic underlying and is a frozen dataclass with no such
+        field, so that expression was always `None` and the `or now.date()` beside it invented
+        *today* as the contract. Kite then matched an expiry exactly and found nothing on all
+        but one day a month, while the mock's basis had converged to zero and returned exactly
+        spot: the underlying substituted for the future, arriving through a working provider.
+
+        The connection is the only thing that knows its own listed series, which is why the
+        question lives here rather than on the canonical instrument.
+
+        Concrete with a safe default, like `get_futures_ltp` — an accidental abstract method on
+        this class once broke provider construction in nine tests at once. `None` means "I
+        cannot name a contract" and the caller must refuse rather than invent one.
+        """
+        return None
+
     def get_live_price(self, inst: Instrument) -> float | None:
         """Underlying price for the expanded per-instrument live view. Defaults to
         the LTP; the mock overrides it with display-only jitter. (Live providers

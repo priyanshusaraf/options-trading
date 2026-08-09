@@ -1805,12 +1805,13 @@ class EngineRunner:
             return
         # Fail closed if the connection cannot price a futures contract.
         #
-        # `get_futures_ltp` is the base no-op returning None and NO provider implements it —
-        # including Kite. This segment is "fully built and switched OFF", so today that is
-        # latent. The moment `index_futures_enabled` is flipped it stops being latent: `fut`
-        # is None at every mark (`_mark_exit_futures`), so a position would never mark on a
-        # real futures price, would read permanently stale, and the delivery-window force
-        # close would exit at `pos.last_premium` — the entry price — instead of the market.
+        # Kite and the mock implement `get_futures_ltp`; replay overrides it precisely in order
+        # to refuse (a recording carries no futures feed), and the base default returns None.
+        # What the guard defends against is a connection for which `fut` is None at every mark
+        # (`_mark_exit_futures`): the position would never mark on a real futures price, would
+        # read permanently stale — and a stale futures position skips its exit check entirely,
+        # so it would not exit at all. The declaration is necessary and, as the expiry
+        # resolution below records, not yet sufficient.
         #
         # Opening a position that cannot be marked is worse than not opening it, so this
         # refuses to open rather than trading blind. Removing the guard requires implementing
@@ -1860,7 +1861,25 @@ class EngineRunner:
                 log.info(f"DISARMED — futures signal ready, not taking {key}",
                          instrument=key, event="DISARMED_SKIP")
                 continue
-            expiry = getattr(inst, "expiry", None) or now.date()
+            # Which CONTRACT would this be? `Instrument` carries no expiry — it is the
+            # economic underlying, not a series — so `getattr` here has always returned None
+            # and the `or now.date()` it used to carry invented *today* as the expiry.
+            #
+            # That invention was invisible while no provider declared FUTURES_QUOTES, and
+            # false in both directions the moment one did: Kite matches an expiry exactly, so
+            # today resolves to no contract on all but one day a month; the mock prices every
+            # expiry, and at zero days to run its basis has converged, so it returns exactly
+            # spot — the substitution this whole capability exists to forbid, arriving through
+            # a working provider.
+            #
+            # The connection is the only thing that knows its own listed series, so it is asked
+            # (`front_month_expiry`) and its refusal is honoured. Inventing a date to get past
+            # this line is what produced the defect.
+            expiry = self.provider.front_month_expiry(inst)
+            if expiry is None:
+                log.info(f"FUTURES skip — no resolved contract expiry for {key}",
+                         instrument=key, event="FUTURES_NO_CONTRACT")
+                continue
             # Delivery guard BEFORE anything else: never OPEN into a window we
             # would immediately have to force-close out of.
             if self.params.get("index_futures_delivery_guard", True):

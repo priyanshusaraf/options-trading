@@ -122,8 +122,14 @@ def test_it_never_opens_into_a_delivery_window(runner, monkeypatch):
     of — the guard runs on entry, not only on exit."""
     import app.engine.delivery_calendar as dc
     _enable(runner)
+    # A window that actually contains `NOW`. It used to be written as `ends=e`, which only
+    # described a real window because the entry expiry was silently *today* — the runner had no
+    # way to name a contract and invented one. Now that the expiry is the connection's front
+    # month, `ends=e` would describe a window ending before it starts, and the guard would
+    # correctly let the entry through, testing nothing.
     monkeypatch.setattr(dc.CashSettledCalendar, "window_for",
-                        lambda self, k, e: dc.DeliveryWindow(starts=NOW.date(), ends=e))
+                        lambda self, k, e: dc.DeliveryWindow(
+                            starts=NOW.date(), ends=NOW.date() + dt.timedelta(days=7)))
     runner._process_futures_entries(NOW)
     assert _futs(runner) == []
 
