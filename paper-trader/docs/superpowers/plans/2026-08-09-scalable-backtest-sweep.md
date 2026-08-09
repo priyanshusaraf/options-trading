@@ -2,11 +2,21 @@
 
 > **For agentic workers:** use test-driven development task by task and preserve numerical output.
 
-**Goal:** Establish measured 100 × 5, 500 × 5, and 1,000 × 5 sweep tiers with exact-result
-parity and bounded provider/database operations.
+**Goal:** Establish measured 100 × 5, 1,000 × 5, and **10,000 × 5** sweep tiers with
+exact-result parity and bounded provider/database operations.
 
 **Design:**
 [`2026-08-09-scalable-backtest-sweep-design.md`](../specs/2026-08-09-scalable-backtest-sweep-design.md)
+· corrected by
+[`2026-08-09-scale-and-cost-corrections-design.md`](../specs/2026-08-09-scale-and-cost-corrections-design.md)
+
+> **Reordered 2026-08-09 by owner correction.** The tier ceiling rose to 10,000 × 5 ("a few
+> minutes"), which is 50,000 datasets. Kite's 0.40 s historical throttle puts a **5 h 33 m**
+> floor under fetching those live, so the target is unreachable by provider refresh at any level
+> of code optimisation. The local content-addressed dataset store — originally Task 4 — is
+> therefore promoted ahead of batch persistence, and measured multiprocess fan-out enters scope
+> (6.61 ms/cell × 50,000 = 5.5 min single-threaded, before the premium replay). Tasks below are
+> renumbered in execution order.
 
 ### Task 1: Share exact dataset acquisition across strategies
 
@@ -23,12 +33,19 @@ parity and bounded provider/database operations.
 - [x] Convert once per dataset and evaluate once per dataset/strategy.
 - [x] Prove refresh-warm hits perform zero conversions and simulations after address validation.
 
-### Task 3: Atomic batch persistence
+### Task 3: Local content-addressed dataset store (promoted from Task 4)
 
-- [ ] Add transaction-budget tests at 500, 2,500, and 5,000 cells without expensive simulation.
-- [ ] Add rollback, terminal-consistency, and interrupted-run reconciliation tests.
-- [ ] Return serialized result values from computation and persist batches of at most ten.
-- [ ] Update progress from durable result count in the same transaction.
+The only path to 10,000 × 5. Datasets are fetched once, stored by the exact address
+`identity.ordered_dataset_address` already computes, and read from disk thereafter.
+
+- [ ] Test that a stored dataset is served without any provider call, and that its bytes
+      round-trip to an identical address.
+- [ ] Test that a refresh still reads once per dataset and that revised history is detected and
+      stored as a new address rather than overwriting.
+- [ ] Test corruption containment: a stored dataset whose recomputed address disagrees is
+      refused, not served.
+- [ ] Implement the store behind the existing prepared-dataset seam so `_one()` is unchanged.
+- [ ] Prove the store never becomes an implicit pin — a normal refresh still costs its reads.
 
 ### Task 4: Pinned immutable warm path
 
@@ -36,10 +53,28 @@ parity and bounded provider/database operations.
 - [ ] Prove pinned exact reruns make zero provider calls and preserve all result artifacts.
 - [ ] Reject manifest mismatch instead of silently refreshing or cloning.
 
-### Task 5: Tiered benchmark and evidence
+### Task 5: Atomic batch persistence (was Task 3)
+
+- [ ] Add transaction-budget tests at 500, 5,000, and 50,000 cells without expensive simulation.
+- [ ] Add rollback, terminal-consistency, and interrupted-run reconciliation tests.
+- [ ] Return serialized result values from computation and persist batches of at most ten.
+- [ ] Update progress from durable result count in the same transaction.
+- [ ] Measure whether one SQLite writer sustains the 50,000-row tier; report, do not assume.
+
+### Task 6: Measured multiprocess fan-out (new)
+
+Justified by measurement, not preference: the provider throttle is now known, and 6.61 ms/cell
+puts the 50,000-cell tier at 5.5 minutes on one core before the premium replay.
+
+- [ ] Prove byte-identical results between serial and parallel execution on a frozen dataset.
+- [ ] Bound worker count and prove no worker observes another's frame.
+- [ ] Measure speedup per core count; keep serial as the reference implementation.
+
+### Task 7: Tiered benchmark and evidence
 
 - [ ] Add a deterministic offline benchmark with separate acquisition, identity, simulation,
       persistence, and total timings.
-- [ ] Run 100 × 5, 500 × 5, and 1,000 × 5 tiers; record p50/p95/p99 and operation counts.
+- [ ] Run 100 × 5, 1,000 × 5, and 10,000 × 5 tiers; record p50/p95/p99 and operation counts.
 - [ ] Keep a smaller real-strategy parity test in the normal suite.
-- [ ] Update roadmap/workstream claims using measured results only.
+- [ ] Update roadmap/workstream claims using measured results only — including an honest
+      statement of what the 10,000 × 5 tier costs cold, warm and pinned.

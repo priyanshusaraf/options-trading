@@ -4,6 +4,11 @@
 3,698 collected, 3,692 passed, 6 expected skips; mock `LEDGER OK`; 16/16 `SWEEP OK`;
 migration head `0014`. No live broker or deployment was contacted.
 
+> **STATUS: COMPLETE.** All steps landed through `9827e23`; migration `0014`,
+> `execution_intents`, `execution_order_events`, the reducer and the store are committed with
+> 1,514 lines of lifecycle tests. The boxes below went unticked during execution and were
+> reconciled to the code on 2026-08-09 — do not re-run this plan.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
 **Goal:** Make every new live entry originate from a committed intent, record broker observations as idempotent immutable events, block uncertain resubmission, and expose measured latency and slippage without changing exit behavior.
@@ -38,7 +43,7 @@ migration head `0014`. No live broker or deployment was contacted.
 
 **Produces:** ExecutionIntent, ExecutionOrderEvent, nullable entry_intent_id on Position and Trade, database constraints, indexes, and immutability triggers.
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add these tests:
 
@@ -49,7 +54,7 @@ Add these tests:
 
 The first inserts an intent and INTENT_CREATED, commits, reopens, and reads both. The second expects IntegrityError for duplicate intent/source/source_event_id. The third expects OperationalError for update and delete. The migration test upgrades 0013 to 0014, inspects exact objects, downgrades, and upgrades again while an old journal row stays unchanged.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -57,7 +62,7 @@ Run:
 
 Expected: imports or inspection fail because revision 0014 and the models do not exist.
 
-- [ ] **Step 3: Add the ORM models**
+- [x] **Step 3: Add the ORM models**
 
 ExecutionIntent fields:
 
@@ -85,15 +90,15 @@ ExecutionOrderEvent fields:
 
 Create unique constraint uq_execution_event_source_identity on client_intent_id, source, source_event_id. Add indexed nullable entry_intent_id FKs to positions and trades with ON DELETE RESTRICT.
 
-- [ ] **Step 4: Add revision 0014 and append-only triggers**
+- [x] **Step 4: Add revision 0014 and append-only triggers**
 
 The migration creates update and delete triggers on execution_order_events. Each trigger aborts with the message execution_order_events are immutable. Downgrade drops the triggers and lifecycle tables, then the two nullable link columns. Follow the existing idempotent downgrade pattern.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run the complete test_execution_lifecycle_schema.py and test_schema_migrations.py modules.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Commit message: feat(execution): add immutable entry lifecycle schema
 
@@ -111,7 +116,7 @@ Commit message: feat(execution): add immutable entry lifecycle schema
 
 NewExecutionIntent is a frozen dataclass containing every ExecutionIntent field except client_intent_id, broker_tag, and context_json; it carries context as a dictionary. NewExecutionEvent is a frozen dataclass containing source, source_event_id, kind, broker_order_id, broker_status, cumulative_filled_qty, avg_price, payload, and anomaly. The store assigns IDs, canonicalizes JSON, and commits timestamps supplied by the caller.
 
-- [ ] **Step 1: Write failing reducer tests**
+- [x] **Step 1: Write failing reducer tests**
 
 Add:
 
@@ -126,11 +131,11 @@ Add:
 
 Use cumulative observations 25 at 100 and then 75 at 102. Derived filled quantity is 75, current cumulative average is 102, and the second incremental fill is 50. Never average cumulative averages.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run test_execution_lifecycle.py. Expected: module import fails.
 
-- [ ] **Step 3: Implement identifiers**
+- [x] **Step 3: Implement identifiers**
 
 Use these signatures:
 
@@ -140,13 +145,13 @@ Use these signatures:
 
 Intent IDs use uuid4 hex. The tag is pti- plus the first 16 characters. The observation ID is SHA-256 over canonical JSON containing order ID, uppercase status, integer cumulative fill, rounded average, and reason.
 
-- [ ] **Step 4: Implement the reducer**
+- [x] **Step 4: Implement the reducer**
 
 ExecutionState exposes client_intent_id, status, broker_order_id, filled_qty, avg_price, remaining_qty, terminal, reconciliation_required, anomalies, four latency measures, slippage_amount, and slippage_bps.
 
 Use event insertion order. Ignore lower cumulative fill for derived state and add an anomaly. Preserve the first broker order ID and flag a later different ID. Terminal state is sticky. SUBMIT_STARTED without ACKNOWLEDGED requires reconciliation.
 
-- [ ] **Step 5: Implement the transactional store**
+- [x] **Step 5: Implement the transactional store**
 
 Use:
 
@@ -158,7 +163,7 @@ Use:
 
 Each write commits before returning. On a uniqueness collision, append_event rolls back and returns the existing row only if canonical contents match. It raises if the same identity carries different content.
 
-- [ ] **Step 6: Verify GREEN and commit**
+- [x] **Step 6: Verify GREEN and commit**
 
 Run test_execution_lifecycle.py and test_execution_lifecycle_schema.py.
 
@@ -178,7 +183,7 @@ Commit message: feat(execution): reduce immutable order observations
 
 **Produces:** An entry-only _execute_entry path. Existing _execute stays on exits.
 
-- [ ] **Step 1: Write failing sequence tests**
+- [x] **Step 1: Write failing sequence tests**
 
 Add:
 
@@ -190,29 +195,29 @@ Add:
 
 The fake timeline must be intent_commit, submit_started_commit, place, ack_commit, status. Pre-submit failure contains no place. Ack failure calls place once and returns the known order ID with reconciliation required.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run test_live_entry_durability.py and test_order_executor.py.
 
-- [ ] **Step 3: Surface acknowledgement persistence failure**
+- [x] **Step 3: Surface acknowledgement persistence failure**
 
 Add reconciliation_required: bool = False to OrderResult. If on_placed raises, return ERROR with the known order ID, zero assumed fill, a typed reason, and reconciliation_required=True. Never retry place.
 
-- [ ] **Step 4: Add _execute_entry**
+- [x] **Step 4: Add _execute_entry**
 
 It loads deployment account_id, commits intent, replaces the request tag, commits SUBMIT_STARTED, calls execute_order once, commits ACKNOWLEDGED in on_placed, appends final STATUS_OBSERVED, mirrors OrderJournal for compatibility, and returns result, filled, average, client_intent_id.
 
 Options use decision mid-price when bid and ask are valid and LTP otherwise. Equity uses the passed decision price. Both use the passed runtime now.
 
-- [ ] **Step 5: Expand tag recognition**
+- [x] **Step 5: Expand tag recognition**
 
 Define LEGACY_BOT_TAG=pt-bot and INTENT_TAG_PREFIX=pti-. is_strategy_os_tag accepts the legacy tag or a 20-character intent tag with 16 lowercase hexadecimal suffix characters. Recovery recognizes both. Protective stops keep pt-bot.
 
-- [ ] **Step 6: Link positions and trades**
+- [x] **Step 6: Link positions and trades**
 
 Set position.entry_intent_id before commit on a real entry. Copy it into every Trade created from that Position. Paper rows remain NULL.
 
-- [ ] **Step 7: Verify GREEN and commit**
+- [x] **Step 7: Verify GREEN and commit**
 
 Run:
 
@@ -239,7 +244,7 @@ Commit message: fix(execution): persist live entry intent before submit
 
 **Produces:** Unresolved-intent recovery and metrics derived only from persisted facts.
 
-- [ ] **Step 1: Write failing recovery tests**
+- [x] **Step 1: Write failing recovery tests**
 
 Add:
 
@@ -250,19 +255,19 @@ Add:
     test_two_partial_observations_book_only_new_delta
     test_recovery_scopes_deployment_account_and_connection
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run test_execution_lifecycle_recovery.py.
 
-- [ ] **Step 3: Expand normalized order reads**
+- [x] **Step 3: Expand normalized order reads**
 
 KiteOrderClient.orders returns only normalized order_id, tradingsymbol, tag, status, filled_qty, avg_price, transaction_type, and exchange. It returns no SDK object or credential.
 
-- [ ] **Step 4: Recover new intents first**
+- [x] **Step 4: Recover new intents first**
 
 Acknowledged intents query by broker order ID. Submit-started intents search today's order book by exact tag. No match stays blocked. One match records acknowledgement and status. Multiple matches record an anomaly and alert. Book only the positive fill delta above quantity already linked to the intent. Run legacy recovery afterward only for rows without an execution intent.
 
-- [ ] **Step 5: Write failing telemetry tests**
+- [x] **Step 5: Write failing telemetry tests**
 
 Add:
 
@@ -272,13 +277,13 @@ Add:
 
 BUY 100 to 101 and SELL 100 to 99 both produce adverse slippage +1 and +100 basis points.
 
-- [ ] **Step 6: Implement and verify telemetry**
+- [x] **Step 6: Implement and verify telemetry**
 
 Add execution_metrics(intent, state) -> dict. It reads no provider quote.
 
 Run recovery, telemetry, journal, tag-sweep, startup-reconcile, and reconcile tests.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Commit message: feat(execution): recover and measure durable entries
 
@@ -291,11 +296,11 @@ Commit message: feat(execution): recover and measure durable entries
 - Modify: paper-trader/docs/CONTINUE.md
 - Modify: this plan with evidence.
 
-- [ ] **Step 1: Run mutation checks**
+- [x] **Step 1: Run mutation checks**
 
 Prove named tests fail when separately bypassing pre-submit commit, acknowledgement propagation, event uniqueness, non-regressing fills, and exact-tag recovery. Restore after each mutation.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run:
 
@@ -307,7 +312,7 @@ Run:
 
 Expected: zero test failures, LEDGER OK, successful backtest smoke, and no whitespace errors.
 
-- [ ] **Step 3: Update truth and commit**
+- [x] **Step 3: Update truth and commit**
 
 Record exact guarantees, legacy exit limits, compatibility scopes, migration head 0014, commands and counts, mutation evidence, and the next causal-cache slice.
 

@@ -55,6 +55,8 @@ closure.
 4. Destructive database or infrastructure operations.
 5. Adopting licence-sensitive code (OpenAlgo is AGPL-3.0).
 6. Regulatory, legal, commercial or customer-real-money decisions.
+7. **Frontend code (2026-08-09).** The owner takes this up directly. Backend work stops at the
+   API boundary; write frontend requirements into the design notes and stop there.
 
 Development, testing and commits continue normally at these gates. Deployment does not.
 

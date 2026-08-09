@@ -28,7 +28,7 @@ the older B → E → C → D → A sequence. The current order is:
 1. execution safety and truthful fill behaviour;
 2. causal strategy admission;
 3. content-addressed backtest correctness, then scalable sweep performance (100 × 5 baseline,
-   followed by 500 × 5 and 1,000 × 5 expansion tiers);
+   followed by 1,000 × 5 and **10,000 × 5** tiers — see the scale corrections below);
 4. explicit data/execution/account role bindings;
 5. account-isolated deployment design and load/failure proof;
 6. novice research UX on the existing frontend;
@@ -49,9 +49,9 @@ the present code cannot support is `CLAIM REJECTED`.
 | 2. Live entry integration, recovery, protection, telemetry | **COMPLETE within the live-entry scope** | Durable recovery, cumulative fill deltas, protection-before-booking, latency, slippage, and `AUTO`/`MARKET`/`LIMIT` live-entry routing passed the branch-wide gate. Live options and equity entries persist and submit the effective MARKET or LIMIT request. **Paper and backtest LIMIT fill parity remains open. Exits remain on the legacy journal and market-order path.** |
 | 3. Causal strategy contract | **PARTIAL** | IR prefix causality and handwritten-strategy mutation tests exist. Closed per-block causal declarations, admission enforcement, and streaming-versus-vectorised parity are not complete. |
 | 4. Content-addressed backtest cache | **COMPLETE on this branch** | Schema v8 binds exact ordered OHLCV bytes and source context to a closed execution manifest: strategy and transitive source, bound parameters, instrument economics, slippage, charges, event/exit policy, and premium assumptions. Historical revisions with the same final timestamp are cold; transient premium failures are not reusable; warm rows preserve every result column except row/run identity. |
-| 5. Scalable sweep: 100 × 5 baseline, then 500 × 5 / 1,000 × 5 | **UNSTARTED as a gate** | A 16-cell smoke exists. Provider-read/DataFrame budgets, shared frame acquisition, batched progress, frozen-output parity, and p50/p95/p99 measurement do not. The 100 × 5 workload is the first measurement tier, not a capacity limit or completion claim. |
+| 5. Scalable sweep: 100 × 5, then 1,000 × 5 / **10,000 × 5 in minutes** | **IN PROGRESS** | Shared dataset acquisition (`439d45d`) and shared frame/signal preparation (`a291722`) are done: `N×I×S` results cost `N×I` reads, one conversion and one evaluation per dataset/strategy. Batching, the local dataset store, multiprocess fan-out and tiered p50/p95/p99 measurement do not exist. **The owner's 10,000 × 5 target cannot be met by live provider fetch at all** — Kite's 0.40 s historical throttle puts a 5 h 33 m floor under 50,000 datasets — so the content-addressed local dataset store is promoted ahead of batching. |
 | 6. Data/execution/account role bindings | **PARTIAL** | Capability gates admit a second-broker-shaped test double, but `make_broker(provider)` still derives execution from one provider. No account actor owns one account yet. |
-| 7. Deployable 100-user topology | **UNSTARTED** | The current single-owner VPS deploy path is real and guarded; it is not a multi-account worker topology and has no soak, lease, fencing, failover, RPO, or RTO proof. |
+| 7. Deployable **500-user** topology at a bounded cost | **UNSTARTED** | The current single-owner VPS deploy path is real and guarded; it is not a multi-account worker topology and has no soak, lease, fencing, failover, RPO, or RTO proof. The five-accounts-per-worker figure is **withdrawn as an assumption** — carried to 500 users it implies 100 worker processes and a hosting bill the owner has named as a blocker. Accounts-per-core, memory per active account, and sustained WebSocket bytes per user are now gates alongside latency and RPO/RTO. |
 | 8. Novice research experience | **PARTIAL** | The React/Vite graph, research, backtest, engine, portfolio, and ledger surfaces exist. The guided idea-to-paper journey and novice usability gate do not. |
 | 9. Additional brokers | **DEFERRED / UNSTARTED** | Capability and resolver seams exist; no Upstox or second execution adapter is shipped. |
 | 10. Commercial access | **DEFERRED / PARTIAL SEAM** | A single-owner bearer-token principal seam exists. Customer identity, ownership, encrypted credentials, and cross-account isolation do not. |
@@ -73,10 +73,22 @@ Nothing below can be resolved by implementation. Everything else can proceed tod
 
 ### Deployment direction, not deployment truth
 
-For roughly 100 users, the target is one shared control plane plus account-isolated execution
-workers, initially capped at five active accounts per worker and spread across at least two
-hosts. The gate is a 50-account soak plus crash-after-submit, token-expiry, throttling, restore,
-failover, and duplicate-worker fencing drills.
+**Owner correction 2026-08-09: the initial target is 500 users, not 100, and hosting cost is a
+first-class constraint.** The full analysis is
+[`superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md`](superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md).
+Its load-bearing conclusion: market data must be fanned in **once per distinct instrument set**
+and broadcast, never once per user — per-account credentials are needed for orders, not for
+prices. That single decision is what keeps 500 users affordable, and the standing "data provider
+≠ execution broker" invariant is what makes it legal. WebSockets stay; **HTTP polling is not the
+answer and is not proposed.** 500 concurrent sockets cost ~25 MB, which is nothing; the real
+line item is sustained payload volume (~2.6 TB/month at 2 KB/s/user), so fan-out must push
+deltas rather than full state. The 2026-07-23 outage is the precedent — a fanout bug, not a
+bandwidth bill.
+
+For 500 users, the target is one shared control plane plus account-isolated execution
+workers spread across at least two hosts. The per-worker account cap is a **measurement, not a
+guess**. The gate is a 50-account soak plus crash-after-submit, token-expiry, throttling,
+restore, failover, and duplicate-worker fencing drills — and a stated monthly cost.
 
 At roughly 1,000 users, bounded execution cells add versioned placement, resource limits,
 primary/standby assignment, shared PostgreSQL authority, leases, and fencing. Per-user VPSs stay
