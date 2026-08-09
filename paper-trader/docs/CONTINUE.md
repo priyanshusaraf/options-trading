@@ -386,17 +386,40 @@ and neither closed:
   multiprocess fan-out. Peak allocation is 2.10 MB/dataset, so the sweep must stream rather than
   accumulate — 50,000 held at once would be ~105 GB.
 
-**The next task is Task 3 of
-[`superpowers/plans/2026-08-09-scalable-backtest-sweep.md`](superpowers/plans/2026-08-09-scalable-backtest-sweep.md)**
-— the local content-addressed dataset store. Note the unavoidable design point: the dataset
-address is computed *from* the candles, so the store needs a request-shaped lookup key
-`(provider, instrument, interval, window)` alongside the content address it verifies on read. A
-normal refresh must still cost its reads; only an explicit pinned run may report zero.
+**Task 3 is DONE (`e985d77`)** — `app/backtest/dataset_store.py`, filesystem blobs, own SQLite
+index, no migration. Measured **38 bytes/bar** (≈10 GB at the full tier; the mock's 22 flatters,
+do not plan against it). The sweep **writes only** — there is deliberately no read path, which is
+what makes "a normal refresh still costs its reads" hold by construction.
 
-Two measurement traps found today, worth not repeating: the earlier 6.61 ms/cell figure was taken
-on 600-bar datasets when a real 15-minute/200-day window is ~5,000 bars, and **the premium replay
-books zero trades below ~5,000 bars**, so every premium timing taken at 161 or 1,000 bars was
-measuring an empty loop.
+**Task 4 is the next task**: the pinned warm path, where the store's zero-fetch payoff is
+actually collected. Its whole risk is in one sentence of the design — a pinned run that cannot
+find or verify a dataset must **fail closed**, never silently fall back to fetching, because that
+turns a pinned run into a refresh wearing a pin's name. Then Task 5 (batch persistence), Task 6
+(measured multiprocess fan-out), Task 7 (tiered benchmark).
+
+### Defects and traps found on 2026-08-09, worth not rediscovering
+
+- **`LogBus` has `warn`, not `warning`.** `sweep.py` used the wrong name in *both* degradation
+  handlers, so a dataset that could not be addressed aborted the **entire sweep** instead of
+  skipping one cell. Guarded by `tests/test_logbus_method_names.py`. Note `app/core/earnings.py`
+  uses the *stdlib* logger, where `.warning` is correct — a blanket grep would break it.
+- **A vacuous guard, caught by mutation.** The first version of that AST guard looked for
+  `x = get_logger(...)`, which almost nothing uses; the real idiom is
+  `from app.core.logging import log`. It matched nothing and passed over the very file whose bug
+  prompted it. Sixth shape of vacuous test on record here.
+- **The 6.61 ms/cell figure was measured on the wrong workload** — 600-bar datasets when a real
+  15-minute/200-day window is ~5,000 bars, and **the premium replay books zero trades below
+  ~5,000 bars**, so every premium timing at 161 or 1,000 bars was timing an empty loop.
+- **Gitignored is not rsync-excluded.** `deploy.sh` would have pushed ~10 GB of candle blobs to
+  the droplet. Now in `EXCLUDES` with a test pinning it — the script's header already records two
+  outages of this exact class.
+- **`scipy.stats.norm.cdf` is a wrapper, not the maths.** It calls `scipy.special.ndtr`; calling
+  `ndtr` directly is bit-identical and 232× faster on scalars. Do **not** replace it with a
+  `math.erf` expression — that is *nearly* identical, differs in the last mantissa byte, and would
+  move every backtested option price without failing anything loudly.
+- **WebSocket fan-out was re-encoding per client.** Fixed (`0d6ac14`): 500 `json.dumps` per push
+  → 1, 148.94 ms → 0.33 ms. Still open: `_ratchet_atr`/`_ratchet_high` engine internals ship to
+  every browser (the delta-protocol slice).
 
 ---
 
