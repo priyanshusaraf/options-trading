@@ -124,3 +124,49 @@ distilled into RFC 0001 has done its job — re-reading it does not re-open the 
 deployment model, or execution authority. This codebase's documented defining defect is
 mechanisms built and wired to nothing; importing a second way to do something already done is the
 fastest route to another one.
+
+---
+
+## 7. Provider maturity — consulted 2026-08-09, before the second adapter
+
+The open question was narrow and concrete, which is the only kind worth opening this library
+for: **what must a provider conformance contract hold an adapter to, before a second real
+provider (Upstox, data-only) lands beside Zerodha?**
+
+### OpenAlgo — `~/dev/openalgo`, **AGPL-3.0** · REFERENCE ONLY
+
+Licence read directly, not grepped: `License.md` line 1 is "GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3". §13's network clause triggers on merely serving users, so this remains **REFERENCE
+ONLY / REJECT for code** — unchanged, and an owner/legal gate if that is ever revisited.
+
+What was taken is **directory shape and problem catalogue only**, from `ls`, not from reading
+source. `broker/upstox/` decomposes as `api/{auth_api, data, funds, margin_api, order_api}`,
+`database/master_contract_db.py`, `mapping/{transform_data, order_data, margin_data}` and
+`streaming/`. Three things that shape our own work:
+
+1. **The instrument master is its own component**, per broker, separate from both data and
+   orders. That is the same seam as our `InstrumentResolver`, arrived at independently, and it
+   is evidence the seam is the right shape rather than an over-abstraction.
+2. **`mapping/` is separate from `api/`** — symbology and payload translation are not mixed into
+   the transport. Our equivalent rule is "adapters stay thin, quirks at the edge".
+3. **Upstox's live feed is protobuf over WebSocket** (`streaming/MarketDataFeedV3.proto`), not
+   JSON. Structural, and it matters: our `STREAMING` capability is declaration-only today, and a
+   protobuf feed is not a variation on Kite's tick format. It is a reason to keep Upstox
+   **data-only over the polling path first** and not to promise `STREAMING` in the same slice.
+
+### What this changed in the conformance contract
+
+Nothing was copied. The catalogue confirmed two obligations rather than inventing them: that
+**instrument identity is a separately-served role** (already the `InstrumentResolver` seam), and
+that **capability declarations must be per-connection**, because a 35-adapter directory is only
+tractable when adapters differ openly rather than pretending parity.
+
+### Not consulted, deliberately
+
+LEAN, vn.py and uTrade/OpenTrade are named in the phase brief but are **not cloned and were not
+reviewed**, per §6: no concrete open question needed them. The nearest trigger is real —
+LEAN's data-provider/brokerage split is the most explicit prior art for "Upstox data, Zerodha
+execution" — but our split already exists (`MarketDataProvider` vs `Broker`/`ExecutionVenue`)
+and the conformance work did not run into a question it could not answer from our own code.
+**Trigger to review LEAN:** a multi-connection *routing* question — which connection serves a
+given instrument when two declare the same capability — which is not yet a question we have.

@@ -322,7 +322,41 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
-**L1.4 is CLOSED. The next gate is the live-authority design, which is owner-gated.**
+**Do not resume at L1, shadow adoption, or the live-authority design.** L1 is closed through
+L1.4; `(ir_graph, live, authoritative)` is absent by design and is an **owner gate**, not a task
+waiting to be picked up. The material below on L1.4 and the live-authority design is retained as
+history, not as an agenda.
+
+### The current phase — provider maturity, tenancy, execution integrity, measured performance
+
+1. **Provider conformance contract — DONE (2026-08-09).** `tests/provider_conformance.py` +
+   `tests/test_provider_conformance.py` hold every adapter to one semantic contract and catch
+   adapters that lie about, or silently under-declare, a capability. Four defects found and
+   fixed; `scripts/provider_conformance_mutations.py` proves 8/8 guards can go red. Full account
+   in [`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md)
+   §9, including five gaps left explicitly open.
+2. **Settle `get_candles`'s missing failure channel — do this BEFORE Upstox.** `[]` currently
+   means both "no history" and "the read failed"; a second provider doubles the ways a read
+   fails, and no caller can fail closed on one today.
+3. **Upstox, data-only** (historical + live quotes). It proves Upstox-data/Zerodha-execution,
+   canonical instrument mapping and provider provenance without new execution authority. Do
+   **not** declare `STREAMING` in that slice: Upstox's live feed is protobuf over WebSocket, not
+   a variation on Kite's tick format (`engineering/reference/multiverse-index.md` §7).
+4. **Relocate `spot_symbol` / `option_name` off canonical `Instrument`**, using the second real
+   mapping, proving Kite's resolution unchanged.
+5. **Tenancy as a V1 blocker** — owner-scoped graphs, identifiers, deployments, research,
+   connections and execution state; a migration path, not a bolt-on.
+6. **Execution integrity around the real order lifecycle** — acknowledgement ambiguity, partial
+   fills, average fill price, requested/decision/fill separation, slippage, duplicate and
+   out-of-order events, cancel/fill races, idempotency, restart recovery, reconciliation.
+7. **Backtest performance baseline** (~100 securities × 5 timeframes + parameter variation).
+   Profile before optimising; no new language or infrastructure without a measured problem.
+8. **Finish the research-integrity audit** — DSR/`var_sr`, cache-key dimensionality, cross-series
+   temporal leakage.
+
+---
+
+**Historical from here.** L1.4 was closed on 2026-08-07; the live-authority design is owner-gated.
 
 **L1.4 — paper-authority runtime hardening (2026-08-07).** 29 deterministic tests
 (`tests/test_paper_authority_runtime.py`) covering restart and exact reload, stale-binding

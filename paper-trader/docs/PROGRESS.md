@@ -3,14 +3,25 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-04** · branch `feat/exec-completeness` · the M-band (M1–M6) is closed,
-**L1 Stage 0** shipped a shared IR strategy adapter with an honest parity claim, and
-**L1 Stage 1 is ENGINEERING-CLOSED**: the engine *observes* the IR mirror of an instrument's
-authoritative strategy, records disagreements, and refuses up front any graph/timeframe/
-history pairing that could never satisfy the graph's declared warmup. **The hand-written
-strategy remains the sole execution authority — nothing binds a graph to an instrument, and
-no order path reaches the IR.** Long-duration native-broker validation is **deferred by
-owner decision**, not pending. Stage 2 (paper adoption) needs a separate owner approval.
+**Updated 2026-08-09** · branch `feat/exec-completeness`
+
+**The L1 band is closed through L1.4 and is no longer the resume point.** IR paper authority
+(`ir_graph, paper, authoritative`) is granted, bound, hardened and proven recoverable;
+`(ir_graph, live, authoritative)` remains **absent by design** and is an owner gate, not a task
+queued for a session to pick up. A session arriving here should **not** resume at L1 Stage 1,
+shadow adoption, or live-authority design.
+
+**The current phase is provider maturity, tenancy, execution integrity and measured research
+performance** — the agenda is §4. Its first slice is done: a semantic **provider conformance
+contract** now holds every adapter to one contract and catches adapters that lie about, or
+silently under-declare, a capability. **Four defects, all fixed in the slice** — replay's
+`option_ltp` signature (open option positions never marked in a replay), the mock's undeclared
+futures pricing, Kite resolving index futures against the cash exchange, and — found by
+independent review, the worst of them — a futures entry path that invented *today* as the
+contract expiry and booked a position at exactly spot. Details and the five gaps left open:
+[`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md) §9.
+
+**Nothing in this phase is deployed, and no live-money path changed.**
 
 ---
 
@@ -108,6 +119,14 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 ---
 
 ## 4. Next
+
+**The agenda is [`CONTINUE.md`](CONTINUE.md) §4** — provider maturity, then tenancy, execution
+integrity and measured backtest performance. In order: settle `get_candles`'s missing failure
+channel, then Upstox data-only, then the `spot_symbol`/`option_name` relocation. The provider
+conformance contract that gates all of it is done; the five gaps it left open are named in
+[`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md) §9.4.
+
+The rest of this section is **history**. L1 is closed and is not a resume point.
 
 **L1.4 — paper-authority runtime hardening — is closed (2026-08-07).** Exact-version IR paper
 authority is now proven deterministic, isolated, attributable and recoverable through the
@@ -252,6 +271,27 @@ Still true and worth knowing: **nothing is shadowed in production.** The default
 what it trades — an owner decision, not a slice's.
 
 ## 5. Verification state
+
+Latest, 2026-08-09, after the provider conformance slice:
+
+```
+$ .venv/bin/python -m pytest tests research_tests      # from backend/
+3,595 passed · 6 skipped · EXIT 0                      (169s)
+
+$ .venv/bin/python scripts/dryrun.py 700
+RECONCILE cash vs expected: 187,733.06 vs 187,733.06 (diff -0.0000) · LEDGER OK · EXIT 0
+
+$ .venv/bin/python scripts/backtest_smoke.py
+SWEEP OK ✓ · EXIT 0
+
+$ .venv/bin/python scripts/provider_conformance_mutations.py
+8/8 mutations reddened their own guard and were restored · suite green · EXIT 0
+```
+
+Exact-head Actions run **`31303084479` on `ca6f231` is green** across backend, frontend and
+deterministic smoke — the verification gap this phase carried is closed.
+
+Earlier baseline, retained for comparison:
 
 ```
 $ .venv/bin/python -m pytest tests research_tests -q  # from backend/
