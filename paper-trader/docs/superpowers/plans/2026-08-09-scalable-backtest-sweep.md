@@ -14,9 +14,15 @@ exact-result parity and bounded provider/database operations.
 > minutes"), which is 50,000 datasets. Kite's 0.40 s historical throttle puts a **5 h 33 m**
 > floor under fetching those live, so the target is unreachable by provider refresh at any level
 > of code optimisation. The local content-addressed dataset store — originally Task 4 — is
-> therefore promoted ahead of batch persistence, and measured multiprocess fan-out enters scope
-> (6.61 ms/cell × 50,000 = 5.5 min single-threaded, before the premium replay). Tasks below are
-> renumbered in execution order.
+> therefore promoted ahead of batch persistence, and measured multiprocess fan-out enters scope.
+> Tasks below are renumbered in execution order.
+>
+> **The 6.61 ms/cell figure this note originally cited was wrong** and is superseded by the
+> per-stage measurement in hardening record §10. It was taken on 600-bar datasets when a real
+> 15-minute/200-day window is ~5,000 bars, and the premium replay books **zero trades** below
+> ~5,000 bars, so it was timing an empty loop. A cell is **84.7 ms** (185.7 before `5ba1233`),
+> which puts the 50,000-cell tier at **4,236 s serial** — ~20× over target, and that is what
+> justifies fan-out.
 
 ### Task 1: Share exact dataset acquisition across strategies
 
@@ -74,8 +80,10 @@ The only path to 10,000 × 5. Datasets are fetched once, stored by the exact add
 
 ### Task 6: Measured multiprocess fan-out (new)
 
-Justified by measurement, not preference: the provider throttle is now known, and 6.61 ms/cell
-puts the 50,000-cell tier at 5.5 minutes on one core before the premium replay.
+Justified by measurement, not preference: the provider throttle is known, and the measured
+84.7 ms/cell puts the 50,000-cell tier at 4,236 s on one core — ~20× over the target. Peak
+allocation is 2.10 MB/dataset, so workers must stream datasets, never accumulate them:
+50,000 held at once would be ~105 GB.
 
 - [ ] Prove byte-identical results between serial and parallel execution on a frozen dataset.
 - [ ] Bound worker count and prove no worker observes another's frame.
