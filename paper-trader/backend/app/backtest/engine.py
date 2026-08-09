@@ -153,7 +153,8 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
              strategy=None, params: dict | None = None,
              ema_length: int = 50, z_length: int = 50, entry_z: float = 1.0,
              slope_lookback: int = 5,
-             slippage_pct: float | None = None) -> tuple[list[BTTrade], BTMetrics]:
+             slippage_pct: float | None = None,
+             signals: pd.DataFrame | None = None) -> tuple[list[BTTrade], BTMetrics]:
     """Run a strategy over `candles` and return (trades, metrics).
 
     `strategy` is a registry Strategy (None → the default trend_impulse_v3); `params`
@@ -186,7 +187,8 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     option_cost = estimate_option_cost(inst, candles)
 
     rm = getattr(strat, "risk_model", None)
-    sig = compute_signals(candles, strat, params)
+    sig = (compute_signals(candles, strat, params)
+           if signals is None else signals.copy(deep=True))
     if sig.empty:
         m = BTMetrics()
         m.bh_return_pct = bh_return_pct
@@ -202,7 +204,13 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     return trades, m
 
 
-def compute_signals(candles, strat, params) -> pd.DataFrame:
+def prepare_signal_frame(candles) -> pd.DataFrame:
+    """Build the validated canonical frame once for a shared candle dataset."""
+    return _candles_to_df(candles)
+
+
+def compute_signals(candles, strat, params, *,
+                    frame: pd.DataFrame | None = None) -> pd.DataFrame:
     """Compute a strategy's canonical signal frame over the FULL candle series and
     trim warmup. Split out of `simulate` (behaviour-preserving) so a caller can
     compute signals ONCE and replay trades over each walk-forward fold with
@@ -210,7 +218,10 @@ def compute_signals(candles, strat, params) -> pd.DataFrame:
     computation would shift the path-dependent EMA/ATR seeds. Adds `_ratchet_atr`
     when the strategy declares a risk_model. Returns a fresh 0-indexed frame
     (possibly empty)."""
-    sig = strat.signals(_candles_to_df(candles), **params)
+    # A strategy may add working columns. A shared base frame is copied so one
+    # strategy can never change the input observed by the next strategy.
+    source = _candles_to_df(candles) if frame is None else frame.copy(deep=True)
+    sig = strat.signals(source, **params)
     rm = getattr(strat, "risk_model", None)
     if rm:
         # computed on the FULL frame so warmup trimming can't shift ATR values

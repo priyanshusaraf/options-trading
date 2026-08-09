@@ -331,6 +331,45 @@ def test_premium_param_changes_signature():
     assert len({a, b, c, d}) == 4
 
 
+@pytest.mark.parametrize("strategy_key", ("trend_impulse_v3", "expanding_z_v4"))
+def test_shared_signal_frame_preserves_exact_spot_and_premium_results(strategy_key):
+    import dataclasses
+
+    from app.backtest.engine import compute_signals, simulate
+    from app.core.instruments import get_instrument
+    from app.providers.mock import MockProvider
+    from app.strategy.registry import get_strategy
+
+    provider = MockProvider()
+    instrument = get_instrument("NIFTY")
+    candles = provider.get_candles(instrument, "15minute", 200)
+    strategy = get_strategy(strategy_key)
+    params = dict(strategy.default_params)
+
+    independent_spot = simulate(
+        candles, instrument, "15minute", capital=50_000,
+        strategy=strategy, params=params, slippage_pct=0.0005)
+    independent_premium = simulate_premium(
+        candles, instrument, "15minute", capital=50_000,
+        strategy=strategy, params=params)
+
+    signals = compute_signals(candles, strategy, params)
+    shared_spot = simulate(
+        candles, instrument, "15minute", capital=50_000,
+        strategy=strategy, params=params, slippage_pct=0.0005,
+        signals=signals)
+    shared_premium = simulate_premium(
+        candles, instrument, "15minute", capital=50_000,
+        strategy=strategy, params=params, signals=signals)
+
+    def artifact(result):
+        trades, metrics = result
+        return [trade.to_dict() for trade in trades], dataclasses.asdict(metrics)
+
+    assert artifact(shared_spot) == artifact(independent_spot)
+    assert artifact(shared_premium) == artifact(independent_premium)
+
+
 # ── numpy scalars must never break result serialization (2026-07-23 sweep bug) ──
 # simulate_premium builds BTTrades from pandas/numpy values, so net_pnl can be an
 # np.float64 — making the `win` property an np.bool, which json.dumps rejects

@@ -192,7 +192,9 @@ def _close_premium(pos: dict, exit_price: float, exit_time: int, exit_idx: int,
 
 def simulate_premium(candles, inst, interval: str, *, strategy=None,
                      params: dict | None = None,
-                     capital: float = 50_000.0) -> tuple[list[BTTrade], BTMetrics]:
+                     capital: float = 50_000.0,
+                     signals: pd.DataFrame | None = None) \
+        -> tuple[list[BTTrade], BTMetrics]:
     """Run a strategy's signals over `candles` and translate them into a synthetic
     ATM-option premium path (Black-Scholes on the underlying's own realised vol),
     returning (trades, metrics) exactly like `engine.simulate`. Pure/offline — no
@@ -210,12 +212,17 @@ def simulate_premium(candles, inst, interval: str, *, strategy=None,
     p.update({k: v for k, v in params.items() if k in DEFAULT_PREMIUM_PARAMS and v is not None})
     strat_kwargs = {k: v for k, v in params.items() if k in strat.default_params}
 
-    sig = strat.signals(_candles_to_df(candles), **strat_kwargs)
     rm = getattr(strat, "risk_model", None)
-    if rm:
-        sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
-    # One warmup rule for both backtesters and the live lane — see `engine.trim_warmup`.
-    sig = trim_warmup(sig, strat).reset_index(drop=True)
+    if signals is None:
+        sig = strat.signals(_candles_to_df(candles), **strat_kwargs)
+        if rm:
+            sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
+        # One warmup rule for both backtesters and the live lane — see `engine.trim_warmup`.
+        sig = trim_warmup(sig, strat).reset_index(drop=True)
+    else:
+        # The sweep computes this once through engine.compute_signals. Copy before
+        # replay so premium bookkeeping cannot alter the spot replay's frame.
+        sig = signals.copy(deep=True)
     if sig.empty:
         return [], BTMetrics()
 

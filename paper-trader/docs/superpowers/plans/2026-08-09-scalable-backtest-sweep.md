@@ -18,10 +18,10 @@ parity and bounded provider/database operations.
 
 ### Task 2: Share frame and signal preparation
 
-- [ ] Measure current DataFrame conversions and strategy signal evaluations.
-- [ ] Add spot/premium exact-parity tests for shared preparation.
-- [ ] Convert once per dataset and evaluate once per dataset/strategy.
-- [ ] Prove refresh-warm hits perform zero conversions and simulations after address validation.
+- [x] Measure current DataFrame conversions and strategy signal evaluations.
+- [x] Add spot/premium exact-parity tests for shared preparation.
+- [x] Convert once per dataset and evaluate once per dataset/strategy.
+- [x] Prove refresh-warm hits perform zero conversions and simulations after address validation.
 
 ### Task 3: Atomic batch persistence
 

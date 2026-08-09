@@ -12,8 +12,10 @@ import datetime as dt
 import json
 import threading
 from dataclasses import dataclass
+from functools import cached_property
 
-from app.backtest.engine import backtest_charge_segment, simulate
+from app.backtest.engine import (backtest_charge_segment, compute_signals,
+                                 prepare_signal_frame, simulate)
 from app.backtest.metrics import BTMetrics
 from app.backtest.identity import execution_result_address, ordered_dataset_address
 from app.backtest.premium import NO_OPTIONS_PREMIUM_ERROR, simulate_premium
@@ -128,6 +130,12 @@ class _PreparedDataset:
     clamped: bool = False
     dataset_address: str = ""
     error: str = ""
+
+    @cached_property
+    def frame(self):
+        # Lazily prepared: a refresh-warm cache hit validates candle bytes but
+        # performs no DataFrame conversion or signal work.
+        return prepare_signal_frame(self.candles)
 
 
 def is_running() -> bool:
@@ -347,9 +355,11 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None,
             if hit is not None:
                 _copy_from_cache(s, run_id, hit)
                 return
-    trades, m = simulate(candles, inst, interval, capital=capital,
-                         strategy=strat, params=dict(strat.default_params),
-                         slippage_pct=slippage_pct)
+    params = dict(strat.default_params)
+    signals = compute_signals(candles, strat, params, frame=prepared.frame)
+    trades, m = simulate(
+        candles, inst, interval, capital=capital, strategy=strat, params=params,
+        slippage_pct=slippage_pct, signals=signals)
     # synthetic-premium backtest (audit C6) — runs alongside the spot cell above.
     # A premium-side bug must NEVER kill the spot result: any exception here is
     # caught and surfaced as premium_error instead of aborting the sweep.
@@ -360,7 +370,7 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None,
         try:
             p_trades, p_metrics = simulate_premium(
                 candles, inst, interval, strategy=strat,
-                params=dict(strat.default_params), capital=capital)
+                params=params, capital=capital, signals=signals)
             premium_error = ""
         except Exception as e:
             p_trades, p_metrics, premium_error = [], BTMetrics(), str(e)

@@ -186,3 +186,71 @@ def test_out_of_range_window_is_fanned_out_without_provider_reads():
     assert provider.candle_reads == []
     assert len(rows) == 2
     assert all("window older than Kite max" in row.error for row in rows)
+
+
+def test_cold_sweep_builds_one_frame_and_evaluates_strategy_once(monkeypatch):
+    from app.backtest import engine, premium
+
+    init_db(reset=True)
+    provider = CountingMockProvider()
+    strategy = get_strategy("trend_impulse_v3")
+    counts = {"engine_frame": 0, "premium_frame": 0, "signals": 0}
+    original_engine_frame = engine._candles_to_df
+    original_premium_frame = premium._candles_to_df
+    original_signals = strategy.signals
+
+    def engine_frame(candles):
+        counts["engine_frame"] += 1
+        return original_engine_frame(candles)
+
+    def premium_frame(candles):
+        counts["premium_frame"] += 1
+        return original_premium_frame(candles)
+
+    def signals(frame, **params):
+        counts["signals"] += 1
+        return original_signals(frame, **params)
+
+    monkeypatch.setattr(engine, "_candles_to_df", engine_frame)
+    monkeypatch.setattr(premium, "_candles_to_df", premium_frame)
+    monkeypatch.setattr(strategy, "signals", signals)
+
+    sweep.start_sweep(
+        scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
+        provider=provider, strategies=[strategy.key])
+    sweep._join()
+    assert counts == {"engine_frame": 1, "premium_frame": 0, "signals": 1}
+
+    counts.update(engine_frame=0, premium_frame=0, signals=0)
+    sweep.start_sweep(
+        scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
+        provider=provider, strategies=[strategy.key])
+    sweep._join()
+    assert counts == {"engine_frame": 0, "premium_frame": 0, "signals": 0}
+
+
+def test_multiple_strategies_share_one_canonical_base_frame(monkeypatch):
+    from app.backtest import engine, premium
+
+    init_db(reset=True)
+    provider = CountingMockProvider()
+    counts = {"engine_frame": 0, "premium_frame": 0}
+    original_engine_frame = engine._candles_to_df
+    original_premium_frame = premium._candles_to_df
+
+    def engine_frame(candles):
+        counts["engine_frame"] += 1
+        return original_engine_frame(candles)
+
+    def premium_frame(candles):
+        counts["premium_frame"] += 1
+        return original_premium_frame(candles)
+
+    monkeypatch.setattr(engine, "_candles_to_df", engine_frame)
+    monkeypatch.setattr(premium, "_candles_to_df", premium_frame)
+    sweep.start_sweep(
+        scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
+        provider=provider,
+        strategies=["trend_impulse_v3", "expanding_z_v4"])
+    sweep._join()
+    assert counts == {"engine_frame": 1, "premium_frame": 0}
