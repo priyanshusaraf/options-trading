@@ -114,6 +114,13 @@ def test_the_dataset_store_is_excluded_from_the_deploy_rsync():
     next one waiting: measured at ~38 bytes/bar, a full 10,000 x 5 sweep run on the Mac is
     ~10 GB that a whole-tree rsync would push to a 1 GB droplet.
 
+    The pattern itself was verified against a control on **openrsync protocol 29** — the macOS
+    default that `deploy.sh` actually invokes, and the flavour whose behaviour has already
+    surprised this repo once (`*.db-*` does not match `paper_trader.db.lock`). Without the
+    exclude a planted blob transfers; with it only the real file does. Note `rsync -n` alone
+    prints nothing either way, so the check needs `-v` and a control — an empty result looks
+    exactly like a passing one.
+
     This lives here rather than in a deploy-specific file because there is no deploy.sh
     test module yet; move it when one exists.
     """
