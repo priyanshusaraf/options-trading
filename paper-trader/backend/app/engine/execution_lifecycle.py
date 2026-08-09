@@ -115,6 +115,7 @@ class ExecutionState:
     ack_to_fill_ms: float | None
     slippage_amount: float | None
     slippage_bps: float | None
+    booked_qty: int = 0
     last_fill_delta: int = 0
     last_fill_price: float | None = None
 
@@ -264,6 +265,7 @@ def reduce_execution_events(
         ack_to_fill_ms=ack_to_fill_ms,
         slippage_amount=slippage_amount,
         slippage_bps=slippage_bps,
+        booked_qty=booked_qty,
         last_fill_delta=last_fill_delta,
         last_fill_price=last_fill_price,
     )
@@ -323,14 +325,24 @@ class ExecutionLifecycleStore:
             try:
                 self.session.commit()
                 return row
-            except IntegrityError:
+            except IntegrityError as exc:
                 self.session.rollback()
-                if attempt == 2:
+                if not self._is_identity_collision(exc) or attempt == 2:
                     raise
             except Exception:
                 self.session.rollback()
                 raise
         raise AssertionError("unreachable")
+
+    @staticmethod
+    def _is_identity_collision(exc: IntegrityError) -> bool:
+        """Only generated intent-id/tag collisions are safe to retry."""
+        detail = str(getattr(exc, "orig", exc)).lower()
+        identity_column = (
+            "execution_intents.client_intent_id" in detail
+            or "execution_intents.broker_tag" in detail
+        )
+        return identity_column and ("unique" in detail or "duplicate" in detail)
 
     def append_event(
         self,

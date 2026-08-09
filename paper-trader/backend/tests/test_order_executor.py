@@ -76,6 +76,21 @@ def test_place_failure_is_error_and_never_double_places():
     assert r.reconciliation_required is True
 
 
+def test_post_ack_status_poll_failure_requires_reconciliation():
+    class _PollFails(FakeClient):
+        def status(self, order_id):
+            self.status_calls += 1
+            raise RuntimeError("broker history unavailable")
+
+    c = _PollFails([])
+    r = execute_order(c, _buy(), sleep_fn=_noslp)
+
+    assert r.status == "ERROR"
+    assert r.order_id == "OID-1"
+    assert r.reconciliation_required is True
+    assert c.places == 1
+
+
 def test_cancelled_after_partial_is_partial():
     c = FakeClient([{"status": "CANCELLED", "filled_qty": 50, "avg_price": 100.0}])
     r = execute_order(c, _buy(), sleep_fn=_noslp)

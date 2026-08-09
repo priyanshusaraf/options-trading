@@ -20,6 +20,7 @@ from app.core.instruments import get_instrument
 from app.core.logging import log
 from app.db.models import (
     Deployment,
+    ExecutionIntent,
     ExecutionOrderEvent,
     LEGACY_DEPLOYMENT_ID,
     OrderJournal,
@@ -365,10 +366,24 @@ class LiveBroker(PaperBroker):
             self.s.rollback()
             log.error(f"journal mark terminal failed: {e}", event="JOURNAL_FAIL")
 
-    def _rebuild_pending(self, row, ctx) -> dict:
-        """Reconstruct a _pending_entries context from a journaled ENTRY row (H13)."""
+    def _pending_from_context(self, *, kind: str, order_id, row_id,
+                              client_intent_id: str, broker_tag: str, ctx: dict) -> dict:
+        """Reconstruct a pending entry from its durable lifecycle context."""
         inst = get_instrument(ctx["inst_key"])
-        if row.kind == "options":
+        common = {
+            "kind": kind,
+            "order_id": order_id,
+            "inst": inst,
+            "direction": ctx["direction"],
+            "reason": ctx.get("reason", "recovered"),
+            "params": ctx.get("params"),
+            "strategy_key": ctx.get("strategy_key"),
+            "strategy_version": ctx.get("strategy_version"),
+            "client_intent_id": client_intent_id,
+            "broker_tag": broker_tag,
+            "row_id": row_id,
+        }
+        if kind == "options":
             qd = dict(ctx.get("q", {}))
             exp = qd.get("expiry")
             if isinstance(exp, str):
@@ -377,20 +392,105 @@ class LiveBroker(PaperBroker):
                 except Exception:
                     pass
             q = OptionQuote(instrument_key=ctx["inst_key"], **qd)
-            return {"kind": "options", "order_id": row.order_id, "inst": inst,
-                    "direction": ctx["direction"], "q": q,
-                    "reason": ctx.get("reason", "recovered"),
-                    "spot": ctx.get("spot", 0.0), "params": ctx.get("params"),
-                    "strategy_key": ctx.get("strategy_key"),
-                    "strategy_version": ctx.get("strategy_version"),
-                    "client_intent_id": ctx.get("client_intent_id"), "row_id": row.id}
-        return {"kind": "equity", "order_id": row.order_id, "inst": inst,
-                "direction": ctx["direction"], "charge_segment": ctx.get("charge_segment", ""),
-                "reason": ctx.get("reason", "recovered"), "params": ctx.get("params"),
-                "strategy_key": ctx.get("strategy_key"),
-                "strategy_version": ctx.get("strategy_version"),
-                "sl_pct": ctx.get("sl_pct"), "tp_pct": ctx.get("tp_pct"),
-                "client_intent_id": ctx.get("client_intent_id"), "row_id": row.id}
+            return dict(common, q=q, spot=ctx.get("spot", 0.0))
+        return dict(
+            common,
+            charge_segment=ctx.get("charge_segment", ""),
+            sl_pct=ctx.get("sl_pct"),
+            tp_pct=ctx.get("tp_pct"),
+            margin=ctx.get("margin"),
+            requested_qty=ctx.get("requested_qty"),
+        )
+
+    def _rebuild_pending(self, row, ctx) -> dict:
+        """Reconstruct a _pending_entries context from a journaled ENTRY row (H13)."""
+        client_intent_id = ctx.get("client_intent_id")
+        return self._pending_from_context(
+            kind=row.kind,
+            order_id=row.order_id,
+            row_id=row.id,
+            client_intent_id=client_intent_id,
+            broker_tag=make_broker_tag(client_intent_id) if client_intent_id else "",
+            ctx=ctx,
+        )
+
+    def _reconcile_uncertain_entries(self, now) -> None:
+        """Attach no-ack intents only when one exact broker tag match exists."""
+        uncertain = [
+            (symbol, ctx) for symbol, ctx in self._pending_entries.items()
+            if not ctx.get("order_id") and ctx.get("broker_tag")
+        ]
+        if not uncertain:
+            return
+        try:
+            orders = list(self.client.orders() or [])
+        except Exception as e:
+            log.error(f"UNCERTAIN: exact-tag reconciliation failed: {e}",
+                      event="ENTRY_RECONCILE_FAIL")
+            return
+
+        store = ExecutionLifecycleStore(self.s)
+        for symbol, ctx in uncertain:
+            matches = [order for order in orders
+                       if order.get("tag") == ctx["broker_tag"]]
+            if not matches:
+                # Broker order books can be eventually consistent. Absence is not
+                # proof that placement failed, so the entry remains blocked.
+                continue
+            if len(matches) != 1:
+                order_ids = sorted(str(order.get("order_id") or "") for order in matches)
+                source_event_id = "tag-multiple:" + ctx["broker_tag"]
+                existing = self.s.scalar(select(ExecutionOrderEvent).where(
+                    ExecutionOrderEvent.client_intent_id == ctx["client_intent_id"],
+                    ExecutionOrderEvent.source == "recovery",
+                    ExecutionOrderEvent.source_event_id == source_event_id,
+                ))
+                if existing is None:
+                    anomaly = (f"multiple exact broker-tag matches for {ctx['broker_tag']}: "
+                               f"{', '.join(order_ids)}")
+                    try:
+                        store.append_event(
+                            ctx["client_intent_id"],
+                            NewExecutionEvent(
+                                source="recovery", source_event_id=source_event_id,
+                                kind="RECONCILIATION_ANOMALY", broker_order_id=None,
+                                broker_status="", cumulative_filled_qty=0,
+                                avg_price=0.0,
+                                payload={"tag": ctx["broker_tag"],
+                                         "order_ids": order_ids},
+                                anomaly=anomaly,
+                            ),
+                            self.lifecycle_clock(),
+                        )
+                    except Exception as e:
+                        log.error(f"UNCERTAIN {symbol}: anomaly persistence failed: {e}",
+                                  event="LIFECYCLE_FAIL")
+                self._notify(f"⚠️ {symbol}: multiple orders match durable entry tag "
+                             f"{ctx['broker_tag']}; entry remains blocked. Verify on Zerodha.")
+                continue
+
+            order_id = str(matches[0].get("order_id") or "")
+            if not order_id:
+                continue
+            try:
+                store.append_event(
+                    ctx["client_intent_id"],
+                    NewExecutionEvent(
+                        source="broker", source_event_id=f"ack:{order_id}",
+                        kind="ACKNOWLEDGED", broker_order_id=order_id,
+                        broker_status="", cumulative_filled_qty=0, avg_price=0.0,
+                        payload={"order_id": order_id, "recovered_by_tag": True},
+                    ),
+                    self.lifecycle_clock(),
+                )
+            except Exception as e:
+                log.error(f"UNCERTAIN {symbol}: acknowledgement persistence failed: {e}",
+                          event="LIFECYCLE_FAIL")
+                continue
+            ctx["order_id"] = order_id
+            self._inflight[symbol] = order_id
+            if ctx.get("row_id"):
+                self._journal_set_order_id(ctx["row_id"], order_id)
 
     def recover_journal(self, now) -> list:
         """H13: on startup, replay WORKING journal rows — the in-memory in-flight
@@ -451,6 +551,42 @@ class LiveBroker(PaperBroker):
                     self.journal_mark_terminal(row.order_id, "DEAD")
                 else:
                     self._inflight[row.tradingsymbol] = row.order_id
+        # The lifecycle log is the authoritative entry record. A crash can happen
+        # after SUBMIT_STARTED even when the best-effort journal never committed, so
+        # rebuild those blockers independently and under the exact broker scope.
+        deployment = self.s.get(Deployment, self.deployment_id)
+        if deployment is not None:
+            store = ExecutionLifecycleStore(self.s)
+            intents = store.unresolved_entries(
+                self.deployment_id,
+                deployment.account_id,
+                f"kite:{deployment.account_id}",
+            )
+            pending_ids = {ctx.get("client_intent_id")
+                           for ctx in self._pending_entries.values()}
+            for intent in intents:
+                if intent.client_intent_id in pending_ids:
+                    continue
+                try:
+                    ctx = json.loads(intent.context_json or "{}")
+                    state = store.state_for(intent.client_intent_id)
+                    kind = "options" if "q" in ctx else "equity"
+                    pending = self._pending_from_context(
+                        kind=kind,
+                        order_id=state.broker_order_id,
+                        row_id=None,
+                        client_intent_id=intent.client_intent_id,
+                        broker_tag=intent.broker_tag,
+                        ctx=ctx,
+                    )
+                    self._pending_entries[intent.tradingsymbol] = pending
+                    pending_ids.add(intent.client_intent_id)
+                    if state.broker_order_id:
+                        self._inflight[intent.tradingsymbol] = state.broker_order_id
+                except Exception as e:
+                    log.error(f"RECOVER {intent.tradingsymbol}: lifecycle rebuild failed: {e}",
+                              event="RECOVER_FAIL")
+        self._reconcile_uncertain_entries(now)
         try:
             recovered.extend(self.adopt_pending_entries(now))   # books + marks ADOPTED
         except Exception as e:
@@ -490,6 +626,11 @@ class LiveBroker(PaperBroker):
         known = {sid(r.order_id) for r in self.s.scalars(
             select(OrderJournal).where(OrderJournal.deployment_id == deployment_id)).all()
                  if r.order_id}
+        lifecycle_intents = self.s.scalars(select(ExecutionIntent).where(
+            ExecutionIntent.deployment_id == deployment_id)).all()
+        lifecycle_store = ExecutionLifecycleStore(self.s)
+        known |= {sid(lifecycle_store.state_for(intent.client_intent_id).broker_order_id)
+                  for intent in lifecycle_intents}
         # Resting protective stops of positions still open …
         known |= {sid(protective_order_id(p)) for p in self.s.scalars(
             select(Position).where(Position.deployment_id == deployment_id)).all()
@@ -538,34 +679,14 @@ class LiveBroker(PaperBroker):
              in self._pending_entries.items()
              if not pending.get("order_id") and pending.get("broker_tag")), None)
         if uncertain_item is not None:
-            pending_symbol, uncertain = uncertain_item
+            self._reconcile_uncertain_entries(self.provider.now())
             try:
-                matches = [order for order in self.client.orders()
-                           if order.get("tag") == uncertain["broker_tag"]]
+                self.adopt_pending_entries(self.provider.now())
             except Exception as e:
-                log.error(f"UNCERTAIN {pending_symbol}: exact-tag reconciliation failed: {e}",
-                          event="ENTRY_RECONCILE_FAIL")
-                return False
-            if matches:
-                oid = str(matches[-1].get("order_id") or "")
-                if oid:
-                    uncertain["order_id"] = oid
-                    self._inflight[pending_symbol] = oid
-                    self._journal_set_order_id(uncertain.get("row_id"), oid)
-                return False
-            client_intent_id = uncertain["client_intent_id"]
-            ExecutionLifecycleStore(self.s).append_event(
-                client_intent_id,
-                NewExecutionEvent(
-                    source="broker", source_event_id="exact-tag-not-found",
-                    kind="STATUS_OBSERVED", broker_order_id=None,
-                    broker_status="FAILED", cumulative_filled_qty=0, avg_price=0.0,
-                    payload={"tag": uncertain["broker_tag"], "accepted_order": False},
-                ), self.lifecycle_clock())
-            self._journal_resolve(
-                uncertain.get("row_id"),
-                OrderResult("REJECTED", None, 0, 0.0, "exact tag not found"), 0, 0.0)
-            self._pending_entries.pop(pending_symbol, None)
+                log.error(f"UNCERTAIN: adoption failed: {e}", event="ENTRY_RECONCILE_FAIL")
+            # This call began with an uncertain submit. Even if it was reconciled,
+            # never place another entry in the same decision cycle.
+            return False
 
         oid = self._inflight.pop(symbol, None)
         if not oid:
@@ -739,7 +860,8 @@ class LiveBroker(PaperBroker):
                    "charge_segment": charge_segment, "reason": reason,
                    "params": params, "strategy_key": strategy_key,
                    "strategy_version": strategy_version, "sl_pct": sl_pct,
-                   "tp_pct": tp_pct}
+                   "tp_pct": tp_pct, "margin": margin,
+                   "requested_qty": qty}
         res, filled, avg, client_intent_id, row_id = self._execute_entry(
             OrderRequest(tsym, exchange_for_segment(charge_segment), side, qty, "MARKET", None,
                          product=product_for_segment(charge_segment)),
@@ -758,6 +880,7 @@ class LiveBroker(PaperBroker):
                     "charge_segment": charge_segment, "reason": reason, "params": params,
                     "strategy_key": strategy_key, "strategy_version": strategy_version,
                     "sl_pct": sl_pct, "tp_pct": tp_pct,
+                    "margin": margin, "requested_qty": qty,
                     "client_intent_id": client_intent_id,
                     "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
                     "booked_qty": 0}
@@ -781,7 +904,8 @@ class LiveBroker(PaperBroker):
                 "direction": direction, "charge_segment": charge_segment,
                 "reason": reason, "params": params, "strategy_key": strategy_key,
                 "strategy_version": strategy_version, "sl_pct": sl_pct,
-                "tp_pct": tp_pct, "client_intent_id": client_intent_id,
+                "tp_pct": tp_pct, "margin": margin, "requested_qty": qty,
+                "client_intent_id": client_intent_id,
                 "row_id": row_id, "booked_qty": filled}
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
@@ -1381,6 +1505,8 @@ class LiveBroker(PaperBroker):
         ones are kept for the next pass."""
         adopted = []
         for sym, ctx in list(self._pending_entries.items()):
+            if not ctx.get("order_id"):
+                continue
             try:
                 st = self.client.status(ctx["order_id"])
             except Exception as e:
@@ -1414,15 +1540,23 @@ class LiveBroker(PaperBroker):
                     continue
             if filled > 0 and avg > 0:
                 inst = ctx["inst"]
+                lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                    ctx["client_intent_id"])
                 pos = self.s.scalar(select(Position).where(
                     Position.entry_intent_id == ctx.get("client_intent_id"),
                     Position.deployment_id == self.deployment_id,
                 ))
                 existing = self.position_for(inst.key, deployment_id=self.deployment_id)
                 if pos is None and existing is not None:
-                    self.journal_mark_terminal(ctx["order_id"], "ADOPTED", filled, avg)
-                    self._pending_entries.pop(sym, None)
-                    self._inflight.pop(sym, None)
+                    log.error(
+                        f"ADOPT {sym}: existing position {existing.id} is not linked to "
+                        f"entry intent {ctx['client_intent_id']} — left blocked",
+                        event="ADOPT_CONFLICT",
+                    )
+                    self._notify(
+                        f"⚠️ {sym}: recovered fill conflicts with an unrelated open "
+                        f"position; entry remains blocked for manual review."
+                    )
                     continue
                 if pos is None:
                     if ctx.get("kind") == "options":
@@ -1439,10 +1573,18 @@ class LiveBroker(PaperBroker):
                         self.s.commit()
                         self._place_gtt(pos, avg)
                     else:
+                        requested_qty = int(ctx.get("requested_qty") or filled)
+                        margin = ctx.get("margin")
+                        fill_margin = (
+                            float(margin) * filled / requested_qty
+                            if margin is not None and float(margin) > 0 and requested_qty > 0
+                            else None
+                        )
                         pos = super().open_equity_position(
                             inst, ctx["direction"], avg, filled, ctx["charge_segment"],
                             ctx["reason"], now, ctx["params"], ctx["strategy_key"],
                             ctx.get("strategy_version"),
+                            margin=fill_margin,
                             sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"),
                             entry_intent_id=ctx.get("client_intent_id"))
                         self._place_equity_stop(pos, avg)
@@ -1451,7 +1593,41 @@ class LiveBroker(PaperBroker):
                     self._notify(f"ℹ️ {sym}: a bot order filled late ({filled}@{avg:.2f}) — "
                                  f"adopted into the book with a stop; verify on Zerodha")
                     adopted.append(inst.key)
-                elif filled > pos.qty:
+                    first_result = OrderResult(
+                        "FILLED" if status == "COMPLETE" else "PARTIAL",
+                        ctx["order_id"], filled, avg,
+                        "complete" if status == "COMPLETE" else "partial fill",
+                    )
+                    if not self._mark_position_booked(
+                            ctx["client_intent_id"], ctx.get("row_id"), pos,
+                            first_result, filled, avg):
+                        continue
+                    lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                        ctx["client_intent_id"])
+                elif pos.qty > lifecycle_state.booked_qty:
+                    # The ledger commit won a crash race against POSITION_BOOKED.
+                    # Close that durable gap before considering any newer broker fill.
+                    gap_result = OrderResult(
+                        "FILLED" if status == "COMPLETE" else "PARTIAL",
+                        ctx["order_id"], pos.qty, pos.entry_premium,
+                        "ledger position recovered",
+                    )
+                    if not self._mark_position_booked(
+                            ctx["client_intent_id"], ctx.get("row_id"), pos,
+                            gap_result, pos.qty, pos.entry_premium):
+                        continue
+                    lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                        ctx["client_intent_id"])
+                if pos is not None and filled > lifecycle_state.booked_qty:
+                    # POSITION_BOOKED is the durable debit watermark. The Position
+                    # must agree with it before applying the next cumulative delta.
+                    if pos.qty != lifecycle_state.booked_qty:
+                        log.error(
+                            f"ADOPT {sym}: ledger qty {pos.qty} disagrees with durable "
+                            f"booked qty {lifecycle_state.booked_qty} — left blocked",
+                            event="ADOPT_CONFLICT",
+                        )
+                        continue
                     old_qty = pos.qty
                     old_cost = pos.entry_cost
                     stop_ratio = pos.stop_price / pos.entry_premium
@@ -1475,7 +1651,13 @@ class LiveBroker(PaperBroker):
                     pos.target_price = avg * target_ratio
                     pos.last_premium = avg
                     pos.last_mark_time = now
-                    self.s.commit()
+                    try:
+                        self.s.commit()
+                    except Exception as e:
+                        self.s.rollback()
+                        log.error(f"ADOPT {sym}: cumulative ledger commit failed: {e}",
+                                  event="ADOPT_FAIL")
+                        continue
                     result = OrderResult(
                         "FILLED" if status == "COMPLETE" else "PARTIAL",
                         ctx["order_id"], filled, avg,

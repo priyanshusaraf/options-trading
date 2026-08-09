@@ -86,8 +86,11 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
         try:
             last = client.status(order_id)
         except Exception as e:
-            # read-only poll failed — do NOT re-place; surface for reconciliation
-            return OrderResult("ERROR", order_id, 0, 0.0, f"status poll failed: {e}")
+            # Placement is acknowledged, but its outcome is unknown until a later
+            # read succeeds. Keep the durable blocker active for reconciliation.
+            return OrderResult("ERROR", order_id, 0, 0.0,
+                               f"status poll failed: {e}",
+                               reconciliation_required=True)
         st = str(last.get("status", "")).upper()
         if st == "COMPLETE":
             return OrderResult("FILLED", order_id, int(last.get("filled_qty", req.qty)),

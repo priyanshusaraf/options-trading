@@ -195,8 +195,10 @@ def test_terminal_fill_requires_position_booked_before_reconciliation_clears():
     ])
 
     assert before_booking.terminal is True
+    assert before_booking.booked_qty == 0
     assert before_booking.reconciliation_required is True
     assert after_booking.terminal is True
+    assert after_booking.booked_qty == 100
     assert after_booking.reconciliation_required is False
 
 
@@ -358,6 +360,24 @@ def test_create_intent_fails_closed_after_three_identity_collisions(tmp_path, mo
 
     with pytest.raises(sa.exc.IntegrityError):
         store.create_intent(_request(), {}, BASE_TIME)
+
+
+def test_create_intent_does_not_retry_non_identity_integrity_failure(tmp_path, monkeypatch):
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    calls = 0
+
+    def fail_foreign_key():
+        nonlocal calls
+        calls += 1
+        raise sa.exc.IntegrityError(
+            "insert", {}, RuntimeError("FOREIGN KEY constraint failed"))
+
+    monkeypatch.setattr(session, "commit", fail_foreign_key)
+    with pytest.raises(sa.exc.IntegrityError, match="FOREIGN KEY"):
+        store.create_intent(_request(), {}, BASE_TIME)
+
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
