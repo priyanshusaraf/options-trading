@@ -11,39 +11,180 @@ New contract, encoded here:
   - log lines sit in a bounded per-client buffer (oldest dropped)
   - a client that can't take a send within SEND_TIMEOUT is evicted
   - push() from a foreign thread must not create one task per message
+  - a message is JSON-encoded ONCE per broadcast, not once per client, and the
+    bytes on the wire stay identical to what starlette's send_json produced
+  - encoding stays inside the sender's try/except: a message that cannot be
+    serialised evicts clients, it never raises into the producer (engine loop)
 """
 import asyncio
+import json
 import threading
 import time
+
+from starlette.websockets import WebSocket
 
 from app.ws.manager import WSManager
 
 
 class FakeWS:
     """Stand-in for a starlette WebSocket. block=True simulates a dead-slow
-    client whose TCP window is full: send_json never completes."""
+    client whose TCP window is full: the send never completes.
+
+    The manager now sends pre-encoded text, so this double takes `send_text`
+    and decodes it back — `sent` therefore still holds dicts for the tests that
+    assert on message content, but nothing here can invent a payload the real
+    starlette consumer would not have seen. The byte-level contract is pinned
+    separately by test_wire_bytes_match_starlette_send_json, which uses a REAL
+    starlette WebSocket rather than this double."""
 
     def __init__(self, block: bool = False):
-        self.sent: list[dict] = []
+        self.sent_text: list[str] = []
         self.block = block
         self.closed = False
+
+    @property
+    def sent(self) -> list[dict]:
+        return [json.loads(t) for t in self.sent_text]
 
     async def accept(self):
         pass
 
-    async def send_json(self, msg):
+    async def send_text(self, text):
+        assert isinstance(text, str), f"send_text got {type(text).__name__}, not str"
         if self.block:
             await asyncio.Event().wait()  # never set — hangs forever
-        self.sent.append(msg)
+        self.sent_text.append(text)
 
     async def close(self, code: int = 1000):
         self.closed = True
+
+
+def _real_ws(captured: list[dict]) -> WebSocket:
+    """A genuine starlette WebSocket whose ASGI output is captured verbatim."""
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        captured.append(message)
+
+    return WebSocket({"type": "websocket", "path": "/ws", "headers": []}, receive, send)
 
 
 def _mgr() -> WSManager:
     m = WSManager()
     m.bind(asyncio.get_event_loop())
     return m
+
+
+# ── serialise-once fan-out (backend-hardening 2026-08-08 §11) ───────────────
+def test_wire_bytes_match_starlette_send_json():
+    """The ASGI frame the manager produces must be identical to the one
+    starlette's own send_json would have produced for the same message."""
+    msg = {
+        "type": "state",
+        "data": {
+            "NIFTY 50": {"ltp": 24_512.35, "chg": -0.42, "_ratchet_atr": None},
+            "unicode": "₹ Ø 日本",
+            "nested": [1, 2.5, True, None],
+        },
+    }
+
+    async def run():
+        via_manager: list[dict] = []
+        m = _mgr()
+        ws = _real_ws(via_manager)
+        await m.connect(ws)
+        await m.broadcast(msg)
+        await asyncio.sleep(0.05)
+
+        via_starlette: list[dict] = []
+        ref = _real_ws(via_starlette)
+        await ref.accept()
+        await ref.send_json(msg)
+        return via_manager, via_starlette
+
+    via_manager, via_starlette = asyncio.run(run())
+    sends_m = [x for x in via_manager if x["type"] == "websocket.send"]
+    sends_s = [x for x in via_starlette if x["type"] == "websocket.send"]
+    assert len(sends_m) == 1, f"expected one send frame, got {sends_m}"
+    assert sends_m == sends_s, (
+        f"wire frame diverged from starlette send_json\n"
+        f"  manager:   {sends_m}\n  send_json: {sends_s}"
+    )
+
+
+def test_message_is_encoded_once_regardless_of_client_count():
+    """One broadcast to N clients must cost exactly one json.dumps.
+
+    json.dumps is patched on the json module itself, so this counts encoding
+    wherever it happens — in the manager or inside starlette's send_json.
+    """
+    n_clients = 5
+    calls = []
+    real_dumps = json.dumps
+
+    def counting_dumps(obj, *a, **kw):
+        calls.append(obj)
+        return real_dumps(obj, *a, **kw)
+
+    async def run():
+        m = _mgr()
+        for _ in range(n_clients):
+            await m.connect(_real_ws([]))
+        assert m.client_count() == n_clients
+        json.dumps = counting_dumps
+        try:
+            await m.broadcast({"type": "state", "data": {"i": 1}})
+            await asyncio.sleep(0.1)
+        finally:
+            json.dumps = real_dumps
+        return len(calls)
+
+    n_encodes = asyncio.run(run())
+    assert n_encodes == 1, (
+        f"{n_encodes} json.dumps calls for one message to {n_clients} clients "
+        f"— the payload is being re-encoded per client"
+    )
+
+
+def test_unserialisable_message_evicts_clients_and_never_reaches_producer():
+    """Encoding must stay lazy, inside the sender's try/except.
+
+    If it moved into _enqueue (a producer context — the engine tick loop and
+    call_soon_threadsafe from the log bus) an unserialisable message would
+    raise into the engine instead of costing the offending clients.
+    """
+
+    class Unserialisable:
+        pass
+
+    bad = {"type": "state", "data": {"x": Unserialisable()}}
+
+    async def run():
+        m = _mgr()
+        a, b = FakeWS(), FakeWS()
+        await m.connect(a)
+        await m.connect(b)
+        await m.broadcast(bad)  # must not raise here
+        await asyncio.sleep(0.1)
+        clients_after_broadcast = m.client_count()
+
+        errors: list[BaseException] = []
+        m2 = _mgr()
+        asyncio.get_running_loop().set_exception_handler(
+            lambda loop, ctx: errors.append(ctx.get("exception") or RuntimeError(ctx["message"]))
+        )
+        await m2.connect(FakeWS())
+        threading.Thread(target=lambda: m2.push(bad)).start()
+        await asyncio.sleep(0.2)
+        return clients_after_broadcast, errors
+
+    clients_after, loop_errors = asyncio.run(run())
+    assert clients_after == 0, "unserialisable message did not evict its clients"
+    assert loop_errors == [], (
+        f"serialisation error escaped into the producer/loop callback: {loop_errors}"
+    )
 
 
 def test_broadcast_does_not_block_on_slow_client():

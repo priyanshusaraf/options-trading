@@ -14,10 +14,20 @@ Now producers only ever enqueue (never touch client I/O):
   - log lines go into a bounded per-client deque (oldest dropped)
   - one sender task per client drains the queue; a send that doesn't complete
     within SEND_TIMEOUT means the client is dead/stalled → it is evicted
+
+Serialise-once fan-out (2026-08-09, backend-hardening §11): the hub used to
+call ws.send_json(msg) per client, so the identical state dict was JSON-encoded
+once per connected browser — ~24 MB/s of encoding at 500 clients x 100
+instruments to transmit ~10 MB/s. Each enqueued message is now wrapped in a
+_Frame shared by every client, which encodes exactly once, lazily, on first
+send. The encoding is byte-identical to starlette's send_json and stays inside
+_sender's try/except so an unserialisable message still evicts clients rather
+than raising into the engine loop that produced it.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -27,9 +37,33 @@ from fastapi import WebSocket
 _COALESCE = ("state", "position_ticks")
 
 
+class _Frame:
+    """One broadcast message, shared by every client, encoded at most once.
+
+    `text` is computed lazily — the first sender to reach it pays, the rest
+    read the cache. Lazy on purpose: producers (_enqueue, called from the
+    engine tick and from call_soon_threadsafe) must never see a serialisation
+    error, so the encode has to happen inside a sender's try/except.
+    """
+
+    __slots__ = ("msg", "_text")
+
+    def __init__(self, msg: dict) -> None:
+        self.msg = msg
+        self._text: str | None = None
+
+    @property
+    def text(self) -> str:
+        if self._text is None:
+            # exactly starlette WebSocket.send_json's encoding — the bytes a
+            # browser receives must not change
+            self._text = json.dumps(self.msg, separators=(",", ":"), ensure_ascii=False)
+        return self._text
+
+
 @dataclass
 class _Client:
-    latest: dict[str, dict] = field(default_factory=dict)   # latest-wins slots
+    latest: dict[str, _Frame] = field(default_factory=dict)  # latest-wins slots
     logs: deque = None  # bounded FIFO for everything else  # type: ignore[assignment]
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
@@ -68,11 +102,15 @@ class WSManager:
 
     # ── producers: enqueue only, never block on client I/O ──────────────────
     def _enqueue(self, msg: dict) -> None:
+        # one envelope for all clients → one encode for all clients (lazy, so
+        # nothing here can raise on a message the JSON encoder dislikes)
+        frame = _Frame(msg)
+        mtype = msg.get("type")
         for client in self.clients.values():
-            if msg.get("type") in _COALESCE:
-                client.latest[msg["type"]] = msg
+            if mtype in _COALESCE:
+                client.latest[mtype] = frame
             else:
-                client.logs.append(msg)  # bounded: oldest silently dropped
+                client.logs.append(frame)  # bounded: oldest silently dropped
             client.wake.set()
 
     async def broadcast(self, msg: dict) -> None:
@@ -91,15 +129,17 @@ class WSManager:
             while True:
                 await client.wake.wait()
                 client.wake.clear()
-                batch: list[dict] = []
+                batch: list[_Frame] = []
                 for t in _COALESCE:
                     m = client.latest.pop(t, None)
                     if m is not None:
                         batch.append(m)
                 while client.logs:
                     batch.append(client.logs.popleft())
-                for msg in batch:
-                    await asyncio.wait_for(ws.send_json(msg), self.SEND_TIMEOUT)
+                for frame in batch:
+                    # frame.text encodes on first use and caches for the other
+                    # clients; a raise here is caught below → this client only
+                    await asyncio.wait_for(ws.send_text(frame.text), self.SEND_TIMEOUT)
         except asyncio.CancelledError:
             raise
         except Exception:
