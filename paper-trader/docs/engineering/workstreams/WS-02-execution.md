@@ -8,7 +8,7 @@
 
 `app/market_data/candles.py` is **consumed, not owned** — WS-07 owns the data seam. It is
 described under Consumes because a re-fork of it is the defect worth naming, wherever it lands.
-**Last verified:** 2026-08-03 · commit `cdbe686`
+**Last verified:** 2026-08-09 · branch `codex/execution-foundation`
 
 > This workstream is the part of the system that spends money. It reads live Zerodha Kite
 > candles, decides when the strategy's edge is present, picks the instrument, sizes the
@@ -133,10 +133,11 @@ WS-08 (cockpit numbers, `ledger_drift`, health payload shapes).
 
 ### The execution lifecycle boundary — G-2 (2026-08-07)
 
-**This is a contract, not a plan.** Nothing here is scheduled, and no `ExecutionIntent` object
-is being built. It is written down because L1.4 and everything after it add order-lifecycle
-behaviour, and the boundary they are written across must be named *before* they harden it —
-not because today's collapsed form is wrong.
+**Implemented for live entries on 2026-08-09.** Migration `0014` adds immutable
+`ExecutionIntent` and `ExecutionOrderEvent` records. Live options and equity entries commit an
+intent and `SUBMIT_STARTED` before broker submission. Broker acknowledgement, cumulative fill,
+protection acknowledgement, protected quantity and booked quantity are separate append-only
+facts. Existing exits remain on the compatibility journal path.
 
 The conceptual lifecycle, in full:
 
@@ -154,12 +155,9 @@ fill(s)                             what actually happened
 position / accounting state         the economic consequence
 ```
 
-**Today several of these stages are collapsed, and that is acceptable.** A strategy emits four
-booleans (`CANONICAL_COLUMNS`); `runner.process_entries` goes from a `self.state` entry to a
-chosen contract, a size and a `broker.open_*_position` call; a fill writes one `positions` row.
-With one-leg strategies the decision, the plan and the order are genuinely the same object, and
-inventing three types to hold one value would be the unconsumed-mechanism defect this codebase
-is named for.
+The strategy decision and execution plan remain collapsed for current one-leg strategies. The
+broker request and its observations no longer collapse into `Position`: `Position` records the
+economic result and links back through `entry_intent_id`.
 
 **Three invariants make the collapse reversible.** These are what must not be eroded:
 
@@ -175,9 +173,9 @@ is named for.
    engine executes, and `PaperBinding`/`ShadowSource` deliberately carry identities only — no
    strategy object, no broker, no callable — so that "non-authoritative" is a property of the
    type rather than a naming convention.
-3. **A future structured intent must be able to sit between strategy output and broker orders
-   without replacing canonical execution authority.** `execution_binding.strategy_for_execution`
-   stays the one gate; an intent is what flows *through* it, never a second thing that decides.
+3. **The durable entry intent does not replace canonical execution authority.**
+   `execution_binding.strategy_for_execution` stays the one gate; the intent records what flows
+   through it and never becomes a second strategy decision source.
 
 **What this forbids in practice.** Not features — assumptions. Reviewers of L1.4 and later
 slices should refuse code that hard-codes any of:
@@ -189,12 +187,9 @@ slices should refuse code that hard-codes any of:
 | all order-lifecycle state belongs to `Position` | it belongs to the order/fill stage; see invariant 1 |
 | an execution intent can only ever hold one leg | ratios, hedges and rolls are leg *sets* |
 
-**L1.4 was inspected against this list before it began (2026-08-07).** Its scope — restart and
-reload of paper-authority deployments, stale-binding withdrawal, pause/resume/retire/rollback,
-attribution and recovery — operates on the *binding* and the *deployment record*, both of which
-are already keyed on `(deployment, instrument, interval)` and carry identities rather than
-positions. It adds no per-order state to `Position` and no new signal→order coupling. **No code
-correction was required to preserve the seam; this contract is the deliverable.**
+The implementation preserves this seam: order observations stay in the lifecycle log, while
+`Position` carries only the resulting economic state plus the intent link. The current intent is
+still one-leg; multi-leg execution remains a later extension.
 
 **Not deferred out of neglect.** Multi-leg intent is a real product direction (2026-08-07
 architecture review, direction H / Drill 3) and the venue layer (`broker_protocol.py`) was
@@ -233,6 +228,29 @@ frontend contract for both is in
 alter lifecycle capability.
 
 ## 4. Completed
+
+### Durable live-entry lifecycle and protection boundary — 2026-08-09
+
+- Entry intent and `SUBMIT_STARTED` commit before the broker call. Unclassified placement
+  failures stay uncertain and block duplicate submission.
+- Startup rebuilds unresolved entries from the lifecycle log under deployment, account and
+  `kite:legacy` connection scope before replaying legacy journal rows.
+- Cumulative partial fills book only the positive delta. Lower and duplicate observations do
+  not shrink or double-charge the ledger. Options and equity resize protection to cumulative
+  quantity before advancing the booked watermark.
+- A filled entry clears reconciliation only after both `POSITION_PROTECTED` and
+  `POSITION_BOOKED` cover the broker fill. A broker-returned protection ID is recorded as
+  `PROTECTION_ACKNOWLEDGED` before the Position stores it.
+- Live entry refuses before intent creation when protection is disabled, invalid, unreadable or
+  unsupported. An unknown-ID GTT/SL-M outcome never auto-attaches by shape and never sends a
+  replacement; it remains blocked for manual reconciliation.
+- `KiteOrderClient.orders()` exposes normalized recovery fields only. `execution_metrics()`
+  derives fill state, adverse slippage and four latency legs only from persisted facts.
+
+Evidence: the final checkpoint collected 3,698 backend/research tests and completed with 3,692
+passes plus 6 expected skips. The 700-tick mock run reported `LEDGER OK`; the 16-cell backtest
+smoke reported `SWEEP OK`; migration head is `0014`. Exact commands are in `docs/CONTINUE.md`.
+No live broker or deployment was contacted.
 
 ### Execution-state ownership — the binding contract (2026-08-04)
 

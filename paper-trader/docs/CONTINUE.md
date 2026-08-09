@@ -10,6 +10,14 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
+**Execution-first foundation update (2026-08-09):** the isolated
+`codex/execution-foundation` branch now contains migration `0014`, immutable live-entry intent
+and event records, lifecycle-first restart recovery, cumulative fill-delta accounting, a durable
+protection-before-booking boundary, normalized broker reads and persisted execution telemetry.
+It is not deployed and did not contact Kite. Broker expansion, authentication and tenancy remain
+deferred. The next backend slices are the causal strategy contract, content-addressed backtest
+cache and the 100-user deployment/soak boundary described in the execution-first roadmap.
+
 **Stage A through S4.6d is implemented. The M-band (M1–M6) is closed; the next boundary is the
 owner-gated L1 execution-integration adoption design.** Fail-closed CI is on the branch. Its first
 run exposed two environment-boundary tests that assumed `PT_DISABLE_DOTENV` was absent; the tests
@@ -115,6 +123,11 @@ explicit approval. The design is presented separately.
 
 ## 2. Repository and remote state
 
+- Active isolated worktree for this increment:
+  `/Users/priyanshusaraf/dev/options-trading/.claude/worktrees/codex-execution-foundation`
+- Active isolated branch: `codex/execution-foundation`
+- This branch is local and not pushed or deployed.
+
 - Repository root: `/Users/priyanshusaraf/dev/options-trading`
 - Application root: `/Users/priyanshusaraf/dev/options-trading/paper-trader`
 - Branch/upstream: `feat/exec-completeness` / `origin/feat/exec-completeness`
@@ -141,6 +154,25 @@ The VPS build was **not measured this session.** `curl localhost:8090/api/health
 the only answer — never read it off a document.
 
 ## 3. Latest acceptance evidence
+
+Execution-first foundation checkpoint on 2026-08-09:
+
+```text
+$ .venv/bin/pytest -q tests research_tests
+3,698 collected · 3,692 passed · 6 expected skips · EXIT 0
+
+$ PT_PROVIDER=mock PT_EXECUTION=paper .venv/bin/python scripts/dryrun.py 700
+cash ₹187,733.06 · expected ₹187,733.06 · diff -0.0000 · LEDGER OK · EXIT 0
+
+$ PT_PROVIDER=mock PT_EXECUTION=paper .venv/bin/python scripts/backtest_smoke.py
+16/16 cells · net<gross where charged OK · SWEEP OK · EXIT 0
+
+$ .venv/bin/python -m app.db.migrate head
+0014 · EXIT 0
+
+Live broker calls: none
+Deployment: none
+```
 
 Latest acceptance run on 2026-08-07, for the L1.3A managed shadow deployment slice:
 
@@ -416,12 +448,10 @@ correction first, then L1.4 unchanged in scope.** Both corrections are now done:
    canonical JSON, its content address, every component body ref and every resolved node id, cache
    id, body ref and warmup: `1077ee8cdb53641e9451956994b6800a5c48a8bce6c2625ba3ea44f07c853590`
    before and after. No schema change; migration head stays `0013`.
-2. **G-2 — the signal → intent → order boundary — DOCUMENTED**, at `WS-02-execution.md` §3, "The
-   execution lifecycle boundary". Three invariants (`Position` is economic state, not the universal
-   container; strategy logic gains no broker authority; a future structured intent must fit between
-   strategy output and broker orders without replacing canonical authority) plus the four
-   assumptions later slices may not deepen. **No code was required** — L1.4 was inspected against
-   those four first and deepens none of them.
+2. **G-2 — the signal → intent → order boundary — SHIPPED for live entries.** Migration `0014`
+   adds immutable entry intents and observations. Position, protection and booking remain distinct
+   facts; restart recovery uses the lifecycle log as authority. Existing exits retain the legacy
+   journal until a separate reviewed migration.
 
 The review itself was amended after owner review (its Amendments section): F7 proves that
 instrument identity participates in the type system and that *accidental* cross-domain wiring fails

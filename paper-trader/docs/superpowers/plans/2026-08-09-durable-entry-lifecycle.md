@@ -1,5 +1,9 @@
 # Durable Entry Lifecycle Implementation Plan
 
+**Status:** completed on `codex/execution-foundation` (2026-08-09). Final evidence:
+3,698 collected, 3,692 passed, 6 expected skips; mock `LEDGER OK`; 16/16 `SWEEP OK`;
+migration head `0014`. No live broker or deployment was contacted.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
 **Goal:** Make every new live entry originate from a committed intent, record broker observations as idempotent immutable events, block uncertain resubmission, and expose measured latency and slippage without changing exit behavior.
