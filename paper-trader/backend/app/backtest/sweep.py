@@ -18,7 +18,10 @@ from app.backtest.engine import (backtest_charge_segment, compute_signals,
                                  prepare_signal_frame, simulate)
 from app.backtest.metrics import BTMetrics
 from app.backtest import dataset_store
-from app.backtest.identity import execution_result_address, ordered_dataset_address
+from app.backtest.identity import (INSTRUMENT_IDENTITY_FIELDS,
+                                   PROVIDER_IDENTITY_FIELDS,
+                                   execution_result_address,
+                                   ordered_dataset_address, source_identity)
 from app.backtest.premium import NO_OPTIONS_PREMIUM_ERROR, simulate_premium
 from app.core.config import get_settings
 from app.backtest.universe import full_universe, liquid_universe
@@ -106,6 +109,82 @@ def _clip_to_window(candles, start_date: str | None, end_date: str | None):
     ed = dt.date.fromisoformat(end_date) if end_date else dt.date.max
     return [c for c in candles if sd <= c.ts.date() <= ed]
 
+def _requested_window(interval: str, win) -> dict:
+    """The request half of a dataset address: what we ASKED the provider for.
+
+    Kept in one place because it is now computed twice — once when fetching, and
+    once when checking that a pinned dataset was fetched for this same request.
+    """
+    start, end = win.get("start"), win.get("end")
+    return {
+        "lookback_days": win.get("lookback_days"),
+        "start": start,
+        "end": end,
+        "fetch_days": _fetch_days(interval, win.get("lookback_days"), start, end),
+    }
+
+
+# ── pinned runs ──────────────────────────────────────────────────────────────
+# A pinned run evaluates against dataset addresses the CALLER named. It makes
+# zero provider reads, and that claim is truthful only because the caller chose
+# the exact bytes. Nothing below is ever reached from an ordinary sweep: a
+# refresh must still pay one read per dataset (design: "Truthful warm modes"),
+# because no provider API exposes a revision token that could prove historical
+# bytes unchanged. Pinning is opt-in at the call site and nowhere else.
+
+def pin_key(instrument_key: str, interval: str) -> str:
+    """The address-map key for one (instrument, interval) cell."""
+    return f"{instrument_key}|{interval}"
+
+
+def _is_address(value: str) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(c in "0123456789abcdef" for c in value.lower()))
+
+
+def normalize_pinned_datasets(pinned_datasets) -> dict[str, str]:
+    """Validate a caller's pin map, or raise. Malformed input must not reach a
+    run row: a half-valid pin map would silently fail closed cell by cell and
+    look like missing data rather than a caller mistake."""
+    normalized: dict[str, str] = {}
+    for key, address in dict(pinned_datasets).items():
+        if not isinstance(key, str) or "|" not in key:
+            raise RuntimeError(
+                f"pinned dataset key must be 'INSTRUMENT|interval', got {key!r}")
+        if not _is_address(address):
+            raise RuntimeError(
+                f"not a dataset address for {key}: {address!r}")
+        normalized[key] = address.lower()
+    return normalized
+
+
+def resolve_pinned_datasets(provider, instruments, intervals, *,
+                            lookback_days: int | None = None,
+                            start_date: str | None = None,
+                            end_date: str | None = None,
+                            store=None) -> dict[str, str]:
+    """Look up the stored dataset address for each requested cell.
+
+    This is the *source-run* half of the pinned API: it turns "the datasets a
+    previous sweep of this window fetched" into explicit addresses the caller
+    then passes to `start_sweep(pinned_datasets=...)`. It is deliberately a
+    separate call — `start_sweep` never invokes it — so that pinning cannot
+    happen by omission. Cells with nothing stored are simply absent from the
+    result and will fail closed if pinned anyway.
+    """
+    store = store or dataset_store.get_store()
+    win = {"lookback_days": lookback_days, "start": start_date, "end": end_date}
+    resolved: dict[str, str] = {}
+    for inst in instruments:
+        for interval in intervals:
+            entry = store.lookup(
+                provider=provider, instrument=inst, interval=interval,
+                requested_window=_requested_window(interval, win))
+            if entry is not None:
+                resolved[pin_key(inst.key, interval)] = entry.address
+    return resolved
+
+
 _state_lock = threading.Lock()
 _running = False
 _worker: "threading.Thread | None" = None
@@ -155,7 +234,8 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                 instruments: list[str] | None = None,
                 lookback_days: int | None = None,
                 start_date: str | None = None, end_date: str | None = None,
-                strategies: list[str] | None = None) -> int:
+                strategies: list[str] | None = None,
+                pinned_datasets=None) -> int:
     """Create a run row, resolve the universe, launch the background thread.
     Returns the new run id. Raises if a sweep is already in flight.
 
@@ -164,9 +244,17 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
     `lookback_days`— preset window in days (None = max available history).
     `start_date`/`end_date` — ISO custom window (overrides lookback_days).
     `strategies`   — registry strategy keys to run EACH instrument×interval across;
-                     None/empty = just the default strategy (single-strategy sweep)."""
+                     None/empty = just the default strategy (single-strategy sweep).
+    `pinned_datasets` — OPT-IN pinned run: `{"NIFTY|15minute": <dataset address>}`,
+                     normally built by `resolve_pinned_datasets`. Every cell is
+                     served from the local dataset store and the run makes ZERO
+                     provider reads; a cell whose pin is missing, corrupt, or
+                     describes another series fails closed with an explanatory
+                     error rather than falling back to a fetch. Omit it and the
+                     sweep behaves exactly as before, provider reads included."""
     from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
     global _running, _worker
+    pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
     with _state_lock:
         if _running:
             raise RuntimeError("a sweep is already running")
@@ -202,14 +290,17 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                               instruments=",".join(i.key for i in specs) if instruments else "",
                               strategies=",".join(st.key for st in strat_objs),
                               note=f"{len(specs)} instruments × {len(intervals)} intervals "
-                                   f"× {len(strat_objs)} strategies · {win['label']}")
+                                   f"× {len(strat_objs)} strategies · {win['label']}"
+                                   + (" · pinned" if pinned else ""))
             s.add(run)
             s.commit()
             run_id = run.id
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
-                 f"window={win['label']}, strategies={strat_label}")
+                 f"window={win['label']}, strategies={strat_label}"
+                 + (f", PINNED to {len(pinned)} stored datasets" if pinned else ""))
         t = threading.Thread(target=_run,
-                             args=(run_id, provider, specs, intervals, capital, win, strat_objs),
+                             args=(run_id, provider, specs, intervals, capital, win,
+                                   strat_objs, pinned),
                              daemon=True)
         _worker = t
         t.start()
@@ -219,7 +310,8 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
         raise
 
 
-def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None) -> None:
+def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
+         pinned=None) -> None:
     global _running
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
@@ -228,7 +320,8 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None)
     try:
         for inst in specs:
             for interval in intervals:
-                prepared = _prepare_dataset(provider, inst, interval, win)
+                prepared = _prepare_dataset(provider, inst, interval, win,
+                                            pinned=pinned)
                 for strat in strategies:
                     _one(run_id, provider, inst, interval, capital, win, strat,
                          prepared=prepared)
@@ -242,9 +335,16 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None)
         _running = False
 
 
-def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
+def _prepare_dataset(provider, inst, interval, win, *,
+                     pinned=None) -> _PreparedDataset:
     start, end = win.get("start"), win.get("end")
     clamped = _is_clamped(interval, win.get("lookback_days"), start)
+    if pinned is not None:
+        # Explicitly pinned: the store is the only source, and a pin that cannot
+        # be honoured is an error, never a fetch. Falling back here would turn a
+        # pinned run into a refresh wearing a pin's name.
+        return _pinned_dataset(provider, inst, interval, win, pinned,
+                               clamped=clamped)
     # A custom window entirely older than Kite's per-interval ceiling can never be
     # fetched — surface a DISTINCT, explanatory status rather than the generic,
     # silently-dropped 'insufficient history' (DV-3).
@@ -254,7 +354,8 @@ def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
             clamped=clamped,
             error=f"window older than Kite max for this interval "
                   f"(≈{cap}d on {interval})")
-    days = _fetch_days(interval, win.get("lookback_days"), start, end)
+    requested_window = _requested_window(interval, win)
+    days = requested_window["fetch_days"]
     try:
         candles = provider.get_candles(inst, interval, days, end=end) \
             if _supports_end(provider) else provider.get_candles(inst, interval, days)
@@ -280,12 +381,6 @@ def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
     first_ts = ist_epoch(candles[0].ts)
     last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
     effective_days = max(0, round((last_ts - first_ts) / 86400))
-    requested_window = {
-        "lookback_days": win.get("lookback_days"),
-        "start": start,
-        "end": end,
-        "fetch_days": days,
-    }
     effective_window = {
         "first_ts": first_ts,
         "last_ts": last_ts,
@@ -323,6 +418,84 @@ def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
         candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
         effective_days=effective_days, clamped=clamped,
         dataset_address=dataset_address)
+
+
+def _pinned_dataset(provider, inst, interval, win, pinned, *,
+                    clamped: bool) -> _PreparedDataset:
+    """Serve one cell from a caller-named dataset address, or refuse.
+
+    Every refusal below is a *closed* failure: one explanatory result row for the
+    cell, the rest of the run untouched, and not one provider read. There is
+    deliberately no path from here back to `provider.get_candles`.
+    """
+    key = pin_key(getattr(inst, "key", ""), interval)
+    address = (pinned.get(key) or "").strip().lower()
+    if not address:
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"pinned run: no dataset address pinned for {key}")
+    try:
+        stored = dataset_store.get_store().get(address)
+    except Exception as exc:
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"pinned run: dataset store unreadable for {key}: {exc}")
+    if stored is None:
+        # Missing, unreadable, or its bytes no longer recompute to this address.
+        # The store refuses all three the same way and so do we.
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"pinned run: dataset {address[:12]}… for {key} is missing or "
+                  f"its content no longer matches its address")
+    mismatch = _pin_mismatch(stored, provider=provider, inst=inst,
+                             interval=interval, win=win)
+    if mismatch:
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"pinned run: dataset {address[:12]}… does not describe "
+                  f"{key} — {mismatch}")
+
+    candles = tuple(
+        _FrozenCandle(c.ts, float(c.open), float(c.high), float(c.low),
+                      float(c.close), float(c.volume))
+        for c in stored.candles)
+    if len(candles) < MIN_BARS:
+        return _PreparedDataset(
+            candles=candles, bars=len(candles), clamped=clamped,
+            error="insufficient history")
+    first_ts = ist_epoch(candles[0].ts)
+    last_ts = ist_epoch(candles[-1].ts)
+    effective = stored.effective_window if isinstance(
+        stored.effective_window, dict) else {}
+    return _PreparedDataset(
+        candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
+        effective_days=max(0, round((last_ts - first_ts) / 86400)),
+        clamped=bool(effective.get("clamped", clamped)),
+        dataset_address=stored.address)
+
+
+def _pin_mismatch(stored, *, provider, inst, interval, win) -> str:
+    """Why this stored dataset is not an answer to this cell's request, or "".
+
+    The store's own address check proves the bytes are the bytes that address
+    names. It cannot prove they are the SERIES this cell asked for: a 30-minute
+    GOLD dataset recomputes to its own address perfectly. Serving it to a
+    15-minute NIFTY cell would be a silently wrong backtest, which is worse than
+    any refusal, so the manifest is compared against the request as well.
+    """
+    if stored.interval != interval:
+        return f"its interval is {stored.interval!r}, not {interval!r}"
+    expected_instrument = source_identity(inst, fields=INSTRUMENT_IDENTITY_FIELDS)
+    if stored.instrument != expected_instrument:
+        return f"its instrument is {stored.instrument!r}"
+    expected_provider = source_identity(provider, fields=PROVIDER_IDENTITY_FIELDS)
+    if stored.provider != expected_provider:
+        return f"its provider is {stored.provider!r}"
+    expected_window = _requested_window(interval, win)
+    if stored.requested_window != expected_window:
+        return (f"it was fetched for window {stored.requested_window!r}, "
+                f"not {expected_window!r}")
+    return ""
 
 
 def _one(run_id, provider, inst, interval, capital, win, strat=None,

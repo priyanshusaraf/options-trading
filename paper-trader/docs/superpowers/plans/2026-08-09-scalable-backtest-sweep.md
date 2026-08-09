@@ -66,9 +66,40 @@ The only path to 10,000 × 5. Datasets are fetched once, stored by the exact add
 
 ### Task 4: Pinned immutable warm path
 
-- [ ] Specify an explicit source-run/dataset-address API; normal refresh never implies pinning.
-- [ ] Prove pinned exact reruns make zero provider calls and preserve all result artifacts.
-- [ ] Reject manifest mismatch instead of silently refreshing or cloning.
+Where the store's payoff is collected: `start_sweep(pinned_datasets=…)` serves every cell from
+the Task-3 store and makes **zero** provider reads.
+
+- [x] Specify an explicit source-run/dataset-address API; normal refresh never implies pinning.
+- [x] Prove pinned exact reruns make zero provider calls and preserve all result artifacts.
+- [x] Reject manifest mismatch instead of silently refreshing or cloning.
+
+> **API.** `sweep.resolve_pinned_datasets(provider, instruments, intervals, …)` turns "the
+> datasets a previous sweep of this window fetched" into `{"NIFTY|15minute": <address>}` via the
+> store's request index; the caller then passes that map to
+> `start_sweep(pinned_datasets=…)`. Two separate calls on purpose — `start_sweep` never resolves
+> anything itself, so pinning cannot happen by omission. Without the parameter the sweep is
+> byte-for-byte what it was, provider reads included
+> (`test_a_sweep_without_the_pin_parameter_reads_exactly_what_it_always_read`).
+>
+> **No `pinned_source_run_id`.** `BacktestResult` stores the *execution* address
+> (`params_hash`), never the dataset address, so a run id cannot be resolved back to its
+> datasets without a new column — and the migration head is frozen at `0014`. Index resolution
+> above is the substitute: it reconstructs the same addresses from the request, not from the
+> run. Add the column when a migration is next in scope.
+>
+> **Fail-closed, four ways.** A missing pin, an address absent from the store, a blob whose
+> content no longer recomputes to its address, and a manifest describing another series all
+> produce one explanatory result row and let the run continue. There is no code path from the
+> pinned branch back to `provider.get_candles`. The fourth case is the one the store's own
+> address check cannot catch — a 30-minute dataset recomputes to its own address perfectly, so
+> `_pin_mismatch` compares interval, instrument identity, provider identity and requested window
+> against the request as well.
+>
+> Suppression evidence: making a failed pin fall back to a fetch reddens all five fail-closed
+> tests on `candle_reads == []`; making a normal refresh read the store reddens the Task-3
+> no-implicit-pin test, the new no-pin-parameter test, **and**
+> `test_revised_historical_candle_with_same_last_timestamp_is_cold` — i.e. it reintroduces the
+> stale-history defect directly, which is exactly what the design says it would.
 
 ### Task 5: Atomic batch persistence (was Task 3)
 
