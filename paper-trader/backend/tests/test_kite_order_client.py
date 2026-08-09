@@ -131,12 +131,15 @@ def test_protection_recovery_reads_order_identity_fields():
     kite.order_book = [{
         "order_id": "SLM-1", "tradingsymbol": "RELIANCE", "exchange": "NSE",
         "transaction_type": "SELL", "quantity": 4, "status": "TRIGGER PENDING",
+        "filled_quantity": 0, "average_price": 0.0, "trigger_price": 95.0,
         "tag": "pt-bot",
     }]
 
     assert KiteOrderClient(kite).orders() == [{
-        "order_id": "SLM-1", "tradingsymbol": "RELIANCE", "exchange": "NSE",
-        "side": "SELL", "qty": 4, "status": "TRIGGER PENDING", "tag": "pt-bot",
+        "order_id": "SLM-1", "tradingsymbol": "RELIANCE", "tag": "pt-bot",
+        "status": "TRIGGER PENDING", "filled_qty": 0, "avg_price": 0.0,
+        "transaction_type": "SELL", "exchange": "NSE", "quantity": 4,
+        "trigger_price": 95.0,
     }]
 
 
@@ -144,14 +147,27 @@ def test_protection_recovery_lists_gtt_identity_fields():
     kite = FakeKite()
     kite.gtt_book = [{
         "id": 555, "status": "active",
-        "condition": {"tradingsymbol": "NIFTY26AUG25000CE", "exchange": "NFO"},
+        "condition": {"tradingsymbol": "NIFTY26AUG25000CE", "exchange": "NFO",
+                      "trigger_values": [70.7]},
         "orders": [{"transaction_type": "SELL", "quantity": 75}],
     }]
 
     assert KiteOrderClient(kite).gtts() == [{
         "trigger_id": "555", "status": "active",
         "tradingsymbol": "NIFTY26AUG25000CE", "exchange": "NFO",
-        "side": "SELL", "qty": 75,
+        "side": "SELL", "qty": 75, "trigger_price": 70.7,
+    }]
+
+
+def test_modify_stop_order_updates_quantity_with_trigger():
+    kite = FakeKite()
+
+    KiteOrderClient(kite).modify_stop_order(
+        "SLM-1", 95.0, "RELIANCE", "NSE", quantity=4)
+
+    assert kite.modified == [{
+        "variety": "regular", "order_id": "SLM-1",
+        "trigger_price": 95.0, "quantity": 4,
     }]
 
 

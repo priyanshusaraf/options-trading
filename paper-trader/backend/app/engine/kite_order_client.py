@@ -26,6 +26,10 @@ LEGACY_BOT_TAG = "pt-bot"
 INTENT_TAG_PREFIX = "pti-"
 
 
+class PreWireProtectionRejected(ValueError):
+    """Local validation proved that no protective request reached the broker."""
+
+
 def is_strategy_os_tag(tag: object) -> bool:
     """Recognise only the legacy bot tag or a durable 20-character intent tag."""
     if tag == LEGACY_BOT_TAG:
@@ -113,8 +117,9 @@ class KiteOrderClient:
         # 2026-07-03 class of failure: option GTTs worked, intraday ones never
         # existed). Refuse locally and loudly; the MIS backstop is place_stop_order.
         if exchange in ("NSE", "BSE"):
-            raise ValueError(f"GTT not supported on equity exchange {exchange} "
-                             f"(intraday/MIS) — use place_stop_order (SL-M) instead")
+            raise PreWireProtectionRejected(
+                f"GTT not supported on equity exchange {exchange} "
+                f"(intraday/MIS) — use place_stop_order (SL-M) instead")
         self._sync_token()
         res = self.kite.place_gtt(**stop_gtt_params(
             tradingsymbol, exchange, qty, trigger_price, last_price, self.product, side,
@@ -158,15 +163,19 @@ class KiteOrderClient:
         return str(self.kite.place_order(**kw))
 
     def modify_stop_order(self, order_id: str, trigger_price: float,
-                          tradingsymbol: str | None = None, exchange: str | None = None):
+                          tradingsymbol: str | None = None, exchange: str | None = None,
+                          quantity: int | None = None):
         """Re-price a resting SL-M stop's trigger (trailing the stop as it ratchets).
         `tradingsymbol`/`exchange`, when supplied, resolve the instrument's real tick
         so the re-price lands on the SAME grid the initial placement used — without
         them this falls back to the standard 0.05 grid."""
         self._sync_token()
-        return self.kite.modify_order(
+        kw = dict(
             variety=self.variety, order_id=order_id,
             trigger_price=round_to_tick(trigger_price, self._tick(tradingsymbol, exchange)))
+        if quantity is not None:
+            kw["quantity"] = int(quantity)
+        return self.kite.modify_order(**kw)
 
     def place(self, req: OrderRequest) -> str:
         self._sync_token()
@@ -234,6 +243,7 @@ class KiteOrderClient:
                 "exchange": condition.get("exchange"),
                 "side": order.get("transaction_type"),
                 "qty": int(order.get("quantity", 0) or 0),
+                "trigger_price": float((condition.get("trigger_values") or [0.0])[0] or 0.0),
             })
         return normalized
 
@@ -243,11 +253,14 @@ class KiteOrderClient:
         return [{
             "order_id": o.get("order_id"),
             "tradingsymbol": o.get("tradingsymbol"),
-            "exchange": o.get("exchange"),
-            "side": o.get("transaction_type"),
-            "qty": int(o.get("quantity", 0) or 0),
-            "status": o.get("status"),
             "tag": o.get("tag"),
+            "status": o.get("status"),
+            "filled_qty": int(o.get("filled_quantity", 0) or 0),
+            "avg_price": float(o.get("average_price", 0.0) or 0.0),
+            "transaction_type": o.get("transaction_type"),
+            "exchange": o.get("exchange"),
+            "quantity": int(o.get("quantity", 0) or 0),
+            "trigger_price": float(o.get("trigger_price", 0.0) or 0.0),
         } for o in (self.kite.orders() or [])]
 
     def find_fill(self, tradingsymbol: str, side: str = "SELL") -> dict | None:

@@ -1,4 +1,5 @@
 import datetime as dt
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from app.engine.broker import PaperBroker
 from app.engine.execution_lifecycle import (
     ExecutionLifecycleStore, NewExecutionEvent, NewExecutionIntent)
 from app.engine.live_broker import LiveBroker
+from app.engine.kite_order_client import PreWireProtectionRejected
 from app.providers.mock import MockProvider
 
 
@@ -71,11 +73,53 @@ class _AcknowledgedFillClient(_RecoveryClient):
 class _StopFailsClient(_AcknowledgedFillClient):
     def place_stop_gtt(self, *args, **kwargs):
         self.stop_calls += 1
-        raise RuntimeError("GTT unavailable")
+        raise PreWireProtectionRejected("GTT rejected before wire")
 
     def place_stop_order(self, *args, **kwargs):
         self.stop_calls += 1
-        raise RuntimeError("SL-M unavailable")
+        raise PreWireProtectionRejected("SL-M rejected before wire")
+
+
+class _InvisibleAcceptedProtectionClient(_AcknowledgedFillClient):
+    def place_stop_gtt(self, *args, **kwargs):
+        self.stop_calls += 1
+        raise RuntimeError("connection dropped after submit")
+
+
+class _OwnerGttCollisionClient(_InvisibleAcceptedProtectionClient):
+    def __init__(self, status, owner_gtt):
+        super().__init__(status=status)
+        self.owner_gtt = dict(owner_gtt)
+
+    def gtts(self):
+        return [dict(self.owner_gtt)]
+
+
+class _GrowingEquityProtectionClient(_RecoveryClient):
+    def __init__(self):
+        super().__init__()
+        self.observations = iter([
+            {"status": "OPEN", "filled_qty": 2, "avg_price": 100.0, "reason": ""},
+            {"status": "COMPLETE", "filled_qty": 4, "avg_price": 101.0, "reason": ""},
+        ])
+        self.protected_qty = 0
+
+    def place(self, request):
+        self.requests.append(request)
+        return "OID-EQ-GROW"
+
+    def status(self, order_id):
+        return dict(next(self.observations))
+
+    def place_stop_order(self, tradingsymbol, exchange, qty, trigger, side="SELL", tag=None):
+        self.stop_calls += 1
+        self.protected_qty = qty
+        return "SLM-GROW"
+
+    def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None,
+                          exchange=None, quantity=None):
+        if quantity is not None:
+            self.protected_qty = quantity
 
 
 class _ProtectionPersistsAtBrokerClient(_AcknowledgedFillClient):
@@ -88,7 +132,7 @@ class _ProtectionPersistsAtBrokerClient(_AcknowledgedFillClient):
         self.gtt_book.append({
             "trigger_id": "GTT-LIVE", "status": "active",
             "tradingsymbol": tradingsymbol, "exchange": exchange,
-            "side": side, "qty": qty,
+            "side": side, "qty": qty, "trigger_price": trigger,
         })
         return "GTT-LIVE"
 
@@ -568,3 +612,133 @@ def test_live_entry_uses_legacy_connection_scope():
 
     with SessionLocal() as session:
         assert session.scalar(select(ExecutionIntent)).connection_scope == "kite:legacy"
+
+
+def test_equity_partial_growth_updates_protection_quantity_before_completion():
+    init_db(reset=True)
+    provider = MockProvider()
+    client = _GrowingEquityProtectionClient()
+    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0)
+    inst = get_instrument("NIFTY")
+
+    pos = broker.open_equity_position(
+        inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
+        params={}, margin=400.0)
+    assert pos.qty == 2
+    assert client.protected_qty == 2
+
+    broker.adopt_pending_entries(NOW)
+
+    assert pos.qty == 4
+    assert client.protected_qty == 4
+    with SessionLocal() as session:
+        state = ExecutionLifecycleStore(session).state_for(pos.entry_intent_id)
+        assert state.protected_qty == 4
+        assert state.reconciliation_required is False
+
+
+def test_uncertain_invisible_protection_is_not_replaced_after_one_empty_read():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    client = _InvisibleAcceptedProtectionClient(status={
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+
+    assert client.stop_calls == 1
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted.recover_journal(NOW)
+
+    assert client.stop_calls == 1
+    with SessionLocal() as session:
+        assert session.get(Position, pos.id).gtt_trigger_id is None
+        assert ExecutionLifecycleStore(session).state_for(
+            pos.entry_intent_id).reconciliation_required is True
+
+
+def test_owner_gtt_in_submit_baseline_is_never_attached_to_bot_position():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    owner_gtt = {
+        "trigger_id": "OWNER-GTT", "status": "active",
+        "tradingsymbol": quote.tradingsymbol, "exchange": quote.exchange,
+        "side": "SELL", "qty": quote.lot_size,
+        "trigger_price": 65.0,
+    }
+    client = _OwnerGttCollisionClient(
+        {"status": "COMPLETE", "filled_qty": quote.lot_size,
+         "avg_price": 101.0, "reason": ""}, owner_gtt)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted.recover_journal(NOW)
+
+    assert client.stop_calls == 1
+    with SessionLocal() as session:
+        assert session.get(Position, pos.id).gtt_trigger_id is None
+        submit = session.scalars(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == pos.entry_intent_id,
+            ExecutionOrderEvent.kind == "PROTECTION_SUBMIT_STARTED")).first()
+        assert "OWNER-GTT" in submit.payload_json
+
+
+@pytest.mark.parametrize("kind", ["options", "equity"])
+def test_live_entry_does_not_submit_when_exchange_protection_disabled(monkeypatch, kind):
+    init_db(reset=True)
+    provider = MockProvider()
+    client = _AcknowledgedFillClient()
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    monkeypatch.setattr(broker, "_gtt_enabled", lambda: False)
+    inst, quote, context = _option_context(provider)
+
+    if kind == "options":
+        result = broker.open_position(
+            inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    else:
+        result = broker.open_equity_position(
+            inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
+            params={}, margin=400.0)
+
+    assert result is None
+    assert client.requests == []
+    with SessionLocal() as session:
+        assert session.scalar(select(ExecutionIntent)) is None
+        assert session.scalar(select(ExecutionOrderEvent)) is None
+
+
+def test_journal_stop_failure_rolls_back_and_same_session_remains_usable(monkeypatch):
+    init_db(reset=True)
+    provider = MockProvider()
+    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    original_commit = broker.s.commit
+    calls = 0
+
+    def fail_once():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("stop journal disk failure")
+        return original_commit()
+
+    monkeypatch.setattr(broker.s, "commit", fail_once)
+    broker._journal_stop(SimpleNamespace(
+        id=91, tradingsymbol="RELIANCE", instrument_key="NIFTY",
+        qty=4, stop_price=95.0), "SLM-91", "SELL")
+    intent = ExecutionLifecycleStore(broker.s).create_intent(
+        NewExecutionIntent(
+            deployment_id=1, broker="kite", account_scope="default",
+            connection_scope="kite:legacy", intent="ENTRY", instrument_key="NIFTY",
+            tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",
+            order_type="MARKET", requested_qty=4, limit_price=None,
+            decision_price=100.0, signal_at=NOW, strategy_key=None,
+            strategy_version=None), {}, NOW)
+
+    assert intent.client_intent_id
+    assert broker.s.scalar(select(OrderJournal).where(
+        OrderJournal.intent == "STOP")) is None

@@ -163,6 +163,12 @@ class _FilledClient:
         self.stop_tags.append(tag)
         return "SLM-1"
 
+    def orders(self):
+        return []
+
+    def gtts(self):
+        return []
+
 
 class _GrowingOptionsClient(_FilledClient):
     def __init__(self):

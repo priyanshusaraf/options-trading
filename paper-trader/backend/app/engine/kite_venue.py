@@ -97,7 +97,7 @@ class KiteVenue:
             # tradingsymbol/exchange are what let the client resolve the SAME real
             # tick the initial placement used, instead of falling back to 0.05.
             return self.client.modify_stop_order(protective_id, trigger_price,
-                                                 tradingsymbol, exchange)
+                                                 tradingsymbol, exchange, quantity=qty)
         return self.client.modify_stop_gtt(protective_id, tradingsymbol, exchange,
                                            qty, trigger_price, last_price, side=side)
 

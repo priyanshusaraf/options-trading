@@ -213,6 +213,7 @@ def reduce_execution_events(
         if kind in {
             "POSITION_BOOKED", "POSITION_PROTECTED",
             "PROTECTION_SUBMIT_STARTED", "PROTECTION_NOT_FOUND",
+            "PROTECTION_RETRY_ALLOWED",
         }:
             continue
 

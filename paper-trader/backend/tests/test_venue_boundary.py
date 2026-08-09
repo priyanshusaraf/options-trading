@@ -146,8 +146,8 @@ class FakeKiteClient:
         self.calls.append(("place_stop_order", sym, exch, qty, trigger, side, tag))
         return "SLM-1"
 
-    def modify_stop_order(self, oid, trigger, sym=None, exch=None):
-        self.calls.append(("modify_stop_order", oid, trigger, sym, exch)); return True
+    def modify_stop_order(self, oid, trigger, sym=None, exch=None, quantity=None):
+        self.calls.append(("modify_stop_order", oid, trigger, sym, exch, quantity)); return True
 
     def place_stop_gtt(self, sym, exch, qty, trigger, last, side="SELL"):
         self.calls.append(("place_stop_gtt", sym, exch, qty, trigger, last, side))
@@ -203,7 +203,7 @@ def test_modify_carries_the_symbol_so_the_real_tick_grid_is_used():
     v.modify_protective_stop(ProtectiveStopKind.RESTING_STOP, "SLM-1",
                              tradingsymbol="LT", exchange="NSE", qty=10,
                              trigger_price=3600.0)
-    assert c.calls[-1] == ("modify_stop_order", "SLM-1", 3600.0, "LT", "NSE")
+    assert c.calls[-1] == ("modify_stop_order", "SLM-1", 3600.0, "LT", "NSE", 10)
 
 
 def test_resting_stop_state_reports_its_fill_but_a_trigger_only_reports_firing():

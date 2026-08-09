@@ -27,7 +27,8 @@ class ModifyRejectClient(FakeClient):
         self.log.append(("place_stop", tradingsymbol))
         return f"SLM-{self._place_seq}"
 
-    def modify_stop_order(self, order_id, trigger_price):
+    def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None,
+                          quantity=None):
         self.stop_modified.append((order_id, trigger_price))
         self.log.append(("modify_stop", order_id))
         raise Exception("Difference between limit price and trigger price for SL orders "

@@ -28,6 +28,7 @@ from app.db.models import (
 )
 from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges, legs_for
+from app.engine.equity_entry import equity_stop_target
 from app.engine.broker_protocol import (
     ProtectiveStopKind,
     clear_protective_order_id,
@@ -44,6 +45,7 @@ from app.engine.execution_lifecycle import (
 )
 from app.engine.kite_order_client import (
     LEGACY_BOT_TAG,
+    PreWireProtectionRejected,
     exchange_for_segment,
     is_strategy_os_tag,
     product_for_segment,
@@ -312,50 +314,62 @@ class LiveBroker(PaperBroker):
             log.error(f"protection event failed: {e}", event="LIFECYCLE_FAIL")
             return False
 
-    def _protection_reconciliation(self, pos: Position) -> tuple[str, str | None]:
-        """Return matched/absent/ambiguous for an uncertain protection placement."""
+    def _protection_inventory(
+        self, pos: Position,
+    ) -> tuple[str, set[str], set[str]]:
+        """Read all protection IDs and the exact subset for this Position."""
         side = "BUY" if (pos.segment == "equity_intraday"
                          and pos.direction == "SHORT") else "SELL"
         exchange = exchange_for_segment(pos.exchange)
+        tick_reader = getattr(self.client, "tick_size", None)
+        try:
+            tick = float(tick_reader(pos.tradingsymbol, exchange)) if tick_reader else 0.05
+        except Exception:
+            tick = 0.05
+
+        def trigger_key(value) -> int:
+            return round(float(value or 0.0) / tick)
+
         try:
             if protective_kind_for_book_segment(
                     pos.segment) is ProtectiveStopKind.SERVER_TRIGGER:
                 reader = getattr(self.client, "gtts", None)
                 if reader is None:
-                    return "ambiguous", None
+                    return "ambiguous", set(), set()
                 rows = list(reader() or [])
                 candidates = [row for row in rows if (
                     row.get("tradingsymbol") == pos.tradingsymbol
                     and row.get("exchange") == exchange
                     and str(row.get("side") or "").upper() == side
                     and int(row.get("qty") or 0) == pos.qty
+                    and trigger_key(row.get("trigger_price")) == trigger_key(pos.stop_price)
                     and str(row.get("status") or "active").lower()
                     not in {"cancelled", "disabled", "deleted", "triggered"}
                 )]
-                ids = [str(row.get("trigger_id") or "") for row in candidates
-                       if row.get("trigger_id")]
+                all_ids = {str(row["trigger_id"]) for row in rows
+                           if row.get("trigger_id")}
+                exact_ids = {str(row["trigger_id"]) for row in candidates
+                             if row.get("trigger_id")}
             else:
                 rows = list(self.client.orders() or [])
                 candidates = [row for row in rows if (
                     row.get("tag") == TAG
                     and row.get("tradingsymbol") == pos.tradingsymbol
                     and row.get("exchange") == exchange
-                    and str(row.get("side") or "").upper() == side
-                    and int(row.get("qty") or 0) == pos.qty
+                    and str(row.get("transaction_type") or "").upper() == side
+                    and int(row.get("quantity") or 0) == pos.qty
+                    and trigger_key(row.get("trigger_price")) == trigger_key(pos.stop_price)
                     and str(row.get("status") or "").upper()
                     not in _DEAD_STATUSES | {"COMPLETE"}
                 )]
-                ids = [str(row.get("order_id") or "") for row in candidates
-                       if row.get("order_id")]
+                all_ids = {str(row["order_id"]) for row in rows if row.get("order_id")}
+                exact_ids = {str(row["order_id"]) for row in candidates
+                             if row.get("order_id")}
         except Exception as e:
-            log.error(f"PROTECTION {pos.tradingsymbol}: reconciliation failed: {e}",
+            log.error(f"PROTECTION {pos.tradingsymbol}: inventory failed: {e}",
                       event="PROTECTION_RECONCILE_FAIL")
-            return "ambiguous", None
-        if len(ids) == 1:
-            return "matched", ids[0]
-        if len(ids) > 1:
-            return "ambiguous", None
-        return "absent", None
+            return "ambiguous", set(), set()
+        return "ok", all_ids, exact_ids
 
     def _ensure_entry_protected(self, pos: Position, last_price: float,
                                 client_intent_id: str) -> bool:
@@ -373,23 +387,30 @@ class LiveBroker(PaperBroker):
         events = list(self.s.scalars(select(ExecutionOrderEvent).where(
             ExecutionOrderEvent.client_intent_id == client_intent_id,
             ExecutionOrderEvent.kind.in_({
-                "PROTECTION_SUBMIT_STARTED", "PROTECTION_NOT_FOUND"}),
+                "PROTECTION_SUBMIT_STARTED", "PROTECTION_RETRY_ALLOWED"}),
         ).order_by(ExecutionOrderEvent.id)))
         last_submit = next(
             (event for event in reversed(events)
              if event.kind == "PROTECTION_SUBMIT_STARTED"), None)
-        absence_id = (f"not-found:{last_submit.source_event_id}"
-                      if last_submit is not None else None)
-        absence_seen = any(event.source_event_id == absence_id for event in events)
-        if last_submit is not None and not absence_seen:
-            outcome, protection_id = self._protection_reconciliation(pos)
-            if outcome == "ambiguous":
+        retry_id = (f"retry-allowed:{last_submit.source_event_id}"
+                    if last_submit is not None else None)
+        retry_allowed = any(event.source_event_id == retry_id for event in events)
+        if last_submit is not None and not retry_allowed:
+            outcome, _, exact_ids = self._protection_inventory(pos)
+            if outcome != "ok":
                 self._notify(
                     f"⚠️ {pos.tradingsymbol}: protective-order placement is uncertain; "
                     f"entry remains blocked and no duplicate stop was sent."
                 )
                 return False
-            if outcome == "matched":
+            try:
+                baseline = set(json.loads(last_submit.payload_json or "{}").get(
+                    "baseline_ids", []))
+            except Exception:
+                baseline = set()
+            new_exact_ids = exact_ids - baseline
+            if len(new_exact_ids) == 1:
+                protection_id = next(iter(new_exact_ids))
                 set_protective_order_id(pos, protection_id)
                 try:
                     self.s.commit()
@@ -399,26 +420,22 @@ class LiveBroker(PaperBroker):
                               f"failed: {e}", event="PROTECTION_RECONCILE_FAIL")
                     return False
                 return self._append_position_protected(client_intent_id, pos)
-            try:
-                store.append_event(
-                    client_intent_id,
-                    NewExecutionEvent(
-                        source="recovery", source_event_id=absence_id,
-                        kind="PROTECTION_NOT_FOUND", broker_order_id=None,
-                        broker_status="", cumulative_filled_qty=0, avg_price=0.0,
-                        payload={"position_id": pos.id,
-                                 "submit_event": last_submit.source_event_id},
-                    ),
-                    self.lifecycle_clock(),
-                )
-            except Exception as e:
-                log.error(f"PROTECTION {pos.tradingsymbol}: absence persistence failed: {e}",
-                          event="LIFECYCLE_FAIL")
-                return False
+            self._notify(
+                f"⚠️ {pos.tradingsymbol}: protective-order placement remains uncertain "
+                f"({len(new_exact_ids)} new exact matches); no replacement was sent."
+            )
+            return False
 
         attempt = 1 + sum(
             event.kind == "PROTECTION_SUBMIT_STARTED" for event in events)
         source_event_id = f"protection-submit:{pos.id}:{pos.qty}:{attempt}"
+        inventory_status, baseline_ids, _ = self._protection_inventory(pos)
+        if inventory_status != "ok":
+            self._notify(
+                f"⚠️ {pos.tradingsymbol}: protection inventory could not be read; "
+                f"no protective order was submitted."
+            )
+            return False
         try:
             store.append_event(
                 client_intent_id,
@@ -426,7 +443,15 @@ class LiveBroker(PaperBroker):
                     source="engine", source_event_id=source_event_id,
                     kind="PROTECTION_SUBMIT_STARTED", broker_order_id=None,
                     broker_status="", cumulative_filled_qty=0, avg_price=0.0,
-                    payload={"position_id": pos.id, "qty": pos.qty},
+                    payload={
+                        "position_id": pos.id, "qty": pos.qty,
+                        "tradingsymbol": pos.tradingsymbol,
+                        "exchange": exchange_for_segment(pos.exchange),
+                        "side": "BUY" if (pos.segment == "equity_intraday"
+                                           and pos.direction == "SHORT") else "SELL",
+                        "trigger_price": pos.stop_price,
+                        "baseline_ids": sorted(baseline_ids),
+                    },
                 ),
                 self.lifecycle_clock(),
             )
@@ -439,6 +464,22 @@ class LiveBroker(PaperBroker):
             outcome = self._place_equity_stop(pos, last_price)
         else:
             outcome = self._place_gtt(pos, last_price)
+        if outcome == "prewire_rejected":
+            try:
+                store.append_event(
+                    client_intent_id,
+                    NewExecutionEvent(
+                        source="engine", source_event_id=f"retry-allowed:{source_event_id}",
+                        kind="PROTECTION_RETRY_ALLOWED", broker_order_id=None,
+                        broker_status="", cumulative_filled_qty=0, avg_price=0.0,
+                        payload={"submit_event": source_event_id},
+                    ),
+                    self.lifecycle_clock(),
+                )
+            except Exception as e:
+                log.error(f"PROTECTION {pos.tradingsymbol}: retry fact failed: {e}",
+                          event="LIFECYCLE_FAIL")
+            return False
         if outcome != "protected":
             return False
         return self._append_position_protected(client_intent_id, pos)
@@ -834,6 +875,23 @@ class LiveBroker(PaperBroker):
         every _actual_fill read so the streak tracks ORDERS, not signals."""
         self.order_fail_streak = 0 if filled > 0 else self.order_fail_streak + 1
 
+    def _entry_protection_preflight(self, *, kind: str, direction: str,
+                                    price: float, params, sl_pct=None) -> bool:
+        """Refuse a live submit unless a positive exchange stop can be formed."""
+        if not self._gtt_enabled() or price <= 0:
+            return False
+        from app.core.runtime_config import effective
+        resolved = params if params is not None else effective(self.settings)
+        if kind == "options":
+            stop_pct = float(resolved.get("stop_loss_pct", self.settings.stop_loss_pct))
+            stop = price * (1 - stop_pct)
+        else:
+            stop_pct = float(
+                sl_pct if sl_pct is not None else resolved.get(
+                    "intraday_stop_loss_pct", self.settings.intraday_stop_loss_pct))
+            stop, _ = equity_stop_target(direction, price, stop_pct, 0.01)
+        return stop > 0
+
     def _record_inflight(self, symbol: str, res) -> None:
         """An order that was placed but whose outcome is UNKNOWN — a TIMEOUT (no fill
         reported) or an ERROR after submission (e.g. the status poll failed) — may
@@ -945,6 +1003,13 @@ class LiveBroker(PaperBroker):
     def open_position(self, inst, direction, q, reason, now, spot,
                       params=None, plan=None, strategy_key=None,
                       strategy_version=None):
+        if not self._entry_protection_preflight(
+                kind="options", direction=direction, price=q.ltp,
+                params=params):
+            log.error(f"LIVE OPEN refused {q.tradingsymbol}: exchange protection is "
+                      f"disabled or invalid", instrument=inst.key,
+                      event="LIVE_OPEN_PROTECTION_REFUSED")
+            return None
         # never two working bot orders on one contract — resolve any prior in-flight
         # order for this symbol first (cancel a stuck one; abort if one already filled).
         if not self._ensure_no_inflight(q.tradingsymbol):
@@ -1030,6 +1095,13 @@ class LiveBroker(PaperBroker):
         `sl_pct`/`tp_pct` (purple tiering) are forwarded to PaperBroker so the live row
         freezes the same band a paper row would, and are carried on `_pending_entries`
         so a late fill adopted on the reconcile sweep keeps its purple band too."""
+        if not self._entry_protection_preflight(
+                kind="equity", direction=direction, price=price,
+                params=params, sl_pct=sl_pct):
+            log.error(f"LIVE EQUITY OPEN refused {inst.key}: exchange protection is "
+                      f"disabled or invalid", instrument=inst.key,
+                      event="LIVE_OPEN_PROTECTION_REFUSED")
+            return None
         tsym = getattr(inst, "spot_symbol", None) or inst.key
         if not self._ensure_no_inflight(tsym):
             return None
@@ -1305,6 +1377,10 @@ class LiveBroker(PaperBroker):
         try:
             tid = self.client.place_stop_gtt(pos.tradingsymbol, exchange, pos.qty,
                                              pos.stop_price, last_price, side=side)
+        except PreWireProtectionRejected as e:
+            log.error(f"GTT rejected locally {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="GTT_PREWIRE_REJECT")
+            return "prewire_rejected"
         except Exception as e:
             log.error(f"GTT place failed {pos.tradingsymbol}: {e}",
                       instrument=pos.instrument_key, event="GTT_FAIL")
@@ -1341,6 +1417,10 @@ class LiveBroker(PaperBroker):
         try:
             oid = self.client.place_stop_order(pos.tradingsymbol, exchange, pos.qty,
                                                pos.stop_price, side=side, tag=TAG)
+        except PreWireProtectionRejected as e:
+            log.error(f"SL-M rejected locally {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="STOP_PREWIRE_REJECT")
+            return "prewire_rejected"
         except Exception as e:
             log.error_ratelimited(f"SL-M stop placement uncertain {pos.tradingsymbol}: {e}",
                                   key=f"{pos.tradingsymbol}:SLM_FAIL", event="STOP_FAIL",
@@ -1388,6 +1468,7 @@ class LiveBroker(PaperBroker):
                 placed_at=self.provider.now()))
             self.s.commit()
         except Exception as e:
+            self.s.rollback()
             log.error(f"journal stop record failed: {e}", event="JOURNAL_FAIL")
 
     def _cancel_equity_stop(self, oid, sym: str = "") -> bool:
@@ -1457,7 +1538,8 @@ class LiveBroker(PaperBroker):
                 # tradingsymbol/exchange let the client resolve the SAME real tick the
                 # initial SL-M placement used, instead of falling back to 0.05.
                 self.client.modify_stop_order(gid, pos.stop_price, pos.tradingsymbol,
-                                              exchange_for_segment(pos.exchange))
+                                              exchange_for_segment(pos.exchange),
+                                              quantity=pos.qty)
                 log.info(f"SL-M {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                          instrument=pos.instrument_key, event="STOP_MODIFY")
                 return True

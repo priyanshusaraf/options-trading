@@ -34,6 +34,7 @@ class FakeClient:
         self.stop_orders = []                # (tradingsymbol, trigger, side, exchange) SL-M stops
         self.stop_modified = []              # (order_id, trigger) SL-M re-prices
         self.stop_modify_calls = []          # (order_id, trigger, tradingsymbol, exchange) full args
+        self.last_stop_modify_qty = None
         self.cancelled = []                  # order ids passed to cancel()
         self.log = []                        # ordered call log across orders + GTTs
 
@@ -68,9 +69,17 @@ class FakeClient:
         self.log.append(("place_stop", tradingsymbol))
         return "SLM-1"
 
-    def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None):
+    def orders(self):
+        return []
+
+    def gtts(self):
+        return []
+
+    def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None,
+                          quantity=None):
         self.stop_modified.append((order_id, trigger_price))
         self.stop_modify_calls.append((order_id, trigger_price, tradingsymbol, exchange))
+        self.last_stop_modify_qty = quantity
         self.log.append(("modify_stop", order_id))
 
     def modify_stop_gtt(self, trigger_id, tradingsymbol, exchange, qty, trigger_price, last_price, side="SELL"):
@@ -467,7 +476,8 @@ def test_resync_recovery_logs_an_explicit_marker():
     from app.core.logging import log
 
     class RejectOnceClient(FakeClient):
-        def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None):
+        def modify_stop_order(self, order_id, trigger_price, tradingsymbol=None, exchange=None,
+                              quantity=None):
             raise RuntimeError("trigger price out of permissible range")
 
     c = RejectOnceClient(fill_price=100.0)
