@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import threading
+from dataclasses import dataclass
 
 from app.backtest.engine import backtest_charge_segment, simulate
 from app.backtest.metrics import BTMetrics
@@ -107,6 +108,28 @@ _running = False
 _worker: "threading.Thread | None" = None
 
 
+@dataclass(frozen=True)
+class _FrozenCandle:
+    ts: dt.datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+@dataclass(frozen=True)
+class _PreparedDataset:
+    candles: tuple[_FrozenCandle, ...] = ()
+    bars: int = 0
+    first_ts: int = 0
+    last_ts: int = 0
+    effective_days: int = 0
+    clamped: bool = False
+    dataset_address: str = ""
+    error: str = ""
+
+
 def is_running() -> bool:
     return _running
 
@@ -196,8 +219,10 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None)
     try:
         for inst in specs:
             for interval in intervals:
+                prepared = _prepare_dataset(provider, inst, interval, win)
                 for strat in strategies:
-                    _one(run_id, provider, inst, interval, capital, win, strat)
+                    _one(run_id, provider, inst, interval, capital, win, strat,
+                         prepared=prepared)
                     _bump(run_id)
         _finish(run_id, "done")
         log.info(f"backtest sweep #{run_id} complete")
@@ -208,11 +233,7 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None)
         _running = False
 
 
-def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
-    if strat is None:
-        from app.strategy.registry import get_strategy
-        strat = get_strategy(None)
-    from app.backtest import cache
+def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
     start, end = win.get("start"), win.get("end")
     clamped = _is_clamped(interval, win.get("lookback_days"), start)
     # A custom window entirely older than Kite's per-interval ceiling can never be
@@ -220,31 +241,36 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
     # silently-dropped 'insufficient history' (DV-3).
     if _window_out_of_range(interval, start, end):
         cap = MAX_DAYS.get(interval, 200)
-        return _store(run_id, inst, interval, None, [], 0, clamped=clamped,
-                      strategy_key=strat.key,
-                      error=f"window older than Kite max for this interval "
-                            f"(≈{cap}d on {interval})")
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"window older than Kite max for this interval "
+                  f"(≈{cap}d on {interval})")
     days = _fetch_days(interval, win.get("lookback_days"), start, end)
     try:
         candles = provider.get_candles(inst, interval, days, end=end) \
             if _supports_end(provider) else provider.get_candles(inst, interval, days)
     except Exception as e:
-        return _store(run_id, inst, interval, None, [], 0, strategy_key=strat.key,
-                      error=f"candles: {e}")
-    candles = _clip_to_window(candles, start, end)
+        # Preserve the existing provider-failure artifact: clamp metadata was not
+        # asserted when no dataset was obtained.
+        return _PreparedDataset(error=f"candles: {e}")
+    candles = tuple(
+        _FrozenCandle(c.ts, float(c.open), float(c.high), float(c.low),
+                      float(c.close), float(c.volume))
+        for c in _clip_to_window(candles, start, end)
+    )
     if len(candles) < MIN_BARS:
         # distinguish "the window is reachable but thin" from "older than ceiling"
         if (start or end):
-            return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
-                          strategy_key=strat.key,
-                          error="window older than Kite max for this interval"
-                          if len(candles) == 0 else "insufficient history in window")
-        return _store(run_id, inst, interval, None, [], len(candles), clamped=clamped,
-                      strategy_key=strat.key, error="insufficient history")
+            return _PreparedDataset(
+                candles=candles, bars=len(candles), clamped=clamped,
+                error="window older than Kite max for this interval"
+                if len(candles) == 0 else "insufficient history in window")
+        return _PreparedDataset(
+            candles=candles, bars=len(candles), clamped=clamped,
+            error="insufficient history")
     first_ts = ist_epoch(candles[0].ts)
     last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
     effective_days = max(0, round((last_ts - first_ts) / 86400))
-    slippage_pct = float(get_settings().backtest_slippage_pct)
     try:
         dataset_address = ordered_dataset_address(
             candles,
@@ -264,20 +290,53 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
                 "clamped": clamped,
             },
         )
-        phash = execution_result_address(
-            dataset_address=dataset_address,
-            instrument=inst,
-            strategy=strat,
-            parameters=dict(strat.default_params),
-            capital=capital,
-            window=win,
-            slippage_pct=slippage_pct,
-            implementation_maps=(),
-        ) or ""
     except Exception as exc:
-        # Identity failure disables reuse for this cell; it never disables the run.
+        # A dataset can still be simulated when it cannot be addressed. It is
+        # deliberately non-reusable for this run.
         log.warning(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
-        phash = ""
+        dataset_address = ""
+    return _PreparedDataset(
+        candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
+        effective_days=effective_days, clamped=clamped,
+        dataset_address=dataset_address)
+
+
+def _one(run_id, provider, inst, interval, capital, win, strat=None,
+         *, prepared: _PreparedDataset | None = None) -> None:
+    if strat is None:
+        from app.strategy.registry import get_strategy
+        strat = get_strategy(None)
+    from app.backtest import cache
+    prepared = prepared or _prepare_dataset(provider, inst, interval, win)
+    if prepared.error:
+        return _store(
+            run_id, inst, interval, None, [], prepared.bars,
+            clamped=prepared.clamped, strategy_key=strat.key,
+            error=prepared.error)
+
+    candles = prepared.candles
+    first_ts = prepared.first_ts
+    last_ts = prepared.last_ts
+    effective_days = prepared.effective_days
+    clamped = prepared.clamped
+    slippage_pct = float(get_settings().backtest_slippage_pct)
+    phash = ""
+    if prepared.dataset_address:
+        try:
+            phash = execution_result_address(
+                dataset_address=prepared.dataset_address,
+                instrument=inst,
+                strategy=strat,
+                parameters=dict(strat.default_params),
+                capital=capital,
+                window=win,
+                slippage_pct=slippage_pct,
+                implementation_maps=(),
+            ) or ""
+        except Exception as exc:
+            # Identity failure disables reuse for this cell; it never disables the run.
+            log.warning(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
+            phash = ""
     if phash:
         expected_premium_error = ("" if getattr(inst, "has_options", True)
                                   else NO_OPTIONS_PREMIUM_ERROR)
@@ -305,7 +364,7 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
             premium_error = ""
         except Exception as e:
             p_trades, p_metrics, premium_error = [], BTMetrics(), str(e)
-    _store(run_id, inst, interval, m, trades, len(candles), strategy_key=strat.key,
+    _store(run_id, inst, interval, m, trades, prepared.bars, strategy_key=strat.key,
            params_hash=phash, last_candle_ts=last_ts,
            first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
            clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
