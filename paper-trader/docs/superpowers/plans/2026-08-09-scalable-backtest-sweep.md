@@ -199,9 +199,31 @@ allocation is 2.10 MB/dataset, so workers must stream datasets, never accumulate
 
 ### Task 7: Tiered benchmark and evidence
 
-- [ ] Add a deterministic offline benchmark with separate acquisition, identity, simulation,
+**DONE — `scripts/sweep_benchmark.py` + `tests/test_sweep_benchmark_harness.py`.**
+
+- [x] Add a deterministic offline benchmark with separate acquisition, identity, simulation,
       persistence, and total timings.
-- [ ] Run 100 × 5, 1,000 × 5, and 10,000 × 5 tiers; record p50/p95/p99 and operation counts.
-- [ ] Keep a smaller real-strategy parity test in the normal suite.
-- [ ] Update roadmap/workstream claims using measured results only — including an honest
+- [x] Run 100 × 5, 1,000 × 5, and 10,000 × 5 tiers; record p50/p95/p99 and operation counts.
+- [x] Keep a smaller real-strategy parity test in the normal suite.
+- [x] Update roadmap/workstream claims using measured results only — including an honest
       statement of what the 10,000 × 5 tier costs cold, warm and pinned.
+
+> Measured: 80.32 ms/cell p50 at 5,000 bars, independently reproducing §10's 84.7 ms on a
+> different series. 10,000 × 5 projects to 4,016 s compute and a 20,000 s I/O floor — **6.67 h
+> cold**, 9.5 GB of store. Operation counts on a real sweep: one provider read per dataset, and
+> 3 write transactions against a budget of 3.
+>
+> **These are projections from a measured per-cell cost, not measured end-to-end tiers.** That
+> distinction is the one Task 6 got wrong, and the harness prints the warning itself.
+>
+> Two harness guards proven able to fail: full-mantissa inputs (rounding them to 2 dp reddens
+> the test — the hazard that made Task 6's bit-identity gate vacuous), and the 0.40 s I/O floor
+> asserted against `KiteProvider._MIN_INTERVAL["historical"]` so a throttle change cannot
+> silently invalidate every published cold-run projection.
+
+## All seven tasks are closed
+
+Remaining work is **not** in this plan. The next lever is sized in
+[`../specs/2026-08-10-full-universe-backtest-design.md`](../specs/2026-08-10-full-universe-backtest-design.md):
+move the dataset-store read off the parent thread and into the workers, which is what stands
+between 2.08× and the owner's 90% target.

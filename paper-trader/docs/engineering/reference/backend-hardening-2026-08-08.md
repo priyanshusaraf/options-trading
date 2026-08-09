@@ -726,3 +726,57 @@ the mock provider**: `MockProvider` rounds every OHLC value to two decimals, so 
 It only reddens against a provider that fills the mantissa
 (`test_backtest_parallel.FullPrecisionMockProvider`), where it fails on `curve_json` first.
 Any numerical guard built on mock candles needs the same witness.
+
+## 13. Tiered sweep benchmark (Task 7, 2026-08-10)
+
+`backend/scripts/sweep_benchmark.py`. Deterministic, offline, drives the shipped
+`sweep.start_sweep` rather than a model of it. `tests/test_sweep_benchmark_harness.py` keeps it
+from rotting into a script nobody runs.
+
+### Per-cell stage cost, 5,000-bar datasets, 12 repeats
+
+| stage | p50 ms | p95 ms | p99 ms |
+|---|---:|---:|---:|
+| identity (`ordered_dataset_address`) | 11.46 | 12.01 | 12.01 |
+| frame (`prepare_signal_frame`) | 8.25 | 10.19 | 10.19 |
+| signals | 2.39 | 2.81 | 8.09 |
+| simulate (spot) | 25.17 | 25.46 | 30.38 |
+| premium (synthetic) | 33.18 | 35.30 | 63.27 |
+| **TOTAL** | **80.32** | | |
+
+Independently reproduces §10's 84.7 ms on a different synthetic series, which is the point of
+measuring it twice.
+
+### Projected tiers — projections, not capacity
+
+| tier | cells | bars | compute serial | I/O floor | cold | store |
+|---|---:|---:|---:|---:|---:|---:|
+| 100 × 5 | 500 | 2.5 M | 40 s | 200 s | 0.07 h | 0.1 GB |
+| 1,000 × 5 | 5,000 | 25 M | 402 s | 2,000 s | 0.67 h | 0.9 GB |
+| 10,000 × 5 | 50,000 | 250 M | 4,016 s | 20,000 s | **6.67 h** | 9.5 GB |
+
+**These multiply a measured per-cell cost; they are not measured end-to-end runs.** That
+distinction is not pedantry — it is exactly where the earlier 16-core projection went wrong
+(§12: the parent thread, not the cells, set the ceiling). Real NSE/BSE universe sizing is in
+`superpowers/specs/2026-08-10-full-universe-backtest-design.md` §2.
+
+### Operation counts, end-to-end
+
+A speed number with an unbounded operation count underneath it is not a speed claim, so the
+harness drives a real sweep and counts:
+
+```
+12 instruments x 2 intervals -> 16 cells, 0 errors
+provider reads       16   (= unique datasets; no cell refetches another's data)
+write transactions    3   budget 3  (ceil(cells/10) + 1)   OK
+```
+
+### Two harness guards, both proven able to fail
+
+- **Full-mantissa inputs.** The harness generates its own series rather than using
+  `MockProvider`, whose 2-decimal rounding already hid a worker-side `round(x, 2)` from a
+  bit-identity gate once (§12). Rounding the harness's own candles to 2 dp reddens that test.
+- **The I/O floor is tied to the adapter it models.** The 0.40 s constant is asserted against
+  `KiteProvider._MIN_INTERVAL["historical"]`, so a throttle change reddens the guard instead of
+  silently invalidating every cold-run projection in the design notes. Changing the constant to
+  0.25 reddens it.
