@@ -53,6 +53,7 @@ from app.engine.reconcile import can_bot_close
 from app.engine.venue import protective_kind_for_book_segment
 
 TAG = LEGACY_BOT_TAG  # protective stops and legacy orders retain their historical tag
+KITE_LEGACY_CONNECTION_SCOPE = "kite:legacy"
 
 # Kite order statuses that mean the order is dead (no working order left at the
 # exchange). Anything else that is not a terminal fill is treated as possibly-working.
@@ -144,7 +145,7 @@ class LiveBroker(PaperBroker):
                 deployment_id=self.deployment_id,
                 broker="kite",
                 account_scope=deployment.account_id,
-                connection_scope=f"kite:{deployment.account_id}",
+                connection_scope=KITE_LEGACY_CONNECTION_SCOPE,
                 intent="ENTRY",
                 instrument_key=durable_context.get("inst_key", ""),
                 tradingsymbol=req.tradingsymbol,
@@ -249,6 +250,12 @@ class LiveBroker(PaperBroker):
     def _mark_position_booked(self, client_intent_id: str, row_id: int | None,
                               pos: Position, res, filled: int, avg: float) -> bool:
         """Close the durable broker-to-ledger gap after the Position commit."""
+        if ExecutionLifecycleStore(self.s).state_for(
+                client_intent_id).protected_qty < pos.qty:
+            log.error(
+                f"position booking refused for {pos.tradingsymbol}: protection is not "
+                f"durable for qty {pos.qty}", event="LIFECYCLE_FAIL")
+            return False
         source_event_id = f"position:{pos.id}:{pos.qty}"
         existing = self.s.scalar(select(ExecutionOrderEvent).where(
             ExecutionOrderEvent.client_intent_id == client_intent_id,
@@ -273,6 +280,168 @@ class LiveBroker(PaperBroker):
                 return False
         self._journal_resolve(row_id, res, filled, avg)
         return True
+
+    def _append_position_protected(self, client_intent_id: str, pos: Position) -> bool:
+        """Persist that exchange protection covers the current ledger quantity."""
+        protection_id = protective_order_id(pos)
+        if not protection_id:
+            return False
+        source_event_id = f"position-protected:{pos.id}:{pos.qty}:{protection_id}"
+        existing = self.s.scalar(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.source == "engine",
+            ExecutionOrderEvent.source_event_id == source_event_id,
+        ))
+        if existing is not None:
+            return True
+        try:
+            ExecutionLifecycleStore(self.s).append_event(
+                client_intent_id,
+                NewExecutionEvent(
+                    source="engine", source_event_id=source_event_id,
+                    kind="POSITION_PROTECTED", broker_order_id=None,
+                    broker_status="", cumulative_filled_qty=pos.qty,
+                    avg_price=pos.entry_premium,
+                    payload={"position_id": pos.id, "protected_qty": pos.qty,
+                             "protection_id": str(protection_id)},
+                ),
+                self.lifecycle_clock(),
+            )
+            return True
+        except Exception as e:
+            log.error(f"protection event failed: {e}", event="LIFECYCLE_FAIL")
+            return False
+
+    def _protection_reconciliation(self, pos: Position) -> tuple[str, str | None]:
+        """Return matched/absent/ambiguous for an uncertain protection placement."""
+        side = "BUY" if (pos.segment == "equity_intraday"
+                         and pos.direction == "SHORT") else "SELL"
+        exchange = exchange_for_segment(pos.exchange)
+        try:
+            if protective_kind_for_book_segment(
+                    pos.segment) is ProtectiveStopKind.SERVER_TRIGGER:
+                reader = getattr(self.client, "gtts", None)
+                if reader is None:
+                    return "ambiguous", None
+                rows = list(reader() or [])
+                candidates = [row for row in rows if (
+                    row.get("tradingsymbol") == pos.tradingsymbol
+                    and row.get("exchange") == exchange
+                    and str(row.get("side") or "").upper() == side
+                    and int(row.get("qty") or 0) == pos.qty
+                    and str(row.get("status") or "active").lower()
+                    not in {"cancelled", "disabled", "deleted", "triggered"}
+                )]
+                ids = [str(row.get("trigger_id") or "") for row in candidates
+                       if row.get("trigger_id")]
+            else:
+                rows = list(self.client.orders() or [])
+                candidates = [row for row in rows if (
+                    row.get("tag") == TAG
+                    and row.get("tradingsymbol") == pos.tradingsymbol
+                    and row.get("exchange") == exchange
+                    and str(row.get("side") or "").upper() == side
+                    and int(row.get("qty") or 0) == pos.qty
+                    and str(row.get("status") or "").upper()
+                    not in _DEAD_STATUSES | {"COMPLETE"}
+                )]
+                ids = [str(row.get("order_id") or "") for row in candidates
+                       if row.get("order_id")]
+        except Exception as e:
+            log.error(f"PROTECTION {pos.tradingsymbol}: reconciliation failed: {e}",
+                      event="PROTECTION_RECONCILE_FAIL")
+            return "ambiguous", None
+        if len(ids) == 1:
+            return "matched", ids[0]
+        if len(ids) > 1:
+            return "ambiguous", None
+        return "absent", None
+
+    def _ensure_entry_protected(self, pos: Position, last_price: float,
+                                client_intent_id: str) -> bool:
+        """Protect a filled entry, resolving uncertain prior stop submissions first."""
+        store = ExecutionLifecycleStore(self.s)
+        state = store.state_for(client_intent_id)
+        if state.protected_qty >= pos.qty and protective_order_id(pos):
+            return True
+        if protective_order_id(pos):
+            if 0 < state.protected_qty < pos.qty:
+                if not self.update_stop_protection(pos, last_price):
+                    return False
+            return self._append_position_protected(client_intent_id, pos)
+
+        events = list(self.s.scalars(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.kind.in_({
+                "PROTECTION_SUBMIT_STARTED", "PROTECTION_NOT_FOUND"}),
+        ).order_by(ExecutionOrderEvent.id)))
+        last_submit = next(
+            (event for event in reversed(events)
+             if event.kind == "PROTECTION_SUBMIT_STARTED"), None)
+        absence_id = (f"not-found:{last_submit.source_event_id}"
+                      if last_submit is not None else None)
+        absence_seen = any(event.source_event_id == absence_id for event in events)
+        if last_submit is not None and not absence_seen:
+            outcome, protection_id = self._protection_reconciliation(pos)
+            if outcome == "ambiguous":
+                self._notify(
+                    f"⚠️ {pos.tradingsymbol}: protective-order placement is uncertain; "
+                    f"entry remains blocked and no duplicate stop was sent."
+                )
+                return False
+            if outcome == "matched":
+                set_protective_order_id(pos, protection_id)
+                try:
+                    self.s.commit()
+                except Exception as e:
+                    self.s.rollback()
+                    log.error(f"PROTECTION {pos.tradingsymbol}: matched-id persistence "
+                              f"failed: {e}", event="PROTECTION_RECONCILE_FAIL")
+                    return False
+                return self._append_position_protected(client_intent_id, pos)
+            try:
+                store.append_event(
+                    client_intent_id,
+                    NewExecutionEvent(
+                        source="recovery", source_event_id=absence_id,
+                        kind="PROTECTION_NOT_FOUND", broker_order_id=None,
+                        broker_status="", cumulative_filled_qty=0, avg_price=0.0,
+                        payload={"position_id": pos.id,
+                                 "submit_event": last_submit.source_event_id},
+                    ),
+                    self.lifecycle_clock(),
+                )
+            except Exception as e:
+                log.error(f"PROTECTION {pos.tradingsymbol}: absence persistence failed: {e}",
+                          event="LIFECYCLE_FAIL")
+                return False
+
+        attempt = 1 + sum(
+            event.kind == "PROTECTION_SUBMIT_STARTED" for event in events)
+        source_event_id = f"protection-submit:{pos.id}:{pos.qty}:{attempt}"
+        try:
+            store.append_event(
+                client_intent_id,
+                NewExecutionEvent(
+                    source="engine", source_event_id=source_event_id,
+                    kind="PROTECTION_SUBMIT_STARTED", broker_order_id=None,
+                    broker_status="", cumulative_filled_qty=0, avg_price=0.0,
+                    payload={"position_id": pos.id, "qty": pos.qty},
+                ),
+                self.lifecycle_clock(),
+            )
+        except Exception as e:
+            log.error(f"PROTECTION {pos.tradingsymbol}: submit fact failed: {e}",
+                      event="LIFECYCLE_FAIL")
+            return False
+        if protective_kind_for_book_segment(
+                pos.segment) is ProtectiveStopKind.RESTING_STOP:
+            outcome = self._place_equity_stop(pos, last_price)
+        else:
+            outcome = self._place_gtt(pos, last_price)
+        if outcome != "protected":
+            return False
+        return self._append_position_protected(client_intent_id, pos)
 
     # ── order journal (H13) — durable mirror of _inflight ∪ _pending_entries ──
     def _journal_open(self, req, intent: str, kind: str, context) -> int | None:
@@ -508,8 +677,14 @@ class LiveBroker(PaperBroker):
                     try:
                         ctx = json.loads(row.context_json or "{}")
                         pending = self._rebuild_pending(row, ctx)
-                        pending.update(order_id=None,
-                                       broker_tag=make_broker_tag(ctx["client_intent_id"]))
+                        client_intent_id = ctx.get("client_intent_id")
+                        if client_intent_id:
+                            state = ExecutionLifecycleStore(self.s).state_for(
+                                client_intent_id)
+                            pending["order_id"] = state.broker_order_id
+                            if state.broker_order_id:
+                                self._inflight[row.tradingsymbol] = state.broker_order_id
+                                self._journal_set_order_id(row.id, state.broker_order_id)
                         self._pending_entries[row.tradingsymbol] = pending
                     except Exception as e:
                         log.error(f"RECOVER {row.tradingsymbol}: uncertain submit rebuild "
@@ -560,7 +735,7 @@ class LiveBroker(PaperBroker):
             intents = store.unresolved_entries(
                 self.deployment_id,
                 deployment.account_id,
-                f"kite:{deployment.account_id}",
+                KITE_LEGACY_CONNECTION_SCOPE,
             )
             pending_ids = {ctx.get("client_intent_id")
                            for ctx in self._pending_entries.values()}
@@ -674,17 +849,16 @@ class LiveBroker(PaperBroker):
         True if it is now safe to place, False if it is NOT (the prior order already
         filled — a second order would double up — or a stuck order could not be
         cancelled)."""
-        uncertain_item = next(
-            ((pending_symbol, pending) for pending_symbol, pending
-             in self._pending_entries.items()
-             if not pending.get("order_id") and pending.get("broker_tag")), None)
-        if uncertain_item is not None:
-            self._reconcile_uncertain_entries(self.provider.now())
+        if self._pending_entries:
+            if any(not pending.get("order_id") and pending.get("broker_tag")
+                   for pending in self._pending_entries.values()):
+                self._reconcile_uncertain_entries(self.provider.now())
             try:
                 self.adopt_pending_entries(self.provider.now())
             except Exception as e:
-                log.error(f"UNCERTAIN: adoption failed: {e}", event="ENTRY_RECONCILE_FAIL")
-            # This call began with an uncertain submit. Even if it was reconciled,
+                log.error(f"PENDING ENTRY: adoption failed: {e}",
+                          event="ENTRY_RECONCILE_FAIL")
+            # This call began with a durable entry blocker. Even if it was repaired,
             # never place another entry in the same decision cycle.
             return False
 
@@ -818,16 +992,21 @@ class LiveBroker(PaperBroker):
                                     entry_intent_id=client_intent_id)
         pos.lot_size = q.lot_size   # qty reflects the real fill; lot_size stays the true lot
         self.s.commit()
-        self._mark_position_booked(client_intent_id, row_id, pos, res, filled, avg)
-        if (res.status == "PARTIAL" and res.order_id
-                and "timeout" in (res.reason or "").lower()):
-            self._inflight[q.tradingsymbol] = res.order_id
+        protected = self._ensure_entry_protected(pos, avg, client_intent_id)
+        booked = (protected and self._mark_position_booked(
+            client_intent_id, row_id, pos, res, filled, avg))
+        partial_working = (res.status == "PARTIAL" and res.order_id
+                           and "timeout" in (res.reason or "").lower())
+        if not booked or partial_working:
+            if partial_working:
+                self._inflight[q.tradingsymbol] = res.order_id
             self._pending_entries[q.tradingsymbol] = {
                 "kind": "options", "order_id": res.order_id, "inst": inst,
                 "direction": direction, "q": q, "reason": reason, "spot": spot,
                 "params": params, "strategy_key": strategy_key,
                 "strategy_version": strategy_version,
-                "client_intent_id": client_intent_id, "row_id": row_id,
+                "client_intent_id": client_intent_id,
+                "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
                 "booked_qty": filled}
         if filled < q.lot_size:
             log.error(f"LIVE OPEN PARTIAL {q.tradingsymbol} {filled}/{q.lot_size} "
@@ -838,7 +1017,6 @@ class LiveBroker(PaperBroker):
         else:
             log.info(f"LIVE FILLED BUY {q.tradingsymbol} @ {avg:.2f} "
                      f"(order {res.order_id})", instrument=inst.key, event="LIVE_OPEN")
-        self._place_gtt(pos, avg)   # exchange-side backstop stop on the real qty
         return pos
 
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
@@ -895,10 +1073,14 @@ class LiveBroker(PaperBroker):
                                            strategy_version,
                                            margin=fill_margin, sl_pct=sl_pct, tp_pct=tp_pct,
                                            entry_intent_id=client_intent_id)
-        self._mark_position_booked(client_intent_id, row_id, pos, res, filled, avg)
-        if (res.status == "PARTIAL" and res.order_id
-                and "timeout" in (res.reason or "").lower()):
-            self._inflight[tsym] = res.order_id
+        protected = self._ensure_entry_protected(pos, avg, client_intent_id)
+        booked = (protected and self._mark_position_booked(
+            client_intent_id, row_id, pos, res, filled, avg))
+        partial_working = (res.status == "PARTIAL" and res.order_id
+                           and "timeout" in (res.reason or "").lower())
+        if not booked or partial_working:
+            if partial_working:
+                self._inflight[tsym] = res.order_id
             self._pending_entries[tsym] = {
                 "kind": "equity", "order_id": res.order_id, "inst": inst,
                 "direction": direction, "charge_segment": charge_segment,
@@ -906,6 +1088,7 @@ class LiveBroker(PaperBroker):
                 "strategy_version": strategy_version, "sl_pct": sl_pct,
                 "tp_pct": tp_pct, "margin": margin, "requested_qty": qty,
                 "client_intent_id": client_intent_id,
+                "broker_tag": make_broker_tag(client_intent_id),
                 "row_id": row_id, "booked_qty": filled}
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
@@ -916,7 +1099,6 @@ class LiveBroker(PaperBroker):
         else:
             log.info(f"LIVE FILLED {side} {tsym} {filled}@{avg:.2f} (order {res.order_id})",
                      instrument=inst.key, event="LIVE_EQUITY_OPEN")
-        self._place_equity_stop(pos, avg)   # SL-M backstop (GTT is not allowed for MIS)
         return pos
 
     def close_equity_position(self, pos, exit_price, reason, now,
@@ -1113,9 +1295,9 @@ class LiveBroker(PaperBroker):
         from app.core.runtime_config import effective
         return bool(effective(self.settings).get("gtt_stop_enabled", True))
 
-    def _place_gtt(self, pos, last_price) -> None:
+    def _place_gtt(self, pos, last_price) -> str:
         if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:
-            return
+            return "disabled"
         # a long position's protective stop SELLs below; an intraday-equity SHORT's
         # BUYs to cover above. Equity charge-segments map to the bare NSE/BSE exchange.
         side = "BUY" if (pos.segment == "equity_intraday" and pos.direction == "SHORT") else "SELL"
@@ -1123,18 +1305,29 @@ class LiveBroker(PaperBroker):
         try:
             tid = self.client.place_stop_gtt(pos.tradingsymbol, exchange, pos.qty,
                                              pos.stop_price, last_price, side=side)
+        except Exception as e:
+            log.error(f"GTT place failed {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="GTT_FAIL")
+            self._notify(f"⚠️ GTT backstop placement uncertain for {pos.tradingsymbol} — "
+                         f"will reconcile before any retry ({e})")
+            return "uncertain"
+        try:
             set_protective_order_id(pos, tid)
             self.s.commit()
             log.info(f"GTT stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (gtt {tid})",
                      instrument=pos.instrument_key, event="GTT_PLACE")
+            return "protected"
         except Exception as e:
-            log.error(f"GTT place failed {pos.tradingsymbol}: {e}",
-                      instrument=pos.instrument_key, event="GTT_FAIL")
-            self._notify(f"⚠️ GTT backstop NOT placed for {pos.tradingsymbol} — "
-                         f"bot-managed stop only ({e})")
+            self.s.rollback()
+            log.error(f"GTT id persistence failed {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="GTT_PERSIST_FAIL")
+            self._notify(f"⚠️ GTT may be live for {pos.tradingsymbol}, but its id could "
+                         f"not be persisted; entry remains blocked and no duplicate will "
+                         f"be sent until reconciliation ({e})")
+            return "uncertain"
 
     # ── SL-M protective stop (the MIS backstop; GTT isn't allowed for MIS) ──
-    def _place_equity_stop(self, pos, last_price=None) -> None:
+    def _place_equity_stop(self, pos, last_price=None) -> str:
         """Exchange-side protective stop for an intraday (MIS) position. Zerodha allows
         GTT only on CNC/NRML, never MIS — so a real SL-M order rests at the exchange
         instead: a LONG is protected by a SELL SL-M below the stop, a SHORT by a BUY SL-M
@@ -1142,25 +1335,34 @@ class LiveBroker(PaperBroker):
         id column). Governed by the same `gtt_stop_enabled` toggle as the option GTT; on
         failure the position is still managed by the bot's own risk-loop stop."""
         if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:
-            return
+            return "disabled"
         side = "BUY" if pos.direction == "SHORT" else "SELL"   # cover a short above / sell a long below
         exchange = exchange_for_segment(pos.exchange)
         try:
             oid = self.client.place_stop_order(pos.tradingsymbol, exchange, pos.qty,
                                                pos.stop_price, side=side, tag=TAG)
+        except Exception as e:
+            log.error_ratelimited(f"SL-M stop placement uncertain {pos.tradingsymbol}: {e}",
+                                  key=f"{pos.tradingsymbol}:SLM_FAIL", event="STOP_FAIL",
+                                  instrument=pos.instrument_key)
+            self._notify(f"⚠️ SL-M stop placement uncertain for {pos.tradingsymbol} — "
+                         f"will reconcile before any retry ({e})")
+            return "uncertain"
+        try:
             set_protective_order_id(pos, oid)
             self.s.commit()
             self._journal_stop(pos, oid, side)
             log.info(f"SL-M stop placed {pos.tradingsymbol} @ {pos.stop_price:.2f} (order {oid})",
                      instrument=pos.instrument_key, event="STOP_PLACE")
+            return "protected"
         except Exception as e:
-            # rate-limited: this same failure repeated 1,820x/day for LT in the
-            # 2026-07-15 autopsy and buried the rest of the journal.
-            log.error_ratelimited(f"SL-M stop place failed {pos.tradingsymbol}: {e}",
-                                  key=f"{pos.tradingsymbol}:SLM_FAIL", event="STOP_FAIL",
-                                  instrument=pos.instrument_key)
-            self._notify(f"⚠️ SL-M stop NOT placed for {pos.tradingsymbol} — "
-                         f"bot-managed stop only ({e})")
+            self.s.rollback()
+            log.error(f"SL-M id persistence failed {pos.tradingsymbol}: {e}",
+                      instrument=pos.instrument_key, event="STOP_PERSIST_FAIL")
+            self._notify(f"⚠️ SL-M may be live for {pos.tradingsymbol}, but its id could "
+                         f"not be persisted; entry remains blocked and no duplicate will "
+                         f"be sent until reconciliation ({e})")
+            return "uncertain"
 
     def _journal_stop(self, pos, order_id, side: str) -> None:
         """Record a resting protective stop in the order journal.
@@ -1235,22 +1437,22 @@ class LiveBroker(PaperBroker):
         else:
             self._place_gtt(pos, lp)
 
-    def update_stop_protection(self, pos, last_price) -> None:
+    def update_stop_protection(self, pos, last_price) -> bool:
         if not self._gtt_enabled():
-            return
+            return False
         gid = protective_order_id(pos)
         if not gid:
             # never placed, or an earlier attempt failed — place fresh at the
             # ratcheted level instead of silently no-op'ing forever.
             self.ensure_stop_protection(pos, last_price)
-            return
+            return bool(protective_order_id(pos))
         lp = last_price or pos.last_premium or pos.entry_premium
         if protective_kind_for_book_segment(pos.segment) is ProtectiveStopKind.RESTING_STOP:
             # If the ratcheted stop is already crossed by LTP it fires THIS risk-loop
             # tick (the close cancels the SL-M) — a modify now only draws the same
             # permissible-range rejection. Leave the resting stop; the internal stop exits.
             if self._equity_stop_crossed(pos, lp):
-                return
+                return False
             try:
                 # tradingsymbol/exchange let the client resolve the SAME real tick the
                 # initial SL-M placement used, instead of falling back to 0.05.
@@ -1258,6 +1460,7 @@ class LiveBroker(PaperBroker):
                                               exchange_for_segment(pos.exchange))
                 log.info(f"SL-M {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                          instrument=pos.instrument_key, event="STOP_MODIFY")
+                return True
             except Exception as e:
                 # 2026-07-13 SUZLON: a rejected trigger modify left the exchange SL-M stale
                 # at the old level while the internal stop moved (silent divergence). Don't
@@ -1265,14 +1468,14 @@ class LiveBroker(PaperBroker):
                 # trigger so the exchange backstop tracks the ratcheted internal stop.
                 log.warn(f"SL-M trigger modify rejected {pos.tradingsymbol}: {e} — cancel+replacing",
                          instrument=pos.instrument_key, event="STOP_MODIFY_REJECT")
-                self._resync_equity_stop(pos, gid)
-            return
+                return self._resync_equity_stop(pos, gid)
         try:
             # options backstop is a GTT (long premium → protective SELL).
             self.client.modify_stop_gtt(gid, pos.tradingsymbol, exchange_for_segment(pos.exchange),
                                         pos.qty, pos.stop_price, lp, side="SELL")
             log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                      instrument=pos.instrument_key, event="GTT_MODIFY")
+            return True
         except Exception as e:
             # E3 (the SUZLON class, options edition): only logging here left the exchange
             # GTT resting at the OLD, looser trigger while the internal stop ratcheted up
@@ -1280,7 +1483,7 @@ class LiveBroker(PaperBroker):
             # never retried. Cancel + replace so the backstop tracks the internal stop.
             log.warn(f"GTT trigger modify rejected {pos.tradingsymbol}: {e} — cancel+replacing",
                      instrument=pos.instrument_key, event="GTT_MODIFY_REJECT")
-            self._resync_option_gtt(pos, gid, lp)
+            return self._resync_option_gtt(pos, gid, lp)
 
     def _equity_stop_crossed(self, pos, lp) -> bool:
         """Is the intraday stop already triggering at the current mark? (SHORT stops
@@ -1310,7 +1513,7 @@ class LiveBroker(PaperBroker):
                      f"external exit (conservative fallback)", event="GTT_STATUS_FAIL")
             return False
 
-    def _resync_option_gtt(self, pos, gid, last_price) -> None:
+    def _resync_option_gtt(self, pos, gid, last_price) -> bool:
         """Cancel a stale options GTT and place a fresh one at `pos.stop_price` so the
         exchange backstop tracks the ratcheted internal stop. Mirrors
         `_resync_equity_stop`: if the cancel is refused, DO NOT place a second GTT (it
@@ -1323,22 +1526,24 @@ class LiveBroker(PaperBroker):
                       instrument=pos.instrument_key, event="GTT_RESYNC_ABORT")
             self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange GTT (cancel "
                          f"refused) — verify on Zerodha; bot-managed stop still active")
-            return
+            return False
         clear_protective_order_id(pos)
         self.s.commit()
-        self._place_gtt(pos, last_price)          # places at pos.stop_price
+        outcome = self._place_gtt(pos, last_price)  # places at pos.stop_price
         if not protective_order_id(pos):
             log.error(f"GTT resync REPLACE failed {pos.tradingsymbol} — no exchange stop "
                       f"resting; bot-managed stop only until retry",
                       instrument=pos.instrument_key, event="GTT_RESYNC_FAIL")
             self._notify(f"🚫 {pos.tradingsymbol}: exchange GTT NOT re-placed — bot-managed "
                          f"stop only until it retries; verify on Zerodha")
+            return False
         else:
             log.info(f"GTT resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
                      f"(gtt {protective_order_id(pos)})", instrument=pos.instrument_key,
                      event="GTT_RESYNC_RECOVERED")
+            return outcome == "protected"
 
-    def _resync_equity_stop(self, pos, gid) -> None:
+    def _resync_equity_stop(self, pos, gid) -> bool:
         """Cancel a stale resting SL-M and place a fresh one at `pos.stop_price` so the
         exchange backstop tracks the ratcheted internal stop. If the cancel is refused,
         DO NOT place a second stop (oversell risk) — leave the still-protective stale one
@@ -1350,16 +1555,18 @@ class LiveBroker(PaperBroker):
                       instrument=pos.instrument_key, event="STOP_RESYNC_ABORT")
             self._notify(f"⚠️ {pos.tradingsymbol}: couldn't re-sync the exchange stop (cancel "
                          f"refused) — verify on Zerodha; bot-managed stop still active")
-            return
+            return False
         clear_protective_order_id(pos)
         self.s.commit()
-        self._place_equity_stop(pos, pos.last_spot or pos.last_premium)   # places at pos.stop_price
+        outcome = self._place_equity_stop(
+            pos, pos.last_spot or pos.last_premium)   # places at pos.stop_price
         if not protective_order_id(pos):
             log.error(f"SL-M resync REPLACE failed {pos.tradingsymbol} — no exchange stop resting; "
                       f"bot-managed stop only until retry", instrument=pos.instrument_key,
                       event="STOP_RESYNC_FAIL")
             self._notify(f"🚫 {pos.tradingsymbol}: exchange stop NOT re-placed — bot-managed stop "
                          f"only until it retries; verify on Zerodha")
+            return False
         else:
             # today this recovery was silent — the 2026-07-15 autopsy could not confirm
             # any recovery ever happened. Log it explicitly so it's visible in the
@@ -1367,6 +1574,7 @@ class LiveBroker(PaperBroker):
             log.info(f"SL-M resync recovered {pos.tradingsymbol} @ {pos.stop_price:.2f} "
                      f"(order {protective_order_id(pos)})", instrument=pos.instrument_key,
                      event="STOP_RESYNC_RECOVERED")
+            return outcome == "protected"
 
     def reconcile_orphans(self, now) -> list:
         """If the live account no longer backs a bot position (a GTT/SL-M fired, you
@@ -1540,8 +1748,39 @@ class LiveBroker(PaperBroker):
                     continue
             if filled > 0 and avg > 0:
                 inst = ctx["inst"]
+                client_intent_id = ctx.get("client_intent_id")
+                if not client_intent_id:
+                    existing = self.position_for(
+                        inst.key, deployment_id=self.deployment_id)
+                    pos = existing
+                    if existing is None:
+                        if ctx.get("kind") == "options":
+                            q = ctx["q"]
+                            pos = super().open_position(
+                                inst, ctx["direction"],
+                                replace(q, ltp=avg, lot_size=filled),
+                                ctx["reason"], now, ctx["spot"], ctx["params"])
+                            pos.lot_size = q.lot_size
+                            self.s.commit()
+                            self._place_gtt(pos, avg)
+                        else:
+                            pos = super().open_equity_position(
+                                inst, ctx["direction"], avg, filled,
+                                ctx["charge_segment"], ctx["reason"], now,
+                                ctx["params"], ctx.get("strategy_key"),
+                                ctx.get("strategy_version"),
+                                margin=ctx.get("margin"),
+                                sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"))
+                            self._place_equity_stop(pos, avg)
+                    if ((status == "COMPLETE" or status in _DEAD_STATUSES)
+                            and protective_order_id(pos)):
+                        self.journal_mark_terminal(
+                            ctx["order_id"], "ADOPTED", filled, avg)
+                        self._pending_entries.pop(sym, None)
+                        self._inflight.pop(sym, None)
+                    continue
                 lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
-                    ctx["client_intent_id"])
+                    client_intent_id)
                 pos = self.s.scalar(select(Position).where(
                     Position.entry_intent_id == ctx.get("client_intent_id"),
                     Position.deployment_id == self.deployment_id,
@@ -1571,7 +1810,6 @@ class LiveBroker(PaperBroker):
                             entry_intent_id=ctx.get("client_intent_id"))
                         pos.lot_size = q.lot_size
                         self.s.commit()
-                        self._place_gtt(pos, avg)
                     else:
                         requested_qty = int(ctx.get("requested_qty") or filled)
                         margin = ctx.get("margin")
@@ -1587,7 +1825,6 @@ class LiveBroker(PaperBroker):
                             margin=fill_margin,
                             sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"),
                             entry_intent_id=ctx.get("client_intent_id"))
-                        self._place_equity_stop(pos, avg)
                     log.warn(f"ADOPTED late fill {sym} {filled}@{avg:.2f} — was untracked; "
                              f"now managed + stopped", instrument=inst.key, event="ADOPT_FILL")
                     self._notify(f"ℹ️ {sym}: a bot order filled late ({filled}@{avg:.2f}) — "
@@ -1598,6 +1835,9 @@ class LiveBroker(PaperBroker):
                         ctx["order_id"], filled, avg,
                         "complete" if status == "COMPLETE" else "partial fill",
                     )
+                    if not self._ensure_entry_protected(
+                            pos, avg, ctx["client_intent_id"]):
+                        continue
                     if not self._mark_position_booked(
                             ctx["client_intent_id"], ctx.get("row_id"), pos,
                             first_result, filled, avg):
@@ -1607,6 +1847,10 @@ class LiveBroker(PaperBroker):
                 elif pos.qty > lifecycle_state.booked_qty:
                     # The ledger commit won a crash race against POSITION_BOOKED.
                     # Close that durable gap before considering any newer broker fill.
+                    if not self._ensure_entry_protected(
+                            pos, pos.last_premium or pos.entry_premium,
+                            ctx["client_intent_id"]):
+                        continue
                     gap_result = OrderResult(
                         "FILLED" if status == "COMPLETE" else "PARTIAL",
                         ctx["order_id"], pos.qty, pos.entry_premium,
@@ -1662,25 +1906,25 @@ class LiveBroker(PaperBroker):
                         "FILLED" if status == "COMPLETE" else "PARTIAL",
                         ctx["order_id"], filled, avg,
                         "complete" if status == "COMPLETE" else "partial fill at timeout")
-                    self._mark_position_booked(
-                        ctx["client_intent_id"], ctx.get("row_id"), pos,
-                        result, filled, avg)
-                    if ctx.get("kind") == "options":
-                        self.update_stop_protection(pos, avg)
-                    else:
-                        gid = protective_order_id(pos)
-                        if gid:
-                            self._resync_equity_stop(pos, gid)
-                        else:
-                            self._place_equity_stop(pos, avg)
+                    if not self._ensure_entry_protected(
+                            pos, avg, ctx["client_intent_id"]):
+                        continue
+                    if not self._mark_position_booked(
+                            ctx["client_intent_id"], ctx.get("row_id"), pos,
+                            result, filled, avg):
+                        continue
                 if status == "COMPLETE" or status in _DEAD_STATUSES:
                     result = OrderResult(
                         "FILLED" if status == "COMPLETE" else "PARTIAL",
                         ctx["order_id"], filled, avg,
                         "complete" if status == "COMPLETE" else "cancelled after partial")
-                    self._mark_position_booked(
-                        ctx["client_intent_id"], ctx.get("row_id"), pos,
-                        result, filled, avg)
+                    if not self._ensure_entry_protected(
+                            pos, avg, ctx["client_intent_id"]):
+                        continue
+                    if not self._mark_position_booked(
+                            ctx["client_intent_id"], ctx.get("row_id"), pos,
+                            result, filled, avg):
+                        continue
                     self._pending_entries.pop(sym, None)
                     self._inflight.pop(sym, None)
             elif status in _DEAD_STATUSES:

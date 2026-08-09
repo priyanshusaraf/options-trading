@@ -13,6 +13,8 @@ class FakeKite:
         self.gtt_deleted = []
         self.cancelled = []
         self.modified = []
+        self.order_book = []
+        self.gtt_book = []
 
     def place_order(self, **kw):
         self.placed.append(kw)
@@ -40,6 +42,12 @@ class FakeKite:
     def modify_order(self, **kw):
         self.modified.append(kw)
         return kw.get("order_id")
+
+    def orders(self):
+        return list(self.order_book)
+
+    def get_gtts(self):
+        return list(self.gtt_book)
 
 
 def test_place_maps_limit_order_fields():
@@ -116,6 +124,35 @@ def test_status_reads_last_history_row():
                    "status_message": ""}])
     st = KiteOrderClient(k).status("OID-9")
     assert st["status"] == "COMPLETE" and st["filled_qty"] == 75 and st["avg_price"] == 100.5
+
+
+def test_protection_recovery_reads_order_identity_fields():
+    kite = FakeKite()
+    kite.order_book = [{
+        "order_id": "SLM-1", "tradingsymbol": "RELIANCE", "exchange": "NSE",
+        "transaction_type": "SELL", "quantity": 4, "status": "TRIGGER PENDING",
+        "tag": "pt-bot",
+    }]
+
+    assert KiteOrderClient(kite).orders() == [{
+        "order_id": "SLM-1", "tradingsymbol": "RELIANCE", "exchange": "NSE",
+        "side": "SELL", "qty": 4, "status": "TRIGGER PENDING", "tag": "pt-bot",
+    }]
+
+
+def test_protection_recovery_lists_gtt_identity_fields():
+    kite = FakeKite()
+    kite.gtt_book = [{
+        "id": 555, "status": "active",
+        "condition": {"tradingsymbol": "NIFTY26AUG25000CE", "exchange": "NFO"},
+        "orders": [{"transaction_type": "SELL", "quantity": 75}],
+    }]
+
+    assert KiteOrderClient(kite).gtts() == [{
+        "trigger_id": "555", "status": "active",
+        "tradingsymbol": "NIFTY26AUG25000CE", "exchange": "NFO",
+        "side": "SELL", "qty": 75,
+    }]
 
 
 def test_place_stop_gtt_maps_payload_and_returns_id():

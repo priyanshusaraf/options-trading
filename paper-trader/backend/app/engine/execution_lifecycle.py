@@ -116,6 +116,7 @@ class ExecutionState:
     slippage_amount: float | None
     slippage_bps: float | None
     booked_qty: int = 0
+    protected_qty: int = 0
     last_fill_delta: int = 0
     last_fill_price: float | None = None
 
@@ -165,6 +166,7 @@ def reduce_execution_events(
     submit_seen = False
     acknowledged = False
     booked_qty = 0
+    protected_qty = 0
     anomalies: list[str] = []
     seen_identities: set[tuple[str, str]] = set()
     intent_at: dt.datetime | None = None
@@ -198,6 +200,8 @@ def reduce_execution_events(
                 acknowledged_at = observed_at
         if kind == "POSITION_BOOKED":
             booked_qty = max(booked_qty, row.cumulative_filled_qty)
+        if kind == "POSITION_PROTECTED":
+            protected_qty = max(protected_qty, row.cumulative_filled_qty)
 
         if row.broker_order_id:
             if broker_order_id is None:
@@ -205,6 +209,12 @@ def reduce_execution_events(
             elif broker_order_id != row.broker_order_id:
                 anomalies.append(
                     f"broker order ID changed from {broker_order_id} to {row.broker_order_id}")
+
+        if kind in {
+            "POSITION_BOOKED", "POSITION_PROTECTED",
+            "PROTECTION_SUBMIT_STARTED", "PROTECTION_NOT_FOUND",
+        }:
+            continue
 
         if row.cumulative_filled_qty < filled_qty:
             anomalies.append(
@@ -220,9 +230,6 @@ def reduce_execution_events(
             last_fill_price = round(
                 ((filled_qty * avg_price) - (previous_qty * previous_avg)) / last_fill_delta, 8)
 
-        if kind == "POSITION_BOOKED":
-            continue
-
         next_status = row_status or kind
         next_terminal = row_status in _TERMINAL_STATUSES or kind in _TERMINAL_STATUSES
         if terminal:
@@ -235,7 +242,9 @@ def reduce_execution_events(
             terminal = True
 
     unbooked_fill = filled_qty > booked_qty
-    reconciliation_required = unbooked_fill or (submit_seen and not terminal)
+    unprotected_fill = filled_qty > protected_qty
+    reconciliation_required = (
+        unbooked_fill or unprotected_fill or (submit_seen and not terminal))
     remaining_qty = max(0, requested_qty - filled_qty)
     slippage_amount: float | None = None
     slippage_bps: float | None = None
@@ -266,6 +275,7 @@ def reduce_execution_events(
         slippage_amount=slippage_amount,
         slippage_bps=slippage_bps,
         booked_qty=booked_qty,
+        protected_qty=protected_qty,
         last_fill_delta=last_fill_delta,
         last_fill_price=last_fill_price,
     )

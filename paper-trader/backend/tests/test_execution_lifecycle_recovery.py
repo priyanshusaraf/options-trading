@@ -31,6 +31,9 @@ class _RecoveryClient:
     def orders(self):
         return list(self.order_book)
 
+    def gtts(self):
+        return []
+
     def status(self, order_id):
         return dict(self.observation)
 
@@ -59,6 +62,40 @@ class _PartialGrowthClient(_RecoveryClient):
         return dict(next(self.observations))
 
 
+class _AcknowledgedFillClient(_RecoveryClient):
+    def place(self, request):
+        self.requests.append(request)
+        return "OID-ENTRY"
+
+
+class _StopFailsClient(_AcknowledgedFillClient):
+    def place_stop_gtt(self, *args, **kwargs):
+        self.stop_calls += 1
+        raise RuntimeError("GTT unavailable")
+
+    def place_stop_order(self, *args, **kwargs):
+        self.stop_calls += 1
+        raise RuntimeError("SL-M unavailable")
+
+
+class _ProtectionPersistsAtBrokerClient(_AcknowledgedFillClient):
+    def __init__(self, status):
+        super().__init__(status=status)
+        self.gtt_book = []
+
+    def place_stop_gtt(self, tradingsymbol, exchange, qty, trigger, last, side="SELL"):
+        self.stop_calls += 1
+        self.gtt_book.append({
+            "trigger_id": "GTT-LIVE", "status": "active",
+            "tradingsymbol": tradingsymbol, "exchange": exchange,
+            "side": side, "qty": qty,
+        })
+        return "GTT-LIVE"
+
+    def gtts(self):
+        return list(self.gtt_book)
+
+
 def _option_context(provider):
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
@@ -79,7 +116,7 @@ def _option_context(provider):
 
 
 def _seed_lifecycle(context, *, symbol, exchange, qty, account_scope="default",
-                    connection_scope="kite:default", deployment_id=1,
+                    connection_scope="kite:legacy", deployment_id=1,
                     decision_price=100.0):
     with SessionLocal() as session:
         store = ExecutionLifecycleStore(session)
@@ -322,3 +359,212 @@ def test_cumulative_adoption_commit_failure_rolls_back_ledger_delta(monkeypatch)
         assert ExecutionLifecycleStore(session).state_for(intent_id).booked_qty == 25
     assert broker.cash() == cash_before
     assert quote.tradingsymbol in broker._pending_entries
+
+
+def test_restart_journal_without_order_id_uses_existing_lifecycle_ack():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    intent_id, _ = _seed_lifecycle(
+        context, symbol=quote.tradingsymbol, exchange=quote.exchange, qty=quote.lot_size)
+    with SessionLocal() as session:
+        ExecutionLifecycleStore(session).append_event(
+            intent_id,
+            NewExecutionEvent(
+                source="broker", source_event_id="ack:OID-ACK",
+                kind="ACKNOWLEDGED", broker_order_id="OID-ACK", broker_status="",
+                cumulative_filled_qty=0, avg_price=0.0,
+                payload={"order_id": "OID-ACK"},
+            ),
+            NOW,
+        )
+        journal_context = dict(context, client_intent_id=intent_id)
+        session.add(OrderJournal(
+            deployment_id=1, order_id=None, tradingsymbol=quote.tradingsymbol,
+            instrument_key=inst.key, side="BUY", kind="options", intent="ENTRY",
+            qty=quote.lot_size, context_json=__import__("json").dumps(journal_context),
+            status="WORKING", placed_at=NOW,
+        ))
+        session.commit()
+    client = _RecoveryClient(status={
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+
+    broker.recover_journal(NOW)
+
+    with SessionLocal() as session:
+        assert session.scalar(select(Position).where(
+            Position.entry_intent_id == intent_id)) is not None
+        ack_events = list(session.scalars(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == intent_id,
+            ExecutionOrderEvent.kind == "ACKNOWLEDGED")))
+        assert len(ack_events) == 1
+        assert session.scalar(select(OrderJournal)).status == "TERMINAL"
+
+
+def test_legacy_working_entry_without_intent_still_adopts():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    with SessionLocal() as session:
+        session.add(OrderJournal(
+            deployment_id=1, order_id="OID-LEGACY", tradingsymbol=quote.tradingsymbol,
+            instrument_key=inst.key, side="BUY", kind="options", intent="ENTRY",
+            qty=quote.lot_size, context_json=__import__("json").dumps(context),
+            status="WORKING", placed_at=NOW,
+        ))
+        session.commit()
+    client = _RecoveryClient(status={
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+
+    broker.recover_journal(NOW)
+
+    with SessionLocal() as session:
+        positions = list(session.scalars(select(Position)))
+        assert len(positions) == 1
+        assert positions[0].entry_intent_id is None
+        assert positions[0].gtt_trigger_id == "GTT-RECOVERED"
+        journal = session.scalar(select(OrderJournal).where(OrderJournal.intent == "ENTRY"))
+        assert journal.status == "TERMINAL"
+        assert journal.resolution == "ADOPTED"
+
+
+def test_option_stop_failure_remains_recoverable_after_restart():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    failing = _StopFailsClient(status={
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, failing, poll_seconds=0.0, timeout_seconds=0.0)
+
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    intent_id = pos.entry_intent_id
+    cash_after_fill = broker.cash()
+    with SessionLocal() as session:
+        stored = session.get(Position, pos.id)
+        assert stored.gtt_trigger_id is None
+        assert ExecutionLifecycleStore(session).state_for(
+            intent_id).reconciliation_required is True
+        assert session.scalar(select(OrderJournal).where(
+            OrderJournal.intent == "ENTRY")).status == "WORKING"
+
+    recovered_client = _RecoveryClient(status={
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted.recover_journal(NOW)
+
+    assert restarted.cash() == cash_after_fill
+    with SessionLocal() as session:
+        positions = list(session.scalars(select(Position)))
+        assert len(positions) == 1
+        assert positions[0].gtt_trigger_id == "GTT-RECOVERED"
+        state = ExecutionLifecycleStore(session).state_for(intent_id)
+        assert state.reconciliation_required is False
+        kinds = [event.kind for event in session.scalars(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == intent_id).order_by(ExecutionOrderEvent.id))]
+        assert kinds.index("POSITION_PROTECTED") < kinds.index("POSITION_BOOKED")
+
+
+def test_equity_stop_failure_remains_recoverable_after_restart():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst = get_instrument("NIFTY")
+    client_status = {"status": "COMPLETE", "filled_qty": 4,
+                     "avg_price": 100.0, "reason": ""}
+    broker = LiveBroker(
+        provider, _StopFailsClient(status=client_status),
+        poll_seconds=0.0, timeout_seconds=0.0)
+
+    pos = broker.open_equity_position(
+        inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
+        params={}, margin=400.0)
+    intent_id = pos.entry_intent_id
+    cash_after_fill = broker.cash()
+    with SessionLocal() as session:
+        stored = session.get(Position, pos.id)
+        assert stored.gtt_trigger_id is None
+        assert ExecutionLifecycleStore(session).state_for(
+            intent_id).reconciliation_required is True
+        assert session.scalar(select(OrderJournal).where(
+            OrderJournal.intent == "ENTRY")).status == "WORKING"
+
+    recovered_client = _RecoveryClient(status=client_status)
+    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted.recover_journal(NOW)
+
+    assert restarted.cash() == cash_after_fill
+    with SessionLocal() as session:
+        positions = list(session.scalars(select(Position)))
+        assert len(positions) == 1
+        assert positions[0].gtt_trigger_id == "SLM-RECOVERED"
+        assert ExecutionLifecycleStore(session).state_for(
+            intent_id).reconciliation_required is False
+
+
+def test_protection_id_persistence_failure_reconciles_without_duplicate(monkeypatch):
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    client = _ProtectionPersistsAtBrokerClient({
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    original_commit = broker.s.commit
+    failed = False
+
+    def fail_protection_id_once():
+        nonlocal failed
+        protected_position = next((
+            row for row in broker.s.dirty
+            if isinstance(row, Position) and row.gtt_trigger_id == "GTT-LIVE"
+        ), None)
+        if protected_position is not None and not failed:
+            failed = True
+            raise RuntimeError("position protection id write failed")
+        return original_commit()
+
+    monkeypatch.setattr(broker.s, "commit", fail_protection_id_once)
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    intent_id = pos.entry_intent_id
+
+    assert client.stop_calls == 1
+    with SessionLocal() as session:
+        assert session.get(Position, pos.id).gtt_trigger_id is None
+        assert ExecutionLifecycleStore(session).state_for(
+            intent_id).reconciliation_required is True
+
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted.recover_journal(NOW)
+
+    assert client.stop_calls == 1
+    with SessionLocal() as session:
+        stored = session.get(Position, pos.id)
+        assert stored.gtt_trigger_id == "GTT-LIVE"
+        assert ExecutionLifecycleStore(session).state_for(
+            intent_id).reconciliation_required is False
+
+
+def test_live_entry_uses_legacy_connection_scope():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    broker = LiveBroker(
+        provider,
+        _AcknowledgedFillClient(status={
+            "status": "COMPLETE", "filled_qty": quote.lot_size,
+            "avg_price": 101.0, "reason": ""}),
+        poll_seconds=0.0,
+        timeout_seconds=0.0,
+    )
+
+    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+
+    with SessionLocal() as session:
+        assert session.scalar(select(ExecutionIntent)).connection_scope == "kite:legacy"

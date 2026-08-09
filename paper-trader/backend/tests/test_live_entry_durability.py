@@ -219,6 +219,8 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
         dt.datetime(2026, 8, 9, 10, 15, 30, 300000),
         dt.datetime(2026, 8, 9, 10, 15, 30, 400000),
         dt.datetime(2026, 8, 9, 10, 15, 30, 500000),
+        dt.datetime(2026, 8, 9, 10, 15, 30, 600000),
+        dt.datetime(2026, 8, 9, 10, 15, 30, 700000),
     ])
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0,
                         lifecycle_clock=lambda: next(clock_times))
@@ -240,7 +242,7 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
         assert intent.signal_at == runtime_now
         assert [event.kind for event in events] == [
             "INTENT_CREATED", "SUBMIT_STARTED", "ACKNOWLEDGED", "STATUS_OBSERVED",
-            "POSITION_BOOKED"]
+            "PROTECTION_SUBMIT_STARTED", "POSITION_PROTECTED", "POSITION_BOOKED"]
         state = live_broker_module.ExecutionLifecycleStore(session).state_for(
             intent.client_intent_id)
         assert state.signal_to_intent_ms == 100.0
@@ -480,7 +482,8 @@ def test_journal_commit_failure_rolls_back_before_lifecycle_write(monkeypatch):
     intent = live_broker_module.ExecutionLifecycleStore(broker.s).create_intent(
         live_broker_module.NewExecutionIntent(
             deployment_id=1, broker="kite", account_scope="default",
-            connection_scope="kite:default", intent="ENTRY", instrument_key="NIFTY",
+            connection_scope=live_broker_module.KITE_LEGACY_CONNECTION_SCOPE,
+            intent="ENTRY", instrument_key="NIFTY",
             tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",
             order_type="MARKET", requested_qty=1, limit_price=None,
             decision_price=100.0, signal_at=dt.datetime(2026, 8, 9, 10),

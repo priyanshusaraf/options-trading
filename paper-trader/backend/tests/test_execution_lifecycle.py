@@ -187,7 +187,17 @@ def test_terminal_fill_requires_position_booked_before_reconciliation_clears():
     ]
 
     before_booking = reduce_execution_events(_request(), events)
+    after_protection = reduce_execution_events(_request(), events + [
+        _row("intent-1", _event("POSITION_PROTECTED", source_event_id="protection:9",
+                                 observed_at=BASE_TIME, source="engine",
+                                 cumulative_filled_qty=100, avg_price=101,
+                                 payload={"position_id": 9}), BASE_TIME),
+    ])
     after_booking = reduce_execution_events(_request(), events + [
+        _row("intent-1", _event("POSITION_PROTECTED", source_event_id="protection:9",
+                                 observed_at=BASE_TIME, source="engine",
+                                 cumulative_filled_qty=100, avg_price=101,
+                                 payload={"position_id": 9}), BASE_TIME),
         _row("intent-1", _event("POSITION_BOOKED", source_event_id="position:9",
                                  observed_at=BASE_TIME, source="engine",
                                  cumulative_filled_qty=100, avg_price=101,
@@ -197,8 +207,11 @@ def test_terminal_fill_requires_position_booked_before_reconciliation_clears():
     assert before_booking.terminal is True
     assert before_booking.booked_qty == 0
     assert before_booking.reconciliation_required is True
+    assert after_protection.protected_qty == 100
+    assert after_protection.reconciliation_required is True
     assert after_booking.terminal is True
     assert after_booking.booked_qty == 100
+    assert after_booking.protected_qty == 100
     assert after_booking.reconciliation_required is False
 
 

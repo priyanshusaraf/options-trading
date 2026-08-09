@@ -218,12 +218,37 @@ class KiteOrderClient:
         status = str(g.get("status", "")).lower()
         return {"status": status, "triggered": status == "triggered"}
 
-    def orders(self) -> list[dict]:
-        """Today's orders, normalized to {order_id, tradingsymbol, tag} — for the
-        journal recovery tag-sweep (H13): find bot-tagged orders with no journal row."""
+    def gtts(self) -> list[dict]:
+        """List GTT identity fields needed to reconcile an uncertain stop submit."""
         self._sync_token()
-        return [{"order_id": o.get("order_id"), "tradingsymbol": o.get("tradingsymbol"),
-                 "tag": o.get("tag")} for o in (self.kite.orders() or [])]
+        normalized = []
+        for trigger in self.kite.get_gtts() or []:
+            condition = trigger.get("condition") or {}
+            orders = trigger.get("orders") or []
+            order = orders[0] if orders else {}
+            trigger_id = trigger.get("trigger_id", trigger.get("id"))
+            normalized.append({
+                "trigger_id": str(trigger_id) if trigger_id is not None else None,
+                "status": trigger.get("status"),
+                "tradingsymbol": condition.get("tradingsymbol"),
+                "exchange": condition.get("exchange"),
+                "side": order.get("transaction_type"),
+                "qty": int(order.get("quantity", 0) or 0),
+            })
+        return normalized
+
+    def orders(self) -> list[dict]:
+        """Today's order identities for entry and protective-stop recovery."""
+        self._sync_token()
+        return [{
+            "order_id": o.get("order_id"),
+            "tradingsymbol": o.get("tradingsymbol"),
+            "exchange": o.get("exchange"),
+            "side": o.get("transaction_type"),
+            "qty": int(o.get("quantity", 0) or 0),
+            "status": o.get("status"),
+            "tag": o.get("tag"),
+        } for o in (self.kite.orders() or [])]
 
     def find_fill(self, tradingsymbol: str, side: str = "SELL") -> dict | None:
         """Find today's REAL fill for `tradingsymbol`/`side` (e.g. the SELL that
