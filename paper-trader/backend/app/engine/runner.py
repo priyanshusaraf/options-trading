@@ -690,6 +690,18 @@ class EngineRunner:
     def _mark_token_ok(self) -> None:
         self._token_bad_until = None
 
+    @staticmethod
+    def _is_positive_quote(px: object) -> bool:
+        """A probe result that actually proves the session can read the market.
+
+        `KiteProvider.get_ltp` catches the expired-token exception and returns `None`, so
+        "did not raise" is not evidence of anything — it is the adapter's normal answer to
+        a dead token, an unresolvable symbol and an empty quote payload alike. Only a real
+        finite price above zero clears the latch. `bool` is excluded because it is an `int`.
+        """
+        return (isinstance(px, (int, float)) and not isinstance(px, bool)
+                and px == px and px not in (float("inf"), float("-inf")) and px > 0)
+
     def _token_sweep_suspended(self) -> bool:
         """True when the sweep should be skipped this loop. While latched we spend
         exactly ONE provider call on a probe instrument to detect re-auth, instead of
@@ -700,13 +712,17 @@ class EngineRunner:
         probe_key = next(iter(sorted(self.enabled)), None)
         if probe_key is not None:
             try:
-                self.provider.get_ltp(get_instrument(probe_key))
+                px = self.provider.get_ltp(get_instrument(probe_key))
+            except Exception:
+                px = None  # still bad — stay latched, suppressed until next loop's probe
+            if self._is_positive_quote(px):
                 self._mark_token_ok()
                 log.info("token recovered — resuming full market-data sweep",
                          event="TOKEN_RECOVERED")
                 return False
-            except Exception:
-                pass  # still bad — stay latched, suppressed until next loop's probe
+            # A `None` quote is absence of evidence, not evidence of recovery. Staying
+            # latched costs one probe call per loop and the latch's own cooldown still
+            # expires it, so a genuinely-recovered session is never stranded.
         log.warn("token invalid — pausing market-data sweep until re-auth",
                  event="TOKEN_SUSPEND_SWEEP")
         return True
@@ -723,8 +739,10 @@ class EngineRunner:
                 continue  # market closed — no new candle can print; don't poll
             try:
                 candles = prov.get_candles(inst, self._interval_for(key), s.history_days)
+                # Transport health only. The read succeeded, so the connection is fine —
+                # but "the provider answered" is not "a frame was evaluated". Freshness is
+                # stamped below, once the frame is known to be usable.
                 self.health.record_ok("candle", prov.now())
-                self.last_scan_ok[key] = prov.now()   # per-instrument freshness
             except Exception as e:
                 self.health.record_fail("candle", str(e), prov.now())
                 if self._is_auth_error(e):
@@ -746,6 +764,12 @@ class EngineRunner:
                          instrument=key, event="FEED_QUALITY")
             if len(candles) < s.ema_length + 5:
                 continue
+            # Per-instrument freshness: a usable frame exists for this key on this loop.
+            # Deliberately AFTER the empty/short checks — an empty-but-successful read used
+            # to stamp this, so the cockpit showed a fresh scan time beside a signal from
+            # whenever the data last worked. Transport ok, data absent: two claims, two
+            # surfaces. `stale` in /api/watchlist reads this one.
+            self.last_scan_ok[key] = prov.now()
             # per-instrument strategy: the default (v3) keeps the exact chart payload;
             # any other strategy yields a strategy-agnostic latest (canonical flags).
             try:
