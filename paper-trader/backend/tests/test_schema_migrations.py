@@ -18,7 +18,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 import pytest
 from alembic import command
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from app.db import migrate
 from app.db.models import Base
@@ -235,6 +235,43 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
             "SELECT order_id, status, filled_qty FROM order_journal "
             "WHERE order_id = 'legacy-order'"
         )).one() == ("legacy-order", "WORKING", 0)
+
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO execution_intents "
+            "(client_intent_id, deployment_id, broker, account_scope, connection_scope, "
+            " broker_tag, intent, instrument_key, tradingsymbol, exchange, side, order_type, "
+            " requested_qty, created_at) "
+            "VALUES ('entry-000000000000000000000002', 1, 'upstox', 'account.default', "
+            "'connection.default', 'entry-000000000000002', 'ENTRY', "
+            "'NSE_EQ|INE002A01018', 'RELIANCE', 'NSE', 'BUY', 'MARKET', 1, "
+            "'2026-08-09 09:15:00')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO execution_order_events "
+            "(client_intent_id, source, source_event_id, kind, observed_at) "
+            "VALUES ('entry-000000000000000000000002', 'broker', 'event-1', "
+            "'INTENT_CREATED', '2026-08-09 09:15:00')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO positions "
+            "(deployment_id, entry_intent_id, instrument_key, direction, option_type, "
+            " tradingsymbol, exchange, segment, strike, expiry, lot_size, qty, entry_premium, "
+            " entry_charges, entry_cost, entry_spot, entry_time, entry_reason, stop_price, "
+            " target_price, last_premium, last_spot, high_water_premium, mfe, mae, "
+            " reinforcement_count, held_overnight, overnight_pnl, session_close_premium, "
+            " manual_target, no_take_profit, mode) "
+            "VALUES (1, 'entry-000000000000000000000002', 'NSE_EQ|INE002A01018', 'LONG', "
+            "'CE', 'RELIANCE', 'NSE', 'options', 1.0, '2026-08-28', 1, 1, 10.0, 0.0, "
+            "10.0, 100.0, '2026-08-09 09:15:00', '', 5.0, 15.0, 10.0, 100.0, 10.0, "
+            "0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, 'paper')"
+        ))
+        for statement in (
+            "UPDATE execution_order_events SET kind = 'CHANGED' WHERE id = 1",
+            "DELETE FROM execution_order_events WHERE id = 1",
+        ):
+            with pytest.raises(IntegrityError, match="execution_order_events are immutable"):
+                connection.execute(sa.text(statement))
 
     with engine.begin() as connection:
         command.downgrade(migrate.alembic_config(connection), "0013")

@@ -114,9 +114,9 @@ def downgrade() -> None:
         ):
             bind.execute(sa.text(f"DROP TRIGGER IF EXISTS {trigger_name}"))
         op.drop_table("execution_order_events")
-    if inspector.has_table("execution_intents"):
-        op.drop_table("execution_intents")
 
+    # The nullable links may hold real rows. Remove them before their parent table
+    # so SQLite's enforced RESTRICT action cannot block the downgrade.
     for table in ("positions", "trades"):
         columns = {column["name"] for column in sa.inspect(bind).get_columns(table)}
         if "entry_intent_id" not in columns:
@@ -126,6 +126,8 @@ def downgrade() -> None:
         if index_name in indexes:
             op.drop_index(index_name, table_name=table)
         op.drop_column(table, "entry_intent_id")
+    if sa.inspect(bind).has_table("execution_intents"):
+        op.drop_table("execution_intents")
 
 
 def _drop_lifecycle_schema() -> None:
@@ -135,7 +137,7 @@ def _drop_lifecycle_schema() -> None:
     ):
         op.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
     op.drop_table("execution_order_events")
-    op.drop_table("execution_intents")
     for table in ("positions", "trades"):
         op.drop_index(f"ix_{table}_entry_intent_id", table_name=table)
         op.drop_column(table, "entry_intent_id")
+    op.drop_table("execution_intents")
