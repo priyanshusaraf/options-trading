@@ -317,9 +317,9 @@ def test_options_cell_populates_premium_metrics_via_sweep():
 
 # ── cache / schema (mirrors tests/test_backtest_cache_risk_model.py's style) ──
 
-def test_schema_version_is_7():
+def test_schema_version_is_8():
     from app.backtest.cache import SCHEMA_VERSION
-    assert SCHEMA_VERSION == 7
+    assert SCHEMA_VERSION == 8
 
 
 def test_premium_param_changes_signature():

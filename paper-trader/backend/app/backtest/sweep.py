@@ -14,7 +14,9 @@ import threading
 
 from app.backtest.engine import backtest_charge_segment, simulate
 from app.backtest.metrics import BTMetrics
-from app.backtest.premium import simulate_premium
+from app.backtest.identity import execution_result_address, ordered_dataset_address
+from app.backtest.premium import NO_OPTIONS_PREMIUM_ERROR, simulate_premium
+from app.core.config import get_settings
 from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
@@ -242,20 +244,59 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None) -> None:
     first_ts = ist_epoch(candles[0].ts)
     last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
     effective_days = max(0, round((last_ts - first_ts) / 86400))
-    phash = cache.params_signature(capital, window=win.get("label", ""), strategy=strat)
-    with SessionLocal() as s:
-        hit = cache.find_reusable(s, inst.key, interval, phash, last_ts)
-        if hit is not None:
-            _copy_from_cache(s, run_id, hit)   # nothing changed -> reuse computed metrics
-            return
+    slippage_pct = float(get_settings().backtest_slippage_pct)
+    try:
+        dataset_address = ordered_dataset_address(
+            candles,
+            provider=provider,
+            instrument=inst,
+            interval=interval,
+            requested_window={
+                "lookback_days": win.get("lookback_days"),
+                "start": start,
+                "end": end,
+                "fetch_days": days,
+            },
+            effective_window={
+                "first_ts": first_ts,
+                "last_ts": last_ts,
+                "bars": len(candles),
+                "clamped": clamped,
+            },
+        )
+        phash = execution_result_address(
+            dataset_address=dataset_address,
+            instrument=inst,
+            strategy=strat,
+            parameters=dict(strat.default_params),
+            capital=capital,
+            window=win,
+            slippage_pct=slippage_pct,
+            implementation_maps=(),
+        ) or ""
+    except Exception as exc:
+        # Identity failure disables reuse for this cell; it never disables the run.
+        log.warning(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
+        phash = ""
+    if phash:
+        expected_premium_error = ("" if getattr(inst, "has_options", True)
+                                  else NO_OPTIONS_PREMIUM_ERROR)
+        with SessionLocal() as s:
+            hit = cache.find_reusable(
+                s, inst.key, interval, phash, last_ts,
+                expected_premium_error=expected_premium_error)
+            if hit is not None:
+                _copy_from_cache(s, run_id, hit)
+                return
     trades, m = simulate(candles, inst, interval, capital=capital,
-                         strategy=strat, params=dict(strat.default_params))
+                         strategy=strat, params=dict(strat.default_params),
+                         slippage_pct=slippage_pct)
     # synthetic-premium backtest (audit C6) — runs alongside the spot cell above.
     # A premium-side bug must NEVER kill the spot result: any exception here is
     # caught and surfaced as premium_error instead of aborting the sweep.
     if not getattr(inst, "has_options", True):
         p_trades, p_metrics, premium_error = [], BTMetrics(), \
-            "instrument has no listed options (has_options=False)"
+            NO_OPTIONS_PREMIUM_ERROR
     else:
         try:
             p_trades, p_metrics = simulate_premium(
@@ -283,34 +324,9 @@ def _supports_end(provider) -> bool:
 
 
 def _copy_from_cache(session, run_id, src) -> None:
-    import datetime as dt
+    from app.backtest.cache import cached_result_values
     session.add(BacktestResult(
-        run_id=run_id, instrument_key=src.instrument_key, name=src.name,
-        segment=src.segment, strategy_key=src.strategy_key or "trend_impulse_v3",
-        interval=src.interval, trades=src.trades, wins=src.wins,
-        win_rate=src.win_rate, profit_factor=src.profit_factor,
-        max_drawdown_pct=src.max_drawdown_pct, return_pct=src.return_pct,
-        net_pnl=src.net_pnl, gross_pnl=src.gross_pnl, charges=src.charges,
-        expectancy=src.expectancy, cagr=src.cagr,
-        calmar=src.calmar, consistency=src.consistency, sharpe=src.sharpe,
-        max_consec_losses=src.max_consec_losses, time_underwater_pct=src.time_underwater_pct,
-        notional=src.notional, lots=src.lots, affordable=src.affordable,
-        option_cost=src.option_cost,
-        open_at_end=src.open_at_end, win_rate_realised=src.win_rate_realised,
-        return_pct_realised=src.return_pct_realised,
-        bh_return_pct=src.bh_return_pct, worst_trade_pnl=src.worst_trade_pnl,
-        worst_mae_pct=src.worst_mae_pct,
-        first_ts=src.first_ts, last_ts=src.last_ts,
-        effective_days=src.effective_days, clamped=src.clamped,
-        bars=src.bars, curve_json=src.curve_json, trades_json=src.trades_json,
-        params_hash=src.params_hash, last_candle_ts=src.last_candle_ts,
-        schema_version=src.schema_version, from_cache=True, computed_at=dt.datetime.now(),
-        premium_trades=src.premium_trades, premium_win_rate=src.premium_win_rate,
-        premium_net_pnl=src.premium_net_pnl, premium_return_pct=src.premium_return_pct,
-        premium_profit_factor=src.premium_profit_factor,
-        premium_max_drawdown_pct=src.premium_max_drawdown_pct,
-        premium_expectancy=src.premium_expectancy, premium_charges=src.premium_charges,
-        premium_trades_json=src.premium_trades_json, premium_error=src.premium_error))
+        run_id=run_id, from_cache=True, **cached_result_values(src)))
     session.commit()
 
 

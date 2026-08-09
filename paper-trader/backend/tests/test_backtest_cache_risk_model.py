@@ -15,9 +15,9 @@ def _strat(rm):
                            default_params={"ema_length": 50}, risk_model=rm)
 
 
-def test_schema_version_is_7():
-    # bumped for the synthetic-premium backtest (audit C6) — see cache.py's v7 note
-    assert SCHEMA_VERSION == 7
+def test_schema_version_is_8():
+    # v8 makes the exact dataset and execution manifest the reusable identity.
+    assert SCHEMA_VERSION == 8
 
 
 def test_risk_model_changes_signature():
@@ -31,4 +31,4 @@ def test_default_strategy_signature_still_stable_shape():
     # v3/None path must not blow up and must differ from a v4 signature
     d = params_signature(50_000, window="90d")
     v4 = params_signature(50_000, window="90d", strategy=_strat(RM))
-    assert d != v4 and len(d) == 32
+    assert d != v4 and len(d) == 64

@@ -27,7 +27,8 @@ the older B → E → C → D → A sequence. The current order is:
 
 1. execution safety and truthful fill behaviour;
 2. causal strategy admission;
-3. content-addressed backtest correctness, then 100 × 5 performance;
+3. content-addressed backtest correctness, then scalable sweep performance (100 × 5 baseline,
+   followed by 500 × 5 and 1,000 × 5 expansion tiers);
 4. explicit data/execution/account role bindings;
 5. account-isolated deployment design and load/failure proof;
 6. novice research UX on the existing frontend;
@@ -47,8 +48,8 @@ the present code cannot support is `CLAIM REJECTED`.
 | 1. Durable entry intent and immutable lifecycle | **COMPLETE** | Migration `0014`, append-only intent/events, pure reduction, and pre-submit commit are verified at `9827e23`. |
 | 2. Live entry integration, recovery, protection, telemetry | **COMPLETE within the live-entry scope** | Durable recovery, cumulative fill deltas, protection-before-booking, latency, slippage, and `AUTO`/`MARKET`/`LIMIT` live-entry routing passed the branch-wide gate. Live options and equity entries persist and submit the effective MARKET or LIMIT request. **Paper and backtest LIMIT fill parity remains open. Exits remain on the legacy journal and market-order path.** |
 | 3. Causal strategy contract | **PARTIAL** | IR prefix causality and handwritten-strategy mutation tests exist. Closed per-block causal declarations, admission enforcement, and streaming-versus-vectorised parity are not complete. |
-| 4. Content-addressed backtest cache | **CLAIM REJECTED** | The current cache uses the final candle timestamp rather than a full ordered OHLCV address, omits executable/cost identity, and drops `bh_curve_json` on cache copy. |
-| 5. Fast 100 × 5 sweep | **UNSTARTED as a gate** | A 16-cell smoke exists. Provider-read/DataFrame budgets, zero-read warm reuse, batched progress, frozen-output parity, and p50/p95/p99 measurement do not. |
+| 4. Content-addressed backtest cache | **COMPLETE on this branch** | Schema v8 binds exact ordered OHLCV bytes and source context to a closed execution manifest: strategy and transitive source, bound parameters, instrument economics, slippage, charges, event/exit policy, and premium assumptions. Historical revisions with the same final timestamp are cold; transient premium failures are not reusable; warm rows preserve every result column except row/run identity. |
+| 5. Scalable sweep: 100 × 5 baseline, then 500 × 5 / 1,000 × 5 | **UNSTARTED as a gate** | A 16-cell smoke exists. Provider-read/DataFrame budgets, shared frame acquisition, batched progress, frozen-output parity, and p50/p95/p99 measurement do not. The 100 × 5 workload is the first measurement tier, not a capacity limit or completion claim. |
 | 6. Data/execution/account role bindings | **PARTIAL** | Capability gates admit a second-broker-shaped test double, but `make_broker(provider)` still derives execution from one provider. No account actor owns one account yet. |
 | 7. Deployable 100-user topology | **UNSTARTED** | The current single-owner VPS deploy path is real and guarded; it is not a multi-account worker topology and has no soak, lease, fencing, failover, RPO, or RTO proof. |
 | 8. Novice research experience | **PARTIAL** | The React/Vite graph, research, backtest, engine, portfolio, and ledger surfaces exist. The guided idea-to-paper journey and novice usability gate do not. |

@@ -1,10 +1,4 @@
-"""
-Reusable backtest cache. A sweep result is reusable when the *content* it would
-recompute is identical: same instrument, interval, strategy/params signature,
-schema version, and the same last completed candle. Then we copy the stored
-metrics into the new run instead of re-simulating. SQLite stays the source of
-truth; nothing here uses the browser or any external store.
-"""
+"""Reusable, content-addressed backtest result cache."""
 from __future__ import annotations
 
 import hashlib
@@ -31,7 +25,21 @@ from app.db.models import BacktestResult
 # v7: the synthetic-premium backtest (audit C6) runs alongside the spot cell —
 #     iv_rv_multiplier/premium_spread_pct/entry_dte_days joined the signature so
 #     a premium-model knob change never silently reuses a stale premium result.
-SCHEMA_VERSION = 7
+# v8: cache identity binds the complete ordered candle dataset, execution source,
+#     strategy version, instrument economics, and every simulation policy.  Full
+#     SHA-256 addresses replace the old timestamp-plus-truncated-params key.
+SCHEMA_VERSION = 8
+
+RUN_LOCAL_FIELDS = frozenset({"id", "run_id", "from_cache"})
+CACHED_RESULT_FIELDS = tuple(
+    column.name for column in BacktestResult.__table__.columns
+    if column.name not in RUN_LOCAL_FIELDS
+)
+
+
+def cached_result_values(source: BacktestResult) -> dict:
+    """Every cold-result value that a warm row must reproduce exactly."""
+    return {name: getattr(source, name) for name in CACHED_RESULT_FIELDS}
 
 # defaults mirrored from app.backtest.premium.DEFAULT_PREMIUM_PARAMS (not
 # imported, to keep this module's dependency graph shallow — cache.py is on the
@@ -46,22 +54,19 @@ def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50
                      iv_rv_multiplier: float = _PREMIUM_SIG_DEFAULTS["iv_rv_multiplier"],
                      premium_spread_pct: float = _PREMIUM_SIG_DEFAULTS["premium_spread_pct"],
                      entry_dte_days: int = _PREMIUM_SIG_DEFAULTS["entry_dte_days"]) -> str:
-    """Stable hash of everything that affects a backtest result other than the
-    candle data itself. Changing any knob — including the requested date window,
-    the STRATEGY, or a synthetic-premium model param — invalidates the cache so a
-    1-year run never reuses a 10-year run's metrics and an Expanding-Z run never
-    reuses a Trend-Impulse run's.
+    """Legacy model-only signature retained for callers outside sweep.
 
-    Back-compat note: through v5 the default strategy reproduced its historical
-    signature so the owner's v3 cache stayed valid; v6's fill-model change makes
-    every pre-v6 cell stale BY DESIGN, so that guarantee is intentionally reset
-    at v6 (the format is kept stable from here so future v3 caches survive
-    non-breaking bumps)."""
-    from app.strategy.registry import DEFAULT_STRATEGY_KEY
+    Sweep reuse uses :func:`execution_result_address`, which also binds exact data,
+    source modules, instrument economics, slippage, and policy globals.
+    """
+    from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
+    strategy = strategy or get_strategy(DEFAULT_STRATEGY_KEY)
+    version = getattr(strategy, "version", "unknown")
     prem = f"ivrv={iv_rv_multiplier}|psprd={premium_spread_pct}|dte={entry_dte_days}"
-    if strategy is None or strategy.key == DEFAULT_STRATEGY_KEY:
+    if strategy.key == DEFAULT_STRATEGY_KEY:
         raw = (f"v{SCHEMA_VERSION}|cap={capital}|ema={ema_length}|z={z_length}"
-               f"|ez={entry_z}|sl={slope_lookback}|win={window}|{prem}")
+               f"|ez={entry_z}|sl={slope_lookback}|win={window}"
+               f"|stratver={version}|{prem}")
     else:
         ps = ",".join(f"{k}={strategy.default_params[k]}"
                       for k in sorted(strategy.default_params))
@@ -69,12 +74,14 @@ def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50
         rs = ("none" if not rm else
               ",".join(f"{k}={rm[k]}" for k in sorted(rm)))
         raw = (f"v{SCHEMA_VERSION}|cap={capital}|win={window}"
-               f"|strat={strategy.key}|params={ps}|risk={rs}|{prem}")
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+               f"|strat={strategy.key}|stratver={version}"
+               f"|params={ps}|risk={rs}|{prem}")
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def find_reusable(session, key: str, interval: str, params_hash: str,
-                  last_candle_ts: int) -> BacktestResult | None:
+                  last_candle_ts: int, *, expected_premium_error: str = "") \
+        -> BacktestResult | None:
     """Most recent successful result with an identical content key, or None."""
     if last_candle_ts <= 0:
         return None
@@ -84,6 +91,7 @@ def find_reusable(session, key: str, interval: str, params_hash: str,
                 BacktestResult.params_hash == params_hash,
                 BacktestResult.last_candle_ts == last_candle_ts,
                 BacktestResult.schema_version == SCHEMA_VERSION,
-                BacktestResult.error == "")
+                BacktestResult.error == "",
+                BacktestResult.premium_error == expected_premium_error)
          .order_by(BacktestResult.id.desc()))
     return session.scalars(q).first()

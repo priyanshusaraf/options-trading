@@ -291,6 +291,11 @@ The original paper explicitly requires unselected trials, variance across trial 
 
 ### F-09: backtest cache identity can return a stale answer
 
+**Status 2026-08-09:** remediated on local branch `codex/execution-foundation`, not pushed or
+deployed. Schema v8 now uses the full ordered dataset address plus a closed execution manifest;
+the regression suite revises an older candle without changing the final timestamp and proves a
+cold run. Warm-copy parity and transient premium-error rejection are also covered.
+
 **Severity:** high research correctness  
 **Files:** `app/backtest/cache.py:43-89`, `app/backtest/sweep.py:242-252`
 

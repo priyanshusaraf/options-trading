@@ -91,6 +91,8 @@ DEFAULT_PREMIUM_PARAMS: dict = {
     "trail_step_lock_pct": 0.10,
 }
 
+NO_OPTIONS_PREMIUM_ERROR = "instrument has no listed options (has_options=False)"
+
 
 def _candles_to_df(candles) -> pd.DataFrame:
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
