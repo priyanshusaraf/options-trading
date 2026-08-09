@@ -184,24 +184,59 @@ def test_realised_slippage_uses_intent_decision_price():
     assert state.slippage_bps == 150.0
 
 
-def test_latency_uses_persisted_event_times():
-    state = reduce_execution_events(_request(), [
+def test_latency_uses_persisted_signal_intent_submit_ack_and_first_fill_times():
+    state = reduce_execution_events(_request(signal_at=BASE_TIME), [
         _row("intent-1", _event("INTENT_CREATED", source_event_id="intent", observed_at=BASE_TIME,
-                                 source="engine"), BASE_TIME),
+                                 source="engine"), BASE_TIME + dt.timedelta(milliseconds=100)),
         _row("intent-1", _event("SUBMIT_STARTED", source_event_id="submit", observed_at=BASE_TIME,
                                  source="engine"), BASE_TIME + dt.timedelta(milliseconds=200)),
         _row("intent-1", _event("ACKNOWLEDGED", source_event_id="ack", observed_at=BASE_TIME,
                                  source="engine", broker_order_id="order-1"),
-             BASE_TIME + dt.timedelta(milliseconds=500)),
-        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="complete", observed_at=BASE_TIME,
-                                 broker_status="COMPLETE", cumulative_filled_qty=100,
-                                 avg_price=100), BASE_TIME + dt.timedelta(milliseconds=900)),
+             BASE_TIME + dt.timedelta(milliseconds=300)),
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="partial", observed_at=BASE_TIME,
+                                 broker_status="OPEN", cumulative_filled_qty=25,
+                                 avg_price=100), BASE_TIME + dt.timedelta(milliseconds=400)),
     ])
 
-    assert state.intent_to_submit_ms == 200.0
-    assert state.submit_to_ack_ms == 300.0
-    assert state.ack_to_terminal_ms == 400.0
-    assert state.intent_to_terminal_ms == 900.0
+    assert state.signal_to_intent_ms == 100.0
+    assert state.intent_to_submit_ms == 100.0
+    assert state.submit_to_ack_ms == 100.0
+    assert state.ack_to_fill_ms == 100.0
+    assert not hasattr(state, "ack_to_terminal_ms")
+    assert not hasattr(state, "intent_to_terminal_ms")
+
+
+def test_latency_ignores_rejection_and_returns_none_for_regressed_timestamps():
+    intent_at = BASE_TIME + dt.timedelta(seconds=2)
+    ack_at = BASE_TIME + dt.timedelta(seconds=1)
+    state = reduce_execution_events(_request(signal_at=BASE_TIME + dt.timedelta(seconds=3)), [
+        _row("intent-1", _event("INTENT_CREATED", source_event_id="intent", observed_at=BASE_TIME,
+                                 source="engine"), intent_at),
+        _row("intent-1", _event("SUBMIT_STARTED", source_event_id="submit", observed_at=BASE_TIME,
+                                 source="engine"), BASE_TIME),
+        _row("intent-1", _event("ACKNOWLEDGED", source_event_id="ack", observed_at=BASE_TIME,
+                                 source="engine", broker_order_id="order-1"), ack_at),
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="rejected", observed_at=BASE_TIME,
+                                 broker_status="REJECTED"), BASE_TIME + dt.timedelta(seconds=3)),
+    ])
+
+    assert state.signal_to_intent_ms is None
+    assert state.intent_to_submit_ms is None
+    assert state.submit_to_ack_ms == 1000.0
+    assert state.ack_to_fill_ms is None
+    assert f"signal_to_intent timestamps regressed: {(BASE_TIME + dt.timedelta(seconds=3)).isoformat()} > {intent_at.isoformat()}" in state.anomalies
+    assert f"intent_to_submit timestamps regressed: {intent_at.isoformat()} > {BASE_TIME.isoformat()}" in state.anomalies
+
+
+def test_sell_adverse_slippage_is_positive():
+    state = reduce_execution_events(_request(side="SELL", decision_price=100.0), [
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="complete", observed_at=BASE_TIME,
+                                 broker_status="COMPLETE", cumulative_filled_qty=100,
+                                 avg_price=98.5), BASE_TIME),
+    ])
+
+    assert state.slippage_amount == 1.5
+    assert state.slippage_bps == 150.0
 
 
 def test_store_canonicalizes_json_and_rejects_identity_collisions(tmp_path):
@@ -228,6 +263,129 @@ def test_store_canonicalizes_json_and_rejects_identity_collisions(tmp_path):
                    broker_status="COMPLETE", payload={"a": 1, "b": 2}),
             BASE_TIME,
         )
+
+
+@pytest.mark.parametrize(
+    ("change", "now"),
+    [
+        ({"kind": "ACKNOWLEDGED"}, BASE_TIME),
+        ({"broker_order_id": "order-2"}, BASE_TIME),
+        ({"broker_status": "COMPLETE"}, BASE_TIME),
+        ({"cumulative_filled_qty": 1}, BASE_TIME),
+        ({"avg_price": 100.5}, BASE_TIME),
+        ({"payload": {"changed": True}}, BASE_TIME),
+        ({"anomaly": "changed"}, BASE_TIME),
+        ({}, BASE_TIME + dt.timedelta(microseconds=1)),
+    ],
+)
+def test_store_rejects_collision_when_any_durable_field_differs(tmp_path, change, now):
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    intent = store.create_intent(_request(), {}, BASE_TIME)
+    store.append_event(intent.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="obs-1", observed_at=BASE_TIME,
+        broker_order_id="order-1", broker_status="OPEN", cumulative_filled_qty=0,
+        avg_price=100.0, payload={"same": True}, anomaly="original",
+    ), BASE_TIME)
+
+    values = {
+        "kind": "STATUS_OBSERVED",
+        "source_event_id": "obs-1",
+        "observed_at": BASE_TIME,
+        "broker_order_id": "order-1",
+        "broker_status": "OPEN",
+        "cumulative_filled_qty": 0,
+        "avg_price": 100.0,
+        "payload": {"same": True},
+        "anomaly": "original",
+    }
+    values.update(change)
+    with pytest.raises(ValueError, match="different content"):
+        store.append_event(intent.client_intent_id, _event(**values), now)
+
+
+def test_create_intent_rolls_back_after_commit_failure_and_can_write_later(tmp_path, monkeypatch):
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    original_commit = session.commit
+
+    def fail_commit():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(session, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        store.create_intent(_request(), {}, BASE_TIME)
+
+    assert session.in_transaction() is False
+    monkeypatch.setattr(session, "commit", original_commit)
+    intent = store.create_intent(_request(), {}, BASE_TIME)
+    assert intent.client_intent_id
+
+
+def test_append_event_rolls_back_after_commit_failure_and_can_write_later(tmp_path, monkeypatch):
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    intent = store.create_intent(_request(), {}, BASE_TIME)
+    original_commit = session.commit
+
+    def fail_commit():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(session, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        store.append_event(intent.client_intent_id, _event(
+            "INTENT_CREATED", source_event_id="intent", observed_at=BASE_TIME, source="engine"),
+            BASE_TIME)
+
+    assert session.in_transaction() is False
+    monkeypatch.setattr(session, "commit", original_commit)
+    event = store.append_event(intent.client_intent_id, _event(
+        "INTENT_CREATED", source_event_id="intent", observed_at=BASE_TIME, source="engine"),
+        BASE_TIME)
+    assert event.id is not None
+
+
+@pytest.mark.parametrize("count", [1, 3, 5])
+def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_path, count):
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    scoped = [
+        store.create_intent(_request(), {}, BASE_TIME + dt.timedelta(seconds=index))
+        for index in range(count)
+    ]
+    terminal = store.create_intent(_request(), {}, BASE_TIME + dt.timedelta(seconds=4))
+    different_account = store.create_intent(_request(account_scope="account.other"), {}, BASE_TIME)
+    different_connection = store.create_intent(
+        _request(connection_scope="kite:other"), {}, BASE_TIME)
+    for intent in scoped[: max(0, count - 1)]:
+        store.append_event(intent.client_intent_id, _event(
+            "STATUS_OBSERVED", source_event_id=f"open-{intent.client_intent_id}",
+            observed_at=BASE_TIME, broker_status="OPEN"), BASE_TIME)
+    store.append_event(terminal.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="complete", observed_at=BASE_TIME,
+        broker_status="COMPLETE", cumulative_filled_qty=100, avg_price=100), BASE_TIME)
+    store.append_event(different_account.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="other-account", observed_at=BASE_TIME,
+        broker_status="OPEN"), BASE_TIME)
+    store.append_event(different_connection.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="other-connection", observed_at=BASE_TIME,
+        broker_status="OPEN"), BASE_TIME)
+
+    statements: list[str] = []
+
+    @sa.event.listens_for(session.get_bind(), "before_cursor_execute")
+    def count_queries(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    try:
+        unresolved = store.unresolved_entries(1, "account.default", "kite:legacy")
+    finally:
+        sa.event.remove(session.get_bind(), "before_cursor_execute", count_queries)
+
+    assert [intent.client_intent_id for intent in unresolved] == [
+        intent.client_intent_id for intent in scoped
+    ]
+    assert len(statements) == 2
 
 
 def test_identifiers_follow_the_entry_lifecycle_contract():

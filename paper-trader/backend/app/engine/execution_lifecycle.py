@@ -109,18 +109,27 @@ class ExecutionState:
     terminal: bool
     reconciliation_required: bool
     anomalies: tuple[str, ...]
+    signal_to_intent_ms: float | None
     intent_to_submit_ms: float | None
     submit_to_ack_ms: float | None
-    ack_to_terminal_ms: float | None
-    intent_to_terminal_ms: float | None
+    ack_to_fill_ms: float | None
     slippage_amount: float | None
     slippage_bps: float | None
     last_fill_delta: int = 0
     last_fill_price: float | None = None
 
 
-def _milliseconds(start: dt.datetime | None, end: dt.datetime | None) -> float | None:
+def _latency_ms(
+    name: str,
+    start: dt.datetime | None,
+    end: dt.datetime | None,
+    anomalies: list[str],
+) -> float | None:
     if start is None or end is None:
+        return None
+    if end < start:
+        anomalies.append(
+            f"{name} timestamps regressed: {start.isoformat()} > {end.isoformat()}")
         return None
     return round((end - start).total_seconds() * 1000.0, 3)
 
@@ -159,7 +168,7 @@ def reduce_execution_events(
     intent_at: dt.datetime | None = None
     submit_at: dt.datetime | None = None
     acknowledged_at: dt.datetime | None = None
-    terminal_at: dt.datetime | None = None
+    first_fill_at: dt.datetime | None = None
     last_fill_delta = 0
     last_fill_price: float | None = None
 
@@ -201,6 +210,8 @@ def reduce_execution_events(
             previous_avg = avg_price
             filled_qty = row.cumulative_filled_qty
             avg_price = row.avg_price
+            if previous_qty == 0 and first_fill_at is None:
+                first_fill_at = observed_at
             last_fill_delta = filled_qty - previous_qty
             last_fill_price = round(
                 ((filled_qty * avg_price) - (previous_qty * previous_avg)) / last_fill_delta, 8)
@@ -215,7 +226,6 @@ def reduce_execution_events(
         status = next_status
         if next_terminal:
             terminal = True
-            terminal_at = observed_at
 
     reconciliation_required = submit_seen and not acknowledged
     remaining_qty = max(0, requested_qty - filled_qty)
@@ -225,6 +235,11 @@ def reduce_execution_events(
         slippage_amount = round(avg_price - decision_price if side == "BUY"
                                 else decision_price - avg_price, 8)
         slippage_bps = round(slippage_amount / decision_price * 10_000.0, 8)
+    signal_to_intent_ms = _latency_ms(
+        "signal_to_intent", intent.signal_at, intent_at, anomalies)
+    intent_to_submit_ms = _latency_ms("intent_to_submit", intent_at, submit_at, anomalies)
+    submit_to_ack_ms = _latency_ms("submit_to_ack", submit_at, acknowledged_at, anomalies)
+    ack_to_fill_ms = _latency_ms("ack_to_fill", acknowledged_at, first_fill_at, anomalies)
 
     return ExecutionState(
         client_intent_id=client_intent_id,
@@ -236,10 +251,10 @@ def reduce_execution_events(
         terminal=terminal,
         reconciliation_required=reconciliation_required,
         anomalies=tuple(anomalies),
-        intent_to_submit_ms=_milliseconds(intent_at, submit_at),
-        submit_to_ack_ms=_milliseconds(submit_at, acknowledged_at),
-        ack_to_terminal_ms=_milliseconds(acknowledged_at, terminal_at),
-        intent_to_terminal_ms=_milliseconds(intent_at, terminal_at),
+        signal_to_intent_ms=signal_to_intent_ms,
+        intent_to_submit_ms=intent_to_submit_ms,
+        submit_to_ack_ms=submit_to_ack_ms,
+        ack_to_fill_ms=ack_to_fill_ms,
         slippage_amount=slippage_amount,
         slippage_bps=slippage_bps,
         last_fill_delta=last_fill_delta,
@@ -284,7 +299,11 @@ class ExecutionLifecycleStore:
             created_at=now,
         )
         self.session.add(row)
-        self.session.commit()
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
         return row
 
     def append_event(
@@ -324,6 +343,9 @@ class ExecutionLifecycleStore:
             if existing is not None:
                 raise ValueError("event identity already exists with different content")
             raise
+        except Exception:
+            self.session.rollback()
+            raise
 
     @staticmethod
     def _same_event(existing: ExecutionOrderEvent, candidate: ExecutionOrderEvent) -> bool:
@@ -362,7 +384,22 @@ class ExecutionLifecycleStore:
                 ExecutionIntent.connection_scope == connection_scope,
             )
             .order_by(ExecutionIntent.created_at, ExecutionIntent.client_intent_id)))
-        return [intent for intent in intents if not self.state_for(intent.client_intent_id).terminal]
+        if not intents:
+            return []
+        intent_ids = [intent.client_intent_id for intent in intents]
+        events_by_intent: dict[str, list[ExecutionOrderEvent]] = {
+            client_intent_id: [] for client_intent_id in intent_ids
+        }
+        events = self.session.scalars(
+            select(ExecutionOrderEvent)
+            .where(ExecutionOrderEvent.client_intent_id.in_(intent_ids))
+            .order_by(ExecutionOrderEvent.id))
+        for event in events:
+            events_by_intent[event.client_intent_id].append(event)
+        return [
+            intent for intent in intents
+            if not reduce_execution_events(intent, events_by_intent[intent.client_intent_id]).terminal
+        ]
 
 
 __all__ = [
