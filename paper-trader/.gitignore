@@ -9,6 +9,8 @@ __pycache__/
 *.db-wal
 *.db-shm
 backend/access_token.json
+# local content-addressed candle store (~10 GB at the 10k×5 tier) — data, not source
+backend/backtest_datasets/
 backend/.env
 backend/predrop-*.sql          # live-ledger recovery dumps — real trades, never commit
 backend/*-ledger-*.sql

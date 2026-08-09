@@ -71,6 +71,10 @@ SAFE_TEST_ENV = {
     "PT_DB_PATH": os.path.join(_TMP_DIR, "paper_trader.db"),
     "PT_LEDGER_DB_PATH": os.path.join(_TMP_DIR, "ledger.db"),
     "PT_RESEARCH_DB_PATH": os.path.join(_TMP_DIR, "research.db"),
+    # The backtest dataset store is a DIRECTORY of candle blobs, and its default
+    # is cwd-relative — a bare `pytest` would otherwise grow gigabytes of them
+    # inside backend/. Same reasoning as the three databases above.
+    "PT_BACKTEST_DATASET_DIR": os.path.join(_TMP_DIR, "backtest_datasets"),
 }
 os.environ.update(SAFE_TEST_ENV)
 

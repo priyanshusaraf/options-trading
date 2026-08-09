@@ -27,6 +27,11 @@ _IST = ZoneInfo("Asia/Kolkata")
 _UTC = dt.timezone.utc
 _EPOCH = dt.datetime(1970, 1, 1, tzinfo=_UTC)
 _CANDLE_FLOATS = ("open", "high", "low", "close", "volume")
+# The exact field sets `ordered_dataset_address` resolves its source context
+# from.  A store that persists a dataset must record the SAME resolution, or a
+# reloaded dataset re-addresses differently and is (correctly) refused.
+PROVIDER_IDENTITY_FIELDS = ("key", "name", "provider")
+INSTRUMENT_IDENTITY_FIELDS = ("key", "spot_exchange", "spot_symbol")
 
 
 def _stable(value: Any) -> Any:
@@ -86,6 +91,11 @@ def _named_identity(value: Any, *, fields: Sequence[str]) -> Any:
     return found
 
 
+def source_identity(value: Any, *, fields: Sequence[str]) -> Any:
+    """Public form of the source-context resolution used by the dataset address."""
+    return _named_identity(value, fields=fields)
+
+
 def ordered_dataset_address(candles: Sequence[Any], *, provider: Any,
                             instrument: Any, interval: str,
                             requested_window: Any,
@@ -98,9 +108,9 @@ def ordered_dataset_address(candles: Sequence[Any], *, provider: Any,
     """
     metadata = {
         "scheme": DATASET_IDENTITY_SCHEME,
-        "provider": _named_identity(provider, fields=("key", "name", "provider")),
+        "provider": _named_identity(provider, fields=PROVIDER_IDENTITY_FIELDS),
         "instrument": _named_identity(
-            instrument, fields=("key", "spot_exchange", "spot_symbol")),
+            instrument, fields=INSTRUMENT_IDENTITY_FIELDS),
         "interval": interval,
         "requested_window": requested_window,
         "effective_window": effective_window,
@@ -295,5 +305,6 @@ def execution_result_address(*, dataset_address: str, instrument: Any,
 
 
 __all__ = ["DATASET_IDENTITY_SCHEME", "EXECUTION_IDENTITY_SCHEME",
-           "ordered_dataset_address", "transitive_module_source_digest",
-           "execution_result_address"]
+           "PROVIDER_IDENTITY_FIELDS", "INSTRUMENT_IDENTITY_FIELDS",
+           "source_identity", "ordered_dataset_address",
+           "transitive_module_source_digest", "execution_result_address"]

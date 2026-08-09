@@ -17,6 +17,7 @@ from functools import cached_property
 from app.backtest.engine import (backtest_charge_segment, compute_signals,
                                  prepare_signal_frame, simulate)
 from app.backtest.metrics import BTMetrics
+from app.backtest import dataset_store
 from app.backtest.identity import execution_result_address, ordered_dataset_address
 from app.backtest.premium import NO_OPTIONS_PREMIUM_ERROR, simulate_premium
 from app.core.config import get_settings
@@ -279,30 +280,45 @@ def _prepare_dataset(provider, inst, interval, win) -> _PreparedDataset:
     first_ts = ist_epoch(candles[0].ts)
     last_ts = ist_epoch(candles[-1].ts)   # IST-correct cache discriminator (DV-5)
     effective_days = max(0, round((last_ts - first_ts) / 86400))
+    requested_window = {
+        "lookback_days": win.get("lookback_days"),
+        "start": start,
+        "end": end,
+        "fetch_days": days,
+    }
+    effective_window = {
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "bars": len(candles),
+        "clamped": clamped,
+    }
     try:
         dataset_address = ordered_dataset_address(
             candles,
             provider=provider,
             instrument=inst,
             interval=interval,
-            requested_window={
-                "lookback_days": win.get("lookback_days"),
-                "start": start,
-                "end": end,
-                "fetch_days": days,
-            },
-            effective_window={
-                "first_ts": first_ts,
-                "last_ts": last_ts,
-                "bars": len(candles),
-                "clamped": clamped,
-            },
+            requested_window=requested_window,
+            effective_window=effective_window,
         )
     except Exception as exc:
         # A dataset can still be simulated when it cannot be addressed. It is
         # deliberately non-reusable for this run.
-        log.warning(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
+        log.warn(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
         dataset_address = ""
+    if dataset_address:
+        # Keep the bytes we just paid a throttled provider read for. This is a
+        # WRITE only: the sweep never reads the store back, so a refresh still
+        # costs its reads. Serving from the store is an explicit pinned run.
+        # Storage failure is not a sweep failure, exactly as above.
+        try:
+            dataset_store.get_store().put(
+                candles, provider=provider, instrument=inst, interval=interval,
+                requested_window=requested_window,
+                effective_window=effective_window, address=dataset_address)
+        except Exception as exc:
+            log.warn(f"backtest dataset not stored for "
+                     f"{inst.key}/{interval}: {exc}")
     return _PreparedDataset(
         candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
         effective_days=effective_days, clamped=clamped,
@@ -343,7 +359,7 @@ def _one(run_id, provider, inst, interval, capital, win, strat=None,
             ) or ""
         except Exception as exc:
             # Identity failure disables reuse for this cell; it never disables the run.
-            log.warning(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
+            log.warn(f"backtest cache disabled for {inst.key}/{interval}: {exc}")
             phash = ""
     if phash:
         expected_premium_error = ("" if getattr(inst, "has_options", True)

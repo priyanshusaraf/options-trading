@@ -424,6 +424,11 @@ class Settings(BaseSettings):
     # misc
     risk_free_rate: float = 0.065
     db_path: str = "paper_trader.db"
+    # Local content-addressed backtest dataset store (env PT_BACKTEST_DATASET_DIR).
+    # A filesystem directory, NOT the ledger database: the 10,000 × 5 tier is
+    # ~50,000 datasets and tens of GB of candle bytes, which must never enter
+    # paper_trader.db. The store owns its own request index inside this directory.
+    backtest_dataset_dir: str = "backtest_datasets"
 
     @property
     def cors_origins_list(self) -> list[str]:

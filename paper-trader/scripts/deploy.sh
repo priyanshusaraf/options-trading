@@ -64,6 +64,16 @@ EXCLUDES=(
                               #   --exclude, so excluded == protected. Deleting it
                               #   is the .env outage's exact signature: GET / 404s
                               #   while /api/health stays 200.
+  --exclude 'backtest_datasets'
+                              # Content-addressed candle blobs written by the sweep
+                              #   (app/backtest/dataset_store.py). Gitignored, which
+                              #   does NOT exclude it from rsync — that distinction is
+                              #   what makes this an outage rather than an annoyance.
+                              #   Measured at ~38 bytes/bar, so a full 10,000x5 sweep
+                              #   run on the Mac is ~10GB that would otherwise be
+                              #   pushed to a 1GB-RAM droplet with a small disk.
+                              #   Excluded == protected from --prune too, which is
+                              #   correct: the VPS may build its own cache.
   --exclude 'node_modules'
   --exclude '.venv'
   --exclude '__pycache__'

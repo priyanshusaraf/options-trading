@@ -1,0 +1,424 @@
+"""Local content-addressed store for backtest candle datasets.
+
+Why it exists
+-------------
+Kite's historical endpoint is throttled to 0.40 s per request
+(``app/providers/kite.py::_MIN_INTERVAL``).  The 10,000 instruments × 5
+intervals tier is 50,000 datasets, so fetching them live has a **5 h 33 m**
+floor that no amount of in-process optimisation can move.  Datasets must
+therefore be fetched once and kept locally.
+
+What it is NOT
+--------------
+It is not a cache that shortens a refresh.  Nothing here is read by the sweep.
+A normal refresh still costs one provider read per dataset — the provider APIs
+expose no revision token, so request metadata cannot prove historical bytes are
+unchanged, and claiming otherwise would reintroduce the stale-history defect
+fixed by cache schema v8 (design: "Truthful warm modes").  Serving a run from
+this store is an *explicit* pinned-run decision, and lives in Task 4.
+
+Storage
+-------
+The filesystem, never the ledger database.  Layout under ``store_root()``::
+
+    blobs/<aa>/<address>.ptds     zlib-compressed packed bars
+    blobs/<aa>/<address>.json     sidecar manifest (source context)
+    index.sqlite3                 request key → newest address + fetch time
+
+``<address>`` is exactly ``identity.ordered_dataset_address`` — there is no
+second addressing scheme — and ``<aa>`` is its first two hex characters, which
+keeps any one directory near 1/256th of the corpus.
+
+The packed record is ``>q5d``: an int64 IST-epoch-microsecond timestamp
+followed by open/high/low/close/volume as IEEE-754 binary64.  No rounding, no
+text, no locale.
+
+The index uses its own ``sqlite3`` connection to its own file inside the store
+directory.  It deliberately does not touch ``app.db.session``: 50,000 datasets
+must never become rows in ``paper_trader.db``.
+
+On-disk size (measured 2026-08-09 on this machine)
+--------------------------------------------------
+=================================  =========  ========================
+                                   bytes/bar   10,000 × 5 × 5,000 bars
+---------------------------------  ---------  ------------------------
+packed, uncompressed                   48.00   12.0 GB
+zlib-6, 5,000 random-walk bars         38.32    9.6 GB
+zlib-6, 1,288 smooth mock bars         21.85    5.5 GB
+manifest sidecar (551 B each)              —   0.03 GB
+=================================  =========  ========================
+
+Compression is entirely a function of how much entropy the prices carry: the
+mock provider's smooth ramp halves, a random walk barely compresses, because
+binary64 mantissas of unrelated prices are near-incompressible.  **Plan on
+38 bytes/bar, i.e. ~10 GB for the full 10,000 × 5 tier at 5,000 bars each.**
+That is fine on a workstation and is a real constraint on the 25 GB VPS disk —
+check free space before enabling the store there, and re-measure against real
+Kite bars (2-decimal prices should sit between the two rows above) before
+committing to a capacity plan.
+
+Corruption containment
+----------------------
+A blob is only served when the address recomputed from its decoded bars and its
+manifest equals the address in its filename.  Anything else — a flipped byte, a
+truncated write, a revised file, a missing sidecar — is refused, never served.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import sqlite3
+import struct
+import threading
+import uuid
+import zlib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from app.backtest.identity import (INSTRUMENT_IDENTITY_FIELDS,
+                                   PROVIDER_IDENTITY_FIELDS,
+                                   ordered_dataset_address, source_identity)
+from app.core.config import get_settings
+
+BLOB_SUFFIX = ".ptds"
+MANIFEST_SUFFIX = ".json"
+STORE_SCHEME = "backtest-dataset-store/1"
+_MAGIC = b"PTDS1\0"
+_HEADER = len(_MAGIC) + 8
+_RECORD = struct.calcsize(">q5d")            # 48 bytes: int64 + five binary64
+_COMPRESSION_LEVEL = 6
+# The project's native candle clock: naive timestamps ARE IST wall-clock
+# (`app/core/market_hours.py::ist_epoch`), so they round-trip back naive.
+_IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+_UTC = dt.timezone.utc
+
+
+@dataclass(frozen=True)
+class StoredCandle:
+    """One decoded bar. Field-compatible with providers' `Candle` and the
+    sweep's `_FrozenCandle`, deliberately without either's behaviour."""
+    ts: dt.datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+@dataclass(frozen=True)
+class StoredDataset:
+    address: str
+    candles: tuple[StoredCandle, ...]
+    provider: Any
+    instrument: Any
+    interval: str
+    requested_window: Any
+    effective_window: Any
+    bars: int
+    first_ts_us: int
+    last_ts_us: int
+
+
+@dataclass(frozen=True)
+class IndexEntry:
+    request_key: str
+    address: str
+    fetched_at: str
+
+
+class DatasetStoreError(RuntimeError):
+    """A dataset could not be stored. Never fatal to a sweep."""
+
+
+# ── packed binary form ───────────────────────────────────────────────────────
+
+def _timestamp_us(value: dt.datetime) -> int:
+    aware = value.replace(tzinfo=_IST) if value.tzinfo is None else value
+    delta = aware.astimezone(_UTC) - dt.datetime(1970, 1, 1, tzinfo=_UTC)
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def encode_candles(candles) -> bytes:
+    out = bytearray(_MAGIC)
+    out += struct.pack(">Q", len(candles))
+    for index, candle in enumerate(candles):
+        ts = getattr(candle, "ts", None)
+        if not isinstance(ts, dt.datetime):
+            raise DatasetStoreError(f"candle {index} has no datetime ts")
+        out += struct.pack(">q5d", _timestamp_us(ts), float(candle.open),
+                           float(candle.high), float(candle.low),
+                           float(candle.close), float(candle.volume))
+    return zlib.compress(bytes(out), _COMPRESSION_LEVEL)
+
+
+def decode_candles(blob: bytes) -> tuple[StoredCandle, ...]:
+    raw = zlib.decompress(blob)
+    if len(raw) < _HEADER or raw[:len(_MAGIC)] != _MAGIC:
+        raise ValueError("not a dataset blob")
+    count = struct.unpack(">Q", raw[len(_MAGIC):_HEADER])[0]
+    if len(raw) != _HEADER + count * _RECORD:
+        raise ValueError("dataset blob length disagrees with its bar count")
+    rows = []
+    for index in range(count):
+        offset = _HEADER + index * _RECORD
+        us, o, h, low, close, volume = struct.unpack(
+            ">q5d", raw[offset:offset + _RECORD])
+        ts = dt.datetime.fromtimestamp(us / 1_000_000, _UTC).astimezone(
+            _IST).replace(tzinfo=None)
+        rows.append(StoredCandle(ts, o, h, low, close, volume))
+    return tuple(rows)
+
+
+def _json_stable(value: Any) -> Any:
+    """The manifest must survive JSON round-trip *identically*, or a reloaded
+    dataset re-addresses differently and is refused for no real reason."""
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                         allow_nan=False)
+    if json.loads(encoded) != value:
+        raise DatasetStoreError("dataset metadata does not survive JSON")
+    return encoded
+
+
+# ── the store ────────────────────────────────────────────────────────────────
+
+class DatasetStore:
+    """Content-addressed datasets on disk, with a request index beside them."""
+
+    def __init__(self, root: str | os.PathLike):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(self.root / "index.sqlite3"),
+                                     check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS dataset_requests ("
+            " request_key TEXT PRIMARY KEY,"
+            " provider TEXT NOT NULL, instrument TEXT NOT NULL,"
+            " interval TEXT NOT NULL, requested_window TEXT NOT NULL,"
+            " address TEXT NOT NULL, fetched_at TEXT NOT NULL)")
+        self._conn.commit()
+
+    # paths -------------------------------------------------------------
+    def _shard(self, address: str) -> Path:
+        return self.root / "blobs" / address[:2]
+
+    def blob_path(self, address: str) -> Path:
+        return self._shard(address) / f"{address}{BLOB_SUFFIX}"
+
+    def manifest_path(self, address: str) -> Path:
+        return self._shard(address) / f"{address}{MANIFEST_SUFFIX}"
+
+    # request identity --------------------------------------------------
+    def request_key(self, *, provider: Any, instrument: Any, interval: str,
+                    requested_window: Any) -> str:
+        """Address of the REQUEST — not of its answer. Two fetches of the same
+        request in different weeks share this key and differ in address."""
+        payload = _json_stable({
+            "scheme": STORE_SCHEME,
+            "provider": source_identity(provider, fields=PROVIDER_IDENTITY_FIELDS),
+            "instrument": source_identity(instrument,
+                                          fields=INSTRUMENT_IDENTITY_FIELDS),
+            "interval": interval,
+            "requested_window": requested_window,
+        })
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    # write -------------------------------------------------------------
+    def put(self, candles, *, provider: Any, instrument: Any, interval: str,
+            requested_window: Any, effective_window: Any,
+            address: str | None = None) -> str:
+        """Store one dataset; return its address.
+
+        Revised history is a NEW address, never an overwrite: the address binds
+        the ordered bytes, so a corrected candle produces a different file and
+        the previous dataset stays retrievable. Only the request index moves.
+        """
+        provider_identity = source_identity(provider,
+                                            fields=PROVIDER_IDENTITY_FIELDS)
+        instrument_identity = source_identity(instrument,
+                                              fields=INSTRUMENT_IDENTITY_FIELDS)
+        if not address:
+            address = ordered_dataset_address(
+                candles, provider=provider_identity,
+                instrument=instrument_identity, interval=interval,
+                requested_window=requested_window,
+                effective_window=effective_window)
+        if len(address) != 64 or any(c not in "0123456789abcdef" for c in address):
+            raise DatasetStoreError(f"not a dataset address: {address!r}")
+
+        blob = encode_candles(candles)
+        decoded = decode_candles(blob)
+        manifest = _json_stable({
+            "scheme": STORE_SCHEME,
+            "address": address,
+            "provider": provider_identity,
+            "instrument": instrument_identity,
+            "interval": interval,
+            "requested_window": requested_window,
+            "effective_window": effective_window,
+            "bars": len(decoded),
+            "first_ts_us": _timestamp_us(decoded[0].ts) if decoded else 0,
+            "last_ts_us": _timestamp_us(decoded[-1].ts) if decoded else 0,
+        })
+
+        blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
+        blob_path.parent.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        try:
+            self._atomic_write(blob_path, blob)
+            written.append(blob_path)
+            self._atomic_write(manifest_path, manifest.encode("utf-8"))
+            written.append(manifest_path)
+        except Exception:
+            # A half-stored dataset must not survive: get() would refuse it
+            # anyway, but a refused file is disk we can never reclaim by address.
+            for path in written:
+                path.unlink(missing_ok=True)
+            raise
+        self._record(address, provider=provider, instrument=instrument,
+                     interval=interval, requested_window=requested_window,
+                     provider_identity=provider_identity,
+                     instrument_identity=instrument_identity)
+        return address
+
+    @staticmethod
+    def _atomic_write(path: Path, payload: bytes) -> None:
+        """Write to a temp name in the same directory, then rename over.
+
+        A reader only ever sees the complete file: `os.replace` is atomic within
+        a filesystem, and the temp name carries a suffix no reader looks for.
+        """
+        tmp = path.parent / f"{path.name}.tmp-{uuid.uuid4().hex}"
+        try:
+            with open(tmp, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def _record(self, address: str, *, provider, instrument, interval,
+                requested_window, provider_identity, instrument_identity) -> None:
+        key = self.request_key(provider=provider, instrument=instrument,
+                               interval=interval,
+                               requested_window=requested_window)
+        row = (key, json.dumps(provider_identity, sort_keys=True),
+               json.dumps(instrument_identity, sort_keys=True), interval,
+               json.dumps(requested_window, sort_keys=True), address,
+               dt.datetime.now().isoformat(timespec="microseconds"))
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO dataset_requests(request_key,provider,instrument,"
+                " interval,requested_window,address,fetched_at)"
+                " VALUES(?,?,?,?,?,?,?)"
+                " ON CONFLICT(request_key) DO UPDATE SET"
+                " address=excluded.address, fetched_at=excluded.fetched_at",
+                row)
+            self._conn.commit()
+
+    # read --------------------------------------------------------------
+    def get(self, address: str) -> StoredDataset | None:
+        """Return the dataset at `address`, or None if it cannot be PROVEN to be
+        that dataset. Every failure mode is a refusal, never a partial answer."""
+        blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
+        if not (blob_path.is_file() and manifest_path.is_file()):
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            candles = decode_candles(blob_path.read_bytes())
+        except (OSError, ValueError, zlib.error, struct.error):
+            return None
+        if not isinstance(manifest, dict) or manifest.get("scheme") != STORE_SCHEME:
+            return None
+        if manifest.get("bars") != len(candles):
+            return None
+        try:
+            recomputed = ordered_dataset_address(
+                candles, provider=manifest["provider"],
+                instrument=manifest["instrument"],
+                interval=manifest["interval"],
+                requested_window=manifest["requested_window"],
+                effective_window=manifest["effective_window"])
+        except (KeyError, ValueError, TypeError):
+            return None
+        if recomputed != address:
+            # THE containment guard: the bytes on disk are not the bytes this
+            # address names. Serving them would put a silently wrong dataset
+            # into a backtest, which is worse than any read failure.
+            return None
+        return StoredDataset(
+            address=address, candles=candles, provider=manifest["provider"],
+            instrument=manifest["instrument"], interval=manifest["interval"],
+            requested_window=manifest["requested_window"],
+            effective_window=manifest["effective_window"], bars=len(candles),
+            first_ts_us=int(manifest.get("first_ts_us", 0)),
+            last_ts_us=int(manifest.get("last_ts_us", 0)))
+
+    def lookup(self, *, provider: Any, instrument: Any, interval: str,
+               requested_window: Any) -> IndexEntry | None:
+        """The newest address stored for this request, and when it was fetched.
+
+        A record of what was fetched, never a permission: it does not authorise
+        skipping a provider read. C13 forbids executor paths from branching on
+        where data came from, and this store is on that side of the line.
+        """
+        key = self.request_key(provider=provider, instrument=instrument,
+                               interval=interval,
+                               requested_window=requested_window)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT request_key,address,fetched_at FROM dataset_requests"
+                " WHERE request_key=?", (key,)).fetchone()
+        return IndexEntry(*row) if row else None
+
+    def stored_addresses(self) -> list[str]:
+        return sorted(path.name[:-len(BLOB_SUFFIX)]
+                      for path in self.root.glob(f"blobs/*/*{BLOB_SUFFIX}"))
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+# ── process-wide default ─────────────────────────────────────────────────────
+
+def store_root() -> Path:
+    """Where datasets live. Tests monkeypatch this onto a tmp_path."""
+    return Path(get_settings().backtest_dataset_dir).expanduser()
+
+
+_default_store: DatasetStore | None = None
+_default_root: Path | None = None
+_default_lock = threading.Lock()
+
+
+def get_store() -> DatasetStore:
+    global _default_store, _default_root
+    root = Path(store_root())
+    with _default_lock:
+        if _default_store is None or _default_root != root:
+            if _default_store is not None:
+                _default_store.close()
+            _default_store = DatasetStore(root)
+            _default_root = root
+        return _default_store
+
+
+def reset_default_store() -> None:
+    global _default_store, _default_root
+    with _default_lock:
+        if _default_store is not None:
+            _default_store.close()
+        _default_store = None
+        _default_root = None
+
+
+__all__ = ["BLOB_SUFFIX", "MANIFEST_SUFFIX", "STORE_SCHEME", "DatasetStore",
+           "DatasetStoreError", "IndexEntry", "StoredCandle", "StoredDataset",
+           "decode_candles", "encode_candles", "get_store",
+           "reset_default_store", "store_root"]
