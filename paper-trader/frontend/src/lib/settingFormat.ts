@@ -93,6 +93,7 @@ function round(n: number): string {
  * mis-tier a new key.
  */
 export const DANGER_KEYS = new Set([
+  'entry_order_mode',
   'max_daily_loss',
   'max_open_drawdown',
   'bot_capital_cap',

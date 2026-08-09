@@ -5,7 +5,7 @@ and a fake account-positions feed."""
 from sqlalchemy import select
 
 from app.core.instruments import get_instrument
-from app.db.models import Trade
+from app.db.models import ExecutionIntent, Trade
 from app.db.session import init_db
 from app.engine.execution_policy import OrderPlan
 from app.engine.live_broker import LiveBroker
@@ -545,6 +545,75 @@ def test_open_books_the_actual_fill_price():
     assert pos is not None
     assert pos.entry_premium == 123.45            # real fill, not the snapshot ltp
     assert c.placed[0].side == "BUY" and c.placed[0].order_type == "MARKET"
+
+
+def test_option_setting_selects_limit_without_an_explicit_runner_plan():
+    from app.core.runtime_config import effective
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    inst = get_instrument("NIFTY")
+    chain = b.provider.get_option_chain(inst)
+    q = min((x for x in chain.quotes if x.option_type == "CE"),
+            key=lambda x: abs(x.strike - chain.spot))
+    params = {**effective(b.settings), "entry_order_mode": "LIMIT"}
+
+    pos = b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot,
+                          params=params)
+
+    assert pos is not None
+    assert c.placed[0].order_type == "LIMIT"
+    assert c.placed[0].limit_price is not None
+
+
+def test_limit_price_is_tick_normalized_before_intent_commit_and_placement():
+    from app.db.session import SessionLocal
+
+    class CoarseTickClient(FakeClient):
+        def tick_size(self, tradingsymbol, exchange=None):
+            return 1.0
+
+    c = CoarseTickClient(fill_price=100.0)
+    b = _broker(c)
+    inst = get_instrument("NIFTY")
+    chain = b.provider.get_option_chain(inst)
+    q = min((x for x in chain.quotes if x.option_type == "CE"),
+            key=lambda x: abs(x.strike - chain.spot))
+
+    pos = b.open_position(
+        inst, "LONG", q, "t", b.provider.now(), chain.spot, params={},
+        plan=OrderPlan("LIMIT", 100.4, "forced test limit", 0.01))
+
+    assert pos is not None
+    assert c.placed[0].limit_price == 100.0
+    with SessionLocal() as s:
+        intent = s.scalar(select(ExecutionIntent))
+        assert intent is not None
+        assert intent.order_type == "LIMIT"
+        assert intent.limit_price == 100.0
+
+
+def test_equity_long_entry_accepts_a_limit_plan():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    inst = get_instrument("NIFTY")
+    pos = b.open_equity_position(
+        inst, "LONG", 100.0, 10, "NSE_INTRADAY", "t", b.provider.now(), params={},
+        plan=OrderPlan("LIMIT", 101.0, "forced test limit", 0.0))
+    assert pos is not None
+    assert (c.placed[0].side, c.placed[0].order_type, c.placed[0].limit_price) == \
+        ("BUY", "LIMIT", 101.0)
+
+
+def test_equity_short_entry_accepts_a_side_aware_limit_plan():
+    c = FakeClient(fill_price=100.0)
+    b = _broker(c)
+    inst = get_instrument("NIFTY")
+    pos = b.open_equity_position(
+        inst, "SHORT", 100.0, 10, "NSE_INTRADAY", "t", b.provider.now(), params={},
+        plan=OrderPlan("LIMIT", 99.0, "forced test limit", 0.0))
+    assert pos is not None
+    assert (c.placed[0].side, c.placed[0].order_type, c.placed[0].limit_price) == \
+        ("SELL", "LIMIT", 99.0)
 
 
 def test_open_returns_none_and_records_nothing_when_not_filled():

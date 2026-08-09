@@ -16,6 +16,7 @@ a thin adapter built separately and gated behind the live-execution flags.
 """
 from __future__ import annotations
 
+import math
 import time as _time
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -31,6 +32,20 @@ class OrderRequest:
     limit_price: float | None = None
     tag: str | None = None          # idempotency / correlation tag
     product: str | None = None      # override the client's product (e.g. MIS for intraday equity); None = client default
+
+    def __post_init__(self) -> None:
+        self.order_type = str(self.order_type).upper()
+        if self.order_type not in ("MARKET", "LIMIT"):
+            raise ValueError(f"unsupported order_type {self.order_type!r}")
+        if self.order_type == "MARKET" and self.limit_price is not None:
+            raise ValueError("MARKET order cannot carry limit_price")
+        if self.order_type == "LIMIT":
+            if self.limit_price is None:
+                raise ValueError("LIMIT entry requires a positive limit_price")
+            price = float(self.limit_price)
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError("LIMIT entry requires a positive limit_price")
+            self.limit_price = price
 
 
 @dataclass

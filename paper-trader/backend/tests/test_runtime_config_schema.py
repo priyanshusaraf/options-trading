@@ -51,3 +51,8 @@ def test_a_differing_override_is_also_marked(monkeypatch):
     row = next(r for r in rc.schema() if r["key"] == "max_open_positions")
     assert row["overridden"] is True
     assert row["value"] == 7
+
+
+def test_closed_choice_setting_publishes_its_allowed_values_to_the_ui():
+    row = next(r for r in rc.schema() if r["key"] == "entry_order_mode")
+    assert row["choices"] == ["AUTO", "MARKET", "LIMIT"]

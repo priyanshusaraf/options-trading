@@ -170,7 +170,8 @@ class PaperBroker:
                              margin: float | None = None,
                              sl_pct: float | None = None,
                              tp_pct: float | None = None,
-                             entry_intent_id: str | None = None) -> Position:
+                             entry_intent_id: str | None = None,
+                             plan=None) -> Position:
         """Open an intraday equity (MIS) position of `qty` shares at `price`.
 
         MIS is leveraged: only the MARGIN leaves cash, not the full notional — but P&L

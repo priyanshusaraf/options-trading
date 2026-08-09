@@ -48,7 +48,7 @@ from app.engine.charges import compute_charges
 from app.engine.equity_entry import (
     IntradayCandidate, equity_exit, equity_qty, qty_for_margin,
     select_intraday_entries)
-from app.engine.execution_policy import plan_order
+from app.engine.execution_policy import plan_order, plan_reference_entry
 from app.engine.event_risk import active_blackout, normalize_key, pending_flatten
 from app.engine.ledger_reconcile import plan_reanchor, should_reanchor
 from app.engine.kite_order_client import exchange_for_segment, product_for_segment
@@ -1644,9 +1644,11 @@ class EngineRunner:
             if not pick.chosen:
                 log.warn(f"signal fired but {pick.reason}", instrument=key)
                 continue
-            # adaptive routing: never market into an ugly book (the COPPER case).
-            plan = plan_order("BUY", pick.chosen.bid, pick.chosen.ask, pick.chosen.ltp,
-                              None, pick.chosen.lot_size, self.params)
+            # Entry purpose is explicit: a SELL can also be a short entry in the equity
+            # branch, so order side must never stand in for risk-reduction intent.
+            plan = plan_order("ENTRY", "BUY", pick.chosen.bid, pick.chosen.ask,
+                              pick.chosen.ltp, pick.chosen.ask_qty,
+                              pick.chosen.lot_size, self.params)
             if plan.action == "SKIP":
                 log.warn(f"signal fired but routing SKIP — {plan.reason}",
                          instrument=key, event="ROUTE_SKIP")
@@ -1774,12 +1776,18 @@ class EngineRunner:
                                   instrument=pickk.instrument_key,
                                   event="ATTRIBUTION_MISSING")
                         continue
+                    side = "BUY" if pickk.direction == "LONG" else "SELL"
+                    plan = plan_reference_entry(side, pickk.price, self.params)
+                    if plan.action == "SKIP":
+                        log.warn(f"INTRADAY routing SKIP — {plan.reason}",
+                                 instrument=pickk.instrument_key, event="ROUTE_SKIP")
+                        continue
                     pos = self.broker.open_equity_position(
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
                         strategy_key=executed.strategy_key,
                         strategy_version=executed.strategy_version,
-                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct)
+                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct, plan=plan)
                     if pos is None:
                         continue
                     if self.params.get("notify_enabled", True):

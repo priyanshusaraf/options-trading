@@ -23,11 +23,35 @@ def _long_signal(r):
 def test_engine_skips_entry_when_router_says_skip(monkeypatch):
     r = _runner()
     from app.engine import runner as rmod
-    monkeypatch.setattr(rmod, "plan_order",
-                        lambda *a, **k: OrderPlan("SKIP", None, "spread too wide (test)", 0.4))
+    calls = []
+
+    def reject(purpose, side, *args, **kwargs):
+        calls.append((purpose, side))
+        return OrderPlan("SKIP", None, "spread too wide (test)", 0.4)
+
+    monkeypatch.setattr(rmod, "plan_order", reject)
     _long_signal(r)
     r.process_entries()
+    assert calls == [("ENTRY", "BUY")]
     assert r.broker.position_for("NIFTY") is None      # router vetoed the ugly book
+
+
+def test_forced_market_uses_real_ask_quantity_to_reject_a_thin_option_book():
+    r = _runner()
+    r.params["entry_order_mode"] = "MARKET"
+    real_chain = r.provider.get_option_chain
+
+    def thin_chain(inst):
+        chain = real_chain(inst)
+        for quote in chain.quotes:
+            quote.ask_qty = 1
+        return chain
+
+    r.provider.get_option_chain = thin_chain
+    _long_signal(r)
+    r.process_entries()
+
+    assert r.broker.position_for("NIFTY") is None
 
 
 def test_daily_loss_halt_blocks_new_entries():

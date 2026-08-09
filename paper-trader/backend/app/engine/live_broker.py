@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from app.core.instruments import get_instrument
 from app.core.logging import log
+from app.core.runtime_config import effective
 from app.db.models import (
     Deployment,
     ExecutionIntent,
@@ -29,6 +30,8 @@ from app.db.models import (
 from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges, legs_for
 from app.engine.equity_entry import equity_stop_target
+from app.engine.execution_policy import plan_order, plan_reference_entry
+from app.engine.gtt import round_to_tick
 from app.engine.broker_protocol import (
     ProtectiveStopKind,
     clear_protective_order_id,
@@ -247,6 +250,24 @@ class LiveBroker(PaperBroker):
         if filled <= 0 and not res.reconciliation_required:
             self._journal_resolve(row_id, res, filled, avg)
         return res, filled, avg, client_intent_id, row_id
+
+    def _prepare_entry_request(self, req: OrderRequest) -> OrderRequest:
+        """Freeze the exact venue-valid limit before durable intent creation.
+
+        The venue adapter also rounds defensively at send time. Doing the same here is
+        required because the immutable intent must describe the order actually sent,
+        including instruments whose exchange tick is coarser than the planner's grid.
+        """
+        if req.order_type != "LIMIT":
+            return req
+        if req.limit_price is None:
+            raise ValueError("LIMIT entry requires limit_price")
+        tick_fn = getattr(self.client, "tick_size", None)
+        try:
+            tick = float(tick_fn(req.tradingsymbol, req.exchange)) if tick_fn else 0.05
+        except Exception:
+            tick = 0.05
+        return replace(req, limit_price=round_to_tick(req.limit_price, tick))
 
     def _mark_position_booked(self, client_intent_id: str, row_id: int | None,
                               pos: Position, res, filled: int, avg: float) -> bool:
@@ -939,7 +960,9 @@ class LiveBroker(PaperBroker):
         exp = q.expiry.isoformat() if hasattr(q.expiry, "isoformat") else q.expiry
         return {"tradingsymbol": q.tradingsymbol, "exchange": q.exchange, "strike": q.strike,
                 "expiry": exp, "option_type": q.option_type, "lot_size": q.lot_size,
-                "ltp": q.ltp, "bid": q.bid, "ask": q.ask, "volume": q.volume, "oi": q.oi}
+                "ltp": q.ltp, "bid": q.bid, "ask": q.ask,
+                "bid_qty": q.bid_qty, "ask_qty": q.ask_qty,
+                "volume": q.volume, "oi": q.oi}
 
     def _note_order_outcome(self, filled: int) -> None:
         """#14: feed the order circuit breaker — a zero-fill outcome extends the
@@ -1115,7 +1138,18 @@ class LiveBroker(PaperBroker):
         # order for this symbol first (cancel a stuck one; abort if one already filled).
         if not self._ensure_no_inflight(q.tradingsymbol):
             return None
-        order_type = plan.action if (plan and plan.action in ("MARKET", "LIMIT")) else "MARKET"
+        # Callers historically pass partial dictionaries (including ``{}``) and expect
+        # omitted controls to inherit the effective settings. Treat params as an overlay,
+        # not as a complete routing configuration.
+        p = {**effective(self.settings), **(params or {})}
+        if plan is None:
+            plan = plan_order("ENTRY", "BUY", q.bid, q.ask, q.ltp, q.ask_qty,
+                              q.lot_size, p)
+        if plan.action == "SKIP":
+            log.warn(f"LIVE OPEN routing refused {q.tradingsymbol}: {plan.reason}",
+                     instrument=inst.key, event="ROUTE_SKIP")
+            return None
+        order_type = plan.action if plan.action in ("MARKET", "LIMIT") else "MARKET"
         limit = plan.limit_price if (plan and plan.action == "LIMIT") else None
         context = {"inst_key": inst.key, "direction": direction, "reason": reason,
                    "spot": spot, "params": params, "q": self._quote_to_ctx(q),
@@ -1124,8 +1158,11 @@ class LiveBroker(PaperBroker):
                        protection_preflight, qty=q.lot_size)}
         decision_price = ((q.bid + q.ask) / 2.0
                           if q.bid > 0 and q.ask > 0 and q.ask >= q.bid else q.ltp)
+        request = self._prepare_entry_request(
+            OrderRequest(q.tradingsymbol, inst.segment, "BUY", q.lot_size,
+                         order_type, limit))
         res, filled, avg, client_intent_id, row_id = self._execute_entry(
-            OrderRequest(q.tradingsymbol, inst.segment, "BUY", q.lot_size, order_type, limit),
+            request,
             kind="options", context=context, now=now, decision_price=decision_price,
             strategy_key=strategy_key, strategy_version=strategy_version)
         # L1 — ADOPT whatever actually filled (partial fills and buzzer fills too),
@@ -1190,7 +1227,7 @@ class LiveBroker(PaperBroker):
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
                              now, params=None, strategy_key=None,
                              strategy_version=None, margin=None,
-                             sl_pct=None, tp_pct=None, entry_intent_id=None):
+                             sl_pct=None, tp_pct=None, entry_intent_id=None, plan=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
         open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it.
@@ -1213,6 +1250,13 @@ class LiveBroker(PaperBroker):
         if not self._ensure_no_inflight(tsym):
             return None
         side = "BUY" if direction == "LONG" else "SELL"
+        p = {**effective(self.settings), **(params or {})}
+        if plan is None:
+            plan = plan_reference_entry(side, price, p)
+        if plan.action == "SKIP":
+            log.warn(f"LIVE EQUITY OPEN routing refused {tsym}: {plan.reason}",
+                     instrument=inst.key, event="ROUTE_SKIP")
+            return None
         context = {"inst_key": inst.key, "direction": direction,
                    "charge_segment": charge_segment, "reason": reason,
                    "params": params, "strategy_key": strategy_key,
@@ -1221,9 +1265,12 @@ class LiveBroker(PaperBroker):
                    "requested_qty": qty,
                    "protection_preflight": dict(
                        protection_preflight, qty=qty)}
+        request = self._prepare_entry_request(OrderRequest(
+            tsym, exchange_for_segment(charge_segment), side, qty, plan.action,
+            plan.limit_price if plan.action == "LIMIT" else None,
+            product=product_for_segment(charge_segment)))
         res, filled, avg, client_intent_id, row_id = self._execute_entry(
-            OrderRequest(tsym, exchange_for_segment(charge_segment), side, qty, "MARKET", None,
-                         product=product_for_segment(charge_segment)),
+            request,
             kind="equity", context=context, now=now, decision_price=price,
             strategy_key=strategy_key, strategy_version=strategy_version)
         self._note_order_outcome(filled)

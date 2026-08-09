@@ -570,8 +570,10 @@ class KiteProvider(MarketDataProvider):
             if not q:
                 continue
             depth = q.get("depth", {})
-            bid = (depth.get("buy") or [{}])[0].get("price", 0.0)
-            ask = (depth.get("sell") or [{}])[0].get("price", 0.0)
+            buy_top = (depth.get("buy") or [{}])[0]
+            sell_top = (depth.get("sell") or [{}])[0]
+            bid = buy_top.get("price", 0.0)
+            ask = sell_top.get("price", 0.0)
             ltp = q.get("last_price", 0.0)
             out.append(OptionQuote(
                 instrument_key=inst.key,
@@ -584,6 +586,8 @@ class KiteProvider(MarketDataProvider):
                 # keep raw bid/ask (0 when a depth side is empty) — do NOT substitute
                 # ltp, which would hide a one-sided book and collapse spread_pct (C8)
                 ltp=ltp, bid=bid, ask=ask,
+                bid_qty=int(buy_top.get("quantity", 0) or 0),
+                ask_qty=int(sell_top.get("quantity", 0) or 0),
                 volume=int(q.get("volume", 0)),
                 oi=int(q.get("oi", 0)),
             ))

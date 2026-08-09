@@ -123,7 +123,20 @@ function Row({ r, onSaved }: { r: SettingRow; onSaved: () => void }) {
 
       {/* Controls: wrap freely on a phone, stay on one line from `sm` up. */}
       <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:shrink-0">
-        {r.type === 'bool' ? (
+        {r.choices?.length ? (
+          <select value={String(v ?? '')}
+            onChange={(e) => {
+              const next = e.target.value
+              setV(next)
+              save(next)
+            }}
+            className="flex-1 min-w-[8rem] sm:flex-none sm:w-40 bg-panel2 border border-edge
+                       rounded px-2 py-2 sm:py-1 text-sm sm:text-xs">
+            {r.choices.map((choice) => (
+              <option key={choice} value={choice}>{choice}</option>
+            ))}
+          </select>
+        ) : r.type === 'bool' ? (
           <button onClick={() => { setV(!v); save(!v) }}
             className={cn(badgeVariants({ variant: 'chip' }),
                           v ? 'bg-up/20 text-up' : 'bg-zinc-700/40 text-muted')}>

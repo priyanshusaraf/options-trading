@@ -75,6 +75,8 @@ class OptionQuote:
     ask: float
     volume: int
     oi: int
+    bid_qty: int | None = None  # top resting BUY quantity; None means unavailable
+    ask_qty: int | None = None  # top resting SELL quantity; None means unavailable
     iv: float | None = None      # filled by the picker (Black-Scholes inversion)
     delta: float | None = None   # filled by the picker
 
@@ -102,6 +104,8 @@ class OptionQuote:
             "ltp": round(self.ltp, 2),
             "bid": round(self.bid, 2),
             "ask": round(self.ask, 2),
+            "bid_qty": self.bid_qty,
+            "ask_qty": self.ask_qty,
             "spread_pct": round(self.spread_pct, 4),
             "volume": self.volume,
             "oi": self.oi,

@@ -2,6 +2,8 @@
 ACTUAL fill. Tested against a fake order client — no exchange, no money, no Kite.
 The 'never double-place' and 'never assume a fill on timeout' guarantees are what
 keep a real-money path safe."""
+import pytest
+
 from app.engine.order_executor import OrderRequest, execute_order
 
 
@@ -66,6 +68,18 @@ def test_never_fills_times_out_without_assuming_fill():
     c = FakeClient([{"status": "OPEN", "filled_qty": 0}])
     r = execute_order(c, _buy(), poll_seconds=1.0, timeout_seconds=2.0, sleep_fn=_noslp)
     assert r.status == "TIMEOUT" and r.filled_qty == 0
+    assert c.places == 1
+
+
+def test_order_request_rejects_incoherent_type_and_price_before_submission():
+    with pytest.raises(ValueError, match="LIMIT entry requires"):
+        _buy("LIMIT", None)
+    with pytest.raises(ValueError, match="positive limit_price"):
+        _buy("LIMIT", 0.0)
+    with pytest.raises(ValueError, match="MARKET order cannot"):
+        _buy("MARKET", 100.0)
+    with pytest.raises(ValueError, match="unsupported order_type"):
+        _buy("ICEBERG", None)
 
 
 def test_place_failure_is_error_and_never_double_places():

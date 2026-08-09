@@ -92,6 +92,7 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
     r.armed = True
     r.params["intraday_enabled"] = True
     r.params["notify_enabled"] = False
+    r.params["entry_order_mode"] = "LIMIT"
 
     candle_close = r.provider._candles[key][r.provider._cursor].close
     live_spot = round(candle_close * 0.90, 2)        # a 10% gap down since the candle closed
@@ -101,12 +102,23 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
         key, r._binding_for(key), {"signal": "SHORT_ENTRY", "close": candle_close, "z": -2.0,
                                    "slope": -1.0, "long_exit": False, "short_exit": False})
 
+    captured = []
+    real_open = r.broker.open_equity_position
+
+    def capture_plan(*args, **kwargs):
+        captured.append(kwargs.get("plan"))
+        return real_open(*args, **kwargs)
+
+    r.broker.open_equity_position = capture_plan
+
     r.process_entries()
 
     pos = r.broker.position_for(key)
     assert pos is not None and pos.segment == "equity_intraday"
     assert pos.entry_premium == live_spot            # priced at the LIVE spot...
     assert pos.entry_premium != candle_close          # ...not the stale candle close
+    assert len(captured) == 1 and captured[0].action == "LIMIT"
+    assert captured[0].limit_price < live_spot         # SHORT entry is a sell limit
 
 
 def test_equity_intraday_equity_uses_margin_not_notional():

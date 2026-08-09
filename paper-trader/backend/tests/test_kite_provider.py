@@ -24,8 +24,8 @@ def _provider(rows):
             "volume": 1000,
             "oi": 5000,
             "depth": {
-                "buy": [{"price": 364.0}],
-                "sell": [{"price": 366.0}],
+                "buy": [{"price": 364.0, "quantity": 300}],
+                "sell": [{"price": 366.0, "quantity": 125}],
             },
         }
         for k in keys
@@ -55,6 +55,8 @@ def test_mcx_option_chain_uses_configured_contract_units_when_kite_lot_is_one():
 
     assert chain is not None
     assert chain.quotes[0].lot_size == 100
+    assert chain.quotes[0].bid_qty == 300
+    assert chain.quotes[0].ask_qty == 125
 
 
 def test_mcx_near_future_falls_back_from_mini_suffix_to_base_name():

@@ -14,6 +14,7 @@ export const OVERRIDABLE: string[] = [
   'capital_reserve',
   'daily_profit_giveback_frac',
   'daily_profit_lock_pct',
+  'entry_order_mode',
   'entry_min_days_to_expiry',
   'entry_window_start',
   'event_risk_enabled',

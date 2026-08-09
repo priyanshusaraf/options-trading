@@ -190,6 +190,9 @@ export interface SettingRow {
   type: 'bool' | 'int' | 'float' | 'str'
   default: any
   value: any
+  /** Closed values supplied by the backend. Presence means render a select rather
+   *  than accepting a free-form string that execution would later reject. */
+  choices?: string[] | null
   /** A DB override row exists. NOT the same as `value !== default`: an override
    *  stored equal to the code default shadows it forever while looking
    *  untouched, so a newly shipped default would silently have no effect. */

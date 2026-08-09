@@ -256,5 +256,6 @@ def schema() -> list[dict]:
             "default": default,
             "value": eff[k],
             "overridden": k in stored,
+            "choices": list(CHOICES[k]) if k in CHOICES else None,
         })
     return rows

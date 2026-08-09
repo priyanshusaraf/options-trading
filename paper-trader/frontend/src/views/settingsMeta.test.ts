@@ -5,6 +5,14 @@ import { DANGER_KEYS } from '../lib/settingFormat'
 import { OVERRIDABLE } from './overridable'
 
 describe('settings coverage', () => {
+  it('exposes the entry order mode as a documented money-moving control', () => {
+    expect(OVERRIDABLE).toContain('entry_order_mode')
+    expect(DANGER_KEYS).toContain('entry_order_mode')
+    expect(META.entry_order_mode?.help).toContain('AUTO')
+    expect(META.entry_order_mode?.help).toContain('MARKET')
+    expect(META.entry_order_mode?.help).toContain('LIMIT')
+  })
+
   it('documents every overridable knob', () => {
     const missing = OVERRIDABLE.filter((k) => !META[k])
     expect(missing, `undocumented keys: ${missing.join(', ')}`).toEqual([])
