@@ -24,9 +24,15 @@ instrument identity`. These are separate roles that may be served by different c
 - **Account/PortfolioProvider** — positions, funds
 - **InstrumentResolver** — provider symbol/token ↔ canonical instrument
 
-The seams already exist and are already separate: `app/providers/base.py::MarketDataProvider`
-versus `app/engine/broker_protocol.py::Broker` / `ExecutionVenue`. Do not merge them into one
-"connection interface". A connection *holds* capabilities; it is not a third protocol.
+The protocol seams exist: `app/providers/base.py::MarketDataProvider` versus
+`app/engine/broker_protocol.py::Broker` / `ExecutionVenue`. **The current composition root does
+not separate them end to end.** `providers/factory.py` returns one process-global provider and
+`broker_factory.make_broker(provider)` derives execution credentials, token refresh and tick
+lookup from that same object. A second data adapter does not prove split routing until a test
+selects market data from one connection and execution from another.
+
+Do not merge the protocols into one "connection interface". A connection *holds* credentials and
+capabilities; role binding selects which connection serves each protocol.
 
 Target examples that must stay expressible: Upstox data → Zerodha execution; Dhan for a
 specialised capability → Zerodha positions/execution.
@@ -57,10 +63,11 @@ capability model exists to remove.
 
 ## Adapters stay thin
 
-Provider quirks live at the edge. `kite_venue.py` is the only place `MIS`/`NRML`/GTT/SL-M are
-spelled, and that is the pattern. A second broker must not grow its own symbol table, charge
-model, frame converter or order path — that breaks "one of anything" and the second one is the
-one nobody tests.
+Provider quirks belong at the edge. `kite_venue.py` is the intended home for `MIS`/`NRML`/GTT/
+SL-M. There is known debt: `live_broker.py` still imports Kite product/exchange helpers through
+`kite_order_client.py`. Do not describe the boundary as complete until shared live-broker code
+consumes neutral product intent and the concrete venue translates it. A second broker must not
+grow its own canonical symbol table, charge model, frame converter or order lifecycle.
 
 New optional provider methods must be **concrete with a safe default** (`get_futures_ltp`
 returns `None`), never abstract — an accidental abstract method once broke provider construction
@@ -81,3 +88,6 @@ starts to look necessary, stop and raise it as an owner/legal gate.
 mapping is correct · the provider-specific request mapping is correct · the normalized response is
 correct · provider provenance is recorded · the relevant failure behaviour (rejection, partial
 fill, timeout, token expiry, reconnect) actually does what it claims.
+
+For health and recovery tests, exercise the concrete adapter's public semantics. A fake that
+raises is not evidence for a real adapter that catches the same exception and returns `None`.

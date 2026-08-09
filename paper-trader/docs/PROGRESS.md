@@ -21,7 +21,12 @@ independent review, the worst of them — a futures entry path that invented *to
 contract expiry and booked a position at exactly spot. Details and the five gaps left open:
 [`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md) §9.
 
-**Nothing in this phase is deployed, and no live-money path changed.**
+**Nothing in this phase is deployed.** "No live-money path changed" would be too strong, and
+was corrected on review: `ProviderReadError` **does** change the live candle-read failure path —
+a failed read now raises where it used to return `[]`, which is what makes the engine's existing
+health-failure and expired-token latch reachable. It changes that path in the *safe* direction
+and touches no order routing, sizing or exit logic, but it is a live-path change and must be
+described as one.
 
 ---
 

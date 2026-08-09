@@ -10,8 +10,12 @@ Follow the sequence. Skipping to implementation is how symbol handling forks per
 ## 1. Inspect Strategy OS first
 
 `app/providers/base.py::MarketDataProvider` (data) and `app/engine/broker_protocol.py::Broker` /
-`ExecutionVenue` (execution) are **already separate seams**. `kite_venue.py` is the only place
-`MIS`/`NRML`/GTT/SL-M are spelled. Understand what exists before adding to it.
+`ExecutionVenue` (execution) are separate protocol seams. Inspect the composition root too:
+`providers/factory.py` currently returns one singleton and `broker_factory.make_broker(provider)`
+still derives execution from it. Protocol separation without role selection is not split routing.
+
+`kite_venue.py` is the target home for `MIS`/`NRML`/GTT/SL-M, but verify the claim from imports:
+`live_broker.py` currently reaches Kite product/exchange helpers through `kite_order_client.py`.
 
 ## 2. Inspect OpenAlgo — for behaviour, never code
 
@@ -42,6 +46,10 @@ Which of these does this connection serve: execution · market/limit/stop orders
 positions · funds · historical data · streaming · option chains · depth · postbacks? Do not
 pretend parity. Capability resolution lives in `app/core/`, never `app/engine/` (C13).
 
+Before adapter #2, prove the runtime can bind market data, execution, account/portfolio and
+instrument resolution independently. A test must select data connection A and execution
+connection B. Adding another value to the process-global provider factory is not that proof.
+
 ## 6. Preserve canonical instrument identity
 
 Provider token/symbol/security-id maps **onto** the Strategy OS canonical instrument. A strategy
@@ -53,7 +61,9 @@ Quirks at the edge. No second symbol table, charge model, frame converter or ord
 
 ## 8. Conformance tests
 
-One suite both adapters pass, and it must **fail an adapter that lies about a capability**.
+One suite both adapters pass, and it must **fail an adapter that lies about a capability**. Add a
+runtime proof for concrete adapter failure semantics when health or recovery depends on them; a
+test double must not raise when the real adapter returns `None` for the same failure.
 
 ## 9. Failure and recovery verification
 

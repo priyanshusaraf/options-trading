@@ -6,8 +6,11 @@
     "agpl|licence|license",
     "canonical",
     "capabilit",
-    "conformance|adapter"
+    "conformance|adapter",
+    "data.*execution|execution.*data",
+    "factory|routing|connection",
+    "do not implement|not implement|before.*adapter"
   ],
   "expect_absent": [],
-  "note": "provider-adapter sequence + licence + canonical instruments"
+  "note": "provider-adapter sequence + licence + canonical instruments + reject a second singleton before split role routing"
 }

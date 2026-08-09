@@ -465,6 +465,9 @@ and were fixed.
    failing transport and asserts the latch engages and `last_scan_ok` is *not* refreshed. Two
    mutations prove it: swallowing the failure again, and dropping the message from the wrapper.
    The conformance contract now requires the typed refusal, so Upstox inherits the obligation.
+   **This is a live-path change**, in the safe direction: the live candle read now raises where
+   it returned `[]`. It alters no order routing, sizing or exit logic, but describing the phase
+   as "no live-money path changed" was wrong and is corrected here.
    The three other call sites improve without change — `sweep.py` already records the error on
    the run, `research/data/store.py` no longer content-hashes a Dataset built from an API error,
    and the one unguarded chart route now degrades to an empty panel rather than a 500.
