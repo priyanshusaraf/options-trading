@@ -203,6 +203,11 @@ def reduce_execution_events(
         if kind == "POSITION_PROTECTED":
             protected_qty = max(protected_qty, row.cumulative_filled_qty)
 
+        # Protection acknowledgements identify a separate broker-side stop. They
+        # must not replace the entry order id or alter the entry order status.
+        if kind == "PROTECTION_ACKNOWLEDGED":
+            continue
+
         if row.broker_order_id:
             if broker_order_id is None:
                 broker_order_id = row.broker_order_id

@@ -2,7 +2,7 @@ import datetime as dt
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.instruments import get_instrument
 from app.db.models import Deployment, ExecutionIntent, ExecutionOrderEvent, OrderJournal, Position
@@ -93,6 +93,53 @@ class _OwnerGttCollisionClient(_InvisibleAcceptedProtectionClient):
 
     def gtts(self):
         return [dict(self.owner_gtt)]
+
+
+class _ConcurrentOwnerGttClient(_InvisibleAcceptedProtectionClient):
+    def __init__(self, status):
+        super().__init__(status=status)
+        self.inventory_reads = 0
+
+    def gtts(self):
+        self.inventory_reads += 1
+        if self.inventory_reads == 1:
+            return []
+        return [{
+            "trigger_id": "OWNER-CONCURRENT", "status": "active",
+            "tradingsymbol": self.last_symbol,
+            "exchange": self.last_exchange,
+            "side": "SELL", "qty": self.last_qty,
+            "trigger_price": self.last_trigger,
+        }]
+
+    def place_stop_gtt(self, tradingsymbol, exchange, qty, trigger, last, side="SELL"):
+        self.stop_calls += 1
+        self.last_symbol = tradingsymbol
+        self.last_exchange = exchange
+        self.last_qty = qty
+        self.last_trigger = trigger
+        raise RuntimeError("connection dropped after submit")
+
+
+class _FailingInventoryClient(_AcknowledgedFillClient):
+    def orders(self):
+        raise RuntimeError("order inventory unavailable")
+
+    def gtts(self):
+        raise RuntimeError("GTT inventory unavailable")
+
+
+class _MissingInventoryClient:
+    def __init__(self):
+        self.requests = []
+
+    def place(self, request):
+        self.requests.append(request)
+        return "OID-UNEXPECTED"
+
+    def status(self, order_id):
+        return {"status": "COMPLETE", "filled_qty": 1,
+                "avg_price": 100.0, "reason": ""}
 
 
 class _GrowingEquityProtectionClient(_RecoveryClient):
@@ -686,6 +733,94 @@ def test_owner_gtt_in_submit_baseline_is_never_attached_to_bot_position():
             ExecutionOrderEvent.client_intent_id == pos.entry_intent_id,
             ExecutionOrderEvent.kind == "PROTECTION_SUBMIT_STARTED")).first()
         assert "OWNER-GTT" in submit.payload_json
+
+
+def test_concurrent_owner_gtt_after_empty_baseline_is_never_attached():
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    client = _ConcurrentOwnerGttClient({
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    LiveBroker(provider, client, poll_seconds=0.0,
+               timeout_seconds=0.0).recover_journal(NOW)
+
+    assert client.stop_calls == 1
+    with SessionLocal() as session:
+        stored = session.get(Position, pos.id)
+        state = ExecutionLifecycleStore(session).state_for(pos.entry_intent_id)
+        assert stored.gtt_trigger_id is None
+        assert state.protected_qty == 0
+        assert state.booked_qty == 0
+        assert state.reconciliation_required is True
+
+
+@pytest.mark.parametrize("payload", ["not-json", "{}", '{"baseline_ids": "bad"}'])
+def test_invalid_protection_submit_metadata_fails_closed(payload):
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    client = _ConcurrentOwnerGttClient({
+        "status": "COMPLETE", "filled_qty": quote.lot_size,
+        "avg_price": 101.0, "reason": ""})
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    pos = broker.open_position(
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+
+    with SessionLocal() as session:
+        session.execute(text("""
+            INSERT INTO execution_order_events (
+                client_intent_id, source, source_event_id, kind,
+                broker_order_id, broker_status, cumulative_filled_qty,
+                avg_price, observed_at, payload_json, anomaly
+            ) VALUES (
+                :intent_id, 'engine', 'protection-submit:legacy-corrupt',
+                'PROTECTION_SUBMIT_STARTED', NULL, '', 0, 0.0,
+                :observed_at, :payload, ''
+            )
+        """), {"intent_id": pos.entry_intent_id, "observed_at": NOW,
+                "payload": payload})
+        session.commit()
+
+    LiveBroker(provider, client, poll_seconds=0.0,
+               timeout_seconds=0.0).recover_journal(NOW)
+
+    with SessionLocal() as session:
+        stored = session.get(Position, pos.id)
+        state = ExecutionLifecycleStore(session).state_for(pos.entry_intent_id)
+        assert stored.gtt_trigger_id is None
+        assert state.protected_qty == 0
+        assert state.booked_qty == 0
+        assert state.reconciliation_required is True
+
+
+@pytest.mark.parametrize("kind", ["options", "equity"])
+@pytest.mark.parametrize("client_factory", [_FailingInventoryClient, _MissingInventoryClient])
+def test_live_entry_refuses_before_intent_when_protection_inventory_fails(
+        kind, client_factory):
+    init_db(reset=True)
+    provider = MockProvider()
+    client = client_factory()
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    inst, quote, context = _option_context(provider)
+
+    if kind == "options":
+        result = broker.open_position(
+            inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    else:
+        result = broker.open_equity_position(
+            inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
+            params={}, margin=400.0)
+
+    assert result is None
+    assert client.requests == []
+    with SessionLocal() as session:
+        assert session.scalar(select(ExecutionIntent)) is None
+        assert session.scalar(select(ExecutionOrderEvent)) is None
 
 
 @pytest.mark.parametrize("kind", ["options", "equity"])

@@ -227,6 +227,7 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
         dt.datetime(2026, 8, 9, 10, 15, 30, 500000),
         dt.datetime(2026, 8, 9, 10, 15, 30, 600000),
         dt.datetime(2026, 8, 9, 10, 15, 30, 700000),
+        dt.datetime(2026, 8, 9, 10, 15, 30, 800000),
     ])
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0,
                         lifecycle_clock=lambda: next(clock_times))
@@ -248,13 +249,15 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
         assert intent.signal_at == runtime_now
         assert [event.kind for event in events] == [
             "INTENT_CREATED", "SUBMIT_STARTED", "ACKNOWLEDGED", "STATUS_OBSERVED",
-            "PROTECTION_SUBMIT_STARTED", "POSITION_PROTECTED", "POSITION_BOOKED"]
+            "PROTECTION_SUBMIT_STARTED", "PROTECTION_ACKNOWLEDGED",
+            "POSITION_PROTECTED", "POSITION_BOOKED"]
         state = live_broker_module.ExecutionLifecycleStore(session).state_for(
             intent.client_intent_id)
         assert state.signal_to_intent_ms == 100.0
         assert state.submit_to_ack_ms == 100.0
         assert state.ack_to_fill_ms == 100.0
         assert state.reconciliation_required is False
+        assert not any("broker order ID changed" in item for item in state.anomalies)
         assert stored_pos.entry_intent_id == intent.client_intent_id == pos.entry_intent_id
         journal = session.scalar(select(OrderJournal).where(OrderJournal.intent == "ENTRY"))
         assert journal.status == "TERMINAL"
