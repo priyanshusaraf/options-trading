@@ -354,6 +354,54 @@ pipeline is the pipe's exit code, not the command's.
 
 ## 4. Next concrete action
 
+**Read this block first; everything below it is older and partly superseded.**
+
+### Resume point, 2026-08-09 (evening)
+
+`codex/execution-foundation` is now the line of record by owner decision, and it is **pushed**
+(`origin/codex/execution-foundation`). Exact-head Linux CI run **`31326084453` is green** across
+backend, frontend and deterministic smoke — the first time this branch has ever been checked on
+Linux, which matters because the two hardest failures this project has had were Linux-only.
+
+Three owner corrections landed and they change the shape of two phases. The full analysis is
+[`superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md`](superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md):
+
+1. **500 users from the start**, not 100. The five-accounts-per-worker figure is withdrawn as an
+   unmeasured assumption — at 500 users it implies 100 worker processes and a hosting bill the
+   owner has named as a blocker. Market data must be fanned in **once per distinct instrument
+   set** and broadcast; per-account credentials are for orders, not prices.
+2. **10,000 × 5 backtest tier in a few minutes**, not 1,000 × 5.
+3. **The frontend is an owner gate.** Do not touch `frontend/`. Write requirements into the
+   design notes and stop at the API boundary.
+
+**Phase 5 (scalable sweep) is the active work, and it is now measured** — hardening record §10.
+A cell is 84.7 ms on realistic 5,000-bar datasets, down from 185.7 ms after `5ba1233` removed a
+`scipy.stats.norm.cdf` wrapper that was 74% of the premium replay. Two floors remain, both named
+and neither closed:
+
+- **Live-fetch I/O: 5 h 33 m** for 50,000 datasets, which is Kite's documented rate limit and is
+  not optimisable in our process. The local content-addressed dataset store is therefore the only
+  path to the target and has been **promoted ahead of batch persistence** in the plan.
+- **Serial compute: 4,236 s**, still ~20× over target, which is what justifies measured
+  multiprocess fan-out. Peak allocation is 2.10 MB/dataset, so the sweep must stream rather than
+  accumulate — 50,000 held at once would be ~105 GB.
+
+**The next task is Task 3 of
+[`superpowers/plans/2026-08-09-scalable-backtest-sweep.md`](superpowers/plans/2026-08-09-scalable-backtest-sweep.md)**
+— the local content-addressed dataset store. Note the unavoidable design point: the dataset
+address is computed *from* the candles, so the store needs a request-shaped lookup key
+`(provider, instrument, interval, window)` alongside the content address it verifies on read. A
+normal refresh must still cost its reads; only an explicit pinned run may report zero.
+
+Two measurement traps found today, worth not repeating: the earlier 6.61 ms/cell figure was taken
+on 600-bar datasets when a real 15-minute/200-day window is ~5,000 bars, and **the premium replay
+books zero trades below ~5,000 bars**, so every premium timing taken at 161 or 1,000 bars was
+measuring an empty loop.
+
+---
+
+**Historical from here.**
+
 **Do not resume at L1, shadow adoption, or the live-authority design.** L1 is closed through
 L1.4; `(ir_graph, live, authoritative)` is absent by design and is an **owner gate**, not a task
 waiting to be picked up. The material below on L1.4 and the live-authority design is retained as
