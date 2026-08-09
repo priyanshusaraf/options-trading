@@ -28,13 +28,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def _real_equity_from_kite():
     try:
-        from kiteconnect import KiteConnect
-
         from app.core.config import get_settings
+        from app.providers.safe_kite import read_only_client
+
         s = get_settings()
         tok = json.load(open(os.path.join(HERE, "..", "access_token.json")))
-        k = KiteConnect(api_key=s.kite_api_key or os.environ.get("KITE_API_KEY", ""))
-        k.set_access_token(tok["access_token"])
+        # This script only reads equity. An order-capable client has no business
+        # being in scope here — see tests/test_safe_kite_construction_invariant.py.
+        k = read_only_client(s.kite_api_key or os.environ.get("KITE_API_KEY", ""),
+                             tok["access_token"])
         return float(k.margins(segment="equity")["net"])
     except Exception as e:
         print(f"  (could not read live Kite equity: {e})")

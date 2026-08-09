@@ -100,3 +100,17 @@ class SafePaperKite(KiteConnect):
         return KiteConnect._request(self, route, method, url_args=url_args,
                                     params=params, is_json=is_json,
                                     query_params=query_params)
+
+
+def read_only_client(api_key: str, access_token: str) -> SafePaperKite:
+    """A Kite client for scripts that only READ (equity, positions, margins).
+
+    Operational scripts reach for `KiteConnect` because it is the obvious name, and a
+    script that only calls `margins()` looks harmless. The type is not: it can place an
+    order, and the next edit to that script is written against whatever object is already
+    in scope. Read-only callers get an object that cannot, and `user.margins.segment` is
+    on the allowlist so nothing legitimate is lost.
+    """
+    k = SafePaperKite(api_key=api_key)
+    k.set_access_token(access_token)
+    return k
