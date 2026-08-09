@@ -135,12 +135,40 @@ iteration is still the bottleneck in a real user's loop, the target is the two h
 `simulate` (25.5 ms/cell) and `simulate_premium` (36.7 ms/cell), 73% of a cell between them. The
 first escalations are cheaper than a language and should be exhausted in order:
 
-1. **Vectorise the premium replay.** Today's profile is per-bar scalar Black-Scholes; the
-   `ndtr` win (232×, `5ba1233`) came from removing per-call overhead and the same shape of win
-   is likely still there.
+1. **Share the per-bar conversions across the two simulators.** *(Corrected 2026-08-10 — see
+   below; this replaced "vectorise the premium replay", which the profile does not support.)*
 2. **Numba on the two loops.** Keeps one language, one deploy, one dependency.
 3. **A compiled kernel behind the existing seam**, only for the hot loop, only with bit-identity
    proven against the Python reference on a frozen dataset.
+
+### Correction: `bs_price` is no longer the bottleneck
+
+An earlier draft of this section said to vectorise the premium replay, reasoning that the
+`ndtr` win came from removing per-call overhead so more of the same was probably available.
+**Re-profiling after `5ba1233` shows that is wrong.** `bs_price` is now ~5% of the premium
+replay (0.014 s of 0.285 s over five iterations); the fix already took what was there.
+
+What remains, in both `simulate` and `simulate_premium`, has the same shape and no dominant
+term:
+
+| cost | share | note |
+|---|---:|---|
+| `to_dict` (signal frame → dicts) | ~15% | paid **once per simulator**, on the same frame |
+| `ist_epoch` | ~17% | ~one call per bar, **in both simulators**, same timestamps |
+| `round`, `compute_charges`, `normalize_key`, … | the rest | thin, spread across per-bar Python |
+
+Two consequences, and they point in opposite directions from what the earlier draft implied:
+
+- **There is a concrete ~30% win available, and it is the same pattern as Tasks 1–2** — hoist
+  the frame-to-dict conversion and the epoch conversion to once per (dataset, strategy) instead
+  of once per simulator. Both simulators consume the identical signal frame and the identical
+  timestamps. This is cheap, stays in Python, and must be proven bit-identical.
+- **The residual after that is thin-spread interpreter overhead**, which is precisely the cost a
+  compiled language removes and which neither vectorisation nor a better algorithm will touch.
+  So if the escalation ladder is ever exhausted, the honest argument for a compiled kernel is
+  *stronger* than the earlier draft implied — but it is still an argument about the last
+  ~60% of a 22-minute warm pass that fan-out already reduces to ~1.4 minutes, which is why it
+  still sits behind fan-out and behind the shared-conversion win.
 
 Only if all three are exhausted does a rewrite deserve a design. It would also have to answer
 how it preserves §5 — a compiled reimplementation of the same arithmetic is *not* automatically
