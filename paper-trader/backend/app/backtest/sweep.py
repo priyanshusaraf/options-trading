@@ -110,17 +110,28 @@ def _clip_to_window(candles, start_date: str | None, end_date: str | None):
     return [c for c in candles if sd <= c.ts.date() <= ed]
 
 def _requested_window(interval: str, win) -> dict:
-    """The request half of a dataset address: what we ASKED the provider for.
+    """The request half of a dataset address: what the caller ASKED for.
 
-    Kept in one place because it is now computed twice — once when fetching, and
-    once when checking that a pinned dataset was fetched for this same request.
+    Kept in one place because it is computed twice — once when fetching, and once
+    when checking that a pinned dataset was fetched for this same request.
+
+    `fetch_days` is deliberately NOT here. It is a fact about *how* we reached the
+    data, not about what was requested: for a custom window it is
+    `(today - start).days + 2`, because the provider only sells trailing history.
+    Including it made an unchanged request resolve to a different address tomorrow
+    — an unpinned rerun silently produced different numbers (indistinguishable
+    from strategy drift) and a pin from yesterday failed closed, turning a
+    "pinned rerun" into a run of all-error cells. `interval` stays out for the
+    same reason it always was: the address hashes it separately.
+
+    What actually came back is recorded exactly, and separately, in the effective
+    window — which is where a genuinely larger trailing window correctly appears
+    as a new dataset. Pinned by tests/test_backtest_request_identity_is_dateless.py.
     """
-    start, end = win.get("start"), win.get("end")
     return {
         "lookback_days": win.get("lookback_days"),
-        "start": start,
-        "end": end,
-        "fetch_days": _fetch_days(interval, win.get("lookback_days"), start, end),
+        "start": win.get("start"),
+        "end": win.get("end"),
     }
 
 
@@ -355,7 +366,7 @@ def _prepare_dataset(provider, inst, interval, win, *,
             error=f"window older than Kite max for this interval "
                   f"(≈{cap}d on {interval})")
     requested_window = _requested_window(interval, win)
-    days = requested_window["fetch_days"]
+    days = _fetch_days(interval, win.get("lookback_days"), start, end)
     try:
         candles = provider.get_candles(inst, interval, days, end=end) \
             if _supports_end(provider) else provider.get_candles(inst, interval, days)
