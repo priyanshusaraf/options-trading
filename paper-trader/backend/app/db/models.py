@@ -27,6 +27,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     event,
     text,
 )
@@ -149,6 +150,89 @@ class Deployment(Base):
                 "notes": self.notes}
 
 
+class ExecutionIntent(Base):
+    """The immutable request to open one position through a broker connection."""
+    __tablename__ = "execution_intents"
+    __table_args__ = (
+        CheckConstraint("intent = 'ENTRY'", name="ck_execution_intent_entry"),
+        CheckConstraint("requested_qty > 0", name="ck_execution_intent_requested_qty"),
+    )
+
+    client_intent_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    deployment_id: Mapped[int] = mapped_column(
+        ForeignKey("deployments.id", ondelete="RESTRICT"), index=True, nullable=False)
+    broker: Mapped[str] = mapped_column(String(32), nullable=False)
+    account_scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    connection_scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    broker_tag: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    intent: Mapped[str] = mapped_column(String(8), nullable=False)
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tradingsymbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    exchange: Mapped[str] = mapped_column(String(16), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    product: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    order_type: Mapped[str] = mapped_column(String(12), nullable=False)
+    requested_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    decision_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}", nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=dt.datetime.now, nullable=False)
+
+
+class ExecutionOrderEvent(Base):
+    """One observed lifecycle fact for an execution intent; rows are append-only."""
+    __tablename__ = "execution_order_events"
+    __table_args__ = (
+        CheckConstraint(
+            "cumulative_filled_qty >= 0", name="ck_execution_event_filled_qty"),
+        CheckConstraint("avg_price >= 0", name="ck_execution_event_avg_price"),
+        UniqueConstraint(
+            "client_intent_id", "source", "source_event_id",
+            name="uq_execution_event_source_identity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_intent_id: Mapped[str] = mapped_column(
+        ForeignKey("execution_intents.client_intent_id", ondelete="RESTRICT"),
+        nullable=False)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    broker_order_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
+    broker_status: Mapped[str] = mapped_column(
+        String(32), default="", server_default="", nullable=False)
+    cumulative_filled_qty: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False)
+    avg_price: Mapped[float] = mapped_column(
+        Float, default=0.0, server_default="0", nullable=False)
+    observed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=dt.datetime.now, nullable=False)
+    payload_json: Mapped[str] = mapped_column(
+        Text, default="{}", server_default="{}", nullable=False)
+    anomaly: Mapped[str] = mapped_column(
+        String(200), default="", server_default="", nullable=False)
+
+
+for _trigger_name, _operation in (
+    ("execution_order_events_refuse_update", "UPDATE"),
+    ("execution_order_events_refuse_delete", "DELETE"),
+):
+    event.listen(
+        ExecutionOrderEvent.__table__,
+        "after_create",
+        DDL(
+            f"CREATE TRIGGER {_trigger_name} BEFORE {_operation} "
+            "ON execution_order_events BEGIN "
+            "SELECT RAISE(ABORT, 'execution_order_events are immutable'); END"
+        ).execute_if(dialect="sqlite"),
+    )
+
+
 class CapitalState(Base):
     """One ledger per execution book. `cash` and `realized_pnl` are aggregates mutated
     in place, so a paper fill debiting the live book's cash could not be prevented by
@@ -203,6 +287,11 @@ class Position(Base):
     deployment_id: Mapped[int] = mapped_column(
         ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
         server_default="1", index=True)
+    # Nullable by design: historic rows predate durable entry intent tracking and
+    # remain exactly as recorded rather than being attributed retrospectively.
+    entry_intent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("execution_intents.client_intent_id", ondelete="RESTRICT"),
+        index=True, nullable=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))       # LONG | SHORT
@@ -364,6 +453,10 @@ class Trade(Base):
     deployment_id: Mapped[int] = mapped_column(
         ForeignKey("deployments.id"), default=LEGACY_DEPLOYMENT_ID,
         server_default="1", index=True)
+    # NULL preserves the fact that legacy trade rows were created before intents.
+    entry_intent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("execution_intents.client_intent_id", ondelete="RESTRICT"),
+        index=True, nullable=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), index=True)
     direction: Mapped[str] = mapped_column(String(8))

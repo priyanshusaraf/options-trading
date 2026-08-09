@@ -115,7 +115,7 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
 
-    assert migrate.head_revision() == "0013"
+    assert migrate.head_revision() == "0014"
     assert set(schema["projects"]["columns"]) == {
         "project_id", "name", "description", "status", "created_at", "updated_at",
     }
@@ -174,6 +174,84 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         and fk["constrained_columns"] == ["graph_identifier", "graph_version"]
         for fk in graph_version_fks
     )
+
+
+def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
+    """Lifecycle links are additive: 0014 must leave old journal facts untouched."""
+    engine = _fresh_engine(tmp_path, "execution-lifecycle-round-trip.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0013")
+        connection.execute(sa.text(
+            "INSERT INTO order_journal "
+            "(deployment_id, order_id, tradingsymbol, instrument_key, side, kind, intent, "
+            "qty, status, filled_qty, avg_price, placed_at) "
+            "VALUES (1, 'legacy-order', 'RELIANCE', 'NSE_EQ|INE002A01018', 'BUY', "
+            "'options', 'ENTRY', 1, 'WORKING', 0, 0.0, '2026-08-09 09:15:00')"
+        ))
+        command.upgrade(migrate.alembic_config(connection), "0014")
+
+    inspector = sa.inspect(engine)
+    assert migrate.schema_version(engine) == "0014"
+    assert {"execution_intents", "execution_order_events"} <= set(
+        inspector.get_table_names())
+    assert {column["name"] for column in inspector.get_columns("execution_intents")} == {
+        "client_intent_id", "deployment_id", "broker", "account_scope", "connection_scope",
+        "broker_tag", "intent", "instrument_key", "tradingsymbol", "exchange", "side",
+        "product", "order_type", "requested_qty", "limit_price", "decision_price",
+        "signal_at", "strategy_key", "strategy_version", "context_json", "created_at",
+    }
+    assert {column["name"] for column in inspector.get_columns("execution_order_events")} == {
+        "id", "client_intent_id", "source", "source_event_id", "kind", "broker_order_id",
+        "broker_status", "cumulative_filled_qty", "avg_price", "observed_at", "payload_json",
+        "anomaly",
+    }
+    for table in ("positions", "trades"):
+        assert "entry_intent_id" in {column["name"] for column in inspector.get_columns(table)}
+        assert any(
+            index["name"] == f"ix_{table}_entry_intent_id"
+            and index["column_names"] == ["entry_intent_id"]
+            for index in inspector.get_indexes(table)
+        )
+        with engine.connect() as connection:
+            foreign_keys = connection.execute(sa.text(
+                f"PRAGMA foreign_key_list({table})"
+            )).mappings().all()
+        assert any(
+            foreign_key["from"] == "entry_intent_id"
+            and foreign_key["table"] == "execution_intents"
+            and foreign_key["to"] == "client_intent_id"
+            and foreign_key["on_delete"] == "RESTRICT"
+            for foreign_key in foreign_keys
+        )
+    assert any(
+        constraint["name"] == "uq_execution_event_source_identity"
+        and constraint["column_names"] == ["client_intent_id", "source", "source_event_id"]
+        for constraint in inspector.get_unique_constraints("execution_order_events")
+    )
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT order_id, status, filled_qty FROM order_journal "
+            "WHERE order_id = 'legacy-order'"
+        )).one() == ("legacy-order", "WORKING", 0)
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0013")
+    inspector = sa.inspect(engine)
+    assert migrate.schema_version(engine) == "0013"
+    assert "execution_intents" not in inspector.get_table_names()
+    assert "execution_order_events" not in inspector.get_table_names()
+    assert "entry_intent_id" not in {column["name"] for column in inspector.get_columns("positions")}
+    assert "entry_intent_id" not in {column["name"] for column in inspector.get_columns("trades")}
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0014")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT order_id, status, filled_qty FROM order_journal "
+            "WHERE order_id = 'legacy-order'"
+        )).one() == ("legacy-order", "WORKING", 0)
 
 
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):
@@ -271,7 +349,7 @@ def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_pa
                 "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
             ), {"identifier": identifier, "version": version})
 
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
     with engine.connect() as connection:
         layouts = connection.execute(sa.text(
             "SELECT graph_identifier, graph_version FROM ir_graph_layouts"
@@ -327,7 +405,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0013"
+    assert migrate.schema_version(engine) == "0014"
 
     with engine.begin() as connection:
         connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
@@ -339,7 +417,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0013"
+    assert migrate.schema_version(engine) == "0014"
 
 
 def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
@@ -382,7 +460,7 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
     assert position == ("n_ema", 10.0, 20.0)
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
 
 
 def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
@@ -408,7 +486,7 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
         )).one()
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
 
 
 def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_path):
@@ -456,7 +534,7 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
             "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
         )).one() == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
 
 
 def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_path):
@@ -485,7 +563,7 @@ def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_pa
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
     assert capital == (50000.0, 49000.0, -1000.0)
     assert graph.content_address.startswith("sha256:")
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
 
 
 def test_review_state_migration_refuses_populated_downgrade(tmp_path):
@@ -504,7 +582,7 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0007")
 
-    assert migrate.schema_version(engine) == "0013"
+    assert migrate.schema_version(engine) == "0014"
 
 
 def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp_path):
@@ -534,7 +612,7 @@ def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp
         assert connection.execute(sa.text(
             "SELECT cash FROM capital_state WHERE id = 1"
         )).scalar_one() == 49000.0
-    assert migrate.upgrade_to_head(engine) == "0013"
+    assert migrate.upgrade_to_head(engine) == "0014"
 
 
 def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
@@ -565,7 +643,7 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0008")
 
-    assert migrate.schema_version(engine) == "0013"
+    assert migrate.schema_version(engine) == "0014"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):
