@@ -229,6 +229,47 @@ alter lifecycle capability.
 
 ## 4. Completed
 
+### Configurable live-entry order policy — 2026-08-09
+
+Live **ENTRY** routing now has one closed operator setting: `AUTO`, `MARKET` or
+`LIMIT`. The backend publishes those choices through `/api/settings`, and the Settings UI
+renders the backend-owned list as a select. `AUTO` preserves the prior behaviour: options use
+the book-aware router, while equity entries without a book snapshot remain MARKET. Explicit
+`MARKET` retains the hard spread and known-thin-book vetoes; explicit `LIMIT` produces a
+side-aware cap for both BUY and SELL entries.
+
+Order purpose and side are separate inputs to the planner. `ENTRY + SELL` is therefore a short
+entry, not a risk-reducing exit, while `EXIT` remains market-only. Kite option-chain quotes now
+retain best bid and ask quantities, and the options runner passes ask quantity for BUY entries,
+so a known thin offer cannot disappear between the provider and the forced-MARKET veto.
+
+The durable request matches the venue request. `OrderRequest` rejects unsupported order types,
+MARKET requests carrying a limit, and LIMIT requests without a finite positive limit. For a
+valid LIMIT, `LiveBroker` resolves the venue tick and rounds the price **before** creating the
+immutable execution intent; the adapter's send-time rounding is only a second, idempotent
+guard. Live options and long/short equity pass the selected plan through the broker boundary,
+and `ExecutionIntent.order_type` / `limit_price` record that prepared instruction before the
+broker call.
+
+Verification evidence: 186 focused backend tests covering configuration, planning, runner
+routing, live broker integration, lifecycle persistence, request validation and Kite quote
+mapping passed during implementation. The completed branch gate collected 3,712
+backend/research tests: 3,706 passed and 6 expected skips. The frontend passed 223/223 tests,
+TypeScript checking, and its production build. `dryrun.py 700` ended `LEDGER OK`, and
+`backtest_smoke.py` completed 16/16 cells with `SWEEP OK`. This verifies the live-entry slice;
+it does not widen the claim to the gaps below.
+
+**Still open:**
+
+- Paper and backtest fill models do not simulate a resting LIMIT; limit-touch parity and cache
+  identity remain a separate versioned fill-model slice.
+- LIMIT time-in-force, automatic cancellation and any cancel/reprice policy are not defined.
+  A timed-out order is reconciled and never silently changed to MARKET or resubmitted.
+- Exits remain market-only on the legacy compatibility lifecycle; this slice changes entries
+  only.
+- Platform and deployment settings are consumed by the runner. Instrument-scoped
+  `entry_order_mode` consumption is not implemented and must not be claimed.
+
 ### Durable live-entry lifecycle and protection boundary — 2026-08-09
 
 - Entry intent and `SUBMIT_STARTED` commit before the broker call. Unclassified placement
