@@ -43,15 +43,43 @@ documented rate limit, not our code. No language, algorithm or data structure to
 (`e985d77`) and the pinned path (`0bd1147`), that iteration makes **zero provider calls**, so it
 costs only compute. Serial that is 22 min for NSE; the 90% target is 2.2 min.
 
-| Cores | NSE warm | vs. 22 min serial |
+**Projection, since corrected by measurement — kept so the error is visible:**
+
+| Cores | NSE warm (projected) | vs. 22 min serial |
 |---:|---:|---:|
 | 8 | 2.8 min | 87% faster |
-| 16 | **1.4 min** | **94% faster** |
-| 32 | 0.7 min | 97% faster |
+| 16 | 1.4 min | 94% faster |
 
-Cells are independent — no cross-cell reduction — so fan-out is near-linear and, importantly,
-**does not change any number** (§5). 16 cores clears the target with margin. This is Task 6 of
-the sweep plan and needs no rewrite.
+### What fan-out actually delivered (`c47acc9`)
+
+The projection assumed cell independence makes fan-out near-linear. Cells *are* independent, but
+the parent thread is not free, and it became the ceiling:
+
+| workers | s / 500 cells | ms/cell | speedup | efficiency |
+|---:|---:|---:|---:|---:|
+| 1 | 48.65 | 97.3 | 1.00× | 100% |
+| 2 | 24.50 | 49.0 | 1.99× | 99% |
+| 4 | 23.35 | 46.7 | **2.08×** | 52% |
+| 8 | 26.76 | 53.5 | 1.82× | 23% |
+
+Profiling the parent explains it: `_prepare_dataset` is **37.9 ms/cell of parent wall time
+(73%)**, while waiting on workers is only 7.9 ms. The same machine reaches 3.78× on pure-CPU
+fan-out, so this is not a multiprocessing limit — it is that the parent's own dataset-store read
+(decompress, re-address, verify the manifest) is now the serial bottleneck. **Adding cores past
+four makes it worse**, because the parent is also paying pickle cost for candles it just decoded.
+
+At ~41 ms/cell parent-bound, the NSE warm pass is **~11 minutes**, not 1.4. The 90% target is
+**not met by this slice.**
+
+**The next lever is known and sized: send workers the dataset address, not the candles.** The
+parent then does ~3.5 ms/cell instead of ~41, and the store read moves into the workers where it
+parallelises. That requires reproducing `_pinned_dataset`'s five fail-closed refusals worker-side,
+so it is a `dataset_store` slice rather than a sweep one. With the parent at ~3.5 ms/cell the
+16,000-cell warm pass is parent-bound at ~56 s with compute distributed — which does clear the
+target, but only after that slice lands and is measured, not before.
+
+The lesson is worth keeping: *independent cells* is a necessary condition for linear fan-out, not
+a sufficient one. What actually mattered was how much work stayed on the serial side of the fork.
 
 Iterating one strategy over a **subset** — the actual developer loop — is far below this again.
 
