@@ -327,9 +327,14 @@ class KiteProvider(MarketDataProvider):
         return row_lot or inst.lot_size
 
     def _near_future(self, inst: Instrument) -> dict | None:
+        # `inst.segment`, matching `_future_for_expiry`. These two are siblings and read the
+        # same dump; leaving one on `spot_exchange` meant they disagreed about where futures
+        # live, which is correct today only because `resolve_underlying` never reaches here for
+        # NSE/BSE. A latent disagreement between two methods that must answer the same question
+        # is how the index-futures lookup was wrong for a year without anything reporting it.
         today = dt.date.today()
         names = set(self._name_candidates(inst))
-        futs = [r for r in self._instruments(inst.spot_exchange)
+        futs = [r for r in self._instruments(inst.segment)
                 if r.get("name") in names
                 and r.get("instrument_type") == "FUT"
                 and _as_date(r.get("expiry")) and _as_date(r["expiry"]) >= today]
@@ -399,17 +404,34 @@ class KiteProvider(MarketDataProvider):
         it was opened in, and marking it against the front month after a rollover would price
         a different contract. So this matches the expiry exactly and returns None otherwise —
         refusing beats marking the wrong series.
+
+        Futures live in the DERIVATIVES segment, not on the underlying's cash exchange. That
+        distinction is invisible on MCX/NCDEX, where `segment == spot_exchange`, and decisive on
+        NSE: `instruments("NSE")` is the cash dump and contains no `FUT` row at all, so an
+        index future searched there resolved to nothing every time. The "dated futures feed"
+        closed on 2026-08-09 was therefore closed for commodities only — it failed closed
+        (`FUTURES_NO_PRICE`, no entry), which is why nothing reported it.
+
+        **This fixes the adapter, not the segment.** `_process_futures_entries` still has no way
+        to resolve which contract it would be trading (`runner.py`, `FUTURES_NO_CONTRACT`), so
+        index futures remain unopenable end to end. Resolving a front-month expiry through the
+        connection is the outstanding work; this method is what that work would call.
         """
         want = _as_date(expiry)
         if want is None:
             return None
         names = set(self._name_candidates(inst))
-        for row in self._instruments(inst.spot_exchange):
+        for row in self._instruments(inst.segment):
             if (row.get("name") in names
                     and row.get("instrument_type") == "FUT"
                     and _as_date(row.get("expiry")) == want):
                 return row
         return None
+
+    def front_month_expiry(self, inst: Instrument) -> dt.date | None:
+        """The nearest listed FUT series for this instrument, from today's dump."""
+        row = self._near_future(inst)
+        return _as_date(row.get("expiry")) if row else None
 
     def get_futures_ltp(self, inst: Instrument, expiry) -> float | None:
         """Last traded price of a dated futures contract.
@@ -428,7 +450,9 @@ class KiteProvider(MarketDataProvider):
             log.warn("no futures contract resolved for expiry",
                      instrument=inst.key)
             return None
-        key = f"{inst.spot_exchange}:{row['tradingsymbol']}"
+        # Quoted on the segment that lists the contract, matching `_future_for_expiry`'s dump.
+        # `NSE:NIFTY26AUGFUT` is not a key Kite knows; `NFO:NIFTY26AUGFUT` is.
+        key = f"{inst.segment}:{row['tradingsymbol']}"
         try:
             return self._ltp([key]).get(key, {}).get("last_price")
         except Exception as e:                       # noqa: BLE001 — an unpriceable contract

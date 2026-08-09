@@ -63,13 +63,27 @@ def test_the_basis_converges_at_expiry():
     assert at_expiry == pytest.approx(spot, rel=1e-6)
 
 
-def test_a_past_expiry_does_not_produce_a_negative_basis():
-    """An expired contract must not price BELOW spot through arithmetic — that
-    would be an arbitrage the model invented."""
+def test_a_past_expiry_is_refused_rather_than_clamped_to_spot():
+    """An expired contract has no price at all, and that supersedes the older contract here.
+
+    This test previously required only that a past expiry not price BELOW spot — an arbitrage
+    the model would have invented — which the `max(0, days)` clamp satisfied by returning
+    exactly spot. Returning spot for a settled contract is the same substitution
+    `get_futures_ltp` exists to prevent, wearing a different disguise: the caller cannot tell a
+    converged future from a contract that no longer exists.
+
+    Refusing is also the only refusal a synthetic market can genuinely make — every FUTURE
+    expiry exists in the mock — so it is what makes the conformance obligation "price it or
+    refuse, never substitute the underlying" testable against the mock rather than vacuous.
+    """
     p = _mock()
     inst = get_instrument("NIFTY")
+    spot = p.get_ltp(inst)
     stale = p.get_futures_ltp(inst, p.now().date() - dt.timedelta(days=10))
-    assert stale >= p.get_ltp(inst)
+    assert stale is None, "a settled contract cannot be marked"
+    assert stale != spot, "and in particular it must not come back as the underlying"
+    assert p.get_futures_ltp(inst, p.now().date()) == pytest.approx(spot, rel=1e-6), (
+        "settlement day itself still prices, at convergence — the refusal starts after it")
 
 
 def test_the_seam_exists_on_the_interface_not_just_the_mock():

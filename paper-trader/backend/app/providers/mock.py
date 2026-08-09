@@ -53,8 +53,15 @@ class MockProvider(MarketDataProvider):
     # NO account capabilities: the base defaults return None/[] and callers must fail closed on
     # that rather than treat a mock as a funded account.
     CAPABILITIES = frozenset({
-        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN, caps.SIMULATED_CLOCK,
+        caps.HISTORICAL_DATA, caps.LIVE_QUOTES, caps.OPTION_CHAIN, caps.FUTURES_QUOTES,
+        caps.SIMULATED_CLOCK,
     })
+    # FUTURES_QUOTES was implemented here and left undeclared until 2026-08-09. The cost was
+    # not cosmetic: `runner._process_futures_entries` fails closed on the capability, so the mock — the one
+    # connection on which the index-futures segment could be exercised before it is switched on
+    # for real — refused to open a single futures position while pricing them perfectly well.
+    # Under-declaring a capability fences off working behaviour, silently, in the safe-looking
+    # direction.
 
     def __init__(self) -> None:
         self.s = get_settings()
@@ -108,6 +115,11 @@ class MockProvider(MarketDataProvider):
     def get_ltp(self, inst: Instrument) -> float | None:
         return self._spot(inst)
 
+    def front_month_expiry(self, inst) -> date | None:
+        """The synthetic market's next live series — the same expiries its option chain uses,
+        so a futures contract and an option contract cannot disagree about what month it is."""
+        return self._active_expiry(self.now())
+
     def get_futures_ltp(self, inst, expiry) -> float | None:
         """Synthetic futures price: spot plus a deterministic, shrinking basis.
 
@@ -120,9 +132,15 @@ class MockProvider(MarketDataProvider):
         if spot is None:
             return None
         try:
-            days = max(0, (expiry - self.now().date()).days)
+            days = (expiry - self.now().date()).days
         except Exception:
             days = 30
+        if days < 0:
+            # A settled contract has no price. Returning spot for it is the same substitution
+            # `get_futures_ltp` exists to prevent, wearing a different disguise — and it is the
+            # one refusal a synthetic market can genuinely make, since every future expiry
+            # "exists" here.
+            return None
         # ~0.5% annualised carry, straight-line to zero at expiry.
         return round(float(spot) * (1.0 + 0.005 * days / 365.0), 2)
 

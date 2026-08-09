@@ -118,10 +118,23 @@ class ReplayProvider(MarketDataProvider):
         # tool whose entire purpose is fidelity to what actually happened.
         return None
 
-    def get_option_chain(self, inst, expiry=None):
-        return []
+    def get_option_chain(self, inst) -> None:
+        # A recording carries the underlying series only, so there is no chain to serve.
+        # Refuse with `None`, the vocabulary the contract uses: `[]` is falsy and so it
+        # survived every `if not chain:` site while being the wrong type at any site that did
+        # anything else with it.
+        return None
 
-    def option_ltp(self, tradingsymbol: str) -> float | None:
+    def option_ltp(self, inst, tradingsymbol, strike, expiry, option_type) -> float | None:
+        """Signature-compatible refusal, and the signature is the load-bearing part.
+
+        This took one argument until 2026-08-09, while the base class's own `live_snapshot`
+        calls it with five on any non-equity position. So marking an open option position in a
+        replayed session raised `TypeError` from inside the provider; `runner.mark_and_exit_
+        positions` caught it, recorded a `quote` health failure and marked nothing. The position
+        went unmarked for the whole replay — no trail, no staleness, no exit — and a tool whose
+        entire purpose is fidelity to a real day quietly stopped reproducing it.
+        """
         return None
 
     def is_authenticated(self) -> bool:
