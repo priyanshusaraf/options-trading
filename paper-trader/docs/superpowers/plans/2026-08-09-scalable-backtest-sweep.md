@@ -38,14 +38,25 @@ exact-result parity and bounded provider/database operations.
 The only path to 10,000 × 5. Datasets are fetched once, stored by the exact address
 `identity.ordered_dataset_address` already computes, and read from disk thereafter.
 
-- [ ] Test that a stored dataset is served without any provider call, and that its bytes
+**DONE — `e985d77`.** `app/backtest/dataset_store.py`, 10 tests, no migration.
+
+- [x] Test that a stored dataset is served without any provider call, and that its bytes
       round-trip to an identical address.
-- [ ] Test that a refresh still reads once per dataset and that revised history is detected and
+- [x] Test that a refresh still reads once per dataset and that revised history is detected and
       stored as a new address rather than overwriting.
-- [ ] Test corruption containment: a stored dataset whose recomputed address disagrees is
+- [x] Test corruption containment: a stored dataset whose recomputed address disagrees is
       refused, not served.
-- [ ] Implement the store behind the existing prepared-dataset seam so `_one()` is unchanged.
-- [ ] Prove the store never becomes an implicit pin — a normal refresh still costs its reads.
+- [x] Implement the store behind the existing prepared-dataset seam so `_one()` is unchanged.
+- [x] Prove the store never becomes an implicit pin — a normal refresh still costs its reads.
+
+> Measured: **38 bytes/bar** on a random walk (22 on the mock's smooth ramp — do not plan
+> against that one), so ~10 GB at the full tier. The sweep **writes only**; there is no read
+> path, which is what makes the no-implicit-pin contract hold by construction. Reading from
+> the store is Task 4.
+>
+> Found on the way: `LogBus` has `warn`, not `warning`, and `sweep.py` used the wrong name in
+> both of its degradation handlers — so a dataset that could not be addressed aborted the
+> whole sweep instead of skipping. Guarded by `tests/test_logbus_method_names.py`.
 
 ### Task 4: Pinned immutable warm path
 
