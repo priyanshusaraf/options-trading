@@ -35,7 +35,7 @@ import json
 
 from app.core.config import Settings, get_settings
 from app.core.logging import log
-from app.core.runtime_config import BOUNDS, OVERRIDABLE, _coerce, effective
+from app.core.runtime_config import BOUNDS, CHOICES, OVERRIDABLE, _coerce_for_key, effective
 
 # Scope names, narrowest last. The order IS the precedence — do not reorder without
 # changing what "narrowest wins" means.
@@ -65,10 +65,14 @@ def validate_override(key: str, value, base_type_source: Settings | None = None)
     settings = base_type_source or get_settings()
     default = getattr(settings, key)
     try:
-        coerced = _coerce(default, value)
+        coerced = _coerce_for_key(key, default, value)
     except Exception as e:
         raise ScopeRejection(f"{key!r}: cannot coerce {value!r} to "
                              f"{type(default).__name__} ({e})") from e
+    choices = CHOICES.get(key)
+    if choices is not None and coerced not in choices:
+        raise ScopeRejection(
+            f"{key!r} must be one of {', '.join(choices)} (got {coerced!r})")
     lo_hi = BOUNDS.get(key)
     if lo_hi is not None and isinstance(coerced, (int, float)) \
             and not isinstance(coerced, bool):

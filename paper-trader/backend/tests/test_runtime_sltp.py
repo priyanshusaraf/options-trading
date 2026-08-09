@@ -59,6 +59,22 @@ def test_override_accepts_in_band_values():
         clear_override("stop_loss_pct")
 
 
+def test_entry_order_mode_accepts_only_closed_case_insensitive_values():
+    """A typo must not silently turn a real-money order policy into a fallback."""
+    init_db(reset=True)
+    try:
+        accepted = set_override("entry_order_mode", "limit")
+        assert "error" not in accepted
+        assert accepted["value"] == "LIMIT"
+        assert effective()["entry_order_mode"] == "LIMIT"
+
+        rejected = set_override("entry_order_mode", "iceberg")
+        assert "error" in rejected
+        assert effective()["entry_order_mode"] == "LIMIT"
+    finally:
+        clear_override("entry_order_mode")
+
+
 def test_sltp_default_when_no_override():
     b = _broker()
     inst = get_instrument("NIFTY")

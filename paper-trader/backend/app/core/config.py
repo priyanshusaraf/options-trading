@@ -220,6 +220,7 @@ class Settings(BaseSettings):
     # Don't market into a wide book (illiquid commodity options): route MARKET only
     # when tight + deep, a capped marketable-limit when moderate, and skip entries
     # uglier than this. SELL exits always go market (getting out beats slippage).
+    entry_order_mode: str = "AUTO"              # "AUTO" | "MARKET" | "LIMIT"
     # ── MTF (funded delivery) segment (E3) — EVERY KNOB DEFAULTS INERT ──────
     # Multi-day, funded, interest-bearing. `mtf_enabled=False` means no candidate
     # is ever generated, so nothing below is reachable. Enabling it is an owner

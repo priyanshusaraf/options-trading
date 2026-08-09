@@ -104,6 +104,12 @@ def test_deployment_cannot_set_an_out_of_bounds_value():
         sc.validate_override("intraday_stop_loss_pct", 5.0)     # bound is 0.50
 
 
+def test_scoped_order_mode_normalizes_known_values_and_rejects_unknown_values():
+    assert sc.validate_override("entry_order_mode", "market") == "MARKET"
+    with pytest.raises(sc.ScopeRejection, match="AUTO, MARKET, LIMIT"):
+        sc.validate_override("entry_order_mode", "iceberg")
+
+
 def test_invalid_scoped_value_is_skipped_not_fatal():
     """This resolution runs inside the signal loop's refresh_params(). One bad row
     must never stop the engine from managing open positions."""

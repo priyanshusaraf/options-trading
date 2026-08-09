@@ -31,6 +31,7 @@ OVERRIDABLE = (
     "option_cache_enabled", "option_cache_snapshot_minutes",
     "max_stale_seconds", "position_loop_seconds", "signal_loop_seconds",
     "notify_enabled", "notify_on_signal", "alert_proximity_pct",
+    "entry_order_mode",
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
     "max_open_drawdown", "max_round_trips_per_day",
@@ -71,6 +72,10 @@ OVERRIDABLE = (
     # switched off on a live box without a deploy or a restart (ADR 0011 criterion 5).
     "ir_shadow_enabled",
 )
+
+CHOICES: dict[str, tuple[str, ...]] = {
+    "entry_order_mode": ("AUTO", "MARKET", "LIMIT"),
+}
 
 
 # Inclusive [min, max] bounds per numeric key. Anything outside is rejected so a
@@ -158,16 +163,26 @@ def _coerce(default, raw: str):
     return str(raw)
 
 
+def _coerce_for_key(key: str, default, raw):
+    value = _coerce(default, raw)
+    if key in CHOICES:
+        return str(value).strip().upper()
+    return value
+
+
 def validate(key: str, value) -> str | None:
     """Return an error string if `value` is out of bounds for `key`, else None."""
+    default = getattr(get_settings(), key)
+    try:
+        coerced = _coerce_for_key(key, default, value)
+    except (TypeError, ValueError):
+        return f"'{value}' is not a valid value for {key}"
+    choices = CHOICES.get(key)
+    if choices is not None and coerced not in choices:
+        return f"{key} must be one of {', '.join(choices)} (got {coerced})"
     bounds = BOUNDS.get(key)
     if bounds is None:
         return None
-    default = getattr(get_settings(), key)
-    try:
-        coerced = _coerce(default, value)
-    except (TypeError, ValueError):
-        return f"'{value}' is not a valid value for {key}"
     lo, hi = bounds
     if not (lo <= coerced <= hi):
         return f"{key} must be between {lo} and {hi} (got {coerced})"
@@ -185,6 +200,7 @@ def set_override(key: str, value) -> dict:
     err = validate(key, value)
     if err:
         return {"error": err}
+    value = _coerce_for_key(key, getattr(get_settings(), key), value)
     with SessionLocal() as s:
         row = s.get(RuntimeConfig, key)
         if row is None:
@@ -211,7 +227,7 @@ def effective(settings: Settings | None = None) -> dict:
     for k, raw in get_overrides().items():
         if k in out:
             try:
-                out[k] = _coerce(out[k], raw)
+                out[k] = _coerce_for_key(k, out[k], raw)
             except Exception:
                 pass  # keep the default if a stored value can't be coerced
     return out
