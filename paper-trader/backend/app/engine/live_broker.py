@@ -44,7 +44,6 @@ from app.engine.execution_lifecycle import (
     make_broker_tag,
 )
 from app.engine.kite_order_client import (
-    LEGACY_BOT_TAG,
     PreWireProtectionRejected,
     exchange_for_segment,
     is_strategy_os_tag,
@@ -54,7 +53,7 @@ from app.engine.order_executor import OrderRequest, OrderResult, execute_order
 from app.engine.reconcile import can_bot_close
 from app.engine.venue import protective_kind_for_book_segment
 
-TAG = LEGACY_BOT_TAG  # protective stops and legacy orders retain their historical tag
+TAG = "pt-bot"  # protective stops and legacy orders retain their historical tag
 KITE_LEGACY_CONNECTION_SCOPE = "kite:legacy"
 
 # Kite order statuses that mean the order is dead (no working order left at the
@@ -1100,7 +1099,9 @@ class LiveBroker(PaperBroker):
 
     def open_position(self, inst, direction, q, reason, now, spot,
                       params=None, plan=None, strategy_key=None,
-                      strategy_version=None):
+                      strategy_version=None, entry_intent_id=None):
+        if entry_intent_id is not None:
+            raise ValueError("LiveBroker creates and commits its own entry intent")
         protection_preflight = self._entry_protection_preflight(
                 kind="options", direction=direction, price=q.ltp,
                 params=params, tradingsymbol=q.tradingsymbol,
@@ -1189,7 +1190,7 @@ class LiveBroker(PaperBroker):
     def open_equity_position(self, inst, direction, price, qty, charge_segment, reason,
                              now, params=None, strategy_key=None,
                              strategy_version=None, margin=None,
-                             sl_pct=None, tp_pct=None):
+                             sl_pct=None, tp_pct=None, entry_intent_id=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
         open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it.
@@ -1197,6 +1198,8 @@ class LiveBroker(PaperBroker):
         `sl_pct`/`tp_pct` (purple tiering) are forwarded to PaperBroker so the live row
         freezes the same band a paper row would, and are carried on `_pending_entries`
         so a late fill adopted on the reconcile sweep keeps its purple band too."""
+        if entry_intent_id is not None:
+            raise ValueError("LiveBroker creates and commits its own entry intent")
         tsym = getattr(inst, "spot_symbol", None) or inst.key
         protection_preflight = self._entry_protection_preflight(
                 kind="equity", direction=direction, price=price,
