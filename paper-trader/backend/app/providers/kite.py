@@ -32,7 +32,8 @@ from app.core.logging import WarnGate, log
 from app.engine.gtt import TICK_SIZE
 from app.providers import capabilities as caps
 from app.providers.instrument_resolver import ResolvedInstrument
-from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
+from app.providers.base import (Candle, MarketDataProvider, OptionChain, OptionQuote,
+                                ProviderReadError)
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
 
@@ -245,7 +246,13 @@ class KiteProvider(MarketDataProvider):
             return False
 
     # ── instrument resolution ─────────────────────────────────────────────
-    def _instruments(self, exchange: str) -> list:
+    def _instruments(self, exchange: str, strict: bool = False) -> list:
+        """Today's instrument dump. Degrades to `[]` unless the caller asks it not to.
+
+        `strict=True` is for the candle path, which must distinguish a failed dump from an
+        empty one. The default stays graceful because the chain and quote callers are built on
+        it, and an empty panel is better than a 500 while a session is still coming up.
+        """
         today = str(dt.date.today())
         cached = self._dumps.get(exchange)
         if cached and cached[0] == today:
@@ -253,8 +260,10 @@ class KiteProvider(MarketDataProvider):
         try:
             rows = self.kite.instruments(exchange)
         except Exception as e:
+            if strict:
+                raise
             # not authenticated yet / transient API error — degrade gracefully so
-            # callers (candles, option chain, ltp) return empty instead of 500.
+            # callers (option chain, ltp) return empty instead of 500.
             log.warn(f"instruments({exchange}) failed: {e}")
             return []
         self._dumps[exchange] = (today, rows)
@@ -379,8 +388,26 @@ class KiteProvider(MarketDataProvider):
 
     # ── market data ───────────────────────────────────────────────────────
     def get_candles(self, inst: Instrument, interval: str, days: int) -> list[Candle]:
+        """Completed bars, or `ProviderReadError` — never a failure disguised as no data.
+
+        Both failure points below used to `return []`, which the engine reads as "this
+        instrument has no history" and handles by silently skipping it. The failure handling
+        it actually wants — a `candle` health failure and the expired-token latch — is written
+        around an exception that was never raised. See `ProviderReadError`.
+        """
+        # Token resolution reads the instruments dump, so it fails for the same reasons the
+        # history call does. Swallowing it produced a None token and then an empty list: the
+        # same wrong answer, one call earlier.
         token = self._underlying_token(inst)
         if not token:
+            # No token has two causes that used to look identical: the dump read failed, or the
+            # dump is fine and does not carry this instrument. Only the first is an outage, so
+            # ask the dump directly — strictly this time. It is cached on success, so this
+            # costs nothing in the ordinary case and never runs at all when a token resolved.
+            try:
+                self._instruments(inst.spot_exchange, strict=True)
+            except Exception as e:
+                raise ProviderReadError(f"instrument resolution failed: {e}") from e
             log.warn(f"no underlying token resolved", instrument=inst.key)
             return []
         now = self.now()   # IST wall-clock (naive), NOT server-local — a UTC host would
@@ -388,8 +415,10 @@ class KiteProvider(MarketDataProvider):
         try:
             raw = self._historical(token, now - dt.timedelta(days=days), now, interval)
         except Exception as e:
-            log.error(f"historical_data failed: {e}", instrument=inst.key)
-            return []
+            # The message is carried through deliberately: `_is_auth_error` matches on the
+            # SDK's text, and a latch that cannot recognise an expired token re-fails on every
+            # remaining instrument in the loop.
+            raise ProviderReadError(f"historical_data failed: {e}") from e
         if not raw:
             return []
         raw = raw[:-1]  # drop the still-forming bar

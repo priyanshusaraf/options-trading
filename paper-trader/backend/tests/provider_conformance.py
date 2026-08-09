@@ -52,7 +52,8 @@ from typing import Callable
 
 from app.core.instruments import Instrument
 from app.providers import capabilities as caps
-from app.providers.base import Candle, MarketDataProvider, OptionChain
+from app.providers.base import (Candle, MarketDataProvider, OptionChain,
+                                ProviderReadError)
 from app.providers.instrument_resolver import ResolvedInstrument
 
 
@@ -559,15 +560,27 @@ def check_market_data_under_failure(case: ConformanceCase) -> list[str]:
     declared = type(p).CAPABILITIES
     case.break_transport()
     if caps.HISTORICAL_DATA in declared:
+        # `get_candles` returns a list, so `[]` is the only thing it could once say about a
+        # failure — which made "the token expired" indistinguishable from "no history" and left
+        # the engine's own health and token-latch handling unreachable. The refusal here is
+        # therefore a TYPED one: `ProviderReadError`, carrying the transport's message.
         try:
             bars = p.get_candles(inst, case.interval, case.days)
+        except ProviderReadError:
+            pass                       # the contract's failure channel, used correctly
         except Exception as e:         # noqa: BLE001
-            violations.append(f"get_candles propagated {type(e).__name__} on a dead transport")
+            violations.append(
+                f"get_candles raised {type(e).__name__} on a dead transport; a read failure "
+                f"must arrive as ProviderReadError so callers can tell it from empty history")
         else:
             if bars:
                 violations.append(
                     f"get_candles served {len(bars)} bars with the transport down, newest "
                     f"{bars[-1].ts} — stale data presented as data is worse than no data")
+            else:
+                violations.append(
+                    "get_candles reported no bars with the transport down; `[]` means 'this "
+                    "instrument has no history' and a failed read must not borrow it")
     if caps.LIVE_QUOTES in declared:
         try:
             px = p.get_ltp(inst)

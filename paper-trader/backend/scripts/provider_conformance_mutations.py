@@ -16,6 +16,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SUITE = "tests/test_provider_conformance.py"
+SUITES = {"tests/test_provider_read_failures.py": (
+    "test_a_failing_history_call_raises_rather_than_reporting_no_data",
+    "test_the_raised_error_still_reads_as_an_expired_token",
+)}
 
 # (label, file, find, replace, test that must fail, string its failure must contain)
 MUTATIONS = [
@@ -68,6 +72,20 @@ MUTATIONS = [
      "test_the_mock_never_prices_its_own_front_month_at_spot",
      "assert"),
 
+    ("kite swallows a failed history read and reports no data again",
+     "app/providers/kite.py",
+     '            raise ProviderReadError(f"historical_data failed: {e}") from e',
+     '            log.error(f"historical_data failed: {e}"); return []',
+     "test_a_failing_history_call_raises_rather_than_reporting_no_data",
+     "DID NOT RAISE"),
+
+    ("the read error stops carrying the transport's message",
+     "app/providers/kite.py",
+     '            raise ProviderReadError(f"historical_data failed: {e}") from e',
+     '            raise ProviderReadError("historical_data failed") from e',
+     "test_the_raised_error_still_reads_as_an_expired_token",
+     "the auth-error latch reads the message"),
+
     ("kite quotes the futures contract on the cash exchange again",
      "app/providers/kite.py",
      '        key = f"{inst.segment}:{row[\'tradingsymbol\']}"',
@@ -80,9 +98,10 @@ MUTATIONS = [
 def run(test: str = "") -> tuple[int, str]:
     env = {**os.environ, "PT_DISABLE_DOTENV": "1", "PT_PROVIDER": "mock",
            "PT_EXECUTION": "paper", "PT_LIVE_ACK": ""}
-    target = f"{SUITE}::{test}" if test else SUITE
+    suite = next((f for f, names in SUITES.items() if test in names), SUITE)
+    target = f"{suite}::{test}" if test else f"{SUITE} {' '.join(SUITES)}"
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", target, "--tb=long", "-rA"],
+        [sys.executable, "-m", "pytest", *target.split(), "--tb=long", "-rA"],
         cwd=ROOT, env=env, capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 

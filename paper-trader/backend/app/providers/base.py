@@ -18,6 +18,28 @@ from datetime import date, datetime
 from app.core.instruments import Instrument
 
 
+class ProviderReadError(RuntimeError):
+    """A market-data read failed. Distinct from a read that succeeded and found nothing.
+
+    `get_candles` returns a list, and until 2026-08-09 a list was the only thing it could say —
+    so `KiteProvider` caught every transport exception and returned `[]`, collapsing "the API
+    500'd", "the token expired" and "this instrument has no history" into one answer.
+
+    The cost was not in the adapter. `runner.scan_signals` already handles a failing read: it
+    records a `candle` health failure, latches `_mark_token_bad` on an auth error so the rest of
+    the loop is skipped rather than re-failing identically, and breaks out of the scan. None of
+    that could fire, because nothing ever raised. On a live token expiry the engine recorded
+    `record_ok("candle")` on every tick and dropped each instrument on the short-frame check —
+    a healthy-looking feed delivering nothing.
+
+    **Always preserve the underlying message.** `_is_auth_error` recognises an expired token by
+    the text the Kite SDK produces; a wrapper that discards it latches nothing.
+
+    An empty list still means "no bars", and that must stay a normal answer — turning a thin
+    symbol into an outage would be the same conflation pointing the other way.
+    """
+
+
 @dataclass
 class Candle:
     ts: datetime

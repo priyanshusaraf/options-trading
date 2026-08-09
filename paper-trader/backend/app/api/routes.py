@@ -313,7 +313,14 @@ def option_candles(key: str, request: Request):
         tsym, strike, expiry, otype = pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type
         entry_premium, stop_price, target_price = pos.entry_premium, pos.stop_price, pos.target_price
     inst = get_instrument(key)
-    cs = r.provider.get_candles(inst, r._interval_for(key), settings.history_days)
+    try:
+        cs = r.provider.get_candles(inst, r._interval_for(key), settings.history_days)
+    except Exception:
+        # `get_candles` now raises on a failed read rather than reporting no data. This route
+        # is a chart; an empty panel is the right degradation and a 500 is not. The sibling
+        # route above has always done this — it was only reachable here once the adapter
+        # gained a failure channel to raise through.
+        cs = []
     if not cs:
         return {"candles": [], "tradingsymbol": tsym}
     flag = "c" if otype == "CE" else "p"

@@ -457,8 +457,22 @@ and were fixed.
 
 ### 9.4 Still open — named, not solved
 
-1. **`get_candles` has no failure channel — and the engine's own failure handling is
-   consequently unreachable for Kite.** This is the next slice, and it is larger than it looked.
+1. ~~**`get_candles` has no failure channel**~~ — **DONE 2026-08-09.** `ProviderReadError` is
+   the typed refusal; `KiteProvider.get_candles` raises it (carrying the SDK's message, which
+   `_is_auth_error` reads) instead of returning `[]`, and `[]` now means only "no bars". The
+   engine's `candle` health failure and `_mark_token_bad` auth latch are reachable for the first
+   time — pinned by `tests/test_provider_read_failures.py`, which drives `scan_signals` against a
+   failing transport and asserts the latch engages and `last_scan_ok` is *not* refreshed. Two
+   mutations prove it: swallowing the failure again, and dropping the message from the wrapper.
+   The conformance contract now requires the typed refusal, so Upstox inherits the obligation.
+   The three other call sites improve without change — `sweep.py` already records the error on
+   the run, `research/data/store.py` no longer content-hashes a Dataset built from an API error,
+   and the one unguarded chart route now degrades to an empty panel rather than a 500.
+
+   The original entry is kept below because the *reasoning* is the reusable part.
+
+   **`get_candles` had no failure channel — and the engine's own failure handling was
+   consequently unreachable for Kite.**
 
    `kite.py` catches every exception around `_historical` and returns `[]`, so "the API 500'd",
    "the token expired" and "this instrument has no history" are one answer. But
