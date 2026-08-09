@@ -627,10 +627,30 @@ holds.
 
 ### Two corrections, neither of them "use polling"
 
-1. **Serialise once, send bytes to many.** Encode the message a single time and `send_text`
-   the identical string to every client. This is a small change to `_sender` and removes
-   essentially all of the per-client CPU. Do this first; it is cheap and it is the whole
-   cliff.
+1. **Serialise once, send bytes to many. — DONE, `0d6ac14`.** Each enqueued message is now one
+   `_Frame` shared by every client, encoded at most once, lazily, inside `_sender`'s existing
+   `try/except`. Measured on a 100-instrument payload to 500 clients over 20 pushes:
+
+   | | `json.dumps` calls/push | wall/push |
+   |---|---:|---:|
+   | before | 500 | 148.94 ms |
+   | after | **1** | **0.33 ms** |
+
+   ~450x on the encode step. 149 ms of CPU every 2.5 s tick becomes 0.33 ms.
+
+   Two guards, both proven able to fail. The encoding is byte-identical to starlette's
+   `send_json`, pinned by diffing raw ASGI frames from a *genuine* starlette `WebSocket`
+   against `send_json`'s own output for the same message, unicode included. And the encode
+   stays **lazy** — moving it into `_enqueue` raises `TypeError` straight out of
+   `broadcast()`, into the engine tick, instead of evicting the one client that cannot take
+   the payload.
+
+   One behaviour change, in our favour: `on_update` broadcasts the *live* `runner.state`, so
+   each client's copy used to be serialised at that client's own send moment — clients could
+   observe different states and the engine could mutate the dict mid-serialisation, once per
+   client per tick. All clients now get one identical snapshot and that window shrinks 500x.
+   A late-draining client reads text captured at first send: at most one tick stale, and
+   coalescing replaces the frame next tick.
 2. **Push deltas, not full state.** A 2.5 s tick changes a handful of fields on a handful of
    instruments, yet every push carries all of them, including `_ratchet_atr` — an
    underscore-prefixed engine internal already flagged in `api/dto.py`'s docstring as
