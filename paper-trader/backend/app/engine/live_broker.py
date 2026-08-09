@@ -18,8 +18,15 @@ from sqlalchemy import select
 
 from app.core.instruments import get_instrument
 from app.core.logging import log
-from app.db.models import Deployment, LEGACY_DEPLOYMENT_ID, OrderJournal, Position
+from app.db.models import (
+    Deployment,
+    ExecutionOrderEvent,
+    LEGACY_DEPLOYMENT_ID,
+    OrderJournal,
+    Position,
+)
 from app.engine.broker import PaperBroker
+from app.engine.charges import compute_charges, legs_for
 from app.engine.broker_protocol import (
     ProtectiveStopKind,
     clear_protective_order_id,
@@ -32,6 +39,7 @@ from app.engine.execution_lifecycle import (
     NewExecutionEvent,
     NewExecutionIntent,
     broker_observation_id,
+    make_broker_tag,
 )
 from app.engine.kite_order_client import (
     LEGACY_BOT_TAG,
@@ -55,12 +63,14 @@ class LiveBroker(PaperBroker):
 
     def __init__(self, provider, order_client, *, poll_seconds: float = 0.5,
                  timeout_seconds: float = 30.0, notifier=None,
-                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
+                 deployment_id: int = LEGACY_DEPLOYMENT_ID,
+                 lifecycle_clock=None) -> None:
         super().__init__(provider, deployment_id=deployment_id)
         self.client = order_client
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
         self.notifier = notifier
+        self.lifecycle_clock = lifecycle_clock or dt.datetime.now
         # tradingsymbol -> order id of an order that TIMED OUT while possibly still
         # working at the exchange. Before placing a NEW order for that contract we
         # cancel/await it, so a contract never has two working bot orders at once
@@ -150,7 +160,7 @@ class LiveBroker(PaperBroker):
                 context=durable_context,
             ),
             durable_context,
-            now,
+            self.lifecycle_clock(),
         )
         client_intent_id = intent_row.client_intent_id
         tagged_req = replace(req, tag=intent_row.broker_tag)
@@ -166,7 +176,7 @@ class LiveBroker(PaperBroker):
                 avg_price=0.0,
                 payload={"broker_tag": intent_row.broker_tag},
             ),
-            now,
+            self.lifecycle_clock(),
         )
 
         journal_context = dict(durable_context, client_intent_id=client_intent_id)
@@ -187,7 +197,7 @@ class LiveBroker(PaperBroker):
                     avg_price=0.0,
                     payload={"order_id": str(order_id)},
                 ),
-                now,
+                self.lifecycle_clock(),
             )
 
         res = execute_order(
@@ -206,8 +216,6 @@ class LiveBroker(PaperBroker):
             "reconciliation_required": res.reconciliation_required,
         }
         broker_status = "COMPLETE" if res.status == "FILLED" else res.status
-        if res.status == "ERROR" and res.order_id is None:
-            broker_status = "FAILED"
         if res.status == "PARTIAL" and "cancelled" in (res.reason or "").lower():
             broker_status = "CANCELLED"
         try:
@@ -224,17 +232,46 @@ class LiveBroker(PaperBroker):
                     avg_price=avg,
                     payload=status_payload,
                 ),
-                now,
+                self.lifecycle_clock(),
             )
         except Exception as e:
             res = OrderResult(
                 "ERROR", res.order_id, 0, 0.0,
                 f"status observation persistence failed: {e}",
-                reconciliation_required=res.order_id is not None,
+                reconciliation_required=True,
             )
             filled, avg = 0, 0.0
+        if filled <= 0 and not res.reconciliation_required:
+            self._journal_resolve(row_id, res, filled, avg)
+        return res, filled, avg, client_intent_id, row_id
+
+    def _mark_position_booked(self, client_intent_id: str, row_id: int | None,
+                              pos: Position, res, filled: int, avg: float) -> bool:
+        """Close the durable broker-to-ledger gap after the Position commit."""
+        source_event_id = f"position:{pos.id}:{pos.qty}"
+        existing = self.s.scalar(select(ExecutionOrderEvent).where(
+            ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.source == "engine",
+            ExecutionOrderEvent.source_event_id == source_event_id,
+        ))
+        if existing is None:
+            try:
+                ExecutionLifecycleStore(self.s).append_event(
+                    client_intent_id,
+                    NewExecutionEvent(
+                        source="engine", source_event_id=source_event_id,
+                        kind="POSITION_BOOKED", broker_order_id=res.order_id,
+                        broker_status=res.status, cumulative_filled_qty=pos.qty,
+                        avg_price=pos.entry_premium,
+                        payload={"position_id": pos.id, "booked_qty": pos.qty},
+                    ),
+                    self.lifecycle_clock(),
+                )
+            except Exception as e:
+                log.error(f"position booking event failed: {e}", event="LIFECYCLE_FAIL")
+                return False
         self._journal_resolve(row_id, res, filled, avg)
-        return res, filled, avg, client_intent_id
+        return True
 
     # ── order journal (H13) — durable mirror of _inflight ∪ _pending_entries ──
     def _journal_open(self, req, intent: str, kind: str, context) -> int | None:
@@ -252,6 +289,7 @@ class LiveBroker(PaperBroker):
             self.s.commit()
             return row.id
         except Exception as e:
+            self.s.rollback()
             log.error(f"journal open failed: {e}", event="JOURNAL_FAIL")
             return None
 
@@ -262,11 +300,14 @@ class LiveBroker(PaperBroker):
                 row.order_id = order_id
                 self.s.commit()
         except Exception as e:
+            self.s.rollback()
             log.error(f"journal order_id set failed: {e}", event="JOURNAL_FAIL")
 
     @staticmethod
     def _journal_resolution(res, filled: int, qty: int) -> str | None:
         """None => the row stays WORKING (order may still be live); else terminal."""
+        if res.reconciliation_required:
+            return None
         if qty > 0 and filled >= qty:
             return "FILLED"
         if filled > 0:                              # partial
@@ -297,6 +338,7 @@ class LiveBroker(PaperBroker):
                 row.resolved_at = self.provider.now()
                 self.s.commit()
         except Exception as e:
+            self.s.rollback()
             log.error(f"journal resolve failed: {e}", event="JOURNAL_FAIL")
 
     def journal_mark_terminal(self, order_id: str, resolution: str,
@@ -308,6 +350,7 @@ class LiveBroker(PaperBroker):
         try:
             row = self.s.scalars(
                 select(OrderJournal).where(OrderJournal.order_id == order_id,
+                                           OrderJournal.deployment_id == self.deployment_id,
                                            OrderJournal.status == "WORKING")).first()
             if row:
                 row.status = "TERMINAL"
@@ -319,6 +362,7 @@ class LiveBroker(PaperBroker):
                 row.resolved_at = self.provider.now()
                 self.s.commit()
         except Exception as e:
+            self.s.rollback()
             log.error(f"journal mark terminal failed: {e}", event="JOURNAL_FAIL")
 
     def _rebuild_pending(self, row, ctx) -> dict:
@@ -339,14 +383,14 @@ class LiveBroker(PaperBroker):
                     "spot": ctx.get("spot", 0.0), "params": ctx.get("params"),
                     "strategy_key": ctx.get("strategy_key"),
                     "strategy_version": ctx.get("strategy_version"),
-                    "client_intent_id": ctx.get("client_intent_id")}
+                    "client_intent_id": ctx.get("client_intent_id"), "row_id": row.id}
         return {"kind": "equity", "order_id": row.order_id, "inst": inst,
                 "direction": ctx["direction"], "charge_segment": ctx.get("charge_segment", ""),
                 "reason": ctx.get("reason", "recovered"), "params": ctx.get("params"),
                 "strategy_key": ctx.get("strategy_key"),
                 "strategy_version": ctx.get("strategy_version"),
                 "sl_pct": ctx.get("sl_pct"), "tp_pct": ctx.get("tp_pct"),
-                "client_intent_id": ctx.get("client_intent_id")}
+                "client_intent_id": ctx.get("client_intent_id"), "row_id": row.id}
 
     def recover_journal(self, now) -> list:
         """H13: on startup, replay WORKING journal rows — the in-memory in-flight
@@ -356,10 +400,21 @@ class LiveBroker(PaperBroker):
         A status read failure leaves the row WORKING (fail open — retry next start)."""
         recovered: list[str] = []
         rows = self.s.scalars(
-            select(OrderJournal).where(OrderJournal.status == "WORKING")).all()
+            select(OrderJournal).where(OrderJournal.status == "WORKING",
+                                       OrderJournal.deployment_id == self.deployment_id)).all()
         for row in rows:
             if not row.order_id:
-                continue   # never-acked placement — the tag sweep surfaces it
+                if row.intent == "ENTRY":
+                    try:
+                        ctx = json.loads(row.context_json or "{}")
+                        pending = self._rebuild_pending(row, ctx)
+                        pending.update(order_id=None,
+                                       broker_tag=make_broker_tag(ctx["client_intent_id"]))
+                        self._pending_entries[row.tradingsymbol] = pending
+                    except Exception as e:
+                        log.error(f"RECOVER {row.tradingsymbol}: uncertain submit rebuild "
+                                  f"failed: {e}", event="RECOVER_FAIL")
+                continue
             try:
                 st = self.client.status(row.order_id)
             except Exception as e:
@@ -383,6 +438,8 @@ class LiveBroker(PaperBroker):
                     self._pending_entries[row.tradingsymbol] = self._rebuild_pending(row, ctx)
             else:   # EXIT
                 pos = self.s.get(Position, ctx["position_id"]) if ctx.get("position_id") else None
+                if pos is not None and pos.deployment_id != self.deployment_id:
+                    pos = None
                 if filled >= row.qty and pos is not None:
                     if pos.segment == "equity_intraday":
                         PaperBroker.close_equity_position(self, pos, avg, "RECOVERED_EXIT_FILL", now)
@@ -429,10 +486,13 @@ class LiveBroker(PaperBroker):
         def sid(v) -> str:
             return "" if v is None else str(v)
 
-        known = {sid(r.order_id) for r in self.s.scalars(select(OrderJournal)).all()
+        deployment_id = getattr(self, "deployment_id", LEGACY_DEPLOYMENT_ID)
+        known = {sid(r.order_id) for r in self.s.scalars(
+            select(OrderJournal).where(OrderJournal.deployment_id == deployment_id)).all()
                  if r.order_id}
         # Resting protective stops of positions still open …
-        known |= {sid(protective_order_id(p)) for p in self.s.scalars(select(Position)).all()
+        known |= {sid(protective_order_id(p)) for p in self.s.scalars(
+            select(Position).where(Position.deployment_id == deployment_id)).all()
                   if protective_order_id(p)}
         known.discard("")
 
@@ -473,6 +533,40 @@ class LiveBroker(PaperBroker):
         True if it is now safe to place, False if it is NOT (the prior order already
         filled — a second order would double up — or a stuck order could not be
         cancelled)."""
+        uncertain_item = next(
+            ((pending_symbol, pending) for pending_symbol, pending
+             in self._pending_entries.items()
+             if not pending.get("order_id") and pending.get("broker_tag")), None)
+        if uncertain_item is not None:
+            pending_symbol, uncertain = uncertain_item
+            try:
+                matches = [order for order in self.client.orders()
+                           if order.get("tag") == uncertain["broker_tag"]]
+            except Exception as e:
+                log.error(f"UNCERTAIN {pending_symbol}: exact-tag reconciliation failed: {e}",
+                          event="ENTRY_RECONCILE_FAIL")
+                return False
+            if matches:
+                oid = str(matches[-1].get("order_id") or "")
+                if oid:
+                    uncertain["order_id"] = oid
+                    self._inflight[pending_symbol] = oid
+                    self._journal_set_order_id(uncertain.get("row_id"), oid)
+                return False
+            client_intent_id = uncertain["client_intent_id"]
+            ExecutionLifecycleStore(self.s).append_event(
+                client_intent_id,
+                NewExecutionEvent(
+                    source="broker", source_event_id="exact-tag-not-found",
+                    kind="STATUS_OBSERVED", broker_order_id=None,
+                    broker_status="FAILED", cumulative_filled_qty=0, avg_price=0.0,
+                    payload={"tag": uncertain["broker_tag"], "accepted_order": False},
+                ), self.lifecycle_clock())
+            self._journal_resolve(
+                uncertain.get("row_id"),
+                OrderResult("REJECTED", None, 0, 0.0, "exact tag not found"), 0, 0.0)
+            self._pending_entries.pop(pending_symbol, None)
+
         oid = self._inflight.pop(symbol, None)
         if not oid:
             return True
@@ -567,7 +661,7 @@ class LiveBroker(PaperBroker):
                    "strategy_key": strategy_key, "strategy_version": strategy_version}
         decision_price = ((q.bid + q.ask) / 2.0
                           if q.bid > 0 and q.ask > 0 and q.ask >= q.bid else q.ltp)
-        res, filled, avg, client_intent_id = self._execute_entry(
+        res, filled, avg, client_intent_id, row_id = self._execute_entry(
             OrderRequest(q.tradingsymbol, inst.segment, "BUY", q.lot_size, order_type, limit),
             kind="options", context=context, now=now, decision_price=decision_price,
             strategy_key=strategy_key, strategy_version=strategy_version)
@@ -580,13 +674,16 @@ class LiveBroker(PaperBroker):
             # Remember enough to ADOPT that late fill on the reconcile sweep — otherwise
             # it becomes an invisible, stopless position (the equity #17 fix, now for
             # options, the default segment).
-            if res.order_id and res.status in ("TIMEOUT", "ERROR"):
+            if ((res.order_id and res.status in ("TIMEOUT", "ERROR"))
+                    or res.reconciliation_required):
                 self._pending_entries[q.tradingsymbol] = {
                     "kind": "options", "order_id": res.order_id, "inst": inst,
                     "direction": direction, "q": q, "reason": reason, "spot": spot,
                     "params": params, "strategy_key": strategy_key,
                     "strategy_version": strategy_version,
-                    "client_intent_id": client_intent_id}
+                    "client_intent_id": client_intent_id,
+                    "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
+                    "booked_qty": 0}
             log.error(f"LIVE OPEN not filled [{res.status}] {q.tradingsymbol} — {res.reason}",
                       instrument=inst.key, event="LIVE_OPEN_FAIL")
             self._notify(f"⚠️ LIVE OPEN {q.tradingsymbol} {res.status}: {res.reason}")
@@ -600,6 +697,17 @@ class LiveBroker(PaperBroker):
                                     entry_intent_id=client_intent_id)
         pos.lot_size = q.lot_size   # qty reflects the real fill; lot_size stays the true lot
         self.s.commit()
+        self._mark_position_booked(client_intent_id, row_id, pos, res, filled, avg)
+        if (res.status == "PARTIAL" and res.order_id
+                and "timeout" in (res.reason or "").lower()):
+            self._inflight[q.tradingsymbol] = res.order_id
+            self._pending_entries[q.tradingsymbol] = {
+                "kind": "options", "order_id": res.order_id, "inst": inst,
+                "direction": direction, "q": q, "reason": reason, "spot": spot,
+                "params": params, "strategy_key": strategy_key,
+                "strategy_version": strategy_version,
+                "client_intent_id": client_intent_id, "row_id": row_id,
+                "booked_qty": filled}
         if filled < q.lot_size:
             log.error(f"LIVE OPEN PARTIAL {q.tradingsymbol} {filled}/{q.lot_size} "
                       f"@ {avg:.2f} (order {res.order_id})", instrument=inst.key,
@@ -632,7 +740,7 @@ class LiveBroker(PaperBroker):
                    "params": params, "strategy_key": strategy_key,
                    "strategy_version": strategy_version, "sl_pct": sl_pct,
                    "tp_pct": tp_pct}
-        res, filled, avg, client_intent_id = self._execute_entry(
+        res, filled, avg, client_intent_id, row_id = self._execute_entry(
             OrderRequest(tsym, exchange_for_segment(charge_segment), side, qty, "MARKET", None,
                          product=product_for_segment(charge_segment)),
             kind="equity", context=context, now=now, decision_price=price,
@@ -642,14 +750,17 @@ class LiveBroker(PaperBroker):
             self._record_inflight(tsym, res)
             # #17: the order may still fill later (pre-open uncross / slow open). Remember
             # enough to ADOPT that fill on the reconcile sweep instead of orphaning it.
-            if res.order_id and res.status in ("TIMEOUT", "ERROR"):
+            if ((res.order_id and res.status in ("TIMEOUT", "ERROR"))
+                    or res.reconciliation_required):
                 self._pending_entries[tsym] = {
                     "kind": "equity",
                     "order_id": res.order_id, "inst": inst, "direction": direction,
                     "charge_segment": charge_segment, "reason": reason, "params": params,
                     "strategy_key": strategy_key, "strategy_version": strategy_version,
                     "sl_pct": sl_pct, "tp_pct": tp_pct,
-                    "client_intent_id": client_intent_id}
+                    "client_intent_id": client_intent_id,
+                    "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
+                    "booked_qty": 0}
             log.error(f"LIVE EQUITY OPEN not filled [{res.status}] {tsym} — {res.reason}",
                       instrument=inst.key, event="LIVE_EQUITY_OPEN_FAIL")
             self._notify(f"⚠️ LIVE EQUITY OPEN {tsym} {res.status}: {res.reason}")
@@ -661,6 +772,17 @@ class LiveBroker(PaperBroker):
                                            strategy_version,
                                            margin=fill_margin, sl_pct=sl_pct, tp_pct=tp_pct,
                                            entry_intent_id=client_intent_id)
+        self._mark_position_booked(client_intent_id, row_id, pos, res, filled, avg)
+        if (res.status == "PARTIAL" and res.order_id
+                and "timeout" in (res.reason or "").lower()):
+            self._inflight[tsym] = res.order_id
+            self._pending_entries[tsym] = {
+                "kind": "equity", "order_id": res.order_id, "inst": inst,
+                "direction": direction, "charge_segment": charge_segment,
+                "reason": reason, "params": params, "strategy_key": strategy_key,
+                "strategy_version": strategy_version, "sl_pct": sl_pct,
+                "tp_pct": tp_pct, "client_intent_id": client_intent_id,
+                "row_id": row_id, "booked_qty": filled}
         if filled < qty:
             log.error(f"LIVE EQUITY OPEN PARTIAL {tsym} {filled}/{qty} @ {avg:.2f} "
                       f"(order {res.order_id})", instrument=inst.key,
@@ -1268,9 +1390,41 @@ class LiveBroker(PaperBroker):
             status = str(st.get("status", "")).upper()
             filled = int(st.get("filled_qty", 0) or 0)
             avg = float(st.get("avg_price", 0.0) or 0.0)
+            payload = {"status": status, "filled_qty": filled, "avg_price": avg,
+                       "reason": str(st.get("reason", "") or "")}
+            source_event_id = broker_observation_id(str(ctx["order_id"]), payload)
+            existing_event = self.s.scalar(select(ExecutionOrderEvent).where(
+                ExecutionOrderEvent.client_intent_id == ctx.get("client_intent_id"),
+                ExecutionOrderEvent.source == "broker",
+                ExecutionOrderEvent.source_event_id == source_event_id,
+            ))
+            if existing_event is None and ctx.get("client_intent_id"):
+                try:
+                    ExecutionLifecycleStore(self.s).append_event(
+                        ctx["client_intent_id"],
+                        NewExecutionEvent(
+                            source="broker", source_event_id=source_event_id,
+                            kind="STATUS_OBSERVED", broker_order_id=str(ctx["order_id"]),
+                            broker_status=status, cumulative_filled_qty=filled,
+                            avg_price=avg, payload=payload),
+                        self.lifecycle_clock())
+                except Exception as e:
+                    log.error(f"ADOPT {sym}: status persistence failed: {e}",
+                              event="LIFECYCLE_FAIL")
+                    continue
             if filled > 0 and avg > 0:
                 inst = ctx["inst"]
-                if self.position_for(inst.key) is None:
+                pos = self.s.scalar(select(Position).where(
+                    Position.entry_intent_id == ctx.get("client_intent_id"),
+                    Position.deployment_id == self.deployment_id,
+                ))
+                existing = self.position_for(inst.key, deployment_id=self.deployment_id)
+                if pos is None and existing is not None:
+                    self.journal_mark_terminal(ctx["order_id"], "ADOPTED", filled, avg)
+                    self._pending_entries.pop(sym, None)
+                    self._inflight.pop(sym, None)
+                    continue
+                if pos is None:
                     if ctx.get("kind") == "options":
                         # C3: adopt an options late fill and rest its GTT backstop, mirroring
                         # the live open_position booking (real filled qty at the real price).
@@ -1297,9 +1451,56 @@ class LiveBroker(PaperBroker):
                     self._notify(f"ℹ️ {sym}: a bot order filled late ({filled}@{avg:.2f}) — "
                                  f"adopted into the book with a stop; verify on Zerodha")
                     adopted.append(inst.key)
-                self.journal_mark_terminal(ctx["order_id"], "ADOPTED", filled, avg)   # H13
-                self._pending_entries.pop(sym, None)
-                self._inflight.pop(sym, None)
+                elif filled > pos.qty:
+                    old_qty = pos.qty
+                    old_cost = pos.entry_cost
+                    stop_ratio = pos.stop_price / pos.entry_premium
+                    target_ratio = pos.target_price / pos.entry_premium
+                    if ctx.get("kind") == "options":
+                        charges = compute_charges(pos.exchange, "BUY", avg, filled)["total"]
+                        new_cost = avg * filled + charges
+                    else:
+                        entry_side, _ = legs_for(pos.direction)
+                        charges = compute_charges(pos.exchange, entry_side, avg, filled)["total"]
+                        margin_per_unit = (old_cost - pos.entry_charges) / old_qty
+                        new_cost = margin_per_unit * filled + charges
+                    cap = self.capital()
+                    cap.cash -= new_cost - old_cost
+                    cap.updated_at = now
+                    pos.qty = filled
+                    pos.entry_premium = avg
+                    pos.entry_charges = charges
+                    pos.entry_cost = new_cost
+                    pos.stop_price = avg * stop_ratio
+                    pos.target_price = avg * target_ratio
+                    pos.last_premium = avg
+                    pos.last_mark_time = now
+                    self.s.commit()
+                    result = OrderResult(
+                        "FILLED" if status == "COMPLETE" else "PARTIAL",
+                        ctx["order_id"], filled, avg,
+                        "complete" if status == "COMPLETE" else "partial fill at timeout")
+                    self._mark_position_booked(
+                        ctx["client_intent_id"], ctx.get("row_id"), pos,
+                        result, filled, avg)
+                    if ctx.get("kind") == "options":
+                        self.update_stop_protection(pos, avg)
+                    else:
+                        gid = protective_order_id(pos)
+                        if gid:
+                            self._resync_equity_stop(pos, gid)
+                        else:
+                            self._place_equity_stop(pos, avg)
+                if status == "COMPLETE" or status in _DEAD_STATUSES:
+                    result = OrderResult(
+                        "FILLED" if status == "COMPLETE" else "PARTIAL",
+                        ctx["order_id"], filled, avg,
+                        "complete" if status == "COMPLETE" else "cancelled after partial")
+                    self._mark_position_booked(
+                        ctx["client_intent_id"], ctx.get("row_id"), pos,
+                        result, filled, avg)
+                    self._pending_entries.pop(sym, None)
+                    self._inflight.pop(sym, None)
             elif status in _DEAD_STATUSES:
                 self.journal_mark_terminal(ctx["order_id"], "DEAD")   # H13
                 self._pending_entries.pop(sym, None)   # died with no fill — nothing to adopt

@@ -72,6 +72,8 @@ def test_place_failure_is_error_and_never_double_places():
     c = FakeClient([], place_raises=True)
     r = execute_order(c, _buy(), sleep_fn=_noslp)
     assert r.status == "ERROR" and c.places == 1
+    assert r.order_id is None
+    assert r.reconciliation_required is True
 
 
 def test_cancelled_after_partial_is_partial():

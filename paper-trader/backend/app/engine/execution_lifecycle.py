@@ -163,6 +163,7 @@ def reduce_execution_events(
     terminal = False
     submit_seen = False
     acknowledged = False
+    booked_qty = 0
     anomalies: list[str] = []
     seen_identities: set[tuple[str, str]] = set()
     intent_at: dt.datetime | None = None
@@ -194,6 +195,8 @@ def reduce_execution_events(
             acknowledged = True
             if acknowledged_at is None:
                 acknowledged_at = observed_at
+        if kind == "POSITION_BOOKED":
+            booked_qty = max(booked_qty, row.cumulative_filled_qty)
 
         if row.broker_order_id:
             if broker_order_id is None:
@@ -216,6 +219,9 @@ def reduce_execution_events(
             last_fill_price = round(
                 ((filled_qty * avg_price) - (previous_qty * previous_avg)) / last_fill_delta, 8)
 
+        if kind == "POSITION_BOOKED":
+            continue
+
         next_status = row_status or kind
         next_terminal = row_status in _TERMINAL_STATUSES or kind in _TERMINAL_STATUSES
         if terminal:
@@ -227,7 +233,8 @@ def reduce_execution_events(
         if next_terminal:
             terminal = True
 
-    reconciliation_required = submit_seen and not acknowledged
+    unbooked_fill = filled_qty > booked_qty
+    reconciliation_required = unbooked_fill or (submit_seen and not terminal)
     remaining_qty = max(0, requested_qty - filled_qty)
     slippage_amount: float | None = None
     slippage_bps: float | None = None
@@ -274,37 +281,56 @@ class ExecutionLifecycleStore:
         context: dict,
         now: dt.datetime,
     ) -> ExecutionIntent:
-        client_intent_id = make_intent_id()
-        row = ExecutionIntent(
-            client_intent_id=client_intent_id,
-            deployment_id=request.deployment_id,
-            broker=request.broker,
-            account_scope=request.account_scope,
-            connection_scope=request.connection_scope,
-            broker_tag=make_broker_tag(client_intent_id),
-            intent=request.intent,
-            instrument_key=request.instrument_key,
-            tradingsymbol=request.tradingsymbol,
-            exchange=request.exchange,
-            side=request.side,
-            product=request.product,
-            order_type=request.order_type,
-            requested_qty=request.requested_qty,
-            limit_price=request.limit_price,
-            decision_price=request.decision_price,
-            signal_at=request.signal_at,
-            strategy_key=request.strategy_key,
-            strategy_version=request.strategy_version,
-            context_json=_canonical_json(context),
-            created_at=now,
-        )
-        self.session.add(row)
-        try:
-            self.session.commit()
-        except Exception:
-            self.session.rollback()
-            raise
-        return row
+        for attempt in range(3):
+            client_intent_id = make_intent_id()
+            row = ExecutionIntent(
+                client_intent_id=client_intent_id,
+                deployment_id=request.deployment_id,
+                broker=request.broker,
+                account_scope=request.account_scope,
+                connection_scope=request.connection_scope,
+                broker_tag=make_broker_tag(client_intent_id),
+                intent=request.intent,
+                instrument_key=request.instrument_key,
+                tradingsymbol=request.tradingsymbol,
+                exchange=request.exchange,
+                side=request.side,
+                product=request.product,
+                order_type=request.order_type,
+                requested_qty=request.requested_qty,
+                limit_price=request.limit_price,
+                decision_price=request.decision_price,
+                signal_at=request.signal_at,
+                strategy_key=request.strategy_key,
+                strategy_version=request.strategy_version,
+                context_json=_canonical_json(context),
+                created_at=now,
+            )
+            self.session.add(row)
+            self.session.add(ExecutionOrderEvent(
+                client_intent_id=client_intent_id,
+                source="engine",
+                source_event_id="intent-created",
+                kind="INTENT_CREATED",
+                broker_order_id=None,
+                broker_status="",
+                cumulative_filled_qty=0,
+                avg_price=0.0,
+                observed_at=now,
+                payload_json="{}",
+                anomaly="",
+            ))
+            try:
+                self.session.commit()
+                return row
+            except IntegrityError:
+                self.session.rollback()
+                if attempt == 2:
+                    raise
+            except Exception:
+                self.session.rollback()
+                raise
+        raise AssertionError("unreachable")
 
     def append_event(
         self,
@@ -396,10 +422,13 @@ class ExecutionLifecycleStore:
             .order_by(ExecutionOrderEvent.id))
         for event in events:
             events_by_intent[event.client_intent_id].append(event)
-        return [
-            intent for intent in intents
-            if not reduce_execution_events(intent, events_by_intent[intent.client_intent_id]).terminal
-        ]
+        unresolved: list[ExecutionIntent] = []
+        for intent in intents:
+            state = reduce_execution_events(
+                intent, events_by_intent[intent.client_intent_id])
+            if not state.terminal or state.reconciliation_required:
+                unresolved.append(intent)
+        return unresolved
 
 
 __all__ = [

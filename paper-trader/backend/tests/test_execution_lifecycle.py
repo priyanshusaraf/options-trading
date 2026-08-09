@@ -5,6 +5,7 @@ import datetime as dt
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.models import Base, Deployment, ExecutionOrderEvent
@@ -173,6 +174,61 @@ def test_submit_started_without_ack_requires_reconciliation():
     assert state.reconciliation_required is True
 
 
+def test_terminal_fill_requires_position_booked_before_reconciliation_clears():
+    events = [
+        _row("intent-1", _event("SUBMIT_STARTED", source_event_id="submit",
+                                 observed_at=BASE_TIME, source="engine"), BASE_TIME),
+        _row("intent-1", _event("ACKNOWLEDGED", source_event_id="ack",
+                                 observed_at=BASE_TIME, broker_order_id="order-1"), BASE_TIME),
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="complete",
+                                 observed_at=BASE_TIME, broker_order_id="order-1",
+                                 broker_status="COMPLETE", cumulative_filled_qty=100,
+                                 avg_price=101), BASE_TIME),
+    ]
+
+    before_booking = reduce_execution_events(_request(), events)
+    after_booking = reduce_execution_events(_request(), events + [
+        _row("intent-1", _event("POSITION_BOOKED", source_event_id="position:9",
+                                 observed_at=BASE_TIME, source="engine",
+                                 cumulative_filled_qty=100, avg_price=101,
+                                 payload={"position_id": 9}), BASE_TIME),
+    ])
+
+    assert before_booking.terminal is True
+    assert before_booking.reconciliation_required is True
+    assert after_booking.terminal is True
+    assert after_booking.reconciliation_required is False
+
+
+@pytest.mark.parametrize("status", ["REJECTED", "CANCELLED", "FAILED"])
+def test_zero_fill_terminal_rejection_needs_no_reconciliation(status):
+    state = reduce_execution_events(_request(), [
+        _row("intent-1", _event("SUBMIT_STARTED", source_event_id="submit",
+                                 observed_at=BASE_TIME, source="engine"), BASE_TIME),
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id=status.lower(),
+                                 observed_at=BASE_TIME, broker_status=status), BASE_TIME),
+    ])
+
+    assert state.terminal is True
+    assert state.filled_qty == 0
+    assert state.reconciliation_required is False
+
+
+def test_post_ack_poll_error_remains_reconciliation_required():
+    state = reduce_execution_events(_request(), [
+        _row("intent-1", _event("SUBMIT_STARTED", source_event_id="submit",
+                                 observed_at=BASE_TIME, source="engine"), BASE_TIME),
+        _row("intent-1", _event("ACKNOWLEDGED", source_event_id="ack",
+                                 observed_at=BASE_TIME, broker_order_id="order-1"), BASE_TIME),
+        _row("intent-1", _event("STATUS_OBSERVED", source_event_id="poll-error",
+                                 observed_at=BASE_TIME, broker_order_id="order-1",
+                                 broker_status="ERROR"), BASE_TIME),
+    ])
+
+    assert state.terminal is False
+    assert state.reconciliation_required is True
+
+
 def test_realised_slippage_uses_intent_decision_price():
     state = reduce_execution_events(_request(decision_price=100.0), [
         _row("intent-1", _event("STATUS_OBSERVED", source_event_id="complete", observed_at=BASE_TIME,
@@ -263,6 +319,45 @@ def test_store_canonicalizes_json_and_rejects_identity_collisions(tmp_path):
                    broker_status="COMPLETE", payload={"a": 1, "b": 2}),
             BASE_TIME,
         )
+
+
+def test_create_intent_emits_intent_created_in_same_commit(tmp_path):
+    session = _session(tmp_path)
+    intent = ExecutionLifecycleStore(session).create_intent(_request(), {}, BASE_TIME)
+
+    events = list(session.scalars(select(ExecutionOrderEvent).where(
+        ExecutionOrderEvent.client_intent_id == intent.client_intent_id)))
+
+    assert [(event.kind, event.observed_at) for event in events] == [
+        ("INTENT_CREATED", BASE_TIME)]
+
+
+def test_create_intent_retries_two_identity_collisions_then_succeeds(tmp_path, monkeypatch):
+    from app.engine import execution_lifecycle as lifecycle
+
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    ids = iter(["a" * 16 + "0" * 16, "a" * 16 + "1" * 16,
+                "a" * 16 + "2" * 16, "b" * 32])
+    monkeypatch.setattr(lifecycle, "make_intent_id", lambda: next(ids))
+    first = store.create_intent(_request(), {}, BASE_TIME)
+    second = store.create_intent(_request(), {}, BASE_TIME)
+
+    assert first.client_intent_id == "a" * 16 + "0" * 16
+    assert second.client_intent_id == "b" * 32
+
+
+def test_create_intent_fails_closed_after_three_identity_collisions(tmp_path, monkeypatch):
+    from app.engine import execution_lifecycle as lifecycle
+
+    session = _session(tmp_path)
+    store = ExecutionLifecycleStore(session)
+    ids = iter(["a" * 16 + suffix * 16 for suffix in "0123"])
+    monkeypatch.setattr(lifecycle, "make_intent_id", lambda: next(ids))
+    store.create_intent(_request(), {}, BASE_TIME)
+
+    with pytest.raises(sa.exc.IntegrityError):
+        store.create_intent(_request(), {}, BASE_TIME)
 
 
 @pytest.mark.parametrize(
@@ -382,9 +477,10 @@ def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_pa
     finally:
         sa.event.remove(session.get_bind(), "before_cursor_execute", count_queries)
 
+    expected = sorted([*scoped, terminal],
+                      key=lambda intent: (intent.created_at, intent.client_intent_id))
     assert [intent.client_intent_id for intent in unresolved] == [
-        intent.client_intent_id for intent in scoped
-    ]
+        intent.client_intent_id for intent in expected]
     assert len(statements) == 2
 
 

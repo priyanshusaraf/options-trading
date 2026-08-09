@@ -63,7 +63,8 @@ def execute_order(client: OrderClient, req: OrderRequest, *,
     try:
         order_id = client.place(req)
     except Exception as e:
-        return OrderResult("ERROR", None, 0, 0.0, f"place failed: {e}")
+        return OrderResult("ERROR", None, 0, 0.0, f"place failed: {e}",
+                           reconciliation_required=True)
 
     # Placement has already happened. If the acknowledgement cannot be made durable,
     # preserve the known broker id and stop: polling or retrying through a caller can
