@@ -139,19 +139,45 @@ class Forbidden(HTTPException):
 def is_allowed(principal: Principal | None, action: str, resource: Any = None) -> bool:
     """The policy, as a pure predicate.
 
-    Currently: the owner may do everything. That is not a placeholder that forgot
-    to be filled in — it is the accurate statement of a single-user system, and
-    writing it as code means the day a second principal exists, the diff is
-    confined to this function instead of being a hunt through 45 routes.
+    Two rules, in order.
 
-    `resource` is accepted and ignored on purpose. Per-resource authorization
-    (H3's "no per-resource authorization") needs a resource identity to hang off,
-    and C1 is about to re-key resources away from the instrument symbol — taking
-    the argument now means that phase changes policy, not every call site.
+    **1. The caller must be an owner.** Until a second principal kind exists that is the whole
+    of admission, and it is the accurate statement of a single-user system rather than a
+    placeholder somebody forgot to fill in.
+
+    **2. If the resource says whose it is, it must be this caller's.** `resource` was accepted
+    and ignored from H3 until 2026-08-11, because per-resource authorization needs a resource
+    identity to hang off and no table had one. Migrations 0015–0017 gave the money plane an
+    `owner_id`, so the identity now exists and the rule is real.
+
+    The check is deliberately **structural, not a table list**: any object exposing an `owner_id`
+    is enforced. A list of table names would have to be updated in lockstep with every migration,
+    and the failure mode of forgetting is silent — a new owned table that nobody enforces looks
+    exactly like one that is enforced. Asking the object means a table cannot opt out by being
+    forgotten; it can only opt out by genuinely having no owner, which is a visible property of
+    its schema.
+
+    The three singleton-keyed money tables (`capital_state`, `instrument_state`,
+    `daily_account_snapshot`) therefore pass rule 2 by having no `owner_id` to check — which is
+    honest. They are single-owner, their keys say so, and migration 0017 declined to give them a
+    column that could not express two owners. This function does not pretend otherwise.
+
+    A resource that is not an owned object — a project id string, `None` — is allowed by rule 2.
+    That is not a hole today: those planes have no ownership dimension yet, and inventing a
+    refusal for them here would be a policy reading a field that does not exist.
     """
-    if principal is None:
+    if principal is None or not principal.is_owner:
         return False
-    return principal.is_owner
+    resource_owner = getattr(resource, "owner_id", None)
+    if resource_owner is None:
+        return True
+    try:
+        return str(resource_owner) == owner_id_for(principal)
+    except Forbidden:
+        # `owner_id_for` refuses a non-owner principal. Rule 1 already excluded that, so this is
+        # unreachable today; it is here because a predicate that raises where callers expect a
+        # bool is how an `if is_allowed(...)` somewhere turns into a 500 instead of a refusal.
+        return False
 
 
 def owner_id_for(principal: Principal | None) -> str:

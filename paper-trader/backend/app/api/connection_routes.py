@@ -33,7 +33,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
-from app.api.principal import Principal, get_principal, owner_id_for, require
+from app.api.principal import (
+    Principal,
+    get_principal,
+    is_allowed,
+    owner_id_for,
+    require,
+)
 from app.core.credential_vault import CredentialVaultUnavailable
 from app.db.session import SessionLocal
 from app.providers import brokers as registry
@@ -94,6 +100,29 @@ def _open(session, principal: Principal) -> OwnedConnectionStore:
     return OwnedConnectionStore(session, owner_id_for(principal))
 
 
+def _authorized(store: OwnedConnectionStore, principal: Principal,
+                action: str, connection_id: int):
+    """Load the row and put it through the policy.
+
+    The store's query already filters on owner, so this is a second, independent check on the
+    same fact — deliberately. They fail differently: the query filter is *data scoping* and lives
+    in the store; `is_allowed` is *policy* and lives in `principal.py`, which is the file
+    `.claude/rules/tenancy-security.md` says authorization must be reviewable from. If the filter
+    is ever dropped in a refactor, this still refuses, and vice versa.
+
+    It is also the first caller that hands `is_allowed` a genuinely owned object. A policy that
+    can enforce ownership and is never given anything owned is the unconsumed-mechanism defect
+    with an authorization label on it.
+    """
+    row = store.get(connection_id)
+    if not is_allowed(principal, action, row):
+        # Reported as absent, NOT forbidden. A 403 confirms the id exists, and ids are guessable
+        # — the same non-disclosure rule `ConnectionNotFound` exists for. The refusal is the
+        # policy's; only how it is *shown* is the route's business.
+        raise ConnectionNotFound(f"no connection {connection_id} for this owner")
+    return row
+
+
 @router.get("/brokers")
 def list_brokers(principal: Principal = Depends(get_principal)) -> dict:
     """The registry, as the operator sees it.
@@ -140,7 +169,8 @@ def get_connection(connection_id: int,
     require(principal, "read:connections")
     with SessionLocal() as s:
         try:
-            return _open(s, principal).get(connection_id).to_dict()
+            store = _open(s, principal)
+            return _authorized(store, principal, "read:connection", connection_id).to_dict()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -217,7 +247,9 @@ def store_credential(connection_id: int, body: CredentialWrite,
                    f"and its value at most {_MAX_SECRET_LEN}")
     with SessionLocal() as s:
         try:
-            row = _open(s, principal).store_credential(connection_id, dict(body.secrets))
+            store = _open(s, principal)
+            _authorized(store, principal, "write:credential", connection_id)
+            row = store.store_credential(connection_id, dict(body.secrets))
             s.commit()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
@@ -238,7 +270,9 @@ def revoke_connection(connection_id: int,
     require(principal, "revoke:connection")
     with SessionLocal() as s:
         try:
-            row = _open(s, principal).revoke(connection_id)
+            store = _open(s, principal)
+            _authorized(store, principal, "revoke:connection", connection_id)
+            row = store.revoke(connection_id)
             s.commit()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e

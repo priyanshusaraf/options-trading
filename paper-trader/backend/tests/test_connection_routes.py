@@ -27,7 +27,7 @@ from app.db.models import LEGACY_OWNER_ID, BrokerConnection
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.main import app
-from app.providers.connection_store import OwnedConnectionStore
+from app.providers.connection_store import ConnectionNotFound, OwnedConnectionStore
 
 KEY = base64.b64encode(b"r" * 32).decode()
 
@@ -410,3 +410,43 @@ def test_the_capabilities_list_is_bounded(client):
                       json={"broker": "kite", "scope": "kite:main",
                             "capabilities": ["historical_data"] * 5000})
     assert res.status_code == 422
+
+
+def test_the_policy_refuses_a_foreign_row_even_if_the_store_filter_hands_one_over():
+    """The second layer, proven independently of the first.
+
+    `_authorized` exists because the store's owner filter and `is_allowed` are two different
+    checks on the same fact: one is data scoping, one is policy. Through the HTTP surface the
+    store's filter always wins the race, so no request can distinguish them — which means the
+    policy layer was untestable and, by this repo's own standard, unproven. A mutation sweep
+    found exactly that: replacing the loaded row with `None` broke nothing.
+
+    So the second layer is tested where it can actually be observed — with a store that hands
+    back a row belonging to someone else, which is what a dropped owner filter would do.
+    """
+    from app.api.connection_routes import _authorized
+    from app.api.principal import OWNER
+
+    class LeakyStore:
+        """A store whose owner filter has been lost in a refactor."""
+        def get(self, connection_id):
+            row = BrokerConnection(id=connection_id, broker="kite", scope="kite:x")
+            row.owner_id = "someone-else"
+            return row
+
+    with pytest.raises(ConnectionNotFound):
+        _authorized(LeakyStore(), OWNER, "read:connection", 1)
+
+
+def test_a_non_owner_principal_is_refused_by_the_policy_itself():
+    """Rule 1 of `is_allowed`, guarded directly.
+
+    `owner_id_for` has its own refusal and it is tested, but `is_allowed` now checks
+    `is_owner` BEFORE ever reaching it — so the two guards are independent and only one of them
+    was pinned. A mutation that removed `is_allowed`'s check stayed green.
+    """
+    from app.api.principal import Principal, is_allowed
+
+    service = Principal(id="ingest", kind="service", scopes=frozenset({"read:status"}))
+    assert is_allowed(service, "read:connections") is False
+    assert is_allowed(service, "read:connections", None) is False

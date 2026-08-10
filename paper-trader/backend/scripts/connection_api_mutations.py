@@ -25,7 +25,7 @@ MODELS = ROOT / "app/db/models.py"
 MAIN = ROOT / "app/main.py"
 STORE = ROOT / "app/providers/connection_store.py"
 PY = "/Users/priyanshusaraf/dev/options-trading/paper-trader/backend/.venv/bin/python"
-TESTS = ["tests/test_connection_routes.py"]
+TESTS = ["tests/test_connection_routes.py", "tests/test_principal.py"]
 
 MUTATIONS = [
     # ── whose rows these are ───────────────────────────────────────────────
@@ -33,15 +33,40 @@ MUTATIONS = [
      '    configured = (get_settings().owner_id or "").strip()\n'
      "    return configured or LEGACY_OWNER_ID",
      "    return principal.id"),
-    ("a-non-owner-principal-falls-through-to-the-owner", PRINCIPAL,
-     "    if principal is None or not principal.is_owner:",
-     "    if principal is None:"),
+    # Two guards, two mutations. `is_allowed` checks `is_owner` BEFORE reaching `owner_id_for`,
+    # so each can be removed independently and only one of them used to be pinned. The anchors
+    # carry a following line because the `if` itself is now identical in both functions and
+    # `replace(..., 1)` would silently mutate whichever comes first in the file.
+    ("is_allowed-lets-a-non-owner-principal-through", PRINCIPAL,
+     "    if principal is None or not principal.is_owner:\n        return False\n"
+     '    resource_owner = getattr(resource, "owner_id", None)',
+     "    if principal is None:\n        return False\n"
+     '    resource_owner = getattr(resource, "owner_id", None)'),
+    ("owner_id_for-falls-through-to-the-owner-for-a-non-owner", PRINCIPAL,
+     "    if principal is None or not principal.is_owner:\n"
+     '        raise Forbidden("no owner identity for this principal")',
+     "    if principal is None:\n"
+     '        raise Forbidden("no owner identity for this principal")'),
     # The vacuity this closes: `LEGACY_OWNER_ID`, `Settings.owner_id`'s default and the model's
     # column default all produce `"owner"`, so the owner test used to pass under a constant.
     ("owner-hardcoded-to-the-single-owner-default", PRINCIPAL,
      '    configured = (get_settings().owner_id or "").strip()\n'
      "    return configured or LEGACY_OWNER_ID",
      "    return LEGACY_OWNER_ID"),
+
+    # ── per-resource ownership: the policy must actually decide something ──
+    ("the-resource-argument-goes-back-to-being-ignored", PRINCIPAL,
+     '    resource_owner = getattr(resource, "owner_id", None)',
+     "    resource_owner = None\n    _unused = getattr(resource, \"owner_id\", None)"),
+    ("a-foreign-owner-passes-the-policy", PRINCIPAL,
+     "        return str(resource_owner) == owner_id_for(principal)",
+     "        return bool(owner_id_for(principal))"),
+    ("an-unowned-resource-is-refused-instead-of-allowed", PRINCIPAL,
+     "    if resource_owner is None:\n        return True",
+     "    if resource_owner is None:\n        return False"),
+    ("the-route-never-hands-the-policy-the-loaded-row", API,
+     "    if not is_allowed(principal, action, row):",
+     "    if not is_allowed(principal, action, None):"),
 
     # ── the credential ─────────────────────────────────────────────────────
     ("a-missing-vault-key-is-reported-as-a-success", API,
@@ -141,12 +166,12 @@ MUTATIONS = [
      "                capabilities=declared)\n            s.commit()",
      "                capabilities=declared)"),
     ("storing-a-credential-never-commits", API,
-     "            row = _open(s, principal).store_credential(connection_id, dict(body.secrets))\n"
+     "            row = store.store_credential(connection_id, dict(body.secrets))\n"
      "            s.commit()",
-     "            row = _open(s, principal).store_credential(connection_id, dict(body.secrets))"),
+     "            row = store.store_credential(connection_id, dict(body.secrets))"),
     ("revocation-never-commits", API,
-     "            row = _open(s, principal).revoke(connection_id)\n            s.commit()",
-     "            row = _open(s, principal).revoke(connection_id)"),
+     "            row = store.revoke(connection_id)\n            s.commit()",
+     "            row = store.revoke(connection_id)"),
 ]
 
 # An exclusive lock on the tree. Two sweeps at once is destructive, not merely slow: sweep B

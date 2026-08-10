@@ -201,3 +201,70 @@ def test_principal_is_owner_when_a_valid_token_is_presented(monkeypatch):
     finally:
         app.router.routes[:] = [r for r in app.router.routes
                                 if getattr(r, "path", None) != "/api/_test_principal_probe2"]
+
+
+# ── per-resource ownership (2026-08-11) ───────────────────────────────────
+# `resource` was accepted and ignored from H3 until migrations 0015–0017 gave the money plane an
+# `owner_id`. These pin the rule that the argument now carries, and each fails differently.
+
+class _Owned:
+    """Stands in for any money-plane row. The policy is structural — it asks the object for an
+    `owner_id` rather than consulting a list of table names — so a fake with the attribute is a
+    faithful stand-in, and that is the property being tested."""
+
+    def __init__(self, owner_id):
+        self.owner_id = owner_id
+
+
+@pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
+def test_a_resource_belonging_to_another_owner_is_refused(principal, monkeypatch):
+    from app.api.principal import is_allowed
+    monkeypatch.setattr(get_settings(), "owner_id", "acct-7")
+    assert is_allowed(principal, "read", _Owned("acct-7")) is True
+    assert is_allowed(principal, "read", _Owned("someone-else")) is False
+
+
+@pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
+def test_the_check_is_structural_so_a_new_owned_table_cannot_opt_out_by_being_forgotten(
+        principal, monkeypatch):
+    """A table-name allowlist would have to be updated in lockstep with every migration, and the
+    failure mode of forgetting is silent: an unenforced owned table looks exactly like an
+    enforced one. Asking the object means a table can only opt out by genuinely having no
+    owner."""
+    from app.api.principal import is_allowed
+    monkeypatch.setattr(get_settings(), "owner_id", "acct-7")
+
+    class NeverSeenBefore:
+        owner_id = "someone-else"
+
+    assert is_allowed(principal, "read", NeverSeenBefore()) is False
+
+
+@pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
+def test_a_resource_with_no_owner_is_still_allowed(principal):
+    """The three singleton-keyed money tables have no `owner_id`, and neither do the user/market
+    planes. They pass by having nothing to check, which is honest — inventing a refusal here
+    would be a policy reading a field that does not exist."""
+    from app.api.principal import is_allowed
+
+    class Unowned:
+        pass
+
+    assert is_allowed(principal, "read", Unowned()) is True
+    assert is_allowed(principal, "read", "a-project-id") is True
+    assert is_allowed(principal, "read", None) is True
+
+
+@pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
+def test_the_real_money_plane_models_are_actually_subject_to_the_check(principal, monkeypatch):
+    """Guards against the check being real and the models being shaped so it never fires. Uses
+    the ORM classes themselves rather than a fake, because a fake proves the predicate and this
+    proves the predicate meets the schema."""
+    from app.api.principal import is_allowed
+    from app.db.models import Position, Trade
+    monkeypatch.setattr(get_settings(), "owner_id", "acct-7")
+    for model in (Position, Trade):
+        row = model()
+        row.owner_id = "someone-else"
+        assert is_allowed(principal, "read", row) is False, (
+            f"{model.__name__} carries an owner_id that the policy does not enforce")
