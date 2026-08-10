@@ -56,6 +56,28 @@ def protective_kind_for_book_segment(book_segment: str) -> ProtectiveStopKind:
             else ProtectiveStopKind.SERVER_TRIGGER)
 
 
+
+def rows_or_refuse(reader, family: str) -> list:
+    """Call an inventory reader and refuse a `None`.
+
+    The distinction is the whole point of `protective_inventory`, and both venues previously
+    wrote `reader() or []` — which turns a client that answers `None` on a failed read into an
+    EMPTY inventory. Callers read emptiness as "this position has no exchange-side stop" and
+    place one, so a duplicate protective order lands on a live position.
+
+    Not reachable through `KiteOrderClient`, which returns a list or raises. It is fixed anyway
+    because the protocol docstring states the guarantee absolutely, and a docstring ahead of the
+    code is this codebase's repeat failure shape — noted by the execution-safety review that
+    found it (F6, 2026-08-10).
+    """
+    rows = reader()
+    if rows is None:
+        raise NotImplementedError(
+            f"this client answered None for the {family} inventory. None is not an empty "
+            f"inventory — it is an unreadable one, and reporting it as empty licenses placing a "
+            f"second protective stop on a position that already has one.")
+    return list(rows)
+
 # ── the wire contract ─────────────────────────────────────────────────────
 
 
@@ -125,6 +147,48 @@ class ExecutionVenue(Protocol):
 
         Needed because a SERVER_TRIGGER id is not an order id, so `status()` cannot
         answer it — the distinction that E6 was about.
+        """
+        ...
+
+    def protective_inventory(self, kind: ProtectiveStopKind) -> list[dict]:
+        """Every protective stop of `kind` currently known to the venue, as rows of
+
+            {id, tradingsymbol, exchange, side, qty, trigger_price, status, tag}
+
+        `status` is normalised to one of `"live"` / `"dead"` / `""` (unknown), because
+        the two families report deadness in different and venue-specific vocabularies
+        and the broker must not learn either. `""` means the venue gave no status at
+        all; a caller deciding whether a stop is still protecting a position must treat
+        it as live, since assuming dead is what would place a second one.
+
+        This exists because the broker used to read the raw `orders()` / `gtts()` dumps
+        and filter them on Kite's own field names (`trigger_id` vs `order_id`,
+        `transaction_type` vs `side`, `quantity` vs `qty`). Those spellings are exactly
+        what a second venue does not share.
+
+        Raises on a read failure. It must never return `[]` for an unreadable venue:
+        callers use emptiness to conclude "this position has no exchange-side stop",
+        and concluding that wrongly places a duplicate.
+        """
+        ...
+
+    # ── vocabulary ─────────────────────────────────────────────────────
+    def exchange_for(self, charge_segment: str) -> str:
+        """The venue's own name for the exchange a charge-segment trades on.
+
+        Strategy OS classifies by charge-segment because that is what drives the charge
+        schedule; the venue's exchange code is a different alphabet (Kite's `NSE` for
+        both `NSE_EQ` and `NSE_INTRADAY`). Translating here is what lets the broker hold
+        one classification while two venues spell it differently.
+        """
+        ...
+
+    def product_for(self, tenor: Tenor) -> str:
+        """The venue's product code for a neutral holding period.
+
+        The broker decides INTRADAY or CARRY — a risk decision it owns. Which of the
+        venue's product codes expresses that is the venue's business: Kite says MIS and
+        NRML, and nothing above this line may.
         """
         ...
 

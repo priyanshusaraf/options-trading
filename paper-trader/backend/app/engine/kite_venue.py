@@ -8,18 +8,24 @@ Two things live here:
     to so there is exactly one implementation of each mapping; and
   * `KiteVenue`, an `ExecutionVenue` adapter over a `KiteOrderClient`.
 
-`KiteVenue` is deliberately NOT wired into the live path yet. Phase F's job was to
-declare the boundary and prove nothing crosses it silently; re-routing the
-real-money broker through a new object is a separate, separately-verified change.
-It is exercised by `tests/test_venue_boundary.py` against a fake Kite client, so
-it is a checked translation table rather than a hopeful one — but read it as the
-target shape, not as the shape in production. See /tmp/phaseF_needs.md.
+`KiteVenue` IS wired into the live path as of 2026-08-10: `broker_factory` builds one
+and hands it to `LiveBroker`, whose every protective-stop call now goes through the
+neutral verbs. Phase F declared the boundary and left it unconsumed — the codebase's
+own defining defect shape — and that has now been closed for the protective-stop
+family. `tests/test_venue_boundary.py` checks the translation table against a fake
+client; `tests/test_live_broker_speaks_no_kite.py` fails the build if the Kite
+vocabulary reappears above this file.
+
+**Still Kite-shaped above the seam** (do not read this file as the whole boundary):
+the raw `orders()` / `gtts()` inventory dumps the entry pre-flight reads, and the
+`exchange_for_segment` / `product_for_segment` helpers, which return Kite exchange
+and product strings straight into `OrderRequest`. Those are the next slice.
 """
 from __future__ import annotations
 
 from app.engine.broker_protocol import ProtectiveStopKind, Tenor
 from app.engine.order_executor import OrderRequest
-from app.engine.venue import tenor_for_charge_segment
+from app.engine.venue import rows_or_refuse, tenor_for_charge_segment
 
 # ── vocabulary translation ────────────────────────────────────────────────
 
@@ -31,6 +37,13 @@ _KITE_PRODUCT = {Tenor.INTRADAY: "MIS", Tenor.CARRY: "NRML"}
 #: Kite actually wants is the bare one. Every other charge-segment (NFO/BFO/MCX/
 #: NCDEX) is already a Kite exchange and passes through.
 _KITE_EXCHANGE = {"NSE_INTRADAY": "NSE", "BSE_INTRADAY": "BSE"}
+
+#: Kite order statuses that mean the order is no longer protecting anything. COMPLETE
+#: belongs here even though it is a success: a filled SL-M has stopped resting.
+_DEAD_ORDER_STATUSES = frozenset({"REJECTED", "CANCELLED", "COMPLETE"})
+
+#: Kite GTT statuses meaning the trigger will not fire again.
+_DEAD_GTT_STATUSES = frozenset({"cancelled", "disabled", "deleted", "triggered"})
 
 
 def kite_product(tenor: Tenor, default: str = "NRML") -> str:
@@ -50,6 +63,8 @@ def kite_product_for_charge_segment(charge_segment: str, default: str = "NRML") 
 
 
 # ── the adapter ───────────────────────────────────────────────────────────
+
+
 
 
 class KiteVenue:
@@ -136,6 +151,75 @@ class KiteVenue:
                 "triggered": bool(d.get("triggered")
                                   or str(d.get("status", "")).lower() == "triggered"),
                 "filled_qty": 0, "avg_price": 0.0}
+
+    def protective_inventory(self, kind: ProtectiveStopKind) -> list[dict]:
+        """Normalise a Kite protection dump into neutral rows.
+
+        The two families arrive in different alphabets — a GTT row calls its id
+        `trigger_id` and its direction `side`; an order row calls them `order_id` and
+        `transaction_type`, and its size `quantity` rather than `qty`. The broker used
+        to know all six spellings. Now nothing above this method does.
+
+        A missing reader raises rather than returning `[]`: an empty inventory is read
+        by callers as "no exchange-side stop exists", and acting on that when the truth
+        is "we could not look" places a second protective stop on a position that
+        already has one.
+        """
+        if kind is ProtectiveStopKind.RESTING_STOP:
+            reader = getattr(self.client, "orders", None)
+            if reader is None:
+                raise NotImplementedError(
+                    "this Kite client cannot list orders, so the resting-stop inventory "
+                    "is unknown — refusing to report it as empty")
+            return [{
+                "id": str(r["order_id"]) if r.get("order_id") else None,
+                "tradingsymbol": r.get("tradingsymbol"),
+                "exchange": r.get("exchange"),
+                "side": str(r.get("transaction_type") or "").upper(),
+                "qty": int(r.get("quantity") or 0),
+                "trigger_price": float(r.get("trigger_price") or 0.0),
+                # COMPLETE joins REJECTED/CANCELLED as dead: a filled SL-M is no longer
+                # protecting anything, which is the whole point of the reconciliation.
+                "status": ("dead" if str(r.get("status") or "").upper()
+                           in _DEAD_ORDER_STATUSES else "live"),
+                "tag": r.get("tag"),
+            } for r in rows_or_refuse(reader, "resting-stop")]
+
+        reader = getattr(self.client, "gtts", None)
+        if reader is None:
+            raise NotImplementedError(
+                "this Kite client cannot list GTTs, so the server-trigger inventory is "
+                "unknown — refusing to report it as empty")
+        rows = []
+        for r in rows_or_refuse(reader, "server-trigger"):
+            raw = r.get("status")
+            rows.append({
+                "id": str(r["trigger_id"]) if r.get("trigger_id") else None,
+                "tradingsymbol": r.get("tradingsymbol"),
+                "exchange": r.get("exchange"),
+                "side": str(r.get("side") or "").upper(),
+                "qty": int(r.get("qty") or 0),
+                "trigger_price": float(r.get("trigger_price") or 0.0),
+                # Kite omits the status on some GTT shapes. The historical filter read a
+                # missing status as "active", and that default is preserved deliberately:
+                # treating an unknown stop as dead is what would place a duplicate.
+                "status": ("dead" if str(raw or "active").lower() in _DEAD_GTT_STATUSES
+                           else "live"),
+                "tag": None,   # Kite GTTs carry no tag
+            })
+        return rows
+
+    # ── vocabulary ─────────────────────────────────────────────────────
+    def exchange_for(self, charge_segment: str) -> str:
+        return kite_exchange(charge_segment)
+
+    def product_for(self, tenor: Tenor) -> str:
+        return kite_product(tenor, self._carry_product())
+
+    def _carry_product(self) -> str:
+        """The client's configured carry product, so a client built with something
+        other than NRML keeps it (the same allowance `kite_product`'s `default` makes)."""
+        return str(getattr(self.client, "product", "NRML") or "NRML")
 
     # ── account ────────────────────────────────────────────────────────
     def funds(self) -> dict:

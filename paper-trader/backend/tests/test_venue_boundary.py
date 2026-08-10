@@ -263,3 +263,178 @@ def test_kite_order_client_exposes_the_public_tick_size_verb():
     assert c.tick_size("LT", "NSE") == 0.10
     assert c.tick_size(None, "NSE") == 0.05          # no symbol -> standard grid
     assert c.tick_size("LT", "NSE") == c._tick("LT", "NSE")
+
+
+# ── protective inventory: the normalisation, and what it refuses ──────────
+# Added 2026-08-10 when the broker stopped reading Kite's raw dumps. These rows are
+# what the reconciliation compares against a live position, so a wrong field name here
+# produces a *silent* mismatch: the stop is real, the broker cannot see it, and it
+# places a second one.
+
+
+class _InventoryClient(FakeKiteClient):
+    """Rows shaped exactly as `KiteOrderClient.orders()` / `.gtts()` emit them."""
+
+    def orders(self):
+        return [
+            {"order_id": "SLM-9", "tradingsymbol": "DLF", "exchange": "NSE",
+             "transaction_type": "sell", "quantity": 10, "trigger_price": 99.0,
+             "status": "TRIGGER PENDING", "tag": "pt-bot"},
+            {"order_id": "SLM-8", "tradingsymbol": "DLF", "exchange": "NSE",
+             "transaction_type": "SELL", "quantity": 10, "trigger_price": 99.0,
+             "status": "COMPLETE", "tag": "pt-bot"},
+        ]
+
+    def gtts(self):
+        return [
+            {"trigger_id": "GTT-9", "tradingsymbol": "NIFTY25000CE", "exchange": "NFO",
+             "side": "SELL", "qty": 50, "trigger_price": 12.0, "status": "active"},
+            {"trigger_id": "GTT-8", "tradingsymbol": "NIFTY25000CE", "exchange": "NFO",
+             "side": "SELL", "qty": 50, "trigger_price": 12.0, "status": "triggered"},
+            # Kite omits the status on some shapes; the historical filter read that as
+            # active and this must keep doing so.
+            {"trigger_id": "GTT-7", "tradingsymbol": "NIFTY25000CE", "exchange": "NFO",
+             "side": "SELL", "qty": 50, "trigger_price": 12.0},
+        ]
+
+
+def test_resting_stop_inventory_is_normalised_off_kites_field_names():
+    rows = KiteVenue(_InventoryClient()).protective_inventory(
+        ProtectiveStopKind.RESTING_STOP)
+    assert [r["id"] for r in rows] == ["SLM-9", "SLM-8"]
+    live = next(r for r in rows if r["id"] == "SLM-9")
+    # `transaction_type` -> `side` (upper-cased), `quantity` -> `qty`
+    assert live == {"id": "SLM-9", "tradingsymbol": "DLF", "exchange": "NSE",
+                    "side": "SELL", "qty": 10, "trigger_price": 99.0,
+                    "status": "live", "tag": "pt-bot"}
+
+
+def test_a_filled_resting_stop_is_dead_because_it_protects_nothing():
+    """COMPLETE is a success and still means the stop is gone. Reading it as live
+    leaves the position believing it is protected by an order that already fired."""
+    rows = KiteVenue(_InventoryClient()).protective_inventory(
+        ProtectiveStopKind.RESTING_STOP)
+    assert {r["id"]: r["status"] for r in rows} == {"SLM-9": "live", "SLM-8": "dead"}
+
+
+def test_server_trigger_inventory_normalises_and_defaults_missing_status_to_live():
+    rows = KiteVenue(_InventoryClient()).protective_inventory(
+        ProtectiveStopKind.SERVER_TRIGGER)
+    assert {r["id"]: r["status"] for r in rows} == {
+        "GTT-9": "live", "GTT-8": "dead", "GTT-7": "live"}
+    assert all(r["tag"] is None for r in rows), "Kite GTTs carry no tag"
+
+
+@pytest.mark.parametrize("kind,missing", [
+    (ProtectiveStopKind.RESTING_STOP, "orders"),
+    (ProtectiveStopKind.SERVER_TRIGGER, "gtts"),
+])
+def test_an_unreadable_inventory_raises_rather_than_reporting_empty(kind, missing):
+    """The most dangerous possible return value here is `[]`. Callers read emptiness as
+    "this position has no exchange-side stop" and place one; doing that when the truth
+    is "we could not look" doubles the protective order on a live position."""
+    class Blind(FakeKiteClient):
+        pass
+
+    setattr(Blind, missing, property(lambda self: (_ for _ in ()).throw(AttributeError)))
+    with pytest.raises(Exception):
+        KiteVenue(Blind()).protective_inventory(kind)
+
+
+# ── vocabulary verbs ──────────────────────────────────────────────────────
+
+def test_exchange_and_product_verbs_match_the_pure_functions():
+    v, _ = _venue()
+    for seg in ALL_SEGMENTS:
+        assert v.exchange_for(seg) == kite_exchange(seg)
+    assert v.product_for(Tenor.INTRADAY) == "MIS"
+    assert v.product_for(Tenor.CARRY) == "NRML"
+
+
+def test_a_client_configured_with_another_carry_product_keeps_it():
+    """`kite_product`'s `default` allowance, preserved through the verb. A client built
+    for CNC delivery must not have NRML forced back onto it by the venue."""
+    class CncClient(FakeKiteClient):
+        product = "CNC"
+
+    assert KiteVenue(CncClient()).product_for(Tenor.CARRY) == "CNC"
+    assert KiteVenue(CncClient()).product_for(Tenor.INTRADAY) == "MIS"
+
+
+# ── F6/F7 from the execution-safety review, 2026-08-10 ────────────────────
+
+@pytest.mark.parametrize("kind,missing", [
+    (ProtectiveStopKind.RESTING_STOP, "orders"),
+    (ProtectiveStopKind.SERVER_TRIGGER, "gtts"),
+])
+def test_a_reader_answering_none_is_unreadable_not_empty(kind, missing):
+    """`reader() or []` turned a client that answers `None` on a failed read into an EMPTY
+    inventory. Callers read emptiness as "this position has no exchange-side stop" and place
+    one — so a duplicate protective order lands on a live position.
+
+    Not reachable through `KiteOrderClient`, which returns a list or raises. Fixed anyway
+    because the protocol docstring stated the guarantee absolutely, and a docstring ahead of the
+    code is this codebase's repeat failure shape.
+    """
+    class NoneReader(FakeKiteClient):
+        pass
+
+    setattr(NoneReader, missing, lambda self: None)
+    with pytest.raises(NotImplementedError) as e:
+        KiteVenue(NoneReader()).protective_inventory(kind)
+    assert "None is not an empty inventory" in str(e.value)
+
+
+def test_an_empty_list_is_still_a_legitimate_empty_inventory():
+    """Guard the guard: refusing `None` must not also refuse a genuine empty book, which is the
+    normal state before the first stop of the day is placed."""
+    class EmptyReader(FakeKiteClient):
+        def orders(self):
+            return []
+
+        def gtts(self):
+            return []
+
+    v = KiteVenue(EmptyReader())
+    assert v.protective_inventory(ProtectiveStopKind.RESTING_STOP) == []
+    assert v.protective_inventory(ProtectiveStopKind.SERVER_TRIGGER) == []
+
+
+def test_one_rule_decides_the_protective_kind_everywhere():
+    """F7. `_entry_protection_preflight` used `kind == "options"` while `_protection_inventory`
+    used `protective_kind_for_book_segment(pos.segment)`. They agree for every segment that
+    exists today, so the baseline written by one and the ids compared by the other matched by
+    luck. A new segment mapping differently under the two would silently compare a GTT id
+    against the SL-M order book."""
+    from app.engine.venue import protective_kind_for_book_segment
+
+    assert protective_kind_for_book_segment("options") is ProtectiveStopKind.SERVER_TRIGGER
+    assert protective_kind_for_book_segment("equity_intraday") is ProtectiveStopKind.RESTING_STOP
+    # and a segment nobody has classified defaults to the server trigger, which is what the
+    # engine has always done for options/futures — stated so a new segment is a visible decision.
+    assert protective_kind_for_book_segment("futures") is ProtectiveStopKind.SERVER_TRIGGER
+
+
+def test_the_preflight_and_the_inventory_agree_on_every_book_segment():
+    """The property F7 is really about: whichever path computes the kind, they must agree.
+
+    Checked by AST, not by a substring. The first version of this test asserted
+    `"protective_kind_for_book_segment" in inspect.getsource(...)` and was **vacuous**: the
+    mutation that restores the old two-branch expression leaves the explanatory comment intact,
+    and that comment names the function. Right clause, wrong cause — shape #1 of the vacuous-test
+    catalogue, committed while fixing a finding about a docstring being ahead of the code.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from app.engine.live_broker import LiveBroker
+
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(LiveBroker._entry_protection_preflight)))
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "protective_kind_for_book_segment" in called, (
+        "the entry preflight computes the protective kind by its own rule again; it must CALL "
+        "the same function `_protection_inventory` does. A comment mentioning the name is not "
+        "a call.")

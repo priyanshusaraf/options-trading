@@ -46,18 +46,24 @@ from app.engine.execution_lifecycle import (
     broker_observation_id,
     make_broker_tag,
 )
-from app.engine.kite_order_client import (
-    PreWireProtectionRejected,
-    exchange_for_segment,
-    is_strategy_os_tag,
-    product_for_segment,
-)
+from app.engine.kite_order_client import PreWireProtectionRejected, is_strategy_os_tag
 from app.engine.order_executor import OrderRequest, OrderResult, execute_order
 from app.engine.reconcile import can_bot_close
-from app.engine.venue import protective_kind_for_book_segment
+from app.engine.venue import (
+    protective_kind_for_book_segment,
+    tenor_for_charge_segment,
+)
+from app.providers.connection import (
+    KITE_LEGACY_CONNECTION_SCOPE as _KITE_LEGACY_CONNECTION_SCOPE,
+    Connection,
+    connection_for,
+)
 
 TAG = "pt-bot"  # protective stops and legacy orders retain their historical tag
-KITE_LEGACY_CONNECTION_SCOPE = "kite:legacy"
+# Re-exported, not redefined: `app/providers/connection.py` owns the constant now that a
+# connection is a real object. Kept under this name because three modules and several tests
+# import it from here, and because every pre-seam `ExecutionIntent` row carries this value.
+KITE_LEGACY_CONNECTION_SCOPE = _KITE_LEGACY_CONNECTION_SCOPE
 
 # Kite order statuses that mean the order is dead (no working order left at the
 # exchange). Anything else that is not a terminal fill is treated as possibly-working.
@@ -70,9 +76,25 @@ class LiveBroker(PaperBroker):
     def __init__(self, provider, order_client, *, poll_seconds: float = 0.5,
                  timeout_seconds: float = 30.0, notifier=None,
                  deployment_id: int = LEGACY_DEPLOYMENT_ID,
-                 lifecycle_clock=None) -> None:
+                 lifecycle_clock=None, connection: Connection | None = None,
+                 venue=None) -> None:
         super().__init__(provider, deployment_id=deployment_id)
         self.client = order_client
+        # The wire seam. Every protective-stop call goes through here, so this broker
+        # asks for a RESTING_STOP or a SERVER_TRIGGER and never for an SL-M or a GTT —
+        # the venue owns that spelling. Defaulting to `KiteVenue` keeps every existing
+        # caller (and every test holding a fake Kite client) working unchanged: the
+        # adapter is a pure delegator, so wrapping a fake changes nothing it observes.
+        # `broker_factory` passes one explicitly; a second broker supplies its own.
+        if venue is None:
+            from app.engine.kite_venue import KiteVenue
+            venue = KiteVenue(order_client)
+        self.venue = venue
+        # Which credential these orders go through. Written into every ExecutionIntent and
+        # matched by the restart-recovery query, so it decides which unresolved entries this
+        # broker may adopt. Defaults to the legacy derivation — the data provider serving as
+        # its own execution connection — which is what production runs today.
+        self.connection = connection or connection_for(provider)
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
         self.notifier = notifier
@@ -147,9 +169,9 @@ class LiveBroker(PaperBroker):
         intent_row = store.create_intent(
             NewExecutionIntent(
                 deployment_id=self.deployment_id,
-                broker="kite",
+                broker=self.connection.broker,
                 account_scope=deployment.account_id,
-                connection_scope=KITE_LEGACY_CONNECTION_SCOPE,
+                connection_scope=self.connection.scope,
                 intent="ENTRY",
                 instrument_key=durable_context.get("inst_key", ""),
                 tradingsymbol=req.tradingsymbol,
@@ -340,51 +362,33 @@ class LiveBroker(PaperBroker):
         """Read all protection IDs and the exact subset for this Position."""
         side = "BUY" if (pos.segment == "equity_intraday"
                          and pos.direction == "SHORT") else "SELL"
-        exchange = exchange_for_segment(pos.exchange)
-        tick_reader = getattr(self.client, "tick_size", None)
+        exchange = self.venue.exchange_for(pos.exchange)
         try:
-            tick = float(tick_reader(pos.tradingsymbol, exchange)) if tick_reader else 0.05
+            tick = float(self.venue.tick_size(pos.tradingsymbol, exchange))
         except Exception:
             tick = 0.05
 
         def trigger_key(value) -> int:
             return round(float(value or 0.0) / tick)
 
+        kind = protective_kind_for_book_segment(pos.segment)
+        # A RESTING_STOP shares the order book with every other order this account
+        # placed, so it must additionally match our tag; a SERVER_TRIGGER lives in its
+        # own GTT book and Kite carries no tag there, which is why the tag test is
+        # conditional rather than absent.
         try:
-            if protective_kind_for_book_segment(
-                    pos.segment) is ProtectiveStopKind.SERVER_TRIGGER:
-                reader = getattr(self.client, "gtts", None)
-                if reader is None:
-                    return "ambiguous", set(), set()
-                rows = list(reader() or [])
-                candidates = [row for row in rows if (
-                    row.get("tradingsymbol") == pos.tradingsymbol
-                    and row.get("exchange") == exchange
-                    and str(row.get("side") or "").upper() == side
-                    and int(row.get("qty") or 0) == pos.qty
-                    and trigger_key(row.get("trigger_price")) == trigger_key(pos.stop_price)
-                    and str(row.get("status") or "active").lower()
-                    not in {"cancelled", "disabled", "deleted", "triggered"}
-                )]
-                all_ids = {str(row["trigger_id"]) for row in rows
-                           if row.get("trigger_id")}
-                exact_ids = {str(row["trigger_id"]) for row in candidates
-                             if row.get("trigger_id")}
-            else:
-                rows = list(self.client.orders() or [])
-                candidates = [row for row in rows if (
-                    row.get("tag") == TAG
-                    and row.get("tradingsymbol") == pos.tradingsymbol
-                    and row.get("exchange") == exchange
-                    and str(row.get("transaction_type") or "").upper() == side
-                    and int(row.get("quantity") or 0) == pos.qty
-                    and trigger_key(row.get("trigger_price")) == trigger_key(pos.stop_price)
-                    and str(row.get("status") or "").upper()
-                    not in _DEAD_STATUSES | {"COMPLETE"}
-                )]
-                all_ids = {str(row["order_id"]) for row in rows if row.get("order_id")}
-                exact_ids = {str(row["order_id"]) for row in candidates
-                             if row.get("order_id")}
+            rows = list(self.venue.protective_inventory(kind))
+            candidates = [row for row in rows if (
+                row.get("tradingsymbol") == pos.tradingsymbol
+                and row.get("exchange") == exchange
+                and str(row.get("side") or "").upper() == side
+                and int(row.get("qty") or 0) == pos.qty
+                and trigger_key(row.get("trigger_price")) == trigger_key(pos.stop_price)
+                and row.get("status") != "dead"
+                and (kind is not ProtectiveStopKind.RESTING_STOP or row.get("tag") == TAG)
+            )]
+            all_ids = {str(row["id"]) for row in rows if row.get("id")}
+            exact_ids = {str(row["id"]) for row in candidates if row.get("id")}
         except Exception as e:
             log.error(f"PROTECTION {pos.tradingsymbol}: inventory failed: {e}",
                       event="PROTECTION_RECONCILE_FAIL")
@@ -520,7 +524,7 @@ class LiveBroker(PaperBroker):
                     payload={
                         "position_id": pos.id, "qty": pos.qty,
                         "tradingsymbol": pos.tradingsymbol,
-                        "exchange": exchange_for_segment(pos.exchange),
+                        "exchange": self.venue.exchange_for(pos.exchange),
                         "side": "BUY" if (pos.segment == "equity_intraday"
                                            and pos.direction == "SHORT") else "SELL",
                         "trigger_price": pos.stop_price,
@@ -869,7 +873,7 @@ class LiveBroker(PaperBroker):
             intents = store.unresolved_entries(
                 self.deployment_id,
                 deployment.account_id,
-                KITE_LEGACY_CONNECTION_SCOPE,
+                self.connection.scope,
             )
             pending_ids = {ctx.get("client_intent_id")
                            for ctx in self._pending_entries.values()}
@@ -988,20 +992,25 @@ class LiveBroker(PaperBroker):
             stop, _ = equity_stop_target(direction, price, stop_pct, 0.01)
         if stop <= 0:
             return None
-        reader_name = "gtts" if kind == "options" else "orders"
-        reader = getattr(self.client, reader_name, None)
-        if reader is None:
-            return None
+        # ONE rule for which protective kind a position takes. This used to be `kind ==
+        # "options"` here while `_protection_inventory` used
+        # `protective_kind_for_book_segment(pos.segment)` — two independently-derived answers
+        # that agree for every segment that exists today, so the baseline written here and the
+        # `all_ids` it is later compared against came from different families by luck. A new
+        # segment (futures, CNC carry) that mapped differently under the two would silently
+        # compare a GTT id against the SL-M order book. F7, 2026-08-10.
+        protective_kind = protective_kind_for_book_segment(
+            "options" if kind == "options" else "equity_intraday")
         try:
-            rows = list(reader() or [])
+            rows = list(self.venue.protective_inventory(protective_kind))
         except Exception as e:
             log.error(
-                f"LIVE OPEN refused {tradingsymbol}: {reader_name} inventory failed: {e}",
+                f"LIVE OPEN refused {tradingsymbol}: {protective_kind.value} inventory "
+                f"failed: {e}",
                 event="LIVE_OPEN_PROTECTION_REFUSED",
             )
             return None
-        id_field = "trigger_id" if kind == "options" else "order_id"
-        baseline_ids = sorted(str(row[id_field]) for row in rows if row.get(id_field))
+        baseline_ids = sorted(str(row["id"]) for row in rows if row.get("id"))
         return {
             "kind": kind,
             "tradingsymbol": tradingsymbol,
@@ -1128,7 +1137,7 @@ class LiveBroker(PaperBroker):
         protection_preflight = self._entry_protection_preflight(
                 kind="options", direction=direction, price=q.ltp,
                 params=params, tradingsymbol=q.tradingsymbol,
-                exchange=exchange_for_segment(inst.segment))
+                exchange=self.venue.exchange_for(inst.segment))
         if protection_preflight is None:
             log.error(f"LIVE OPEN refused {q.tradingsymbol}: exchange protection is "
                       f"disabled or invalid", instrument=inst.key,
@@ -1241,7 +1250,7 @@ class LiveBroker(PaperBroker):
         protection_preflight = self._entry_protection_preflight(
                 kind="equity", direction=direction, price=price,
                 params=params, tradingsymbol=tsym,
-                exchange=exchange_for_segment(charge_segment), sl_pct=sl_pct)
+                exchange=self.venue.exchange_for(charge_segment), sl_pct=sl_pct)
         if protection_preflight is None:
             log.error(f"LIVE EQUITY OPEN refused {inst.key}: exchange protection is "
                       f"disabled or invalid", instrument=inst.key,
@@ -1266,9 +1275,9 @@ class LiveBroker(PaperBroker):
                    "protection_preflight": dict(
                        protection_preflight, qty=qty)}
         request = self._prepare_entry_request(OrderRequest(
-            tsym, exchange_for_segment(charge_segment), side, qty, plan.action,
+            tsym, self.venue.exchange_for(charge_segment), side, qty, plan.action,
             plan.limit_price if plan.action == "LIMIT" else None,
-            product=product_for_segment(charge_segment)))
+            product=self.venue.product_for(tenor_for_charge_segment(charge_segment))))
         res, filled, avg, client_intent_id, row_id = self._execute_entry(
             request,
             kind="equity", context=context, now=now, decision_price=price,
@@ -1372,8 +1381,10 @@ class LiveBroker(PaperBroker):
             return None
         side = "SELL" if pos.direction == "LONG" else "BUY"   # buy to cover a short
         res, filled, avg = self._execute(
-            OrderRequest(sym, exchange_for_segment(pos.exchange), side, pos.qty, "MARKET", None,
-                         tag=TAG, product=product_for_segment(pos.exchange)),
+            OrderRequest(sym, self.venue.exchange_for(pos.exchange), side, pos.qty,
+                         "MARKET", None, tag=TAG,
+                         product=self.venue.product_for(
+                             tenor_for_charge_segment(pos.exchange))),
             intent="EXIT", kind="equity",
             context={"inst_key": pos.instrument_key, "position_id": pos.id, "segment": pos.segment})
         self._note_order_outcome(filled)
@@ -1529,10 +1540,12 @@ class LiveBroker(PaperBroker):
         # a long position's protective stop SELLs below; an intraday-equity SHORT's
         # BUYs to cover above. Equity charge-segments map to the bare NSE/BSE exchange.
         side = "BUY" if (pos.segment == "equity_intraday" and pos.direction == "SHORT") else "SELL"
-        exchange = exchange_for_segment(pos.exchange)
+        exchange = self.venue.exchange_for(pos.exchange)
         try:
-            tid = self.client.place_stop_gtt(pos.tradingsymbol, exchange, pos.qty,
-                                             pos.stop_price, last_price, side=side)
+            tid = self.venue.place_protective_stop(
+                ProtectiveStopKind.SERVER_TRIGGER, tradingsymbol=pos.tradingsymbol,
+                exchange=exchange, qty=pos.qty, trigger_price=pos.stop_price,
+                side=side, last_price=last_price)
         except PreWireProtectionRejected as e:
             log.error(f"GTT rejected locally {pos.tradingsymbol}: {e}",
                       instrument=pos.instrument_key, event="GTT_PREWIRE_REJECT")
@@ -1579,10 +1592,12 @@ class LiveBroker(PaperBroker):
         if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:
             return "disabled"
         side = "BUY" if pos.direction == "SHORT" else "SELL"   # cover a short above / sell a long below
-        exchange = exchange_for_segment(pos.exchange)
+        exchange = self.venue.exchange_for(pos.exchange)
         try:
-            oid = self.client.place_stop_order(pos.tradingsymbol, exchange, pos.qty,
-                                               pos.stop_price, side=side, tag=TAG)
+            oid = self.venue.place_protective_stop(
+                ProtectiveStopKind.RESTING_STOP, tradingsymbol=pos.tradingsymbol,
+                exchange=exchange, qty=pos.qty, trigger_price=pos.stop_price,
+                side=side, tag=TAG)
         except PreWireProtectionRejected as e:
             log.error(f"SL-M rejected locally {pos.tradingsymbol}: {e}",
                       instrument=pos.instrument_key, event="STOP_PREWIRE_REJECT")
@@ -1655,7 +1670,7 @@ class LiveBroker(PaperBroker):
         if not oid:
             return True
         try:
-            self.client.cancel(oid)
+            self.venue.cancel_protective_stop(ProtectiveStopKind.RESTING_STOP, oid)
             log.info(f"SL-M {oid} cancelled ({sym})", event="STOP_CANCEL")
             return True
         except Exception as e:
@@ -1671,7 +1686,7 @@ class LiveBroker(PaperBroker):
         if not gid:
             return True
         try:
-            self.client.delete_gtt(gid)
+            self.venue.cancel_protective_stop(ProtectiveStopKind.SERVER_TRIGGER, gid)
             log.info(f"GTT {gid} cancelled ({sym})", event="GTT_DELETE")
             return True
         except Exception as e:
@@ -1713,9 +1728,11 @@ class LiveBroker(PaperBroker):
             try:
                 # tradingsymbol/exchange let the client resolve the SAME real tick the
                 # initial SL-M placement used, instead of falling back to 0.05.
-                self.client.modify_stop_order(gid, pos.stop_price, pos.tradingsymbol,
-                                              exchange_for_segment(pos.exchange),
-                                              quantity=pos.qty)
+                self.venue.modify_protective_stop(
+                    ProtectiveStopKind.RESTING_STOP, gid,
+                    tradingsymbol=pos.tradingsymbol,
+                    exchange=self.venue.exchange_for(pos.exchange),
+                    qty=pos.qty, trigger_price=pos.stop_price)
                 log.info(f"SL-M {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                          instrument=pos.instrument_key, event="STOP_MODIFY")
                 return True
@@ -1729,8 +1746,11 @@ class LiveBroker(PaperBroker):
                 return self._resync_equity_stop(pos, gid)
         try:
             # options backstop is a GTT (long premium → protective SELL).
-            self.client.modify_stop_gtt(gid, pos.tradingsymbol, exchange_for_segment(pos.exchange),
-                                        pos.qty, pos.stop_price, lp, side="SELL")
+            self.venue.modify_protective_stop(
+                ProtectiveStopKind.SERVER_TRIGGER, gid,
+                tradingsymbol=pos.tradingsymbol,
+                exchange=self.venue.exchange_for(pos.exchange),
+                qty=pos.qty, trigger_price=pos.stop_price, last_price=lp, side="SELL")
             log.info(f"GTT {gid} trailed → {pos.stop_price:.2f} ({pos.tradingsymbol})",
                      instrument=pos.instrument_key, event="GTT_MODIFY")
             return True
@@ -1758,14 +1778,14 @@ class LiveBroker(PaperBroker):
         than silently skipping it on a guess."""
         if not gid:
             return False
-        probe = getattr(self.client, "gtt_status", None)
-        if probe is None:
-            return False
         try:
-            d = probe(gid) or {}
-            # accept either the normalized flag or a raw kite.get_gtt() status string
-            return bool(d.get("triggered")
-                        or str(d.get("status", "")).lower() == "triggered")
+            # The venue normalises both shapes — its own flag and a raw kite.get_gtt()
+            # status string — and answers a not-triggered False for a client that cannot
+            # report at all, which is the same conservative fallback this method has
+            # always applied.
+            state = self.venue.protective_stop_state(
+                ProtectiveStopKind.SERVER_TRIGGER, gid)
+            return bool((state or {}).get("triggered"))
         except Exception as e:
             log.warn(f"GTT STATUS {sym}: gtt_status({gid}) read failed: {e} — treating as "
                      f"external exit (conservative fallback)", event="GTT_STATUS_FAIL")
