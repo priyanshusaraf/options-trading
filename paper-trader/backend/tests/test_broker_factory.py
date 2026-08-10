@@ -80,7 +80,8 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
                         lambda *a, **k: object())
     captured = {}
 
-    def fake_lb(provider, client, *, poll_seconds=0.5, timeout_seconds=30.0, notifier=None):
+    def fake_lb(provider, client, *, poll_seconds=0.5, timeout_seconds=30.0, notifier=None,
+                **_connection_and_book):
         captured["poll"], captured["timeout"] = poll_seconds, timeout_seconds
         return "LB"
 

@@ -51,7 +51,10 @@ from app.engine.equity_entry import (
 from app.engine.execution_policy import plan_order, plan_reference_entry
 from app.engine.event_risk import active_blackout, normalize_key, pending_flatten
 from app.engine.ledger_reconcile import plan_reanchor, should_reanchor
-from app.engine.kite_order_client import exchange_for_segment, product_for_segment
+# The Kite spellings, imported under their honest names: this is a Kite `order_margin`
+# payload, guarded three lines down by `prov.name != "kite"`. A neutral-looking alias
+# here would hide that the block is venue-specific.
+from app.engine.kite_venue import kite_exchange, kite_product_for_charge_segment
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.engine.exit_monitor import evaluate_exit, trailing_stop
 from app.engine.health import HealthTracker, is_stale
@@ -68,6 +71,7 @@ from app.engine.risk_controls import (
     signal_already_evaluated, signal_too_old, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
+from app.providers.connection import configured_execution_connection
 from app.providers.factory import get_provider
 from app.core import execution_binding, execution_book
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
@@ -119,8 +123,25 @@ class EngineRunner:
             log.warn(f"could not clear persisted deployment arm state at boot: {e}",
                      event="ARM_RESET_FAIL")
         # PaperBroker unless the live-execution flags are set (then LiveBroker).
+        # The execution connection is resolved here, at the composition root, because
+        # this is the only place that knows both roles: `self.provider` serves prices,
+        # and PT_EXECUTION_PROVIDER may name a different connection to place the
+        # orders. It returns None for the single-connection config production runs,
+        # which is the pre-seam path unchanged.
+        # A session is opened ONLY when a stored connection is actually configured. Opening one
+        # unconditionally made every `Runner()` construction take a database connection — which
+        # the backtest sweep's spawned workers each do, against the same SQLite file, so a
+        # parallel sweep turned into `busy_timeout` contention. The default configuration reads
+        # no connection row at all and must therefore touch no session.
+        if (get_settings().execution_connection or "").strip():
+            with SessionLocal() as _conn_s:
+                _execution_connection = configured_execution_connection(
+                    self.provider, session=_conn_s)
+        else:
+            _execution_connection = configured_execution_connection(self.provider)
         self.broker = make_broker(self.provider, self.notifier,
-                                  deployment_id=self.deployment_id)
+                                  deployment_id=self.deployment_id,
+                                  execution_connection=_execution_connection)
         # Which execution book this runner's money state belongs to. Taken from the
         # broker that was actually built rather than from configuration, because that
         # object is the one doing the writing (`core/execution_book.py`).
@@ -1335,9 +1356,9 @@ class EngineRunner:
             if per_share is None:
                 probe = max(1, equity_qty(target_margin, lev, cand.price))
                 total = prov.order_margin([{
-                    "exchange": exchange_for_segment(seg), "tradingsymbol": tsym,
+                    "exchange": kite_exchange(seg), "tradingsymbol": tsym,
                     "transaction_type": side, "variety": "regular",
-                    "product": product_for_segment(seg), "order_type": "MARKET",
+                    "product": kite_product_for_charge_segment(seg), "order_type": "MARKET",
                     "quantity": probe, "price": 0}])
                 if not total or total <= 0:
                     q = equity_qty(target_margin, lev, cand.price)   # graceful fallback

@@ -12,6 +12,8 @@ from app.engine.execution_lifecycle import (
     ExecutionLifecycleStore, NewExecutionEvent, NewExecutionIntent)
 from app.engine.live_broker import LiveBroker
 from app.engine.kite_order_client import PreWireProtectionRejected
+from app.providers import capabilities as caps
+from app.providers.connection import Connection
 from app.providers.mock import MockProvider
 
 
@@ -659,6 +661,71 @@ def test_live_entry_uses_legacy_connection_scope():
 
     with SessionLocal() as session:
         assert session.scalar(select(ExecutionIntent)).connection_scope == "kite:legacy"
+
+
+def test_restart_recovers_this_connections_entries_and_not_another_connections():
+    """The mirror of the exact-scope test above, from the second connection's side.
+
+    That test builds a broker on the default connection, where "this connection's scope" and
+    the legacy constant are the same string — so it cannot tell a correct lookup from a
+    hardcoded one. This one can: the broker runs on `upstox:acct-1` and must adopt only the
+    intent seeded there, leaving the legacy-scope intent for the broker that owns it.
+
+    Getting this wrong is not cosmetic. Adopting another connection's unresolved entry means
+    polling one broker for an order id that only exists at another, and abandoning your own
+    means a real working order with no local record of it.
+    """
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    legacy_id, _ = _seed_lifecycle(
+        context, symbol=quote.tradingsymbol, exchange=quote.exchange, qty=quote.lot_size)
+    second_id, _ = _seed_lifecycle(
+        context, symbol="SECOND-CONNECTION", exchange=quote.exchange, qty=quote.lot_size,
+        connection_scope="upstox:acct-1")
+    broker = LiveBroker(
+        provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+        connection=Connection(
+            broker="upstox", scope="upstox:acct-1",
+            capabilities=frozenset({caps.LIVE_EXECUTION})))
+
+    broker.recover_journal(NOW)
+
+    adopted = {ctx["client_intent_id"] for ctx in broker._pending_entries.values()}
+    assert adopted == {second_id}
+    assert legacy_id not in adopted
+
+
+def test_the_money_record_carries_the_connection_that_actually_placed_the_order():
+    """The scope and broker on an intent must come from the execution connection.
+
+    Both were hardcoded (`"kite"`, `KITE_LEGACY_CONNECTION_SCOPE`) until the connection seam,
+    so a second broker's fills would have been attributed to Kite's legacy connection — and
+    the restart-recovery query matches on exactly this pair, so a wrong scope means a restart
+    either adopts another connection's unresolved entries or abandons its own.
+    """
+    init_db(reset=True)
+    provider = MockProvider()
+    inst, quote, context = _option_context(provider)
+    second = Connection(
+        broker="upstox", scope="upstox:acct-1",
+        capabilities=frozenset({caps.LIVE_EXECUTION}))
+    broker = LiveBroker(
+        provider,
+        _AcknowledgedFillClient(status={
+            "status": "COMPLETE", "filled_qty": quote.lot_size,
+            "avg_price": 101.0, "reason": ""}),
+        poll_seconds=0.0,
+        timeout_seconds=0.0,
+        connection=second,
+    )
+
+    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+
+    with SessionLocal() as session:
+        intent = session.scalar(select(ExecutionIntent))
+        assert intent.connection_scope == "upstox:acct-1"
+        assert intent.broker == "upstox"
 
 
 def test_equity_partial_growth_updates_protection_quantity_before_completion():

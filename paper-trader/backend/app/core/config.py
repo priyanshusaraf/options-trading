@@ -67,7 +67,29 @@ class Settings(BaseSettings):
     )
 
     # provider selection
-    provider: str = "mock"  # "mock" | "kite" | "replay"
+    provider: str = "mock"  # "mock" | "kite" | "replay" | "upstox" (data only)
+    # Which connection places the ORDERS. Empty (the default, and what production
+    # runs) means "the same connection that serves prices" — one Kite login doing
+    # data, account and execution, byte-identical to the pre-seam behaviour. Set it
+    # to a different provider name to split the roles: prices from `provider`,
+    # orders through this one (`providers/connection.py`). The pair is validated at
+    # engine construction, and a connection that cannot execute refuses loudly
+    # rather than falling back to paper.
+    execution_provider: str = ""  # "" (same as provider) | "kite"
+    # A DURABLE connection to place orders through, named by its scope and owned by
+    # `owner_id`. Takes precedence over `execution_provider` because a stored connection is an
+    # explicit act by an owner where the env var is a deployment default. Naming one that does
+    # not exist REFUSES rather than falling back — see `providers/connection.py`.
+    execution_connection: str = ""
+    # Whose resources this process serves. One owner today; the column exists so the tenancy
+    # dimension is real rather than retrofitted. `LEGACY_OWNER_ID` in models.py is the same
+    # value and the two must not drift.
+    owner_id: str = "owner"
+    # Encrypts stored broker credentials. Declared here so `PT_CREDENTIAL_KEY` in `backend/.env`
+    # actually reaches `core/credential_vault.py` — pydantic-settings reads that file itself and
+    # does NOT export to `os.environ`, so a vault reading only the environment silently ignored
+    # the documented setup path. The vault still prefers a real environment variable.
+    credential_key: str = ""
     # Replay mode: a recorded session re-run bar by bar (see providers/replay.py).
     # Diagnostic only — the provider reports is_authenticated() False, so the
     # live-order path is structurally unreachable from a replay.

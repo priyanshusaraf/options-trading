@@ -16,6 +16,8 @@ from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine import live_broker as live_broker_module
 from app.engine.live_broker import LiveBroker
+from app.providers import capabilities as caps
+from app.providers.connection import KITE_LEGACY_CONNECTION_SCOPE, Connection
 from app.engine.order_executor import OrderRequest
 from app.providers.mock import MockProvider
 
@@ -49,6 +51,12 @@ def _broker(timeline):
     broker.poll_seconds = 0.0
     broker.timeout_seconds = 0.0
     broker.lifecycle_clock = lambda: dt.datetime(2026, 8, 9, 10, 0)
+    # Mirrors what __init__ derives. This double bypasses the constructor, so the execution
+    # connection has to be set by hand; the legacy one keeps the intent rows these tests
+    # assert on identical to the pre-seam values.
+    broker.connection = Connection(
+        broker="kite", scope=KITE_LEGACY_CONNECTION_SCOPE,
+        capabilities=frozenset({caps.LIVE_EXECUTION}))
     broker._journal_open = lambda *args, **kwargs: None
     broker._journal_resolve = lambda *args, **kwargs: None
     return broker
