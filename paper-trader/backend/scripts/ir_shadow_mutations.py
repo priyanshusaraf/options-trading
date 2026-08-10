@@ -623,6 +623,20 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
 BACKUP = BACKEND / ".ir_shadow_mutation_backup"
 
 
+import fcntl as _fcntl
+# A mutation sweep writes mutants into the WORKING TREE and restores from an in-memory baseline,
+# so two sweeps at once is destructive rather than slow: the second captures its baseline while
+# the first has a mutant applied, and its restore writes that mutant back permanently. On
+# 2026-08-10 that silently removed credential destruction from `OwnedConnectionStore.revoke`,
+# and the only reason it surfaced was a stale-anchor SKIP in the next run.
+_LOCK_FD = open(pathlib.Path(__file__).resolve().parent / ".mutation-sweep.lock", "w")
+try:
+    _fcntl.flock(_LOCK_FD, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+except BlockingIOError:
+    print("REFUSED: another mutation sweep is already running in this tree.")
+    raise SystemExit(2)
+
+
 def restore_any_orphan() -> None:
     """Undo a mutation left behind by a run that was killed rather than finished."""
     if not BACKUP.exists():

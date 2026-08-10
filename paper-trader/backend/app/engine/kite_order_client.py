@@ -30,6 +30,18 @@ class PreWireProtectionRejected(ValueError):
     """Local validation proved that no protective request reached the broker."""
 
 
+class CredentialWithdrawn(RuntimeError):
+    """The connection had an access token and no longer does.
+
+    Distinct from "never authenticated": this means a credential that WAS working has been
+    revoked, rotated out, or become unreadable. Nothing may be sent on the cached one.
+
+    A `RuntimeError` rather than a `ProviderReadError` deliberately — this is not a failed read
+    of market data, it is a refusal to act, and `execute_order` must not classify it as a
+    transient data problem to be retried.
+    """
+
+
 def is_strategy_os_tag(tag: object) -> bool:
     """Recognise only the legacy bot tag or a durable 20-character intent tag."""
     if tag == LEGACY_BOT_TAG:
@@ -81,15 +93,88 @@ class KiteOrderClient:
         # flows through to order placement without rebuilding the broker.
         self._token_source = token_source
         self._last_token: str | None = None
+        # Latched, and never reset. `_last_token` alone was not enough: `_sync_token` cleared it
+        # before raising, so the SECOND withdrawn call saw None, took the never-authenticated
+        # branch and returned normally — the refusal fired exactly once and then went quiet.
+        # Orders after that reached Kite with a blanked token and failed as a generic
+        # TokenException, which `find_fill` swallows into `None`. Found by the same review.
+        self._ever_authenticated = False
+        # Adopt the credential HERE, so construction and refresh are the same code path.
+        #
+        # This line closes a hole that an independent execution-safety review found in the very
+        # fix that was supposed to close it (2026-08-10). `broker_factory` authenticated the wire
+        # object itself — `token = conn.token_source(); kite.set_access_token(token)` — and then
+        # built this client with `_last_token = None`. So the client HELD a live token it had
+        # never recorded, and `_sync_token`'s withdrawal branch (`if self._last_token is not
+        # None`) could never fire. A connection revoked after startup went on placing REAL orders
+        # for the life of the process, which is precisely the defect the withdrawal branch exists
+        # to prevent. The tests missed it because they called `_sync_token()` first, seeding
+        # `_last_token` — a shape production never takes.
+        #
+        # Swallowing here is deliberate and narrow: a client constructed before the connection
+        # has authenticated is the ordinary pre-Connect-Kite state, and it must not prevent the
+        # broker from being built. It leaves `_last_token` None, which is the honest "never
+        # authenticated" state, and the first successful sync records it.
+        try:
+            self._sync_token()
+        except Exception:                          # noqa: BLE001 — see above
+            pass
 
     def _sync_token(self) -> None:
-        """Adopt the provider's current access token if it changed (post re-login)."""
+        """Adopt the connection's current access token, and REFUSE if it has been withdrawn.
+
+        The refusal is the part that was missing, and its absence was a real hole (found by an
+        independent security review, 2026-08-10). This method used to read
+
+            if tok and tok != self._last_token: ...
+
+        so a `None` was simply discarded and `self.kite` kept whatever token was set when the
+        broker was constructed. Three separate docstrings — two of them in
+        `providers/connection_store.py` — asserted that a `None` from the token source meant the
+        order would be "refused unauthenticated". **No such mechanism existed.** Revoking a
+        connection, rotating `PT_CREDENTIAL_KEY`, or a database read failure all produced a
+        `None` that changed nothing, and the engine kept placing REAL orders on that account for
+        the life of the process while every health check stayed green.
+
+        The withdrawal case is treated separately from "never had one" on purpose:
+
+          * **Never had a token** (`_ever_authenticated is False`) — unchanged. A connection
+            that has not authenticated yet fails at Kite with its own auth error, which is the
+            pre-existing behaviour and is already safe.
+          * **Had one, and it is now gone** — the credential was WITHDRAWN. Clearing it and
+            raising is the only correct move: the alternative is authenticating as an account
+            whose owner has just told us they no longer want us there.
+
+        The flag is `_ever_authenticated`, **not** `_last_token`, and it is latched. Keying the
+        branch on `_last_token` was wrong twice over: the composition root authenticated the wire
+        object without recording it (so the branch never fired at all in production), and
+        clearing it before raising meant the second withdrawn call took the never-authenticated
+        branch and proceeded silently.
+
+        Raising rather than returning a sentinel because every caller here is a wire call, and
+        `execute_order` already turns an exception on `place` into a non-placement rather than an
+        assumed fill. A refused cancel likewise stops the caller sending a closing order, which
+        is the conservative direction.
+        """
         if not self._token_source:
             return
         tok = self._token_source()
-        if tok and tok != self._last_token:
-            self.kite.set_access_token(tok)
-            self._last_token = tok
+        if tok:
+            if tok != self._last_token:
+                self.kite.set_access_token(tok)
+                self._last_token = tok
+            self._ever_authenticated = True
+            return
+        if self._ever_authenticated:
+            self._last_token = None
+            try:
+                self.kite.set_access_token("")
+            except Exception:                      # noqa: BLE001 — clearing must never mask the refusal
+                pass
+            raise CredentialWithdrawn(
+                "the execution connection no longer holds an access token (revoked, key "
+                "rotated, or the credential could not be read). Refusing to place or modify an "
+                "order with the previously cached token.")
 
     def _tick(self, tradingsymbol: str | None, exchange: str | None) -> float:
         """Resolve the real exchange tick for this instrument. No tick source, no

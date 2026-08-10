@@ -140,6 +140,36 @@ class KiteProvider(MarketDataProvider):
             except Exception:
                 pass
 
+    def current_access_token(self) -> str | None:
+        """The token this connection should use RIGHT NOW, re-reading the saved file if the
+        cached one is missing or stale.
+
+        Exists because of a defect an execution-safety review found on 2026-08-10 (F4). A
+        split-role config (`PT_PROVIDER=upstox`, `PT_EXECUTION_PROVIDER=kite`) builds a SECOND
+        `KiteProvider` for execution. `complete_session` writes the new token to `TOKEN_FILE` and
+        onto **the instance it was called on** — and the API's re-auth route reaches the *data*
+        provider (`routes.py:158`, `_runner(request).provider`), which in that config is not this
+        object. So the execution instance kept whatever token it read at construction, and after
+        the ~06:00 IST expiry every order **and every exit** was rejected until a restart.
+
+        Re-reading the dated file makes the token late-bound to the authoritative source rather
+        than to an attribute on an object nothing can reach. It does NOT make the split config
+        fully usable — see the note below — but it removes the silent staleness.
+        """
+        # Re-read only when the file has actually changed. `_sync_token` runs before EVERY Kite
+        # call, including the 0.5s status poll, so an unconditional read would stat+parse JSON
+        # hundreds of times a minute. mtime is the cheap, correct trigger.
+        try:
+            stamp = os.stat(TOKEN_FILE).st_mtime_ns
+        except OSError:
+            return self.access_token               # no file yet — keep whatever we hold
+        if stamp != getattr(self, "_token_file_stamp", None):
+            self._token_file_stamp = stamp
+            # Adopts the file's token ONLY if it is dated today (`_load_saved_token`), so a
+            # yesterday-dated file cannot overwrite a good in-memory token with an expired one.
+            self._load_saved_token()
+        return self.access_token
+
     def login_url(self) -> str | None:
         return self.kite.login_url()
 
