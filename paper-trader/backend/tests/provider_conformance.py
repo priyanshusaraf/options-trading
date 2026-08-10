@@ -87,6 +87,12 @@ class ConformanceCase:
     # symbol — so "spot" and "the front month" are legitimately the same number, and requiring
     # a basis there would fail a correct adapter.
     expects_basis: bool = True
+    # (tradingsymbol, exchange, tick) for an instrument this connection serves whose tick is
+    # NOT the 0.05 default. Only such a symbol can distinguish "reads the venue's tick" from
+    # "returns the constant" — checking a 0.05 instrument passes either way, which is the
+    # right-clause-wrong-cause shape. Required of every executing connection; `None` on a
+    # data-only one, where the field is meaningless.
+    non_default_tick: tuple[str, str, float] | None = None
     # Puts the connection's transport into a failure state (expired token, network error).
     # Every declared read must degrade to its documented refusal rather than propagate or,
     # worse, serve a stale cache as though it were data.
@@ -226,6 +232,48 @@ def check_declaration_matches_implementation(provider: MarketDataProvider) -> li
             violations.append(
                 f"declares {cap!r} but {method}() is the base default — callers will stop "
                 f"fail-closing on a connection that always refuses")
+    return violations
+
+
+def check_undeclared_options_are_refused(case: ConformanceCase) -> list[str]:
+    """A connection that does not declare OPTION_CHAIN must return `None`, not a number.
+
+    `get_option_chain` and `option_ltp` were `@abstractmethod` until 2026-08-10, which made a
+    data-only adapter impossible to construct — the parked Upstox adapter failed at
+    instantiation. Making them concrete with a `None` default fixed that and opened a hole in
+    the same movement: `check_no_undeclared_working_capability` deliberately skips a method the
+    adapter inherits unchanged, so a wrong *base* default would be invisible to every adapter at
+    once. A suppression sweep found it — the base returning `1.0` reddened nothing.
+
+    The consequence is specific. `None` means "I cannot price this" and callers refuse; any
+    number is taken as a real premium, and an option position gets marked, stopped and booked
+    against a price no market ever quoted.
+    """
+    p = case.provider
+    if caps.OPTION_CHAIN in type(p).CAPABILITIES:
+        return []
+    violations = []
+    try:
+        chain = p.get_option_chain(case.instrument)
+    except Exception as e:            # noqa: BLE001
+        violations.append(f"get_option_chain raised {type(e).__name__} on an adapter that does "
+                          f"not declare {caps.OPTION_CHAIN!r}; it must simply answer None")
+    else:
+        if chain is not None:
+            violations.append(
+                f"get_option_chain served {type(chain).__name__} without declaring "
+                f"{caps.OPTION_CHAIN!r} — every gate in the system reads this connection as "
+                f"unable to price options while it hands out chains")
+    try:
+        px = p.option_ltp(case.instrument, "SYNTHETIC", 0.0, dt.date(2026, 1, 1), "CE")
+    except Exception as e:            # noqa: BLE001
+        violations.append(f"option_ltp raised {type(e).__name__} for a contract this connection "
+                          f"cannot price; the contract's refusal is None")
+    else:
+        if px is not None:
+            violations.append(
+                f"option_ltp answered {px!r} for a contract on a connection that declares no "
+                f"option capability — a fabricated premium marks and stops a real position")
     return violations
 
 
@@ -581,20 +629,31 @@ def check_market_data_under_failure(case: ConformanceCase) -> list[str]:
                 violations.append(
                     "get_candles reported no bars with the transport down; `[]` means 'this "
                     "instrument has no history' and a failed read must not borrow it")
+    # `None` and `ProviderReadError` are BOTH acceptable refusals for a quote. They say
+    # different things — "no price" versus "the read failed" — and the second is strictly more
+    # informative, so an adapter that raises the typed error is not penalised for it. What is
+    # never acceptable is an answer, or an untyped exception the caller cannot classify.
     if caps.LIVE_QUOTES in declared:
         try:
             px = p.get_ltp(inst)
+        except ProviderReadError:
+            pass
         except Exception as e:         # noqa: BLE001
-            violations.append(f"get_ltp propagated {type(e).__name__} on a dead transport")
+            violations.append(
+                f"get_ltp raised {type(e).__name__} on a dead transport; a read failure must "
+                f"arrive as ProviderReadError or as None")
         else:
             if px is not None:
                 violations.append(f"get_ltp answered {px!r} with the transport down")
     if caps.OPTION_CHAIN in declared:
         try:
             chain = p.get_option_chain(inst)
+        except ProviderReadError:
+            pass
         except Exception as e:         # noqa: BLE001
             violations.append(
-                f"get_option_chain propagated {type(e).__name__} on a dead transport")
+                f"get_option_chain raised {type(e).__name__} on a dead transport; a read "
+                f"failure must arrive as ProviderReadError or as None")
         else:
             if chain is not None:
                 violations.append("get_option_chain served a chain with the transport down")
@@ -668,6 +727,102 @@ def check_account_reads(case: ConformanceCase) -> list[str]:
     return violations
 
 
+_ORDER_TYPE_CAPS = (caps.MARKET_ORDERS, caps.LIMIT_ORDERS, caps.STOP_ORDERS)
+
+
+def check_execution_declaration_coherence(provider: MarketDataProvider) -> list[str]:
+    """Tier 1. The execution capabilities are the only ones with **no required method**
+    (`capabilities._METHOD_FOR[LIVE_EXECUTION] is None`), because declaring `LIVE_EXECUTION`
+    says "a live order client can be built from this connection", not "I place orders myself" —
+    the orders go through `app/engine/broker_protocol.py`. That makes the declaration
+    unfalsifiable by the structural check, so its *internal* coherence is checked here instead.
+
+    Both directions are real defects, not tidiness:
+
+      * **execution without an order type.** `plan_order` chooses between market, limit and
+        SL-M per signal. A connection that can execute but names no order kind leaves every
+        caller to assume; the assumption in this codebase is Kite's, and it would be applied to
+        a venue that never agreed to it.
+      * **an order type without execution.** `make_broker` gates on `LIVE_EXECUTION` alone. A
+        connection declaring `MARKET_ORDERS` and not `LIVE_EXECUTION` reads as capable
+        everywhere a human looks and is refused at the one place that decides — which surfaces
+        as "the bot silently stopped trading" rather than as a configuration error.
+    """
+    declared = type(provider).CAPABILITIES
+    executes = caps.LIVE_EXECUTION in declared
+    order_types = [c for c in _ORDER_TYPE_CAPS if c in declared]
+    if executes and not order_types:
+        return [f"declares {caps.LIVE_EXECUTION!r} but no order type; callers must not have to "
+                f"guess which of {list(_ORDER_TYPE_CAPS)} this venue accepts"]
+    if order_types and not executes:
+        return [f"declares {order_types} but not {caps.LIVE_EXECUTION!r}; make_broker gates on "
+                f"the latter alone, so this connection reads as tradable and is refused"]
+    return []
+
+
+def check_execution_role(case: ConformanceCase) -> list[str]:
+    """Tier 2. What an executing connection must be able to answer *before* an order exists.
+
+    No order is placed here and none should be — a conformance run that trades is a conformance
+    run nobody dares execute. These are the two reads the order path makes on the connection
+    itself, and each has a live incident behind it.
+
+    **A credential.** `connection_for(provider).token_source()` is what seeds the order client.
+    A provider declaring `LIVE_EXECUTION` without an `access_token` attribute yields a source
+    that returns `None` forever: `make_broker` builds the client, logs 🔴 LIVE EXECUTION
+    ENABLED, and every order is rejected unauthenticated. Nothing in the current suite would
+    notice.
+
+    **A real tick.** 2026-07-15: SL-M triggers were rounded to a hardcoded 0.05 grid while LT
+    trades in 0.10 steps and MARUTI in whole rupees, and 2,437 stop placements were rejected —
+    stops that the operator believed were in place. An executing connection must resolve the
+    venue's actual tick, and `case.non_default_tick` is how an adapter proves it reads the
+    instrument rather than returning the default. A case that omits it leaves that hole open on
+    purpose rather than by accident: the check below says so in its violation text only when the
+    connection also has no way to be asked.
+    """
+    from app.providers.connection import connection_for
+
+    violations = []
+    provider = case.provider
+
+    if not hasattr(provider, "access_token"):
+        violations.append(
+            f"declares {caps.LIVE_EXECUTION!r} but exposes no `access_token`; the order client "
+            f"would be seeded with None and every order rejected unauthenticated")
+    else:
+        token = connection_for(provider).token_source()
+        if provider.is_authenticated() and not token:
+            violations.append(
+                "reports authenticated but the derived connection produces no credential; "
+                "the order client cannot authenticate what the data feed already has")
+
+    tick_of = getattr(provider, "tick_size", None)
+    if not callable(tick_of):
+        violations.append(
+            "declares execution but cannot resolve a tick size; SL-M triggers would be rounded "
+            "to a hardcoded grid, which is the 2026-07-15 naked-stop incident")
+        return violations
+
+    if case.non_default_tick is None:
+        violations.append(
+            "declares execution but its conformance case names no non-default-tick instrument, "
+            "so `tick_size` is never distinguished from returning the 0.05 constant")
+    else:
+        symbol, exchange, expected = case.non_default_tick
+        try:
+            actual = tick_of(symbol, exchange)
+        except Exception as e:                        # noqa: BLE001
+            violations.append(f"tick_size({symbol!r}, {exchange!r}) raised {type(e).__name__}: {e}")
+            return violations
+        if actual != expected:
+            violations.append(
+                f"tick_size({symbol!r}, {exchange!r}) answered {actual!r}, expected {expected!r} "
+                f"— the instrument's real tick is being replaced by a default, so stop triggers "
+                f"round onto a grid this venue does not trade on")
+    return violations
+
+
 def check_simulated_clock(case: ConformanceCase) -> list[str]:
     """An advanceable clock must actually advance, or a replay/backtest never moves."""
     p = case.provider
@@ -693,6 +848,7 @@ CAPABILITY_OBLIGATIONS: dict[str, Callable[[ConformanceCase], list[str]]] = {
     caps.OPTION_CHAIN: check_option_chain,
     caps.FUTURES_QUOTES: check_futures_quotes,
     caps.ACCOUNT_FUNDS: check_account_reads,
+    caps.LIVE_EXECUTION: check_execution_role,
     caps.SIMULATED_CLOCK: check_simulated_clock,
 }
 
@@ -710,6 +866,9 @@ def conform(case: ConformanceCase) -> list[str]:
     violations += [f"declaration: {v}"
                    for v in check_declaration_matches_implementation(case.provider)]
     violations += [f"declaration: {v}" for v in check_no_undeclared_working_capability(case)]
+    violations += [f"declaration: {v}" for v in check_undeclared_options_are_refused(case)]
+    violations += [f"declaration: {v}"
+                   for v in check_execution_declaration_coherence(case.provider)]
     declared = type(case.provider).CAPABILITIES
     for cap, check in CAPABILITY_OBLIGATIONS.items():
         if cap in declared and check is not check_account_reads:

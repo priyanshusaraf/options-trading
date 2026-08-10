@@ -1,3 +1,4 @@
+import pathlib
 """Prove the provider-conformance guards can go red, one defect at a time.
 
 A conformance suite that has only ever been observed passing is indistinguishable from one that
@@ -22,6 +23,20 @@ SUITES = {"tests/test_provider_read_failures.py": (
 )}
 
 # (label, file, find, replace, test that must fail, string its failure must contain)
+import fcntl as _fcntl
+# A mutation sweep writes mutants into the WORKING TREE and restores from an in-memory baseline,
+# so two sweeps at once is destructive rather than slow: the second captures its baseline while
+# the first has a mutant applied, and its restore writes that mutant back permanently. On
+# 2026-08-10 that silently removed credential destruction from `OwnedConnectionStore.revoke`,
+# and the only reason it surfaced was a stale-anchor SKIP in the next run.
+_LOCK_FD = open(pathlib.Path(__file__).resolve().parent / ".mutation-sweep.lock", "w")
+try:
+    _fcntl.flock(_LOCK_FD, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+except BlockingIOError:
+    print("REFUSED: another mutation sweep is already running in this tree.")
+    raise SystemExit(2)
+
+
 MUTATIONS = [
     ("replay narrows option_ltp back to one argument",
      "app/providers/replay.py",

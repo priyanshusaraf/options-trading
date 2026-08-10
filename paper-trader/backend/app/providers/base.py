@@ -263,11 +263,24 @@ class MarketDataProvider(ABC):
             }
         return out
 
-    @abstractmethod
-    def get_option_chain(self, inst: Instrument) -> OptionChain | None:
-        """Nearest tradable expiry chain, or None if none is available."""
+    # ── options: optional, because a data connection may not serve them ────
+    # These were `@abstractmethod` until 2026-08-10, which made "an adapter that serves
+    # candles and quotes and nothing else" impossible to construct at all — the parked
+    # Upstox adapter failed at instantiation, not at any call. That contradicts this
+    # repo's own rule (`.claude/rules/providers-brokers.md`): optional provider methods
+    # are **concrete with a safe default**, never abstract, because an abstract addition
+    # breaks every adapter at once and at construction time.
+    #
+    # `None` means "I cannot price this", and the caller must refuse rather than fall back
+    # to spot. What keeps that honest is not the base class but the declaration: an adapter
+    # claiming `caps.OPTION_CHAIN` is held to it by `check_option_chain` in
+    # `tests/provider_conformance.py`, including on a dead transport. Silence here is only
+    # safe because a lie is caught there.
 
-    @abstractmethod
+    def get_option_chain(self, inst: Instrument) -> OptionChain | None:
+        """Nearest tradable expiry chain, or None if this connection serves none."""
+        return None
+
     def option_ltp(
         self,
         inst: Instrument,
@@ -277,4 +290,5 @@ class MarketDataProvider(ABC):
         option_type: str,
     ) -> float | None:
         """Current premium of a specific contract — used to reprice open positions
-        and to feed the per-instrument option price chart."""
+        and to feed the per-instrument option price chart. `None` = cannot price."""
+        return None

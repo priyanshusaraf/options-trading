@@ -23,11 +23,14 @@ import pytest
 
 from app.core.instruments import Instrument, get_instrument
 from app.providers import capabilities as caps
-from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
+from app.providers.base import (Candle, MarketDataProvider, OptionChain, OptionQuote,
+                                ProviderReadError)
 from app.providers.kite import KiteProvider
 from app.providers.mock import MockProvider
+from app.providers.dhan import DhanProvider
 from app.providers.instrument_resolver import ResolvedInstrument
 from app.providers.replay import ReplayProvider
+from app.providers.upstox import UpstoxProvider
 from tests.provider_conformance import (ConformanceCase, check_declaration_matches_implementation,
                                         check_signature_conformance, conform)
 
@@ -58,7 +61,15 @@ class _FakeKite:
         if exchange == "NSE":
             return [{"instrument_token": 256265, "tradingsymbol": "NIFTY 50",
                      "name": "NIFTY 50", "instrument_type": "EQ", "expiry": "",
-                     "strike": 0.0, "lot_size": 0, "tick_size": 0.05}]
+                     "strike": 0.0, "lot_size": 0, "tick_size": 0.05},
+                    # LT trades in 0.10 steps. Present so `tick_size` can be caught returning
+                    # the 0.05 constant instead of reading the dump — the 2026-07-15 incident,
+                    # where 2,437 SL-M placements were rejected because every trigger was
+                    # rounded onto a grid LT does not trade on. A dump of only 0.05 rows makes
+                    # that obligation unfailable.
+                    {"instrument_token": 2939649, "tradingsymbol": "LT",
+                     "name": "LARSEN & TOUBRO", "instrument_type": "EQ", "expiry": "",
+                     "strike": 0.0, "lot_size": 0, "tick_size": 0.10}]
         if exchange == "NFO":
             rows = [{"instrument_token": 111, "tradingsymbol": "NIFTY26AUGFUT",
                      "name": "NIFTY", "instrument_type": "FUT", "expiry": NEAR_EXPIRY,
@@ -245,6 +256,7 @@ def kite_case(nifty) -> ConformanceCase:
                                                "transaction_type": "BUY", "variety": "regular",
                                                "product": "NRML", "order_type": "MARKET",
                                                "quantity": 75},
+                           non_default_tick=("LT", "NSE", 0.10),
                            break_transport=lambda: setattr(fake, "broken", True))
 
 
@@ -261,12 +273,154 @@ def kite_mcx_case() -> ConformanceCase:
     return ConformanceCase(provider=p, instrument=get_instrument("GOLDM"), min_bars=20,
                            priceable_expiry=NEAR_EXPIRY, unlisted_expiry=ABSENT_EXPIRY,
                            expects_basis=False,
+                           non_default_tick=("GOLDM26AUGFUT", "MCX", 1.0),
                            break_transport=lambda: setattr(fake, "broken", True))
+
+
+# ── Upstox: a DATA-ONLY connection, and the contract must accommodate one ────
+# Restored from the parked branch 2026-08-10 and put through the same contract as every
+# other adapter. It declares HISTORICAL_DATA and LIVE_QUOTES and nothing else, so the
+# tier-2 obligations for accounts, option chains and execution do not run — which is the
+# point: an adapter is held to what it CLAIMS, and claiming less must not be a way to
+# claim falsely. `_UnderDeclarer` in the liar table is what keeps that honest.
+
+
+class _FakeUpstoxTransport:
+    """Real Upstox v3 payload SHAPES, no network.
+
+    Driving the adapter through its real transport interface rather than stubbing
+    `get_candles` is deliberate: the interval path, the historical/intraday merge and the
+    array-with-`+05:30` normalisation are the three things most likely to be wrong, and
+    stubbing the method under test would exercise none of them.
+    """
+
+    def __init__(self, now: dt.datetime) -> None:
+        self.broken = False
+        self.now = now
+        self.calls: list[str] = []
+
+    def _bars(self, count: int, *, end: dt.datetime, step_minutes: int = 15) -> list[list]:
+        # Upstox sends NEWEST FIRST and with a +05:30 offset. Both are reproduced here on
+        # purpose: an adapter that trusted the order, or that kept the tz, would pass a
+        # tidied fixture and fail against the real service.
+        rows = []
+        for i in range(count):
+            ts = end - dt.timedelta(minutes=step_minutes * i)
+            base = 24000.0 + i
+            rows.append([ts.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
+                         base, base + 6.0, base - 4.0, base + 2.0, 15000 + i, 0])
+        return rows
+
+    def get(self, path: str, params=None):
+        from app.providers.upstox_transport import UpstoxResponse
+        self.calls.append(path)
+        if self.broken:
+            raise ProviderReadError(f"upstox GET {path}: transport failed: ConnectError")
+        if path.startswith("/v3/market-quote/ltp"):
+            return UpstoxResponse(endpoint=path,
+                                  data={"NSE_INDEX:Nifty 50": {"last_price": 24012.5}})
+        if "/intraday/" in path:
+            # Today's bars, including the still-forming one the merge must drop.
+            return UpstoxResponse(endpoint=path,
+                                  data={"candles": self._bars(4, end=self.now)})
+        return UpstoxResponse(
+            endpoint=path,
+            data={"candles": self._bars(60, end=self.now - dt.timedelta(days=1))})
+
+
+@pytest.fixture
+def upstox_case(nifty) -> ConformanceCase:
+    from app.providers.upstox import UpstoxProvider
+    p = UpstoxProvider.__new__(UpstoxProvider)
+    transport = _FakeUpstoxTransport(now=p.now())
+    p.access_token = "fake"
+    p._transport = transport
+    from app.providers.upstox import UpstoxInstrumentResolver
+    p._resolver = UpstoxInstrumentResolver()
+    return ConformanceCase(
+        provider=p, instrument=nifty, min_bars=20,
+        break_transport=lambda: setattr(transport, "broken", True),
+        notes={"role": "data only — no account, no chain, no execution, and the contract "
+                       "must let a connection be exactly that"})
+
+
+# ── Dhan: the third adapter, and the one that proves the contract is not Kite-shaped ────
+# Dhan's payloads are COLUMNAR (six parallel arrays) where Kite's and Upstox's are rows, its
+# timestamps are epoch integers, and its interval coverage is genuinely narrower than this
+# engine's vocabulary. If the contract could only be satisfied by an adapter that resembled the
+# first two, it was never a contract — it was Kite's shape with a neutral name on it.
+
+
+class _FakeDhanTransport:
+    """Shape-accurate DhanHQ v2 payloads, no network."""
+
+    def __init__(self, now: dt.datetime) -> None:
+        self.broken = False
+        self.now = now
+        self.posts: list[tuple[str, dict]] = []
+
+    def post(self, path: str, body: dict):
+        from app.providers.dhan_transport import DhanResponse
+        self.posts.append((path, body))
+        if self.broken:
+            raise ProviderReadError(f"dhan POST {path}: transport failed: ConnectError")
+        if path == "/marketfeed/ltp":
+            segment, ids = next(iter(body.items()))
+            return DhanResponse(endpoint=path,
+                                data={segment: {str(ids[0]): {"last_price": 24012.5}}})
+        step = dt.timedelta(days=1) if path.endswith("historical") else dt.timedelta(minutes=15)
+        end = self.now - step                       # newest COMPLETED bar
+        n = 60
+        stamps, o, h, low, c, vol = [], [], [], [], [], []
+        for i in range(n):
+            ts = end - step * (n - 1 - i)
+            base = 24000.0 + i
+            stamps.append(ts.replace(tzinfo=IST_TZ).timestamp())
+            o.append(base); h.append(base + 6.0); low.append(base - 4.0)
+            c.append(base + 2.0); vol.append(15000.0 + i)
+        return DhanResponse(endpoint=path, data={
+            "timestamp": stamps, "open": o, "high": h, "low": low, "close": c, "volume": vol})
+
+
+IST_TZ = dt.timezone(dt.timedelta(hours=5, minutes=30))
+
+
+@pytest.fixture
+def dhan_case(nifty):
+    from app.providers import dhan_instruments as dhan_master
+    from app.providers.dhan import DhanInstrumentResolver, DhanProvider
+
+    # The master is loaded through the real loader from real column names, rather than by
+    # writing into the module's dict. A fixture that bypassed `load_master` would leave the
+    # column resolution — the part most likely to break when Dhan changes the file — untested.
+    dhan_master.load_master(
+        [{"SECURITY_ID": "13", "SEGMENT": "IDX_I", "SYMBOL_NAME": "NIFTY",
+          "INSTRUMENT": "INDEX"}],
+        canonical_for=lambda symbol, segment: "NIFTY" if symbol == "NIFTY" else None)
+
+    p = DhanProvider.__new__(DhanProvider)
+    transport = _FakeDhanTransport(now=p.now())
+    p.access_token = "fake"
+    p.client_id = "1000000001"
+    p._transport = transport
+    p._resolver = DhanInstrumentResolver()
+    try:
+        yield ConformanceCase(
+            provider=p, instrument=nifty, min_bars=20,
+            break_transport=lambda: setattr(transport, "broken", True),
+            notes={"role": "data only",
+                   "intervals": "narrower than the engine's vocabulary by design — no 3/10/30 "
+                                "minute, and it refuses them rather than approximating"})
+    finally:
+        # The master is process-global. Leaving it loaded would let a later test resolve a Dhan
+        # instrument it never set up — the shared-fixture hazard, which passes in isolation.
+        dhan_master.clear_master()
 
 
 # One entry per adapter CLASS; extra cases exercise the same class from other angles.
 CASE_FIXTURES = {MockProvider: "mock_case", ReplayProvider: "replay_case",
-                 KiteProvider: "kite_case"}
+                 KiteProvider: "kite_case", UpstoxProvider: "upstox_case",
+                 DhanProvider: "dhan_case"}
 EXTRA_CASES = ["kite_mcx_case"]
 
 
@@ -481,7 +635,51 @@ class _WrongProvenance(_ConformantBase):
                                   symbol="NIFTY 50", exchange="NSE", token=256265)
 
 
+class _ExecutesWithoutOrderTypes(_ConformantBase):
+    """Says it can trade, names no order kind. `plan_order` picks between market, limit and
+    SL-M per signal; this connection leaves every caller to assume Kite's answer."""
+    name = "liar-execution-no-order-type"
+    CAPABILITIES = _ConformantBase.CAPABILITIES | {caps.LIVE_EXECUTION}
+    access_token = "tok"
+
+    def tick_size(self, tradingsymbol, exchange=None) -> float:
+        return 0.10
+
+
+class _OrderTypesWithoutExecution(_ConformantBase):
+    """The mirror image, and the quieter one: reads as tradable everywhere a human looks,
+    refused by `make_broker`, which gates on LIVE_EXECUTION alone."""
+    name = "liar-order-type-no-execution"
+    CAPABILITIES = _ConformantBase.CAPABILITIES | {caps.MARKET_ORDERS}
+
+
+class _TokenlessExecutor(_ConformantBase):
+    """Declares execution and exposes no credential. `make_broker` logs 🔴 LIVE EXECUTION
+    ENABLED and seeds the order client with None; every order is rejected unauthenticated."""
+    name = "liar-tokenless-executor"
+    CAPABILITIES = _ConformantBase.CAPABILITIES | {caps.LIVE_EXECUTION, caps.MARKET_ORDERS}
+
+    def tick_size(self, tradingsymbol, exchange=None) -> float:
+        return 0.10
+
+
+class _BlanketTickExecutor(_ConformantBase):
+    """Returns the 0.05 constant for every symbol — the 2026-07-15 naked-stop incident,
+    reproduced as an adapter rather than as a call site."""
+    name = "liar-blanket-tick"
+    CAPABILITIES = _ConformantBase.CAPABILITIES | {caps.LIVE_EXECUTION, caps.STOP_ORDERS}
+    access_token = "tok"
+
+    def tick_size(self, tradingsymbol, exchange=None) -> float:
+        return 0.05
+
+
 _LIARS = [
+    (_ExecutesWithoutOrderTypes, "declaration", "no order type", {}),
+    (_OrderTypesWithoutExecution, "declaration", "reads as tradable and is refused", {}),
+    (_TokenlessExecutor, caps.LIVE_EXECUTION, "exposes no `access_token`", {}),
+    (_BlanketTickExecutor, caps.LIVE_EXECUTION, "does not trade on",
+     {"non_default_tick": ("LT", "NSE", 0.10)}),
     (_StubFunds, caps.ACCOUNT_FUNDS, "never answers", {}),
     (_BackwardsCandles, caps.HISTORICAL_DATA, "oldest-first", {}),
     (_SpotFallbackFutures, caps.FUTURES_QUOTES, "exactly spot", {}),
