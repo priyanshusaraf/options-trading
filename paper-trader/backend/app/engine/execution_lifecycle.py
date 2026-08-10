@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import ExecutionIntent, ExecutionOrderEvent
+from app.db.models import LEGACY_OWNER_ID, ExecutionIntent, ExecutionOrderEvent
 
 
 _TERMINAL_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED", "FAILED"})
@@ -83,6 +83,12 @@ class NewExecutionIntent:
     strategy_key: str | None
     strategy_version: str | None
     context: Mapping[str, Any] = field(default_factory=dict)
+    #: Whose money this intent moves. Defaulted rather than required so every existing writer
+    #: keeps working and lands on the legacy owner — which is not a convenience, it is TRUE of
+    #: those rows: this system had exactly one owner when they were written. Matched by
+    #: `unresolved_entries`, so it decides which unresolved live entries a restarting broker may
+    #: adopt.
+    owner_id: str = LEGACY_OWNER_ID
 
 
 @dataclass(frozen=True)
@@ -335,6 +341,7 @@ class ExecutionLifecycleStore:
             row = ExecutionIntent(
                 client_intent_id=client_intent_id,
                 deployment_id=request.deployment_id,
+                owner_id=request.owner_id,
                 broker=request.broker,
                 account_scope=request.account_scope,
                 connection_scope=request.connection_scope,
@@ -460,13 +467,40 @@ class ExecutionLifecycleStore:
         deployment_id: int,
         account_scope: str,
         connection_scope: str,
+        *,
+        broker: str,
+        owner_id: str,
     ) -> list[ExecutionIntent]:
+        """Live entries this broker may adopt on restart.
+
+        Every field in the predicate is load-bearing, and two of them were added on 2026-08-10
+        after both an execution-safety and a security review found the same gap independently:
+
+          * `deployment_id` + `account_scope` — whose book.
+          * `connection_scope` — which credential. A second connection reusing the first's scope
+            would have its live orders recovered under the wrong book.
+          * `broker` — which VENUE. `ExecutionIntent.broker` had been written since the seam
+            landed and never read back, so cross-broker adoption was blocked only incidentally,
+            by `make_broker`'s hardcoded Kite check. That check became a registry lookup in the
+            same session, which made a second execution venue real — and therefore made this
+            dimension necessary rather than theoretical.
+          * `owner_id` — whose money. Migration 0015 scoped connection uniqueness to
+            `(owner_id, scope)` so two owners may each hold `kite:legacy`; that is exactly the
+            collision this must disambiguate, and adopting another owner's working orders is the
+            worst failure this system has available.
+
+        Keyword-only for `broker` and `owner_id` deliberately: they were added to a call that
+        already took three positional strings, and a caller silently passing them in the wrong
+        order would recover the wrong set rather than fail.
+        """
         intents = list(self.session.scalars(
             select(ExecutionIntent)
             .where(
                 ExecutionIntent.deployment_id == deployment_id,
                 ExecutionIntent.account_scope == account_scope,
                 ExecutionIntent.connection_scope == connection_scope,
+                ExecutionIntent.broker == broker,
+                ExecutionIntent.owner_id == owner_id,
             )
             .order_by(ExecutionIntent.created_at, ExecutionIntent.client_intent_id)))
         if not intents:

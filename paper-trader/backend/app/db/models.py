@@ -69,6 +69,18 @@ class Base(DeclarativeBase):
 # server_default, a seed, a backfill and every lookup default, and those four must
 # never drift apart.
 LEGACY_DEPLOYMENT_ID = 1
+#: The owner every pre-existing row belongs to. This system had exactly one owner until
+#: tenancy existed, and that owner is named retroactively rather than left NULL — a NULL
+#: owner is indistinguishable from "we lost track of whose this is", and on a table that
+#: grants the authority to trade, those two must never look the same. Kept as a constant
+#: for the same reason as `LEGACY_DEPLOYMENT_ID`: it appears in a server_default, a seed and
+#: every scoped lookup, and those must not drift apart.
+#:
+#: It is deliberately the SAME string as `app/api/principal.py::OWNER.id`. Two independently
+#: invented owner identities would resolve the same human to two different sets of resources —
+#: authenticated requests seeing one book and the engine writing to another — and the symptom
+#: would be missing data rather than an error. `tests/test_connection_store.py` pins the match.
+LEGACY_OWNER_ID = "owner"
 
 
 class Deployment(Base):
@@ -162,6 +174,14 @@ class ExecutionIntent(Base):
     client_intent_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     deployment_id: Mapped[int] = mapped_column(
         ForeignKey("deployments.id", ondelete="RESTRICT"), index=True, nullable=False)
+    #: Whose money this intent moves. Written at creation and matched by
+    #: `unresolved_entries`, so it decides which unresolved live entries a restarting broker
+    #: may adopt. Defaulted to `LEGACY_OWNER_ID` rather than NULL for the same reason
+    #: `broker_connections.owner_id` is: on a row that records a real order, "belongs to the
+    #: original owner" and "we lost track of whose this is" must never look the same.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     broker: Mapped[str] = mapped_column(String(32), nullable=False)
     account_scope: Mapped[str] = mapped_column(String(64), nullable=False)
     connection_scope: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1665,18 +1685,6 @@ class IrShadowDeployment(Base):
         }
 
 
-#: The owner every pre-existing row belongs to. This system had exactly one owner until
-#: tenancy existed, and that owner is named retroactively rather than left NULL — a NULL
-#: owner is indistinguishable from "we lost track of whose this is", and on a table that
-#: grants the authority to trade, those two must never look the same. Kept as a constant
-#: for the same reason as `LEGACY_DEPLOYMENT_ID`: it appears in a server_default, a seed and
-#: every scoped lookup, and those must not drift apart.
-#:
-#: It is deliberately the SAME string as `app/api/principal.py::OWNER.id`. Two independently
-#: invented owner identities would resolve the same human to two different sets of resources —
-#: authenticated requests seeing one book and the engine writing to another — and the symptom
-#: would be missing data rather than an error. `tests/test_connection_store.py` pins the match.
-LEGACY_OWNER_ID = "owner"
 
 
 class BrokerConnection(Base):

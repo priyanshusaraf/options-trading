@@ -474,7 +474,11 @@ def test_append_event_rolls_back_after_commit_failure_and_can_write_later(tmp_pa
 
 
 @pytest.mark.parametrize("count", [1, 3, 5])
-def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_path, count):
+def test_unresolved_entries_scope_on_all_five_fields_and_use_two_queries(tmp_path, count):
+    """Renamed from "all three fields" on 2026-08-10: the predicate gained `broker` and
+    `owner_id`, and a test asserting three would have kept passing while the two dimensions that
+    decide whether one venue adopts another's live orders, or one owner another's, went
+    unchecked."""
     session = _session(tmp_path)
     store = ExecutionLifecycleStore(session)
     scoped = [
@@ -485,6 +489,12 @@ def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_pa
     different_account = store.create_intent(_request(account_scope="account.other"), {}, BASE_TIME)
     different_connection = store.create_intent(
         _request(connection_scope="kite:other"), {}, BASE_TIME)
+    # The two dimensions added in 2026-08-10. `different_broker` shares the scope deliberately:
+    # a second venue configured under a familiar scope is exactly the case a scope-only
+    # predicate cannot separate, and adopting another venue's working orders means polling one
+    # broker for an order id that only exists at another.
+    different_broker = store.create_intent(_request(broker="dhan"), {}, BASE_TIME)
+    different_owner = store.create_intent(_request(owner_id="someone-else"), {}, BASE_TIME)
     for intent in scoped[: max(0, count - 1)]:
         store.append_event(intent.client_intent_id, _event(
             "STATUS_OBSERVED", source_event_id=f"open-{intent.client_intent_id}",
@@ -498,6 +508,12 @@ def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_pa
     store.append_event(different_connection.client_intent_id, _event(
         "STATUS_OBSERVED", source_event_id="other-connection", observed_at=BASE_TIME,
         broker_status="OPEN"), BASE_TIME)
+    store.append_event(different_broker.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="other-broker", observed_at=BASE_TIME,
+        broker_status="OPEN"), BASE_TIME)
+    store.append_event(different_owner.client_intent_id, _event(
+        "STATUS_OBSERVED", source_event_id="other-owner", observed_at=BASE_TIME,
+        broker_status="OPEN"), BASE_TIME)
 
     statements: list[str] = []
 
@@ -506,7 +522,8 @@ def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_pa
         statements.append(statement)
 
     try:
-        unresolved = store.unresolved_entries(1, "account.default", "kite:legacy")
+        unresolved = store.unresolved_entries(
+            1, "account.default", "kite:legacy", broker="kite", owner_id="owner")
     finally:
         sa.event.remove(session.get_bind(), "before_cursor_execute", count_queries)
 
@@ -515,6 +532,13 @@ def test_unresolved_entries_scope_on_all_three_fields_and_use_two_queries(tmp_pa
     assert [intent.client_intent_id for intent in unresolved] == [
         intent.client_intent_id for intent in expected]
     assert len(statements) == 2
+    adopted = {intent.client_intent_id for intent in unresolved}
+    assert different_broker.client_intent_id not in adopted, (
+        "a live entry belonging to ANOTHER VENUE was adopted; the broker would poll Kite for an "
+        "order id that only exists at Dhan")
+    assert different_owner.client_intent_id not in adopted, (
+        "a live entry belonging to ANOTHER OWNER was adopted — the worst failure this system "
+        "has available")
 
 
 def test_identifiers_follow_the_entry_lifecycle_contract():

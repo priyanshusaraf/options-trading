@@ -24,9 +24,11 @@ from app.db.models import (
     ExecutionIntent,
     ExecutionOrderEvent,
     LEGACY_DEPLOYMENT_ID,
+    LEGACY_OWNER_ID,
     OrderJournal,
     Position,
 )
+from app.core.config import get_settings
 from app.engine.broker import PaperBroker
 from app.engine.charges import compute_charges, legs_for
 from app.engine.equity_entry import equity_stop_target
@@ -95,6 +97,11 @@ class LiveBroker(PaperBroker):
         # broker may adopt. Defaults to the legacy derivation — the data provider serving as
         # its own execution connection — which is what production runs today.
         self.connection = connection or connection_for(provider)
+        # Whose money this broker moves. Stamped onto every ExecutionIntent and matched by the
+        # restart-recovery query, so it decides which unresolved live entries this broker may
+        # adopt. One owner today; the dimension exists so a second is a configuration rather
+        # than a migration of the money record.
+        self.owner_id = (get_settings().owner_id or LEGACY_OWNER_ID).strip() or LEGACY_OWNER_ID
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
         self.notifier = notifier
@@ -169,6 +176,7 @@ class LiveBroker(PaperBroker):
         intent_row = store.create_intent(
             NewExecutionIntent(
                 deployment_id=self.deployment_id,
+                owner_id=self.owner_id,
                 broker=self.connection.broker,
                 account_scope=deployment.account_id,
                 connection_scope=self.connection.scope,
@@ -874,6 +882,8 @@ class LiveBroker(PaperBroker):
                 self.deployment_id,
                 deployment.account_id,
                 self.connection.scope,
+                broker=self.connection.broker,
+                owner_id=self.owner_id,
             )
             pending_ids = {ctx.get("client_intent_id")
                            for ctx in self._pending_entries.values()}
@@ -1870,7 +1880,7 @@ class LiveBroker(PaperBroker):
         CONSECUTIVE passes; a single >60s feed glitch that looks like an exit no longer
         phantom-closes a still-open real position. Any read where the account backs the
         position (or it is no longer open) resets the streak."""
-        from app.engine.broker import PaperBroker
+        from app.core.config import get_settings
         from app.engine.reconcile import find_orphans
         need = int(getattr(self.settings, "orphan_confirm_count", 2) or 1)
         acct = self.provider.account_positions()

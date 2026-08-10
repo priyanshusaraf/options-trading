@@ -210,13 +210,23 @@ def _option_context(provider):
 
 def _seed_lifecycle(context, *, symbol, exchange, qty, account_scope="default",
                     connection_scope="kite:legacy", deployment_id=1,
-                    decision_price=100.0):
+                    decision_price=100.0, broker="mock", owner_id="owner"):
+    """Seed a durable intent as the broker-under-test would have written it.
+
+    `broker` defaults to `"mock"`, not `"kite"`, and that is the point: these tests build a
+    `LiveBroker` on a `MockProvider`, so `connection_for(provider).broker` is `"mock"`. The
+    helper used to hardcode `"kite"` — writing a broker it was not using — which was invisible
+    until `unresolved_entries` started matching on it (2026-08-10). A recovery query that
+    ignores the broker cannot tell a Kite intent from a Dhan one, and adopting another venue's
+    working orders is the failure this dimension exists to prevent.
+    """
     with SessionLocal() as session:
         store = ExecutionLifecycleStore(session)
         intent = store.create_intent(
             NewExecutionIntent(
                 deployment_id=deployment_id,
-                broker="kite",
+                broker=broker,
+                owner_id=owner_id,
                 account_scope=account_scope,
                 connection_scope=connection_scope,
                 intent="ENTRY",
@@ -682,7 +692,7 @@ def test_restart_recovers_this_connections_entries_and_not_another_connections()
         context, symbol=quote.tradingsymbol, exchange=quote.exchange, qty=quote.lot_size)
     second_id, _ = _seed_lifecycle(
         context, symbol="SECOND-CONNECTION", exchange=quote.exchange, qty=quote.lot_size,
-        connection_scope="upstox:acct-1")
+        connection_scope="upstox:acct-1", broker="upstox")
     broker = LiveBroker(
         provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
         connection=Connection(

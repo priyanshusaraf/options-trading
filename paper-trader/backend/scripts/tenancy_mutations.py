@@ -18,10 +18,12 @@ CONN = ROOT / "app/providers/connection.py"
 PLANES = ROOT / "app/db/planes.py"
 KOC = ROOT / "app/engine/kite_order_client.py"
 KPROV = ROOT / "app/providers/kite.py"
+LIFECYCLE = ROOT / "app/engine/execution_lifecycle.py"
 VAULTC = ROOT / "app/core/credential_vault.py"
 PY = "/Users/priyanshusaraf/dev/options-trading/paper-trader/backend/.venv/bin/python"
 TESTS = ["tests/test_connection_store.py", "tests/test_db_planes.py",
-         "tests/test_execution_connection.py", "tests/test_split_routing.py"]
+         "tests/test_execution_connection.py", "tests/test_split_routing.py",
+         "tests/test_execution_lifecycle.py"]
 
 MUTATIONS = [
     # ── cross-owner isolation ──────────────────────────────────────────────
@@ -129,6 +131,16 @@ MUTATIONS = [
     except Exception:                               # noqa: BLE001 — settings must never break the vault
         return """"",
      "    return """),
+
+    # ── restart recovery: whose money, and which venue ────────────────────
+    # Both dimensions were found missing by two independent reviews. Adopting another owner's
+    # or another venue's unresolved live entries is the worst failure available here.
+    ("recovery-drops-the-owner-dimension", LIFECYCLE,
+     "                ExecutionIntent.owner_id == owner_id,",
+     "                # dropped"),
+    ("recovery-drops-the-broker-dimension", LIFECYCLE,
+     "                ExecutionIntent.broker == broker,",
+     "                # dropped"),
 
     # ── the plane ratchet ──────────────────────────────────────────────────
     ("connections-move-to-the-market-plane", PLANES,

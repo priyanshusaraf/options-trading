@@ -15,6 +15,7 @@ from app.db.models import (
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine import live_broker as live_broker_module
+from app.db.models import LEGACY_OWNER_ID
 from app.engine.live_broker import LiveBroker
 from app.providers import capabilities as caps
 from app.providers.connection import KITE_LEGACY_CONNECTION_SCOPE, Connection
@@ -57,6 +58,9 @@ def _broker(timeline):
     broker.connection = Connection(
         broker="kite", scope=KITE_LEGACY_CONNECTION_SCOPE,
         capabilities=frozenset({caps.LIVE_EXECUTION}))
+    # Same reason as the connection above: the constructor is bypassed, so the owner has to be
+    # set by hand. It is stamped onto every intent and matched by the restart-recovery query.
+    broker.owner_id = LEGACY_OWNER_ID
     broker._journal_open = lambda *args, **kwargs: None
     broker._journal_resolve = lambda *args, **kwargs: None
     return broker
