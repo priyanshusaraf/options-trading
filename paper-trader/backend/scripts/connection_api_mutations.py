@@ -24,8 +24,10 @@ PRINCIPAL = ROOT / "app/api/principal.py"
 MODELS = ROOT / "app/db/models.py"
 MAIN = ROOT / "app/main.py"
 STORE = ROOT / "app/providers/connection_store.py"
+AUTH = ROOT / "app/providers/broker_auth.py"
 PY = "/Users/priyanshusaraf/dev/options-trading/paper-trader/backend/.venv/bin/python"
-TESTS = ["tests/test_connection_routes.py", "tests/test_principal.py"]
+TESTS = ["tests/test_connection_routes.py", "tests/test_principal.py",
+         "tests/test_safe_kite_construction_invariant.py"]
 
 MUTATIONS = [
     # ── whose rows these are ───────────────────────────────────────────────
@@ -111,6 +113,39 @@ MUTATIONS = [
      '            "has_credential": bool(self.credential_ciphertext),',
      '            "has_credential": bool(self.credential_ciphertext),\n'
      '            "credential_ciphertext": self.credential_ciphertext,'),
+
+    # ── acquiring a credential ─────────────────────────────────────────────
+    ("the-login-url-falls-back-to-the-process-wide-api-key", AUTH,
+     '        (api_key,) = _required(secrets, "api_key")',
+     '        from app.core.config import get_settings\n'
+     '        api_key = (secrets or {}).get("api_key") or get_settings().kite_api_key'),
+    # Caught in the full suite by the F-10 construction invariant, not by any connection test —
+    # so it is anchored here too, because a sweep that only runs the connection suite would have
+    # reported this behaviour as guarded when only a different file's test was holding it.
+    ("the-authenticator-holds-an-order-capable-client", AUTH,
+     "        from app.providers.safe_kite import SafePaperKite\n"
+     "        return SafePaperKite(api_key=api_key)",
+     "        from kiteconnect import KiteConnect\n"
+     "        return KiteConnect(api_key=api_key)"),
+    ("the-exchange-drops-the-app-keys", AUTH,
+     "        return {**{k: v for k, v in (secrets or {}).items() if isinstance(v, str)},\n"
+     '                "access_token": str(token),',
+     "        return {\n"
+     '                "access_token": str(token),'),
+    ("the-brokers-exception-message-is-passed-through", AUTH,
+     '                f"Kite refused the session exchange ({type(e).__name__}). A request_token is "\n'
+     '                f"single-use and expires within minutes — start the login again.") from e',
+     '                f"Kite refused the session exchange: {e}") from e'),
+    ("a-long-lived-key-broker-invents-a-login-url", AUTH,
+     "    def login_url(self, secrets: dict) -> str:\n"
+     "        raise NoInteractiveLogin(",
+     "    def login_url(self, secrets: dict) -> str:\n"
+     "        return self.docs_url\n"
+     "    def _unreachable(self, secrets: dict) -> str:\n"
+     "        raise NoInteractiveLogin("),
+    ("an-unregistered-broker-gets-a-silent-none-authenticator", API,
+     "    if auth is None:\n        raise HTTPException(\n            status_code=501,",
+     "    if False:\n        raise HTTPException(\n            status_code=501,"),
 
     # ── refusals that must not become crashes or successes ────────────────
     ("an-unsupported-broker-crashes-instead-of-refusing", API,

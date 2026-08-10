@@ -450,3 +450,137 @@ def test_a_non_owner_principal_is_refused_by_the_policy_itself():
     service = Principal(id="ingest", kind="service", scopes=frozenset({"read:status"}))
     assert is_allowed(service, "read:connections") is False
     assert is_allowed(service, "read:connections", None) is False
+
+
+# ── acquiring a credential, per connection (2026-08-11) ───────────────────
+
+def _kite_with_app_keys(client, vault_key) -> dict:
+    created = _create(client)
+    client.post(f"/api/connections/{created['id']}/credential",
+                json={"secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+    return created
+
+
+def test_the_login_url_is_built_from_THIS_connections_app_keys(client, vault_key, monkeypatch):
+    """No fallback to the process-wide `KITE_API_KEY`. A default that reaches for the owner's
+    own Zerodha app registration is a cross-tenant credential path wearing a convenience."""
+    monkeypatch.setattr(get_settings(), "kite_api_key", "PROCESS-WIDE-KEY")
+    created = _kite_with_app_keys(client, vault_key)
+    res = client.get(f"/api/connections/{created['id']}/login")
+    assert res.status_code == 200
+    url = res.json()["login_url"]
+    assert "ak-123" in url
+    assert "PROCESS-WIDE-KEY" not in url
+
+
+def test_a_connection_with_no_app_keys_is_told_to_store_them(client, vault_key):
+    created = _create(client)                       # no credential stored at all
+    res = client.get(f"/api/connections/{created['id']}/login")
+    assert res.status_code == 400
+    assert "api_key" in res.json()["detail"]
+
+
+def test_a_long_lived_key_broker_refuses_a_login_url_instead_of_inventing_one(client, vault_key):
+    """Dhan issues its token in a dashboard. Returning a URL would send the user to a 404 with
+    no way to distinguish that from a broker outage."""
+    with SessionLocal() as s:
+        row = OwnedConnectionStore(s, OWNER).create(broker="dhan", scope="dhan:main")
+        s.commit()
+        dhan_id = row.id
+    res = client.get(f"/api/connections/{dhan_id}/login")
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "dashboard" in detail and "/credential" in detail
+
+
+def test_the_exchange_seals_the_token_and_carries_the_app_keys_through(client, vault_key,
+                                                                      monkeypatch):
+    """Dropping the app keys would work until tomorrow morning, when the re-login has nothing to
+    authenticate with — a failure that appears once a day and looks like an expired token."""
+    import app.providers.broker_auth as ba
+
+    monkeypatch.setattr(ba.KiteAuthenticator, "_client",
+                        lambda self, api_key: _FakeKite(api_key))
+    created = _kite_with_app_keys(client, vault_key)
+    res = client.post(f"/api/connections/{created['id']}/session",
+                      json={"request_token": "one-time-rt"})
+    assert res.status_code == 200
+    assert res.json()["has_credential"] is True
+    assert "exchanged-access-token" not in res.text      # never echoed back
+
+    with SessionLocal() as s:
+        bundle = vault.unseal(s.get(BrokerConnection, created["id"]).credential_ciphertext)
+    assert bundle["access_token"] == "exchanged-access-token"
+    assert bundle["api_key"] == "ak-123" and bundle["api_secret"] == "as-456"
+
+
+class _FakeKite:
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+    def login_url(self):
+        return f"https://kite.zerodha.com/connect/login?api_key={self.api_key}"
+
+    def generate_session(self, request_token, api_secret):
+        assert request_token == "one-time-rt" and api_secret == "as-456"
+        return {"access_token": "exchanged-access-token", "user_id": "AB1234"}
+
+
+def test_a_refused_exchange_does_not_leak_the_brokers_message(client, vault_key, monkeypatch):
+    """Kite's exception messages have been observed to echo request parameters, and this one
+    reaches an API response and the /api/logs ring buffer. Only the type name crosses."""
+    import app.providers.broker_auth as ba
+
+    class _Angry:
+        def __init__(self, api_key): pass
+        def login_url(self): return "x"
+        def generate_session(self, request_token, api_secret):
+            raise ValueError(f"bad checksum for api_secret={api_secret} rt={request_token}")
+
+    monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, k: _Angry(k))
+    created = _kite_with_app_keys(client, vault_key)
+    res = client.post(f"/api/connections/{created['id']}/session",
+                      json={"request_token": "one-time-rt"})
+    assert res.status_code == 400
+    assert "as-456" not in res.text and "one-time-rt" not in res.text
+    assert "ValueError" in res.json()["detail"]
+
+
+def test_the_session_exchange_is_authenticated_and_is_not_a_GET(client, monkeypatch):
+    """`/api/session` is an auth-exempt GET because Zerodha redirects to it directly. That is
+    acceptable for one hard-coded account and not here, where the request names WHICH connection
+    to write a credential into — an unauthenticated GET taking an id would let anyone who could
+    reach the port bind a credential to another owner's connection."""
+    monkeypatch.setattr(get_settings(), "api_token", "secret-token")
+    assert client.post("/api/connections/1/session",
+                       json={"request_token": "x"}).status_code == 401
+    assert client.get("/api/connections/1/login").status_code == 401
+    # And there is no GET form of the exchange at all.
+    assert client.get("/api/connections/1/session",
+                      headers={"Authorization": "Bearer secret-token"}).status_code == 405
+
+
+def test_another_owners_connection_cannot_be_logged_in_or_exchanged(client, vault_key):
+    foreign = _foreign_connection()
+    assert client.get(f"/api/connections/{foreign}/login").status_code == 404
+    assert client.post(f"/api/connections/{foreign}/session",
+                       json={"request_token": "x"}).status_code == 404
+
+
+def test_a_broker_with_no_registered_login_flow_refuses_with_its_docs_url(client, vault_key):
+    """Upstox is SUPPORTED and DAILY_OAUTH and has a working data adapter — and deliberately no
+    authenticator, because writing its token exchange without reading its current documentation
+    is how a flow that looks right fails at 06:00. It must refuse and name the documentation,
+    not fall through to an AttributeError 500 that reads as a server fault."""
+    with SessionLocal() as s:
+        row = OwnedConnectionStore(s, OWNER).create(broker="upstox", scope="upstox:data")
+        s.commit()
+        upstox_id = row.id
+    res = client.get(f"/api/connections/{upstox_id}/login")
+    assert res.status_code == 501
+    detail = res.json()["detail"]
+    assert "upstox.com" in detail
+
+    exchange = client.post(f"/api/connections/{upstox_id}/session",
+                           json={"request_token": "x"})
+    assert exchange.status_code == 501

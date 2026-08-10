@@ -97,7 +97,22 @@ class BrokerSpec:
     orders go out is exactly the thing the registry exists to remove.
     """
 
+    authenticator: str | None = None
+    """`"module:function"` returning a `BrokerAuthenticator` (app/providers/broker_auth.py).
+
+    On the spec rather than in the route for the same reason `venue_builder` is: acquiring a
+    credential is broker-shaped — Kite redirects and exchanges a one-time token, Dhan issues one
+    in a dashboard, a TOTP broker signs in from a seed — and `auth` already declares which shape
+    this broker uses. `None` means no flow is registered, which is the honest state for a broker
+    whose documentation has not been read at build time; the route refuses and names `docs_url`
+    rather than guessing an endpoint.
+    """
+
     notes: str = ""
+
+    def load_authenticator(self):
+        factory = _load(self.authenticator, self.key, "authenticator")
+        return factory() if factory is not None else None
 
     def load_builder(self):
         return _load(self.venue_builder, self.key, "venue builder")
@@ -146,6 +161,7 @@ BROKERS: tuple[BrokerSpec, ...] = (
         data="app.providers.kite:KiteProvider",
         venue="app.engine.kite_venue:KiteVenue",
         venue_builder="app.engine.kite_venue:build_live_venue",
+        authenticator="app.providers.broker_auth:kite_authenticator",
         notes="The reference implementation and the only broker this build has ever placed a "
               "real order through. Its vocabulary (MIS/NRML/GTT/SL-M) is confined to kite_venue.",
     ),
@@ -175,6 +191,7 @@ BROKERS: tuple[BrokerSpec, ...] = (
         data="app.providers.dhan:DhanProvider",
         venue="app.engine.dhan_venue:DhanVenue",
         venue_builder="app.engine.dhan_venue:build_live_venue",
+        authenticator="app.providers.broker_auth:dhan_authenticator",
         notes="Data only IN THIS BUILD. Long-lived token, so no daily re-login — the first "
               "broker whose connection lifecycle differs from Kite's, which is why Auth is on "
               "the spec. Two credentials (access-token AND client-id). Its interval coverage is "

@@ -41,6 +41,7 @@ from app.api.principal import (
     require,
 )
 from app.core.credential_vault import CredentialVaultUnavailable
+from app.providers.broker_auth import BrokerAuthError, NoInteractiveLogin
 from app.db.session import SessionLocal
 from app.providers import brokers as registry
 from app.providers import capabilities as caps
@@ -277,3 +278,93 @@ def revoke_connection(connection_id: int,
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         return row.to_dict()
+
+
+# ── acquiring a credential ────────────────────────────────────────────────
+# The half that made "a connection row exists" fall short of "a user connected their broker".
+# `/api/login` and `/api/session` already exist and drive the process-global provider into
+# `access_token.json` — one file, one account. These are their per-connection equivalents and
+# they deliberately do not touch that file.
+
+class SessionExchange(_ClosedModel):
+    request_token: str = Field(min_length=1, max_length=512)
+
+
+def _authenticator(broker: str):
+    spec = registry.spec(broker)
+    auth = spec.load_authenticator()
+    if auth is None:
+        raise HTTPException(
+            status_code=501,
+            detail=f"no login flow is implemented for {spec.display_name}. Its API "
+                   f"documentation is at {spec.docs_url}; an adapter written without reading it "
+                   f"is how a flow that looks right fails at 06:00.")
+    return auth
+
+
+@router.get("/connections/{connection_id}/login")
+def connection_login_url(connection_id: int,
+                         principal: Principal = Depends(get_principal)) -> dict:
+    """Where to send this connection's browser to authenticate.
+
+    Returns the URL rather than redirecting. A 302 from an API the frontend calls with fetch()
+    is followed transparently by the browser and lands the JSON parser on Zerodha's HTML; the
+    caller needs the URL so it can navigate deliberately.
+
+    The app keys come from THIS connection's stored secrets. There is no fallback to the
+    process-wide `KITE_API_KEY`: that would run every owner's login through the owner's own
+    Zerodha app registration, which is a cross-tenant credential path wearing a default.
+    """
+    require(principal, "read:connections")
+    with SessionLocal() as s:
+        try:
+            store = _open(s, principal)
+            row = _authorized(store, principal, "read:connection", connection_id)
+            auth = _authenticator(row.broker)
+            secrets = store.live_connection(connection_id).secrets_source()
+            return {"connection_id": row.id, "broker": row.broker,
+                    "login_url": auth.login_url(secrets)}
+        except ConnectionNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except NoInteractiveLogin as e:
+            # 400, not 501: nothing is missing. This broker genuinely has no redirect flow and
+            # the message says what to do instead.
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except BrokerAuthError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/connections/{connection_id}/session")
+def connection_complete_session(connection_id: int, body: SessionExchange,
+                                principal: Principal = Depends(get_principal)) -> dict:
+    """Exchange the broker's one-time token and seal the result.
+
+    A POST, and authenticated as the owner of this connection — deliberately not a GET the
+    broker can redirect to. `/api/session` is a GET on the auth-exempt list because it receives
+    Zerodha's redirect directly; that is acceptable for one hard-coded account and is not
+    acceptable here, where the request names WHICH connection to write a credential into. An
+    unauthenticated GET taking a connection id would let anyone who could reach the port bind a
+    credential of their choosing to another owner's connection.
+
+    The exchanged bundle carries the app keys through, so tomorrow's re-login still has
+    something to authenticate with.
+    """
+    require(principal, "write:credential")
+    with SessionLocal() as s:
+        try:
+            store = _open(s, principal)
+            row = _authorized(store, principal, "write:credential", connection_id)
+            auth = _authenticator(row.broker)
+            secrets = store.live_connection(connection_id).secrets_source()
+            bundle = auth.exchange(secrets, body.request_token)
+            saved = store.store_credential(connection_id, bundle)
+            s.commit()
+            return saved.to_dict()
+        except ConnectionNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except NoInteractiveLogin as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except BrokerAuthError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except CredentialVaultUnavailable as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
