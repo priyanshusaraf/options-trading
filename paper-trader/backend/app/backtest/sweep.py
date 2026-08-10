@@ -403,15 +403,19 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
 # Justified by measurement: a cell is 84.7 ms and the owner's full-universe warm
 # pass is 16,000 cells, so serial is 22 minutes against a 1.4-minute target.
 #
-# What crosses a process boundary is a candle tuple in and a dict of already-
-# serialized column values out. Nothing shared, nothing mutable, no database
-# session, no provider handle. The parent keeps everything that is not pure
-# arithmetic: the throttled provider read, the dataset address, the store write
-# and the reusable-result lookup. That bounds the achievable speedup (see the
-# measured table in the hardening record) and it is the honest trade — moving the
-# result-cache lookup into workers would make their visibility of already-written
-# rows depend on batch timing, which is exactly the class of difference the
-# bit-identity gate exists to forbid.
+# What crosses a process boundary is a dict of plain values in and a dict of
+# already-serialized column values out. Nothing shared, nothing mutable, no
+# database session, no provider handle.
+#
+# On a REFRESH the parent must fetch, so candles cross the boundary. On a PINNED
+# run only the dataset ADDRESS crosses and the worker reads the store itself:
+# that read — decompress, re-address, check the manifest — was 37.9 ms of the
+# parent's 52 ms per cell and capped fan-out at 2.08x (hardening record §12).
+#
+# The parent still keeps the throttled provider read, the store WRITE and the
+# reusable-result lookup. The last of those is deliberate: moving it into workers
+# would make their visibility of already-written rows depend on batch timing,
+# which is exactly the class of difference the bit-identity gate exists to forbid.
 
 MAX_SWEEP_WORKERS = 32
 
@@ -474,9 +478,68 @@ def _worker_task(payload: dict) -> list[dict]:
     return out
 
 
-def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared):
+_WORKER_STORES: dict[str, dataset_store.DatasetStore] = {}
+
+
+def _worker_store(root: str) -> dataset_store.DatasetStore:
+    """One store handle per (process, root). The root is carried in the payload
+    rather than resolved from settings, so a worker reads the same directory the
+    parent pinned against and cannot silently address a different corpus."""
+    store = _WORKER_STORES.get(root)
+    if store is None:
+        store = _WORKER_STORES[root] = dataset_store.DatasetStore(root)
+    return store
+
+
+def _pinned_worker_task(payload: dict) -> dict:
+    """Read, VERIFY and simulate one pinned dataset. Runs in a worker process.
+
+    This is the lever measured in hardening record §12: with the candles decoded
+    in the parent, `_prepare_dataset` was 37.9 ms of the parent's 52 ms per cell
+    and fan-out plateaued at 2.08x. Only the address crosses the boundary now, so
+    the decompress + re-address + manifest check happen once per dataset in the
+    process that is about to use them.
+
+    Every refusal of `_pinned_dataset` is reproduced here, in the same order and
+    with the same text, by calling the same function. A refusal is returned as a
+    DATASET-level verdict rather than a per-cell one, because it must also
+    override a result-cache hit the parent took from the unverified manifest:
+    serially that cell is an explanatory error row, so it is one here too.
+
+    There is no provider in this payload and no way to reach one.
+    """
+    inst, interval = payload["inst"], payload["interval"]
+    prepared = _pinned_dataset_from_store(
+        lambda address: _worker_store(payload["store_root"]).get(address),
+        address=payload["address"],
+        key=pin_key(getattr(inst, "key", ""), interval),
+        provider_identity=payload["provider_identity"],
+        instrument_identity=source_identity(
+            inst, fields=INSTRUMENT_IDENTITY_FIELDS),
+        interval=interval, requested_window=payload["requested_window"],
+        clamped=payload["clamped"])
+    if prepared.error:
+        return {"refused": True, "rows": [
+            _result_values(inst, interval, None, [], prepared.bars,
+                           clamped=prepared.clamped, strategy_key=key,
+                           error=prepared.error)
+            for key in payload["strategy_keys"]]}
+    return {"refused": False, "rows": _worker_task(dict(
+        payload, candles=prepared.candles, bars=prepared.bars,
+        first_ts=prepared.first_ts, last_ts=prepared.last_ts,
+        effective_days=prepared.effective_days, clamped=prepared.clamped))}
+
+
+def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
+                  *, pinned_address: str = ""):
     """Split one dataset's cells into values this process already has and cells a
-    worker must compute — keeping the ORDER the serial path would produce."""
+    worker must compute — keeping the ORDER the serial path would produce.
+
+    `pinned_address` switches the payload from candles to an address. A pinned
+    dataset is submitted even when every cell was served from the result cache:
+    the parent planned it from an UNVERIFIED manifest, so something must still
+    prove the bytes, and a worker's refusal replaces those cached values.
+    """
     slots: list[tuple[str, dict | None]] = []
     cells: list[dict] = []
     slippage_pct = float(get_settings().backtest_slippage_pct)
@@ -499,7 +562,18 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared):
                       "params": dict(strat.default_params),
                       "phash": phash})
     payload = None
-    if cells:
+    if pinned_address:
+        payload = {"pinned": True, "address": pinned_address,
+                   "store_root": str(dataset_store.get_store().root),
+                   "provider_identity": source_identity(
+                       provider, fields=PROVIDER_IDENTITY_FIELDS),
+                   "requested_window": _requested_window(interval, win),
+                   "clamped": _is_clamped(interval, win.get("lookback_days"),
+                                          win.get("start")),
+                   "strategy_keys": [st.key for st in strategies],
+                   "inst": inst, "interval": interval, "capital": capital,
+                   "slippage_pct": slippage_pct, "cells": cells}
+    elif cells:
         payload = {"candles": prepared.candles, "inst": inst,
                    "interval": interval, "capital": capital,
                    "slippage_pct": slippage_pct, "bars": prepared.bars,
@@ -512,6 +586,20 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared):
 def _merge(slots, computed) -> list[dict]:
     it = iter(computed)
     return [value if kind == "ready" else next(it) for kind, value in slots]
+
+
+def _drain(slots, future) -> list[dict]:
+    """One dataset's results, in slot order, from whichever task computed it."""
+    if future is None:
+        return _merge(slots, ())
+    result = future.result()
+    if isinstance(result, dict):          # a pinned dataset's verdict
+        if result["refused"]:
+            # The dataset itself is unservable: every cell of it is that
+            # refusal, including cells the parent had planned from the cache.
+            return result["rows"]
+        return _merge(slots, result["rows"])
+    return _merge(slots, result)
 
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
@@ -533,22 +621,32 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         for inst in specs:
             for interval in intervals:
-                prepared = _prepare_dataset(provider, inst, interval, win,
-                                            pinned=pinned)
+                if pinned is not None:
+                    # Pinned: the parent reads the manifest, never the bars. The
+                    # store read — and every refusal it can raise — belongs to
+                    # the worker (`_pinned_worker_task`).
+                    prepared = _pinned_header(
+                        provider, inst, interval, win, pinned,
+                        clamped=_is_clamped(interval, win.get("lookback_days"),
+                                            win.get("start")))
+                    task, address = _pinned_worker_task, prepared.dataset_address
+                else:
+                    prepared = _prepare_dataset(provider, inst, interval, win)
+                    task, address = _worker_task, ""
                 slots, payload = _plan_dataset(
-                    provider, inst, interval, capital, win, strategies, prepared)
-                future = pool.submit(_worker_task, payload) if payload else None
+                    provider, inst, interval, capital, win, strategies, prepared,
+                    pinned_address=address)
+                future = pool.submit(task, payload) if payload else None
                 pending.append((future, slots))
                 # `prepared` (and its lazily-built frame) is dropped here: the
                 # parent never holds a dataset past its submission.
                 del prepared, payload
                 while len(pending) >= max_inflight:
                     future, slots = pending.popleft()
-                    yield from _merge(
-                        slots, future.result() if future else ())
+                    yield from _drain(slots, future)
         while pending:
             future, slots = pending.popleft()
-            yield from _merge(slots, future.result() if future else ())
+            yield from _drain(slots, future)
 
 
 def _prepare_dataset(provider, inst, interval, win, *,
@@ -636,22 +734,88 @@ def _prepare_dataset(provider, inst, interval, win, *,
         dataset_address=dataset_address)
 
 
+def _pinned_address(inst, interval, pinned) -> str:
+    """The address the caller pinned for this cell, or "". No I/O."""
+    return (pinned.get(pin_key(getattr(inst, "key", ""), interval))
+            or "").strip().lower()
+
+
 def _pinned_dataset(provider, inst, interval, win, pinned, *,
                     clamped: bool) -> _PreparedDataset:
     """Serve one cell from a caller-named dataset address, or refuse.
 
-    Every refusal below is a *closed* failure: one explanatory result row for the
-    cell, the rest of the run untouched, and not one provider read. There is
-    deliberately no path from here back to `provider.get_candles`.
+    The serial path. It reads and verifies in this process; the parallel path
+    sends the address to a worker, which calls the same function underneath
+    (`_pinned_dataset_from_store`) so there is one set of refusals, not two.
     """
     key = pin_key(getattr(inst, "key", ""), interval)
-    address = (pinned.get(key) or "").strip().lower()
+    address = _pinned_address(inst, interval, pinned)
+    if not address:
+        return _PreparedDataset(
+            clamped=clamped,
+            error=f"pinned run: no dataset address pinned for {key}")
+    return _pinned_dataset_from_store(
+        lambda a: dataset_store.get_store().get(a),
+        address=address, key=key,
+        provider_identity=source_identity(provider,
+                                          fields=PROVIDER_IDENTITY_FIELDS),
+        instrument_identity=source_identity(inst,
+                                            fields=INSTRUMENT_IDENTITY_FIELDS),
+        interval=interval, requested_window=_requested_window(interval, win),
+        clamped=clamped)
+
+
+def _pinned_header(provider, inst, interval, win, pinned, *,
+                   clamped: bool) -> _PreparedDataset:
+    """What the PARENT needs to plan a pinned dataset, without decoding it.
+
+    Deliberately candle-less and deliberately proof-less. It resolves the pinned
+    address (no I/O) and reads the manifest sidecar for the one planning value
+    the parent cannot obtain otherwise: the effective window's last timestamp,
+    which discriminates the result cache. It performs no refusal check beyond
+    "nothing was pinned for this cell", which is a property of the caller's pin
+    map rather than of any stored bytes — so the ORDER in which the remaining
+    refusals fire is unchanged, and every one of them still fires, in the worker.
+
+    A manifest that is missing, unreadable or untruthful costs a cache miss and
+    nothing else: an execution address binds the dataset address, and a stored
+    row's `last_candle_ts` came from real decoded bars, so no wrong row can be
+    matched. The bytes are then proven, or refused, by the worker.
+    """
+    key = pin_key(getattr(inst, "key", ""), interval)
+    address = _pinned_address(inst, interval, pinned)
     if not address:
         return _PreparedDataset(
             clamped=clamped,
             error=f"pinned run: no dataset address pinned for {key}")
     try:
-        stored = dataset_store.get_store().get(address)
+        manifest = dataset_store.get_store().manifest(address)
+    except Exception:
+        manifest = None
+    effective = (manifest or {}).get("effective_window")
+    effective = effective if isinstance(effective, dict) else {}
+    try:
+        last_ts = int(effective.get("last_ts") or 0)
+    except (TypeError, ValueError):
+        last_ts = 0
+    return _PreparedDataset(clamped=clamped, dataset_address=address,
+                            last_ts=last_ts)
+
+
+def _pinned_dataset_from_store(read, *, address: str, key: str,
+                               provider_identity, instrument_identity,
+                               interval: str, requested_window,
+                               clamped: bool) -> _PreparedDataset:
+    """Verify one pinned dataset and decode it, or refuse — the whole fail-closed
+    set, in one place, callable from the parent or from a worker.
+
+    Every refusal below is a *closed* failure: one explanatory result row for the
+    cell, the rest of the run untouched, and not one provider read. `read` takes
+    an address and returns a proven `StoredDataset` or None; there is
+    deliberately no path from here back to `provider.get_candles`.
+    """
+    try:
+        stored = read(address)
     except Exception as exc:
         return _PreparedDataset(
             clamped=clamped,
@@ -663,8 +827,10 @@ def _pinned_dataset(provider, inst, interval, win, pinned, *,
             clamped=clamped,
             error=f"pinned run: dataset {address[:12]}… for {key} is missing or "
                   f"its content no longer matches its address")
-    mismatch = _pin_mismatch(stored, provider=provider, inst=inst,
-                             interval=interval, win=win)
+    mismatch = _pin_mismatch(stored, provider_identity=provider_identity,
+                             instrument_identity=instrument_identity,
+                             interval=interval,
+                             requested_window=requested_window)
     if mismatch:
         return _PreparedDataset(
             clamped=clamped,
@@ -690,7 +856,8 @@ def _pinned_dataset(provider, inst, interval, win, pinned, *,
         dataset_address=stored.address)
 
 
-def _pin_mismatch(stored, *, provider, inst, interval, win) -> str:
+def _pin_mismatch(stored, *, provider_identity, instrument_identity, interval,
+                  requested_window) -> str:
     """Why this stored dataset is not an answer to this cell's request, or "".
 
     The store's own address check proves the bytes are the bytes that address
@@ -698,19 +865,19 @@ def _pin_mismatch(stored, *, provider, inst, interval, win) -> str:
     GOLD dataset recomputes to its own address perfectly. Serving it to a
     15-minute NIFTY cell would be a silently wrong backtest, which is worse than
     any refusal, so the manifest is compared against the request as well.
+
+    Identities rather than a provider handle, because this now also runs in a
+    worker process — which has no provider and must never acquire one.
     """
     if stored.interval != interval:
         return f"its interval is {stored.interval!r}, not {interval!r}"
-    expected_instrument = source_identity(inst, fields=INSTRUMENT_IDENTITY_FIELDS)
-    if stored.instrument != expected_instrument:
+    if stored.instrument != instrument_identity:
         return f"its instrument is {stored.instrument!r}"
-    expected_provider = source_identity(provider, fields=PROVIDER_IDENTITY_FIELDS)
-    if stored.provider != expected_provider:
+    if stored.provider != provider_identity:
         return f"its provider is {stored.provider!r}"
-    expected_window = _requested_window(interval, win)
-    if stored.requested_window != expected_window:
+    if stored.requested_window != requested_window:
         return (f"it was fetched for window {stored.requested_window!r}, "
-                f"not {expected_window!r}")
+                f"not {requested_window!r}")
     return ""
 
 

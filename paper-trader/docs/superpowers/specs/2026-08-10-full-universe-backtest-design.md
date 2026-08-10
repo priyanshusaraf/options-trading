@@ -69,14 +69,33 @@ fan-out, so this is not a multiprocessing limit — it is that the parent's own 
 four makes it worse**, because the parent is also paying pickle cost for candles it just decoded.
 
 At ~41 ms/cell parent-bound, the NSE warm pass is **~11 minutes**, not 1.4. The 90% target is
-**not met by this slice.**
+**not met by this slice** (nor, as it turned out, by the next one).
 
-**The next lever is known and sized: send workers the dataset address, not the candles.** The
-parent then does ~3.5 ms/cell instead of ~41, and the store read moves into the workers where it
-parallelises. That requires reproducing `_pinned_dataset`'s five fail-closed refusals worker-side,
-so it is a `dataset_store` slice rather than a sweep one. With the parent at ~3.5 ms/cell the
-16,000-cell warm pass is parent-bound at ~56 s with compute distributed — which does clear the
-target, but only after that slice lands and is measured, not before.
+**The next lever was known and sized: send workers the dataset address, not the candles.** It has
+now landed and been measured — see hardening record §14. It delivered on the parent and did not
+deliver on the target:
+
+| workers | ms/cell before | ms/cell after | speedup before | speedup after |
+|---:|---:|---:|---:|---:|
+| 1 | 105.7 | 109.5 | 1.00× | 1.00× |
+| 2 | 50.5 | 58.0 | 2.09× | 1.89× |
+| 4 | 49.5 | 37.9 | 2.13× | **2.89×** |
+| 8 | 65.7 | 36.3 | 1.61× | **3.19×** |
+
+The parent's own dataset work fell from **49.2 to 0.43 ms/cell** — better than the ~3.5 ms this
+note predicted — and 94% of parent wall time is now waiting on workers. The 8-worker *regression*
+is gone: eight cores are no longer slower than four.
+
+But the parent was not the only ceiling. At ~38 ms/cell on eight workers the 16,000-cell NSE warm
+pass is **~10 minutes**, not the ~56 s projected here, because the projection implicitly assumed
+compute would keep distributing once the parent got out of the way, and this box tops out at
+3.78× on pure-CPU fan-out. **The 90% / 1.4-minute target is still not met.** What remains is the
+per-cell cost itself — §6's `to_dict` and `ist_epoch` hoist — not more parallelism plumbing.
+
+Reproducing `_pinned_dataset`'s fail-closed refusals worker-side was the whole risk, and the
+non-obvious part of the answer is recorded in §14: a pinned dataset is submitted to a worker even
+when every cell of it was served from the result cache, because the parent plans from an
+*unverified* manifest and something must still prove the bytes.
 
 The lesson is worth keeping: *independent cells* is a necessary condition for linear fan-out, not
 a sufficient one. What actually mattered was how much work stayed on the serial side of the fork.

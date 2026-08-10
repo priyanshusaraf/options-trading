@@ -360,6 +360,32 @@ class DatasetStore:
             first_ts_us=int(manifest.get("first_ts_us", 0)),
             last_ts_us=int(manifest.get("last_ts_us", 0)))
 
+    def manifest(self, address: str) -> dict | None:
+        """The sidecar manifest alone, without decoding the blob.
+
+        This is a **planning** read, not a proof, and the difference matters.
+        `get` proves the bytes on disk are the bytes this address names; this
+        reads a few hundred bytes of JSON and proves nothing about them. It
+        exists because a parallel pinned sweep must decide, cheaply and in the
+        parent, which cells already have a reusable result — while the
+        verification that decides whether a dataset may be SIMULATED happens in
+        the worker that will simulate it.
+
+        Nothing here may be used to serve candles or to skip a refusal. The one
+        value the parent takes from it, the effective window's last timestamp,
+        is a result-cache discriminator: a lying manifest can only cause a cache
+        MISS, because a hit additionally requires an execution address that
+        binds the dataset address, and a row whose stored last timestamp came
+        from the real decoded bars.
+        """
+        try:
+            manifest = json.loads(self.manifest_path(address).read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(manifest, dict) or manifest.get("scheme") != STORE_SCHEME:
+            return None
+        return manifest
+
     def lookup(self, *, provider: Any, instrument: Any, interval: str,
                requested_window: Any) -> IndexEntry | None:
         """The newest address stored for this request, and when it was fetched.
