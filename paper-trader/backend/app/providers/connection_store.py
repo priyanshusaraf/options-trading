@@ -153,8 +153,18 @@ class OwnedConnectionStore:
 
         Raises `CredentialVaultUnavailable` when no key is configured, rather than storing
         plaintext. That refusal is the reason the vault exists.
+
+        **A revoked connection cannot be re-credentialed.** `get` filters on owner but not on
+        status, and without this check one POST undid a revocation: the row stayed `revoked`
+        while acquiring fresh ciphertext, so `revoke`'s promise that a revoked connection is not
+        a credential at rest lasted until the next request, and the audit record contradicted
+        itself with `last_authenticated_at` later than `revoked_at`. Found by an independent
+        security review, 2026-08-11. The check mirrors the one `live_connection` already had.
         """
         row = self.get(connection_id)
+        if row.status != "active":
+            raise ConnectionNotFound(
+                f"connection {connection_id} is {row.status}, not active")
         ciphertext, key_id = seal(secrets)
         row.credential_ciphertext = ciphertext
         row.credential_key_id = key_id

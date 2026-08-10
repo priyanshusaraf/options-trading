@@ -10,6 +10,33 @@ file is the resume point, not the overview.
 
 ## 1. Current phase
 
+**Broker and connection layer (2026-08-10/11), superseding the paragraph below.** Migration head
+is **`0016`**, not `0014`. The claim that "broker expansion, authentication and tenancy remain
+deferred" is **no longer true** and is kept here only so a reader who remembers it knows it was
+retired:
+
+- **`ExecutionVenue`** is the neutral wire seam — `place_protective_stop`,
+  `modify_protective_stop`, `cancel_protective_stop`, `protective_stop_state`,
+  `protective_inventory`, `exchange_for`, `product_for`. `KiteVenue` and `DhanVenue` are
+  translations; no MIS/NRML/GTT/SL-M spelling crosses it.
+- **`app/providers/brokers.py`** is the registry, and it — not `broker_factory` — decides whether
+  a live order path can be built. A broker is `SUPPORTED` only if an adapter exists **and** passes
+  conformance; the other five are `PLANNED` and refused at selection with their documentation URL.
+- **`broker_connections` (0015) + `execution_intents.owner_id` (0016)** make a connection a
+  durable, per-owner, encrypted, revocable object, and make restart recovery match on owner and
+  broker rather than adopting whatever unresolved live entry it found.
+- **The connection API** (`app/api/connection_routes.py`, 2026-08-11) is the reachable end of
+  that store: `GET /api/brokers`, and list/create/credential/revoke under `/api/connections`. The
+  owner is derived from the principal and is never a request parameter; a credential goes in and
+  has no route out.
+- Split routing is proven end to end in `tests/test_split_routing.py` — market data from Upstox,
+  execution through Kite.
+
+**Not deployed, and no Kite contact.** Production is measured at `6bb7e97` (2026-08-02);
+`CURRENT_STATE_HANDOFF_2026-08-10.md` is the evidence-backed statement of what is and is not
+real on this branch, including what is still missing — the per-broker interactive login flow,
+`owner_id` on the remaining tables, and an `is_allowed()` that still ignores its `resource`.
+
 **Execution-first foundation update (2026-08-09):** the isolated
 `codex/execution-foundation` branch now contains migration `0014`, immutable live-entry intent
 and event records, lifecycle-first restart recovery, cumulative fill-delta accounting, a durable

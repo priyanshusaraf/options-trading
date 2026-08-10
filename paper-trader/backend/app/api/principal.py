@@ -35,6 +35,7 @@ from fastapi import HTTPException, Request, WebSocket
 
 from app.api.auth import extract_token, token_ok, ws_authorized
 from app.core.config import get_settings
+from app.db.models import LEGACY_OWNER_ID
 
 # `owner` holds the shared token; `anonymous_owner` is the same human on a box
 # with auth switched off. Both are the owner — the distinction is how we know it.
@@ -151,6 +152,25 @@ def is_allowed(principal: Principal | None, action: str, resource: Any = None) -
     if principal is None:
         return False
     return principal.is_owner
+
+
+def owner_id_for(principal: Principal | None) -> str:
+    """The `owner_id` column value this principal's rows belong to.
+
+    Deliberately NOT `principal.id`. `ANONYMOUS_OWNER.id` is `"anonymous-owner"`, and auth
+    disabled is the shipped default and the current production posture on the tailnet-only box —
+    so keying rows on the principal id would file every connection created with auth off under an
+    owner the engine never reads. `LiveBroker` and `configured_execution_connection` both resolve
+    the owner from `settings.owner_id`, and this returns the same value so the API writes the rows
+    the engine reads. The two identities are the same human; `kind` is how we know which.
+
+    Raises for anything that is not an owner, so a future non-owner principal cannot silently
+    acquire the owner's connections by falling through a default.
+    """
+    if principal is None or not principal.is_owner:
+        raise Forbidden("no owner identity for this principal")
+    configured = (get_settings().owner_id or "").strip()
+    return configured or LEGACY_OWNER_ID
 
 
 def require(principal: Principal | None, action: str, resource: Any = None) -> None:

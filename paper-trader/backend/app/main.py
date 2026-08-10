@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -21,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     backtest_routes,
+    connection_routes,
     ir_experiment_routes,
     ir_edit_routes,
     ir_layout_routes,
@@ -216,6 +218,23 @@ async def editor_request_validation_handler(
             status_code=422,
             content=ir_edit_routes.request_validation_envelope(exc.errors()),
         )
+    if path.startswith("/api/connections/") and path.endswith("/credential"):
+        # FastAPI's default envelope includes pydantic's `input` — the value that failed
+        # validation. On every other route that is a helpful echo; on this one it is a live
+        # broker access token sent back in an error body, which lands in browser network logs,
+        # proxy error logs and any client-side error reporter. `connection_routes` is careful
+        # never to interpolate the bundle into its own messages, and until this branch existed
+        # the framework undid that one layer down. Found by an independent security review,
+        # 2026-08-11.
+        #
+        # `loc` and `msg` are kept: the caller still learns WHICH field was wrong and why, which
+        # is the whole job of a 422. Only the value is dropped.
+        return JSONResponse(
+            status_code=422,
+            content=jsonable_encoder(
+                {"detail": [{k: v for k, v in err.items() if k != "input"}
+                            for err in exc.errors()]}),
+        )
     return await request_validation_exception_handler(request, exc)
 
 _AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/session"}
@@ -283,6 +302,7 @@ app.include_router(ir_edit_routes.router)
 app.include_router(ir_experiment_routes.router)
 app.include_router(research_operation_routes.router)
 app.include_router(research_review_routes.router)
+app.include_router(connection_routes.router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -294,7 +314,8 @@ mount_versioned(app, routes.router, backtest_routes.router,
                 portfolio_routes.router, ledger_routes.router, ir_routes.router,
                 ir_layout_routes.router, product_object_routes.router,
                 ir_edit_routes.router, ir_experiment_routes.router,
-                research_operation_routes.router, research_review_routes.router)
+                research_operation_routes.router, research_review_routes.router,
+                connection_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:
