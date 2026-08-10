@@ -8,7 +8,7 @@ paths:
 
 # Migrations and persistence
 
-Migration head is **0013**. Verify with `.venv/bin/python -m app.db.migrate head`, never from a
+Migration head is **0015** (`broker_connections`, 2026-08-10). Verify with `.venv/bin/python -m app.db.migrate head`, never from a
 document.
 
 ## Rules

@@ -97,7 +97,7 @@ Run from `backend/` or `frontend/` — never the repo root. `python` is not on `
 .venv/bin/python -m pytest tests research_tests   # BOTH suites; bare pytest skips research_tests
 .venv/bin/python scripts/dryrun.py 700            # engine + ledger reconciliation → LEDGER OK
 .venv/bin/python scripts/backtest_smoke.py        # sweep + net-of-charges → SWEEP OK
-.venv/bin/python -m app.db.migrate head           # migration head (currently 0013)
+.venv/bin/python -m app.db.migrate head           # migration head (currently 0015)
 # frontend/
 npm test && npm run typecheck && npm run build
 # paper-trader/

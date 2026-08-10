@@ -11,6 +11,7 @@ charges) from cash, and every closed trade has folded its net P&L back in.
 """
 from __future__ import annotations
 
+import json
 import datetime as dt
 
 from app.core.version import get_build_sha
@@ -1661,4 +1662,106 @@ class IrShadowDeployment(Base):
             "state": self.state, "revision": self.revision, "note": self.note,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+#: The owner every pre-existing row belongs to. This system had exactly one owner until
+#: tenancy existed, and that owner is named retroactively rather than left NULL — a NULL
+#: owner is indistinguishable from "we lost track of whose this is", and on a table that
+#: grants the authority to trade, those two must never look the same. Kept as a constant
+#: for the same reason as `LEGACY_DEPLOYMENT_ID`: it appears in a server_default, a seed and
+#: every scoped lookup, and those must not drift apart.
+#:
+#: It is deliberately the SAME string as `app/api/principal.py::OWNER.id`. Two independently
+#: invented owner identities would resolve the same human to two different sets of resources —
+#: authenticated requests seeing one book and the engine writing to another — and the symptom
+#: would be missing data rather than an error. `tests/test_connection_store.py` pins the match.
+LEGACY_OWNER_ID = "owner"
+
+
+class BrokerConnection(Base):
+    """A credentialed link one owner holds to one broker — durable, encrypted, revocable.
+
+    Until now a connection was constructed per process from environment variables: one
+    implicit owner, one implicit credential, discarded on restart. That is why
+    `Connection` (app/providers/connection.py) is a runtime value object with a late-bound
+    `token_source` and no persistence. This table is its durable form, and the two are
+    deliberately separate: the row is what an owner *has*, and `Connection` is what a
+    running engine *uses*. Merging them would put a database session on the order path.
+
+    **ADR 0015 places this in the money plane.** Not on recovery cost — losing a row costs a
+    re-login, and Kite tokens expire daily anyway — but on blast radius: a row here is the
+    authority to place real orders on a real account. Two consequences that are load-bearing
+    rather than stylistic:
+
+      * `scope` is the same string written into `ExecutionIntent.connection_scope` and matched
+        by restart recovery. Keeping connections and intents in one plane is what keeps
+        attribution a join rather than a hope. It is **by value, not a foreign key** — ADR 0015's
+        no-cross-plane-FK rule applies within a plane too here, because an intent must survive
+        the deletion of the connection that authored it. A live order whose connection row is
+        gone is still a live order, and nulling its scope would orphan it.
+      * The credential is stored encrypted and the **key is not in the database** — it comes
+        from the process environment. A database compromise alone must not be a credential
+        compromise, and that is only true if the key is never a row.
+
+    Revocation is a status change, never a delete. "This credential was revoked at 14:02" is a
+    fact someone will need to establish, and a deleted row establishes nothing.
+    """
+
+    __tablename__ = "broker_connections"
+    __table_args__ = (
+        # One scope per owner, not one globally: two owners may both hold a `kite:legacy`
+        # connection, and they are different connections. Scoping the uniqueness by owner is
+        # what makes the tenancy dimension real rather than decorative.
+        UniqueConstraint("owner_id", "scope", name="uq_broker_connection_owner_scope"),
+        Index("ix_broker_connections_owner", "owner_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID)
+    #: The broker registry key (`app/providers/brokers.py`). An identifier, not a label.
+    broker: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: What `ExecutionIntent.connection_scope` carries. See the class docstring.
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    label: Mapped[str] = mapped_column(String(80), nullable=False, default="",
+                                       server_default="")
+    #: Declared capabilities, as a JSON array. Stored rather than recomputed from the adapter
+    #: class because an owner may hold a connection whose entitlements are narrower than what
+    #: the adapter can do — a data-only Kite connection is a legitimate thing to grant.
+    capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]",
+                                                   server_default="[]")
+    #: AES-GCM ciphertext of the credential bundle, base64. NULL means "no credential stored"
+    #: — a connection that has been created but never authenticated, which is a real state and
+    #: is distinguishable from an empty credential.
+    credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Which key encrypted it. Stored so a key rotation can find the rows it still has to
+    #: re-wrap, instead of discovering them one failed decrypt at a time on the order path.
+    credential_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                        server_default="active")   # active | revoked
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                    default=dt.datetime.now)
+    #: When this connection last held a working credential. Distinct from `updated_at`, which
+    #: moves for a label edit — the operator's question is "when did this last work".
+    last_authenticated_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def to_dict(self) -> dict:
+        """Safe to serialise. **No credential field appears here, and none may be added** —
+        this dict reaches the API, the logs and the operator's browser."""
+        return {
+            "id": self.id, "owner_id": self.owner_id, "broker": self.broker,
+            "scope": self.scope, "label": self.label,
+            "capabilities": json.loads(self.capabilities_json or "[]"),
+            "status": self.status,
+            "has_credential": bool(self.credential_ciphertext),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "last_authenticated_at": (self.last_authenticated_at.isoformat()
+                                      if self.last_authenticated_at else None),
+            "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
         }

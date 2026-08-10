@@ -9,3 +9,4 @@ ledger-backup-*.sql
 report_run_*.md
 report_generated_*.md
 .ir_shadow_mutation_backup
+.mutation-sweep.lock
