@@ -107,6 +107,10 @@ class Deployment(Base):
     saw before.
     """
     __tablename__ = "deployments"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True)
 
@@ -216,6 +220,10 @@ class ExecutionOrderEvent(Base):
             "client_intent_id", "source", "source_event_id",
             name="uq_execution_event_source_identity"),
     )
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_intent_id: Mapped[str] = mapped_column(
@@ -301,6 +309,10 @@ class InstrumentState(Base):
 
 class Position(Base):
     __tablename__ = "positions"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -467,6 +479,10 @@ class Position(Base):
 
 class Trade(Base):
     __tablename__ = "trades"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -585,6 +601,10 @@ class Trade(Base):
 
 class EquitySnapshot(Base):
     __tablename__ = "equity_snapshots"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -869,6 +889,10 @@ class BacktestResult(Base):
 
 class SignalEvent(Base):
     __tablename__ = "signal_events"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -1313,6 +1337,10 @@ class OrderJournal(Base):
     Every site that pops _inflight/_pending_entries must mark its row terminal so the
     two stay in lockstep."""
     __tablename__ = "order_journal"
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -1380,6 +1408,10 @@ class IrShadowDivergence(Base):
               "graph_address", "reason", unique=True),
         Index("ix_ir_shadow_divergences_observed", "observed_at"),
     )
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, index=True)
@@ -1474,6 +1506,10 @@ class IrPaperDeployment(Base):
         CheckConstraint("graph_version >= 1", name="ck_ir_paper_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_paper_deployment_revision"),
     )
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -1612,6 +1648,10 @@ class IrShadowDeployment(Base):
         CheckConstraint("graph_version >= 1", name="ck_ir_shadow_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_shadow_deployment_revision"),
     )
+    #: Whose money this row records. See migration 0017.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID, index=True)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     #: Which project owns the logic. Not derivable from the graph identifier.

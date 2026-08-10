@@ -28,7 +28,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0016"
+HEAD = "0017"
 
 
 def _schema(engine) -> dict:
@@ -214,7 +214,10 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
         "signal_at", "strategy_key", "strategy_version", "context_json", "created_at",
     }
     assert {column["name"] for column in inspector.get_columns("execution_order_events")} == {
-        "id", "client_intent_id", "source", "source_event_id", "kind", "broker_order_id",
+        # `owner_id` arrived in 0017, for the same reason it is asserted above rather than
+        # excluded: this test upgrades to HEAD, so it pins the CURRENT shape.
+        "id", "client_intent_id", "owner_id", "source", "source_event_id", "kind",
+        "broker_order_id",
         "broker_status", "cumulative_filled_qty", "avg_price", "observed_at", "payload_json",
         "anomaly",
     }
