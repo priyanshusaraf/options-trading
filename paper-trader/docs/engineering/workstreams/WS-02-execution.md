@@ -229,6 +229,458 @@ alter lifecycle capability.
 
 ## 4. Completed
 
+### The second ExecutionVenue — Dhan, and what it proved about the seam — 2026-08-10
+
+`KiteVenue` implementing `ExecutionVenue` proved nothing about the protocol: one adapter cannot
+distinguish "a neutral contract" from "Kite's shape with neutral names on it". `DhanVenue`
+(`app/engine/dhan_venue.py` + `app/engine/dhan_order_client.py`) is the second, written from
+https://dhanhq.co/docs/v2/ read at the time of writing rather than from the first adapter.
+
+**The seam held.** Every protocol verb maps onto something Dhan actually does — with one
+exception, and the exception is the most valuable thing in the slice.
+
+**Dhan has no SERVER_TRIGGER, and the venue refuses rather than substituting.** Kite's GTT is a
+broker-side conditional that can be attached to a position that already exists; that is what
+protects every options position this system holds. Dhan has `STOP_LOSS_MARKET` — a resting order,
+i.e. `RESTING_STOP` — and **super orders**, which bundle entry+target+stop into one construct
+submitted together and cannot be attached to an open position. So they are not a substitute.
+
+Placing a `RESTING_STOP` when the broker asks for a `SERVER_TRIGGER` would *look* like it worked
+— the position does end up protected. It is refused anyway, and the reason is correctness rather
+than purity: the two have different ids (an order id vs a trigger id), different margin, and
+different reconciliation. `protective_stop_state` would report a fill that never happened, and
+the check deciding whether the bot may re-enter a contract reads exactly that. The refusal fires
+on **every** verb, not just placement — a stale id from a previous session reaches modify, cancel
+and read directly.
+
+**Consequence, stated rather than discovered at 09:15: an options deployment cannot run on Dhan
+execution in this build.** Intraday equity can. The venue seam existing is what lets that be a
+stated capability fact instead of a surprise.
+
+Other differences that each return a *plausible wrong answer* rather than an error:
+
+* **`TRADED` is the terminal fill, not `COMPLETE`.** A status map copied from Kite reads every
+  filled Dhan order as still working, and `execute_order` polls to TIMEOUT on an order that
+  filled instantly — which the caller must then treat as possibly-working and refuse to replace.
+* **Modify is `PUT` and cancel is `DELETE`**, where Kite POSTs to action paths. Assuming Kite's
+  shape returns 404/405, and a failed protective-stop modify leaves the exchange stop stale at
+  the old trigger while the internal one ratchets — the 2026-07-13 SUZLON class.
+* **`GET /orders` is a bare JSON array.** The transport permits a list only where a list is
+  documented; market-data `post` still refuses one so the error names the shape rather than
+  surfacing three frames later as an `AttributeError` on `.get`.
+* **Dhan answers 200 with a REJECTED order.** Returning that id as a successful placement leaves
+  the caller polling an order that will never work — and, for a protective stop, believing the
+  position is backstopped when nothing is resting. Raised instead.
+* **`correlationId` is 30 chars**; our durable intent tag is 20, so attribution survives the
+  second broker. An over-long tag is refused rather than truncated — a truncated tag is an order
+  nobody can attribute, silently.
+
+```
+pytest tests/test_dhan_venue.py tests/test_dhan_adapter.py → 24 + 24 passed
+scripts/dhan_venue_mutations.py → 13/13 reddened · restored byte-identical
+```
+
+`test_no_unconsumed_mechanisms` then failed the build on a `dhan_product_for_charge_segment`
+helper written "for symmetry" with `kite_venue` that nothing called. **Deleted rather than
+exempted** — writing a mirror function because the other adapter has one is precisely how the
+defect this workstream keeps paying for gets in.
+
+**Not wired, deliberately.** `brokers.py` keeps `venue=None` for Dhan: `make_broker` can build no
+Dhan order client yet, and a registry claiming a venue would disagree with the one place that
+decides. It is registered in the same slice that makes it buildable — which needs `make_broker`'s
+`conn.broker != "kite"` refusal replaced by `brokers.venue_adapter(...)`, and that file is under
+concurrent execution-safety review.
+
+### Independent security review, and the hole it found — 2026-08-10
+
+The first genuinely independent read of this session's work. Its top finding is the reason the
+"a reviewer should not be the author" rule exists.
+
+**HIGH — revoking a connection did not stop orders.** `OwnedConnectionStore.live_connection`
+returns a `token_source` that yields `None` when the row is revoked, the vault key has rotated,
+or the credential cannot be read. **Three docstrings — two of them mine, in
+`connection_store.py` — asserted that a `None` meant the order was "refused unauthenticated".
+No such mechanism existed.** `KiteOrderClient._sync_token` read
+
+```python
+if tok and tok != self._last_token: ...
+```
+
+so a `None` was discarded and `self.kite` kept the token set at broker construction. The owner
+could revoke a compromised credential, see `CONNECTION_REVOKED` in the log, and the engine would
+keep placing **real orders on that account** until someone restarted the backend — with every
+health check green.
+
+This is the codebase's defining defect, third shape: a mechanism that *has* a caller, where the
+caller discards the value. The mutation sweeps could not see it because they mutate a module and
+run that module's own tests; the tests stopped at the store boundary, asserting `None` and
+calling that a refusal. `test_a_missing_vault_key_refuses_the_order_rather_than_sending_it_unauthenticated`
+was named for a behaviour it never checked.
+
+Fixed: `_sync_token` now distinguishes **never authenticated** (unchanged — fails at Kite's own
+auth check, the pre-existing safe path) from **withdrawn** (had a token, now gone), and the
+second clears the cached token and raises `CredentialWithdrawn`. Tests reach the wire client now,
+not the store.
+
+**MEDIUM — the documented way to configure the vault key did not work.** `credential_vault` read
+`os.environ` only, while `.env.example` (added the same day) told the operator to put
+`PT_CREDENTIAL_KEY` in `backend/.env` — which pydantic-settings reads *itself* and does not
+export. `available()` returned False while the variable was demonstrably set, and the error said
+"is not set". Fail-closed, so not a hole, but an operator who cannot make the documented path
+work is an operator inventing a workaround around a credential vault. Now read from the
+environment first, then settings.
+
+**MEDIUM — an explicitly empty owner id resolved to the real owner.** `""`, `"   "` and `None`
+all became `"owner"`, the identity holding the live Zerodha credential — and **a test of mine
+pinned that as intended**, on availability grounds. The reviewer was right and I was wrong: the
+argument being *omitted* is the single-owner default and is fine; an argument *passed* as empty
+is a caller bug (a header parsed to `""`, an unpopulated principal), and defaulting it is
+principal substitution the moment routes exist. Now refused, and the duplicate copy of the same
+fallback in `connection.py` is gone.
+
+**LOW, fixed:** a `CredentialDecryptionFailed` escaped `token_source` into the order path — where
+`order_executor` turned a recoverable auth condition into a durable reconciliation-required
+blocker — and carried `key_id()` into `/api/logs` and Telegram. Now caught and turned into the
+same withdrawal refusal. `list()` is bounded at the query. A docstring claiming the IDOR log line
+"records the distinction" was false and would have been unsafe if made true, since `/api/logs`
+serves the buffer to callers; corrected to say the distinction is recorded nowhere reachable.
+
+**MEDIUM, NOT fixed — recorded as a blocker instead (§5).** `broker_connections` is the only
+money-plane table with an `owner_id`. `unresolved_entries` recovers on
+`(deployment_id, account_scope, connection_scope)` with no owner, while the new
+`(owner_id, scope)` uniqueness makes two owners holding `kite:legacy` legitimate. Not reachable
+today, but the constraint that permits the collision shipped before the query that must handle
+it. Fixing it is an owner column across the money plane plus a recovery-predicate change — its
+own reviewed slice, and a prerequisite for a second owner.
+
+**Clean, per the reviewer:** cross-owner reads in the store (no unscoped helper exists, and the
+late `token_source` re-filters on owner and status so the check does not go stale); credential
+leakage into payloads (`to_dict` emits a bool, nothing in `app/api/` imports the model);
+fail-closed totality of the vault; `key_id()` as a fingerprint; IDOR timing and the uniqueness
+constraint; migration 0015; and transport-layer credential handling in both new adapters.
+
+```
+scripts/tenancy_mutations.py → 17/17 reddened · restored byte-identical
+  new: withdrawn-token-silently-discarded · withdrawn-token-not-cleared-from-the-wire-client
+       dotenv-key-ignored-again
+```
+
+**The execution-safety review did NOT run** — that agent died on a session limit before reading
+anything. The venue boundary, the protective-stop re-route and the restart-recovery paths have
+still had no independent reader.
+
+### The ADR claimed a durability it never had — 2026-08-10
+
+Recorded as a completed item because the correction is the deliverable, not the bug.
+
+ADR 0015 §3 was written and accepted asserting, under **Enforced now**, that "the money plane
+commits with `synchronous=FULL`". It never did — `app/db/session.py:36` sets `NORMAL`. The claim
+survived its own review, a 3,996-test suite and four mutation sweeps, because **nothing anywhere
+connected the sentence to the pragma.** It was found by the owner asking whether the three-plane
+structure was actually being complied with, which is not a control.
+
+This is the codebase's defining defect arriving somewhere the existing guards structurally
+cannot look. `test_no_unconsumed_mechanisms` inspects callables; the mutation sweeps inspect
+tests. A *durability posture stated in prose* has no callable to have no callers.
+
+It was also **unimplementable as written**, which is the more useful half. `PRAGMA synchronous`
+is per connection, and all three planes share one SQLite file and one engine — so `FULL` for
+money-plane commits would put an fsync on every bulk backtest write too, the exact coupling the
+plane split exists to remove. The sentence described something the topology cannot express.
+
+**What was done:** the ADR is corrected in place (both corrections it now carries are recorded
+rather than edited away), F-2 is moved to its real home — fixed by the physical split, or by a
+deliberate *global* move to `FULL` with the write benchmark re-taken, which is the ordering the
+failure-mode review already gives it — and `tests/test_durability_posture.py` now pins the
+posture in both directions. It does not assert the posture is *correct*; it asserts it is what
+the ADR says, so the two cannot drift again.
+
+```
+scripts/durability_posture_mutations.py → 5/5 reddened · restored byte-identical
+  including "the-false-adr-claim-comes-back" — the original defect, replayed
+```
+
+**Still open and live:** under `synchronous=NORMAL` with WAL, a committed money transaction
+survives a process crash and **not a host failure**. That is F-2, unfixed, and the correction
+above makes it visible rather than resolved.
+
+### Durable per-owner connections, and the plane that holds a credential — 2026-08-10
+
+WS-02 §5 blocked this on "the three-plane database ADR". That ADR is now written and accepted —
+**ADR 0015** — and this is what it unblocked.
+
+**The decision that mattered** was not the plane split in general but *which plane holds a broker
+credential*, and the three honest readings disagree. By recovery cost it is user-plane or lower:
+lose it and the user re-authenticates, and Kite tokens expire every morning anyway. By
+confidentiality it is in a class of its own. By **blast radius** it is money — a row here is the
+authority to place real orders on a real account. Money won, with two practical supports: it
+keeps `ExecutionIntent.connection_scope` and its connection inside one plane (attribution stays
+a join rather than a hope), and "who changed this credential, and when" is an audit question that
+the money plane already answers with append-only history rather than with a backup.
+
+**Writing the plane check immediately falsified the ADR.** Rule 2 said "no foreign key crosses a
+plane boundary"; the schema already broke it **seven times**, all one shape — a money-plane
+deployment referencing the user-plane artefact it runs. Those relationships are correct; only
+their enforcement mechanism is the problem. So the rule became a **ratchet**: the seven are
+enumerated in `planes.py::GRANDFATHERED_CROSS_PLANE_FKS`, every new crossing fails the build, and
+that set is now the countable price of the physical split rather than something discovered
+mid-migration. The ADR records the correction rather than editing it away, because the sequence
+is the point — the rule came from reasoning, the check came from the rule, and the code was right
+about what exists.
+
+**What shipped.** Migration `0015` (head is now 0015, not the 0013 the rules file still claims)
+adds `broker_connections`: owner-scoped, capabilities stored per connection, revocable. No
+foreign keys in either direction — deliberately, because an intent must survive the deletion of
+the connection that authored it, and a live order whose connection row is gone is still a live
+order.
+
+* **`OwnedConnectionStore`** fixes the owner at construction. There is no method on it that can
+  return another owner's connection, because the alternative is a helper that "just needs the id"
+  and a caller who forgets. "Does not exist" and "belongs to someone else" are the **same error**;
+  distinguishing them confirms another owner's connection exists, and an integer id is guessable.
+* **`credential_vault`** is AES-256-GCM with the key from the environment, never a row — a
+  database file is rsynced by `deploy.sh`, backed up and copied between environments, so a
+  plaintext token in it *is* the account. AEAD rather than plain AES so a tampered ciphertext
+  fails rather than decrypting to something an attacker chose. No key is a **refusal**, not a
+  fallback to plaintext. Every ciphertext records which key wrote it, so a rotation can find its
+  unwrapped rows instead of discovering them one failed decrypt at a time at 09:15.
+* **`PT_EXECUTION_CONNECTION`** names a stored connection and outranks `PT_EXECUTION_PROVIDER`,
+  because a stored connection is an explicit act by an owner where the env var is a deployment
+  default. Naming one that does not exist, or that is revoked, **refuses** — falling back would
+  place real orders through a credential the operator did not choose, with every health check
+  green.
+* The credential is read **late, through its own short-lived session**, not from one closed over
+  at build time. The pool is 15 connections against a 40-thread worker pool and a `Connection`
+  outlives the request that built it — holding a pooled connection for the life of the process is
+  the shape behind the 2026-07-23 collapse.
+
+```
+pytest tests research_tests   → 3,990 passed · 0 failed · 6 skipped
+scripts/tenancy_mutations.py  → 14/14 reddened · restored byte-identical
+python -m app.db.migrate head → 0015
+```
+
+The sweep initially found **three unguarded behaviours**, none visible by reading the code: the
+late credential read's owner filter was unreachable by any test, an explicitly-empty owner id
+(`""`/`None` from a settings field or a principal) bypassed the legacy-owner default, and a
+missing stored connection silently fell back to the environment. All three are now covered.
+
+**Not done, and it is the honest boundary of "commercial access".** There is still no
+authentication: `principal.py` resolves one shared bearer token to one owner, and `owner_id`
+defaults to that same identity everywhere. What exists now is *resource ownership and isolation
+on the connection table* — the dimension, enforced and tested — not multi-user login, signup,
+entitlement tiers or billing. Those need the frontend the owner has gated (#7) and a decision at
+owner gate #6.
+
+### The broker fleet: a registry, split routing, and a third adapter — 2026-08-10
+
+The owner's correction reframed this workstream mid-session: **every major Indian broker is in
+scope for v1, not one second broker.** That changes what the valuable artefact is. With seven or
+more adapters the failure mode is not a bug in one of them — it is seven slightly different
+answers to the same question — so the registry and its contract matter more than any single
+adapter.
+
+**`app/providers/brokers.py`** is now the single answer to "which brokers does Strategy OS
+support", with one rule the rest of the system leans on: *a broker is SUPPORTED only if its
+adapter exists and passes the conformance contract.* Everything else is `PLANNED` and is refused
+at selection with a message naming what is missing. `tests/test_broker_registry.py` fails the
+build in **both** directions — a SUPPORTED broker whose adapter is missing, and a PLANNED broker
+that has quietly grown a working one. A registry is the most attractive possible home for this
+codebase's defining defect, and a row in it is a claim until a test makes it a fact.
+
+Registered: `kite` and `upstox` and `dhan` SUPPORTED; `angelone`, `fyers`, `fivepaisa`, `icici`,
+`kotak`, `groww` PLANNED with their documentation URLs located. `provider_named` now reads the
+registry instead of repeating it.
+
+**Split routing is proven, which was the actual gate.** `.claude/rules/providers-brokers.md`:
+*"A second data adapter does not prove split routing until a test selects market data from one
+connection and execution from another."* `tests/test_split_routing.py` sets `PT_PROVIDER=upstox`
+and `PT_EXECUTION_PROVIDER=kite` and lets the composition root resolve both roles itself —
+prices from Upstox, the order credential from Zerodha, the tick grid from the execution side
+(Upstox has no `tick_size` at all, so a tick source pointing at the data connection would be
+`None` and every trigger would fall back to the 0.05 grid that caused the 2026-07-15 incident).
+
+**Upstox** came back from the parked branch `58436bb`. Its docstring had honestly said the
+mixed-provider claim was not yet true; that seam now exists, so the docstring was corrected
+rather than left to ship as a lie. Restoring it required making `get_option_chain`/`option_ltp`
+**concrete with a `None` default** instead of abstract — a data-only adapter was previously
+impossible to *construct*, which contradicted this repo's own rule. That opened a hole in the
+same movement (a wrong base default is invisible to `check_no_undeclared_working_capability`,
+which skips inherited methods), closed by a new tier-1 obligation.
+
+**Dhan** is the third adapter and the one that proves the contract is not Kite-shaped. Written
+from https://dhanhq.co/docs/v2/ read at the time of writing, and it differs in four ways that
+each return a *plausible wrong answer* rather than an error:
+
+* the response is **columnar** — six parallel arrays, where the other two send rows. A
+  row-oriented parser does not raise; it reads floats out of the `open` array as candles.
+  Ragged columns are refused rather than zipped, because zipping fabricates candles from mixed
+  rows and nothing downstream could detect it;
+* intervals are integers and the set is **incomplete** — 1/5/15/25/60 only, so `3minute`,
+  `10minute` and `30minute` are genuinely unservable and are refused. A nearby substitute is
+  available here in a way it was not for Upstox, which makes the temptation worse;
+* `toDate` is **non-inclusive** on the daily endpoint — passing today's date drops the entire
+  current session from a completely successful-looking response;
+* **two credentials**, `access-token` and `client-id`, named separately in the failure because
+  they look identical from outside and have different fixes.
+
+Dhan also gets the instrument-master correction: **no hand-typed security ids.** A wrong id does
+not raise — it prices a different real company, forever, with every layer above reporting
+health, and the numbers are unverifiable by inspection. The master loads from Dhan's published
+scrip CSV, and an unloaded one resolves nothing, so the connection has no coverage rather than
+wrong coverage.
+
+```
+pytest tests/test_broker_registry.py tests/test_split_routing.py \
+       tests/test_provider_conformance.py tests/test_upstox_adapter.py \
+       tests/test_dhan_adapter.py                            → 90 passed
+conformance now runs SIX cases: mock · replay · kite · kite-MCX · upstox · dhan
+scripts/split_routing_mutations.py → 8/8 reddened · restored byte-identical
+```
+
+The sweep initially found **three unguarded behaviours** — an unmapped interval silently
+rounded, the intraday endpoint never read, and a base `option_ltp` inventing a price. None was
+visible by reading the code; all three are now covered.
+
+**Not done:** no second *execution* venue. Upstox and Dhan serve data and declare no execution
+capability, and `make_broker` refuses a non-Kite connection outright. That remains the wall, and
+it is now a bounded one.
+
+### The venue seam gets its first caller — 2026-08-10
+
+`ExecutionVenue` (`app/engine/venue.py`) and its Kite translation (`app/engine/kite_venue.py`)
+were declared in phase F and then **called by nothing**. `kite_venue.py`'s own docstring said so
+plainly — "deliberately NOT wired into the live path yet" — which makes it an honest instance of
+this codebase's defining defect rather than a hidden one, but an instance nonetheless: a boundary
+that no code crosses is a boundary that has never been shown to hold, and a second broker could
+not reach the engine through it.
+
+`LiveBroker`'s protective-stop family now goes through the seam. It asks for a
+`ProtectiveStopKind.RESTING_STOP` or a `SERVER_TRIGGER`; the venue decides that Kite spells those
+`SL-M` and `GTT`. Six Kite-only verbs left the broker: `place_stop_gtt`, `place_stop_order`,
+`modify_stop_gtt`, `modify_stop_order`, `delete_gtt`, `gtt_status`.
+
+Two decisions worth keeping:
+
+* **The venue is passed, not defaulted, at the composition root.** `broker_factory` builds
+  `KiteVenue(client)` and hands it over, so the one line that will choose between two venues is
+  in the place that already chooses between two connections. `LiveBroker` still defaults to
+  `KiteVenue` when none is given, which is what keeps several dozen existing tests holding fake
+  Kite clients working unchanged — the adapter is a pure delegator, so wrapping a fake changes
+  nothing the fake observes.
+* **The kind is carried, never inferred at the wire.** A resting SL-M is cancelled through the
+  order endpoint and a GTT through the GTT endpoint; sending either to the other's is rejected by
+  Kite. `test_each_cancel_carries_the_kind_that_picks_the_endpoint` fails if the two collapse.
+
+**Evidence.** `tests/test_live_broker_speaks_no_kite.py` (7 tests) asserts both directions: the
+six verbs are absent from the broker's executable lines (parsed by AST, not grepped — the log
+strings the operator reads on their phone still legitimately say "GTT" and "SL-M"), *and* the
+broker really dispatches to a recording venue while a client that raises on any Kite verb sits
+underneath it. A second test guards the guard: if `KiteOrderClient` renames a verb, the watched
+set silently stops watching and the file would pass forever.
+
+```
+suppression sweep (scripts/venue_seam_mutations.py) — each verb put back, one at a time:
+  RED  gtt-place-back-to-kite · slm-place-back-to-kite · gtt-cancel-back-to-kite
+  RED  slm-cancel-back-to-kite · fired-back-to-kite-probe · cancel-kind-collapsed
+  6/6 reddened · file RESTORED byte-identical
+pytest tests research_tests → 3,895 passed · 0 failed · 6 skipped
+scripts/dryrun.py 700       → RECONCILE 187,733.06 vs 187,733.06 · LEDGER OK
+scripts/backtest_smoke.py   → net<gross where charged OK · SWEEP OK
+```
+
+**Not done, and named so this is not misread as a finished boundary.** The entry pre-flight still
+reads raw `orders()` / `gtts()` inventory dumps off the client, and `exchange_for_segment` /
+`product_for_segment` still put Kite exchange and product strings straight into `OrderRequest` —
+so the broker still decides `MIS` rather than deciding `Tenor.INTRADAY`. That is the next slice
+and it is recorded in `kite_venue.py`'s docstring, not only here.
+
+Owner gate #2 — this changes the live protective-stop call path. Committed, **not deployed**.
+
+### The execution role enters the conformance contract — 2026-08-10
+
+`tests/provider_conformance.py` held every adapter to the market-data and account roles and to
+nothing about execution. The reason was structural: the execution capabilities are the only ones
+mapping to `None` in `capabilities._METHOD_FOR`, because `LIVE_EXECUTION` means "a live order
+client can be built from this connection", not "I place orders myself" — so the structural check
+could not falsify the declaration at all.
+
+Three obligations now do, and no order is placed to establish any of them (a conformance run
+that trades is one nobody dares execute):
+
+  * **declaration coherence, both directions.** Execution without an order type leaves
+    `plan_order` to assume Kite's answer at a venue that never agreed to it; an order type
+    without `LIVE_EXECUTION` reads as tradable everywhere a human looks and is refused at the
+    one place that decides, surfacing as "the bot silently stopped trading";
+  * **a credential exists.** A provider declaring `LIVE_EXECUTION` with no `access_token`
+    yields a `token_source` returning `None` forever — `make_broker` logs 🔴 LIVE EXECUTION
+    ENABLED and every order is rejected unauthenticated;
+  * **a real tick.** `ConformanceCase.non_default_tick` names an instrument whose tick is not
+    0.05, because only such a symbol distinguishes "reads the venue's tick" from "returns the
+    constant". That is the 2026-07-15 incident (2,437 SL-M placements rejected) as an adapter
+    obligation. **A case omitting the field is itself a violation** — otherwise a new adapter
+    drops the obligation by leaving a field blank.
+
+The `_FakeKite` NSE dump gained an `LT` row at 0.10; a dump of only 0.05 rows made the tick
+obligation unfailable. Evidence: four new liars in `_LIARS`, each caught by the clause it broke.
+Suppression sweep — unregistering the `LIVE_EXECUTION` obligation reddens exactly
+`liar-tokenless-executor` and `liar-blanket-tick`; unwiring the coherence check reddens exactly
+`liar-execution-no-order-type` and `liar-order-type-no-execution`; file restored byte-identical.
+
+### The execution connection seam — 2026-08-10 (phase 6, narrow)
+
+`make_broker` read the order credential off the *data provider*
+(`token = getattr(provider, "access_token", None)`), so "where do I read prices" and "whose
+account do I trade" were necessarily one object. `app/providers/connection.py` makes the
+execution role addressable on its own: a `Connection` carries broker, scope, declared
+capabilities and a **late-bound** `token_source` (a value would freeze the daily Kite
+re-login). `make_broker(provider, execution_connection=…)` accepts the two separately, and
+`connection_for(provider)` reproduces the legacy single-connection derivation, so the Kite path
+production runs is unchanged.
+
+Two consequences beyond the seam itself. **A named connection that cannot execute now refuses**
+(`ConnectionCannotExecute`) instead of returning a `PaperBroker` — the silent fall-back is
+indistinguishable from trading and is why the Upstox adapter was parked. An *unnamed* one keeps
+the historical fall-back, deliberately: mock and replay are not brokers and `PT_EXECUTION=live`
+against them has always meant paper. And **`ExecutionIntent.broker` / `.connection_scope` now
+carry the real connection** rather than the `"kite"` / `"kite:legacy"` constants every writer
+passed — the schema and the restart-recovery query had named the connection since migration
+`0014` while being fed one hardcoded value, the third shape of unconsumed mechanism.
+
+**The binding (same day, second slice).** A seam with no caller is this repo's defining defect,
+so the resolver landed with it. `PT_EXECUTION_PROVIDER` names the connection that places orders;
+empty — production's value — resolves to `None`, which *means* unnamed and takes the legacy path
+byte-for-byte. `configured_execution_connection()` runs at `EngineRunner.__init__`, the only
+place that knows both roles. Three decisions worth keeping:
+
+  * **a split connection gets its own scope** (`"<broker>:execution"`, never `kite:legacy`).
+    Sharing the legacy scope would have a second connection's live entries recovered under the
+    first connection's book after a restart — a silent cross-account mix;
+  * **`provider_named` reuses the process singleton** when the two names match. A second
+    `KiteProvider` would carry its own throttle (Kite's limits are per client, so two breach
+    1 req/s together) and would never hold the token the OAuth callback set on the singleton;
+  * **an unrecognised name refuses** (`UnknownProvider`) rather than defaulting to the mock.
+    `get_provider`'s fall-through is documented and warned about at startup; a typo in a *new*
+    setting silently routing real orders at a synthetic market is not.
+
+`make_broker` also now refuses an execution connection whose broker has no order client — only
+`kite` has one — instead of handing a foreign credential to a Kite endpoint. Over-declaring
+`LIVE_EXECUTION` is a documented adapter lie that `provider_conformance.py` exists to catch;
+this is the fail-closed answer if one gets past it.
+
+Evidence: `tests/test_execution_connection.py` (11), plus recovery and money-record guards in
+`tests/test_execution_lifecycle_recovery.py`. `scripts/connection_seam_mutations.py` proves
+**11/11** guards go red on their own defect and restores every file by hash.
+`pytest tests research_tests` → 3,883 passed, 1 failed (`test_shadow_deployment_engine.py::
+test_the_managed_binding_does_not_change_authoritative_selection`, a `QueuePool` exhaustion
+reproduced on unmodified HEAD in a clean worktree — not this slice), 6 skipped.
+`dryrun.py 700` → LEDGER OK; `backtest_smoke.py` → SWEEP OK.
+
+Explicitly **not** in this slice, with homes: account actors, leases and fencing (phase 7);
+`spot_symbol`/`option_name` relocation (R2); market-data fan-in (R3); credential encryption
+(phase 10); registering Upstox in the provider factory. Reasoning:
+[`../reference/2026-08-10-account-role-seam-review.md`](../reference/2026-08-10-account-role-seam-review.md).
+
 ### Configurable live-entry order policy — 2026-08-09
 
 Live **ENTRY** routing now has one closed operator setting: `AUTO`, `MARKET` or
@@ -869,6 +1321,60 @@ last clause first: **nothing in this workstream deploys without owner acknowledg
          has been repairing silently and nobody has ever seen the report.
       3. The retuned **150 / 0.7** give-back lock takes its first live session. It is running
          on a 22-trade sample. Watch it; do not retune off one day.
+- [x] **Hold connections durably, per owner. DONE 2026-08-10** — the blocking ADR is written
+      (ADR 0015, which places a credential in the money plane on blast radius) and
+      `broker_connections` exists behind migration 0015: owner-scoped, AES-256-GCM at rest with
+      the key in the environment rather than a row, revocable without a delete.
+      `PT_EXECUTION_CONNECTION` names one and it takes precedence over `PT_EXECUTION_PROVIDER`;
+      naming one that does not exist **refuses** rather than falling back, because the fallback
+      places real orders through a credential the operator did not choose. A second connection
+      is now a record.
+- [ ] **BLOCKER FOR THE SPLIT CONFIG: there is no way to authenticate a non-data connection.**
+      Found while fixing F4 of the 2026-08-10 execution review, and larger than F4 itself.
+      `routes.py:147,158` reach `_runner(request).provider` — the **data** provider — for both
+      `login_url` and `complete_session`. Under `PT_PROVIDER=upstox, PT_EXECUTION_PROVIDER=kite`
+      that is the Upstox object, so "Connect Kite" cannot reach the connection that actually
+      places the orders. The token-freshness fix makes the execution instance *adopt* a token
+      that something else writes; it does not give the operator a way to write one.
+      Closing this needs a per-connection auth route (`POST /api/connections/{id}/login`) and the
+      UI to drive it — which is **owner gate #7**, so the backend half can be built and the
+      frontend requirement written down, and no further.
+      Until then the split config is usable only for a same-day process start, and
+      `PT_EXECUTION_CONNECTION`/`PT_EXECUTION_PROVIDER` must not be set on the live box.
+- [ ] **BLOCKER FOR A SECOND OWNER: carry `owner_id` across the money plane.** Found by an
+      independent security review, 2026-08-10. `broker_connections` is the only money-plane
+      table with an owner. `deployments` and `execution_intents` have none, and
+      `execution_lifecycle.unresolved_entries` recovers live entries on
+      `(deployment_id, account_scope, connection_scope)` with **no owner in the predicate**.
+      Because `(owner_id, scope)` is unique rather than `scope` — deliberate and correct — two
+      owners may both hold `kite:legacy`, and that collision is exactly the "silent cross-account
+      mix" `providers/connection.py` calls the worst available failure. **Not reachable today**
+      (one owner, one deployment, no route creates a second) but the constraint that permits it
+      shipped before the query that must handle it. This is a prerequisite for onboarding any
+      second owner, ahead of authentication.
+- [ ] **A second execution venue — now the only wall left, and a bounded one.** The blocker
+      this item used to describe is gone: `live_broker.py` no longer imports Kite product or
+      exchange helpers, its protective stops go through `ExecutionVenue`, and
+      `tests/test_live_broker_speaks_no_kite.py` fails the build if the vocabulary returns
+      (2026-08-10, §4). What remains is genuinely adapter-shaped: implement `ExecutionVenue`
+      for one more broker, register it in `app/providers/brokers.py`, and replace
+      `make_broker`'s `conn.broker != "kite"` refusal with `brokers.venue_adapter(...)` — the
+      function already exists and already refuses correctly.
+      **Pick the broker by auth model, not by popularity.** Dhan is the cheapest first
+      execution venue in the registry because its token is long-lived: every other candidate
+      (`angelone`, `fivepaisa`, `kotak`) is TOTP-session, which makes the credential lifecycle
+      a second piece of work stacked on the venue itself.
+      Still-Kite-shaped above the seam, and this is now the whole list: `orders()` /
+      `find_fill()` / `status()` are neutral by name but go direct to the client, and the entry
+      pre-flight's raw dumps are routed but the *plain-order* family is not.
+- [ ] **Fill out the broker fleet.** `app/providers/brokers.py` carries six `PLANNED` rows —
+      `angelone`, `fyers`, `fivepaisa`, `icici`, `kotak`, `groww` — each with its documentation
+      URL located. Each is now a bounded task: a data adapter plus a conformance case, and the
+      registry test refuses to let a row claim `SUPPORTED` without both.
+      **Read the broker's published API at the time of writing; never write an adapter from
+      the shape of the previous one.** Dhan proved why — columnar payloads, an incomplete
+      interval set, a non-inclusive end date and two credentials, none of which resembles
+      Upstox and every one of which returns a plausible wrong answer rather than an error.
 - [ ] **Workstream C-P2 proper: walk-forward exit sweep, a BE-arming-threshold knob, finer
       `exit_reason` tags.** The MFE/MAE telemetry that blocked this now exists (E0.3) and the
       first sweep (`eafd7bc`) has been done, but on 22 replayable trades and without
