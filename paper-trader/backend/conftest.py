@@ -205,3 +205,62 @@ def give_futures_price_feed(monkeypatch):
                             raising=False)
 
     return _give
+
+
+@pytest.fixture(autouse=True)
+def close_broker_sessions_opened_by_this_test():
+    """Close every `EngineRunner`'s broker session at the end of the test that built it.
+
+    `PaperBroker` holds a SQLAlchemy session for its lifetime, and `EngineRunner.__init__`
+    builds one. A test that constructs a runner and walks away therefore leaks a pooled
+    connection, and the pool is `pool_size=5 + max_overflow=10` = **fifteen**. Nothing bounds
+    how many runners a file builds: `tests/test_shadow_deployment_engine.py` builds one per
+    test and four inside a single dict comprehension, so it crosses fifteen partway through
+    and the *next* checkout blocks for the pool timeout.
+
+    The failure that produces is the worst shape this suite has:
+
+        sqlalchemy/pool/impl.py:167: TimeoutError
+
+    — raised by whichever test happens to ask for connection sixteen. It is not that test's
+    defect, it passes in isolation, and it moves as the file grows. Measured 2026-08-11:
+    `test_the_managed_binding_does_not_change_authoritative_selection` failed inside the full
+    run and inside its own file, passed alone, and reproduced identically in a clean worktree
+    at `efc0b1f` — i.e. it had nothing to do with the slice that surfaced it, and it is
+    intermittent, so a single green run does not clear it.
+
+    Fixed here rather than at the call sites for the same reason the clock fixture above is:
+    the leak is the shape, not the site. Closing at the sites means every future test that
+    builds a runner has to remember, and this repo has now paid for that lesson three times
+    (`PaperBroker.close()` in fixtures, the shared provider clock, the cursor).
+
+    Tracks instances by wrapping construction rather than scanning `gc`: a `gc.get_objects()`
+    sweep would also collect runners a *previous* test deliberately kept alive, and closing
+    someone else's session mid-suite is the bug this fixture exists to prevent, not a fix
+    for it. Close failures are swallowed — a runner whose broker never opened a session, or
+    which a test already closed, must not turn teardown into an error and mask the real
+    result.
+    """
+    from app.engine.runner import EngineRunner
+
+    built: list = []
+    original = EngineRunner.__init__
+
+    def tracking_init(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        built.append(self)
+
+    EngineRunner.__init__ = tracking_init
+    try:
+        yield
+    finally:
+        EngineRunner.__init__ = original
+        for runner in built:
+            broker = getattr(runner, "broker", None)
+            close = getattr(broker, "close", None)
+            if close is None:
+                continue
+            try:
+                close()
+            except Exception:                       # noqa: BLE001 — see the docstring
+                pass

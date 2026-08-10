@@ -261,11 +261,19 @@ def test_a_managed_shadow_deployment_is_never_the_author_of_a_signal(monkeypatch
 def test_the_managed_binding_does_not_change_authoritative_selection(monkeypatch):
     """The comparison that makes this a shadow: the authoritative strategy chosen for each
     instrument is identical with the managed deployment active and absent."""
-    without = {k: EngineRunner()._binding_for(k).strategy_key
-               for k in sorted(EngineRunner().enabled)}
+    # ONE runner per side, not one per instrument. `EngineRunner()` inside the comprehension
+    # built a runner for every enabled instrument, and each holds a `PaperBroker` session for
+    # its lifetime — twenty-odd checkouts against a fifteen-connection pool, inside a single
+    # test, so the pool timed out mid-comprehension and the failure surfaced as
+    # `QueuePool limit of size 5 overflow 10 reached` rather than as anything about bindings.
+    # Two runners is also what the comparison actually means: the second is built AFTER
+    # `activate_binding()` because construction reads no database and the load happens when the
+    # lane starts (see `started`), so a runner cannot observe a binding created after it.
+    before = EngineRunner()
+    without = {k: before._binding_for(k).strategy_key for k in sorted(before.enabled)}
     activate_binding()
-    with_managed = {k: EngineRunner()._binding_for(k).strategy_key
-                    for k in sorted(EngineRunner().enabled)}
+    after = EngineRunner()
+    with_managed = {k: after._binding_for(k).strategy_key for k in sorted(after.enabled)}
     assert with_managed == without
 
 
