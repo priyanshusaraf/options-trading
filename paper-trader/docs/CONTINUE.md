@@ -32,10 +32,36 @@ retired:
 - Split routing is proven end to end in `tests/test_split_routing.py` — market data from Upstox,
   execution through Kite.
 
-**Not deployed, and no Kite contact.** Production is measured at `6bb7e97` (2026-08-02);
+**Tenancy, 2026-08-11 — what is and is not true.** Migration head is **`0017`**.
+
+- **Recording** whose each row is: done for the money plane. `owner_id` on ten tables
+  (`deployments`, `positions`, `trades`, `order_journal`, `equity_snapshots`, `signal_events`,
+  `execution_order_events`, and the three `ir_*` deployment tables), non-null,
+  `server_default='owner'`, indexed. Additive; no existing value rewritten.
+- **Enforcing** it: `is_allowed()` no longer ignores its `resource`. Two rules — the caller must
+  be an owner, and if the resource exposes an `owner_id` it must be this caller's. The check is
+  **structural, not a table list**, so a new owned table cannot opt out by being forgotten.
+- **NOT done, and this is the honest limit.** `capital_state` (`UNIQUE(book)`),
+  `instrument_state` (`PK(instrument_key)`) and `daily_account_snapshot` (`PK(day)`) each permit
+  exactly one row. They did **not** get a column, because one there would be non-null, indexed,
+  correct and unable to express two owners. **The system is therefore not multi-tenant on
+  capital state** — one book, one instrument config, one daily snapshot, globally. Making them
+  per-owner is a primary-key change: not additive, it rewrites row identity in the money record,
+  and it needs its own slice with its own restore path.
+  `tests/test_money_plane_ownership.py` fails the build if that exclusion is quietly undone, and
+  fails it if a NEW money table is added with no ownership decision at all.
+- The user and market planes have **no ownership dimension at all**.
+
+**Not deployed, and no Kite contact.** Production was measured at `6bb7e97` (2026-08-02) while
+writing `CURRENT_STATE_HANDOFF_2026-08-10.md`; a probe on 2026-08-11 returned nothing, so that
+figure is as-of the earlier measurement and not current. Measure before relying on it.
+
 `CURRENT_STATE_HANDOFF_2026-08-10.md` is the evidence-backed statement of what is and is not
-real on this branch, including what is still missing — the per-broker interactive login flow,
-`owner_id` on the remaining tables, and an `is_allowed()` that still ignores its `resource`.
+real on this branch. **Two of its findings were closed on 2026-08-11 and it has not been
+rewritten**: it says `owner_id` exists on two tables (now twelve) and that `is_allowed()` ignores
+its `resource` (it no longer does). Everything else in it stands, including the largest gap it
+names — the per-broker interactive login flow, which is what still separates "a connection can be
+created" from "a user can connect a broker".
 
 **Execution-first foundation update (2026-08-09):** the isolated
 `codex/execution-foundation` branch now contains migration `0014`, immutable live-entry intent
