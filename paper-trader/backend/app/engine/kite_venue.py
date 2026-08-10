@@ -246,3 +246,33 @@ class KiteVenue:
 
     def tick_size(self, tradingsymbol: str, exchange: str | None = None) -> float:
         return self.client.tick_size(tradingsymbol, exchange)
+
+
+def build_live_venue(connection, settings):
+    """Build Kite's live order client and venue from a connection. Registry-invoked.
+
+    Lives here, beside the dialect it constructs, rather than in `broker_factory`: the factory's
+    job is to decide *whether* a live path may exist, and this is *how* one particular broker's
+    is assembled. Keeping the two apart is what let `conn.broker != "kite"` leave the factory.
+
+    Returns `(client, venue)` because `LiveBroker` still needs the raw client for the plain-order
+    verbs it has not yet routed through the seam.
+    """
+    import os
+
+    from app.engine.kite_order_client import KiteOrderClient
+    from app.providers.live_kite import LiveExecutionKite
+
+    kite = LiveExecutionKite(
+        api_key=settings.kite_api_key or os.environ.get("KITE_API_KEY", ""))
+    # token_source keeps the client in lock-step with the connection: after a daily re-login the
+    # connection refreshes and the client picks it up on the next order, no restart. It is a
+    # source rather than a value for exactly that reason — and, since 2026-08-10, a source that
+    # RETURNS NOTHING is a refusal rather than a silently reused cached token.
+    #
+    # tick_source resolves each order's REAL exchange tick. LT/MARUTI-class symbols do not trade
+    # on the hardcoded 0.05 grid; assuming they do was the 2026-07-15 incident.
+    client = KiteOrderClient(kite, token_source=connection.token_source,
+                             market_protection=settings.market_protection_pct,
+                             tick_source=connection.tick_source)
+    return client, KiteVenue(client)

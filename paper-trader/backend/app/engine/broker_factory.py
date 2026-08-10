@@ -106,49 +106,28 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
         return PaperBroker(provider, **book)
 
     # Declaring LIVE_EXECUTION says "a live order client can be built from this
-    # connection". Exactly one such client exists — Kite's. Without this check the
-    # seam would hand a non-Kite connection's credential to `LiveExecutionKite`,
-    # which authenticates against Zerodha with a token Zerodha never issued: the
-    # order fails at the venue, or worse, succeeds on whichever account that key
-    # does belong to. Refusing here is what makes the second adapter's arrival a
-    # visible piece of work rather than a silent misroute. Phase 9 replaces this
-    # with a venue lookup; until then the constraint is stated rather than assumed.
-    if conn.broker != "kite":
-        raise ConnectionCannotExecute(
-            f"connection {conn.scope!r} declares {caps.LIVE_EXECUTION!r} but its broker "
-            f"{conn.broker!r} has no order client in this build — only 'kite' does. "
-            f"Refusing rather than sending its credential to a Kite endpoint."
-        )
-
-    from app.engine.kite_order_client import KiteOrderClient
-    from app.engine.live_broker import LiveBroker
-    from app.providers.live_kite import LiveExecutionKite
+    # connection". WHICH client is the registry's answer, not this function's: until
+    # 2026-08-10 this read `if conn.broker != "kite": raise`, and a hardcoded broker
+    # name in the one place that decides whether real orders go out is exactly what the
+    # registry exists to remove. The refusal is unchanged — a connection whose broker
+    # has no order client in this build is refused rather than having its credential
+    # sent to another broker's endpoint — it is now a lookup rather than a comparison.
+    from app.providers.brokers import BrokerNotSupported, build_live_venue
     s = get_settings()
-    kite = LiveExecutionKite(api_key=s.kite_api_key or os.environ.get("KITE_API_KEY", ""))
-    token = conn.token_source()
-    if token:
-        kite.set_access_token(token)
+    try:
+        client, venue = build_live_venue(conn, s)
+    except BrokerNotSupported as e:
+        raise ConnectionCannotExecute(str(e)) from e
+
+    from app.engine.live_broker import LiveBroker
     log.warn("🔴 LIVE EXECUTION ENABLED — the bot can place REAL orders on your "
              "account (still gated by ARM, daily-loss halt, routing, and the "
              "ownership guard).")
-    # token_source keeps the order client's token in lock-step with the execution
-    # connection's: after a daily re-login the connection refreshes its token, and the
-    # order client picks it up on the next order — no backend restart needed. It is a
-    # source rather than a value for exactly that reason.
-    # tick_source resolves each order's REAL exchange tick from the connection's
-    # Kite instrument dump (LT/MARUTI-class symbols don't trade on the
-    # hardcoded 0.05 grid — the 2026-07-15 incident). Falls back to 0.05
-    # inside KiteOrderClient if the connection has no such method.
-    client = KiteOrderClient(kite, token_source=conn.token_source,
-                             market_protection=s.market_protection_pct,
-                             tick_source=conn.tick_source)
-    # The venue is passed rather than defaulted so the composition root, not the
-    # broker, decides which dialect the wire speaks. When a second venue exists this
-    # is the one line that chooses between them — the broker above it never learns.
-    from app.engine.kite_venue import KiteVenue
+    # The venue is passed rather than defaulted so the composition root, not the broker,
+    # decides which dialect the wire speaks.
     broker = LiveBroker(provider, client, notifier=notifier,
                         poll_seconds=s.order_poll_seconds,
                         timeout_seconds=s.order_timeout_seconds,
-                        connection=conn, venue=KiteVenue(client), **book)
+                        connection=conn, venue=venue, **book)
     _refuse_live_broker_under_pytest(broker)
     return broker

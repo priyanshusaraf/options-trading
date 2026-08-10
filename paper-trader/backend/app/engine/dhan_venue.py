@@ -237,3 +237,26 @@ class DhanVenue:
 
     def tick_size(self, tradingsymbol: str, exchange: str | None = None) -> float:
         return self.client.tick_size(tradingsymbol, exchange)
+
+
+def build_live_venue(connection, settings):
+    """Build Dhan's live order client and venue from a connection. Registry-invoked.
+
+    Two credentials, not one. `client-id` is a header on every request AND `dhanClientId` in the
+    body of every order, and a token without it authenticates nothing — so it is read from the
+    connection's bundle rather than assumed, and its absence is a refusal at the transport with
+    a message naming the field rather than a generic auth failure.
+
+    `tick_source` comes from the connection for the same reason it does for Kite: an unsnapped
+    trigger is rejected outright and the position runs with no exchange-side stop.
+    """
+    from app.engine.dhan_order_client import DhanOrderClient
+    from app.providers.dhan_transport import DhanTransport
+
+    def client_id_source():
+        return (connection.secrets_source() or {}).get("client_id")
+
+    transport = DhanTransport(connection.token_source, client_id_source)
+    client = DhanOrderClient(transport, client_id_source,
+                             tick_source=connection.tick_source)
+    return client, DhanVenue(client)

@@ -296,3 +296,55 @@ def test_modify_is_a_put_and_cancel_is_a_delete():
     assert t.calls[-1][0] == "PUT" and t.calls[-1][1] == "/orders/DH-1"
     v.cancel_protective_stop(ProtectiveStopKind.RESTING_STOP, "DH-1")
     assert t.calls[-1][0] == "DELETE" and t.calls[-1][1] == "/orders/DH-1"
+
+
+# ── the registry can now BUILD a Dhan live path ───────────────────────────
+
+def test_the_registry_builds_a_dhan_venue_from_a_connection():
+    """`make_broker` no longer names a broker. It asks the registry to build the live path, so
+    adding a broker is a registry row plus a builder rather than an edit to the one function
+    that decides whether real orders go out."""
+    from app.core.config import get_settings
+    from app.providers.brokers import build_live_venue
+    from app.providers.connection import Connection
+
+    conn = Connection(broker="dhan", scope="dhan:main",
+                      capabilities=frozenset({"live_execution", "market_orders"}),
+                      token_source=lambda: "TOK",
+                      secrets_source=lambda: {"access_token": "TOK", "client_id": "1000000001"})
+    client, venue = build_live_venue(conn, get_settings())
+    assert isinstance(venue, DhanVenue)
+    assert client is venue.client
+
+
+def test_the_dhan_builder_reads_the_client_id_from_the_bundle_not_the_token():
+    """Dhan needs `client-id` on every request AND `dhanClientId` in every order body. A token
+    without it authenticates nothing, so it comes from the credential bundle rather than being
+    assumed — and its absence is refused at the transport, naming the field."""
+    from app.core.config import get_settings
+    from app.providers.base import ProviderReadError
+    from app.providers.brokers import build_live_venue
+    from app.providers.connection import Connection
+
+    conn = Connection(broker="dhan", scope="dhan:main",
+                      capabilities=frozenset({"live_execution"}),
+                      token_source=lambda: "TOK",
+                      secrets_source=lambda: {"access_token": "TOK"})   # no client_id
+    client, _ = build_live_venue(conn, get_settings())
+    with pytest.raises(ProviderReadError) as e:
+        client.transport.post("/orders", {}, allow_list=True)
+    assert "client id" in str(e.value)
+
+
+def test_a_broker_with_no_builder_is_refused_by_the_registry():
+    """The refusal that replaced `conn.broker != "kite"`. Same guarantee, now a lookup."""
+    from app.core.config import get_settings
+    from app.providers.brokers import BrokerNotSupported, build_live_venue
+    from app.providers.connection import Connection
+
+    conn = Connection(broker="upstox", scope="upstox:x",
+                      capabilities=frozenset({"live_execution"}),
+                      token_source=lambda: "TOK")
+    with pytest.raises(BrokerNotSupported) as e:
+        build_live_venue(conn, get_settings())
+    assert "no order client" in str(e.value)

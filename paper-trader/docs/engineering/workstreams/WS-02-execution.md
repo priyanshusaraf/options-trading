@@ -1352,7 +1352,18 @@ last clause first: **nothing in this workstream deploys without owner acknowledg
       (one owner, one deployment, no route creates a second) but the constraint that permits it
       shipped before the query that must handle it. This is a prerequisite for onboarding any
       second owner, ahead of authentication.
-- [ ] **A second execution venue — now the only wall left, and a bounded one.** The blocker
+- [x] **A second execution venue. DONE 2026-08-10.** `make_broker` no longer names a broker:
+      `conn.broker != "kite"` became `brokers.build_live_venue(conn, settings)`, so the registry
+      answers *which* client a connection gets and the composition root only decides *whether* a
+      live path may exist. The refusal is unchanged — a broker with no order client in this build
+      is refused rather than having its credential sent to another broker's endpoint — it is a
+      lookup rather than a hardcoded string. `Connection` gained `secrets_source` for brokers
+      needing more than an access token (Dhan requires `client_id` on every request and in every
+      order body); it is deliberately separate from `token_source` so the full bundle is not put
+      in front of the many callers that want exactly the token.
+      **Dhan cannot serve an options deployment** — no GTT equivalent, so `DhanVenue` declares
+      RESTING_STOP only and refuses SERVER_TRIGGER on every verb rather than substituting.
+- [ ] **The remaining wall is smaller: the plain-order verbs.** The blocker
       this item used to describe is gone: `live_broker.py` no longer imports Kite product or
       exchange helpers, its protective stops go through `ExecutionVenue`, and
       `tests/test_live_broker_speaks_no_kite.py` fails the build if the vocabulary returns

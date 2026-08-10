@@ -83,6 +83,12 @@ class Connection:
     capabilities: frozenset[str] = field(default_factory=frozenset)
     token_source: Callable[[], str | None] = lambda: None
     tick_source: Callable[..., float] | None = None
+    #: The whole credential bundle, for brokers that need more than an access token. Dhan
+    #: requires `client_id` alongside the token; a TOTP-session broker stores a seed. Kept
+    #: separate from `token_source` rather than replacing it, because every existing caller
+    #: wants exactly the token and widening that signature would put the full bundle in front
+    #: of code that has no business holding it. Consumed only by the per-broker venue builders.
+    secrets_source: Callable[[], dict] = lambda: {}
 
     def __post_init__(self) -> None:
         caps.validate(frozenset(self.capabilities))

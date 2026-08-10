@@ -251,11 +251,32 @@ class OwnedConnectionStore:
                           event="CONNECTION_VAULT_UNAVAILABLE")
                 return None
 
+        def secrets_source() -> dict:
+            """The whole decrypted bundle, read late for the same reasons the token is.
+
+            Returns `{}` on any failure rather than raising: this runs on the order path, and a
+            builder that gets an empty bundle refuses at its own credential check with a message
+            naming the missing field, which is more useful than a decrypt traceback.
+            """
+            try:
+                with make_session() as s:
+                    fresh = s.query(BrokerConnection).filter(
+                        BrokerConnection.id == cid,
+                        BrokerConnection.owner_id == owner_id,
+                        BrokerConnection.status == "active").one_or_none()
+                    ciphertext = fresh.credential_ciphertext if fresh is not None else None
+                return unseal(ciphertext) if ciphertext else {}
+            except Exception as e:                  # noqa: BLE001
+                log.error(f"connection {cid}: credential bundle read failed: {e}",
+                          event="CONNECTION_CREDENTIAL_READ_FAIL")
+                return {}
+
         return Connection(
             broker=row.broker,
             scope=row.scope,
             capabilities=caps.validate(frozenset(json.loads(row.capabilities_json or "[]"))),
             token_source=token_source,
+            secrets_source=secrets_source,
         )
 
 

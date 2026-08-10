@@ -86,7 +86,21 @@ class BrokerSpec:
     in this build. Data and execution are separate roles and a broker may serve either alone —
     that is the whole point of the connection seam."""
 
+    venue_builder: str | None = None
+    """`"module:function"` taking `(connection, settings)` and returning `(client, venue)`.
+
+    The registry owns this rather than `broker_factory` because the *construction* of a live
+    order path is broker-specific in a way the venue interface deliberately is not: Kite needs a
+    `LiveExecutionKite` seeded with an api key, Dhan needs a transport carrying two credentials.
+    Leaving that in the composition root is what kept `conn.broker != "kite"` there as a
+    hardcoded string, and a hardcoded broker name in the one place that decides whether real
+    orders go out is exactly the thing the registry exists to remove.
+    """
+
     notes: str = ""
+
+    def load_builder(self):
+        return _load(self.venue_builder, self.key, "venue builder")
 
     def load_data(self):
         return _load(self.data, self.key, "data")
@@ -131,6 +145,7 @@ BROKERS: tuple[BrokerSpec, ...] = (
         auth=Auth.DAILY_OAUTH, docs_url="https://kite.trade/docs/connect/v3/",
         data="app.providers.kite:KiteProvider",
         venue="app.engine.kite_venue:KiteVenue",
+        venue_builder="app.engine.kite_venue:build_live_venue",
         notes="The reference implementation and the only broker this build has ever placed a "
               "real order through. Its vocabulary (MIS/NRML/GTT/SL-M) is confined to kite_venue.",
     ),
@@ -158,7 +173,8 @@ BROKERS: tuple[BrokerSpec, ...] = (
         key="dhan", display_name="Dhan", status=Status.SUPPORTED,
         auth=Auth.LONG_LIVED_KEY, docs_url="https://dhanhq.co/docs/v2/",
         data="app.providers.dhan:DhanProvider",
-        venue=None,
+        venue="app.engine.dhan_venue:DhanVenue",
+        venue_builder="app.engine.dhan_venue:build_live_venue",
         notes="Data only IN THIS BUILD. Long-lived token, so no daily re-login — the first "
               "broker whose connection lifecycle differs from Kite's, which is why Auth is on "
               "the spec. Two credentials (access-token AND client-id). Its interval coverage is "
@@ -222,13 +238,26 @@ def data_adapter(key: str):
     return cls
 
 
-def venue_adapter(key: str):
-    """The `ExecutionVenue` CLASS for `key`. Refuses a broker that cannot place orders.
+def build_live_venue(connection, settings):
+    """Construct the live order client and venue for `connection`'s broker.
 
-    This is what `make_broker`'s Kite-only guard becomes when the second execution venue lands:
-    a lookup with a refusal, instead of a hardcoded comparison. Until then the guard states the
-    same constraint in the same place, and this function is the shape it will take.
+    This replaced `make_broker`'s `if conn.broker != "kite": raise`. The refusal it raises is the
+    same one, and it is still the thing standing between a foreign credential and a Kite
+    endpoint — but it is now a LOOKUP, so adding a broker is a registry row plus a builder
+    rather than an edit to the function that decides whether real orders go out.
     """
+    s = spec(getattr(connection, "broker", ""))
+    builder = s.load_builder()
+    if builder is None:
+        raise BrokerNotSupported(
+            f"broker {s.key!r} ({s.display_name}) declares live execution but has no order "
+            f"client in this build. Refusing rather than sending its credential to another "
+            f"broker's endpoint.")
+    return builder(connection, settings)
+
+
+def venue_adapter(key: str):
+    """The `ExecutionVenue` CLASS for `key`. Refuses a broker that cannot place orders."""
     s = spec(key)
     cls = s.load_venue()
     if cls is None:

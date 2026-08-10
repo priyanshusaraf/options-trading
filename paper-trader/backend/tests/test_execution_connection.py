@@ -239,21 +239,34 @@ def test_an_unknown_execution_provider_refuses_instead_of_defaulting_to_the_mock
     assert "zeroda" in str(err.value)
 
 
-def test_a_broker_with_no_order_client_refuses_even_when_it_declares_execution(monkeypatch):
-    """Over-declaration is a documented adapter lie (`tests/provider_conformance.py`).
-    If one reaches the live branch, the credential must not be handed to Kite's endpoint."""
+@pytest.mark.parametrize("broker", ["upstox", "angelone", "zeroda"])
+def test_a_broker_with_no_order_client_refuses_even_when_it_declares_execution(broker,
+                                                                              monkeypatch):
+    """Over-declaration is a documented adapter lie (`tests/provider_conformance.py`). If one
+    reaches the live branch, the credential must not be handed to another broker's endpoint.
+
+    Three shapes, because they fail at different points and all three must refuse:
+      * `upstox` — a SUPPORTED broker with a data adapter and no venue builder;
+      * `angelone` — a PLANNED broker with no adapter at all;
+      * `zeroda`  — not a broker; the typo that matters.
+
+    **This test used to name `dhan`.** Dhan acquired a real `ExecutionVenue` and builder, so it
+    is no longer an example of a broker that cannot execute — and the pytest live-broker guard
+    caught that by refusing to hand back a real `LiveBroker`, which is the guard working rather
+    than a test to loosen.
+    """
     _open_the_live_gate(monkeypatch)
     init_db(reset=True)
 
-    dhan = Connection(
-        broker="dhan", scope="dhan:execution",
+    conn = Connection(
+        broker=broker, scope=f"{broker}:execution",
         capabilities=frozenset({caps.LIVE_EXECUTION, caps.MARKET_ORDERS}),
-        token_source=lambda: "DHAN_TOKEN",
+        token_source=lambda: "SOME_TOKEN",
     )
 
     with pytest.raises(ConnectionCannotExecute) as err:
-        make_broker(_kite_shaped_provider("tok"), execution_connection=dhan)
-    assert "dhan" in str(err.value)
+        make_broker(_kite_shaped_provider("tok"), execution_connection=conn)
+    assert broker in str(err.value)
 
 
 # ── F4 from the execution-safety review, 2026-08-10 ───────────────────────
