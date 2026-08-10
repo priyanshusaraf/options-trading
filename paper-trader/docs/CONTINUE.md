@@ -386,16 +386,49 @@ and neither closed:
   multiprocess fan-out. Peak allocation is 2.10 MB/dataset, so the sweep must stream rather than
   accumulate — 50,000 held at once would be ~105 GB.
 
-**Task 3 is DONE (`e985d77`)** — `app/backtest/dataset_store.py`, filesystem blobs, own SQLite
-index, no migration. Measured **38 bytes/bar** (≈10 GB at the full tier; the mock's 22 flatters,
-do not plan against it). The sweep **writes only** — there is deliberately no read path, which is
-what makes "a normal refresh still costs its reads" hold by construction.
+**All seven tasks of the scalable-backtest-sweep plan are CLOSED.** Shared acquisition,
+shared frame/signal preparation, the content-addressed dataset store, the pinned warm path,
+batch persistence, multiprocess fan-out, and the tiered benchmark.
 
-**Task 4 is the next task**: the pinned warm path, where the store's zero-fetch payoff is
-actually collected. Its whole risk is in one sentence of the design — a pinned run that cannot
-find or verify a dataset must **fail closed**, never silently fall back to fetching, because that
-turns a pinned run into a refresh wearing a pin's name. Then Task 5 (batch persistence), Task 6
-(measured multiprocess fan-out), Task 7 (tiered benchmark).
+**Measured, not projected** (hardening record §10, §12, §13, §14):
+
+| | |
+|---|---|
+| Per cell, 5,000 bars | **80.3 ms** p50 (was 185.7 before `5ba1233`) |
+| SQLite writes | 16,000 rows in 2.64 s; 50,000 in 9.69 s — **not a ceiling** |
+| Fan-out | **2.89× at 4 workers, 3.19× at 8** (was 2.08×, and 8 used to be *slower* than 4) |
+| Parent active work | ~52 → **~2.0 ms/cell**; 94% of parent wall is now waiting on workers |
+| 10,000 × 5 cold | 4,016 s compute + 20,000 s I/O floor = **6.67 h**, 9.5 GB store |
+
+**The owner's 90% warm-iteration target is NOT met and must not be described as met.** The NSE
+16,000-cell warm pass is **~10 min** on 8 workers, against ~17 before. The parent is no longer
+the bottleneck — the machine is. This box reaches 3.78× on pure-CPU fan-out and the pinned sweep
+now reaches 2.89×, so **the next honest lever is per-cell compute, not more workers.** The sized
+candidate is in the full-universe design note §6: share `to_dict` and `ist_epoch` across the two
+simulators (~30%, same shape as Tasks 1–2), then Numba, then a compiled kernel — each gated on
+bit-identity against the Python reference.
+
+**Next work is NOT in the sweep plan.** Read
+[`superpowers/specs/2026-08-10-full-universe-backtest-design.md`](superpowers/specs/2026-08-10-full-universe-backtest-design.md)
+§6 and §7. The cold run is 83% provider I/O and its three attacks are the shared store
+(user #2 onward starts warm), parallel data connections (the first hard commercial argument for
+Upstox), and bulk endpoints — **none of them a language**. ADR 0014 settles Postgres: defer, the
+trigger is topology or contention, and the write-throughput question is measured and closed.
+
+### Open, and deliberately not taken
+
+- **F-08 — DSR breadth deflation is computed but does not select.** Needs a statistical audit to
+  define the trial family before it is admission-grade. Given `var_sr` silently not engaging for
+  months, changing what promotes a strategy is an owner decision.
+- **Store provenance.** The store proves self-consistency, not authenticity — a blob and manifest
+  edited *together* and re-addressed is served as genuine.
+- **A pinned result is not structurally marked as pinned.** No dataset-address column on
+  `BacktestResult`, so nothing downstream distinguishes it from a live-fetched one.
+- **Settings do not cross the process boundary.** A worker cannot see an in-process settings
+  mutation. Closed today because the compute path reads exactly one setting and the sweep passes
+  it explicitly — verified by grep — but adding one `get_settings()` call inside `simulate` would
+  make serial and parallel diverge silently, and no test would catch it.
+- **`_ratchet_atr`/`_ratchet_high` still ship to every browser** (the delta-protocol slice).
 
 ### Defects and traps found on 2026-08-09, worth not rediscovering
 
