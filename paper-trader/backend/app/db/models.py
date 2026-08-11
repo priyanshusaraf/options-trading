@@ -272,12 +272,9 @@ class ExecutionIntent(Base):
     #: may adopt. Defaulted to `LEGACY_OWNER_ID` rather than NULL for the same reason
     #: `broker_connections.owner_id` is: on a row that records a real order, "belongs to the
     #: original owner" and "we lost track of whose this is" must never look the same.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     broker: Mapped[str] = mapped_column(String(32), nullable=False)
     account_scope: Mapped[str] = mapped_column(String(64), nullable=False)
     connection_scope: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -314,12 +311,9 @@ class ExecutionOrderEvent(Base):
         Index("ix_execution_order_events_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_intent_id: Mapped[str] = mapped_column(
@@ -411,12 +405,9 @@ class Position(Base):
         Index("ix_positions_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -587,12 +578,9 @@ class Trade(Base):
         Index("ix_trades_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -715,12 +703,9 @@ class EquitySnapshot(Base):
         Index("ix_equity_snapshots_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -1009,12 +994,9 @@ class SignalEvent(Base):
         Index("ix_signal_events_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -1466,12 +1448,9 @@ class OrderJournal(Base):
         Index("ix_order_journal_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # Which deployment executed this. server_default="1" is load-bearing: every
     # row written before Phase B belongs to the legacy book, and any insert path
     # that has not been taught about deployments still lands there instead of
@@ -1535,18 +1514,14 @@ class IrShadowDivergence(Base):
         # prints, so one bar would otherwise arrive dozens of times. One (instrument, bar,
         # graph, reason) is one row; `reason` is in the key because a bar that later fails
         # a *different* way is a different fact worth keeping.
-        Index("uq_ir_shadow_divergence_bar", "instrument_key", "bar_time",
-              "graph_address", "reason", unique=True),
+        Index("uq_ir_shadow_divergence_bar", "owner_id", "broker_account_id", "instrument_key", "bar_time", "graph_address", "reason", unique=True),
         Index("ix_ir_shadow_divergences_observed", "observed_at"),
         Index("ix_ir_shadow_divergences_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, index=True)
@@ -1643,12 +1618,9 @@ class IrPaperDeployment(Base):
         CheckConstraint("revision >= 0", name="ck_ir_paper_deployment_revision"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -1791,12 +1763,9 @@ class IrShadowDeployment(Base):
         CheckConstraint("revision >= 0", name="ck_ir_shadow_deployment_revision"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     #: Which project owns the logic. Not derivable from the graph identifier.
@@ -1915,12 +1884,9 @@ class BrokerConnection(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     #: The broker registry key (`app/providers/brokers.py`). An identifier, not a label.
     broker: Mapped[str] = mapped_column(String(32), nullable=False)
     #: What `ExecutionIntent.connection_scope` carries. See the class docstring.

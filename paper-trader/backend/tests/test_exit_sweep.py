@@ -11,7 +11,24 @@ would have touched BOTH a candidate stop and a candidate target we cannot know w
 first. That ambiguity is reported as a band, never silently resolved. A sweep that hides it
 would manufacture confidence and re-run exactly the mistake it exists to fix.
 """
+import sqlite3
+
+import pytest
+
 from app.backtest.exit_sweep import ExitParams, ReplayTrade, replay, sweep
+from scripts.exit_sweep import _rows_from_db
+
+
+def test_db_sweep_requires_an_explicit_owner_and_broker_account_scope(tmp_path):
+    db = tmp_path / "trades.db"
+    con = sqlite3.connect(db)
+    try:
+        con.execute("CREATE TABLE trades (exit_time TEXT)")
+        con.commit()
+    finally:
+        con.close()
+    with pytest.raises(ValueError, match="owner.*broker account"):
+        _rows_from_db(str(db), None, None, owner_id=None, broker_account_id=None)
 
 
 def _t(**over):

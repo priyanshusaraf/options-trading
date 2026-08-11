@@ -14,6 +14,14 @@ from app.engine.execution_lifecycle import (
     ExecutionLifecycleStore as _ExecutionLifecycleStore,
     NewExecutionEvent, NewExecutionIntent)
 from app.engine.live_broker import LiveBroker
+import inspect
+import app.engine.live_broker as live_broker_module
+
+
+def test_protection_intent_lookup_is_not_an_unscoped_primary_key_read():
+    """An intent id received in a protection path must be checked against this broker's book."""
+    assert ".get(ExecutionIntent, client_intent_id)" not in inspect.getsource(
+        live_broker_module.LiveBroker)
 from app.engine.kite_order_client import PreWireProtectionRejected
 from app.providers import capabilities as caps
 from app.providers.connection import Connection
@@ -494,6 +502,7 @@ def test_restart_journal_without_order_id_uses_existing_lifecycle_ack():
         )
         journal_context = dict(context, client_intent_id=intent_id)
         session.add(OrderJournal(
+            owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
             deployment_id=1, order_id=None, tradingsymbol=quote.tradingsymbol,
             instrument_key=inst.key, side="BUY", kind="options", intent="ENTRY",
             qty=quote.lot_size, context_json=__import__("json").dumps(journal_context),
@@ -523,6 +532,7 @@ def test_legacy_working_entry_without_intent_still_adopts():
     inst, quote, context = _option_context(provider)
     with SessionLocal() as session:
         session.add(OrderJournal(
+            owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
             deployment_id=1, order_id="OID-LEGACY", tradingsymbol=quote.tradingsymbol,
             instrument_key=inst.key, side="BUY", kind="options", intent="ENTRY",
             qty=quote.lot_size, context_json=__import__("json").dumps(context),
@@ -871,15 +881,16 @@ def test_invalid_protection_submit_metadata_fails_closed(payload):
     with SessionLocal() as session:
         session.execute(text("""
             INSERT INTO execution_order_events (
-                client_intent_id, source, source_event_id, kind,
+                client_intent_id, owner_id, broker_account_id, source, source_event_id, kind,
                 broker_order_id, broker_status, cumulative_filled_qty,
                 avg_price, observed_at, payload_json, anomaly
             ) VALUES (
-                :intent_id, 'engine', 'protection-submit:legacy-corrupt',
+                :intent_id, :owner_id, :broker_account_id, 'engine', 'protection-submit:legacy-corrupt',
                 'PROTECTION_SUBMIT_STARTED', NULL, '', 0, 0.0,
                 :observed_at, :payload, ''
             )
-        """), {"intent_id": pos.entry_intent_id, "observed_at": NOW,
+        """), {"intent_id": pos.entry_intent_id, "owner_id": LEGACY_OWNER_ID,
+               "broker_account_id": LEGACY_BROKER_ACCOUNT_ID, "observed_at": NOW,
                 "payload": payload})
         session.commit()
 

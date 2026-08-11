@@ -116,6 +116,9 @@ def _restore_inline_entry_fk(table: str) -> None:
 
 
 def _upgrade_deployments() -> None:
+    columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("deployments")}
+    if "broker_account_id" in columns and "account_id" not in columns:
+        return
     op.execute(sa.text(
         "UPDATE deployments SET account_id='account.default' WHERE account_id='default'"))
     op.execute(sa.text("""
@@ -155,6 +158,14 @@ def _upgrade_deployments() -> None:
     op.create_index("ix_deployments_owner_id", "deployments", ["owner_id"])
     op.create_index("ix_deployments_owner_account", "deployments",
                     ["owner_id", "broker_account_id"])
+
+
+def _remove_legacy_scope_defaults() -> None:
+    """Backfill defaults belong to the upgrade, never to future application writes."""
+    for table in ACCOUNT_TABLES:
+        with op.batch_alter_table(table, recreate="always") as batch:
+            batch.alter_column("broker_account_id", server_default=None)
+            batch.alter_column("owner_id", server_default=None)
 
 
 def _downgrade_deployments() -> None:
@@ -197,6 +208,8 @@ def upgrade() -> None:
     try:
         _upgrade_deployments()
         for table in ACCOUNT_TABLES:
+            if "broker_account_id" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}:
+                continue
             reflect_args = ()
             if table in ("positions", "trades"):
                 reflect_args = (sa.Column(
@@ -218,6 +231,10 @@ def upgrade() -> None:
                     batch.create_unique_constraint(
                         "uq_broker_connection_owner_account_scope",
                         ["owner_id", "broker_account_id", "scope"])
+                if table == "ir_shadow_divergences":
+                    batch.drop_index("uq_ir_shadow_divergence_bar")
+                    batch.create_index("uq_ir_shadow_divergence_bar", ["owner_id", "broker_account_id", "instrument_key", "bar_time", "graph_address", "reason"], unique=True)
+        _remove_legacy_scope_defaults()
         _recreate_event_guards()
     finally:
         _foreign_keys(True)
@@ -274,6 +291,12 @@ def downgrade() -> None:
                         "uq_broker_connection_owner_account_scope", type_="unique")
                     batch.create_unique_constraint(
                         "uq_broker_connection_owner_scope", ["owner_id", "scope"])
+                if table == "ir_shadow_divergences":
+                    batch.drop_index("uq_ir_shadow_divergence_bar")
+                    batch.create_index(
+                        "uq_ir_shadow_divergence_bar",
+                        ["instrument_key", "bar_time", "graph_address", "reason"],
+                        unique=True)
                 batch.drop_index(_account_index(table))
                 batch.drop_constraint(_account_fk(table), type_="foreignkey")
                 batch.drop_column("broker_account_id")

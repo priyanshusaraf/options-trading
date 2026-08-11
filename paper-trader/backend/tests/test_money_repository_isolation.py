@@ -10,6 +10,7 @@ import datetime as dt
 
 import pytest
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core import deployments
 from app.db.models import (
@@ -35,6 +36,7 @@ from app.engine.execution_lifecycle import (
     NewExecutionEvent,
     NewExecutionIntent,
 )
+from app.engine.runner import EngineRunner
 
 
 OWNER_A = "org-a"
@@ -74,6 +76,22 @@ ACCOUNT_MONEY_MODELS = (
     IrShadowDeployment,
     IrShadowDivergence,
 )
+
+
+@pytest.mark.parametrize("model", ACCOUNT_MONEY_MODELS)
+def test_new_account_money_rows_require_explicit_tenant_scope(model):
+    """Only the migration may backfill legacy scope; ordinary ORM writes must supply it."""
+    table = model.__table__
+    for name in ("owner_id", "broker_account_id"):
+        column = table.c[name]
+        assert column.default is None, f"{table.name}.{name} still has a Python legacy default"
+        assert column.server_default is None, f"{table.name}.{name} still has a server legacy default"
+
+    with SessionLocal() as session:
+        values = {"client_intent_id": "unscoped-intent"} if model is ExecutionIntent else {}
+        session.add(model(**values))
+        with pytest.raises(IntegrityError):
+            session.flush()
 
 
 @pytest.mark.parametrize("model", ACCOUNT_MONEY_MODELS)
@@ -247,3 +265,34 @@ def test_model_metadata_uses_tenant_local_deployment_name_uniqueness():
     assert ("name",) not in uniques
     assert Deployment.__table__.c.broker_account_id.nullable is False
     assert "account_id" not in Deployment.__table__.c
+
+
+def test_shadow_divergence_identity_is_local_to_an_owner_and_account():
+    """The same observed bar is evidence for each book, never a global collision."""
+    with SessionLocal() as session:
+        session.add_all([
+            IrShadowDivergence(owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
+                observed_at=NOW, bar_time=NOW, instrument_key="RELIANCE",
+                authoritative_strategy_key="a", shadow_strategy_key="shadow",
+                graph_address="sha256:a", reason="MISMATCH"),
+            IrShadowDivergence(owner_id=OWNER_B, broker_account_id=ACCOUNT_B,
+                observed_at=NOW, bar_time=NOW, instrument_key="RELIANCE",
+                authoritative_strategy_key="a", shadow_strategy_key="shadow",
+                graph_address="sha256:a", reason="MISMATCH"),
+        ])
+        session.commit()
+        assert session.query(IrShadowDivergence).count() == 2
+
+
+def test_runner_today_trade_count_excludes_the_other_account():
+    with SessionLocal() as session:
+        dep_a = deployments.create_deployment(session, "count-a", owner_id=OWNER_A,
+                                               broker_account_id=ACCOUNT_A)
+        dep_b = deployments.create_deployment(session, "count-b", owner_id=OWNER_B,
+                                               broker_account_id=ACCOUNT_B)
+        session.add_all([_trade(OWNER_A, ACCOUNT_A, dep_a.id, 1),
+                         _trade(OWNER_B, ACCOUNT_B, dep_b.id, 1)])
+        session.commit()
+    runner = object.__new__(EngineRunner)
+    runner.book, runner.owner_id, runner.broker_account_id = "live", OWNER_A, ACCOUNT_A
+    assert runner._today_trade_count(NOW.date()) == 1

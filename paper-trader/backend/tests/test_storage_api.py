@@ -5,6 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.session import init_db
+from app.db.session import SessionLocal
+from app.db.models import BrokerAccount, Organization, Trade
 from app.engine.runner import EngineRunner
 from app.main import app
 
@@ -41,3 +43,21 @@ def test_publishes_the_active_retention_policy():
     assert r["option_data_days"] == 90
     assert r["equity_full_days"] == 7
     assert "last_run" in r
+
+
+def test_storage_counts_money_rows_only_for_the_runners_account():
+    """A storage response for account.default must not disclose a second book's trades."""
+    import datetime as dt
+    with SessionLocal() as s:
+        s.add(Organization(organization_id="other", name="Other"))
+        s.add(BrokerAccount(broker_account_id="account.other", owner_id="other",
+                            broker="kite", external_account_id="other", display_name="Other"))
+        s.add(Trade(owner_id="other", broker_account_id="account.other", deployment_id=1,
+                    instrument_key="X", direction="LONG", option_type="EQ", tradingsymbol="X",
+                    exchange="NSE", segment="equity_intraday", strike=0, expiry=dt.date.today(),
+                    qty=1, entry_premium=1, entry_cost=1, entry_spot=1, entry_time=dt.datetime.now(),
+                    exit_premium=1, exit_charges=0, exit_spot=1, exit_time=dt.datetime.now(),
+                    exit_reason="test", gross_pnl=0, charges_total=0, net_pnl=0, return_pct=0,
+                    holding_minutes=1, win=False, mode="paper"))
+        s.commit()
+    assert client.get("/api/storage").json()["tables"][-2]["rows"] == 0

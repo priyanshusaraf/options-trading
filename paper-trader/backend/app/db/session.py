@@ -330,6 +330,6 @@ def init_db(reset: bool = False) -> None:
         for row in sess.scalars(select(UniverseInstrument)):
             if row.active and sess.get(InstrumentState, (LEGACY_OWNER_ID, row.key)) is None:
                 sess.add(InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=row.key, enabled=True))
-        _repair_open_position_lot_sizes(sess)
+        # Repairs mutate cash across rows; run only via explicit maintenance tooling.
         sess.commit()
     inst_registry.load_universe()  # populate the in-memory registry from the DB

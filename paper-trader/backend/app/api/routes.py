@@ -563,14 +563,26 @@ def storage_stats(request: Request):
             "option_data": (s.query(func.count(OptionData.id)).scalar() or 0,
                             s.query(func.count(OptionData.id)).filter(
                                 OptionData.ts >= day_ago).scalar() or 0),
-            "signal_events": (s.query(func.count(SignalEvent.id)).scalar() or 0,
+            "signal_events": (s.query(func.count(SignalEvent.id)).filter(
+                              SignalEvent.owner_id == r.owner_id,
+                              SignalEvent.broker_account_id == r.broker_account_id).scalar() or 0,
                               s.query(func.count(SignalEvent.id)).filter(
-                                  SignalEvent.time >= day_ago).scalar() or 0),
-            "equity_snapshots": (s.query(func.count(EquitySnapshot.id)).scalar() or 0,
+                                  SignalEvent.time >= day_ago,
+                                  SignalEvent.owner_id == r.owner_id,
+                                  SignalEvent.broker_account_id == r.broker_account_id).scalar() or 0),
+            "equity_snapshots": (s.query(func.count(EquitySnapshot.id)).filter(
+                                 EquitySnapshot.owner_id == r.owner_id,
+                                 EquitySnapshot.broker_account_id == r.broker_account_id).scalar() or 0,
                                  s.query(func.count(EquitySnapshot.id)).filter(
-                                     EquitySnapshot.time >= day_ago).scalar() or 0),
-            "trades": (s.query(func.count(Trade.id)).scalar() or 0, None),
-            "order_journal": (s.query(func.count(OrderJournal.id)).scalar() or 0, None),
+                                     EquitySnapshot.time >= day_ago,
+                                     EquitySnapshot.owner_id == r.owner_id,
+                                     EquitySnapshot.broker_account_id == r.broker_account_id).scalar() or 0),
+            "trades": (s.query(func.count(Trade.id)).filter(
+                Trade.owner_id == r.owner_id,
+                Trade.broker_account_id == r.broker_account_id).scalar() or 0, None),
+            "order_journal": (s.query(func.count(OrderJournal.id)).filter(
+                OrderJournal.owner_id == r.owner_id,
+                OrderJournal.broker_account_id == r.broker_account_id).scalar() or 0, None),
         }
 
     return {

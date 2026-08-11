@@ -2695,6 +2695,8 @@ class EngineRunner:
             with SessionLocal() as s:
                 return int(s.query(func.count(Trade.id)).filter(
                     Trade.mode == self.book,
+                    Trade.owner_id == self.owner_id,
+                    Trade.broker_account_id == self.broker_account_id,
                     Trade.exit_time >= dt.datetime.combine(today, dt.time.min),
                     Trade.exit_time < dt.datetime.combine(today, dt.time.max)).scalar() or 0)
         except Exception:

@@ -255,29 +255,29 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO execution_intents "
-            "(client_intent_id, deployment_id, broker, account_scope, connection_scope, "
+            "(client_intent_id, deployment_id, owner_id, broker_account_id, broker, account_scope, connection_scope, "
             " broker_tag, intent, instrument_key, tradingsymbol, exchange, side, order_type, "
             " requested_qty, created_at) "
-            "VALUES ('entry-000000000000000000000002', 1, 'upstox', 'account.default', "
+            "VALUES ('entry-000000000000000000000002', 1, 'owner', 'account.default', 'upstox', 'account.default', "
             "'connection.default', 'entry-000000000000002', 'ENTRY', "
             "'NSE_EQ|INE002A01018', 'RELIANCE', 'NSE', 'BUY', 'MARKET', 1, "
             "'2026-08-09 09:15:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO execution_order_events "
-            "(client_intent_id, source, source_event_id, kind, observed_at) "
-            "VALUES ('entry-000000000000000000000002', 'broker', 'event-1', "
+            "(client_intent_id, owner_id, broker_account_id, source, source_event_id, kind, observed_at) "
+            "VALUES ('entry-000000000000000000000002', 'owner', 'account.default', 'broker', 'event-1', "
             "'INTENT_CREATED', '2026-08-09 09:15:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO positions "
-            "(deployment_id, entry_intent_id, instrument_key, direction, option_type, "
+            "(owner_id, broker_account_id, deployment_id, entry_intent_id, instrument_key, direction, option_type, "
             " tradingsymbol, exchange, segment, strike, expiry, lot_size, qty, entry_premium, "
             " entry_charges, entry_cost, entry_spot, entry_time, entry_reason, stop_price, "
             " target_price, last_premium, last_spot, high_water_premium, mfe, mae, "
             " reinforcement_count, held_overnight, overnight_pnl, session_close_premium, "
             " manual_target, no_take_profit, mode) "
-            "VALUES (1, 'entry-000000000000000000000002', 'NSE_EQ|INE002A01018', 'LONG', "
+            "VALUES ('owner', 'account.default', 1, 'entry-000000000000000000000002', 'NSE_EQ|INE002A01018', 'LONG', "
             "'CE', 'RELIANCE', 'NSE', 'options', 1.0, '2026-08-28', 1, 1, 10.0, 0.0, "
             "10.0, 100.0, '2026-08-09 09:15:00', '', 5.0, 15.0, 10.0, 100.0, 10.0, "
             "0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, 'paper')"
@@ -478,6 +478,41 @@ def test_revision_0019_refuses_lossy_tenant_name_downgrade(tmp_path):
             "VALUES ('org-b','account.b','default',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
         with pytest.raises(RuntimeError, match="lossy"):
             command.downgrade(migrate.alembic_config(connection), "0018")
+
+
+def test_revision_0019_retry_after_interrupted_rebuild_preserves_rows_and_guards(tmp_path):
+    """SQLite may retain DDL before an upgrade error; retrying must reach head safely."""
+    engine = _fresh_engine(tmp_path, "0019-interrupted-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "before_cursor_execute")
+    def interrupt_after_deployments(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "_alembic_tmp_positions" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after deployments rebuild")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        connection.execute(sa.text(
+            "UPDATE deployments SET notes='survives-retry' WHERE id=1"))
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+        assert connection.execute(sa.text(
+            "SELECT notes, broker_account_id FROM deployments WHERE id=1")).one() == (
+                "survives-retry", "account.default")
+        with pytest.raises(IntegrityError):
+            connection.execute(sa.text(
+                "INSERT INTO execution_order_events "
+                "(client_intent_id, source, source_event_id, kind, observed_at) "
+                "VALUES ('missing', 'retry', 'event', 'ACK', CURRENT_TIMESTAMP)"))
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
 
 
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):

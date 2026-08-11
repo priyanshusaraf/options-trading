@@ -514,7 +514,10 @@ class LiveBroker(PaperBroker):
             event.kind == "PROTECTION_SUBMIT_STARTED" for event in events)
         source_event_id = f"protection-submit:{pos.id}:{pos.qty}:{attempt}"
         if last_submit is None:
-            intent = self.s.get(ExecutionIntent, client_intent_id)
+            intent = self.s.scalar(select(ExecutionIntent).where(
+                ExecutionIntent.client_intent_id == client_intent_id,
+                ExecutionIntent.owner_id == self.owner_id,
+                ExecutionIntent.broker_account_id == self.broker_account_id))
             try:
                 intent_context = json.loads(intent.context_json or "") if intent else {}
                 preflight = intent_context["protection_preflight"]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 
 import pytest
 from sqlalchemy import create_engine
@@ -9,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.models import Base, BrokerAccount, CapitalState, Position, UniverseInstrument
 from app.db.session import _repair_open_position_lot_sizes
+from app.db import session as session_module
 from app.engine.charges import compute_charges
 
 
@@ -32,6 +34,7 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
         on_home=True, active=True, mock_spot=6500, mock_vol=0.30,
     ))
     s.add(Position(
+        owner_id="owner", broker_account_id="account.default",
         instrument_key="CRUDEOIL", direction="LONG", option_type="CE",
         tradingsymbol="CRUDEOIL26JUL7200CE", exchange="MCX", strike=7200,
         expiry=dt.date(2026, 7, 16), lot_size=1, qty=1, entry_premium=365.10,
@@ -61,6 +64,9 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     unclosable). The discriminator: a partial has pos.lot_size == inst.lot_size."""
     s = _session()
     now = dt.datetime(2026, 6, 19, 9, 30)
+    s.add(BrokerAccount(
+        owner_id="owner", broker_account_id="account.default", broker="kite",
+        external_account_id="legacy", display_name="Legacy account"))
     s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=40_000.0, realized_pnl=0))
     s.add(UniverseInstrument(
         key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
@@ -70,6 +76,7 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     ))
     charges = compute_charges("MCX", "BUY", 365.10, 25)["total"]
     s.add(Position(
+        owner_id="owner", broker_account_id="account.default",
         instrument_key="CRUDEOIL", direction="LONG", option_type="CE",
         tradingsymbol="CRUDEOIL26JUL7200CE", exchange="MCX", strike=7200,
         expiry=dt.date(2026, 7, 16), lot_size=100, qty=25, entry_premium=365.10,
@@ -87,3 +94,8 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     assert pos.qty == 25                                     # partial NOT inflated
     assert pos.lot_size == 100
     assert s.get(CapitalState, ("account.default", "paper")).cash == cash_before        # no phantom cash debit
+
+
+def test_ordinary_database_initialization_does_not_run_global_money_repair():
+    """A runner boot cannot repair and debit every tenant's positions."""
+    assert "_repair_open_position_lot_sizes(sess)" not in inspect.getsource(session_module.init_db)

@@ -33,8 +33,13 @@ def _f(v):
     return None if v is None or v == "" else float(v)
 
 
-def _rows_from_db(path: str, segment: str | None, since: str | None):
+def _rows_from_db(path: str, segment: str | None, since: str | None, *, owner_id: str | None,
+                  broker_account_id: str | None):
+    if not owner_id or not broker_account_id:
+        raise ValueError("owner and broker account scope are required for database sweeps")
     sql, args = _SQL, []
+    sql += " AND owner_id = ? AND broker_account_id = ?"
+    args.extend((owner_id, broker_account_id))
     if segment:
         sql += " AND segment = ?"
         args.append(segment)
@@ -70,10 +75,13 @@ def main() -> None:
     ap.add_argument("--segment", default=None, help="equity_intraday | options")
     ap.add_argument("--since", default=None, help="only trades exited on/after YYYY-MM-DD")
     ap.add_argument("--top", type=int, default=12)
+    ap.add_argument("--owner-id")
+    ap.add_argument("--broker-account-id")
     args = ap.parse_args()
 
     raw = (_rows_from_csv(args.csv, args.segment, args.since) if args.csv
-           else _rows_from_db(args.db, args.segment, args.since))
+           else _rows_from_db(args.db, args.segment, args.since, owner_id=args.owner_id,
+                              broker_account_id=args.broker_account_id))
     trades = [ReplayTrade(tradingsymbol=r[0], direction=r[1], entry_price=float(r[2]),
                           qty=int(r[3]), mfe=_f(r[4]), mae=_f(r[5]), net_pnl=float(r[6]),
                           charges=float(r[7] or 0.0)) for r in raw]
