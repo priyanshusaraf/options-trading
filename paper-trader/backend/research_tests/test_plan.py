@@ -26,6 +26,8 @@ from research.domain.base import init_research_db, make_engine, make_sessionmake
 from research.domain.models import Hypothesis, ResearchProgram
 from research.plan import build_plan
 
+OWNER_ID = "test-owner"
+
 
 @pytest.fixture
 def session(tmp_path):
@@ -38,10 +40,10 @@ def session(tmp_path):
 def _hyp(session, statement, priority, status="open"):
     prog = session.query(ResearchProgram).first()
     if prog is None:
-        prog = ResearchProgram(name="test-program", thesis="t")
+        prog = ResearchProgram(owner_id=OWNER_ID, name="test-program", thesis="t")
         session.add(prog)
         session.flush()
-    h = Hypothesis(program_id=prog.id, statement=statement,
+    h = Hypothesis(owner_id=OWNER_ID, program_id=prog.id, statement=statement,
                    status=status, retest_priority=priority)
     session.add(h)
     session.flush()
@@ -52,7 +54,7 @@ def _hyp(session, statement, priority, status="open"):
 
 def test_a_committed_instrument_never_reaches_the_plan(session):
     _hyp(session, "h1", 1.0)
-    plan = build_plan(session, eligible={"GOLDM", "SILVERM"}, strategy_key="s")
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM", "SILVERM"}, strategy_key="s")
     assert plan
     for item in plan:
         assert "RELIANCE" not in item["instruments"]
@@ -63,7 +65,7 @@ def test_an_empty_eligible_universe_produces_no_plan(session):
     """Nothing to research is a safe no-op, not an error and not a fallback to
     'everything' — a fallback here would target live instruments."""
     _hyp(session, "h1", 1.0)
-    assert build_plan(session, eligible=set(), strategy_key="s") == []
+    assert build_plan(session, owner_id=OWNER_ID, eligible=set(), strategy_key="s") == []
 
 
 # ── retest_priority gets its consumer ───────────────────────────────────────
@@ -72,7 +74,7 @@ def test_hypotheses_are_ordered_by_retest_priority(session):
     _hyp(session, "low", 0.1)
     _hyp(session, "high", 9.0)
     _hyp(session, "mid", 1.0)
-    plan = build_plan(session, eligible={"GOLDM"}, strategy_key="s", max_experiments=3)
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM"}, strategy_key="s", max_experiments=3)
     assert [p["hypothesis"] for p in plan] == ["high", "mid", "low"]
 
 
@@ -80,7 +82,7 @@ def test_only_open_hypotheses_are_scheduled(session):
     _hyp(session, "open-one", 1.0, status="open")
     _hyp(session, "already-supported", 9.0, status="supported")
     _hyp(session, "rejected", 8.0, status="rejected")
-    plan = build_plan(session, eligible={"GOLDM"}, strategy_key="s")
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM"}, strategy_key="s")
     assert [p["hypothesis"] for p in plan] == ["open-one"]
 
 
@@ -89,14 +91,14 @@ def test_the_plan_is_bounded(session):
     following one and the loop stops being nightly."""
     for i in range(20):
         _hyp(session, f"h{i}", float(i))
-    plan = build_plan(session, eligible={"GOLDM"}, strategy_key="s", max_experiments=3)
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM"}, strategy_key="s", max_experiments=3)
     assert len(plan) == 3
 
 
 def test_instruments_per_experiment_is_bounded(session):
     _hyp(session, "h", 1.0)
     eligible = {f"INST{i}" for i in range(50)}
-    plan = build_plan(session, eligible=eligible, strategy_key="s",
+    plan = build_plan(session, owner_id=OWNER_ID, eligible=eligible, strategy_key="s",
                       instruments_per_experiment=6)
     assert len(plan[0]["instruments"]) == 6
 
@@ -106,8 +108,8 @@ def test_instrument_selection_is_deterministic(session):
     reproducible from the plan that produced it."""
     _hyp(session, "h", 1.0)
     eligible = {f"INST{i}" for i in range(50)}
-    a = build_plan(session, eligible=eligible, strategy_key="s")
-    b = build_plan(session, eligible=eligible, strategy_key="s")
+    a = build_plan(session, owner_id=OWNER_ID, eligible=eligible, strategy_key="s")
+    b = build_plan(session, owner_id=OWNER_ID, eligible=eligible, strategy_key="s")
     assert a[0]["instruments"] == b[0]["instruments"]
 
 
@@ -116,7 +118,7 @@ def test_instrument_selection_is_deterministic(session):
 def test_a_database_with_no_hypotheses_seeds_one(session):
     """First ever run. Returning [] would mean the loop can never start itself —
     it would wait forever for a hypothesis only a human could write."""
-    plan = build_plan(session, eligible={"GOLDM", "SILVERM"}, strategy_key="s")
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM", "SILVERM"}, strategy_key="s")
     assert len(plan) == 1
     assert plan[0]["instruments"]
     assert plan[0]["hypothesis"]
@@ -125,7 +127,7 @@ def test_a_database_with_no_hypotheses_seeds_one(session):
 def test_the_cold_start_seed_prefers_the_research_sandbox(session):
     """The sandbox is permanently research-eligible, so seeding there cannot
     collide with anything the owner has committed."""
-    plan = build_plan(session, eligible={"GOLDM", "SILVERM", "SOMEEQUITY"},
+    plan = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM", "SILVERM", "SOMEEQUITY"},
                       strategy_key="s", instruments_per_experiment=2)
     assert set(plan[0]["instruments"]) <= {"GOLDM", "SILVERM"}
 
@@ -134,7 +136,7 @@ def test_the_cold_start_seed_prefers_the_research_sandbox(session):
 
 def test_plan_items_carry_every_key_run_nightly_reads(session):
     _hyp(session, "h", 1.0)
-    item = build_plan(session, eligible={"GOLDM"}, strategy_key="trend_impulse_v3")[0]
+    item = build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM"}, strategy_key="trend_impulse_v3")[0]
     for k in ("program", "hypothesis", "strategy_key", "instruments", "interval"):
         assert k in item, f"run_nightly reads {k!r}"
     assert item["strategy_key"] == "trend_impulse_v3"
@@ -144,7 +146,7 @@ def test_the_plan_asks_for_the_optimizing_path(session):
     """PBO and var_sr deflation only exist on the optimize path — a plan that ran
     single-pass validation would silently skip everything Phase 0 built."""
     _hyp(session, "h", 1.0)
-    assert build_plan(session, eligible={"GOLDM"}, strategy_key="s")[0]["optimize_search"] is True
+    assert build_plan(session, owner_id=OWNER_ID, eligible={"GOLDM"}, strategy_key="s")[0]["optimize_search"] is True
 
 
 # ── the cron one-shot actually loads a plan now ─────────────────────────────

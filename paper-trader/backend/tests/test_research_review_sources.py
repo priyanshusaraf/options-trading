@@ -75,11 +75,11 @@ def _seed_candidates(run_id: int) -> tuple[int, int]:
     Session = make_sessionmaker(engine)
     with Session.begin() as session:
         pending = PromotionCandidate(
-            run_id=run_id, parameterization_hash="p" * 64,
+            owner_id="owner", run_id=run_id, parameterization_hash="p" * 64,
             qualifying_universe_json="[]", scorecard_json="{}", status="pending",
         )
         decided = PromotionCandidate(
-            run_id=run_id, parameterization_hash="d" * 64,
+            owner_id="owner", run_id=run_id, parameterization_hash="d" * 64,
             qualifying_universe_json="[]", scorecard_json="{}", status="pending",
         )
         session.add_all([pending, decided])

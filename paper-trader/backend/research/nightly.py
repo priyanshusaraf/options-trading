@@ -54,7 +54,7 @@ def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
-def _load_plan(session) -> list:
+def _load_plan(session, *, owner_id: str) -> list:
     """Tonight's plan: open hypotheses by retest_priority over the research-eligible
     universe. See research/plan.py for the two rules that govern it.
 
@@ -75,7 +75,7 @@ def _load_plan(session) -> list:
               f"exported one, this run may develop strategies on LIVE instruments.")
     by_key = {i.key: i for i in all_instruments()}
     eligible = eligible_for_research(set(by_key), committed)
-    plan = build_plan(session, eligible=eligible, strategy_key=nightly_strategy_key(),
+    plan = build_plan(session, owner_id=owner_id, eligible=eligible, strategy_key=nightly_strategy_key(),
                       interval=nightly_interval())
     # `build_plan` deals in instrument KEYS so it stays pure over its inputs and
     # testable without the execution-side registry; `run_nightly` needs the
@@ -130,7 +130,8 @@ def _run_generation(session, source, plan, report_dir) -> list:
           f"{len(instruments)} instrument(s) @ {interval}"
           f"{f' (sampled, seed={nightly_search_seed()})' if nightly_search_seed() is not None else ' (fixed grid)'}")
     seed = nightly_search_seed()
-    reports = run_generated(session, source, instruments, interval, limit=limit,
+    owner_id = os.environ["PT_RESEARCH_OWNER_ID"]
+    reports = run_generated(session, source, instruments, interval, owner_id=owner_id, limit=limit,
                             git_commit=_git_commit(), seed=seed)
     for i, report in enumerate(reports, 1):
         path = os.path.join(report_dir, f"report_generated_{report.get('run_id', i)}.md")
@@ -142,6 +143,9 @@ def _run_generation(session, source, plan, report_dir) -> list:
 def _run_enabled_operation(research_db: str) -> list:
     from app.core.config import get_settings
 
+    owner_id = os.environ.get("PT_RESEARCH_OWNER_ID")
+    if not owner_id:
+        raise RuntimeError("PT_RESEARCH_OWNER_ID is required for nightly research")
     with acquire_operation_lock(operation_lock_path()):
         recorder = ResearchOperationRecorder.start(
             operation_receipt_path(),
@@ -158,13 +162,14 @@ def _run_enabled_operation(research_db: str) -> list:
             with Session() as session:
                 src = _make_source()
                 recorder.transition("planning")
-                plan = _load_plan(session)
+                plan = _load_plan(session, owner_id=owner_id)
                 recorder.set_plan(safe_plan_summary(plan))
                 report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
                 reports = run_nightly(
                     session,
                     source=src,
                     plan=plan,
+                    owner_id=owner_id,
                     git_commit=_git_commit(),
                     report_dir=report_dir,
                     progress=recorder.add_completed_run,

@@ -27,6 +27,8 @@ from research.domain.models import BlockEdge
 from research.knowledge import (blocks_in, edge_report, mutate, record_outcome,
                                 suppressed_blocks)
 
+OWNER_ID = "test-owner"
+
 
 @pytest.fixture
 def session(tmp_path):
@@ -68,19 +70,19 @@ def test_blocks_in_survives_junk():
 # ── recording ───────────────────────────────────────────────────────────────
 
 def test_recording_accumulates_per_block_and_instrument(session):
-    record_outcome(session, COMP, "GOLDM", validated=False)
-    record_outcome(session, COMP, "GOLDM", validated=False)
-    record_outcome(session, COMP, "SILVERM", validated=True)
-    row = session.get(BlockEdge, ("rsi_gt", "GOLDM"))
+    record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=False)
+    record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=False)
+    record_outcome(session, COMP, "SILVERM", owner_id=OWNER_ID, validated=True)
+    row = session.get(BlockEdge, (OWNER_ID, "rsi_gt", "GOLDM"))
     assert (row.positive, row.negative) == (0, 2)
-    assert session.get(BlockEdge, ("rsi_gt", "SILVERM")).positive == 1
+    assert session.get(BlockEdge, (OWNER_ID, "rsi_gt", "SILVERM")).positive == 1
 
 
 def test_recording_is_idempotent_in_shape_not_in_count(session):
     """Two evaluations are two data points; the table must not collapse them."""
     for _ in range(5):
-        record_outcome(session, COMP, "GOLDM", validated=False)
-    assert session.get(BlockEdge, ("rsi_gt", "GOLDM")).negative == 5
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=False)
+    assert session.get(BlockEdge, (OWNER_ID, "rsi_gt", "GOLDM")).negative == 5
 
 
 # ── suppression, with a power floor ─────────────────────────────────────────
@@ -101,47 +103,47 @@ SIBLING = {
 def _make_rsi_the_clear_loser(session, instrument="GOLDM"):
     """RSI fails everywhere; its siblings win about half the time."""
     for _ in range(12):
-        record_outcome(session, COMP, instrument, validated=False)
+        record_outcome(session, COMP, instrument, owner_id=OWNER_ID, validated=False)
     for _ in range(14):
-        record_outcome(session, SIBLING, instrument, validated=True)
+        record_outcome(session, SIBLING, instrument, owner_id=OWNER_ID, validated=True)
 
 
 def test_a_well_powered_loser_is_suppressed(session):
     _make_rsi_the_clear_loser(session)
-    assert "rsi_gt" in suppressed_blocks(session, "GOLDM")
+    assert "rsi_gt" in suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
 
 
 def test_one_bad_night_does_not_suppress_a_family(session):
     """The failure mode this guards: suppressing on n=1 would let a single noisy
     evaluation permanently delete an idea from the search space."""
-    record_outcome(session, COMP, "GOLDM", validated=False)
-    assert suppressed_blocks(session, "GOLDM") == set()
+    record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=False)
+    assert suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID) == set()
 
 
 def test_suppression_is_per_instrument_not_global(session):
     """'Which idea works WHERE' — a family that dies on gold must stay available
     on crude, or the map is just a global blocklist."""
     _make_rsi_the_clear_loser(session)
-    assert "rsi_gt" in suppressed_blocks(session, "GOLDM")
-    assert suppressed_blocks(session, "CRUDEOIL") == set()
+    assert "rsi_gt" in suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
+    assert suppressed_blocks(session, "CRUDEOIL", owner_id=OWNER_ID) == set()
 
 
 def test_a_family_that_sometimes_works_is_not_suppressed(session):
     for _ in range(8):
-        record_outcome(session, COMP, "GOLDM", validated=False)
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=False)
     for _ in range(4):
-        record_outcome(session, COMP, "GOLDM", validated=True)
-    assert "rsi_gt" not in suppressed_blocks(session, "GOLDM")
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=True)
+    assert "rsi_gt" not in suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
 
 
 def test_suppression_can_be_escaped_by_later_evidence(session):
     """Never permanently banned. A suppressed family that later validates must
     come back, mirroring how retest_priority decays UPWARD."""
     _make_rsi_the_clear_loser(session)
-    assert "rsi_gt" in suppressed_blocks(session, "GOLDM")
+    assert "rsi_gt" in suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
     for _ in range(20):
-        record_outcome(session, COMP, "GOLDM", validated=True)
-    assert "rsi_gt" not in suppressed_blocks(session, "GOLDM")
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=True)
+    assert "rsi_gt" not in suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
 
 
 # ── mutation ────────────────────────────────────────────────────────────────
@@ -183,11 +185,11 @@ def test_a_poisoned_family_is_suppressed_and_a_survivor_is_mutated(session):
                 "longExit": {"any": ["zscore_lt(50, 0.0)"]},
                 "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
     for _ in range(15):
-        record_outcome(session, poisoned, "GOLDM", validated=False)
+        record_outcome(session, poisoned, "GOLDM", owner_id=OWNER_ID, validated=False)
     for _ in range(15):
-        record_outcome(session, COMP, "GOLDM", validated=True)
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=True)
 
-    suppressed = suppressed_blocks(session, "GOLDM")
+    suppressed = suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
     assert "roc_gt" in suppressed, "the poisoned family survived"
     assert "rsi_gt" not in suppressed, "the survivor was suppressed too"
 
@@ -199,16 +201,16 @@ def test_the_edge_report_is_legible(session):
     """It gets rendered into the research report — a human has to be able to read
     'which idea works where' off it."""
     for _ in range(6):
-        record_outcome(session, COMP, "GOLDM", validated=True)
+        record_outcome(session, COMP, "GOLDM", owner_id=OWNER_ID, validated=True)
     for _ in range(6):
-        record_outcome(session, COMP, "SILVERM", validated=False)
-    text = edge_report(session)
+        record_outcome(session, COMP, "SILVERM", owner_id=OWNER_ID, validated=False)
+    text = edge_report(session, owner_id=OWNER_ID)
     assert "rsi_gt" in text
     assert "GOLDM" in text and "SILVERM" in text
 
 
 def test_the_edge_report_is_empty_when_nothing_is_known(session):
-    assert edge_report(session) == ""
+    assert edge_report(session, owner_id=OWNER_ID) == ""
 
 
 # ── the exploration floor ───────────────────────────────────────────────────
@@ -226,9 +228,9 @@ def test_suppression_can_never_take_the_whole_vocabulary(session):
                   "longExit": {"any": ["zscore_lt(50, 0.0)"]},
                   "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
     for _ in range(20):
-        record_outcome(session, everything, "GOLDM", validated=False)
+        record_outcome(session, everything, "GOLDM", owner_id=OWNER_ID, validated=False)
     families = blocks_in(everything)
-    suppressed = suppressed_blocks(session, "GOLDM")
+    suppressed = suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
     assert suppressed, "nothing was suppressed despite a uniformly awful record"
     assert len(suppressed) < len(families), \
         "suppression consumed the entire vocabulary — the search would collapse"
@@ -246,11 +248,11 @@ def test_the_worst_offenders_are_the_ones_kept_suppressed(session):
              "longExit": {"any": ["zscore_lt(50, 0.0)"]},
              "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
     for _ in range(20):
-        record_outcome(session, bad, "GOLDM", validated=False)
+        record_outcome(session, bad, "GOLDM", owner_id=OWNER_ID, validated=False)
     for _ in range(9):
-        record_outcome(session, mixed, "GOLDM", validated=False)
-    record_outcome(session, mixed, "GOLDM", validated=True)
-    sup = suppressed_blocks(session, "GOLDM")
+        record_outcome(session, mixed, "GOLDM", owner_id=OWNER_ID, validated=False)
+    record_outcome(session, mixed, "GOLDM", owner_id=OWNER_ID, validated=True)
+    sup = suppressed_blocks(session, "GOLDM", owner_id=OWNER_ID)
     assert "roc_gt" in sup
 
 
@@ -279,9 +281,9 @@ def test_edge_weights_favour_winners_and_disfavour_losers(session):
              "longExit": {"any": ["zscore_lt(50, 0.0)"]},
              "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
     for _ in range(10):
-        record_outcome(session, winner, "GOLDM", validated=True)
-        record_outcome(session, loser, "GOLDM", validated=False)
-    w = edge_weights(session, "GOLDM")
+        record_outcome(session, winner, "GOLDM", owner_id=OWNER_ID, validated=True)
+        record_outcome(session, loser, "GOLDM", owner_id=OWNER_ID, validated=False)
+    w = edge_weights(session, "GOLDM", owner_id=OWNER_ID)
     assert w["rsi_gt"] > w["roc_gt"]
 
 
@@ -294,8 +296,8 @@ def test_weights_are_bounded_so_the_search_cannot_collapse(session):
             "longExit": {"any": ["zscore_lt(50, 0.0)"]},
             "shortExit": {"any": ["zscore_gt(50, 0.0)"]}}
     for _ in range(50):
-        record_outcome(session, comp, "GOLDM", validated=True)
-    for w in edge_weights(session, "GOLDM").values():
+        record_outcome(session, comp, "GOLDM", owner_id=OWNER_ID, validated=True)
+    for w in edge_weights(session, "GOLDM", owner_id=OWNER_ID).values():
         assert 0.25 <= w <= 2.0
 
 

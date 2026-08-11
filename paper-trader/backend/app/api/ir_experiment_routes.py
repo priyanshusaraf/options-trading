@@ -328,6 +328,7 @@ def post_graph_experiment(
             try:
                 report = run_published_graph_experiment(
                     session,
+                    owner_id=owner_id_for(principal),
                     project_id=project_id,
                     graph=published.graph,
                     declared_content_address=published.content_address,
@@ -351,7 +352,7 @@ def post_graph_experiment(
                 raise _error(
                     422, "EXPERIMENT_GRAPH_BINDING_INVALID", str(exc)
                 ) from exc
-            spec = session.get(ExperimentSpec, report["spec_id"])
+            spec = session.get(ExperimentSpec, (owner_id_for(principal), report["spec_id"]))
             recipe = json.loads(spec.recipe_json)
             provenance = recipe["graph_provenance"]
             binding = {

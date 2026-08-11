@@ -27,12 +27,12 @@ from research.strategy.builder.search import (enumerate_compositions,
 logger = logging.getLogger("research.orchestrator")
 
 
-def _persist_record(session, strat) -> None:
-    rec = session.get(GeneratedStrategyRecord, strat.key)
+def _persist_record(session, strat, *, owner_id: str) -> None:
+    rec = session.get(GeneratedStrategyRecord, (owner_id, strat.key))
     payload = json.dumps(strat.composition.to_dict())
     if rec is None:
         session.add(GeneratedStrategyRecord(
-            key=strat.key, composition_json=payload, source=strat.source))
+            owner_id=owner_id, key=strat.key, composition_json=payload, source=strat.source))
     else:
         rec.composition_json = payload
         rec.source = strat.source
@@ -53,7 +53,7 @@ def _regime_multiplier(comp) -> int:
         return 1
 
 
-def run_generated(session, source, instruments, interval, *, limit=24,
+def run_generated(session, source, instruments, interval, *, owner_id: str, limit=24,
                   git_commit="unknown", program="Generated strategies",
                   min_trades=20, n_folds=4, min_positive_fold_frac=0.6,
                   seed: int | None = None) -> list:
@@ -73,11 +73,11 @@ def run_generated(session, source, instruments, interval, *, limit=24,
         from research.knowledge import edge_weights, suppressed_blocks
         for inst in instruments:
             k = getattr(inst, "key", str(inst))
-            suppressed |= suppressed_blocks(session, k)
+            suppressed |= suppressed_blocks(session, k, owner_id=owner_id)
             # Average each family's weight across the universe: a block is
             # favoured for THIS plan if it has worked across these instruments,
             # not because it shone on one of them.
-            for block, w in edge_weights(session, k).items():
+            for block, w in edge_weights(session, k, owner_id=owner_id).items():
                 prev = weights.get(block)
                 weights[block] = w if prev is None else (prev + w) / 2.0
         if suppressed:
@@ -105,10 +105,10 @@ def run_generated(session, source, instruments, interval, *, limit=24,
     reports = []
     for comp in compositions:
         strat = build_strategy(comp)                 # emit → AST-validate → sandbox-load
-        _persist_record(session, strat)
+        _persist_record(session, strat, owner_id=owner_id)
         logger.info("═══ generated %s", strat.key)
         report = run_experiment(
-            session, program_name=program, strategy=strat,
+            session, owner_id=owner_id, program_name=program, strategy=strat,
             hypothesis_statement=f"generated composition {strat.key} has edge",
             datasets=datasets, params={}, git_commit=git_commit,
             min_trades=min_trades, n_folds=n_folds,
@@ -126,7 +126,7 @@ def run_generated(session, source, instruments, interval, *, limit=24,
         # what it did — see report.render_markdown.
         try:
             from research.knowledge import edge_report
-            report["edge_map"] = edge_report(session)
+            report["edge_map"] = edge_report(session, owner_id=owner_id)
             report["suppressed_blocks"] = sorted(suppressed)
         except Exception as e:            # noqa: BLE001
             logger.warning("edge-map render failed: %s", e)

@@ -61,12 +61,16 @@ def record_session(session, candidate_id: int, *, session_date: dt.date,
     """Append one shadow session. Idempotent per (candidate, date, instrument):
     re-running a day must not inflate the record into looking better-powered than
     it is."""
+    candidate = session.get(PromotionCandidate, candidate_id)
+    if candidate is None:
+        raise ValueError("candidate not found")
     existing = (session.query(ShadowSession)
-                .filter(ShadowSession.candidate_id == candidate_id,
+                .filter(ShadowSession.owner_id == candidate.owner_id,
+                        ShadowSession.candidate_id == candidate_id,
                         ShadowSession.session_date == session_date,
                         ShadowSession.instrument_key == instrument_key)
                 .one_or_none())
-    row = existing or ShadowSession(candidate_id=candidate_id,
+    row = existing or ShadowSession(owner_id=candidate.owner_id, candidate_id=candidate_id,
                                     session_date=session_date,
                                     instrument_key=instrument_key)
     row.trades, row.wins, row.net_pnl = int(trades), int(wins), float(net_pnl)

@@ -182,6 +182,9 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
     from research.orchestrator.run import run_nightly
     from research.universe import ALWAYS_ALLOWED
 
+    owner_id = os.environ.get("PT_RESEARCH_OWNER_ID")
+    if not owner_id:
+        raise RuntimeError("PT_RESEARCH_OWNER_ID is required for manual research")
     with acquire_operation_lock(operation_lock_path()):
         recorder = ResearchOperationRecorder.start(
             operation_receipt_path(),
@@ -212,6 +215,7 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                     session,
                     source,
                     plan,
+                    owner_id=owner_id,
                     git_commit=_git_commit(),
                     report_dir=report_dir,
                     progress=recorder.add_completed_run,
@@ -224,7 +228,7 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                           f"{[i.key for i in sandbox]} ──")
                     for interval in INTERVALS:
                         generated = run_generated(
-                            session, source, sandbox, interval, limit=8,
+                            session, source, sandbox, interval, owner_id=owner_id, limit=8,
                             git_commit=_git_commit(), min_trades=30, n_folds=4,
                             min_positive_fold_frac=0.5,
                         )

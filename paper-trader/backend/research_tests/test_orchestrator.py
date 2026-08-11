@@ -21,6 +21,8 @@ from research.orchestrator.report import render_markdown
 from research.orchestrator.run import run_experiment, spec_hash
 from research.evidence import EvidenceRejected, decode_terminal_evidence
 
+OWNER_ID = "test-owner"
+
 
 def _datasets(inst_factory, candles_factory, keys):
     src = StaticDataSource({(k, "day"): candles_factory(400) for k in keys})
@@ -31,7 +33,7 @@ def _datasets(inst_factory, candles_factory, keys):
 def _run(session, inst_factory, candles_factory, **kw):
     strat = kernels.get_strategy("trend_impulse_v3")
     _, datasets = _datasets(inst_factory, candles_factory, ["AAA", "BBB"])
-    return run_experiment(session, program_name="Trend Following",
+    return run_experiment(session, owner_id=OWNER_ID, program_name="Trend Following",
                           hypothesis_statement="EMA trend persists in large-caps",
                           strategy=strat, datasets=datasets,
                           params=dict(strat.default_params), git_commit="deadbeef",
@@ -44,7 +46,7 @@ def test_run_experiment_persists_completed_run_and_spec(research_session, inst_f
     assert len(runs) == 1
     assert runs[0].status == "completed"
     assert runs[0].decision in ("propose", "archive")
-    spec = research_session.get(ExperimentSpec, runs[0].spec_id)
+    spec = research_session.get(ExperimentSpec, (OWNER_ID, runs[0].spec_id))
     assert spec.git_commit == "deadbeef"
     assert report["spec_id"] == spec.id
 
@@ -173,7 +175,7 @@ def test_spec_records_every_result_affecting_data_cost_and_gate_input(
         sibling_trials=3,
     )
 
-    spec = research_session.get(ExperimentSpec, report["spec_id"])
+    spec = research_session.get(ExperimentSpec, (OWNER_ID, report["spec_id"]))
     recipe = json.loads(spec.recipe_json)
     assert recipe["program"] == "Trend Following"
     assert recipe["hypothesis"] == "EMA trend persists in large-caps"
@@ -241,6 +243,7 @@ def test_hypothesis_or_build_change_cannot_reuse_a_spec_with_stale_provenance(
     _, datasets = _datasets(inst_factory, candles_factory, ["AAA"])
     common = {
         "session": research_session,
+        "owner_id": OWNER_ID,
         "program_name": "Programme A",
         "strategy": strat,
         "datasets": datasets,
@@ -302,7 +305,7 @@ def test_run_nightly_writes_report_files(research_session, inst_factory, candles
     stages = []
     run_ids = []
     reports = run_nightly(
-        research_session, src, plan, git_commit="abc", report_dir=str(tmp_path),
+        research_session, src, plan, owner_id=OWNER_ID, git_commit="abc", report_dir=str(tmp_path),
         stage=stages.append, progress=run_ids.append,
     )
     assert len(reports) == 1
@@ -314,14 +317,14 @@ def test_run_nightly_writes_report_files(research_session, inst_factory, candles
 
 def test_run_nightly_empty_plan_is_noop(research_session):
     from research.orchestrator.run import run_nightly
-    assert run_nightly(research_session, source=None, plan=[]) == []
+    assert run_nightly(research_session, source=None, plan=[], owner_id=OWNER_ID) == []
 
 
 def _validating_run(session, inst_factory, uptrend_factory, keys=("UPA", "UPB")):
     strat = kernels.get_strategy("trend_impulse_v3")
     src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})
     datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
-    return run_experiment(session, program_name="Trend Following",
+    return run_experiment(session, owner_id=OWNER_ID, program_name="Trend Following",
                           hypothesis_statement="EMA trend persists", strategy=strat,
                           datasets=datasets, params=dict(strat.default_params),
                           git_commit="deadbeef", seed=1, min_trades=1, n_folds=3,
@@ -355,7 +358,7 @@ def test_run_experiment_with_optimization_persists_immutable_trials(
     keys = ["UPA", "UPB"]
     src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})
     datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
-    run_experiment(research_session, program_name="Trend Following",
+    run_experiment(research_session, owner_id=OWNER_ID, program_name="Trend Following",
                    hypothesis_statement="EMA trend persists in large-caps", strategy=strat,
                    datasets=datasets, params=dict(strat.default_params), git_commit="deadbeef",
                    seed=1, min_trades=1, n_folds=3, min_positive_fold_frac=0.0,

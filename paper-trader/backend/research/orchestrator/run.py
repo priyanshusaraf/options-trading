@@ -137,27 +137,27 @@ def _dataset_identity(dataset) -> dict:
     }
 
 
-def _get_or_create_program(session, name: str) -> ResearchProgram:
-    p = session.query(ResearchProgram).filter_by(name=name).one_or_none()
+def _get_or_create_program(session, name: str, *, owner_id: str) -> ResearchProgram:
+    p = session.query(ResearchProgram).filter_by(owner_id=owner_id, name=name).one_or_none()
     if p is None:
-        p = ResearchProgram(name=name, thesis="")
+        p = ResearchProgram(owner_id=owner_id, name=name, thesis="")
         session.add(p)
         session.flush()
     return p
 
 
-def _get_or_create_hypothesis(session, program_id: int, statement: str) -> Hypothesis:
+def _get_or_create_hypothesis(session, program_id: int, statement: str, *, owner_id: str) -> Hypothesis:
     h = (session.query(Hypothesis)
-         .filter_by(program_id=program_id, statement=statement).one_or_none())
+         .filter_by(owner_id=owner_id, program_id=program_id, statement=statement).one_or_none())
     if h is None:
-        h = Hypothesis(program_id=program_id, statement=statement)
+        h = Hypothesis(owner_id=owner_id, program_id=program_id, statement=statement)
         session.add(h)
         session.flush()
     return h
 
 
 def _record_edge(session, strategy, instrument_key: str, validated: bool,
-                 run_id: int | None) -> None:
+                 run_id: int | None, *, owner_id: str) -> None:
     """Feed the block-family x instrument edge map.
 
     Only GENERATED strategies carry a composition; a handwritten one has no block
@@ -172,7 +172,7 @@ def _record_edge(session, strategy, instrument_key: str, validated: bool,
     try:
         from research.knowledge import record_outcome
         payload = comp.to_dict() if hasattr(comp, "to_dict") else comp
-        record_outcome(session, payload, instrument_key,
+        record_outcome(session, payload, instrument_key, owner_id=owner_id,
                        validated=validated, run_id=run_id)
     except Exception as e:            # noqa: BLE001
         logger.warning("edge-map update failed for %s/%s: %s",
@@ -180,7 +180,7 @@ def _record_edge(session, strategy, instrument_key: str, validated: bool,
 
 
 @_persist_failed_run
-def run_experiment(session, *, program_name, hypothesis_statement, strategy, datasets,
+def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement, strategy, datasets,
                    params=None, git_commit="unknown", seed=0, min_trades=20, n_folds=4,
                    min_positive_fold_frac=0.6, capital=50_000.0, optimize_search=False,
                    qualifier_version="q1", optimizer_version="none",
@@ -199,8 +199,8 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     Multiplying the trial count by the sibling count is the correction; 1 (the
     default) leaves single-strategy runs exactly as they were."""
     params = params if params is not None else dict(strategy.default_params)
-    program = _get_or_create_program(session, program_name)
-    hyp = _get_or_create_hypothesis(session, program.id, hypothesis_statement)
+    program = _get_or_create_program(session, program_name, owner_id=owner_id)
+    hyp = _get_or_create_hypothesis(session, program.id, hypothesis_statement, owner_id=owner_id)
     interval = datasets[0][1].interval if datasets else "day"
 
     recipe = {
@@ -230,10 +230,12 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     if graph_provenance is not None:
         recipe["graph_provenance"] = graph_provenance
     sid = spec_hash(recipe)
-    spec = session.get(ExperimentSpec, sid)
+    spec = (session.query(ExperimentSpec)
+            .filter(ExperimentSpec.owner_id == owner_id, ExperimentSpec.id == sid)
+            .one_or_none())
     if spec is None:
         spec = ExperimentSpec(
-            id=sid,
+            owner_id=owner_id, id=sid,
             hypothesis_id=hyp.id,
             recipe_json=json.dumps(
                 recipe,
@@ -251,7 +253,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
     else:
         logger.info("[spec] reusing immutable spec %s (content-addressed cache hit)", sid)
 
-    run = ExperimentRun(spec_id=sid, status="running", started_at=dt.datetime.now())
+    run = ExperimentRun(owner_id=owner_id, spec_id=sid, status="running", started_at=dt.datetime.now())
     session.add(run)
     session.flush()
     run_id = run.id
@@ -296,7 +298,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
                         ie.instrument_key, ie.reason, ie.trades)
             rejected.append({"instrument": ie.instrument_key, "reason": ie.reason})
             session.add(Finding(
-                hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
+                owner_id=owner_id, hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} did not qualify on {ie.instrument_key} "
                           f"({interval}): {ie.reason}"))
@@ -304,7 +306,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             # this instrument too — arguably the most common kind. Recording only
             # validation failures would leave the edge map blind to every idea
             # that never even produced enough trades to be judged.
-            _record_edge(session, strategy, ie.instrument_key, False, run.id)
+            _record_edge(session, strategy, ie.instrument_key, False, run.id, owner_id=owner_id)
             continue
         logger.info("[qualify] %-10s PASS   — %d trades clear the min-evidence bar",
                     ie.instrument_key, ie.trades)
@@ -316,7 +318,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             opt = optimize(ds.candles, inst, strategy, n_folds=n_folds, capital=capital)
             for tr in opt.trials:
                 session.add(OptimizationTrial(
-                    run_id=run.id, instrument_key=ie.instrument_key, fold_index=tr.fold_index,
+                    owner_id=owner_id, run_id=run.id, instrument_key=ie.instrument_key, fold_index=tr.fold_index,
                     params_json=json.dumps(tr.params),
                     is_objective=(tr.is_objective if math.isfinite(tr.is_objective) else -1e12),
                     is_trades=tr.is_trades, oos_trades=tr.oos_trades, selected=tr.selected))
@@ -373,11 +375,11 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             rejected.append({"instrument": ie.instrument_key,
                              "reason": f"failed validation: {', '.join(failed)}"})
             session.add(Finding(
-                hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
+                owner_id=owner_id, hypothesis_id=hyp.id, polarity="negative", confidence=confidence_from_trades(ie.trades),
                 evidence_run_id=run.id,
                 statement=f"{strategy.key} qualified but failed validation on "
                           f"{ie.instrument_key}: {', '.join(failed)}"))
-            _record_edge(session, strategy, ie.instrument_key, False, run.id)
+            _record_edge(session, strategy, ie.instrument_key, False, run.id, owner_id=owner_id)
             continue
         logger.info("[validate] %-10s PASS   — %s", ie.instrument_key, gate_summary)
         sc = build_scorecard(ie.instrument_key, score_metrics,
@@ -392,9 +394,9 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             "dsr": sc.dsr,
             "components": sc.components,
         }
-        _record_edge(session, strategy, ie.instrument_key, True, run.id)
+        _record_edge(session, strategy, ie.instrument_key, True, run.id, owner_id=owner_id)
         session.add(Finding(
-            hypothesis_id=hyp.id, polarity="positive", confidence=confidence_from_trades(ie.trades),
+            owner_id=owner_id, hypothesis_id=hyp.id, polarity="positive", confidence=confidence_from_trades(ie.trades),
             evidence_run_id=run.id,
             statement=f"{strategy.key} validated on {ie.instrument_key} "
                       f"({interval}), DSR={sc.dsr:.3f}"))
@@ -451,7 +453,7 @@ def run_experiment(session, *, program_name, hypothesis_statement, strategy, dat
             "var_sr_across_instruments": round(breadth_var_sr, 6),
         }
         session.add(PromotionCandidate(
-            run_id=run.id,
+            owner_id=owner_id, run_id=run.id,
             parameterization_hash=spec_hash({"strategy": strategy.key, "params": params}),
             qualifying_universe_json=json.dumps(qualified),
             # STATUS_SHADOW, not "pending". A validated candidate has cleared a
@@ -562,7 +564,7 @@ def _regime_context(datasets) -> dict:
 
 
 def run_nightly(
-    session, source, plan, *, git_commit="unknown", report_dir=".",
+    session, source, plan, *, owner_id: str, git_commit="unknown", report_dir=".",
     progress=None, stage=None,
 ) -> list:
     """Run every experiment in `plan` and write a report per run. Each plan item:
@@ -589,7 +591,7 @@ def run_nightly(
         if stage is not None:
             stage("experiments")
         report = run_experiment(
-            session, program_name=item["program"],
+            session, owner_id=owner_id, program_name=item["program"],
             hypothesis_statement=item["hypothesis"], strategy=strat, datasets=datasets,
             params=item.get("params"), git_commit=git_commit, seed=item.get("seed", 0),
             min_trades=item.get("min_trades", 20), n_folds=item.get("n_folds", 4),

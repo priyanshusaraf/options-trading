@@ -13,6 +13,8 @@ from research.domain.models import (
     PromotionCandidate,
 )
 from research.orchestrator.generate import run_generated
+
+OWNER_ID = "test-owner"
 from research.strategy.builder.grammar import Composition
 
 
@@ -32,7 +34,7 @@ def test_run_generated_evaluates_and_persists_compositions(
     src = StaticDataSource({(k, "day"): _osc_candles(Candle) for k in keys})
     instruments = [inst_factory(k) for k in keys]
 
-    reports = run_generated(research_session, src, instruments, "day", limit=4,
+    reports = run_generated(research_session, src, instruments, "day", owner_id=OWNER_ID, limit=4,
                             git_commit="gen", min_trades=1, n_folds=3,
                             min_positive_fold_frac=0.0)
 
@@ -66,7 +68,7 @@ def test_run_generated_respects_the_limit(research_session, inst_factory, candle
     Candle = type(candles_factory(1)[0])
     src = StaticDataSource({("GOLDM", "day"): _osc_candles(Candle)})
     reports = run_generated(research_session, src, [inst_factory("GOLDM")], "day",
-                            limit=2, git_commit="g", min_trades=1, n_folds=3,
+                            owner_id=OWNER_ID, limit=2, git_commit="g", min_trades=1, n_folds=3,
                             min_positive_fold_frac=0.0)
     assert len(reports) == 2
     assert research_session.query(GeneratedStrategyRecord).count() == 2

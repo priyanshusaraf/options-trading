@@ -22,12 +22,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
-    ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     event,
 )
+from sqlalchemy import Index
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.schema import Table
 
@@ -49,10 +51,16 @@ class ResearchProgram(ResearchBase):
     """A long-lived research initiative (e.g. Trend Following, Mean Reversion)."""
     __tablename__ = "research_program"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(80), unique=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(80))
     thesis: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(12), default="active")  # active|paused|archived
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_research_program_owner_id"),
+        UniqueConstraint("owner_id", "name", name="uq_research_program_owner_name"),
+        Index("ix_research_program_owner_name", "owner_id", "name"),
+    )
 
 
 class Hypothesis(ResearchBase):
@@ -61,12 +69,22 @@ class Hypothesis(ResearchBase):
     is eventually revisited (floor > 0: never permanently banned; cap: never thrash)."""
     __tablename__ = "research_hypothesis"
     id: Mapped[int] = mapped_column(primary_key=True)
-    program_id: Mapped[int] = mapped_column(ForeignKey("research_program.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    program_id: Mapped[int] = mapped_column(Integer)
     statement: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(12), default="open")  # open|supported|rejected|dormant
     retest_priority: Mapped[float] = mapped_column(Float, default=1.0)
     last_tested_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_research_hypothesis_owner_id"),
+        ForeignKeyConstraint(
+            ("owner_id", "program_id"),
+            ("research_program.owner_id", "research_program.id"),
+        ),
+        Index("ix_research_hypothesis_owner_program", "owner_id", "program_id"),
+        Index("ix_research_hypothesis_owner_program_statement", "owner_id", "program_id", "statement"),
+    )
 
 
 class ExperimentSpec(ResearchBase):
@@ -75,10 +93,10 @@ class ExperimentSpec(ResearchBase):
     same Spec. Provenance (git_commit + rule-set versions + seed) makes any result
     interpretable and reproducible."""
     __tablename__ = "research_experiment_spec"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     id: Mapped[str] = mapped_column(String(64), primary_key=True)  # content hash
-    hypothesis_id: Mapped[int] = mapped_column(ForeignKey("research_hypothesis.id"), index=True)
-    parent_spec_id: Mapped[str | None] = mapped_column(
-        ForeignKey("research_experiment_spec.id"), nullable=True)  # lineage
+    hypothesis_id: Mapped[int] = mapped_column(Integer)
+    parent_spec_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # lineage
     recipe_json: Mapped[str] = mapped_column(Text, default="{}")  # definitions, datasets, budgets
     git_commit: Mapped[str] = mapped_column(String(40), default="")
     qualifier_version: Mapped[str] = mapped_column(String(24), default="")
@@ -87,6 +105,18 @@ class ExperimentSpec(ResearchBase):
     scoring_version: Mapped[str] = mapped_column(String(24), default="")
     rng_seed: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "hypothesis_id"),
+            ("research_hypothesis.owner_id", "research_hypothesis.id"),
+        ),
+        ForeignKeyConstraint(
+            ("owner_id", "parent_spec_id"),
+            ("research_experiment_spec.owner_id", "research_experiment_spec.id"),
+        ),
+        Index("ix_research_experiment_spec_owner_hypothesis", "owner_id", "hypothesis_id"),
+        Index("ix_research_experiment_spec_owner_parent", "owner_id", "parent_spec_id"),
+    )
 
 
 _make_immutable(ExperimentSpec.__table__)
@@ -98,7 +128,8 @@ class ExperimentRun(ResearchBase):
     re-run after a code change is a new Run against the same (immutable) Spec."""
     __tablename__ = "research_experiment_run"
     id: Mapped[int] = mapped_column(primary_key=True)
-    spec_id: Mapped[str] = mapped_column(ForeignKey("research_experiment_spec.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    spec_id: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|running|failed|completed
     decision: Mapped[str | None] = mapped_column(String(16), nullable=True)  # propose|archive|needs_review
     spent_bar_seconds: Mapped[float] = mapped_column(Float, default=0.0)  # compute budget spent
@@ -107,6 +138,14 @@ class ExperimentRun(ResearchBase):
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_research_experiment_run_owner_id"),
+        ForeignKeyConstraint(
+            ("owner_id", "spec_id"),
+            ("research_experiment_spec.owner_id", "research_experiment_spec.id"),
+        ),
+        Index("ix_research_experiment_run_owner_spec", "owner_id", "spec_id"),
+    )
 
 
 class Finding(ResearchBase):
@@ -116,15 +155,23 @@ class Finding(ResearchBase):
     superseding Finding (`superseded_by`). Time-decay lives on Hypothesis.retest_priority."""
     __tablename__ = "research_finding"
     id: Mapped[int] = mapped_column(primary_key=True)
-    hypothesis_id: Mapped[int] = mapped_column(ForeignKey("research_hypothesis.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    hypothesis_id: Mapped[int] = mapped_column(Integer)
     statement: Mapped[str] = mapped_column(Text)
     polarity: Mapped[str] = mapped_column(String(8))  # positive|negative
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
-    evidence_run_id: Mapped[int | None] = mapped_column(
-        ForeignKey("research_experiment_run.id"), nullable=True)
-    superseded_by: Mapped[int | None] = mapped_column(
-        ForeignKey("research_finding.id"), nullable=True)
+    evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    superseded_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_research_finding_owner_id"),
+        ForeignKeyConstraint(("owner_id", "hypothesis_id"), ("research_hypothesis.owner_id", "research_hypothesis.id")),
+        ForeignKeyConstraint(("owner_id", "evidence_run_id"), ("research_experiment_run.owner_id", "research_experiment_run.id")),
+        ForeignKeyConstraint(("owner_id", "superseded_by"), ("research_finding.owner_id", "research_finding.id")),
+        Index("ix_research_finding_owner_hypothesis", "owner_id", "hypothesis_id"),
+        Index("ix_research_finding_owner_evidence_run", "owner_id", "evidence_run_id"),
+        Index("ix_research_finding_owner_superseded", "owner_id", "superseded_by"),
+    )
 
 
 class OptimizationTrial(ResearchBase):
@@ -133,7 +180,8 @@ class OptimizationTrial(ResearchBase):
     counts over, so it must be a faithful, tamper-proof record of the search."""
     __tablename__ = "research_optimization_trial"
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("research_experiment_run.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_id: Mapped[int] = mapped_column(Integer)
     instrument_key: Mapped[str] = mapped_column(String(48), index=True)
     fold_index: Mapped[int] = mapped_column(Integer)
     params_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -142,6 +190,10 @@ class OptimizationTrial(ResearchBase):
     oos_trades: Mapped[int] = mapped_column(Integer, default=0)
     selected: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        ForeignKeyConstraint(("owner_id", "run_id"), ("research_experiment_run.owner_id", "research_experiment_run.id")),
+        Index("ix_research_optimization_trial_owner_run", "owner_id", "run_id"),
+    )
 
 
 _make_immutable(OptimizationTrial.__table__)
@@ -154,6 +206,7 @@ class GeneratedStrategyRecord(ResearchBase):
     the human review and, on approval, into the execution engine. Mutable/upsert on
     re-generation (unlike the immutable experiment ledger)."""
     __tablename__ = "research_generated_strategy"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     composition_json: Mapped[str] = mapped_column(Text, default="{}")
     source: Mapped[str] = mapped_column(Text, default="")
@@ -166,13 +219,19 @@ class PromotionCandidate(ResearchBase):
     is never written to from here — approval flows through a reviewed git commit."""
     __tablename__ = "research_promotion_candidate"
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[int] = mapped_column(ForeignKey("research_experiment_run.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    run_id: Mapped[int] = mapped_column(Integer)
     parameterization_hash: Mapped[str] = mapped_column(String(64))
     qualifying_universe_json: Mapped[str] = mapped_column(Text, default="[]")
     scorecard_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|approved|rejected
     approved_git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_research_promotion_candidate_owner_id"),
+        ForeignKeyConstraint(("owner_id", "run_id"), ("research_experiment_run.owner_id", "research_experiment_run.id")),
+        Index("ix_research_promotion_candidate_owner_run", "owner_id", "run_id"),
+    )
 
 
 class BlockEdge(ResearchBase):
@@ -189,6 +248,7 @@ class BlockEdge(ResearchBase):
     lesson generalises to the next night's draw.
     """
     __tablename__ = "research_block_edge"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     block_name: Mapped[str] = mapped_column(String(48), primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), primary_key=True)
     positive: Mapped[int] = mapped_column(Integer, default=0)
@@ -210,11 +270,15 @@ class ShadowSession(ResearchBase):
     """
     __tablename__ = "research_shadow_session"
     id: Mapped[int] = mapped_column(primary_key=True)
-    candidate_id: Mapped[int] = mapped_column(
-        ForeignKey("research_promotion_candidate.id"), index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_id: Mapped[int] = mapped_column(Integer)
     session_date: Mapped[dt.date] = mapped_column(Date)
     instrument_key: Mapped[str] = mapped_column(String(32))
     trades: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
     net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    __table_args__ = (
+        ForeignKeyConstraint(("owner_id", "candidate_id"), ("research_promotion_candidate.owner_id", "research_promotion_candidate.id")),
+        Index("ix_research_shadow_session_owner_candidate", "owner_id", "candidate_id"),
+    )

@@ -262,7 +262,7 @@ def test_selected_version_and_persisted_evidence_do_not_follow_a_newer_head(clie
     engine = make_engine(research_db_path())
     Session = make_sessionmaker(engine)
     with Session() as session:
-        spec = session.get(ExperimentSpec, first_body["spec_id"])
+        spec = session.get(ExperimentSpec, ("owner", first_body["spec_id"]))
         recipe = json.loads(spec.recipe_json)
         assert recipe["graph_provenance"]["graph"] == first_body["binding"]["graph"]
         assert recipe["datasets"] == first_body["binding"]["datasets"]
@@ -297,7 +297,7 @@ def _seed_pending_candidate(run_id: int, *, status: str = "pending") -> tuple[in
     Session = make_sessionmaker(engine)
     with Session.begin() as session:
         candidate = PromotionCandidate(
-            run_id=run_id,
+            owner_id="owner", run_id=run_id,
             parameterization_hash="candidate-parameterization",
             qualifying_universe_json='["NIFTY"]',
             scorecard_json=json.dumps(scorecard),

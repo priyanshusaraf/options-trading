@@ -66,7 +66,7 @@ def blocks_in(composition: dict) -> set:
 
 
 def record_outcome(session, composition: dict, instrument_key: str, *,
-                   validated: bool, run_id: int | None = None) -> None:
+                   owner_id: str, validated: bool, run_id: int | None = None) -> None:
     """Credit or debit every block family in `composition` on this instrument.
 
     Two evaluations are two data points — this accumulates rather than collapsing,
@@ -74,9 +74,9 @@ def record_outcome(session, composition: dict, instrument_key: str, *,
     """
     now = dt.datetime.now()
     for name in blocks_in(composition):
-        row = session.get(BlockEdge, (name, instrument_key))
+        row = session.get(BlockEdge, (owner_id, name, instrument_key))
         if row is None:
-            row = BlockEdge(block_name=name, instrument_key=instrument_key,
+            row = BlockEdge(owner_id=owner_id, block_name=name, instrument_key=instrument_key,
                             positive=0, negative=0)
             session.add(row)
         if validated:
@@ -88,7 +88,7 @@ def record_outcome(session, composition: dict, instrument_key: str, *,
     session.flush()
 
 
-def suppressed_blocks(session, instrument_key: str) -> set:
+def suppressed_blocks(session, instrument_key: str, *, owner_id: str) -> set:
     """Families with a well-powered negative record on this instrument.
 
     Returns a set the sampler should avoid — not a ban. A family that later
@@ -96,7 +96,7 @@ def suppressed_blocks(session, instrument_key: str) -> set:
     the full record every time rather than latched.
     """
     rows = (session.query(BlockEdge)
-            .filter(BlockEdge.instrument_key == instrument_key).all())
+            .filter(BlockEdge.owner_id == owner_id, BlockEdge.instrument_key == instrument_key).all())
     scored = []
     for r in rows:
         pos, neg = int(r.positive or 0), int(r.negative or 0)
@@ -167,7 +167,7 @@ def mutate(composition: dict, *, seed: int = 0) -> dict:
     return out
 
 
-def edge_weights(session, instrument_key: str) -> dict:
+def edge_weights(session, instrument_key: str, *, owner_id: str) -> dict:
     """Per-family sampling weight on this instrument: >1 favoured, <1 disfavoured.
 
     Used to bias the draw toward what has worked here. Bounded on both sides so
@@ -175,7 +175,7 @@ def edge_weights(session, instrument_key: str) -> dict:
     exploration floor that stops the loop from converging on its first success.
     """
     rows = (session.query(BlockEdge)
-            .filter(BlockEdge.instrument_key == instrument_key).all())
+            .filter(BlockEdge.owner_id == owner_id, BlockEdge.instrument_key == instrument_key).all())
     out = {}
     for r in rows:
         pos, neg = int(r.positive or 0), int(r.negative or 0)
@@ -188,11 +188,11 @@ def edge_weights(session, instrument_key: str) -> dict:
     return out
 
 
-def edge_report(session) -> str:
+def edge_report(session, *, owner_id: str) -> str:
     """"Which idea works where", rendered for the research report. Empty when
     nothing is known yet — so a caller can use it directly as "is there anything
     to say?"."""
-    rows = session.query(BlockEdge).all()
+    rows = session.query(BlockEdge).filter(BlockEdge.owner_id == owner_id).all()
     if not rows:
         return ""
     by_block: dict = {}

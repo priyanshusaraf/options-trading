@@ -12,6 +12,9 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
+LEGACY_OWNER_ID = "legacy"
+
+
 class ResearchBase(DeclarativeBase):
     """Declarative base for every research-plane table. Never shared with the
     execution ledger's Base."""
@@ -41,7 +44,7 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
 
 
 def init_research_db(engine: Engine) -> None:
-    """Create all research tables. Imports the models module so every mapped class
-    is registered on `ResearchBase.metadata` before `create_all`."""
-    from research.domain import models  # noqa: F401  (registers tables)
-    ResearchBase.metadata.create_all(engine)
+    """Bring the physically separate research database to its owned schema head."""
+    from research.domain.migrate import migrate_research_db
+
+    migrate_research_db(engine)

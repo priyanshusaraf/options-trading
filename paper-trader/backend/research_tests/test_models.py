@@ -15,16 +15,18 @@ from research.domain.models import (
     ResearchProgram,
 )
 
+OWNER_ID = "test-owner"
+
 
 def _seed_spec(s):
-    prog = ResearchProgram(name="Trend Following", thesis="trend persists in large-caps")
+    prog = ResearchProgram(owner_id=OWNER_ID, name="Trend Following", thesis="trend persists in large-caps")
     s.add(prog)
     s.flush()
-    hyp = Hypothesis(program_id=prog.id, statement="EMA trend in large-cap intraday")
+    hyp = Hypothesis(owner_id=OWNER_ID, program_id=prog.id, statement="EMA trend in large-cap intraday")
     s.add(hyp)
     s.flush()
     spec = ExperimentSpec(
-        id="hash-abc", hypothesis_id=hyp.id, recipe_json="{}", git_commit="221f0b0",
+        owner_id=OWNER_ID, id="hash-abc", hypothesis_id=hyp.id, recipe_json="{}", git_commit="221f0b0",
         qualifier_version="q1", optimizer_version="o1", validator_version="v1",
         scoring_version="s1", rng_seed=7)
     s.add(spec)
@@ -35,11 +37,11 @@ def _seed_spec(s):
 def test_program_hypothesis_spec_run_graph(research_session):
     s = research_session
     _, hyp, spec = _seed_spec(s)
-    run = ExperimentRun(spec_id=spec.id)
+    run = ExperimentRun(owner_id=OWNER_ID, spec_id=spec.id)
     s.add(run)
     s.commit()
     assert run.status == "pending"
-    assert s.get(ExperimentSpec, "hash-abc").hypothesis_id == hyp.id
+    assert s.get(ExperimentSpec, (OWNER_ID, "hash-abc")).hypothesis_id == hyp.id
 
 
 def test_experiment_spec_rejects_update(research_session):
@@ -65,7 +67,7 @@ def test_experiment_spec_rejects_delete(research_session):
 def test_experiment_run_is_mutable(research_session):
     s = research_session
     _, _, spec = _seed_spec(s)
-    run = ExperimentRun(spec_id=spec.id)
+    run = ExperimentRun(owner_id=OWNER_ID, spec_id=spec.id)
     s.add(run)
     s.commit()
     run.status = "running"
@@ -89,14 +91,14 @@ def test_hypothesis_retest_priority_defaults_and_updates(research_session):
 def test_finding_negative_polarity_and_supersession(research_session):
     s = research_session
     _, hyp, spec = _seed_spec(s)
-    run = ExperimentRun(spec_id=spec.id)
+    run = ExperimentRun(owner_id=OWNER_ID, spec_id=spec.id)
     s.add(run)
     s.commit()
-    neg = Finding(hypothesis_id=hyp.id, statement="no edge in pharma intraday",
+    neg = Finding(owner_id=OWNER_ID, hypothesis_id=hyp.id, statement="no edge in pharma intraday",
                   polarity="negative", confidence=0.7, evidence_run_id=run.id)
     s.add(neg)
     s.commit()
-    later = Finding(hypothesis_id=hyp.id, statement="edge re-emerged post-regime-shift",
+    later = Finding(owner_id=OWNER_ID, hypothesis_id=hyp.id, statement="edge re-emerged post-regime-shift",
                     polarity="positive", confidence=0.6, evidence_run_id=run.id)
     s.add(later)
     s.commit()
@@ -108,10 +110,10 @@ def test_finding_negative_polarity_and_supersession(research_session):
 def test_promotion_candidate_defaults_pending(research_session):
     s = research_session
     _, _, spec = _seed_spec(s)
-    run = ExperimentRun(spec_id=spec.id)
+    run = ExperimentRun(owner_id=OWNER_ID, spec_id=spec.id)
     s.add(run)
     s.commit()
-    pc = PromotionCandidate(run_id=run.id, parameterization_hash="p-123")
+    pc = PromotionCandidate(owner_id=OWNER_ID, run_id=run.id, parameterization_hash="p-123")
     s.add(pc)
     s.commit()
     assert pc.status == "pending"

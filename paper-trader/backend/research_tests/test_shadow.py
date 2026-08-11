@@ -25,6 +25,8 @@ from research.shadow import (MIN_SHADOW_SESSIONS, STATUS_PENDING, STATUS_SHADOW,
                              approval_queue, comparison, is_ready_for_approval,
                              promote_if_ready, record_session, shadow_record)
 
+OWNER_ID = "test-owner"
+
 
 @pytest.fixture
 def session(tmp_path):
@@ -42,15 +44,15 @@ def _candidate(session, status=STATUS_SHADOW):
     around: a promotion with no traceable run is exactly what the immutable-spec
     lineage exists to prevent.
     """
-    prog = ResearchProgram(name="p", thesis="t")
+    prog = ResearchProgram(owner_id=OWNER_ID, name="p", thesis="t")
     session.add(prog); session.flush()
-    hyp = Hypothesis(program_id=prog.id, statement="h")
+    hyp = Hypothesis(owner_id=OWNER_ID, program_id=prog.id, statement="h")
     session.add(hyp); session.flush()
-    spec = ExperimentSpec(id=f"spec{hyp.id}", hypothesis_id=hyp.id)
+    spec = ExperimentSpec(owner_id=OWNER_ID, id=f"spec{hyp.id}", hypothesis_id=hyp.id)
     session.add(spec); session.flush()
-    run = ExperimentRun(spec_id=spec.id, status="completed")
+    run = ExperimentRun(owner_id=OWNER_ID, spec_id=spec.id, status="completed")
     session.add(run); session.flush()
-    c = PromotionCandidate(run_id=run.id, parameterization_hash="h", status=status,
+    c = PromotionCandidate(owner_id=OWNER_ID, run_id=run.id, parameterization_hash="h", status=status,
                            scorecard_json=json.dumps({"best": {"dsr": 0.9}}))
     session.add(c)
     session.flush()

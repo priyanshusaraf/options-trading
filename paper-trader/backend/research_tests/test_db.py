@@ -7,7 +7,7 @@ never entangle the two databases), and an engine with WAL + foreign keys on.
 from sqlalchemy import text
 
 from research.config import research_db_path
-from research.domain.base import ResearchBase, make_engine, make_sessionmaker
+from research.domain.base import ResearchBase, init_research_db, make_engine, make_sessionmaker
 
 
 def test_research_db_path_defaults_to_research_db():
@@ -44,7 +44,7 @@ def test_make_engine_enables_wal_and_foreign_keys(tmp_path):
 
 def test_sessionmaker_roundtrips_against_research_db(tmp_path):
     engine = make_engine(str(tmp_path / "r.db"))
-    ResearchBase.metadata.create_all(engine)
+    init_research_db(engine)
     Session = make_sessionmaker(engine)
     with Session() as s:
         assert s.execute(text("SELECT 1")).scalar() == 1

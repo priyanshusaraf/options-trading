@@ -9,6 +9,8 @@ from app.ir.resolve import resolve
 from app.ir.strategies.expanding_z import GRAPH, LIBRARY
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import ExperimentRun, ExperimentSpec
+OWNER_ID = "test-owner"
+
 from research.orchestrator.graph_experiment import (
     GraphBindingRejected,
     build_graph_provenance,
@@ -68,6 +70,7 @@ def test_published_graph_experiment_persists_binding_in_existing_spec(
         research_session, inst_factory, candles_factory):
     report = run_published_graph_experiment(
         research_session,
+        owner_id=OWNER_ID,
         project_id="project.alpha",
         graph=GRAPH,
         declared_content_address=content_address(GRAPH),
@@ -86,7 +89,7 @@ def test_published_graph_experiment_persists_binding_in_existing_spec(
         optimize_search=False,
     )
 
-    spec = research_session.get(ExperimentSpec, report["spec_id"])
+    spec = research_session.get(ExperimentSpec, (OWNER_ID, report["spec_id"]))
     recipe = json.loads(spec.recipe_json)
     assert recipe["graph_provenance"]["graph"]["version"] == GRAPH["version"]
     assert recipe["graph_provenance"]["graph"]["content_address"] == content_address(GRAPH)
@@ -105,6 +108,7 @@ def test_presentation_metadata_cannot_change_experiment_identity(
     dataset = _dataset(inst_factory, candles_factory)
     first = run_published_graph_experiment(
         research_session,
+        owner_id=OWNER_ID,
         project_id="project.alpha",
         graph=GRAPH,
         declared_content_address=content_address(GRAPH),
@@ -120,6 +124,7 @@ def test_presentation_metadata_cannot_change_experiment_identity(
     with pytest.raises(GraphBindingRejected, match="executable graph fields"):
         run_published_graph_experiment(
             research_session,
+            owner_id=OWNER_ID,
             project_id="project.alpha",
             graph=contaminated,
             declared_content_address=content_address(contaminated),

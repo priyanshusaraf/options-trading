@@ -32,6 +32,8 @@ from research.strategy.builder.ir_evaluate import (
     knowledge_payload,
     score_exploration,
 )
+
+OWNER_ID = "test-owner"
 from research.strategy.builder.ir_search import Explored, Exploration, explore
 from research.strategy.builder.ir_strategy import (
     IRGraphStrategy,
@@ -175,7 +177,7 @@ def test_every_scored_candidate_carries_a_binding_that_validates(
         research_session, inst_factory, uptrend_factory, vocabulary, lib, frame_inputs):
     walk = _walk(vocabulary, lib, frame_inputs, steps=2)
     scored = score_exploration(
-        research_session, walk, lib, _datasets(inst_factory, uptrend_factory(400)),
+        research_session, walk, lib, _datasets(inst_factory, uptrend_factory(400)), owner_id=OWNER_ID,
         min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
 
     assert len(scored) == len(walk.steps) >= 3
@@ -202,7 +204,7 @@ def test_a_record_bound_to_another_graph_is_refused_not_scored(
     with pytest.raises(UnboundResult):
         score_exploration(research_session, swapped, lib,
                           _datasets(inst_factory, uptrend_factory(400)),
-                          min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
+                          owner_id=OWNER_ID, min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
 
 
 def test_sibling_trials_is_the_size_of_the_lineage(
@@ -214,9 +216,9 @@ def test_sibling_trials_is_the_size_of_the_lineage(
     short = _walk(vocabulary, lib, frame_inputs, seed=5, steps=1)
     long = _walk(vocabulary, lib, frame_inputs, seed=5, steps=3)
 
-    a = score_exploration(research_session, short, lib, datasets, min_trades=1,
+    a = score_exploration(research_session, short, lib, datasets, owner_id=OWNER_ID, min_trades=1,
                           n_folds=3, min_positive_fold_frac=0.0)
-    b = score_exploration(research_session, long, lib, datasets, min_trades=1,
+    b = score_exploration(research_session, long, lib, datasets, owner_id=OWNER_ID, min_trades=1,
                           n_folds=3, min_positive_fold_frac=0.0)
 
     assert {r.report["sibling_trials"] for r in a} == {len(short.steps)}
@@ -237,7 +239,7 @@ def test_the_same_graph_scores_identically_across_runs(
         init_research_db(engine)
         with make_sessionmaker(engine)() as session:
             return [_comparable(r.report) for r in score_exploration(
-                session, walk, lib, datasets, min_trades=1, n_folds=3,
+                session, walk, lib, datasets, owner_id=OWNER_ID, min_trades=1, n_folds=3,
                 min_positive_fold_frac=0.0)]
 
     assert once("a.db") == once("b.db")
@@ -255,7 +257,7 @@ def test_pbo_still_fails_closed(
     evaluated — one candidate, nothing to select between — does not pass."""
     walk = _walk(vocabulary, lib, frame_inputs, seed=5, steps=1)
     scored = score_exploration(
-        research_session, walk, lib, _datasets(inst_factory, uptrend_factory(400)),
+        research_session, walk, lib, _datasets(inst_factory, uptrend_factory(400)), owner_id=OWNER_ID,
         min_trades=1, n_folds=3, min_positive_fold_frac=0.0, optimize_search=True)
 
     reasons = [r["reason"] for item in scored for r in item.report["rejected"]]
@@ -269,7 +271,7 @@ def test_the_loop_feeds_what_it_learned_back_through_knowledge(
     walk = _walk(vocabulary, lib, frame_inputs, seed=5, steps=1)
     score_exploration(research_session, walk, lib,
                       _datasets(inst_factory, uptrend_factory(400)),
-                      min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
+                      owner_id=OWNER_ID, min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
 
     rows = research_session.query(BlockEdge).all()
     assert rows, "nothing was fed back; the Findings corpus stays write-only"

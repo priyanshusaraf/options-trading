@@ -30,6 +30,8 @@ _GEN_COMP = {
     "shortExit":  {"any": ["zscore_gt(50,0.0)", "ema_slope_up(50,5)"]},
 }
 
+OWNER_ID = "owner"
+
 
 def _seed_generated_candidate(path: str) -> int:
     """A candidate for a bot-GENERATED strategy, with its composition persisted."""
@@ -40,26 +42,26 @@ def _seed_generated_candidate(path: str) -> int:
     init_research_db(eng)
     Session = make_sessionmaker(eng)
     with Session() as s:
-        prog = ResearchProgram(name="Generated", thesis="")
+        prog = ResearchProgram(owner_id=OWNER_ID, name="Generated", thesis="")
         s.add(prog)
         s.flush()
-        hyp = Hypothesis(program_id=prog.id, statement="generated has edge")
+        hyp = Hypothesis(owner_id=OWNER_ID, program_id=prog.id, statement="generated has edge")
         s.add(hyp)
         s.flush()
         recipe = {"strategy": "gen_api_test_v1", "params": {}, "interval": "30minute"}
         sid = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:32]
-        s.add(ExperimentSpec(id=sid, hypothesis_id=hyp.id,
+        s.add(ExperimentSpec(owner_id=OWNER_ID, id=sid, hypothesis_id=hyp.id,
                              recipe_json=json.dumps(recipe), git_commit="gen"))
         s.flush()
-        run = ExperimentRun(spec_id=sid, status="completed", decision="propose")
+        run = ExperimentRun(owner_id=OWNER_ID, spec_id=sid, status="completed", decision="propose")
         s.add(run)
         s.flush()
         strat = build_strategy(Composition.from_dict(_GEN_COMP))
-        s.add(GeneratedStrategyRecord(key="gen_api_test_v1",
+        s.add(GeneratedStrategyRecord(owner_id=OWNER_ID, key="gen_api_test_v1",
                                       composition_json=json.dumps(_GEN_COMP),
                                       source=strat.source))
         s.add(PromotionCandidate(
-            run_id=run.id, parameterization_hash="pg",
+            owner_id=OWNER_ID, run_id=run.id, parameterization_hash="pg",
             qualifying_universe_json=json.dumps(["GOLDM"]),
             scorecard_json=json.dumps({"best": {"instrument": "GOLDM", "dsr": 0.3},
                                        "validated": [{"instrument": "GOLDM", "dsr": 0.3,
@@ -74,23 +76,23 @@ def _seed_research_db(path: str) -> int:
     init_research_db(eng)
     Session = make_sessionmaker(eng)
     with Session() as s:
-        prog = ResearchProgram(name="Trend", thesis="")
+        prog = ResearchProgram(owner_id=OWNER_ID, name="Trend", thesis="")
         s.add(prog)
         s.flush()
-        hyp = Hypothesis(program_id=prog.id, statement="EMA trend persists")
+        hyp = Hypothesis(owner_id=OWNER_ID, program_id=prog.id, statement="EMA trend persists")
         s.add(hyp)
         s.flush()
         recipe = {"strategy": "trend_impulse_v3", "params": {"ema_length": 50},
                   "interval": "30minute"}
         sid = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:32]
-        s.add(ExperimentSpec(id=sid, hypothesis_id=hyp.id,
+        s.add(ExperimentSpec(owner_id=OWNER_ID, id=sid, hypothesis_id=hyp.id,
                              recipe_json=json.dumps(recipe), git_commit="abc"))
         s.flush()
-        run = ExperimentRun(spec_id=sid, status="completed", decision="propose")
+        run = ExperimentRun(owner_id=OWNER_ID, spec_id=sid, status="completed", decision="propose")
         s.add(run)
         s.flush()
         cand = PromotionCandidate(
-            run_id=run.id, parameterization_hash="p1",
+            owner_id=OWNER_ID, run_id=run.id, parameterization_hash="p1",
             qualifying_universe_json=json.dumps(["SILVERM", "GOLDM"]),
             scorecard_json=json.dumps({
                 "best": {"instrument": "SILVERM", "dsr": 0.4},

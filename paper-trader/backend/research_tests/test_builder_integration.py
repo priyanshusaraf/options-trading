@@ -9,6 +9,8 @@ import math
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import ExperimentRun, Finding, PromotionCandidate
 from research.orchestrator.run import run_experiment
+
+OWNER_ID = "test-owner"
 from research.strategy.builder.grammar import Composition
 from research.strategy.builder.load import build_strategy
 
@@ -39,7 +41,7 @@ def test_generated_strategy_runs_through_run_experiment(
     datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
 
     report = run_experiment(
-        research_session, program_name="Generated", strategy=strat,
+        research_session, owner_id=OWNER_ID, program_name="Generated", strategy=strat,
         hypothesis_statement="a bot-composed trend/z strategy has edge",
         datasets=datasets, params={}, git_commit="gen", seed=1,
         min_trades=1, n_folds=3, min_positive_fold_frac=0.0)

@@ -65,19 +65,20 @@ def knowledge_payload(graph: Mapping[str, Any],
 
 
 def _feed_knowledge(session, graph: Mapping[str, Any], mapping: Mapping[str, str],
-                    report: Mapping[str, Any]) -> None:
+                    report: Mapping[str, Any], *, owner_id: str) -> None:
     """Credit the graph's block families where it validated, debit where it did not."""
     payload = knowledge_payload(graph, mapping)
     run_id = report.get("run_id")
     for entry in report.get("validated", []):
-        record_outcome(session, payload, entry["instrument"], validated=True, run_id=run_id)
+        record_outcome(session, payload, entry["instrument"], owner_id=owner_id, validated=True, run_id=run_id)
     for entry in report.get("rejected", []):
-        record_outcome(session, payload, entry["instrument"], validated=False, run_id=run_id)
+        record_outcome(session, payload, entry["instrument"], owner_id=owner_id, validated=False, run_id=run_id)
     session.commit()
 
 
 def score_exploration(session, exploration: Exploration,
                       library, datasets, *,
+                      owner_id: str,
                       program: str = "Generated IR graphs",
                       git_commit: str = "unknown", min_trades: int = 20,
                       n_folds: int = 4, min_positive_fold_frac: float = 0.6,
@@ -103,7 +104,7 @@ def score_exploration(session, exploration: Exploration,
 
         logger.info("═══ ir graph %s (%s)", strategy.key, step.record.experiment_id)
         report = dict(run_experiment(
-            session, program_name=program, strategy=strategy,
+            session, owner_id=owner_id, program_name=program, strategy=strategy,
             hypothesis_statement=f"IR graph {strategy.key} has edge",
             datasets=datasets, params={}, git_commit=git_commit,
             seed=exploration.seed, min_trades=min_trades, n_folds=n_folds,
@@ -117,7 +118,7 @@ def score_exploration(session, exploration: Exploration,
         report["graph_version"] = list(step.record.graph)
         report["sibling_trials"] = siblings
         if feed_knowledge:
-            _feed_knowledge(session, step.graph, strategy.mapping, report)
+            _feed_knowledge(session, step.graph, strategy.mapping, report, owner_id=owner_id)
         scored.append(Scored(explored=step, strategy_key=strategy.key, report=report))
 
     return scored

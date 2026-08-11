@@ -55,7 +55,7 @@ def _pick_instruments(eligible: set, limit: int) -> list:
     return (sandbox + rest)[:limit]
 
 
-def build_plan(session, *, eligible: set, strategy_key: str,
+def build_plan(session, *, owner_id: str, eligible: set, strategy_key: str,
                interval: str = "day", days: int = 2000,
                max_experiments: int = DEFAULT_MAX_EXPERIMENTS,
                instruments_per_experiment: int = DEFAULT_INSTRUMENTS_PER_EXPERIMENT,
@@ -70,7 +70,7 @@ def build_plan(session, *, eligible: set, strategy_key: str,
         return []
 
     open_hyps = (session.query(Hypothesis)
-                 .filter(Hypothesis.status == "open")
+                 .filter(Hypothesis.owner_id == owner_id, Hypothesis.status == "open")
                  .order_by(Hypothesis.retest_priority.desc(), Hypothesis.id.asc())
                  .limit(max_experiments)
                  .all())
@@ -85,7 +85,8 @@ def build_plan(session, *, eligible: set, strategy_key: str,
 
     out = []
     for h in open_hyps:
-        prog = session.get(ResearchProgram, h.program_id)
+        prog = (session.query(ResearchProgram)
+                .filter_by(owner_id=owner_id, id=h.program_id).one_or_none())
         out.append(_item(prog.name if prog else COLD_START_PROGRAM, h.statement,
                          strategy_key, instruments, interval, days))
     return out

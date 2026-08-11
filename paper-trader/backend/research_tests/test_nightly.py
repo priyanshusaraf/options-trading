@@ -39,6 +39,7 @@ def test_nightly_initialises_research_db(tmp_path):
     r = _run({"PT_RESEARCH_DB_PATH": research_db,
               "PT_DB_PATH": str(tmp_path / "paper_trader.db"),
               "PT_EXECUTION": "paper",
+              "PT_RESEARCH_OWNER_ID": "test-owner",
               "PT_RESEARCH_ENABLED": "1"}, tmp_path)
     assert r.returncode == 0, r.stderr
     assert os.path.exists(research_db)

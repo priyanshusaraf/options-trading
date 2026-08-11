@@ -26,7 +26,7 @@ from app.core.research_review import ReviewQueryRejected, make_review_event
 from app.ir.hashing import canonical_json, content_address
 
 from research.config import research_db_path
-from research.domain.base import make_engine, make_sessionmaker
+from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.domain.models import (
     ExperimentRun,
     ExperimentSpec,
@@ -52,6 +52,7 @@ def _research_session():
         yield None
         return
     engine = make_engine(path)
+    init_research_db(engine)
     session = make_sessionmaker(engine)()
     try:
         yield session
@@ -62,7 +63,7 @@ def _research_session():
 
 def _recipe_for(session, run_id: int) -> dict:
     run = session.get(ExperimentRun, run_id)
-    spec = session.get(ExperimentSpec, run.spec_id) if run else None
+    spec = (session.get(ExperimentSpec, (run.owner_id, run.spec_id)) if run else None)
     if spec is None:
         return {}
     try:
@@ -422,7 +423,7 @@ def project_review_source(project_id: str) -> dict:
 
 def _verified_finding_run(session, project_id: str, run_id: int) -> dict | None:
     run = session.get(ExperimentRun, run_id)
-    spec = session.get(ExperimentSpec, run.spec_id) if run is not None else None
+    spec = (session.get(ExperimentSpec, (run.owner_id, run.spec_id)) if run is not None else None)
     if run is None or spec is None:
         return None
     recipe = _recipe_for(session, run_id)
@@ -531,6 +532,7 @@ def create_project_finding(
         if context is None:
             return None
         finding = Finding(
+            owner_id=context["run"].owner_id,
             hypothesis_id=context["spec"].hypothesis_id,
             statement=statement,
             polarity=polarity,
@@ -563,6 +565,7 @@ def revise_project_finding(
         if original.superseded_by is not None:
             raise FindingRevisionConflict(finding_id)
         successor = Finding(
+            owner_id=original.owner_id,
             hypothesis_id=original.hypothesis_id,
             statement=statement,
             polarity=polarity,
@@ -607,7 +610,7 @@ def _view(session, c: PromotionCandidate) -> dict:
     payload = _load(c.scorecard_json, {})
     # If this is a bot-generated strategy, carry its exact composition + source so the
     # human reviews the real logic and deploy can hand the composition to the engine.
-    gen = session.get(GeneratedStrategyRecord, strategy_key)
+    gen = session.get(GeneratedStrategyRecord, (c.owner_id, strategy_key))
     composition = _load(gen.composition_json, None) if gen is not None else None
     explanation = _explain(strategy_key, params, composition)
     return {
