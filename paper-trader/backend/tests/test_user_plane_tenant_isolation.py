@@ -152,6 +152,17 @@ def test_owner_a_graph_and_presentation_changes_leave_owner_b_lineage_byte_for_b
                 "shared.group", owner, layouts.GroupFrame(1.0, 2.0, 3.0, 4.0), False, ("n_ema",),
             ),), valid_instance_ids=frozenset({"n_ema"}), owner_id=owner,
         )
+    with SessionLocal.begin() as session:
+        session.execute(text(
+            "INSERT INTO ir_graph_layout_orphan_archive "
+            "(owner_id,graph_identifier,graph_version,revision,updated_at,archived_at) "
+            "VALUES ('owner.b',:identifier,41,17,'2026-08-12 09:10:11','2026-08-12 09:10:12')"
+        ), {"identifier": identifier})
+        session.execute(text(
+            "INSERT INTO ir_graph_layout_position_orphan_archive "
+            "(owner_id,graph_identifier,graph_version,instance_id,x,y) "
+            "VALUES ('owner.b',:identifier,41,'private.archive.node',91.25,92.5)"
+        ), {"identifier": identifier})
 
     tables = (
         "graph_artifacts", "graph_versions", "ir_graph_layouts", "ir_graph_layout_positions",
@@ -164,6 +175,8 @@ def test_owner_a_graph_and_presentation_changes_leave_owner_b_lineage_byte_for_b
                 f"SELECT * FROM {table} WHERE owner_id='owner.b' ORDER BY rowid"
             )).all()) for table in tables
         }
+    assert owner_b_rows["ir_graph_layout_orphan_archive"]
+    assert owner_b_rows["ir_graph_layout_position_orphan_archive"]
 
     changed = _graph(identifier)
     changed["display_name"] = "Owner A revision two"

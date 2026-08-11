@@ -1034,6 +1034,13 @@ def test_revision_0021_populated_legacy_round_trip_restores_rows_and_contracts(t
         before_rows = _insert_populated_0020_graph_lineage(connection)
         before_contracts = {table: _revision_0020_contract(engine, table) for table in AFFECTED_0021_TABLES}
         command.upgrade(migrate.alembic_config(connection), HEAD)
+        expected_0021_rows = {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
+            for table in AFFECTED_0021_TABLES
+        }
+        expected_0021_contracts = {
+            table: _revision_0021_contract(engine, table) for table in AFFECTED_0021_TABLES
+        }
         command.downgrade(migrate.alembic_config(connection), "0020")
         restored_rows = {
             table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
@@ -1050,8 +1057,14 @@ def test_revision_0021_populated_legacy_round_trip_restores_rows_and_contracts(t
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), HEAD)
     assert migrate.schema_version(engine) == HEAD
-    assert all("owner_id" in {column["name"] for column in sa.inspect(engine).get_columns(table)}
-               for table in AFFECTED_0021_TABLES[:-2])
+    with engine.connect() as connection:
+        assert {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
+            for table in AFFECTED_0021_TABLES
+        } == expected_0021_rows
+    assert {
+        table: _revision_0021_contract(engine, table) for table in AFFECTED_0021_TABLES
+    } == expected_0021_contracts
 
 
 def test_revision_0021_downgrade_refuses_two_owner_same_identifier_before_ddl(tmp_path):

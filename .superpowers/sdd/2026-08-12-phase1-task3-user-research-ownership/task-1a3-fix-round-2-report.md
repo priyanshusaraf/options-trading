@@ -40,8 +40,9 @@ The migration suite passed. The existing broker/provider files remained unedited
 
 The follow-up tenant node creates byte-identical `shared.mutation.graph` lineages for two owners,
 then has owner A save and publish a second draft and carry presentation from version 1 to version
-2 with the only node removed. That path creates both archive row types. It snapshots owner B's
-artifact/version, layout head, child rows, and both archives before the mutation and proves the
+2 with the only node removed. Carry reconciles presentation; it does not create archive rows.
+The test explicitly seeds private owner-B rows in both archive tables, snapshots owner B's
+artifact/version, layout head, child rows, and archives before the mutation, and proves the
 complete snapshot and B's layout revision remain unchanged afterwards. It also reads both stored
 version rows to prove identical `artifact_json` and `content_address`, then checks canonical graph
 JSON and the owner-facing published records for absent owner and visibility fields.
