@@ -21,6 +21,7 @@ import pytest
 
 import app.engine.broker_factory as bf
 from app.engine.broker import PaperBroker
+from app.db.models import LEGACY_OWNER_ID
 from app.providers.mock import MockProvider
 from app.providers.kite import KiteProvider as _KiteForCaps
 
@@ -147,7 +148,7 @@ def test_make_broker_raises_if_it_ever_resolves_a_real_live_broker(monkeypatch):
     assert bf.live_execution_enabled() is True, "precondition: the gate is open"
 
     with pytest.raises(RuntimeError, match="real LiveBroker inside a pytest run"):
-        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
+        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
 
 
 def test_the_raise_names_the_offending_test(monkeypatch):
@@ -156,7 +157,7 @@ def test_the_raise_names_the_offending_test(monkeypatch):
     _stub_the_kite_plumbing(monkeypatch)
 
     with pytest.raises(RuntimeError) as e:
-        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
+        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
     assert "test_the_raise_names_the_offending_test" in str(e.value)
     assert "REAL orders" in str(e.value)
 
@@ -198,7 +199,7 @@ def test_make_broker_really_does_construct_a_genuine_live_broker(monkeypatch):
     _stub_the_kite_plumbing(monkeypatch)
     monkeypatch.setattr(bf, "_refuse_live_broker_under_pytest", lambda b: None)
 
-    broker = bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
+    broker = bf.make_broker(_kite_looking_provider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
     assert type(broker) is LiveBroker
     assert type(broker).__module__ == bf._LIVE_BROKER_MODULE
 

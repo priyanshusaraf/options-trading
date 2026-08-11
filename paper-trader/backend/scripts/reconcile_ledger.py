@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select
 
-from app.db.models import CapitalState, Position
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, CapitalState, Position
 from app.db.session import SessionLocal
 from app.engine.ledger_reconcile import plan_reanchor
 
@@ -51,7 +51,7 @@ def main() -> None:
     args = ap.parse_args()
 
     with SessionLocal() as sess:
-        cap = sess.get(CapitalState, 1)
+        cap = sess.get(CapitalState, (LEGACY_BROKER_ACCOUNT_ID, "live"))
         if cap is None:
             print("no capital_state row — nothing to reconcile")
             return
@@ -75,7 +75,7 @@ def main() -> None:
             return
 
         print(f"Real account equity: ₹{equity:,.2f}   (book is flat)\n")
-        print("Re-anchor plan (capital_state id=1):")
+        print(f"Re-anchor plan ({cap.broker_account_id}/{cap.book} capital state):")
         for n in notes:
             print("  " + n)
 
@@ -90,7 +90,7 @@ def main() -> None:
                     f"UPDATE capital_state SET initial_capital={cap.initial_capital}, "
                     f"cash={cap.cash}, realized_pnl={cap.realized_pnl}, "
                     f"account_baseline={cap.account_baseline if cap.account_baseline is not None else 'NULL'} "
-                    "WHERE id=1;\n")
+                    f"WHERE broker_account_id='{cap.broker_account_id}' AND book='{cap.book}';\n")
         cap.initial_capital = new["initial_capital"]
         cap.cash = new["cash"]
         cap.realized_pnl = new["realized_pnl"]

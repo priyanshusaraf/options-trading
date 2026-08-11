@@ -78,9 +78,11 @@ class LiveBroker(PaperBroker):
     def __init__(self, provider, order_client, *, poll_seconds: float = 0.5,
                  timeout_seconds: float = 30.0, notifier=None,
                  deployment_id: int = LEGACY_DEPLOYMENT_ID,
+                 owner_id: str, broker_account_id: str,
                  lifecycle_clock=None, connection: Connection | None = None,
                  venue=None) -> None:
-        super().__init__(provider, deployment_id=deployment_id)
+        super().__init__(provider, deployment_id=deployment_id,
+                         broker_account_id=broker_account_id)
         self.client = order_client
         # The wire seam. Every protective-stop call goes through here, so this broker
         # asks for a RESTING_STOP or a SERVER_TRIGGER and never for an SL-M or a GTT —
@@ -101,7 +103,7 @@ class LiveBroker(PaperBroker):
         # restart-recovery query, so it decides which unresolved live entries this broker may
         # adopt. One owner today; the dimension exists so a second is a configuration rather
         # than a migration of the money record.
-        self.owner_id = (get_settings().owner_id or LEGACY_OWNER_ID).strip() or LEGACY_OWNER_ID
+        self.owner_id = owner_id
         self.poll_seconds = poll_seconds
         self.timeout_seconds = timeout_seconds
         self.notifier = notifier

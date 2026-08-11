@@ -25,7 +25,8 @@ os.environ.setdefault("PT_MOCK_TICK_SECONDS", "0")
 
 from sqlalchemy import func, select  # noqa: E402
 
-from app.db.models import EquitySnapshot, SignalEvent, Trade  # noqa: E402
+from app.db.models import (  # noqa: E402
+    EquitySnapshot, LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, SignalEvent, Trade)
 from app.db.session import SessionLocal, init_db  # noqa: E402
 from app.engine.runner import EngineRunner  # noqa: E402
 
@@ -33,7 +34,8 @@ from app.engine.runner import EngineRunner  # noqa: E402
 def main() -> int:
     ticks = int(sys.argv[1]) if len(sys.argv) > 1 else 600
     init_db(reset=True)
-    eng = EngineRunner()
+    eng = EngineRunner(owner_id=LEGACY_OWNER_ID,
+                       broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     eng.armed = True   # headless dry-run: arm so the engine actually trades
 
     for _ in range(ticks):

@@ -105,6 +105,19 @@ def _instrument(view: dict, key: str = INSTRUMENT) -> dict:
     return next(i for i in view["instruments"] if i["instrument_key"] == key)
 
 
+def test_cockpit_reads_capital_from_the_runners_broker_account(monkeypatch, runner):
+    """A cockpit view must not quietly report the legacy account's cash."""
+    from app.engine import analytics
+
+    captured = {}
+    monkeypatch.setattr(analytics, "capital_dict", lambda _session, **kwargs:
+                        captured.update(kwargs) or {"cash": 12})
+    runner.broker.broker_account_id = "account.nonlegacy"
+    with SessionLocal() as session:
+        cockpit.view(runner, session)
+    assert captured["broker_account_id"] == "account.nonlegacy"
+
+
 # ── 1. the eight questions ───────────────────────────────────────────────────────
 
 class TestTheCockpitCanAnswer:

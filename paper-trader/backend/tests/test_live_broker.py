@@ -5,7 +5,8 @@ and a fake account-positions feed."""
 from sqlalchemy import select
 
 from app.core.instruments import get_instrument
-from app.db.models import ExecutionIntent, Trade
+from app.db.models import (
+    ExecutionIntent, LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, Trade)
 from app.db.session import init_db
 from app.engine.execution_policy import OrderPlan
 from app.engine.live_broker import LiveBroker
@@ -99,7 +100,9 @@ def _broker(client, account=None):
     init_db(reset=True)
     prov = MockProvider()
     prov.account_positions = lambda: (account or [])
-    return LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0)
+    return LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0,
+                      owner_id=LEGACY_OWNER_ID,
+                      broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
 
 def _open(b, client):

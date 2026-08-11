@@ -318,7 +318,7 @@ def init_db(reset: bool = False) -> None:
         from app.editor.graph_artifacts import ensure_catalogue_seed
         ensure_legacy_deployment(sess)
         ensure_catalogue_seed(sess)
-        if sess.get(CapitalState, (LEGACY_BROKER_ACCOUNT_ID, "live")) is None:
+        if sess.query(CapitalState).count() == 0:
             sess.add(CapitalState(id=1, broker_account_id=LEGACY_BROKER_ACCOUNT_ID, book="live",
                                   initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))

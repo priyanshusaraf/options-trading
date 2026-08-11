@@ -2,7 +2,7 @@
 in-flight trackers, so a crash mid-order-poll is recoverable on restart."""
 from sqlalchemy import select
 
-from app.db.models import OrderJournal
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, OrderJournal
 from app.db.session import init_db, SessionLocal
 
 
@@ -55,7 +55,9 @@ from app.providers.mock import MockProvider
 def _fresh_broker_same_db(client):
     prov = MockProvider()
     prov.account_positions = lambda: []
-    return LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0)
+    return LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0,
+                      owner_id=LEGACY_OWNER_ID,
+                      broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
 
 def test_recover_adopts_a_late_filled_entry_after_restart():

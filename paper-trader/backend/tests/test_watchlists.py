@@ -114,7 +114,8 @@ def test_engine_prefers_active_watchlist_strategy_over_instrument_state():
     with SessionLocal() as s:
         # GOLDM is a seed instrument; pin its per-instrument strategy explicitly so the
         # test proves the watchlist beats even an explicit InstrumentState assignment.
-        st = s.get(InstrumentState, "GOLDM") or InstrumentState(instrument_key="GOLDM")
+        st = (s.get(InstrumentState, ("owner", "GOLDM"))
+              or InstrumentState(owner_id="owner", instrument_key="GOLDM"))
         st.strategy_key = "trend_impulse_v3"
         st.enabled = True
         s.add(st)

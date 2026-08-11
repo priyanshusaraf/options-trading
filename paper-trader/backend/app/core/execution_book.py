@@ -109,10 +109,16 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
 
     from app.core.config import get_settings
     from app.core.logging import log
-    from app.db.models import CapitalState
+    from app.db.models import BrokerAccount, CapitalState
 
     if book not in BOOKS:
         raise ValueError(f"{book!r} is not an execution book; expected one of {BOOKS}")
+
+    # A capital row is not proof of tenancy: pre-foreign-key rows can exist for an
+    # account that was deleted or never provisioned. Refusing before either the named
+    # row or bootstrap path prevents that orphan from becoming spendable money state.
+    if session.get(BrokerAccount, broker_account_id) is None:
+        raise ValueError(f"broker account {broker_account_id!r} does not exist")
 
     row = session.get(CapitalState, (broker_account_id, book))
     if row is not None:
@@ -124,6 +130,10 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     legacy = session.get(CapitalState, (broker_account_id, LEGACY_UNATTRIBUTED_BOOK))
     if legacy is not None:
         owners = _books_with_money_rows(session, broker_account_id=broker_account_id)
+        named_books = set(session.scalars(
+            select(CapitalState.book).where(
+                CapitalState.broker_account_id == broker_account_id,
+                CapitalState.book != LEGACY_UNATTRIBUTED_BOOK)))
         if owners is None:
             log.warn(f"capital_state row {legacy.id} cannot be claimed: broker account "
                      f"{broker_account_id!r} has no tenancy root", event="LEDGER_UNATTRIBUTED")
@@ -131,7 +141,7 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
             log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,
                                                     owners=sorted(owners), book=book),
                      event="LEDGER_UNATTRIBUTED")
-        elif not owners or owners == {book}:
+        elif not named_books and (not owners or owners == {book}):
             legacy.book = book
             _commit_the_bootstrap(session)
             return legacy

@@ -152,7 +152,9 @@ def loop_ab(settle_first: bool = False) -> dict:
         # with `refresh_params()`, which would overwrite an attribute set by hand — and
         # silently measure the lane as OFF in both arms.
         runtime_config.set_override("ir_shadow_enabled", enabled)
-        runner = EngineRunner()
+        from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+        runner = EngineRunner(owner_id=LEGACY_OWNER_ID,
+                              broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
         for key in list(runner.enabled):
             runner.strategy_keys[key] = "expanding_z_v4"
         durations = []

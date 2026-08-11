@@ -39,7 +39,7 @@ def test_interval_default_and_set():
     r.set_interval("NIFTY", "60minute")
     assert r._interval_for("NIFTY") == "60minute"
     with SessionLocal() as s:
-        assert s.get(InstrumentState, "NIFTY").live_interval == "60minute"
+        assert s.get(InstrumentState, ("owner", "NIFTY")).live_interval == "60minute"
     r.set_interval("NIFTY", "1minute")   # unsupported -> clamped to default
     assert r._interval_for("NIFTY") == config.DEFAULT_LIVE_INTERVAL
 

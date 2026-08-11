@@ -362,7 +362,7 @@ class TestBooksStayApartWhileAGraphTrades:
             self._paper_position(s, mode=PAPER)
         live = LiveLike.__new__(LiveLike)
         live.__init__(__import__("app.providers.mock", fromlist=["MockProvider"])
-                      .MockProvider())
+                      .MockProvider(), broker_account_id="account.default")
         try:
             assert live.open_positions() == []
             assert live.position_for(INSTRUMENT) is None

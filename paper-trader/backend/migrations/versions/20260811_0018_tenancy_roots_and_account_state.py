@@ -171,6 +171,14 @@ def downgrade() -> None:
     # Dropping tenant roots is reversible only while this revision's single legacy
     # compatibility root is the *only* root.  A later customer must never disappear
     # merely because an operator asks Alembic to walk backwards.
+    # Membership must be checked before its user root. A valid non-legacy membership
+    # necessarily has a non-legacy user, but naming the relationship makes the loss
+    # explicit rather than reporting its prerequisite and hiding the affected grant.
+    if bind.execute(sa.text(
+        "SELECT 1 FROM memberships WHERE organization_id != :organization_id "
+        "OR user_id != :user_id LIMIT 1"
+    ), {"organization_id": LEGACY_OWNER_ID, "user_id": LEGACY_USER_ID}).scalar() is not None:
+        raise RuntimeError("tenancy downgrade refused: non-legacy membership would be lost")
     root_counts = {
         "organizations": ("organization_id", LEGACY_OWNER_ID),
         "users": ("user_id", LEGACY_USER_ID),
@@ -182,11 +190,6 @@ def downgrade() -> None:
         ), {"legacy_id": legacy_id}).scalar() is not None:
             raise RuntimeError(
                 f"tenancy downgrade refused: non-legacy {table} root would be lost")
-    if bind.execute(sa.text(
-        "SELECT 1 FROM memberships WHERE organization_id != :organization_id "
-        "OR user_id != :user_id LIMIT 1"
-    ), {"organization_id": LEGACY_OWNER_ID, "user_id": LEGACY_USER_ID}).scalar() is not None:
-        raise RuntimeError("tenancy downgrade refused: non-legacy membership would be lost")
     collisions = {
         "capital_state": "book",
         "instrument_state": "instrument_key",

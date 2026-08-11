@@ -66,6 +66,21 @@ def test_fresh_reset_bootstrap_seeds_exactly_one_legacy_root_set_idempotently():
             organization_id=LEGACY_OWNER_ID, user_id=LEGACY_USER_ID).count() == 1
         assert session.query(BrokerAccount).filter_by(
             broker_account_id=LEGACY_BROKER_ACCOUNT_ID).count() == 1
+        assert session.query(Organization).count() == 1
+        assert session.query(User).count() == 1
+        assert session.query(Membership).count() == 1
+        assert session.query(BrokerAccount).count() == 1
+        organization = session.get(Organization, LEGACY_OWNER_ID)
+        user = session.get(User, LEGACY_USER_ID)
+        assert (organization.name, organization.status) == ("Legacy owner", "active")
+        assert (user.email_normalized, user.display_name, user.status) == (
+            "owner@legacy.local", "Legacy owner", "active")
+        membership = session.get(Membership, (LEGACY_OWNER_ID, LEGACY_USER_ID))
+        assert (membership.role, membership.status) == ("owner", "active")
+        account = session.get(BrokerAccount, LEGACY_BROKER_ACCOUNT_ID)
+        assert (account.owner_id, account.broker, account.external_account_id,
+                account.display_name, account.status) == (
+                    LEGACY_OWNER_ID, "legacy", "default", "Default account", "active")
 
 
 def test_membership_refuses_dangling_same_plane_roots(tmp_path):

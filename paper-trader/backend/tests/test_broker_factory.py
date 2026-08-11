@@ -1,6 +1,7 @@
 """You cannot reach the order-placing broker by accident: it needs BOTH live flags
 AND the live Kite provider. Default and mock always give the paper broker."""
 from app.core.config import get_settings
+from app.db.models import LEGACY_OWNER_ID
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import live_execution_enabled, make_broker
@@ -33,7 +34,7 @@ def test_paper_broker_by_default(monkeypatch):
     monkeypatch.delenv("PT_LIVE_ACK", raising=False)
     init_db(reset=True)
     assert live_execution_enabled() is False
-    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default"), PaperBroker)
+    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID), PaperBroker)
 
 
 def test_both_flags_required(monkeypatch):
@@ -61,7 +62,28 @@ def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
     _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     # even with both flags, the mock provider can never place a real order
-    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default"), PaperBroker)
+    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID), PaperBroker)
+
+
+def test_real_live_broker_constructor_keeps_explicit_nonlegacy_owner_and_account():
+    """The real subclass, not a permissive factory fake, must retain both scopes."""
+    from app.db.models import BrokerAccount, Organization
+    from app.db.session import SessionLocal
+    from app.engine.live_broker import LiveBroker
+
+    init_db(reset=True)
+    with SessionLocal() as session:
+        session.add(Organization(organization_id="org.nonlegacy", name="Nonlegacy"))
+        session.add(BrokerAccount(broker_account_id="account.nonlegacy", owner_id="org.nonlegacy",
+                                  broker="kite", external_account_id="nonlegacy",
+                                  display_name="Nonlegacy account"))
+        session.commit()
+    broker = LiveBroker(MockProvider(), object(), owner_id="org.nonlegacy",
+                        broker_account_id="account.nonlegacy", venue=object())
+    try:
+        assert (broker.owner_id, broker.broker_account_id) == ("org.nonlegacy", "account.nonlegacy")
+    finally:
+        broker.close()
 
 
 def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
@@ -83,15 +105,18 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
     def fake_lb(provider, client, *, poll_seconds=0.5, timeout_seconds=30.0, notifier=None,
                 **_connection_and_book):
         captured["poll"], captured["timeout"] = poll_seconds, timeout_seconds
+        captured.update(_connection_and_book)
         return "LB"
 
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", fake_lb)
-    assert make_broker(prov, broker_account_id="account.default") == "LB"
+    assert make_broker(prov, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID) == "LB"
     from app.core.config import get_settings
     s = get_settings()
     assert captured["timeout"] == s.order_timeout_seconds
     assert captured["poll"] == s.order_poll_seconds
     assert captured["timeout"] <= 15.0
+    assert (captured["owner_id"], captured["broker_account_id"]) == (
+        LEGACY_OWNER_ID, "account.default")
 
 
 def test_make_broker_passes_configured_market_protection_to_order_client(monkeypatch):
@@ -116,7 +141,7 @@ def test_make_broker_passes_configured_market_protection_to_order_client(monkeyp
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker",
                         lambda *a, **k: "LB")
-    assert make_broker(prov, broker_account_id="account.default") == "LB"
+    assert make_broker(prov, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID) == "LB"
     from app.core.config import get_settings
     assert captured["market_protection"] == get_settings().market_protection_pct
 
@@ -145,7 +170,7 @@ def test_make_broker_wires_the_provider_tick_size_as_the_tick_source(monkeypatch
 
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
-    assert make_broker(prov, broker_account_id="account.default") == "LB"
+    assert make_broker(prov, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID) == "LB"
     assert captured["tick_source"] is prov.tick_size
     assert captured["tick_source"]("LT", "NSE") == 0.10
 
@@ -172,7 +197,7 @@ def test_make_broker_tick_source_is_none_when_the_provider_has_no_tick_size(monk
 
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
-    assert make_broker(prov, broker_account_id="account.default") == "LB"
+    assert make_broker(prov, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID) == "LB"
     assert captured["tick_source"] is None
 
 

@@ -127,11 +127,14 @@ class _ExplodingClient:
 @pytest.fixture()
 def broker_and_venue():
     from app.db.session import init_db
+    from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
     from app.engine.live_broker import LiveBroker
     from app.providers.mock import MockProvider
     init_db(reset=True)
     venue = _RecordingVenue()
-    return LiveBroker(MockProvider(), _ExplodingClient(), venue=venue), venue
+    return LiveBroker(MockProvider(), _ExplodingClient(), venue=venue,
+                      owner_id=LEGACY_OWNER_ID,
+                      broker_account_id=LEGACY_BROKER_ACCOUNT_ID), venue
 
 
 def _position(segment: str, *, direction: str = "LONG", protective_id=None):

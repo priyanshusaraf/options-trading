@@ -72,20 +72,20 @@ def test_repeated_writes_do_not_accumulate_connections(runner):
 def test_the_flag_is_actually_persisted(runner):
     runner.set_priority_flag("NIFTY", True)
     with SessionLocal() as s:
-        assert s.get(InstrumentState, "NIFTY").priority_flag is True
+        assert s.get(InstrumentState, ("owner", "NIFTY")).priority_flag is True
     runner.set_priority_flag("NIFTY", False)
     with SessionLocal() as s:
-        assert s.get(InstrumentState, "NIFTY").priority_flag is False
+        assert s.get(InstrumentState, ("owner", "NIFTY")).priority_flag is False
 
 
 def test_a_row_is_created_for_an_instrument_that_has_none(runner):
     """The whole point of an UPSERT: a freshly added instrument has no row yet."""
     key = "NEWLY_ADDED_KEY"
     with SessionLocal() as s:
-        assert s.get(InstrumentState, key) is None
+        assert s.get(InstrumentState, ("owner", key)) is None
     runner.set_priority_flag(key, True)
     with SessionLocal() as s:
-        assert s.get(InstrumentState, key).priority_flag is True
+        assert s.get(InstrumentState, ("owner", key)).priority_flag is True
 
 
 def test_a_failed_write_leaves_no_half_applied_row(runner, monkeypatch):
@@ -104,7 +104,7 @@ def test_a_failed_write_leaves_no_half_applied_row(runner, monkeypatch):
     monkeypatch.setattr("sqlalchemy.orm.Session.commit", real_commit)
 
     with SessionLocal() as s:
-        assert s.get(InstrumentState, key) is None, \
+        assert s.get(InstrumentState, ("owner", key)) is None, \
             "the uncommitted row survived the failed write"
 
 

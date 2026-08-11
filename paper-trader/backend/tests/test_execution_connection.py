@@ -18,6 +18,7 @@ import types
 import pytest
 
 from app.core.config import get_settings
+from app.db.models import LEGACY_OWNER_ID
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import make_broker
@@ -99,7 +100,7 @@ def test_the_order_credential_comes_from_the_execution_connection_not_the_data_p
         token_source=lambda: "EXEC_TOKEN",
     )
 
-    assert make_broker(data, execution_connection=execution, broker_account_id="account.default") == "LB"
+    assert make_broker(data, execution_connection=execution, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID) == "LB"
     assert captured["token_source"]() == "EXEC_TOKEN"
 
 
@@ -117,7 +118,7 @@ def test_the_credential_stays_late_bound_so_a_daily_relogin_still_propagates(mon
         capabilities=frozenset({caps.LIVE_EXECUTION}),
         token_source=lambda: tokens[-1],
     )
-    make_broker(_kite_shaped_provider("ignored"), execution_connection=execution, broker_account_id="account.default")
+    make_broker(_kite_shaped_provider("ignored"), execution_connection=execution, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
 
     assert captured["token_source"]() == "MONDAY"
     tokens.append("TUESDAY")
@@ -140,7 +141,7 @@ def test_a_named_data_only_connection_refuses_instead_of_silently_paper_trading(
     )
 
     with pytest.raises(ConnectionCannotExecute) as err:
-        make_broker(_kite_shaped_provider("tok"), execution_connection=data_only, broker_account_id="account.default")
+        make_broker(_kite_shaped_provider("tok"), execution_connection=data_only, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
 
     message = str(err.value)
     assert "upstox:acct-1" in message, "the refusal must name the connection"
@@ -157,7 +158,7 @@ def test_an_unnamed_execution_connection_keeps_the_legacy_paper_fallback(monkeyp
     _open_the_live_gate(monkeypatch)
     init_db(reset=True)
 
-    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default"), PaperBroker)
+    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID), PaperBroker)
 
 
 def test_the_legacy_kite_connection_is_derived_unchanged_from_the_provider():
@@ -265,7 +266,7 @@ def test_a_broker_with_no_order_client_refuses_even_when_it_declares_execution(b
     )
 
     with pytest.raises(ConnectionCannotExecute) as err:
-        make_broker(_kite_shaped_provider("tok"), execution_connection=conn, broker_account_id="account.default")
+        make_broker(_kite_shaped_provider("tok"), execution_connection=conn, broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
     assert broker in str(err.value)
 
 

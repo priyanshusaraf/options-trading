@@ -32,7 +32,8 @@ def test_intraday_equity_trades_end_to_end():
     assert keys, "expected at least one affordably-priced mock instrument"
     with SessionLocal() as s:
         for k in keys:
-            row = s.get(InstrumentState, k) or InstrumentState(instrument_key=k)
+            row = (s.get(InstrumentState, ("owner", k))
+                   or InstrumentState(owner_id="owner", instrument_key=k))
             row.enabled = True
             row.product = "equity_intraday"
             s.add(row)
@@ -83,7 +84,8 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
     init_db(reset=True)
     key = _cheap_keys(1)[0]
     with SessionLocal() as s:
-        row = s.get(InstrumentState, key) or InstrumentState(instrument_key=key)
+        row = (s.get(InstrumentState, ("owner", key))
+               or InstrumentState(owner_id="owner", instrument_key=key))
         row.enabled = True
         row.product = "equity_intraday"
         s.add(row)

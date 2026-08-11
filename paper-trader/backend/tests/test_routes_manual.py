@@ -166,6 +166,31 @@ def test_calendar_combines_bot_ledger_and_account_snapshots():
     assert rec[yday.isoformat()]["bot_pnl"] is None
 
 
+def test_calendar_reads_same_day_snapshots_only_from_the_runners_broker_account():
+    """A second account's account-net must never alter this cockpit's discretionary P&L."""
+    import datetime as dt
+    from app.db.models import DailyAccountSnapshot
+
+    c, runner = _client()
+    runner.broker.broker_account_id = "account.second"
+    today = runner.provider.now().date()
+    yesterday = today - dt.timedelta(days=1)
+    with SessionLocal() as session:
+        session.add_all([
+            DailyAccountSnapshot(broker_account_id="account.second", day=yesterday.isoformat(),
+                                 account_net=100.0, account_available=100.0),
+            DailyAccountSnapshot(broker_account_id="account.second", day=today.isoformat(),
+                                 account_net=120.0, account_available=120.0),
+            DailyAccountSnapshot(broker_account_id="account.default", day=yesterday.isoformat(),
+                                 account_net=1_000.0, account_available=1_000.0),
+            DailyAccountSnapshot(broker_account_id="account.default", day=today.isoformat(),
+                                 account_net=9_000.0, account_available=9_000.0),
+        ])
+        session.commit()
+    rows = {row["day"]: row for row in c.get("/api/calendar").json()["days"]}
+    assert rows[today.isoformat()]["my_pnl"] == 20.0
+
+
 def test_set_interval_route():
     c, r = _client()
     res = c.post("/api/instruments/NIFTY/interval", json={"interval": "60minute"}).json()

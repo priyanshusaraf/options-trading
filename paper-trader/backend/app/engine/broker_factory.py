@@ -71,7 +71,7 @@ def live_execution_enabled() -> bool:
 
 
 def make_broker(provider, notifier=None, deployment_id=None, execution_connection=None,
-                *, broker_account_id: str):
+                *, broker_account_id: str, owner_id: str):
     """Build the broker for `deployment_id`'s book.
 
     `deployment_id=None` means "the legacy deployment" — resolved inside the broker
@@ -91,12 +91,12 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
     `ConnectionCannotExecute` for why silence there is the dangerous option."""
     named = execution_connection is not None
     conn = execution_connection if named else connection_for(provider)
-    book = {"broker_account_id": broker_account_id}
+    book = {"broker_account_id": broker_account_id, "owner_id": owner_id}
     if deployment_id is not None:
         book["deployment_id"] = deployment_id
 
     if not live_execution_enabled():
-        return PaperBroker(provider, **book)
+        return PaperBroker(provider, deployment_id=deployment_id, broker_account_id=broker_account_id)
 
     if not conn.supports(caps.LIVE_EXECUTION):
         if named:
@@ -106,7 +106,8 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
                 f"{sorted(conn.capabilities)}. Refusing to return a PaperBroker under a live "
                 f"configuration — that would look exactly like trading and place no order."
             )
-        return PaperBroker(provider, **book)
+        return PaperBroker(provider, deployment_id=deployment_id,
+                           broker_account_id=broker_account_id)
 
     # Declaring LIVE_EXECUTION says "a live order client can be built from this
     # connection". WHICH client is the registry's answer, not this function's: until

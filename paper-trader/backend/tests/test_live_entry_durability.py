@@ -15,7 +15,7 @@ from app.db.models import (
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine import live_broker as live_broker_module
-from app.db.models import LEGACY_OWNER_ID
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
 from app.engine.live_broker import LiveBroker
 from app.providers import capabilities as caps
 from app.providers.connection import KITE_LEGACY_CONNECTION_SCOPE, Connection
@@ -242,6 +242,8 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
         dt.datetime(2026, 8, 9, 10, 15, 30, 800000),
     ])
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
                         lifecycle_clock=lambda: next(clock_times))
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
@@ -284,7 +286,9 @@ def test_equity_entry_uses_decision_price_and_links_intent_while_stop_stays_lega
     init_db(reset=True)
     provider = MockProvider()
     client = _FilledClient(251.0)
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
     runtime_now = dt.datetime(2026, 8, 9, 10, 16, 0)
 
@@ -310,7 +314,9 @@ def test_partial_timeout_books_only_later_positive_fill_delta_once():
     init_db(reset=True)
     provider = MockProvider()
     client = _GrowingOptionsClient()
-    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
@@ -345,7 +351,9 @@ def test_partial_timeout_books_only_later_positive_fill_delta_once():
 def test_complete_then_ledger_commit_failure_recovers_and_books_once(monkeypatch):
     init_db(reset=True)
     provider = MockProvider()
-    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
@@ -367,7 +375,9 @@ def test_complete_then_ledger_commit_failure_recovers_and_books_once(monkeypatch
         journal = session.scalar(select(OrderJournal).where(OrderJournal.intent == "ENTRY"))
         assert journal.status == "WORKING"
 
-    restarted = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+                           owner_id=LEGACY_OWNER_ID,
+                           broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(provider.now())
     cash_after_recovery = restarted.cash()
     with SessionLocal() as session:
@@ -388,7 +398,9 @@ def test_equity_partial_timeout_recomputes_cumulative_order_without_double_debit
     init_db(reset=True)
     provider = MockProvider()
     client = _GrowingEquityClient()
-    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
 
     pos = broker.open_equity_position(
@@ -409,7 +421,9 @@ def test_equity_partial_timeout_recomputes_cumulative_order_without_double_debit
 def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
     init_db(reset=True)
     provider = MockProvider()
-    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
@@ -421,7 +435,9 @@ def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
     cash_after_position = broker.cash()
     assert pos is not None
 
-    restarted = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+                           owner_id=LEGACY_OWNER_ID,
+                           broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(provider.now())
     assert restarted.cash() == cash_after_position
     with SessionLocal() as session:
@@ -457,7 +473,9 @@ def test_pre_ack_place_exception_remains_uncertain_and_reconciliation_required()
 
     init_db(reset=True)
     provider = MockProvider()
-    broker = LiveBroker(provider, _PlaceFails(0.0), poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, _PlaceFails(0.0), poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
@@ -484,7 +502,8 @@ def test_pre_ack_place_exception_remains_uncertain_and_reconciliation_required()
 def test_journal_commit_failure_rolls_back_before_lifecycle_write(monkeypatch):
     init_db(reset=True)
     broker = LiveBroker(MockProvider(), _FilledClient(100.0), poll_seconds=0.0,
-                        timeout_seconds=0.0)
+                        timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     original_commit = broker.s.commit
     calls = 0
 
@@ -515,7 +534,9 @@ def test_journal_commit_failure_rolls_back_before_lifecycle_write(monkeypatch):
 def test_journal_terminalization_is_deployment_scoped():
     init_db(reset=True)
     broker = LiveBroker(MockProvider(), _FilledClient(100.0), poll_seconds=0.0,
-                        timeout_seconds=0.0, deployment_id=1)
+                        timeout_seconds=0.0, deployment_id=1,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     broker.s.add(Deployment(id=2, name="other", account_id="other"))
     for deployment_id in (2, 1):
         broker.s.add(OrderJournal(

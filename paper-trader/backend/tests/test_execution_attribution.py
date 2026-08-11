@@ -32,7 +32,7 @@ import pytest
 
 from app.core import execution_binding as binding
 from app.core.instruments import all_instruments
-from app.db.models import InstrumentState
+from app.db.models import LEGACY_OWNER_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.providers.mock import MockProvider
@@ -91,7 +91,8 @@ def _intraday_runner(assigned: str | None) -> tuple[EngineRunner, list[str]]:
     assert keys, "expected at least one affordably-priced mock instrument"
     with SessionLocal() as session:
         for key in keys:
-            row = session.get(InstrumentState, key) or InstrumentState(instrument_key=key)
+            row = (session.get(InstrumentState, (LEGACY_OWNER_ID, key))
+                   or InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=key))
             row.enabled = True
             row.product = "equity_intraday"
             row.strategy_key = assigned          # straight to the table: a stale row is
@@ -146,7 +147,7 @@ def test_the_requested_assignment_is_preserved_where_it_already_lived():
     _run_until_open(runner)
 
     with SessionLocal() as session:
-        assert session.get(InstrumentState, keys[0]).strategy_key == STALE
+        assert session.get(InstrumentState, (LEGACY_OWNER_ID, keys[0])).strategy_key == STALE
     assert runner.strategy_keys[keys[0]] == STALE
 
 
@@ -200,7 +201,7 @@ def test_restarting_the_engine_preserves_the_corrected_attribution():
     assert position is not None
 
     with SessionLocal() as session:
-        row = session.get(InstrumentState, keys[0])
+        row = session.get(InstrumentState, (LEGACY_OWNER_ID, keys[0]))
         row.strategy_key = "expanding_z_v4"      # reassign after the fact
         session.commit()
 

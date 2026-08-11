@@ -146,7 +146,7 @@ class EngineRunner:
         self.broker = make_broker(self.provider, self.notifier,
                                   deployment_id=self.deployment_id,
                                   execution_connection=_execution_connection,
-                                  broker_account_id=self.broker_account_id)
+                                  broker_account_id=self.broker_account_id, owner_id=self.owner_id)
         # Which execution book this runner's money state belongs to. Taken from the
         # broker that was actually built rather than from configuration, because that
         # object is the one doing the writing (`core/execution_book.py`).

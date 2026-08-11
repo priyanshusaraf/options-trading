@@ -5,7 +5,9 @@ import pytest
 from sqlalchemy import select, text
 
 from app.core.instruments import get_instrument
-from app.db.models import Deployment, ExecutionIntent, ExecutionOrderEvent, OrderJournal, Position
+from app.db.models import (
+    Deployment, ExecutionIntent, ExecutionOrderEvent, LEGACY_BROKER_ACCOUNT_ID,
+    LEGACY_OWNER_ID, OrderJournal, Position)
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine.execution_lifecycle import (
@@ -267,7 +269,7 @@ def test_exact_tag_miss_stays_blocked_and_delayed_match_is_adopted_without_repla
     init_db(reset=True)
     provider = MockProvider()
     client = _RecoveryClient()
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst, quote, context = _option_context(provider)
 
     assert broker.open_position(
@@ -299,7 +301,7 @@ def test_multiple_exact_tag_matches_persist_anomaly_and_remain_blocked():
     init_db(reset=True)
     provider = MockProvider()
     client = _RecoveryClient()
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst, quote, context = _option_context(provider)
 
     assert broker.open_position(
@@ -335,7 +337,7 @@ def test_startup_recovers_lifecycle_only_intent_in_exact_scope_and_ignores_wrong
         context, symbol="WRONG-DEPLOYMENT", exchange=quote.exchange, qty=quote.lot_size,
         deployment_id=2)
     client = _RecoveryClient()
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -363,7 +365,7 @@ def test_startup_exact_tag_match_persists_ack_before_status_and_adopts_lifecycle
         context, symbol=quote.tradingsymbol, exchange=quote.exchange, qty=quote.lot_size)
     client = _RecoveryClient([{"order_id": "OID-FOUND", "tag": tag,
                                "tradingsymbol": quote.tradingsymbol}])
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -391,7 +393,7 @@ def test_unrelated_legacy_position_does_not_consume_lifecycle_recovery():
     intent_id, tag = _seed_lifecycle(
         context, symbol=quote.tradingsymbol, exchange=quote.exchange, qty=quote.lot_size)
     client = _RecoveryClient([{"order_id": "OID-CONFLICT", "tag": tag}])
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -420,7 +422,7 @@ def test_lifecycle_only_equity_recovery_uses_durable_margin_basis():
         [{"order_id": "OID-EQ", "tag": tag}],
         {"status": "COMPLETE", "filled_qty": 2, "avg_price": 100.0, "reason": ""},
     )
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -433,7 +435,7 @@ def test_cumulative_adoption_commit_failure_rolls_back_ledger_delta(monkeypatch)
     init_db(reset=True)
     provider = MockProvider()
     client = _PartialGrowthClient()
-    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst, quote, context = _option_context(provider)
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
@@ -492,7 +494,7 @@ def test_restart_journal_without_order_id_uses_existing_lifecycle_ack():
     client = _RecoveryClient(status={
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -521,7 +523,7 @@ def test_legacy_working_entry_without_intent_still_adopts():
     client = _RecoveryClient(status={
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     broker.recover_journal(NOW)
 
@@ -542,7 +544,7 @@ def test_option_stop_failure_remains_recoverable_after_restart():
     failing = _StopFailsClient(status={
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, failing, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, failing, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
@@ -559,7 +561,7 @@ def test_option_stop_failure_remains_recoverable_after_restart():
     recovered_client = _RecoveryClient(status={
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
 
     assert restarted.cash() == cash_after_fill
@@ -582,7 +584,9 @@ def test_equity_stop_failure_remains_recoverable_after_restart():
                      "avg_price": 100.0, "reason": ""}
     broker = LiveBroker(
         provider, _StopFailsClient(status=client_status),
-        poll_seconds=0.0, timeout_seconds=0.0)
+        poll_seconds=0.0, timeout_seconds=0.0,
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     pos = broker.open_equity_position(
         inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
@@ -598,7 +602,7 @@ def test_equity_stop_failure_remains_recoverable_after_restart():
             OrderJournal.intent == "ENTRY")).status == "WORKING"
 
     recovered_client = _RecoveryClient(status=client_status)
-    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, recovered_client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
 
     assert restarted.cash() == cash_after_fill
@@ -617,7 +621,7 @@ def test_protection_id_persistence_failure_reconciles_without_duplicate(monkeypa
     client = _ProtectionPersistsAtBrokerClient({
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     original_commit = broker.s.commit
     failed = False
 
@@ -643,7 +647,7 @@ def test_protection_id_persistence_failure_reconciles_without_duplicate(monkeypa
         assert ExecutionLifecycleStore(session).state_for(
             intent_id).reconciliation_required is True
 
-    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
 
     assert client.stop_calls == 1
@@ -665,6 +669,8 @@ def test_live_entry_uses_legacy_connection_scope():
             "avg_price": 101.0, "reason": ""}),
         poll_seconds=0.0,
         timeout_seconds=0.0,
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
     )
 
     broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={})
@@ -695,6 +701,8 @@ def test_restart_recovers_this_connections_entries_and_not_another_connections()
         connection_scope="upstox:acct-1", broker="upstox")
     broker = LiveBroker(
         provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0,
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
         connection=Connection(
             broker="upstox", scope="upstox:acct-1",
             capabilities=frozenset({caps.LIVE_EXECUTION})))
@@ -727,6 +735,8 @@ def test_the_money_record_carries_the_connection_that_actually_placed_the_order(
             "avg_price": 101.0, "reason": ""}),
         poll_seconds=0.0,
         timeout_seconds=0.0,
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
         connection=second,
     )
 
@@ -742,7 +752,7 @@ def test_equity_partial_growth_updates_protection_quantity_before_completion():
     init_db(reset=True)
     provider = MockProvider()
     client = _GrowingEquityProtectionClient()
-    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst = get_instrument("NIFTY")
 
     pos = broker.open_equity_position(
@@ -768,12 +778,12 @@ def test_uncertain_invisible_protection_is_not_replaced_after_one_empty_read():
     client = _InvisibleAcceptedProtectionClient(status={
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
 
     assert client.stop_calls == 1
-    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
 
     assert client.stop_calls == 1
@@ -796,11 +806,11 @@ def test_owner_gtt_in_submit_baseline_is_never_attached_to_bot_position():
     client = _OwnerGttCollisionClient(
         {"status": "COMPLETE", "filled_qty": quote.lot_size,
          "avg_price": 101.0, "reason": ""}, owner_gtt)
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
 
-    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
 
     assert client.stop_calls == 1
@@ -819,12 +829,13 @@ def test_concurrent_owner_gtt_after_empty_baseline_is_never_attached():
     client = _ConcurrentOwnerGttClient({
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
     LiveBroker(provider, client, poll_seconds=0.0,
-               timeout_seconds=0.0).recover_journal(NOW)
+               timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID,
+               broker_account_id=LEGACY_BROKER_ACCOUNT_ID).recover_journal(NOW)
 
     assert client.stop_calls == 1
     with SessionLocal() as session:
@@ -844,7 +855,7 @@ def test_invalid_protection_submit_metadata_fails_closed(payload):
     client = _ConcurrentOwnerGttClient({
         "status": "COMPLETE", "filled_qty": quote.lot_size,
         "avg_price": 101.0, "reason": ""})
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
         inst, "LONG", quote, "signal", NOW, context["spot"], params={})
 
@@ -864,7 +875,8 @@ def test_invalid_protection_submit_metadata_fails_closed(payload):
         session.commit()
 
     LiveBroker(provider, client, poll_seconds=0.0,
-               timeout_seconds=0.0).recover_journal(NOW)
+               timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID,
+               broker_account_id=LEGACY_BROKER_ACCOUNT_ID).recover_journal(NOW)
 
     with SessionLocal() as session:
         stored = session.get(Position, pos.id)
@@ -882,7 +894,7 @@ def test_live_entry_refuses_before_intent_when_protection_inventory_fails(
     init_db(reset=True)
     provider = MockProvider()
     client = client_factory()
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst, quote, context = _option_context(provider)
 
     if kind == "options":
@@ -905,7 +917,7 @@ def test_live_entry_does_not_submit_when_exchange_protection_disabled(monkeypatc
     init_db(reset=True)
     provider = MockProvider()
     client = _AcknowledgedFillClient()
-    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     monkeypatch.setattr(broker, "_gtt_enabled", lambda: False)
     inst, quote, context = _option_context(provider)
 
@@ -927,7 +939,7 @@ def test_live_entry_does_not_submit_when_exchange_protection_disabled(monkeypatc
 def test_journal_stop_failure_rolls_back_and_same_session_remains_usable(monkeypatch):
     init_db(reset=True)
     provider = MockProvider()
-    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0)
+    broker = LiveBroker(provider, _RecoveryClient(), poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     original_commit = broker.s.commit
     calls = 0
 
