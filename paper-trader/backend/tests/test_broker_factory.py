@@ -1,7 +1,7 @@
 """You cannot reach the order-placing broker by accident: it needs BOTH live flags
 AND the live Kite provider. Default and mock always give the paper broker."""
 from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID
+from app.db.models import LEGACY_DEPLOYMENT_ID, LEGACY_OWNER_ID
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import live_execution_enabled, make_broker
@@ -34,7 +34,10 @@ def test_paper_broker_by_default(monkeypatch):
     monkeypatch.delenv("PT_LIVE_ACK", raising=False)
     init_db(reset=True)
     assert live_execution_enabled() is False
-    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID), PaperBroker)
+    broker = make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
+    assert isinstance(broker, PaperBroker)
+    assert broker.deployment_id == LEGACY_DEPLOYMENT_ID
+    broker.close()
 
 
 def test_both_flags_required(monkeypatch):
@@ -62,7 +65,10 @@ def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
     _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     # even with both flags, the mock provider can never place a real order
-    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID), PaperBroker)
+    broker = make_broker(MockProvider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
+    assert isinstance(broker, PaperBroker)
+    assert broker.deployment_id == LEGACY_DEPLOYMENT_ID
+    broker.close()
 
 
 def test_real_live_broker_constructor_keeps_explicit_nonlegacy_owner_and_account():

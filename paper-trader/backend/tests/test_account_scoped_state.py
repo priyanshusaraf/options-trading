@@ -291,12 +291,86 @@ def test_revision_0018_downgrade_refuses_each_nonlegacy_tenancy_root(tmp_path, t
 def test_upgraded_0018_database_exposes_actual_composite_keys_and_membership_foreign_keys(tmp_path):
     engine = _engine(tmp_path)
     migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0017")
+        command.upgrade(migrate.alembic_config(connection), "0018")
     inspector = sa.inspect(engine)
     assert inspector.get_pk_constraint("capital_state")["constrained_columns"] == ["broker_account_id", "book"]
     assert inspector.get_pk_constraint("instrument_state")["constrained_columns"] == ["owner_id", "instrument_key"]
     assert inspector.get_pk_constraint("daily_account_snapshot")["constrained_columns"] == ["broker_account_id", "day"]
     membership_targets = {fk["referred_table"] for fk in inspector.get_foreign_keys("memberships")}
     assert membership_targets == {"organizations", "users"}
+    import pytest
+    with pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(sa.text(
+                "INSERT INTO memberships (organization_id, user_id, role, status, created_at, updated_at) "
+                "VALUES ('missing.organization', 'owner-user', 'member', 'active', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+
+
+@__import__("pytest").mark.parametrize(("legacy_book", "expected_book"), [
+    (None, "legacy"),
+    ("paper", "paper"),
+])
+def test_init_db_does_not_collide_with_a_preserved_id_one_legacy_capital_row(
+        tmp_path, monkeypatch, legacy_book, expected_book):
+    """Bootstrap leaves a migrated id=1 ledger untouched until a book is requested."""
+    import app.db.session as session_module
+
+    engine = _engine(tmp_path)
+    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0017")
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, book, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, :book, 123.0, 117.5, -5.5, '2026-08-11 09:01:00')"),
+            {"book": legacy_book})
+        command.upgrade(migrate.alembic_config(connection), "0018")
+
+    isolated_sessions = sa.orm.sessionmaker(bind=engine, future=True, expire_on_commit=False)
+    monkeypatch.setattr(session_module, "engine", engine)
+    monkeypatch.setattr(session_module, "SessionLocal", isolated_sessions)
+    session_module.init_db()
+
+    with isolated_sessions() as session:
+        rows = session.query(__import__("app.db.models", fromlist=["CapitalState"]).CapitalState).all()
+        assert [(row.id, row.book, row.cash) for row in rows] == [(1, expected_book, 117.5)]
+
+
+def test_upgrade_preserves_null_and_live_ledgers_and_paper_request_creates_a_third_row(tmp_path):
+    """0017 permits a NULL ledger alongside live; 0018 must retain both exact values."""
+    from app.core.execution_book import LEGACY_UNATTRIBUTED_BOOK, capital_for_book
+    from app.db.models import CapitalState
+
+    engine = _engine(tmp_path)
+    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0017")
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
+            "VALUES (41, NULL, 101.0, 91.0, -10.0, 99.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00'), "
+            "(42, 'live', 202.0, 192.0, -10.0, 198.0, '2026-08-10 10:30:00', '2026-08-10 10:31:00')"))
+        command.upgrade(migrate.alembic_config(connection), "0018")
+
+    with sa.orm.Session(engine) as session:
+        before = {(row.id, row.book): (row.initial_capital, row.cash, row.realized_pnl,
+                                        row.account_baseline, row.anchored_at.isoformat(sep=" "),
+                                        row.updated_at.isoformat(sep=" "))
+                  for row in session.query(CapitalState)}
+        assert before == {
+            (41, LEGACY_UNATTRIBUTED_BOOK): (101.0, 91.0, -10.0, 99.0,
+                                              "2026-08-10 09:30:00", "2026-08-10 09:31:00"),
+            (42, "live"): (202.0, 192.0, -10.0, 198.0,
+                           "2026-08-10 10:30:00", "2026-08-10 10:31:00"),
+        }
+        paper = capital_for_book(session, "paper", broker_account_id="account.default")
+        assert paper.book == "paper"
+        assert session.get(CapitalState, ("account.default", LEGACY_UNATTRIBUTED_BOOK)).id == 41
+        assert session.get(CapitalState, ("account.default", "live")).id == 42
+        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 3
 
 
 def test_revision_0018_downgrade_round_trips_legacy_sentinel_to_null_book(tmp_path):

@@ -95,8 +95,14 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
     if deployment_id is not None:
         book["deployment_id"] = deployment_id
 
+    # PaperBroker owns the legacy deployment default. Passing ``None`` explicitly
+    # suppresses that constructor default and makes position reads unscoped.
+    paper_book = {"broker_account_id": broker_account_id}
+    if deployment_id is not None:
+        paper_book["deployment_id"] = deployment_id
+
     if not live_execution_enabled():
-        return PaperBroker(provider, deployment_id=deployment_id, broker_account_id=broker_account_id)
+        return PaperBroker(provider, **paper_book)
 
     if not conn.supports(caps.LIVE_EXECUTION):
         if named:
@@ -106,8 +112,7 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
                 f"{sorted(conn.capabilities)}. Refusing to return a PaperBroker under a live "
                 f"configuration — that would look exactly like trading and place no order."
             )
-        return PaperBroker(provider, deployment_id=deployment_id,
-                           broker_account_id=broker_account_id)
+        return PaperBroker(provider, **paper_book)
 
     # Declaring LIVE_EXECUTION says "a live order client can be built from this
     # connection". WHICH client is the registry's answer, not this function's: until
