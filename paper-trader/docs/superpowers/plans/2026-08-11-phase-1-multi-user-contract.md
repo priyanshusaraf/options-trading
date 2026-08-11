@@ -148,6 +148,16 @@ deployment rename, positions temp creation, positions rename), as did the full m
 `NewExecutionIntent` and the lot-size repair boundary now require explicit owner/account scope.
 No frontend work or deployment was performed.
 
+**Recovery hardening (2026-08-12):** `0019` now treats every SQLite batch rebuild as
+restartable. Its explicit historical index manifest restores all legacy, account-scope,
+unique, and partial indexes after a retry; it does not consult current ORM metadata. Default
+removal now also recovers stale batch tables for deployments, every money table,
+`instrument_state`, `capital_state`, and `daily_account_snapshot`. Injected failures after
+account-table renames and at default-removal CREATE/RENAME boundaries converge to the exact
+fresh-0019 table contract, including defaults, foreign keys, unique rules, and index SQL.
+The migration suite passed (34 tests), as did account/money isolation (106 tests) and
+`compileall`; no frontend work or deployment was performed.
+
 ### Task 3: Own product, graph, research and review objects
 
 **Files:**

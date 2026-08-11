@@ -42,6 +42,25 @@ SQLITE_NAMING_CONVENTION = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
 }
 
+# SQLite drops all named indexes when a batch rebuild is interrupted after its RENAME.
+# This is the historical migration contract, kept here rather than importing current ORM
+# metadata: 0019 must be able to repair an old database even after models have evolved.
+INDEX_MANIFEST: dict[str, tuple[str, ...]] = {
+    "deployments": ("CREATE INDEX ix_deployments_owner_id ON deployments (owner_id)",
+                    "CREATE INDEX ix_deployments_owner_account ON deployments (owner_id, broker_account_id)"),
+    "positions": ("CREATE INDEX ix_positions_deployment_id ON positions (deployment_id)", "CREATE INDEX ix_positions_entry_intent_id ON positions (entry_intent_id)", "CREATE INDEX ix_positions_instrument_key ON positions (instrument_key)", "CREATE INDEX ix_positions_owner_id ON positions (owner_id)", "CREATE INDEX ix_positions_owner_account ON positions (owner_id, broker_account_id)"),
+    "trades": ("CREATE INDEX ix_trades_deployment_id ON trades (deployment_id)", "CREATE INDEX ix_trades_entry_intent_id ON trades (entry_intent_id)", "CREATE INDEX ix_trades_exit_time ON trades (exit_time)", "CREATE INDEX ix_trades_instrument_key ON trades (instrument_key)", "CREATE INDEX ix_trades_owner_id ON trades (owner_id)", "CREATE INDEX ix_trades_owner_account ON trades (owner_id, broker_account_id)"),
+    "equity_snapshots": ("CREATE INDEX ix_equity_snapshots_book ON equity_snapshots (book)", "CREATE INDEX ix_equity_snapshots_deployment_id ON equity_snapshots (deployment_id)", "CREATE INDEX ix_equity_snapshots_owner_id ON equity_snapshots (owner_id)", "CREATE INDEX ix_equity_snapshots_time ON equity_snapshots (time)", "CREATE INDEX ix_equity_snapshots_owner_account ON equity_snapshots (owner_id, broker_account_id)"),
+    "order_journal": ("CREATE INDEX ix_order_journal_deployment_id ON order_journal (deployment_id)", "CREATE INDEX ix_order_journal_order_id ON order_journal (order_id)", "CREATE INDEX ix_order_journal_owner_id ON order_journal (owner_id)", "CREATE INDEX ix_order_journal_status ON order_journal (status)", "CREATE INDEX ix_order_journal_owner_account ON order_journal (owner_id, broker_account_id)"),
+    "signal_events": ("CREATE INDEX ix_signal_events_deployment_id ON signal_events (deployment_id)", "CREATE INDEX ix_signal_events_instrument_key ON signal_events (instrument_key)", "CREATE INDEX ix_signal_events_owner_id ON signal_events (owner_id)", "CREATE INDEX ix_signal_events_time ON signal_events (time)", "CREATE INDEX ix_signal_events_owner_account ON signal_events (owner_id, broker_account_id)"),
+    "execution_intents": ("CREATE INDEX ix_execution_intents_deployment_id ON execution_intents (deployment_id)", "CREATE INDEX ix_execution_intents_instrument_key ON execution_intents (instrument_key)", "CREATE INDEX ix_execution_intents_owner_id ON execution_intents (owner_id)", "CREATE INDEX ix_execution_intents_owner_account ON execution_intents (owner_id, broker_account_id)"),
+    "execution_order_events": ("CREATE INDEX ix_execution_order_events_broker_order_id ON execution_order_events (broker_order_id)", "CREATE INDEX ix_execution_order_events_kind ON execution_order_events (kind)", "CREATE INDEX ix_execution_order_events_owner_id ON execution_order_events (owner_id)", "CREATE INDEX ix_execution_order_events_owner_account ON execution_order_events (owner_id, broker_account_id)"),
+    "broker_connections": ("CREATE INDEX ix_broker_connections_owner ON broker_connections (owner_id)", "CREATE INDEX ix_broker_connections_owner_account ON broker_connections (owner_id, broker_account_id)"),
+    "ir_paper_deployments": ("CREATE INDEX ix_ir_paper_deployments_state ON ir_paper_deployments (state)", "CREATE INDEX ix_ir_paper_deployments_project_id ON ir_paper_deployments (project_id)", "CREATE INDEX ix_ir_paper_deployments_deployment_id ON ir_paper_deployments (deployment_id)", "CREATE INDEX ix_ir_paper_deployments_instrument_key ON ir_paper_deployments (instrument_key)", "CREATE INDEX ix_ir_paper_deployments_owner_id ON ir_paper_deployments (owner_id)", "CREATE INDEX ix_ir_paper_deployments_owner_account ON ir_paper_deployments (owner_id, broker_account_id)", "CREATE UNIQUE INDEX uq_ir_paper_deployment_active ON ir_paper_deployments (deployment_id, instrument_key, interval) WHERE state IN ('staged','paper_active','paused')"),
+    "ir_shadow_deployments": ("CREATE INDEX ix_ir_shadow_deployments_state ON ir_shadow_deployments (state)", "CREATE INDEX ix_ir_shadow_deployments_project_id ON ir_shadow_deployments (project_id)", "CREATE INDEX ix_ir_shadow_deployments_deployment_id ON ir_shadow_deployments (deployment_id)", "CREATE INDEX ix_ir_shadow_deployments_instrument_key ON ir_shadow_deployments (instrument_key)", "CREATE INDEX ix_ir_shadow_deployments_owner_id ON ir_shadow_deployments (owner_id)", "CREATE INDEX ix_ir_shadow_deployments_owner_account ON ir_shadow_deployments (owner_id, broker_account_id)", "CREATE UNIQUE INDEX uq_ir_shadow_deployment_active ON ir_shadow_deployments (deployment_id, instrument_key, interval) WHERE state IN ('staged','shadow_active','paused')"),
+    "ir_shadow_divergences": ("CREATE INDEX ix_ir_shadow_divergences_observed_at ON ir_shadow_divergences (observed_at)", "CREATE INDEX ix_ir_shadow_divergences_instrument_key ON ir_shadow_divergences (instrument_key)", "CREATE INDEX ix_ir_shadow_divergences_reason ON ir_shadow_divergences (reason)", "CREATE INDEX ix_ir_shadow_divergences_observed ON ir_shadow_divergences (observed_at)", "CREATE INDEX ix_ir_shadow_divergences_owner_id ON ir_shadow_divergences (owner_id)", "CREATE INDEX ix_ir_shadow_divergences_owner_account ON ir_shadow_divergences (owner_id, broker_account_id)", "CREATE UNIQUE INDEX uq_ir_shadow_divergence_bar ON ir_shadow_divergences (owner_id, broker_account_id, instrument_key, bar_time, graph_address, reason)"),
+}
+
 
 def _account_index(table: str) -> str:
     return f"ix_{table}_owner_account"
@@ -91,17 +110,18 @@ def _recover_sqlite_rebuild_temp(table: str, *, temporary: str | None = None) ->
 
 
 def _restore_account_index(table: str) -> None:
-    op.execute(sa.text(
-        f"CREATE INDEX IF NOT EXISTS {_account_index(table)} "
-        f"ON {table} (owner_id, broker_account_id)"))
+    _restore_indexes(table)
 
 
 def _restore_deployment_indexes() -> None:
-    op.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_deployments_owner_id ON deployments (owner_id)"))
-    op.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_deployments_owner_account "
-        "ON deployments (owner_id, broker_account_id)"))
+    _restore_indexes("deployments")
+
+
+def _restore_indexes(table: str) -> None:
+    for ddl in INDEX_MANIFEST.get(table, ()):
+        safe_ddl = ddl.replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1)
+        safe_ddl = safe_ddl.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
+        op.execute(sa.text(safe_ddl))
 
 
 def _restore_inline_entry_fk(table: str) -> None:
@@ -198,12 +218,16 @@ def _remove_legacy_scope_defaults() -> None:
     # tenant is unsafe.  Include the three singleton-identity replacements and
     # deployments, which do not belong to ACCOUNT_TABLES' account-FK rebuild loop.
     for table in (*ACCOUNT_TABLES, "deployments"):
+        _recover_sqlite_rebuild_temp(table)
         with op.batch_alter_table(table, recreate="always") as batch:
             batch.alter_column("broker_account_id", server_default=None)
             batch.alter_column("owner_id", server_default=None)
+        _restore_indexes(table)
+    _recover_sqlite_rebuild_temp("instrument_state")
     with op.batch_alter_table("instrument_state", recreate="always") as batch:
         batch.alter_column("owner_id", server_default=None)
     for table in ("capital_state", "daily_account_snapshot"):
+        _recover_sqlite_rebuild_temp(table)
         with op.batch_alter_table(table, recreate="always") as batch:
             batch.alter_column("broker_account_id", server_default=None)
 

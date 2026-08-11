@@ -635,6 +635,94 @@ def test_revision_0019_retry_after_positions_rename_restores_account_index(tmp_p
                for fk in inspector.get_foreign_keys("positions"))
 
 
+def _table_contract(engine, table: str) -> dict:
+    """The complete SQLite-visible contract a retry must reproduce exactly."""
+    inspector = sa.inspect(engine)
+    with engine.connect() as connection:
+        indexes = connection.execute(sa.text(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type='index' AND tbl_name=:table AND sql IS NOT NULL ORDER BY name"
+        ), {"table": table}).all()
+    return {
+        "columns": [(column["name"], str(column["type"]), bool(column["nullable"]),
+                     str(column.get("default")))
+                    for column in inspector.get_columns(table)],
+        "foreign_keys": sorted((tuple(fk["constrained_columns"]), fk["referred_table"],
+                                tuple(fk["referred_columns"]), fk.get("name"))
+                               for fk in inspector.get_foreign_keys(table)),
+        "unique": sorted((tuple(item["column_names"]), item.get("name"))
+                         for item in inspector.get_unique_constraints(table)),
+        "indexes": indexes,
+    }
+
+
+def _canonical_0019_contract(tmp_path, table: str) -> dict:
+    engine = _fresh_engine(tmp_path, f"canonical-{table}.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    return _table_contract(engine, table)
+
+
+@pytest.mark.parametrize("table", ("positions", "ir_shadow_divergences"))
+def test_revision_0019_retry_after_account_table_rename_restores_full_contract(tmp_path, table):
+    """A retry after RENAME must restore every legacy index, unique rule and FK."""
+    expected = _canonical_0019_contract(tmp_path, table)
+    engine = _fresh_engine(tmp_path, f"0019-{table}-rename-contract.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_rename(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and f"ALTER TABLE _alembic_tmp_{table} RENAME TO {table}" in statement:
+            failed = True
+            raise RuntimeError(f"injected interruption after {table} rename")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert _table_contract(engine, table) == expected
+
+
+@pytest.mark.parametrize(
+    ("table", "marker"),
+    (("instrument_state", "CREATE TABLE _alembic_tmp_instrument_state"),
+     ("capital_state", "ALTER TABLE _alembic_tmp_capital_state RENAME TO capital_state"),
+     ("deployments", "CREATE TABLE deployments__0019")),
+)
+def test_revision_0019_retry_during_default_removal_restores_exact_contract(tmp_path, table, marker):
+    """Default-removal batch rebuilds are recoverable at either SQLite DDL boundary."""
+    expected = _canonical_0019_contract(tmp_path, table)
+    engine = _fresh_engine(tmp_path, f"0019-{table}-default-contract.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_default_rebuild(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and marker in statement:
+            failed = True
+            raise RuntimeError(f"injected interruption during {table} default removal")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert _table_contract(engine, table) == expected
+
+
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):
     from app.ir.hashing import canonical_json, content_address
     from app.ir.strategies.expanding_z import GRAPH
