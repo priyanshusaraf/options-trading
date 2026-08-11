@@ -135,7 +135,7 @@ def test_project_review_source_derives_events_and_current_queues_once(client, mo
             yield session
 
     monkeypatch.setattr(research_read, "_research_session", counted_session)
-    source = research_read.project_review_source(CATALOGUE_PROJECT_ID)
+    source = research_read.project_review_source(CATALOGUE_PROJECT_ID, owner_id="owner")
 
     types = [event["type"] for event in source["events"]]
     assert types.count("experiment_run") == 1
@@ -149,7 +149,7 @@ def test_project_review_source_derives_events_and_current_queues_once(client, mo
     assert source["queues"]["review_needed_runs"] == []
     assert source["source_errors"] == []
     assert calls == 1
-    assert research_read.project_review_source("project.other")["events"] == []
+    assert research_read.project_review_source("project.other", owner_id="owner")["events"] == []
 
 
 def test_corrupt_candidate_is_contained_without_hiding_other_events(client):
@@ -163,7 +163,7 @@ def test_corrupt_candidate_is_contained_without_hiding_other_events(client):
         })
     engine.dispose()
 
-    source = research_read.project_review_source(CATALOGUE_PROJECT_ID)
+    source = research_read.project_review_source(CATALOGUE_PROJECT_ID, owner_id="owner")
 
     assert any(event["type"] == "experiment_run" for event in source["events"])
     assert [item["candidate_id"] for item in source["queues"]["pending_candidates"]] == [

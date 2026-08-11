@@ -19,6 +19,7 @@ from app.core import watchlists as wl
 from app.core.config import get_settings
 from app.core.deploy_bridge import DeployRequest, deploy, preview_deploy
 from app.db.session import SessionLocal
+from app.api.principal import Principal, get_principal, owner_id_for
 
 
 def _research_gate() -> None:
@@ -59,21 +60,23 @@ class PromotionDeployIn(BaseModel):
 
 
 @router.get("/api/portfolio/promotions")
-def get_promotions():
+def get_promotions(principal: Principal = Depends(get_principal)):
     """Pending research promotions awaiting a human decision — read from research.db
     read-only, each carrying its validated universe + a plain-language explanation."""
-    return {"promotions": research_read.list_pending_promotions()}
+    return {"promotions": research_read.list_pending_promotions(
+        owner_id=owner_id_for(principal))}
 
 
 @router.post("/api/portfolio/promotions/{candidate_id}/deploy")
-def deploy_promotion(candidate_id: int, body: PromotionDeployIn):
+def deploy_promotion(candidate_id: int, body: PromotionDeployIn,
+                     principal: Principal = Depends(get_principal)):
     """Preview the legacy candidate-to-watchlist bridge without committing it.
 
     S4.2 separates the research decision from any application deployment state. The
     committed combined path is therefore closed; a later workflow may consume an
     approved candidate to create a draft, disarmed deployment explicitly.
     """
-    cand = research_read.get_promotion(candidate_id)
+    cand = research_read.get_promotion(candidate_id, owner_id=owner_id_for(principal))
     if cand is None:
         return JSONResponse(
             status_code=409,

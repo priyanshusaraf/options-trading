@@ -2,6 +2,8 @@
 evaluated on both of its native timeframes (the strategy is invalid on anything
 slower or faster). The dev-blacklist filtering must still apply on every interval."""
 import importlib
+import contextlib
+from types import SimpleNamespace
 
 from research.operations import OperationAlreadyRunning
 
@@ -82,3 +84,75 @@ def test_manual_entry_point_freeze_precedes_operation_receipt(monkeypatch):
 
     assert rr.main() == 0
     assert calls == []
+
+
+def test_manual_operation_forwards_the_required_owner_to_every_research_call(monkeypatch):
+    """The CLI has no compatibility owner: both manual paths receive the env owner."""
+    rr = _load()
+    monkeypatch.setenv("PT_RESEARCH_OWNER_ID", "manual-owner")
+    monkeypatch.setattr(rr, "_plan", lambda _instrument: [])
+    monkeypatch.setattr(rr, "_dump_db", lambda _session: None)
+    monkeypatch.setattr(rr, "UNIVERSE", ("NIFTY",))
+    monkeypatch.setattr(rr, "INTERVALS", ("day",))
+    seen = []
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Engine:
+        def dispose(self):
+            pass
+
+    class Recorder:
+        @staticmethod
+        def start(*_args, **_kwargs):
+            return Recorder()
+
+        def transition(self, *_args):
+            pass
+
+        def set_plan(self, *_args):
+            pass
+
+        def add_completed_run(self, *_args):
+            pass
+
+        def complete(self, **_kwargs):
+            pass
+
+        def fail(self, **_kwargs):
+            pass
+
+    import app.core.config as config
+    import app.core.instruments as instruments
+    import app.providers.factory as providers
+    import research.data.store as data_store
+    import research.domain.base as domain_base
+    import research.operations as operations
+    import research.orchestrator.generate as generate
+    import research.orchestrator.run as run
+    import research.universe as universe
+
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(provider="mock"))
+    monkeypatch.setattr(instruments, "get_instrument", lambda key: SimpleNamespace(key=key))
+    monkeypatch.setattr(providers, "get_provider", lambda: SimpleNamespace(name="mock"))
+    monkeypatch.setattr(data_store, "KiteDataSource", lambda provider: provider)
+    monkeypatch.setattr(domain_base, "make_engine", lambda _path: Engine())
+    monkeypatch.setattr(domain_base, "init_research_db", lambda _engine: None)
+    monkeypatch.setattr(domain_base, "make_sessionmaker", lambda _engine: Session)
+    monkeypatch.setattr(operations, "ResearchOperationRecorder", Recorder)
+    monkeypatch.setattr(operations, "acquire_operation_lock", lambda _path: contextlib.nullcontext())
+    monkeypatch.setattr(operations, "safe_plan_summary", lambda plan: plan)
+    monkeypatch.setattr(universe, "ALWAYS_ALLOWED", frozenset({"NIFTY"}))
+    monkeypatch.setattr(run, "run_nightly", lambda *_args, **kwargs: seen.append(("nightly", kwargs["owner_id"])) or [])
+    monkeypatch.setattr(generate, "run_generated", lambda *_args, **kwargs: seen.append(("generated", kwargs["owner_id"])) or [])
+
+    reports, provider = rr._run_enabled_operation("research.db")
+
+    assert reports == []
+    assert provider == "mock"
+    assert seen == [("nightly", "manual-owner"), ("generated", "manual-owner")]

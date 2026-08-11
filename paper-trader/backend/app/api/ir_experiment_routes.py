@@ -375,8 +375,11 @@ def post_graph_experiment(
     "/projects/{project_id}/experiments",
     response_model=GraphRunListResponse,
 )
-def get_graph_experiments(project_id: str) -> GraphRunListResponse:
-    return GraphRunListResponse(runs=research_read.list_graph_runs(project_id))
+def get_graph_experiments(
+    project_id: str, principal: Principal = Depends(get_principal)
+) -> GraphRunListResponse:
+    return GraphRunListResponse(runs=research_read.list_graph_runs(
+        project_id, owner_id=owner_id_for(principal)))
 
 
 @router.post(
@@ -384,11 +387,13 @@ def get_graph_experiments(project_id: str) -> GraphRunListResponse:
     response_model=GraphComparisonResponse,
 )
 def post_graph_experiment_comparison(
-    project_id: str, body: GraphComparisonRequest
+    project_id: str, body: GraphComparisonRequest,
+    principal: Principal = Depends(get_principal),
 ) -> GraphComparisonResponse:
     try:
-        left = research_read.get_graph_run(project_id, body.left_run_id)
-        right = research_read.get_graph_run(project_id, body.right_run_id)
+        owner_id = owner_id_for(principal)
+        left = research_read.get_graph_run(project_id, body.left_run_id, owner_id=owner_id)
+        right = research_read.get_graph_run(project_id, body.right_run_id, owner_id=owner_id)
     except research_read.StoredEvidenceCorrupt as exc:
         raise _error(
             409,
@@ -438,11 +443,13 @@ def _comparison_run(
     project_id: str,
     selection: VersionComparisonSelection,
     published,
+    *,
+    owner_id: str,
 ):
     if selection.run_id is None:
         return None
     try:
-        run = research_read.get_graph_run(project_id, selection.run_id)
+        run = research_read.get_graph_run(project_id, selection.run_id, owner_id=owner_id)
     except research_read.StoredEvidenceCorrupt as exc:
         raise _error(
             409,
@@ -497,8 +504,8 @@ def post_version_comparison(
     except GraphComparisonRejected as exc:
         raise _error(409, "GRAPH_VERSION_CORRUPT", str(exc)) from exc
 
-    left_run = _comparison_run(project_id, body.left, left_graph)
-    right_run = _comparison_run(project_id, body.right, right_graph)
+    left_run = _comparison_run(project_id, body.left, left_graph, owner_id=owner_id)
+    right_run = _comparison_run(project_id, body.right, right_graph, owner_id=owner_id)
     differences = list(graph_result["differences"])
     incomparable = list(graph_result["incomparable"])
     if left_run is not None and right_run is not None:
@@ -533,12 +540,14 @@ def post_version_comparison(
     response_model=CandidateDecisionResponse,
 )
 def post_candidate_decision(
-    project_id: str, candidate_id: int, body: CandidateDecisionRequest
+    project_id: str, candidate_id: int, body: CandidateDecisionRequest,
+    principal: Principal = Depends(get_principal),
 ) -> CandidateDecisionResponse:
     try:
         result = research_read.decide_project_candidate(
             project_id,
             candidate_id,
+            owner_id=owner_id_for(principal),
             expected_status=body.expected_status,
             decision=body.decision,
             reason=body.reason.strip(),
@@ -574,9 +583,9 @@ def _finding_failure(exc: Exception) -> None:
     "/projects/{project_id}/findings",
     response_model=FindingListResponse,
 )
-def get_findings(project_id: str) -> FindingListResponse:
+def get_findings(project_id: str, principal: Principal = Depends(get_principal)) -> FindingListResponse:
     try:
-        findings = research_read.list_project_findings(project_id)
+        findings = research_read.list_project_findings(project_id, owner_id=owner_id_for(principal))
     except (research_read.StoredEvidenceCorrupt,
             research_read.FindingEvidenceUnavailable) as exc:
         _finding_failure(exc)
@@ -587,9 +596,9 @@ def get_findings(project_id: str) -> FindingListResponse:
     "/projects/{project_id}/findings/{finding_id}",
     response_model=FindingResponse,
 )
-def get_finding(project_id: str, finding_id: int) -> FindingResponse:
+def get_finding(project_id: str, finding_id: int, principal: Principal = Depends(get_principal)) -> FindingResponse:
     try:
-        finding = research_read.get_project_finding(project_id, finding_id)
+        finding = research_read.get_project_finding(project_id, finding_id, owner_id=owner_id_for(principal))
     except (research_read.StoredEvidenceCorrupt,
             research_read.FindingEvidenceUnavailable) as exc:
         _finding_failure(exc)
@@ -604,12 +613,14 @@ def get_finding(project_id: str, finding_id: int) -> FindingResponse:
     status_code=status.HTTP_201_CREATED,
 )
 def post_finding(
-    project_id: str, run_id: int, body: FindingRequest
+    project_id: str, run_id: int, body: FindingRequest,
+    principal: Principal = Depends(get_principal),
 ) -> FindingResponse:
     try:
         finding = research_read.create_project_finding(
             project_id,
             run_id,
+            owner_id=owner_id_for(principal),
             statement=body.statement.strip(),
             polarity=body.polarity,
         )
@@ -627,12 +638,14 @@ def post_finding(
     status_code=status.HTTP_201_CREATED,
 )
 def post_finding_revision(
-    project_id: str, finding_id: int, body: FindingRevisionRequest
+    project_id: str, finding_id: int, body: FindingRevisionRequest,
+    principal: Principal = Depends(get_principal),
 ) -> FindingRevisionResponse:
     try:
         revision = research_read.revise_project_finding(
             project_id,
             finding_id,
+            owner_id=owner_id_for(principal),
             statement=body.statement.strip(),
             polarity=body.polarity,
         )
@@ -654,9 +667,11 @@ def post_finding_revision(
     "/projects/{project_id}/experiments/{run_id}",
     response_model=GraphRunDetail,
 )
-def get_graph_experiment(project_id: str, run_id: int) -> GraphRunDetail:
+def get_graph_experiment(
+    project_id: str, run_id: int, principal: Principal = Depends(get_principal)
+) -> GraphRunDetail:
     try:
-        run = research_read.get_graph_run(project_id, run_id)
+        run = research_read.get_graph_run(project_id, run_id, owner_id=owner_id_for(principal))
     except research_read.StoredEvidenceCorrupt as exc:
         raise _error(
             409,

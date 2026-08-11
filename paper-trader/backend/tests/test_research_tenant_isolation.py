@@ -12,13 +12,16 @@ from research.domain import migrate as migrate_module
 from research.domain.migrate import LEGACY_OWNER_ID, ResearchMigrationError, downgrade_research_db
 from research.domain.models import (
     BlockEdge,
+    ExperimentRun,
     ExperimentSpec,
     GeneratedStrategyRecord,
     Hypothesis,
+    PromotionCandidate,
     ResearchProgram,
 )
 from research.orchestrator.run import spec_hash
 from research.evidence import encode_terminal_evidence
+from app.core import research_read
 
 
 def test_empty_initialization_stamps_research_owned_schema_version(tmp_path):
@@ -56,15 +59,19 @@ def test_legacy_rows_upgrade_losslessly_and_two_owners_share_content_addresses(t
     try:
         connection.executescript("""
             CREATE TABLE research_program (id INTEGER PRIMARY KEY, name VARCHAR(80), thesis TEXT, status VARCHAR(12), created_at DATETIME);
-            CREATE TABLE research_hypothesis (id INTEGER PRIMARY KEY, program_id INTEGER, statement TEXT, status VARCHAR(12), retest_priority FLOAT, last_tested_at DATETIME, created_at DATETIME);
-            CREATE TABLE research_experiment_spec (id VARCHAR(64) PRIMARY KEY, hypothesis_id INTEGER, parent_spec_id VARCHAR(64), recipe_json TEXT, git_commit VARCHAR(40), qualifier_version VARCHAR(24), optimizer_version VARCHAR(24), validator_version VARCHAR(24), scoring_version VARCHAR(24), rng_seed INTEGER, created_at DATETIME);
-            CREATE TABLE research_experiment_run (id INTEGER PRIMARY KEY, spec_id VARCHAR(64), status VARCHAR(12), decision VARCHAR(16), spent_bar_seconds FLOAT, checkpoint_json TEXT, error VARCHAR(400), started_at DATETIME, completed_at DATETIME, created_at DATETIME);
-            CREATE TABLE research_finding (id INTEGER PRIMARY KEY, hypothesis_id INTEGER, statement TEXT, polarity VARCHAR(8), confidence FLOAT, evidence_run_id INTEGER, superseded_by INTEGER, created_at DATETIME);
-            CREATE TABLE research_optimization_trial (id INTEGER PRIMARY KEY, run_id INTEGER, instrument_key VARCHAR(48), fold_index INTEGER, params_json TEXT, is_objective FLOAT, is_trades INTEGER, oos_trades INTEGER, selected BOOLEAN, created_at DATETIME);
+            CREATE TABLE research_hypothesis (id INTEGER PRIMARY KEY, program_id INTEGER REFERENCES research_program(id), statement TEXT, status VARCHAR(12), retest_priority FLOAT, last_tested_at DATETIME, created_at DATETIME);
+            CREATE TABLE research_experiment_spec (id VARCHAR(64) PRIMARY KEY, hypothesis_id INTEGER REFERENCES research_hypothesis(id), parent_spec_id VARCHAR(64) REFERENCES research_experiment_spec(id), recipe_json TEXT, git_commit VARCHAR(40), qualifier_version VARCHAR(24), optimizer_version VARCHAR(24), validator_version VARCHAR(24), scoring_version VARCHAR(24), rng_seed INTEGER, created_at DATETIME);
+            CREATE TABLE research_experiment_run (id INTEGER PRIMARY KEY, spec_id VARCHAR(64) REFERENCES research_experiment_spec(id), status VARCHAR(12), decision VARCHAR(16), spent_bar_seconds FLOAT, checkpoint_json TEXT, error VARCHAR(400), started_at DATETIME, completed_at DATETIME, created_at DATETIME);
+            CREATE TABLE research_finding (id INTEGER PRIMARY KEY, hypothesis_id INTEGER REFERENCES research_hypothesis(id), statement TEXT, polarity VARCHAR(8), confidence FLOAT, evidence_run_id INTEGER REFERENCES research_experiment_run(id), superseded_by INTEGER REFERENCES research_finding(id), created_at DATETIME);
+            CREATE TABLE research_optimization_trial (id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES research_experiment_run(id), instrument_key VARCHAR(48), fold_index INTEGER, params_json TEXT, is_objective FLOAT, is_trades INTEGER, oos_trades INTEGER, selected BOOLEAN, created_at DATETIME);
             CREATE TABLE research_generated_strategy (key VARCHAR(64) PRIMARY KEY, composition_json TEXT, source TEXT, created_at DATETIME);
-            CREATE TABLE research_promotion_candidate (id INTEGER PRIMARY KEY, run_id INTEGER, parameterization_hash VARCHAR(64), qualifying_universe_json TEXT, scorecard_json TEXT, status VARCHAR(12), approved_git_sha VARCHAR(40), created_at DATETIME);
-            CREATE TABLE research_block_edge (block_name VARCHAR(48), instrument_key VARCHAR(32), positive INTEGER, negative INTEGER, last_run_id INTEGER, updated_at DATETIME, PRIMARY KEY(block_name, instrument_key));
-            CREATE TABLE research_shadow_session (id INTEGER PRIMARY KEY, candidate_id INTEGER, session_date DATE, instrument_key VARCHAR(32), trades INTEGER, wins INTEGER, net_pnl FLOAT, created_at DATETIME);
+            CREATE TABLE research_promotion_candidate (id INTEGER PRIMARY KEY, run_id INTEGER REFERENCES research_experiment_run(id), parameterization_hash VARCHAR(64), qualifying_universe_json TEXT, scorecard_json TEXT, status VARCHAR(12), approved_git_sha VARCHAR(40), created_at DATETIME);
+            CREATE TABLE research_block_edge (block_name VARCHAR(48), instrument_key VARCHAR(32), positive INTEGER, negative INTEGER, last_run_id INTEGER REFERENCES research_experiment_run(id), updated_at DATETIME, PRIMARY KEY(block_name, instrument_key));
+            CREATE TABLE research_shadow_session (id INTEGER PRIMARY KEY, candidate_id INTEGER REFERENCES research_promotion_candidate(id), session_date DATE, instrument_key VARCHAR(32), trades INTEGER, wins INTEGER, net_pnl FLOAT, created_at DATETIME);
+            CREATE INDEX ix_legacy_hypothesis_program ON research_hypothesis(program_id);
+            CREATE INDEX ix_legacy_run_spec ON research_experiment_run(spec_id);
+            CREATE TRIGGER trg_research_experiment_spec_no_update BEFORE UPDATE ON research_experiment_spec BEGIN SELECT RAISE(ABORT, 'legacy immutable'); END;
+            CREATE TRIGGER trg_research_optimization_trial_no_delete BEFORE DELETE ON research_optimization_trial BEGIN SELECT RAISE(ABORT, 'legacy immutable'); END;
         """)
         now = "2026-08-12 00:00:00"
         connection.execute("INSERT INTO research_program VALUES (1, ?, ?, ?, ?)", ("same", "thesis", "active", now))
@@ -100,6 +107,29 @@ def test_legacy_rows_upgrade_losslessly_and_two_owners_share_content_addresses(t
             session.add(GeneratedStrategyRecord(owner_id="owner-b", key="generated", source="b"))
             session.add(BlockEdge(owner_id="owner-b", block_name="edge", instrument_key="GOLDM"))
             session.commit()
+        with engine.connect() as check:
+            assert check.exec_driver_sql(
+                "SELECT owner_id, id, name, thesis, status, created_at FROM research_program WHERE owner_id=?",
+                (LEGACY_OWNER_ID,),
+            ).one() == (LEGACY_OWNER_ID, 1, "same", "thesis", "active", now)
+            assert check.exec_driver_sql(
+                "SELECT owner_id, id, program_id, statement, status, retest_priority, last_tested_at, created_at FROM research_hypothesis WHERE owner_id=?",
+                (LEGACY_OWNER_ID,),
+            ).one() == (LEGACY_OWNER_ID, 1, 1, "statement", "open", 1.0, None, now)
+            assert check.exec_driver_sql(
+                "SELECT owner_id, id, hypothesis_id, recipe_json, rng_seed, created_at FROM research_experiment_spec WHERE owner_id=?",
+                (LEGACY_OWNER_ID,),
+            ).one() == (LEGACY_OWNER_ID, "hash", 1, recipe, 7, now)
+            assert check.exec_driver_sql(
+                "SELECT owner_id, id, spec_id, checkpoint_json, started_at, completed_at, created_at FROM research_experiment_run WHERE owner_id=?",
+                (LEGACY_OWNER_ID,),
+            ).one() == (LEGACY_OWNER_ID, 1, "hash", "{\"e\":1}", now, now, now)
+            assert check.exec_driver_sql("SELECT owner_id, id, hypothesis_id, evidence_run_id, created_at FROM research_finding WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, 1, 1, 1, now)
+            assert check.exec_driver_sql("SELECT owner_id, id, run_id, params_json, created_at FROM research_optimization_trial WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, 1, 1, '{"p":1}', now)
+            assert check.exec_driver_sql("SELECT owner_id, key, composition_json, source, created_at FROM research_generated_strategy WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, "generated", '{"k":1}', "source", now)
+            assert check.exec_driver_sql("SELECT owner_id, id, run_id, parameterization_hash, approved_git_sha, created_at FROM research_promotion_candidate WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, 1, 1, "param", None, now)
+            assert check.exec_driver_sql("SELECT owner_id, block_name, instrument_key, last_run_id, updated_at FROM research_block_edge WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, "edge", "GOLDM", 1, now)
+            assert check.exec_driver_sql("SELECT owner_id, id, candidate_id, session_date, created_at FROM research_shadow_session WHERE owner_id=?", (LEGACY_OWNER_ID,)).one() == (LEGACY_OWNER_ID, 1, 1, "2026-08-12", now)
     finally:
         engine.dispose()
 
@@ -264,11 +294,88 @@ def test_wrong_owner_root_locators_have_the_same_absent_shape_and_preserve_other
         engine.dispose()
 
 
-def test_owner_does_not_change_canonical_spec_or_evidence_bytes():
+def test_two_owner_rows_keep_identical_canonical_spec_and_evidence_bytes(tmp_path):
     recipe = {"strategy": "trend", "params": {"length": 20}, "datasets": {"GOLDM": "digest"}}
-    payload = {"spec_id": spec_hash(recipe), "provenance": recipe, "results": {"address": "sha256:abc"}}
-    assert spec_hash(recipe) == spec_hash(recipe)
-    assert encode_terminal_evidence(payload) == encode_terminal_evidence(payload)
+    spec_id = spec_hash(recipe)
+    payload = {"spec_id": spec_id, "provenance": recipe, "results": {"address": "sha256:abc"}}
+    engine = make_engine(str(tmp_path / "canonical.db"))
+    try:
+        init_research_db(engine)
+        from research.domain.base import make_sessionmaker
+        with make_sessionmaker(engine).begin() as session:
+            for owner_id in ("owner-a", "owner-b"):
+                program = ResearchProgram(owner_id=owner_id, name="same", thesis="")
+                session.add(program)
+                session.flush()
+                hypothesis = Hypothesis(owner_id=owner_id, program_id=program.id, statement="same")
+                session.add(hypothesis)
+                session.flush()
+                session.add(ExperimentSpec(
+                    owner_id=owner_id, id=spec_id, hypothesis_id=hypothesis.id,
+                    recipe_json='{"datasets":{"GOLDM":"digest"},"params":{"length":20},"strategy":"trend"}',
+                ))
+                session.flush()
+                session.add(ExperimentRun(owner_id=owner_id, spec_id=spec_id, status="pending"))
+        with make_sessionmaker(engine)() as session:
+            left = session.get(ExperimentSpec, ("owner-a", spec_id))
+            right = session.get(ExperimentSpec, ("owner-b", spec_id))
+            assert left is not None and right is not None
+            assert left.id == right.id == spec_hash(recipe)
+            assert encode_terminal_evidence(payload) == encode_terminal_evidence(dict(payload))
+    finally:
+        engine.dispose()
+
+
+def test_project_read_boundaries_require_an_explicit_owner():
+    """A project-scoped read cannot silently query all research tenants."""
+    assert research_read.get_graph_run("project", 999, owner_id="owner-a") is None
+
+
+def test_project_reads_hide_a_foreign_run_like_an_absent_run(tmp_path, monkeypatch):
+    """The read bridge scopes the database predicate before project provenance."""
+    path = tmp_path / "read-scope.db"
+    monkeypatch.setattr(research_read, "research_db_path", lambda: str(path))
+    engine = make_engine(str(path))
+    try:
+        init_research_db(engine)
+        from research.domain.base import make_sessionmaker
+        with make_sessionmaker(engine).begin() as session:
+            program = ResearchProgram(owner_id="owner-a", name="program", thesis="")
+            session.add(program)
+            session.flush()
+            hypothesis = Hypothesis(owner_id="owner-a", program_id=program.id, statement="h")
+            session.add(hypothesis)
+            session.flush()
+            session.add(ExperimentSpec(
+                owner_id="owner-a", id="spec", hypothesis_id=hypothesis.id,
+                recipe_json='{"strategy":"generated","graph_provenance":{"graph":{"project_id":"project"}}}',
+            ))
+            session.flush()
+            run = ExperimentRun(owner_id="owner-a", spec_id="spec", status="pending")
+            session.add(run)
+            session.flush()
+            foreign_run_id = run.id
+            candidate = PromotionCandidate(
+                owner_id="owner-a", run_id=run.id, parameterization_hash="p" * 64,
+                qualifying_universe_json="[]", scorecard_json="{}", status="pending",
+            )
+            session.add(candidate)
+            session.add(GeneratedStrategyRecord(
+                owner_id="owner-a", key="generated", composition_json='{"nodes":[]}', source="owner-a",
+            ))
+            session.flush()
+            foreign_candidate_id = candidate.id
+        assert research_read.get_graph_run("project", foreign_run_id, owner_id="owner-b") is None
+        assert research_read.get_graph_run("project", foreign_run_id + 1, owner_id="owner-b") is None
+        assert research_read.list_graph_runs("project", owner_id="owner-b") == []
+        assert [view["run_id"] for view in research_read.list_graph_runs("project", owner_id="owner-a")] == [foreign_run_id]
+        assert research_read.get_promotion(foreign_candidate_id, owner_id="owner-b") is None
+        assert research_read.list_pending_promotions(owner_id="owner-b") == []
+        owned_candidate = research_read.get_promotion(foreign_candidate_id, owner_id="owner-a")
+        assert owned_candidate is not None
+        assert owned_candidate["generated_source"] == "owner-a"
+    finally:
+        engine.dispose()
 
 
 def test_downgrade_refusal_is_non_destructive(tmp_path):

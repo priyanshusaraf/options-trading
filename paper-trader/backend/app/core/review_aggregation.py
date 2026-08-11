@@ -36,7 +36,7 @@ def project_review_source(project_id: str, *, owner_id: str) -> dict:
                 "candidate_id": None,
             },
         ))
-    research = research_read.project_review_source(project_id)
+    research = research_read.project_review_source(project_id, owner_id=owner_id)
     events.extend(research["events"])
     source_errors.extend(research["source_errors"])
     return {

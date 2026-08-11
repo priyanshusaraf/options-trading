@@ -61,8 +61,10 @@ def _research_session():
         engine.dispose()
 
 
-def _recipe_for(session, run_id: int) -> dict:
-    run = session.get(ExperimentRun, run_id)
+def _recipe_for(session, run_id: int, *, owner_id: str) -> dict:
+    run = (session.query(ExperimentRun)
+           .filter(ExperimentRun.owner_id == owner_id, ExperimentRun.id == run_id)
+           .one_or_none())
     spec = (session.get(ExperimentSpec, (run.owner_id, run.spec_id)) if run else None)
     if spec is None:
         return {}
@@ -94,10 +96,10 @@ def _graph_for_recipe(recipe: dict) -> dict | None:
     return graph if isinstance(graph, dict) else None
 
 
-def _candidate_for_run(session, run_id: int) -> dict | None:
+def _candidate_for_run(session, run_id: int, *, owner_id: str) -> dict | None:
     candidate = (
         session.query(PromotionCandidate)
-        .filter_by(run_id=run_id)
+        .filter(PromotionCandidate.owner_id == owner_id, PromotionCandidate.run_id == run_id)
         .order_by(PromotionCandidate.id.desc())
         .first()
     )
@@ -116,7 +118,7 @@ def _candidate_for_run(session, run_id: int) -> dict | None:
 
 
 def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> dict | None:
-    recipe = _recipe_for(session, run.id)
+    recipe = _recipe_for(session, run.id, owner_id=run.owner_id)
     graph = _graph_for_recipe(recipe)
     if graph is None:
         return None
@@ -144,19 +146,21 @@ def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> d
         "decision": run.decision,
         "evidence_state": evidence_state,
         "graph": graph,
-        "candidate": _candidate_for_run(session, run.id),
+        "candidate": _candidate_for_run(session, run.id, owner_id=run.owner_id),
     }
     if include_evidence:
         view["evidence"] = evidence
     return view
 
 
-def list_graph_runs(project_id: str) -> list[dict]:
+def list_graph_runs(project_id: str, *, owner_id: str) -> list[dict]:
     """Graph-bound runs owned by one copied immutable project provenance."""
     with _research_session() as session:
         if session is None:
             return []
-        runs = session.query(ExperimentRun).order_by(ExperimentRun.id.desc()).all()
+        runs = (session.query(ExperimentRun)
+                .filter(ExperimentRun.owner_id == owner_id)
+                .order_by(ExperimentRun.id.desc()).all())
         views = []
         for run in runs:
             view = _graph_run_view(session, run, include_evidence=False)
@@ -165,12 +169,14 @@ def list_graph_runs(project_id: str) -> list[dict]:
         return views
 
 
-def get_graph_run(project_id: str, run_id: int) -> dict | None:
+def get_graph_run(project_id: str, run_id: int, *, owner_id: str) -> dict | None:
     """One graph-bound run, hidden unless its immutable recipe owns the project."""
     with _research_session() as session:
         if session is None:
             return None
-        run = session.get(ExperimentRun, run_id)
+        run = (session.query(ExperimentRun)
+               .filter(ExperimentRun.owner_id == owner_id, ExperimentRun.id == run_id)
+               .one_or_none())
         if run is None:
             return None
         view = _graph_run_view(session, run, include_evidence=True)
@@ -257,7 +263,7 @@ def _empty_project_review_source() -> dict:
     }
 
 
-def project_review_source(project_id: str) -> dict:
+def project_review_source(project_id: str, *, owner_id: str) -> dict:
     """Derive one project's review facts and queues in one research snapshot.
 
     Corrupt rows are contained and identified without copying untrusted source text
@@ -269,7 +275,9 @@ def project_review_source(project_id: str) -> dict:
             return result
 
         run_contexts: dict[int, dict] = {}
-        for run in session.query(ExperimentRun).order_by(ExperimentRun.id.asc()).all():
+        for run in (session.query(ExperimentRun)
+                    .filter(ExperimentRun.owner_id == owner_id)
+                    .order_by(ExperimentRun.id.asc()).all()):
             view = _graph_run_view(session, run, include_evidence=False)
             graph = view.get("graph") if view is not None else None
             if not isinstance(graph, dict) or graph.get("project_id") != project_id:
@@ -306,12 +314,14 @@ def project_review_source(project_id: str) -> dict:
                     "graph": graph_ref,
                 })
 
-        for finding in session.query(Finding).order_by(Finding.id.asc()).all():
+        for finding in (session.query(Finding)
+                        .filter(Finding.owner_id == owner_id)
+                        .order_by(Finding.id.asc()).all()):
             if finding.evidence_run_id not in run_contexts:
                 continue
             try:
                 context = _verified_finding_run(
-                    session, project_id, finding.evidence_run_id
+                    session, project_id, finding.evidence_run_id, owner_id=owner_id
                 )
             except FindingEvidenceUnavailable:
                 result["source_errors"].append({
@@ -421,12 +431,14 @@ def project_review_source(project_id: str) -> dict:
     return result
 
 
-def _verified_finding_run(session, project_id: str, run_id: int) -> dict | None:
-    run = session.get(ExperimentRun, run_id)
+def _verified_finding_run(session, project_id: str, run_id: int, *, owner_id: str) -> dict | None:
+    run = (session.query(ExperimentRun)
+           .filter(ExperimentRun.owner_id == owner_id, ExperimentRun.id == run_id)
+           .one_or_none())
     spec = (session.get(ExperimentSpec, (run.owner_id, run.spec_id)) if run is not None else None)
     if run is None or spec is None:
         return None
-    recipe = _recipe_for(session, run_id)
+    recipe = _recipe_for(session, run_id, owner_id=owner_id)
     graph = _graph_for_recipe(recipe)
     if graph is None or graph.get("project_id") != project_id:
         return None
@@ -480,31 +492,35 @@ def _finding_view(finding: Finding, context: dict) -> dict:
     }
 
 
-def list_project_findings(project_id: str) -> list[dict]:
+def list_project_findings(project_id: str, *, owner_id: str) -> list[dict]:
     with _research_session() as session:
         if session is None:
             return []
         views = []
-        for finding in session.query(Finding).order_by(Finding.id.asc()).all():
+        for finding in (session.query(Finding)
+                        .filter(Finding.owner_id == owner_id)
+                        .order_by(Finding.id.asc()).all()):
             if finding.evidence_run_id is None:
                 continue
             context = _verified_finding_run(
-                session, project_id, finding.evidence_run_id
+                session, project_id, finding.evidence_run_id, owner_id=owner_id
             )
             if context is not None:
                 views.append(_finding_view(finding, context))
         return views
 
 
-def get_project_finding(project_id: str, finding_id: int) -> dict | None:
+def get_project_finding(project_id: str, finding_id: int, *, owner_id: str) -> dict | None:
     with _research_session() as session:
         if session is None:
             return None
-        finding = session.get(Finding, finding_id)
+        finding = (session.query(Finding)
+                   .filter(Finding.owner_id == owner_id, Finding.id == finding_id)
+                   .one_or_none())
         if finding is None or finding.evidence_run_id is None:
             return None
         context = _verified_finding_run(
-            session, project_id, finding.evidence_run_id
+            session, project_id, finding.evidence_run_id, owner_id=owner_id
         )
         return _finding_view(finding, context) if context is not None else None
 
@@ -523,12 +539,12 @@ def _finding_confidence(evidence: dict) -> float:
 
 
 def create_project_finding(
-    project_id: str, run_id: int, *, statement: str, polarity: str
+    project_id: str, run_id: int, *, owner_id: str, statement: str, polarity: str
 ) -> dict | None:
     with _research_session() as session:
         if session is None:
             return None
-        context = _verified_finding_run(session, project_id, run_id)
+        context = _verified_finding_run(session, project_id, run_id, owner_id=owner_id)
         if context is None:
             return None
         finding = Finding(
@@ -549,16 +565,18 @@ def _after_finding_successor_insert(_session, _successor) -> None:
 
 
 def revise_project_finding(
-    project_id: str, finding_id: int, *, statement: str, polarity: str
+    project_id: str, finding_id: int, *, owner_id: str, statement: str, polarity: str
 ) -> dict | None:
     with _research_session() as session:
         if session is None:
             return None
-        original = session.get(Finding, finding_id)
+        original = (session.query(Finding)
+                    .filter(Finding.owner_id == owner_id, Finding.id == finding_id)
+                    .one_or_none())
         if original is None or original.evidence_run_id is None:
             return None
         context = _verified_finding_run(
-            session, project_id, original.evidence_run_id
+            session, project_id, original.evidence_run_id, owner_id=owner_id
         )
         if context is None:
             return None
@@ -577,7 +595,7 @@ def revise_project_finding(
         _after_finding_successor_insert(session, successor)
         claimed = session.execute(
             update(Finding)
-            .where(Finding.id == finding_id, Finding.superseded_by.is_(None))
+            .where(Finding.owner_id == owner_id, Finding.id == finding_id, Finding.superseded_by.is_(None))
             .values(superseded_by=successor.id)
             .execution_options(synchronize_session=False)
         )
@@ -596,7 +614,7 @@ def _view(session, c: PromotionCandidate) -> dict:
     """Flatten a candidate + its spec into a JSON-safe dict for the API. Carries the
     validated universe (what deploy assigns) and a plain-language explanation so the
     human reviews the strategy's actual logic, not just a score."""
-    recipe = _recipe_for(session, c.run_id)
+    recipe = _recipe_for(session, c.run_id, owner_id=c.owner_id)
     strategy_key = recipe.get("strategy", "unknown")
     params = recipe.get("params", {})
     interval = recipe.get("interval", "day")
@@ -645,28 +663,28 @@ def _explain(strategy_key: str, params: dict, composition) -> dict:
     return dataclasses.asdict(explain(strategy_key, params))
 
 
-def list_pending_promotions() -> list[dict]:
+def list_pending_promotions(*, owner_id: str) -> list[dict]:
     """Every candidate still awaiting a human decision, newest first."""
     with _research_session() as session:
         if session is None:
             return []
         try:
             cands = (session.query(PromotionCandidate)
-                     .filter_by(status="pending")
+                     .filter(PromotionCandidate.owner_id == owner_id, PromotionCandidate.status == "pending")
                      .order_by(PromotionCandidate.created_at.desc()).all())
             return [_view(session, c) for c in cands]
         except Exception:
             return []
 
 
-def get_promotion(candidate_id: int) -> dict | None:
+def get_promotion(candidate_id: int, *, owner_id: str) -> dict | None:
     """One pending candidate, or None for absent and every non-pending state."""
     with _research_session() as session:
         if session is None:
             return None
         try:
             c = (session.query(PromotionCandidate)
-                 .filter_by(id=candidate_id, status="pending")
+                 .filter(PromotionCandidate.owner_id == owner_id, PromotionCandidate.id == candidate_id, PromotionCandidate.status == "pending")
                  .one_or_none())
             return _view(session, c) if c is not None else None
         except Exception:
@@ -677,6 +695,7 @@ def decide_project_candidate(
     project_id: str,
     candidate_id: int,
     *,
+    owner_id: str,
     expected_status: str,
     decision: str,
     reason: str,
@@ -697,10 +716,12 @@ def decide_project_candidate(
             or len(reason) > 400
         ):
             raise CandidateDecisionConflict(candidate_id)
-        candidate = session.get(PromotionCandidate, candidate_id)
+        candidate = (session.query(PromotionCandidate)
+                     .filter(PromotionCandidate.owner_id == owner_id, PromotionCandidate.id == candidate_id)
+                     .one_or_none())
         if candidate is None:
             return None
-        recipe = _recipe_for(session, candidate.run_id)
+        recipe = _recipe_for(session, candidate.run_id, owner_id=owner_id)
         graph = _graph_for_recipe(recipe)
         if graph is None or graph.get("project_id") != project_id:
             return None
@@ -731,6 +752,7 @@ def decide_project_candidate(
         claimed = session.execute(
             update(PromotionCandidate)
             .where(
+                PromotionCandidate.owner_id == owner_id,
                 PromotionCandidate.id == candidate_id,
                 PromotionCandidate.status == expected_status,
                 PromotionCandidate.scorecard_json == candidate.scorecard_json,
@@ -752,7 +774,7 @@ def decide_project_candidate(
 
 
 def verified_graph_decision(*, project_id: str, graph_identifier: str,
-                            graph_version: int) -> dict | None:
+                            graph_version: int, owner_id: str) -> dict | None:
     """The verified approval for one exact graph version, or None.
 
     The single cross-plane read a managed shadow deployment makes, and it makes it once —
@@ -770,7 +792,7 @@ def verified_graph_decision(*, project_id: str, graph_identifier: str,
     approval exists" is an ordinary answer for a graph nobody has decided on yet. The
     caller decides what to do about it; `shadow_deployments.activate` refuses.
     """
-    for view in list_graph_runs(project_id):
+    for view in list_graph_runs(project_id, owner_id=owner_id):
         graph = view.get("graph") or {}
         if (graph.get("identifier") != graph_identifier
                 or graph.get("version") != graph_version):
@@ -797,7 +819,7 @@ CANDIDATE_DECISIONS = frozenset({"approved", "rejected"})
 
 
 def graph_decision_history(*, project_id: str, graph_identifier: str,
-                           graph_version: int) -> list[dict] | None:
+                           graph_version: int, owner_id: str) -> list[dict] | None:
     """Every verified decision recorded about one exact graph version, newest run first.
 
     The narrow read the execution cockpit needs to tell an operator "the research view has
@@ -819,7 +841,7 @@ def graph_decision_history(*, project_id: str, graph_identifier: str,
     if not os.path.exists(research_db_path()):
         return None
     try:
-        views = list_graph_runs(project_id)
+        views = list_graph_runs(project_id, owner_id=owner_id)
     except Exception:
         return None
 

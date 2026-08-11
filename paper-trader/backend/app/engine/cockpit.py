@@ -277,7 +277,7 @@ def current_research(binding) -> dict[str, Any]:
         history = research_read.graph_decision_history(
             project_id=binding.project_id,
             graph_identifier=binding.graph_identifier,
-            graph_version=binding.graph_version)
+            graph_version=binding.graph_version, owner_id=binding.owner_id)
     except Exception as exc:      # observability may never break the execution view
         return _research(RESEARCH_UNAVAILABLE, basis,
                          detail=f"{type(exc).__name__}: {exc}")

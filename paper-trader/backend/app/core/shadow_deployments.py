@@ -125,6 +125,7 @@ class ShadowBinding:
     """
 
     deployment_row_id: int
+    owner_id: str
     project_id: str
     graph_identifier: str
     graph_version: int
@@ -154,7 +155,8 @@ def strategy_key_for(graph_identifier: str) -> str:
     return f"{IR_NAMESPACE}{graph_identifier}"
 
 
-def verified_decision(*, project_id: str, graph_identifier: str, graph_version: int):
+def verified_decision(*, project_id: str, graph_identifier: str, graph_version: int,
+                      owner_id: str):
     """The verified research approval for one graph version, or None.
 
     A thin seam over the read-only research bridge. It exists as a module-level name so the
@@ -165,7 +167,7 @@ def verified_decision(*, project_id: str, graph_identifier: str, graph_version: 
 
     return verified_graph_decision(project_id=project_id,
                                    graph_identifier=graph_identifier,
-                                   graph_version=graph_version)
+                                   graph_version=graph_version, owner_id=owner_id)
 
 
 # ── writing ─────────────────────────────────────────────────────────────────────
@@ -310,7 +312,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
                 on_problem(str(exc))
             continue
         out.append(ShadowBinding(
-            deployment_row_id=row.id, project_id=row.project_id,
+            deployment_row_id=row.id, owner_id=row.owner_id, project_id=row.project_id,
             graph_identifier=row.graph_identifier, graph_version=row.graph_version,
             content_address=row.graph_content_address,
             evidence_run_id=row.evidence_run_id,
@@ -412,7 +414,7 @@ def _require_known_interval(interval: str) -> None:
 def _require_evidence(row: IrShadowDeployment) -> dict:
     decision = verified_decision(project_id=row.project_id,
                                  graph_identifier=row.graph_identifier,
-                                 graph_version=row.graph_version)
+                                 graph_version=row.graph_version, owner_id=row.owner_id)
     if not decision:
         raise EvidenceUnverified(
             f"no verified research decision approves {row.graph_identifier!r} v"

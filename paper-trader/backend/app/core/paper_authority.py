@@ -170,7 +170,8 @@ def strategy_key_for(graph_identifier: str) -> str:
     return f"{IR_NAMESPACE}{graph_identifier}"
 
 
-def verified_decision(*, project_id: str, graph_identifier: str, graph_version: int):
+def verified_decision(*, project_id: str, graph_identifier: str, graph_version: int,
+                      owner_id: str):
     """The verified research approval for one graph version, or None.
 
     One call site for the cross-plane read, so the isolation boundary hard invariant 5 puts
@@ -180,7 +181,7 @@ def verified_decision(*, project_id: str, graph_identifier: str, graph_version: 
 
     return verified_graph_decision(project_id=project_id,
                                    graph_identifier=graph_identifier,
-                                   graph_version=graph_version)
+                                   graph_version=graph_version, owner_id=owner_id)
 
 
 # ── writing ─────────────────────────────────────────────────────────────────────
@@ -532,7 +533,7 @@ def _require_evidence(row: IrPaperDeployment) -> dict:
     """
     decision = verified_decision(project_id=row.project_id,
                                  graph_identifier=row.graph_identifier,
-                                 graph_version=row.graph_version)
+                                 graph_version=row.graph_version, owner_id=row.owner_id)
     if not decision:
         raise EvidenceUnverified(
             f"no verified research decision approves {row.graph_identifier!r} v"
