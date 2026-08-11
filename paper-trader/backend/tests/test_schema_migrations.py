@@ -723,6 +723,68 @@ def test_revision_0019_retry_during_default_removal_restores_exact_contract(tmp_
     assert _table_contract(engine, table) == expected
 
 
+def test_revision_0019_retry_after_deployments_default_removal_drop_promotes_generic_temp(tmp_path):
+    """A retry must recover the default-removal batch before deployments reflection."""
+    expected = _canonical_0019_contract(tmp_path, "deployments")
+    engine = _fresh_engine(tmp_path, "0019-deployments-default-drop-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    completed_custom_rebuild = False
+    failed = False
+    interrupted_table_names: set[str] | None = None
+    interrupted_temp_ddl: str | None = None
+    interrupted_temp_rows: list[dict[str, object]] = []
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_default_removal_drop(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal completed_custom_rebuild, failed, interrupted_table_names
+        nonlocal interrupted_temp_ddl, interrupted_temp_rows
+        if "ALTER TABLE deployments__0019 RENAME TO deployments" in statement:
+            completed_custom_rebuild = True
+        if (completed_custom_rebuild and not failed
+                and statement.strip() == "DROP TABLE deployments"):
+            failed = True
+            interrupted_table_names = {
+                row[0] for row in _cursor.connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+            interrupted_temp_ddl = _cursor.connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' "
+                "AND name='_alembic_tmp_deployments'").fetchone()[0]
+            temp_cursor = _cursor.connection.execute(
+                "SELECT * FROM _alembic_tmp_deployments")
+            columns = [column[0] for column in temp_cursor.description]
+            interrupted_temp_rows = [
+                dict(zip(columns, row)) for row in temp_cursor.fetchall()]
+            raise RuntimeError("injected interruption after deployments default-removal drop")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        assert failed
+        assert interrupted_table_names is not None
+        assert "deployments" not in interrupted_table_names
+        assert "_alembic_tmp_deployments" in interrupted_table_names
+        assert interrupted_temp_ddl is not None
+        # Alembic rolls the test transaction back after the injected exception. Recreate
+        # the exact batch table observed above to model a process interruption after
+        # SQLite committed the DROP but before the RENAME.
+        connection.execute(sa.text(interrupted_temp_ddl))
+        if interrupted_temp_rows:
+            columns = tuple(interrupted_temp_rows[0])
+            connection.execute(sa.text(
+                "INSERT INTO _alembic_tmp_deployments "
+                f"({', '.join(columns)}) VALUES "
+                f"({', '.join(f':{column}' for column in columns)})"),
+                interrupted_temp_rows)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert migrate.schema_version(engine) == HEAD
+    assert "_alembic_tmp_deployments" not in sa.inspect(engine).get_table_names()
+    assert _table_contract(engine, "deployments") == expected
+
+
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):
     from app.ir.hashing import canonical_json, content_address
     from app.ir.strategies.expanding_z import GRAPH

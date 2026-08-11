@@ -166,6 +166,7 @@ def _restore_inline_entry_fk(table: str) -> None:
 
 
 def _upgrade_deployments() -> None:
+    _recover_sqlite_rebuild_temp("deployments")
     _recover_sqlite_rebuild_temp(
         "deployments", temporary="deployments__0019")
     columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("deployments")}
