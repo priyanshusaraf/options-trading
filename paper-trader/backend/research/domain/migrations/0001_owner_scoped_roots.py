@@ -49,7 +49,7 @@ TABLE_SIGNATURE = {
 # Filled from the deterministic complete contract represented by TABLE_SIGNATURE
 # and the frozen model metadata at the time 0001 was introduced.  Kept separate
 # from the explanatory table map so a reviewer can inspect the covered shape.
-SCHEMA_DIGEST = "105bb87242135b9ebb404910242470c53598290f2d36a9415d3e2f2ec0f05830"
+SCHEMA_DIGEST = "8a6580f8fc123c306a524651a5dcb7ec5f699eaf65c73a4fa6e02756ee2917bc"
 
 
 def upgrade(connection, rebuild, *, schema_digest) -> None:

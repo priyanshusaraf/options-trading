@@ -15,6 +15,11 @@ from research.domain.base import LEGACY_OWNER_ID, ResearchBase
 VERSION_TABLE = "research_schema_version"
 HEAD_VERSION = "0001"
 _VERSION_COLUMNS = ("version", "schema_cookie")
+_LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
+_CURRENT_MARKER_SHAPE = (
+    ("version", "VARCHAR(16)", True, None, 1),
+    ("schema_cookie", "INTEGER", True, None, 0),
+)
 
 
 class ResearchMigrationError(RuntimeError):
@@ -39,6 +44,20 @@ def _schema_cookie(connection) -> int:
 
 def _normalise_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql.replace("IF NOT EXISTS ", "").replace('"', "").strip()).upper()
+
+
+def _marker_shape(connection) -> tuple[tuple[str, str, bool, object, int], ...]:
+    return tuple(
+        (row[1], row[2].upper(), bool(row[3]), row[4], row[5])
+        for row in connection.exec_driver_sql(f"PRAGMA table_info({_quoted(VERSION_TABLE)})")
+    )
+
+
+def _create_current_marker(connection) -> None:
+    connection.exec_driver_sql(
+        f"CREATE TABLE {_quoted(VERSION_TABLE)} "
+        "(version VARCHAR(16) NOT NULL PRIMARY KEY, schema_cookie INTEGER NOT NULL)"
+    )
 
 
 def _temporary_name(table: Table) -> str:
@@ -181,18 +200,17 @@ def _create_indexes_and_triggers(connection) -> None:
 
 
 def _stamp(connection) -> None:
-    connection.exec_driver_sql(
-        f"CREATE TABLE IF NOT EXISTS {_quoted(VERSION_TABLE)} "
-        "(version VARCHAR(16) NOT NULL PRIMARY KEY, schema_cookie INTEGER NOT NULL)"
-    )
-    columns = tuple(row[1] for row in connection.exec_driver_sql(
-        f"PRAGMA table_info({_quoted(VERSION_TABLE)})"
-    ))
-    if columns == ("version",):
-        connection.exec_driver_sql(
-            f"ALTER TABLE {_quoted(VERSION_TABLE)} ADD COLUMN schema_cookie INTEGER"
-        )
-    elif columns != _VERSION_COLUMNS:
+    if VERSION_TABLE not in _table_names(connection):
+        _create_current_marker(connection)
+    elif _marker_shape(connection) == _LEGACY_MARKER_SHAPE:
+        # SQLite cannot add a NOT NULL column without a default to a populated
+        # table. Rebuild only this marker, after the caller validated all user
+        # tables, to keep the current marker contract exact.
+        old = f"{VERSION_TABLE}__legacy_marker"
+        connection.exec_driver_sql(f"ALTER TABLE {_quoted(VERSION_TABLE)} RENAME TO {_quoted(old)}")
+        _create_current_marker(connection)
+        connection.exec_driver_sql(f"DROP TABLE {_quoted(old)}")
+    elif _marker_shape(connection) != _CURRENT_MARKER_SHAPE:
         raise ResearchMigrationError("research schema marker contract drift")
     connection.exec_driver_sql(f"DELETE FROM {_quoted(VERSION_TABLE)}")
     connection.exec_driver_sql(
@@ -204,18 +222,18 @@ def _stamp(connection) -> None:
 def _current_version(connection) -> tuple[str, int | None] | None:
     if VERSION_TABLE not in _table_names(connection):
         return None
-    columns = tuple(row[1] for row in connection.exec_driver_sql(
-        f"PRAGMA table_info({_quoted(VERSION_TABLE)})"
-    ))
-    if columns not in (("version",), _VERSION_COLUMNS):
+    shape = _marker_shape(connection)
+    if shape not in (_LEGACY_MARKER_SHAPE, _CURRENT_MARKER_SHAPE):
         raise ResearchMigrationError("research schema marker contract drift")
     rows = connection.exec_driver_sql(
-        f"SELECT version{', schema_cookie' if len(columns) == 2 else ''} "
+        f"SELECT version{', schema_cookie' if shape == _CURRENT_MARKER_SHAPE else ''} "
         f"FROM {_quoted(VERSION_TABLE)}"
     ).all()
     if len(rows) != 1:
         raise ResearchMigrationError("research schema marker is not singular")
-    return rows[0][0], (int(rows[0][1]) if len(columns) == 2 and rows[0][1] is not None else None)
+    return rows[0][0], (
+        int(rows[0][1]) if shape == _CURRENT_MARKER_SHAPE else None
+    )
 
 
 def _expected_default(column, dialect) -> str | None:
@@ -235,6 +253,18 @@ def _expected_triggers() -> dict[str, str]:
     }
 
 
+def _normalise_fk_options(*, ondelete=None, onupdate=None,
+                          deferrable=None, initially=None) -> tuple:
+    """Compare FK actions/options even when SQLite's inspector omits nulls."""
+    def action(value):
+        return value.upper() if isinstance(value, str) else value
+
+    def initial(value):
+        return value.upper() if isinstance(value, str) else value
+
+    return (action(ondelete), action(onupdate), deferrable, initial(initially))
+
+
 def _validate_schema(connection, *, include_marker: bool = True) -> None:
     """Reject every visible schema-contract drift, not merely missing owners."""
     inspector = inspect(connection)
@@ -245,10 +275,7 @@ def _validate_schema(connection, *, include_marker: bool = True) -> None:
             f"research table-set drift: {sorted(actual_tables)} != {sorted(expected_tables)}"
         )
     if include_marker:
-        marker_columns = tuple(row[1] for row in connection.exec_driver_sql(
-            f"PRAGMA table_info({_quoted(VERSION_TABLE)})"
-        ))
-        if marker_columns != _VERSION_COLUMNS:
+        if _marker_shape(connection) != _CURRENT_MARKER_SHAPE:
             raise ResearchMigrationError("research schema marker contract drift")
     for table in ResearchBase.metadata.sorted_tables:
         pk_positions = {
@@ -295,11 +322,27 @@ def _validate_schema(connection, *, include_marker: bool = True) -> None:
         if actual_indexes != expected_indexes:
             raise ResearchMigrationError(f"{table.name} index drift")
         expected_fks = {
-            (tuple(fk.column_keys), fk.referred_table.name, tuple(element.column.name for element in fk.elements))
+            (
+                tuple(fk.column_keys), fk.referred_table.name,
+                tuple(element.column.name for element in fk.elements),
+                _normalise_fk_options(
+                    ondelete=fk.ondelete, onupdate=fk.onupdate,
+                    deferrable=fk.deferrable, initially=fk.initially,
+                ),
+            )
             for fk in table.foreign_key_constraints
         }
         actual_fks = {
-            (tuple(fk["constrained_columns"]), fk["referred_table"], tuple(fk["referred_columns"]))
+            (
+                tuple(fk["constrained_columns"]), fk["referred_table"],
+                tuple(fk["referred_columns"]),
+                _normalise_fk_options(
+                    ondelete=fk.get("options", {}).get("ondelete"),
+                    onupdate=fk.get("options", {}).get("onupdate"),
+                    deferrable=fk.get("options", {}).get("deferrable"),
+                    initially=fk.get("options", {}).get("initially"),
+                ),
+            )
             for fk in inspector.get_foreign_keys(table.name)
         }
         if actual_fks != expected_fks:
@@ -347,7 +390,11 @@ def _migration_schema_digest(connection) -> str:
             ),
             "foreign_keys": sorted(
                 (tuple(fk.column_keys), fk.referred_table.name,
-                 tuple(element.column.name for element in fk.elements))
+                 tuple(element.column.name for element in fk.elements),
+                 _normalise_fk_options(
+                     ondelete=fk.ondelete, onupdate=fk.onupdate,
+                     deferrable=fk.deferrable, initially=fk.initially,
+                 ))
                 for fk in table.foreign_key_constraints
             ),
         }

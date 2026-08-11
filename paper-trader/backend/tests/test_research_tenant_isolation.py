@@ -81,6 +81,45 @@ def test_c823_head_marker_is_upgraded_in_place_without_touching_payload(tmp_path
         engine.dispose()
 
 
+def test_malformed_two_column_marker_is_rejected_before_cookie_fast_path(tmp_path):
+    """Matching names and schema cookie cannot bless a malformed version marker."""
+    engine = make_engine(str(tmp_path / "malformed-marker.db"))
+    try:
+        init_research_db(engine)
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE research_schema_version RENAME TO marker_old")
+            connection.exec_driver_sql(
+                "CREATE TABLE research_schema_version (version TEXT, schema_cookie TEXT)"
+            )
+            connection.exec_driver_sql("DROP TABLE marker_old")
+            cookie = connection.exec_driver_sql("PRAGMA schema_version").scalar_one()
+            connection.exec_driver_sql(
+                "INSERT INTO research_schema_version (version, schema_cookie) VALUES ('0001', ?)",
+                (str(cookie),),
+            )
+        with pytest.raises(ResearchMigrationError, match="marker contract drift"):
+            init_research_db(engine)
+    finally:
+        engine.dispose()
+
+
+def test_0001_digest_changes_when_a_foreign_key_action_changes(tmp_path):
+    """Same-column FK actions are part of the immutable 0001 contract."""
+    engine = make_engine(str(tmp_path / "digest.db"))
+    try:
+        with engine.connect() as connection:
+            baseline = migrate_module._migration_schema_digest(connection)
+            constraint = next(iter(Hypothesis.__table__.foreign_key_constraints))
+            original = constraint.ondelete
+            try:
+                constraint.ondelete = "CASCADE"
+                assert migrate_module._migration_schema_digest(connection) != baseline
+            finally:
+                constraint.ondelete = original
+    finally:
+        engine.dispose()
+
+
 def test_legacy_rows_upgrade_losslessly_and_two_owners_share_content_addresses(tmp_path):
     """A legacy row keeps its exact payload while a second owner can reuse its hash.
 
