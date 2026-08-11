@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.editor import graph_artifacts
 from app.editor import layouts as ir_layouts
+from app.db.models import LEGACY_OWNER_ID
 
 
 router = APIRouter(prefix="/api/ir")
@@ -58,7 +59,7 @@ class IrLayoutResponse(BaseModel):
 
 def _graph(identifier: str, version: int):
     try:
-        return graph_artifacts.load_published_graph(identifier, version).graph
+        return graph_artifacts.load_published_graph(identifier, version, owner_id=LEGACY_OWNER_ID).graph
     except graph_artifacts.GraphNotFound as exc:
         raise HTTPException(
             status_code=404,

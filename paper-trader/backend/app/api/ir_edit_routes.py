@@ -14,6 +14,7 @@ from app.api import ir_layout_routes, ir_routes
 from app.editor import descriptors
 from app.editor import graph_artifacts as store
 from app.editor import layouts
+from app.db.models import LEGACY_OWNER_ID
 from app.ir import edit as ir_edit
 from app.ir.kernels import KernelDeclarationError
 from app.ir.library import LIBRARY
@@ -669,7 +670,7 @@ def _document(
 )
 def get_editor_document(project_id: str, identifier: str):
     try:
-        snapshot = store.load_editor_snapshot(project_id, identifier)
+        snapshot = store.load_editor_snapshot(project_id, identifier, owner_id=LEGACY_OWNER_ID)
         return _document(snapshot, snapshot.layout, include_receipt=False)
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc
@@ -696,6 +697,7 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
             response_factory=lambda publication, layout: _document(
                 publication, layout, include_receipt=True
             ),
+            owner_id=LEGACY_OWNER_ID,
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc
@@ -780,6 +782,7 @@ def post_presentation_edit(
             response_factory=lambda publication, layout: _document(
                 publication, layout, include_receipt=True
             ),
+            owner_id=LEGACY_OWNER_ID,
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc

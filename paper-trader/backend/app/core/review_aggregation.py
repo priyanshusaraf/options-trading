@@ -4,13 +4,14 @@ from __future__ import annotations
 from app.core import research_read
 from app.core.research_review import make_review_event
 from app.editor import graph_artifacts as store
+from app.db.models import LEGACY_OWNER_ID
 
 
 def project_review_source(project_id: str) -> dict:
     source_errors: list[dict] = []
     events: list[dict] = []
     try:
-        versions = store.list_project_version_events(project_id)
+        versions = store.list_project_version_events(project_id, owner_id=LEGACY_OWNER_ID)
     except store.GraphVersionCorrupt as exc:
         source_errors.append({
             "source": "graph_version",

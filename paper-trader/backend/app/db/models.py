@@ -1035,9 +1035,12 @@ class Project(Base):
     __tablename__ = "projects"
     __table_args__ = (
         CheckConstraint("status IN ('active', 'archived')", name="ck_projects_status"),
+        UniqueConstraint("owner_id", "name", name="uq_projects_owner_name"),
     )
 
     project_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="",
                                               server_default="")
@@ -1099,6 +1102,7 @@ class GraphVersion(Base):
             "json_extract(artifact_json, '$.version') IS version",
             name="ck_graph_versions_version_matches_json",
         ),
+        CheckConstraint("visibility = 'PRIVATE'", name="ck_graph_versions_private_visibility"),
         Index("ix_graph_versions_content_address", "content_address"),
     )
 
@@ -1106,6 +1110,8 @@ class GraphVersion(Base):
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
     content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="PRIVATE", server_default="PRIVATE")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, nullable=False, default=dt.datetime.now)
 

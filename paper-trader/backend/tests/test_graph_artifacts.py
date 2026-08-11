@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+from functools import partial
 
 import pytest
 from sqlalchemy import select
@@ -12,6 +13,18 @@ from app.db.session import SessionLocal, init_db
 from app.editor import graph_artifacts as store
 from app.ir.hashing import canonical_json, content_address
 from app.ir.strategies.expanding_z import GRAPH
+
+
+@pytest.fixture(autouse=True)
+def _legacy_owner_scope(monkeypatch):
+    """Existing behaviour tests exercise the explicit legacy composition seam."""
+    for name in (
+        "create_project", "set_project_status", "list_projects", "create_artifact",
+        "load_draft", "load_editor_snapshot", "save_draft", "publish_draft",
+        "apply_and_publish", "apply_presentation", "load_version", "list_versions",
+        "list_project_version_events", "load_owned_version_for_experiment",
+    ):
+        monkeypatch.setattr(store, name, partial(getattr(store, name), owner_id="owner"))
 
 
 @pytest.fixture(autouse=True)

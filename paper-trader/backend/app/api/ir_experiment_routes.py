@@ -12,6 +12,7 @@ from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
 from app.editor import graph_artifacts as store
+from app.db.models import LEGACY_OWNER_ID
 from app.editor.comparison import GraphComparisonRejected, compare_graph_versions
 from research.compare import compare_experiment_evidence
 from research.config import research_db_path
@@ -266,7 +267,7 @@ def post_graph_experiment(
         )
     try:
         published = store.load_owned_version_for_experiment(
-            project_id, identifier, version
+            project_id, identifier, version, owner_id=LEGACY_OWNER_ID
         )
     except store.ProjectNotFound as exc:
         raise _error(404, "EXPERIMENT_PROJECT_NOT_FOUND", "project not found") from exc
@@ -415,7 +416,7 @@ def _load_comparison_graph(
 ):
     try:
         return store.load_version(
-            project_id, selection.graph_identifier, selection.graph_version
+            project_id, selection.graph_identifier, selection.graph_version, owner_id=LEGACY_OWNER_ID
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _error(

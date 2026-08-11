@@ -28,7 +28,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0019"
+HEAD = "0020"
 
 
 def _schema(engine) -> dict:
@@ -124,14 +124,14 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
 
     assert migrate.head_revision() == HEAD
     assert set(schema["projects"]["columns"]) == {
-        "project_id", "name", "description", "status", "created_at", "updated_at",
+        "project_id", "owner_id", "name", "description", "status", "created_at", "updated_at",
     }
     assert set(schema["graph_artifacts"]["columns"]) == {
         "identifier", "project_id", "display_name", "draft_json", "draft_revision",
         "published_revision", "current_version", "created_at", "updated_at",
     }
     assert set(schema["graph_versions"]["columns"]) == {
-        "graph_identifier", "version", "artifact_json", "content_address", "created_at",
+        "graph_identifier", "version", "artifact_json", "content_address", "visibility", "created_at",
     }
     assert set(schema["ir_graph_layouts"]["columns"]) == {
         "graph_identifier", "graph_version", "revision", "updated_at",
@@ -927,8 +927,8 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO projects "
-            "(project_id, name, description, status, created_at, updated_at) "
-            "VALUES ('project.user', 'User project', '', 'active', "
+            "(project_id, owner_id, name, description, status, created_at, updated_at) "
+            "VALUES ('project.user', 'owner', 'User project', '', 'active', "
             "'2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
 
@@ -936,7 +936,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
 
     with engine.begin() as connection:
         connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
@@ -948,7 +948,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
 
 
 def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
@@ -1113,7 +1113,7 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0007")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
 
 
 def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp_path):
@@ -1174,7 +1174,7 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0008")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):
