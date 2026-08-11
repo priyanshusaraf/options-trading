@@ -429,9 +429,9 @@ def shadow_source_for(*, instrument_key: str, authoritative_key: str | None,
 
 
 def _assigned_strategy_key(session, instrument_key: str) -> str | None:
-    from app.db.models import InstrumentState
+    from app.db.models import InstrumentState, LEGACY_OWNER_ID
 
-    row = session.get(InstrumentState, instrument_key)
+    row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
     return (row.strategy_key or None) if row is not None else None
 
 

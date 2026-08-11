@@ -46,7 +46,7 @@ rev0017 = _load_revision("20260811_0017_money_plane_owner.py")
 
 #: Keyed so that only one row can exist per book / instrument / day. Making these per-owner is a
 #: PRIMARY KEY change, not an added column — see `rev0017`'s module docstring.
-SINGLETON_KEYED = {"capital_state", "instrument_state", "daily_account_snapshot"}
+SINGLETON_KEYED: set[str] = set()
 
 #: Owned by earlier revisions.
 ALREADY_OWNED = {"broker_connections", "execution_intents"}
@@ -60,7 +60,8 @@ def test_every_money_table_is_accounted_for():
     """No money-plane table may be silently left out. Either it carries an owner, or it is on
     the singleton-keyed list with a reason — there is no third category, and a new money table
     that is neither fails here rather than shipping unowned."""
-    accounted = set(rev0017.TABLES) | SINGLETON_KEYED | ALREADY_OWNED
+    scoped = {"broker_accounts", "capital_state", "instrument_state", "daily_account_snapshot"}
+    accounted = set(rev0017.TABLES) | scoped | SINGLETON_KEYED | ALREADY_OWNED
     unaccounted = _money_tables() - accounted
     assert not unaccounted, (
         f"money-plane tables with no ownership decision: {sorted(unaccounted)}. Add the column "
@@ -79,33 +80,13 @@ def test_the_ten_owned_tables_carry_a_non_null_owner_defaulted_to_the_original_o
             f"{table}.owner_id joins a WHERE clause on a table that grows per trade or per bar")
 
 
-def test_the_singleton_keyed_tables_do_NOT_carry_a_decorative_owner():
-    """The guard against the defect this repo keeps producing.
-
-    An `owner_id` on a table keyed `PK(instrument_key)` is a column that cannot express two
-    owners — the key above it still says one row. If a later slice adds it, this test fails and
-    points at the key that has to change with it.
-    """
-    for table in sorted(SINGLETON_KEYED):
-        cols = Base.metadata.tables[table].columns
-        assert "owner_id" not in cols, (
-            f"{table} gained an owner_id, but its key still permits only one row per "
-            f"book/instrument/day. Either change the primary key in the same migration, or "
-            f"leave the column off — a column that cannot express two owners is worse than an "
-            f"absent one, because it reads as tenancy that is not there.")
-
-
-def test_the_key_that_blocks_each_singleton_table_is_still_the_one_documented():
-    """Pins WHY each of the three is excluded, so the exclusion cannot outlive its reason. If a
-    key changes, this fails and the exclusion gets re-decided rather than inherited."""
+def test_the_replacement_keys_make_each_former_singleton_tenant_addressable():
     tables = Base.metadata.tables
-    assert [c.name for c in tables["instrument_state"].primary_key] == ["instrument_key"]
-    assert [c.name for c in tables["daily_account_snapshot"].primary_key] == ["day"]
-    book_unique = [ix for ix in tables["capital_state"].indexes
-                   if ix.name == "uq_capital_state_book"]
-    assert book_unique and book_unique[0].unique, (
-        "capital_state's uniqueness on `book` is what a second owner's `live` book would "
-        "violate; if it is gone, the exclusion needs revisiting")
+    assert [c.name for c in tables["capital_state"].primary_key] == ["broker_account_id", "book"]
+    assert [c.name for c in tables["instrument_state"].primary_key] == ["owner_id", "instrument_key"]
+    assert [c.name for c in tables["daily_account_snapshot"].primary_key] == ["broker_account_id", "day"]
+    from app.db import models
+    assert getattr(models, "LEGACY_BROKER_ACCOUNT_ID", None) == "account.default"
 
 
 def test_a_new_row_gets_an_owner_without_anyone_passing_one(tmp_path):

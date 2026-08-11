@@ -144,8 +144,8 @@ def resolve(session=None, settings: Settings | None = None, *,
                          f"#{deployment_id} ({row.name})", settings)
 
     if instrument_key is not None:
-        from app.db.models import InstrumentState
-        row = session.get(InstrumentState, instrument_key)
+        from app.db.models import InstrumentState, LEGACY_OWNER_ID
+        row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
         if row is not None:
             _apply_layer(out, _json_params(getattr(row, "params_json", None)),
                          INSTRUMENT, instrument_key, settings)
@@ -176,8 +176,8 @@ def explain(session, settings: Settings | None = None, *,
                 if k in scope_of and final.get(k) != platform.get(k):
                     scope_of[k] = DEPLOYMENT
     if instrument_key is not None:
-        from app.db.models import InstrumentState
-        row = session.get(InstrumentState, instrument_key) if session else None
+        from app.db.models import InstrumentState, LEGACY_OWNER_ID
+        row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key)) if session else None
         if row is not None:
             for k in _json_params(getattr(row, "params_json", None)):
                 if k in scope_of:

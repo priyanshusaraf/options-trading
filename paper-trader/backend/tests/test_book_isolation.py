@@ -343,8 +343,8 @@ class TestOrphansFromTheOtherBookAreLoud:
 
         _claim_both_ledgers()
         with SessionLocal() as s:
-            live_cash_before = eb.capital_for_book(s, LIVE).cash
-            paper_cash_before = eb.capital_for_book(s, PAPER).cash
+            live_cash_before = eb.capital_for_book(s, LIVE, broker_account_id="account.default").cash
+            paper_cash_before = eb.capital_for_book(s, PAPER, broker_account_id="account.default").cash
         # A paper position whose lot size is under-recorded — the legacy defect shape.
         with SessionLocal() as s:
             row = _open_row(s, mode=PAPER, key="NIFTY", entry_cost=100.0)
@@ -355,7 +355,7 @@ class TestOrphansFromTheOtherBookAreLoud:
             _repair_open_position_lot_sizes(s)
             s.commit()
         with SessionLocal() as s:
-            assert eb.capital_for_book(s, LIVE).cash == live_cash_before
+            assert eb.capital_for_book(s, LIVE, broker_account_id="account.default").cash == live_cash_before
             # Whatever the repair did (it may legitimately do nothing for this row), it
             # cannot have moved the live book's cash.
-            assert eb.capital_for_book(s, PAPER).cash <= paper_cash_before
+            assert eb.capital_for_book(s, PAPER, broker_account_id="account.default").cash <= paper_cash_before

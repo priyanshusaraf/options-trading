@@ -32,6 +32,8 @@ from app.core.instruments import all_instruments, get_instrument
 from app.core.logging import log
 from app.db.models import (
     LEGACY_DEPLOYMENT_ID,
+    LEGACY_BROKER_ACCOUNT_ID,
+    LEGACY_OWNER_ID,
     CapitalState,
     InstrumentState,
     SignalEvent,
@@ -261,7 +263,7 @@ class EngineRunner:
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         with SessionLocal() as s:
-            r = s.get(InstrumentState, key)
+            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
             if r:
                 r.enabled = enabled
                 s.commit()
@@ -571,7 +573,7 @@ class EngineRunner:
     def set_interval(self, key: str, interval: str) -> str:
         iv = normalize_live_interval(interval)
         with SessionLocal() as s:
-            r = s.get(InstrumentState, key)
+            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
             if r:
                 r.live_interval = iv
                 s.commit()
@@ -606,7 +608,7 @@ class EngineRunner:
 
     def set_entries_blocked(self, key: str, blocked: bool) -> None:
         with SessionLocal() as s:
-            r = s.get(InstrumentState, key)
+            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
             if r:
                 r.entries_blocked = blocked
                 s.commit()
@@ -631,9 +633,9 @@ class EngineRunner:
         after the `with` only runs if the write actually landed.
         """
         with SessionLocal() as s:
-            r = s.get(InstrumentState, key)
+            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
             if r is None:
-                r = InstrumentState(instrument_key=key)
+                r = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=key)
                 s.add(r)
             yield r
             s.commit()
@@ -2732,9 +2734,9 @@ class EngineRunner:
         day = self.provider.now().date().isoformat()
         try:
             with SessionLocal() as s:
-                row = s.get(DailyAccountSnapshot, day)
+                row = s.get(DailyAccountSnapshot, (LEGACY_BROKER_ACCOUNT_ID, day))
                 if row is None:
-                    row = DailyAccountSnapshot(day=day)
+                    row = DailyAccountSnapshot(broker_account_id=LEGACY_BROKER_ACCOUNT_ID, day=day)
                     s.add(row)
                 row.account_net = float(funds.get("net", 0.0) or 0.0)
                 row.account_available = float(funds.get("available", 0.0) or 0.0)

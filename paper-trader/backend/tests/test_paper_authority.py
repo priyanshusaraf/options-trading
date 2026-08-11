@@ -315,7 +315,7 @@ class TestRollback:
             s.commit()
 
             assert s.get(IrPaperDeployment, row.id).rollback_strategy_key == "expanding_z_v4"
-            assert s.get(InstrumentState, INSTRUMENT).strategy_key == "expanding_z_v4"
+            assert s.get(InstrumentState, ("owner", INSTRUMENT)).strategy_key == "expanding_z_v4"
 
     def test_retiring_with_no_previous_authority_leaves_the_instrument_unassigned(self):
         from app.db.models import InstrumentState
@@ -326,7 +326,7 @@ class TestRollback:
             pa.activate(s, row.id, revision=0)
             pa.retire(s, row.id, revision=1, restore_strategy_key=None)
             s.commit()
-            state = s.get(InstrumentState, INSTRUMENT)
+            state = s.get(InstrumentState, ("owner", INSTRUMENT))
             assert state is None or state.strategy_key is None
 
     def test_a_rollback_target_that_cannot_execute_is_refused(self):

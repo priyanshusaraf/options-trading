@@ -81,7 +81,7 @@ def _books_with_money_rows(session) -> set[str]:
             | {resolve_book(m) for m in session.scalars(select(Trade.mode).distinct())})
 
 
-def capital_for_book(session, book: str):
+def capital_for_book(session, book: str, *, broker_account_id: str):
     """This book's `capital_state` row, claiming or creating it if it has none.
 
     Three cases, in order:
@@ -106,25 +106,13 @@ def capital_for_book(session, book: str):
     if book not in BOOKS:
         raise ValueError(f"{book!r} is not an execution book; expected one of {BOOKS}")
 
-    row = session.scalar(select(CapitalState).where(CapitalState.book == book))
+    row = session.get(CapitalState, (broker_account_id, book))
     if row is not None:
         return row
 
-    legacy = session.scalar(select(CapitalState).where(CapitalState.book.is_(None))
-                            .order_by(CapitalState.id))
-    if legacy is not None:
-        owners = _books_with_money_rows(session)
-        if len(owners) > 1:
-            log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,
-                                                    owners=sorted(owners), book=book),
-                     event="LEDGER_UNATTRIBUTED")
-        elif not owners or owners == {book}:
-            legacy.book = book
-            _commit_the_bootstrap(session)
-            return legacy
-
     seed = get_settings().initial_capital
-    row = CapitalState(book=book, initial_capital=seed, cash=seed, realized_pnl=0.0)
+    row = CapitalState(broker_account_id=broker_account_id, book=book,
+                       initial_capital=seed, cash=seed, realized_pnl=0.0)
     session.add(row)
     _commit_the_bootstrap(session)
     return row

@@ -21,7 +21,7 @@ from app.core import deployments as dep
 from app.core import execution_binding as binding
 from app.core.execution_book import LIVE as LIVE_BOOK
 from app.core.execution_book import configured_execution_mode
-from app.db.models import LEGACY_DEPLOYMENT_ID, InstrumentState
+from app.db.models import LEGACY_DEPLOYMENT_ID, LEGACY_OWNER_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
 from app.strategy.registry import DEFAULT_STRATEGY_KEY, StrategyNotFound
 
@@ -38,9 +38,9 @@ def resolve(instrument_key="NIFTY", deployment_id=LEGACY_DEPLOYMENT_ID):
 
 def assign(instrument_key: str, strategy_key: str | None) -> None:
     with SessionLocal() as session:
-        row = session.get(InstrumentState, instrument_key)
+        row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
         if row is None:
-            row = InstrumentState(instrument_key=instrument_key)
+            row = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=instrument_key)
             session.add(row)
         row.strategy_key = strategy_key
         session.commit()

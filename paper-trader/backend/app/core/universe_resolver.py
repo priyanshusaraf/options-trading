@@ -14,7 +14,7 @@ from app.core.instruments import Instrument
 from app.core.logging import log
 from sqlalchemy import select
 
-from app.db.models import InstrumentState, Position, UniverseInstrument
+from app.db.models import LEGACY_OWNER_ID, InstrumentState, Position, UniverseInstrument
 from app.db.session import SessionLocal
 
 # cache of {key: Instrument} resolved from the Kite-built universe, per day
@@ -86,9 +86,9 @@ def add_instrument(key: str, provider, on_home: bool = True,
         else:
             row.active = True
             row.on_home = on_home
-        st = s.get(InstrumentState, key)
+        st = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
         if st is None:
-            st = InstrumentState(instrument_key=key, enabled=True)
+            st = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=key, enabled=True)
             s.add(st)
         else:
             st.enabled = True
@@ -136,7 +136,7 @@ def remove_instrument(key: str) -> dict:
         row.on_home = False
         if row.source == "user":
             row.active = False
-        st = s.get(InstrumentState, key)
+        st = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
         if st is not None:
             st.enabled = False
         s.commit()

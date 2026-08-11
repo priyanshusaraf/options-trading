@@ -13,7 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.execution_book import capital_for_book, configured_execution_mode
-from app.db.models import CapitalState, EquitySnapshot, Position, SignalEvent, Trade
+from app.db.models import (LEGACY_BROKER_ACCOUNT_ID, CapitalState, EquitySnapshot, Position,
+                           SignalEvent, Trade)
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
 from app.providers import capabilities as caps
 
@@ -97,7 +98,8 @@ def account_pnl(s: Session, provider, book: str | None = None) -> dict:
     """Bot-vs-you split from a caller-owned session + the live provider. Records the
     account baseline once, on the first successful live equity read."""
     book = book or configured_execution_mode()
-    cap = capital_for_book(s, book)
+    # Task 2 replaces this legacy compatibility boundary with caller-derived account scope.
+    cap = capital_for_book(s, book, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     eq = (provider.account_equity()
           if caps.provider_supports(provider, caps.ACCOUNT_EQUITY) else None)
     if eq is not None and not cap.account_baseline:
@@ -119,7 +121,8 @@ def capital_dict(s: Session, book: str | None = None) -> dict:
     is what every production caller means. It is never "both": cash and realised P&L
     from two ledgers cannot be summed into one meaningful figure."""
     book = book or configured_execution_mode()
-    cap = capital_for_book(s, book)
+    # Task 2 replaces this legacy compatibility boundary with caller-derived account scope.
+    cap = capital_for_book(s, book, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     opens = open_positions(s, book)
     # segment-aware: leveraged MIS contributes margin + unrealized P&L, not full
     # notional (raw last × qty), which double-counts leverage and inflates equity.

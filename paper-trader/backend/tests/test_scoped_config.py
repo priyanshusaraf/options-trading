@@ -69,7 +69,7 @@ def test_instrument_scope_overrides_deployment():
         d = create_deployment(s, "d", params={"intraday_stop_loss_pct": 0.02})
         # init_db seeds instrument_state from the universe, so NIFTY already exists —
         # update it rather than inserting a duplicate.
-        row = s.get(InstrumentState, "NIFTY")
+        row = s.get(InstrumentState, ("owner", "NIFTY"))
         assert row is not None, "expected the seeded universe to contain NIFTY"
         row.params_json = json.dumps({"intraday_stop_loss_pct": 0.005})
         s.commit()

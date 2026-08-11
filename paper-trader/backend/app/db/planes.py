@@ -55,6 +55,7 @@ TABLE_PLANES: dict[str, Plane] = {
     "ir_shadow_deployments": Plane.MONEY,
     "ir_paper_deployments": Plane.MONEY,
     "broker_connections": Plane.MONEY,
+    "broker_accounts": Plane.MONEY,
     # ADR 0015 §2: a connection is money-plane on BLAST RADIUS, not on recovery cost. A row
     # here is the authority to place real orders on a real account. The encryption key is not
     # in any plane — it comes from the environment, so a database compromise alone is not a
@@ -96,6 +97,9 @@ TABLE_PLANES: dict[str, Plane] = {
     "strategy_lifecycle": Plane.USER,
     "generated_strategies": Plane.USER,
     "runtime_config": Plane.USER,
+    "organizations": Plane.USER,
+    "users": Plane.USER,
+    "memberships": Plane.USER,
     # `runtime_config` is a genuinely awkward one and is called out rather than smoothed over:
     # its rows are the owner's hand-set trading decisions, so they *behave* like money, but
     # losing one restores a documented code default rather than corrupting a ledger. It is

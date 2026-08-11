@@ -17,6 +17,7 @@ from app.core.market_hours import now_ist
 from app.core.instruments import Instrument
 from app.core.logging import log
 from app.db.models import (
+    LEGACY_BROKER_ACCOUNT_ID,
     LEGACY_DEPLOYMENT_ID,
     CapitalState,
     EquitySnapshot,
@@ -51,9 +52,12 @@ class PaperBroker:
         # (`core/execution_book.py`) — a broker that cannot say which book it writes to
         # must not be assumed harmless.
         self.book = book_of(self)
+        # Task 2 threads this from the resolved deployment/account binding; this legacy
+        # broker is the compatibility boundary for the current single-owner runtime.
+        self.broker_account_id = LEGACY_BROKER_ACCOUNT_ID
         # Attribute this book's ledger once, here, at construction. Doing it lazily on
         # the first `capital()` call would put a bootstrap write in the middle of a fill.
-        capital_for_book(self.s, self.book)
+        capital_for_book(self.s, self.book, broker_account_id=self.broker_account_id)
 
     # ── ledger ────────────────────────────────────────────────────────────
     def capital(self) -> CapitalState:
@@ -62,7 +66,7 @@ class PaperBroker:
         Was `self.s.get(CapitalState, 1)`. One row for both books made hard invariant 1
         (`cash == initial + realized − Σ open`) unprovable the moment a second book
         existed, because a paper fill debited the live book's cash."""
-        return capital_for_book(self.s, self.book)
+        return capital_for_book(self.s, self.book, broker_account_id=self.broker_account_id)
 
     def cash(self) -> float:
         return self.capital().cash

@@ -32,7 +32,7 @@ from sqlalchemy import (
     event,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 
 # Segments whose positions are MARGINED rather than fully paid for: only the
@@ -81,6 +81,88 @@ LEGACY_DEPLOYMENT_ID = 1
 #: authenticated requests seeing one book and the engine writing to another — and the symptom
 #: would be missing data rather than an error. `tests/test_connection_store.py` pins the match.
 LEGACY_OWNER_ID = "owner"
+LEGACY_USER_ID = "owner-user"
+LEGACY_BROKER_ACCOUNT_ID = "account.default"
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'disabled')", name="ck_organizations_status"),
+    )
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                         server_default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'disabled')", name="ck_users_status"),
+    )
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email_normalized: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                         server_default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+
+    @validates("email_normalized")
+    def _normalize_email(self, _key: str, value: str) -> str:
+        return value.strip().lower()
+
+
+class Membership(Base):
+    __tablename__ = "memberships"
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'admin', 'member', 'viewer')",
+                        name="ck_memberships_role"),
+        CheckConstraint("status IN ('active', 'invited', 'revoked')",
+                        name="ck_memberships_status"),
+    )
+
+    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="member",
+                                      server_default="member")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                        server_default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+
+
+class BrokerAccount(Base):
+    __tablename__ = "broker_accounts"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "broker", "external_account_id",
+                         name="uq_broker_accounts_owner_broker_external"),
+        CheckConstraint("status IN ('active', 'disabled')", name="ck_broker_accounts_status"),
+    )
+
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # By value on purpose: organizations are user-plane while this identity scopes money.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    broker: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_account_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
+                                        server_default="active")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
+                                                     nullable=False)
 
 
 class Deployment(Base):
@@ -273,14 +355,13 @@ class CapitalState(Base):
     2026-08-07 and not yet attributed", never "shared"."""
 
     __tablename__ = "capital_state"
-    __table_args__ = (
-        # Two rows for one book would silently split a ledger in half. Partial so the
-        # unclaimed legacy row is exempt rather than blocking the constraint entirely.
-        Index("uq_capital_state_book", "book", unique=True,
-              sqlite_where=text("book IS NOT NULL")),
-    )
-    id: Mapped[int] = mapped_column(primary_key=True)
-    book: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # `id` remains a compatibility address for historic diagnostics. The composite key is
+    # the identity: two customer accounts may both have a paper or live book.
+    id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                                    default=LEGACY_BROKER_ACCOUNT_ID,
+                                                    server_default=LEGACY_BROKER_ACCOUNT_ID)
+    book: Mapped[str] = mapped_column(String(8), primary_key=True, server_default="live")
     initial_capital: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
@@ -291,6 +372,9 @@ class CapitalState(Base):
 
 class InstrumentState(Base):
     __tablename__ = "instrument_state"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                          default=LEGACY_OWNER_ID,
+                                          server_default=LEGACY_OWNER_ID)
     instrument_key: Mapped[str] = mapped_column(String(32), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     live_interval: Mapped[str] = mapped_column(String(12), default="15minute")
@@ -1317,6 +1401,9 @@ class DailyAccountSnapshot(Base):
     straight from the Trade ledger). Recorded forward from go-live, so history
     builds from the first live day."""
     __tablename__ = "daily_account_snapshot"
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                                    default=LEGACY_BROKER_ACCOUNT_ID,
+                                                    server_default=LEGACY_BROKER_ACCOUNT_ID)
     day: Mapped[str] = mapped_column(String(10), primary_key=True)   # "YYYY-MM-DD" IST
     account_net: Mapped[float] = mapped_column(Float, default=0.0)        # total account equity (margins.net)
     account_available: Mapped[float] = mapped_column(Float, default=0.0)  # free funds (live_balance)

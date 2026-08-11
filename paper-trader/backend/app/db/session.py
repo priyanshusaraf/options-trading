@@ -6,7 +6,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core import instruments as inst_registry
-from app.db.models import Base, CapitalState, InstrumentState, Position, UniverseInstrument
+from app.db.models import (Base, CapitalState, InstrumentState, LEGACY_BROKER_ACCOUNT_ID,
+                           LEGACY_OWNER_ID, Position, UniverseInstrument)
 from app.engine.charges import compute_charges
 
 _settings = get_settings()
@@ -107,7 +108,10 @@ def _repair_open_position_lot_sizes(sess) -> int:
         # Debit the ledger of the book that OWNS this position, not row 1. Repairing a
         # paper position used to move the live book's cash — the exact contamination
         # L1.3B exists to prevent, in a path that runs on every startup.
-        capital_for_book(sess, resolve_book(pos.mode)).cash -= pos.entry_cost - old_cost
+        # Task 2 supplies the account from the owning position/binding; startup repair is
+        # still the explicit legacy-runtime compatibility boundary.
+        capital_for_book(sess, resolve_book(pos.mode),
+                         broker_account_id=LEGACY_BROKER_ACCOUNT_ID).cash -= pos.entry_cost - old_cost
         fixed += 1
     return fixed
 
@@ -297,15 +301,16 @@ def init_db(reset: bool = False) -> None:
         from app.editor.graph_artifacts import ensure_catalogue_seed
         ensure_legacy_deployment(sess)
         ensure_catalogue_seed(sess)
-        if sess.get(CapitalState, 1) is None:
-            sess.add(CapitalState(id=1, initial_capital=s.initial_capital,
+        if sess.get(CapitalState, (LEGACY_BROKER_ACCOUNT_ID, "live")) is None:
+            sess.add(CapitalState(id=1, broker_account_id=LEGACY_BROKER_ACCOUNT_ID, book="live",
+                                  initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))
         _sync_seed_universe(sess)
         sess.commit()
         # enable each active universe instrument for trading by default
         for row in sess.scalars(select(UniverseInstrument)):
-            if row.active and sess.get(InstrumentState, row.key) is None:
-                sess.add(InstrumentState(instrument_key=row.key, enabled=True))
+            if row.active and sess.get(InstrumentState, (LEGACY_OWNER_ID, row.key)) is None:
+                sess.add(InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=row.key, enabled=True))
         _repair_open_position_lot_sizes(sess)
         sess.commit()
     inst_registry.load_universe()  # populate the in-memory registry from the DB

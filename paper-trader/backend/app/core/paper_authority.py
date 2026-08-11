@@ -559,11 +559,12 @@ def _restore_instrument_authority(session, instrument_key: str,
     when it is NULL everywhere else in this codebase. It is chosen explicitly by passing
     `None`, never arrived at by omission.
     """
-    row = session.get(InstrumentState, instrument_key)
+    from app.db.models import LEGACY_OWNER_ID
+    row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
     if row is None:
         if strategy_key is None:
             return
-        row = InstrumentState(instrument_key=instrument_key)
+        row = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=instrument_key)
         session.add(row)
     row.strategy_key = strategy_key
     session.flush()
