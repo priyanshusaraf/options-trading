@@ -123,15 +123,20 @@ def _snapshot(row: ProjectReviewSnapshot) -> ReviewSnapshot:
     )
 
 
-def _existing(session, project_id: str, capture_key: str) -> ProjectReviewSnapshot | None:
+def _existing(
+    session, project_id: str, capture_key: str, *, owner_id: str,
+) -> ProjectReviewSnapshot | None:
     return session.scalar(select(ProjectReviewSnapshot).where(
+        ProjectReviewSnapshot.owner_id == owner_id,
         ProjectReviewSnapshot.project_id == project_id,
         ProjectReviewSnapshot.capture_key == capture_key,
     ))
 
 
-def _project(session, project_id: str, *, active: bool) -> Project:
-    project = session.get(Project, project_id)
+def _project(session, project_id: str, *, owner_id: str, active: bool) -> Project:
+    project = session.scalar(select(Project).where(
+        Project.owner_id == owner_id, Project.project_id == project_id,
+    ))
     if project is None:
         raise ProjectNotFound(project_id)
     if active and project.status != "active":
@@ -181,31 +186,29 @@ def _after_snapshot_flush(_session, _row) -> None:
 def capture_snapshot(
     project_id: str,
     *,
+    owner_id: str,
     label: str,
     capture_key: str,
     created_by: str,
     source_loader: Callable[[str], Mapping[str, Any]] | None = None,
-    graph_owner_id: str | None = None,
 ) -> ReviewSnapshot:
     normalized_label = _label(label)
     normalized_key = _capture_key(capture_key)
     if created_by != "owner":
         raise SnapshotCaptureRejected("snapshot owner is invalid")
     if source_loader is None:
-        if graph_owner_id is None:
-            raise SnapshotCaptureRejected("graph source owner is required")
-        loader = partial(project_review_source, owner_id=graph_owner_id)
+        loader = partial(project_review_source, owner_id=owner_id)
     else:
         loader = source_loader
 
     with SessionLocal() as session:
-        existing = _existing(session, project_id, normalized_key)
+        existing = _existing(session, project_id, normalized_key, owner_id=owner_id)
         if existing is not None:
             # An idempotent retry is a read, so it is served for archived projects too.
-            _project(session, project_id, active=False)
+            _project(session, project_id, owner_id=owner_id, active=False)
             return _intent(existing, normalized_label)
         # Refuse an archived project before doing any source work: capture is a write.
-        _project(session, project_id, active=True)
+        _project(session, project_id, owner_id=owner_id, active=True)
 
     started = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     source_before = loader(project_id)
@@ -218,11 +221,12 @@ def capture_snapshot(
 
     try:
         with SessionLocal.begin() as session:
-            _project(session, project_id, active=True)
-            existing = _existing(session, project_id, normalized_key)
+            _project(session, project_id, owner_id=owner_id, active=True)
+            existing = _existing(session, project_id, normalized_key, owner_id=owner_id)
             if existing is not None:
                 return _intent(existing, normalized_label)
             notes = session.scalars(select(ProjectReviewNote).where(
+                ProjectReviewNote.owner_id == owner_id,
                 ProjectReviewNote.project_id == project_id,
                 ProjectReviewNote.deleted_at.is_(None),
             ).order_by(ProjectReviewNote.note_id).limit(MAX_SNAPSHOT_NOTES + 1)).all()
@@ -244,6 +248,7 @@ def capture_snapshot(
                 raise SnapshotCaptureRejected(str(exc)) from exc
             completed = dt.datetime.now(dt.UTC).replace(tzinfo=None)
             row = ProjectReviewSnapshot(
+                owner_id=owner_id,
                 snapshot_id=f"snapshot.{uuid.uuid4().hex}",
                 project_id=project_id,
                 label=normalized_label,
@@ -261,20 +266,21 @@ def capture_snapshot(
         return result
     except IntegrityError as exc:
         with SessionLocal() as session:
-            existing = _existing(session, project_id, normalized_key)
+            existing = _existing(session, project_id, normalized_key, owner_id=owner_id)
             if existing is not None:
                 return _intent(existing, normalized_label)
         raise SnapshotCaptureConflict(normalized_key) from exc
 
 
-def list_snapshots(project_id: str) -> tuple[SnapshotListing, ...]:
+def list_snapshots(project_id: str, *, owner_id: str) -> tuple[SnapshotListing, ...]:
     """The most recent captures as bounded metadata, each verified against its stored
     content address. A row whose bytes no longer hash to its declared address is
     reported as `corrupt` rather than raised: one damaged record must not withhold the
     rest of a project's review history."""
     with SessionLocal() as session:
-        _project(session, project_id, active=False)
+        _project(session, project_id, owner_id=owner_id, active=False)
         rows = session.execute(select(
+            ProjectReviewSnapshot.owner_id,
             ProjectReviewSnapshot.snapshot_id,
             ProjectReviewSnapshot.project_id,
             ProjectReviewSnapshot.label,
@@ -285,6 +291,7 @@ def list_snapshots(project_id: str) -> tuple[SnapshotListing, ...]:
             ProjectReviewSnapshot.capture_started_at,
             ProjectReviewSnapshot.capture_completed_at,
         ).where(
+            ProjectReviewSnapshot.owner_id == owner_id,
             ProjectReviewSnapshot.project_id == project_id,
         ).order_by(
             ProjectReviewSnapshot.capture_completed_at.desc(),
@@ -311,12 +318,12 @@ def list_snapshots(project_id: str) -> tuple[SnapshotListing, ...]:
         ) for row in rows)
 
 
-def get_snapshot(project_id: str, snapshot_id: str) -> ReviewSnapshot:
+def get_snapshot(project_id: str, snapshot_id: str, *, owner_id: str) -> ReviewSnapshot:
     with SessionLocal() as session:
-        _project(session, project_id, active=False)
-        row = session.get(ProjectReviewSnapshot, snapshot_id)
+        _project(session, project_id, owner_id=owner_id, active=False)
+        row = session.get(ProjectReviewSnapshot, (owner_id, snapshot_id))
         if row is None or row.project_id != project_id:
-            raise SnapshotNotFound(snapshot_id)
+            raise SnapshotNotFound()
         return _snapshot(row)
 
 

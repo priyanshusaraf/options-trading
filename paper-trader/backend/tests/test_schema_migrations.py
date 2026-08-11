@@ -30,7 +30,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0021"
+HEAD = "0022"
 
 
 def _schema(engine) -> dict:
@@ -120,6 +120,192 @@ def test_models_and_migrations_agree(tmp_path):
             f"index mismatch in {table!r}"
 
 
+def test_revision_0022_makes_every_review_table_owner_owned(tmp_path):
+    """Historical review rows rebuild onto owner-first composite identities."""
+    engine = _build_from_baseline(tmp_path)
+    inspector = sa.inspect(engine)
+    for table, key in (
+        ("project_review_notes", ("owner_id", "note_id")),
+        ("project_review_saved_views", ("owner_id", "view_id")),
+        ("project_review_snapshots", ("owner_id", "snapshot_id")),
+    ):
+        assert [column["name"] for column in inspector.get_columns(table)][0] == "owner_id"
+        assert tuple(inspector.get_pk_constraint(table)["constrained_columns"]) == key
+        assert any(
+            tuple(foreign_key["constrained_columns"]) == ("owner_id", "project_id")
+            and tuple(foreign_key["referred_columns"]) == ("owner_id", "project_id")
+            and foreign_key["options"].get("ondelete") == "RESTRICT"
+            for foreign_key in inspector.get_foreign_keys(table)
+        )
+
+
+REVIEW_0022_TABLES = (
+    "project_review_notes", "project_review_saved_views", "project_review_snapshots",
+)
+
+
+def _populated_review_0021(engine) -> dict[str, tuple[tuple[object, ...], ...]]:
+    """Literal legacy bytes prove 0022 copies review payloads without rewriting them."""
+    manifest = (
+        '{"captured_queues":{"active_findings":[],"pending_candidates":[],'
+        '"review_needed_runs":[]},"events":[],"notes":[],"project_id":'
+        '"project.review.legacy","schema_version":1,"source_errors":[]}'
+    )
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO projects (project_id,owner_id,name,description,status,created_at,updated_at) "
+            "VALUES ('project.review.legacy','owner','Review legacy','exact','active',"
+            "'2026-08-12 09:10:11','2026-08-12 09:10:12')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO project_review_notes VALUES "
+            "('note.legacy','project.review.legacy','graph:legacy:1','graph_version_published',"
+            "'exact note bytes','owner',7,'2026-08-12 09:10:13','2026-08-12 09:10:11','2026-08-12 09:10:12')"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO project_review_saved_views VALUES "
+            "('view.legacy','project.review.legacy','Exact view',:filters,"
+            "'owner',4,'2026-08-12 09:10:14','2026-08-12 09:10:11','2026-08-12 09:10:12')"
+        ), {"filters": '{"limit":25}'})
+        connection.execute(sa.text(
+            "INSERT INTO project_review_snapshots VALUES "
+            "('snapshot.legacy','project.review.legacy','Exact snapshot',"
+            "'2ba56d22-7094-4a8d-9bf5-b84a4e8f083f',:manifest,:address,'owner',"
+            "'2026-08-12 09:10:11','2026-08-12 09:10:12')"
+        ), {"manifest": manifest, "address": "sha256:" + "a" * 64})
+    with engine.connect() as connection:
+        return {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table}")).all())
+            for table in REVIEW_0022_TABLES
+        }
+
+
+def test_revision_0022_populated_upgrade_preserves_review_bytes_and_schema_parity(tmp_path):
+    upgraded = _at_revision_0020(tmp_path, "0022-populated-upgrade.db")
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+    before = _populated_review_0021(upgraded)
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+    with upgraded.connect() as connection:
+        for table, rows in before.items():
+            actual = tuple(connection.execute(sa.text(
+                f"SELECT * FROM {table} ORDER BY 1,2"
+            )).all())
+            assert [row[1:] for row in actual] == list(rows)
+            assert {row[0] for row in actual} == {"owner"}
+
+    fresh = _build_from_models(tmp_path)
+    for table in REVIEW_0022_TABLES:
+        assert _semantic_contract(_revision_0020_contract(upgraded, table)) == _semantic_contract(
+            _revision_0020_contract(fresh, table)
+        )
+
+
+@pytest.mark.parametrize("table", REVIEW_0022_TABLES)
+def test_revision_0022_upgrade_recovers_stale_and_completed_temp_tables(tmp_path, table):
+    engine = _at_revision_0020(tmp_path, f"0022-{table}-recovery.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+        connection.execute(sa.text(f"CREATE TABLE {table}__0022 (stale INTEGER)"))
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        assert f"{table}__0022" not in sa.inspect(connection).get_table_names()
+
+        # This is the durable post-DROP shape: the finished table is only waiting
+        # for its rename. Re-running 0022 must promote it, not discard it.
+        connection.execute(sa.text(f"ALTER TABLE {table} RENAME TO {table}__0022"))
+        connection.execute(sa.text("UPDATE alembic_version SET version_num='0021'"))
+        command.upgrade(migrate.alembic_config(connection), "0022")
+    inspector = sa.inspect(engine)
+    assert table in inspector.get_table_names()
+    assert f"{table}__0022" not in inspector.get_table_names()
+
+
+def test_revision_0022_legacy_round_trip_and_downgrade_refusal_are_lossless(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-review-round-trip.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+    legacy_rows = _populated_review_0021(engine)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+    with engine.connect() as connection:
+        owned_rows = {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY 1,2")).all())
+            for table in REVIEW_0022_TABLES
+        }
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0021")
+    with engine.connect() as connection:
+        assert migrate.schema_version(engine) == "0021"
+        assert {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table}")).all())
+            for table in REVIEW_0022_TABLES
+        } == legacy_rows
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+    with engine.connect() as connection:
+        assert {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY 1,2")).all())
+            for table in REVIEW_0022_TABLES
+        } == owned_rows
+
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES ('owner.other','Other','active',"
+            "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO projects (project_id,owner_id,name,description,status,created_at,updated_at) "
+            "VALUES ('project.review.other','owner.other','Other','','active',"
+            "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(sa.text(
+            "INSERT INTO project_review_notes VALUES "
+            "('owner','note.unrepresentable','project.review.other','run:1','experiment_run',"
+            "'cannot downgrade','owner',0,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=ON")
+
+    before = {table: _revision_0020_contract(engine, table) for table in REVIEW_0022_TABLES}
+    with pytest.raises(RuntimeError, match="cannot be represented by 0021"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0021")
+    assert migrate.schema_version(engine) == "0022"
+    assert {table: _revision_0020_contract(engine, table) for table in REVIEW_0022_TABLES} == before
+
+
+def test_revision_0022_upgrade_failure_restores_the_callers_foreign_key_state(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-fk-state.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=OFF")
+
+    failed = False
+
+    def interrupt(_conn, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal failed
+        if not failed and "CREATE TABLE project_review_notes__0022" in statement:
+            failed = True
+            raise RuntimeError("injected 0022 rebuild interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected 0022 rebuild interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0022")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 0
+        assert migrate.schema_version(engine) == "0021"
+
+
 def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
@@ -149,25 +335,25 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         "owner_id", "graph_identifier", "graph_version", "group_identifier", "instance_id",
     }
     assert set(schema["project_review_notes"]["columns"]) == {
-        "note_id", "project_id", "event_id", "event_type", "body", "created_by",
+        "owner_id", "note_id", "project_id", "event_id", "event_type", "body", "created_by",
         "revision", "deleted_at", "created_at", "updated_at",
     }
     assert set(schema["project_review_saved_views"]["columns"]) == {
-        "view_id", "project_id", "name", "filters_json", "created_by", "revision",
+        "owner_id", "view_id", "project_id", "name", "filters_json", "created_by", "revision",
         "deleted_at", "created_at", "updated_at",
     }
     assert set(schema["project_review_snapshots"]["columns"]) == {
-        "snapshot_id", "project_id", "label", "capture_key", "manifest_json",
+        "owner_id", "snapshot_id", "project_id", "label", "capture_key", "manifest_json",
         "content_address", "created_by", "capture_started_at", "capture_completed_at",
     }
     assert any(
         name == "uq_project_review_saved_views_active_name"
-        and columns == ("project_id", "name") and unique
+        and columns == ("owner_id", "project_id", "name") and unique
         for name, columns, unique in schema["project_review_saved_views"]["indexes"]
     )
     assert any(
         name == "uq_project_review_snapshots_capture_key"
-        and columns == ("project_id", "capture_key") and unique
+        and columns == ("owner_id", "project_id", "capture_key") and unique
         for name, columns, unique in schema["project_review_snapshots"]["indexes"]
     )
     assert set(schema["ir_graph_layout_orphan_archive"]["columns"]) == {
@@ -1108,7 +1294,7 @@ def test_revision_0021_downgrade_refuses_two_owner_same_identifier_before_ddl(tm
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0020")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0021"
     assert {table: _revision_0021_contract(engine, table) for table in AFFECTED_0021_TABLES} == before
     with engine.connect() as connection:
         assert connection.execute(sa.text(
@@ -1381,7 +1567,7 @@ def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0019")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0021"
     assert {table: _revision_0020_contract(engine, table)
             for table in ("projects", "graph_versions")} == before
     with engine.connect() as connection:
@@ -1418,7 +1604,7 @@ def test_revision_0020_downgrade_refuses_two_valid_owner_same_name_before_destru
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0019")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0021"
     assert {table: _revision_0020_contract(engine, table)
             for table in ("projects", "graph_versions")} == before
     with engine.connect() as connection:
@@ -2019,9 +2205,9 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO project_review_notes "
-            "(note_id, project_id, event_id, event_type, body, created_by, revision, "
+            "(owner_id, note_id, project_id, event_id, event_type, body, created_by, revision, "
             " deleted_at, created_at, updated_at) VALUES "
-            "('note-1', 'project.repository_catalogue', 'run:1', 'experiment_run', "
+            "('owner', 'note-1', 'project.repository_catalogue', 'run:1', 'experiment_run', "
             " 'Retain this note', 'owner', 0, NULL, "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
@@ -2043,9 +2229,9 @@ def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp
         ))
         connection.execute(sa.text(
             "INSERT INTO project_review_notes "
-            "(note_id, project_id, event_id, event_type, body, created_by, revision, "
+            "(owner_id, note_id, project_id, event_id, event_type, body, created_by, revision, "
             " deleted_at, created_at, updated_at) VALUES "
-            "('note-keep', 'project.repository_catalogue', 'run:1', 'experiment_run', "
+            "('owner', 'note-keep', 'project.repository_catalogue', 'run:1', 'experiment_run', "
             " 'Keep this note', 'owner', 0, NULL, "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
@@ -2080,9 +2266,9 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO project_review_snapshots "
-            "(snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
+            "(owner_id, snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
             " created_by, capture_started_at, capture_completed_at) VALUES "
-            "('snapshot.1', 'project.repository_catalogue', 'Daily', "
+            "('owner', 'snapshot.1', 'project.repository_catalogue', 'Daily', "
             " '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f', :manifest, :address, 'owner', "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:01')"
         ), {"manifest": canonical_json(manifest), "address": content_address(manifest)})

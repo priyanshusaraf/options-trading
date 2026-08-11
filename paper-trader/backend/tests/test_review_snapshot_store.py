@@ -44,6 +44,7 @@ def _database():
 def test_capture_is_stabilized_append_only_and_losslessly_reloadable():
     review_state.create_note(
         CATALOGUE_PROJECT_ID,
+        owner_id="owner",
         event_id="graph:strategy.expanding_z_impulse:4",
         event_type="graph_version_published",
         body="Freeze this interpretation.", created_by="owner",
@@ -56,6 +57,7 @@ def test_capture_is_stabilized_append_only_and_losslessly_reloadable():
 
     captured = review_snapshot_store.capture_snapshot(
         CATALOGUE_PROJECT_ID, label="Morning review", capture_key=CAPTURE_KEY,
+        owner_id="owner",
         created_by="owner", source_loader=source_loader,
     )
 
@@ -64,13 +66,13 @@ def test_capture_is_stabilized_append_only_and_losslessly_reloadable():
     assert captured.capture_started_at <= captured.capture_completed_at
     assert captured.manifest["notes"][0]["body"] == "Freeze this interpretation."
     assert captured.manifest["captured_queues"] == _source()["queues"]
-    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID)
+    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner")
     assert [entry.snapshot_id for entry in listing] == [captured.snapshot_id]
     assert listing[0].integrity == "verified"
     assert listing[0].content_address == captured.content_address
     assert not hasattr(listing[0], "manifest")
     assert review_snapshot_store.get_snapshot(
-        CATALOGUE_PROJECT_ID, captured.snapshot_id
+        CATALOGUE_PROJECT_ID, captured.snapshot_id, owner_id="owner"
     ) == captured
 
 
@@ -82,9 +84,10 @@ def test_source_change_error_and_post_flush_failure_each_leave_no_snapshot(monke
     with pytest.raises(review_snapshot_store.SnapshotSourceChanged):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="Unstable", capture_key=str(uuid.uuid4()),
+            owner_id="owner",
             created_by="owner", source_loader=lambda _project: next(values),
         )
-    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID) == ()
+    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner") == ()
 
     incomplete = _source()
     incomplete["source_errors"] = [{
@@ -93,9 +96,10 @@ def test_source_change_error_and_post_flush_failure_each_leave_no_snapshot(monke
     with pytest.raises(review_snapshot_store.SnapshotCaptureRejected, match="source errors"):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="Incomplete", capture_key=str(uuid.uuid4()),
+            owner_id="owner",
             created_by="owner", source_loader=lambda _project: incomplete,
         )
-    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID) == ()
+    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner") == ()
 
     monkeypatch.setattr(
         review_snapshot_store, "_after_snapshot_flush",
@@ -104,18 +108,21 @@ def test_source_change_error_and_post_flush_failure_each_leave_no_snapshot(monke
     with pytest.raises(RuntimeError, match="after flush"):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="Rollback", capture_key=str(uuid.uuid4()),
+            owner_id="owner",
             created_by="owner", source_loader=lambda _project: _source(),
         )
-    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID) == ()
+    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner") == ()
 
 
 def test_capture_key_retry_is_idempotent_and_conflicting_reuse_fails_closed():
     first = review_snapshot_store.capture_snapshot(
         CATALOGUE_PROJECT_ID, label="Daily", capture_key=CAPTURE_KEY,
+        owner_id="owner",
         created_by="owner", source_loader=lambda _project: _source(),
     )
     retry = review_snapshot_store.capture_snapshot(
         CATALOGUE_PROJECT_ID, label="Daily", capture_key=CAPTURE_KEY,
+        owner_id="owner",
         created_by="owner",
         source_loader=lambda _project: pytest.fail("retry reloaded sources"),
     )
@@ -124,29 +131,32 @@ def test_capture_key_retry_is_idempotent_and_conflicting_reuse_fails_closed():
     with pytest.raises(review_snapshot_store.SnapshotCaptureConflict):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="Different intent", capture_key=CAPTURE_KEY,
+            owner_id="owner",
             created_by="owner", source_loader=lambda _project: _source(),
         )
     assert [entry.snapshot_id for entry in review_snapshot_store.list_snapshots(
-        CATALOGUE_PROJECT_ID
+        CATALOGUE_PROJECT_ID, owner_id="owner"
     )] == [first.snapshot_id]
 
 
 def test_snapshot_is_project_isolated_archived_readable_and_database_immutable():
     captured = review_snapshot_store.capture_snapshot(
         CATALOGUE_PROJECT_ID, label="Archive me", capture_key=CAPTURE_KEY,
+        owner_id="owner",
         created_by="owner", source_loader=lambda _project: _source(),
     )
     other = graph_artifacts.create_project("Other", owner_id="owner")
     with pytest.raises(review_snapshot_store.SnapshotNotFound):
-        review_snapshot_store.get_snapshot(other.project_id, captured.snapshot_id)
+        review_snapshot_store.get_snapshot(other.project_id, captured.snapshot_id, owner_id="owner")
 
     graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived", owner_id="owner")
     assert review_snapshot_store.get_snapshot(
-        CATALOGUE_PROJECT_ID, captured.snapshot_id
+        CATALOGUE_PROJECT_ID, captured.snapshot_id, owner_id="owner"
     ) == captured
     with pytest.raises(graph_artifacts.InvalidTransition):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="No archived writes",
+            owner_id="owner",
             capture_key=str(uuid.uuid4()), created_by="owner",
             source_loader=lambda _project: _source(),
         )
@@ -162,9 +172,9 @@ def test_snapshot_is_project_isolated_archived_readable_and_database_immutable()
 def _insert_raw(session, snapshot_id, *, manifest_json, content_address, completed):
     session.execute(sa.text(
         "INSERT INTO project_review_snapshots "
-        "(snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
+        "(owner_id, snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
         " created_by, capture_started_at, capture_completed_at) VALUES "
-        "(:snapshot_id, :project_id, :label, :capture_key, :manifest, :address, 'owner', "
+        "('owner', :snapshot_id, :project_id, :label, :capture_key, :manifest, :address, 'owner', "
         " '2026-08-03 10:00:00', :completed)"
     ), {
         "snapshot_id": snapshot_id, "project_id": CATALOGUE_PROJECT_ID,
@@ -199,7 +209,7 @@ def test_listing_is_bounded_and_never_loads_manifest_documents():
                 content_address=address, completed=f"2026-08-03 10:{index % 60:02d}:00",
             )
 
-    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID)
+    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner")
 
     assert len(listing) == limit
     assert all(entry.integrity == "verified" for entry in listing)
@@ -221,21 +231,22 @@ def test_a_corrupt_record_is_contained_and_never_hides_intact_history():
         )
 
     listing = {entry.snapshot_id: entry for entry in
-               review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID)}
+               review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner")}
 
     assert set(listing) == {"snapshot.intact", "snapshot.tampered"}
     assert listing["snapshot.intact"].integrity == "verified"
     assert listing["snapshot.tampered"].integrity == "corrupt"
     assert review_snapshot_store.get_snapshot(
-        CATALOGUE_PROJECT_ID, "snapshot.intact"
+        CATALOGUE_PROJECT_ID, "snapshot.intact", owner_id="owner"
     ).content_address == address
     with pytest.raises(review_snapshot_store.SnapshotCorrupt):
-        review_snapshot_store.get_snapshot(CATALOGUE_PROJECT_ID, "snapshot.tampered")
+        review_snapshot_store.get_snapshot(CATALOGUE_PROJECT_ID, "snapshot.tampered", owner_id="owner")
 
 
 def test_database_refuses_delete_as_well_as_update():
     captured = review_snapshot_store.capture_snapshot(
         CATALOGUE_PROJECT_ID, label="Permanent", capture_key=CAPTURE_KEY,
+        owner_id="owner",
         created_by="owner", source_loader=lambda _project: _source(),
     )
 
@@ -246,7 +257,7 @@ def test_database_refuses_delete_as_well_as_update():
             ), {"snapshot_id": captured.snapshot_id})
 
     assert review_snapshot_store.get_snapshot(
-        CATALOGUE_PROJECT_ID, captured.snapshot_id
+        CATALOGUE_PROJECT_ID, captured.snapshot_id, owner_id="owner"
     ) == captured
 
 
@@ -256,11 +267,12 @@ def test_capture_refuses_an_archived_project_before_reading_any_source():
     with pytest.raises(graph_artifacts.InvalidTransition):
         review_snapshot_store.capture_snapshot(
             CATALOGUE_PROJECT_ID, label="Archived", capture_key=CAPTURE_KEY,
+            owner_id="owner",
             created_by="owner",
             source_loader=lambda _project: pytest.fail("archived capture read sources"),
         )
 
-    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID) == ()
+    assert review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner") == ()
 
 
 def test_a_valid_manifest_with_a_false_declared_address_is_refused_on_read():
@@ -282,7 +294,7 @@ def test_a_valid_manifest_with_a_false_declared_address_is_refused_on_read():
         )
 
     with pytest.raises(review_snapshot_store.SnapshotCorrupt):
-        review_snapshot_store.get_snapshot(CATALOGUE_PROJECT_ID, "snapshot.lying")
+        review_snapshot_store.get_snapshot(CATALOGUE_PROJECT_ID, "snapshot.lying", owner_id="owner")
 
-    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID)
+    listing = review_snapshot_store.list_snapshots(CATALOGUE_PROJECT_ID, owner_id="owner")
     assert [entry.integrity for entry in listing] == ["corrupt"]

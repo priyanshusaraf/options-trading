@@ -394,10 +394,10 @@ def post_review_snapshot(
     try:
         snapshot = review_snapshot_store.capture_snapshot(
             project_id,
+            owner_id=owner_id_for(principal),
             label=body.label,
             capture_key=body.capture_key,
             created_by=actor,
-            graph_owner_id=owner_id_for(principal),
         )
     except _SNAPSHOT_EXCEPTIONS as exc:
         return _snapshot_error(exc)
@@ -411,7 +411,9 @@ def get_review_snapshots(
 ):
     _owner(principal, "list project review snapshots", project_id)
     try:
-        snapshots = review_snapshot_store.list_snapshots(project_id)
+        snapshots = review_snapshot_store.list_snapshots(
+            project_id, owner_id=owner_id_for(principal)
+        )
     except _SNAPSHOT_EXCEPTIONS as exc:
         return _snapshot_error(exc)
     return {"snapshots": [_snapshot_listing(snapshot) for snapshot in snapshots]}
@@ -425,7 +427,9 @@ def get_review_snapshot(
 ):
     _owner(principal, "read project review snapshot", project_id)
     try:
-        snapshot = review_snapshot_store.get_snapshot(project_id, snapshot_id)
+        snapshot = review_snapshot_store.get_snapshot(
+            project_id, snapshot_id, owner_id=owner_id_for(principal)
+        )
     except _SNAPSHOT_EXCEPTIONS as exc:
         return _snapshot_error(exc)
     return _snapshot_response(snapshot)
@@ -479,7 +483,7 @@ def search_project_review(
         source = project_review_source(
             project_id, owner_id=owner_id_for(principal)
         )
-        notes = review_state.list_notes(project_id)
+        notes = review_state.list_notes(project_id, owner_id=owner_id_for(principal))
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
     event_types = {event["event_id"]: event["type"] for event in source["events"]}
@@ -534,7 +538,7 @@ def get_review_notes(
     _owner(principal, "read review notes", project_id)
     try:
         event_types = _event_types(project_id, owner_id=owner_id_for(principal))
-        notes = review_state.list_notes(project_id)
+        notes = review_state.list_notes(project_id, owner_id=owner_id_for(principal))
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
     return {"notes": [_note_response(note, event_types) for note in notes]}
@@ -563,6 +567,7 @@ def post_review_note(
             )
         note = review_state.create_note(
             project_id,
+            owner_id=owner_id_for(principal),
             event_id=body.event_id,
             event_type=event_type,
             body=body.body,
@@ -584,7 +589,8 @@ def patch_review_note(
     try:
         event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         note = review_state.update_note(
-            project_id, note_id, base_revision=body.base_revision, body=body.body
+            project_id, note_id, owner_id=owner_id_for(principal),
+            base_revision=body.base_revision, body=body.body,
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -601,7 +607,7 @@ def delete_review_note(
     _owner(principal, "delete review note", project_id)
     try:
         review_state.delete_note(
-            project_id, note_id, base_revision=body.base_revision
+            project_id, note_id, owner_id=owner_id_for(principal), base_revision=body.base_revision
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -614,7 +620,7 @@ def get_review_views(
 ):
     _owner(principal, "read saved review views", project_id)
     try:
-        views = review_state.list_saved_views(project_id)
+        views = review_state.list_saved_views(project_id, owner_id=owner_id_for(principal))
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
     return {"views": [_view_response(view) for view in views]}
@@ -633,6 +639,7 @@ def post_review_view(
     try:
         view = review_state.create_saved_view(
             project_id,
+            owner_id=owner_id_for(principal),
             name=body.name,
             filters=body.filters.model_dump(),
             created_by=actor,
@@ -654,6 +661,7 @@ def patch_review_view(
         view = review_state.update_saved_view(
             project_id,
             view_id,
+            owner_id=owner_id_for(principal),
             base_revision=body.base_revision,
             name=body.name,
             filters=body.filters.model_dump(),
@@ -673,7 +681,7 @@ def delete_review_view(
     _owner(principal, "delete saved review view", project_id)
     try:
         review_state.delete_saved_view(
-            project_id, view_id, base_revision=body.base_revision
+            project_id, view_id, owner_id=owner_id_for(principal), base_revision=body.base_revision
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)

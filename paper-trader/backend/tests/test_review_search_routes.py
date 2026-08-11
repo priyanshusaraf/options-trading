@@ -89,7 +89,7 @@ def test_missing_anchor_note_remains_searchable_and_source_errors_are_contained(
     note = client.post(
         f"{BASE}/notes", json={"event_id": EVENT_ID, "body": "human retained context"}
     ).json()
-    monkeypatch.setattr(research_review_routes, "project_review_source", lambda _project: {
+    monkeypatch.setattr(research_review_routes, "project_review_source", lambda _project, *, owner_id: {
         "events": [],
         "queues": {"review_needed_runs": [], "pending_candidates": [], "active_findings": []},
         "source_errors": [{
@@ -120,7 +120,10 @@ def test_corrupt_note_source_is_reported_without_hiding_verified_event_matches(c
         created_at=dt.datetime(2026, 8, 3),
         updated_at=dt.datetime(2026, 8, 3),
     )
-    monkeypatch.setattr(research_review_routes.review_state, "list_notes", lambda _project: (corrupt,))
+    monkeypatch.setattr(
+        research_review_routes.review_state, "list_notes",
+        lambda _project, *, owner_id: (corrupt,),
+    )
 
     page = client.get(f"{BASE}/search", params={"q": "published"})
 

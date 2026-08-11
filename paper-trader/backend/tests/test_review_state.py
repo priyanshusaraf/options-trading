@@ -14,6 +14,7 @@ def _database():
 def test_note_create_reload_update_delete_preserves_immutable_anchor():
     created = review_state.create_note(
         CATALOGUE_PROJECT_ID,
+        owner_id="owner",
         event_id="graph:strategy.expanding_z_impulse:4",
         event_type="graph_version_published",
         body="Review the immutable baseline.",
@@ -21,37 +22,41 @@ def test_note_create_reload_update_delete_preserves_immutable_anchor():
     )
 
     assert created.revision == 0
-    assert review_state.list_notes(CATALOGUE_PROJECT_ID) == (created,)
+    assert review_state.list_notes(CATALOGUE_PROJECT_ID, owner_id="owner") == (created,)
     updated = review_state.update_note(
         CATALOGUE_PROJECT_ID, created.note_id,
+        owner_id="owner",
         base_revision=0, body="Reviewed the immutable baseline.",
     )
     assert updated.revision == 1
     assert (updated.event_id, updated.event_type) == (created.event_id, created.event_type)
     deleted = review_state.delete_note(
         CATALOGUE_PROJECT_ID, created.note_id, base_revision=1,
+        owner_id="owner",
     )
     assert deleted.revision == 2
     assert deleted.deleted_at is not None
-    assert review_state.list_notes(CATALOGUE_PROJECT_ID) == ()
+    assert review_state.list_notes(CATALOGUE_PROJECT_ID, owner_id="owner") == ()
 
 
 def test_note_stale_and_wrong_project_writes_make_no_partial_change():
     other = graph_artifacts.create_project("Other", owner_id="owner")
     note = review_state.create_note(
         CATALOGUE_PROJECT_ID, event_id="run:12", event_type="experiment_run",
+        owner_id="owner",
         body="Keep exact context.", created_by="owner",
     )
 
     with pytest.raises(review_state.ReviewStateConflict) as stale:
         review_state.update_note(
             CATALOGUE_PROJECT_ID, note.note_id,
+            owner_id="owner",
             base_revision=9, body="Must not persist.",
         )
     assert stale.value.current_revision == 0
     with pytest.raises(review_state.ReviewStateNotFound):
-        review_state.delete_note(other.project_id, note.note_id, base_revision=0)
-    assert review_state.list_notes(CATALOGUE_PROJECT_ID)[0].body == "Keep exact context."
+        review_state.delete_note(other.project_id, note.note_id, owner_id="owner", base_revision=0)
+    assert review_state.list_notes(CATALOGUE_PROJECT_ID, owner_id="owner")[0].body == "Keep exact context."
 
 
 def test_saved_view_is_canonical_optimistic_and_active_name_is_unique():
@@ -60,7 +65,7 @@ def test_saved_view_is_canonical_optimistic_and_active_name_is_unique():
         "after": "2026-08-01T00:00:00Z", "limit": 25,
     }
     created = review_state.create_saved_view(
-        CATALOGUE_PROJECT_ID, name="Failed runs", filters=filters, created_by="owner",
+        CATALOGUE_PROJECT_ID, owner_id="owner", name="Failed runs", filters=filters, created_by="owner",
     )
 
     assert created.filters == {
@@ -70,28 +75,31 @@ def test_saved_view_is_canonical_optimistic_and_active_name_is_unique():
         "limit": 25,
         "status": "failed",
     }
-    assert review_state.list_saved_views(CATALOGUE_PROJECT_ID) == (created,)
+    assert review_state.list_saved_views(CATALOGUE_PROJECT_ID, owner_id="owner") == (created,)
     with pytest.raises(review_state.ReviewViewNameConflict):
         review_state.create_saved_view(
-            CATALOGUE_PROJECT_ID, name="Failed runs", filters=filters, created_by="owner",
+            CATALOGUE_PROJECT_ID, owner_id="owner", name="Failed runs", filters=filters, created_by="owner",
         )
     with pytest.raises(review_state.ReviewStateConflict):
         review_state.update_saved_view(
             CATALOGUE_PROJECT_ID, created.view_id, base_revision=8,
+            owner_id="owner",
             name="Changed", filters=filters,
         )
-    assert review_state.list_saved_views(CATALOGUE_PROJECT_ID)[0].name == "Failed runs"
+    assert review_state.list_saved_views(CATALOGUE_PROJECT_ID, owner_id="owner")[0].name == "Failed runs"
 
     updated = review_state.update_saved_view(
         CATALOGUE_PROJECT_ID, created.view_id, base_revision=0,
+        owner_id="owner",
         name="Failed experiments", filters={"status": "failed", "limit": 50},
     )
     assert updated.revision == 1
     deleted = review_state.delete_saved_view(
         CATALOGUE_PROJECT_ID, created.view_id, base_revision=1,
+        owner_id="owner",
     )
     replacement = review_state.create_saved_view(
-        CATALOGUE_PROJECT_ID, name="Failed runs", filters=filters, created_by="owner",
+        CATALOGUE_PROJECT_ID, owner_id="owner", name="Failed runs", filters=filters, created_by="owner",
     )
     assert deleted.deleted_at is not None
     assert replacement.view_id != created.view_id
@@ -100,21 +108,24 @@ def test_saved_view_is_canonical_optimistic_and_active_name_is_unique():
 def test_saved_view_rename_conflict_rolls_back_every_field():
     first = review_state.create_saved_view(
         CATALOGUE_PROJECT_ID, name="First", filters={"status": "failed"},
+        owner_id="owner",
         created_by="owner",
     )
     second = review_state.create_saved_view(
         CATALOGUE_PROJECT_ID, name="Second", filters={"status": "active"},
+        owner_id="owner",
         created_by="owner",
     )
 
     with pytest.raises(review_state.ReviewViewNameConflict):
         review_state.update_saved_view(
             CATALOGUE_PROJECT_ID, second.view_id, base_revision=0,
+            owner_id="owner",
             name="First", filters={"status": "approved", "limit": 99},
         )
 
     reloaded = {view.view_id: view for view in review_state.list_saved_views(
-        CATALOGUE_PROJECT_ID
+        CATALOGUE_PROJECT_ID, owner_id="owner"
     )}
     assert reloaded[first.view_id].name == "First"
     assert reloaded[second.view_id].name == "Second"
@@ -129,12 +140,14 @@ def test_review_state_never_changes_graph_or_presentation_identity():
     before = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse", owner_id="owner")
     note = review_state.create_note(
         CATALOGUE_PROJECT_ID,
+        owner_id="owner",
         event_id="graph:strategy.expanding_z_impulse:4",
         event_type="graph_version_published",
         body="Presentation-independent context.", created_by="owner",
     )
     view = review_state.create_saved_view(
         CATALOGUE_PROJECT_ID, name="Published", filters={"status": "published"},
+        owner_id="owner",
         created_by="owner",
     )
     after = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse", owner_id="owner")
@@ -149,16 +162,19 @@ def test_review_state_rejects_invalid_values_and_archived_writes():
         with pytest.raises(review_state.ReviewStateRejected):
             review_state.create_note(
                 CATALOGUE_PROJECT_ID, event_id="run:1", event_type="experiment_run",
+                owner_id="owner",
                 body=body, created_by="owner",
             )
     with pytest.raises(review_state.ReviewStateRejected):
         review_state.create_saved_view(
             CATALOGUE_PROJECT_ID, name="Invalid", filters={"cursor": "opaque"},
+            owner_id="owner",
             created_by="owner",
         )
     with pytest.raises(review_state.ReviewStateRejected):
         review_state.create_saved_view(
             CATALOGUE_PROJECT_ID, name="Invalid", filters={"status": "unknown"},
+            owner_id="owner",
             created_by="owner",
         )
 
@@ -166,6 +182,7 @@ def test_review_state_rejects_invalid_values_and_archived_writes():
     with pytest.raises(graph_artifacts.InvalidTransition):
         review_state.create_note(
             CATALOGUE_PROJECT_ID, event_id="run:1", event_type="experiment_run",
+            owner_id="owner",
             body="Archived projects are read-only.", created_by="owner",
         )
-    assert review_state.list_notes(CATALOGUE_PROJECT_ID) == ()
+    assert review_state.list_notes(CATALOGUE_PROJECT_ID, owner_id="owner") == ()

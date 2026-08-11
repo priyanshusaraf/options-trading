@@ -149,7 +149,7 @@ def test_disappeared_source_keeps_note_without_copying_a_stale_summary(client, m
     created = client.post(
         f"{BASE}/notes", json={"event_id": EVENT_ID, "body": "Retain human context"}
     ).json()
-    monkeypatch.setattr(research_review_routes, "project_review_source", lambda _project: {
+    monkeypatch.setattr(research_review_routes, "project_review_source", lambda _project, *, owner_id: {
         "events": [],
         "queues": {
             "review_needed_runs": [], "pending_candidates": [], "active_findings": [],

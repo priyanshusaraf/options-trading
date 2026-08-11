@@ -6,7 +6,9 @@ from dataclasses import asdict
 
 import pytest
 from sqlalchemy import event, text
+from sqlalchemy.exc import IntegrityError
 
+from app.core import review_snapshot_store, review_state
 from app.db.models import Organization
 from app.db.session import SessionLocal, engine, init_db
 from app.editor import graph_artifacts as store
@@ -31,6 +33,149 @@ def _graph(identifier: str) -> dict:
     graph["version"] = 99
     graph.pop("parent_version", None)
     return graph
+
+
+def test_review_note_repository_requires_owner_and_hides_another_owners_note() -> None:
+    """A review row belongs to its project owner, never the global row identity."""
+    project_a = store.create_project("Review owner A", owner_id="owner.a")
+    project_b = store.create_project("Review owner B", owner_id="owner.b")
+    created = review_state.create_note(
+        project_a.project_id,
+        owner_id="owner.a",
+        event_id="graph:review.a:1",
+        event_type="graph_version_published",
+        body="Only owner A can read this note.",
+        created_by="owner",
+    )
+
+    assert review_state.list_notes(project_a.project_id, owner_id="owner.a") == (created,)
+    assert review_state.list_notes(project_b.project_id, owner_id="owner.b") == ()
+    with pytest.raises(review_state.ReviewStateNotFound):
+        review_state.update_note(
+            project_b.project_id,
+            created.note_id,
+            owner_id="owner.b",
+            base_revision=0,
+            body="Guessed row IDs cannot cross tenants.",
+        )
+
+
+def test_review_composite_project_foreign_keys_reject_cross_owner_rows() -> None:
+    project = store.create_project("Owner B review", owner_id="owner.b")
+    with SessionLocal.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "INSERT INTO project_review_notes "
+                "(owner_id,note_id,project_id,event_id,event_type,body,created_by,revision,created_at,updated_at) "
+                "VALUES ('owner.a','note.cross-owner',:project,'run:1','experiment_run',"
+                "'cross-owner write','owner',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            ), {"project": project.project_id})
+
+
+def _empty_review_source() -> dict:
+    return {
+        "events": [],
+        "queues": {
+            "review_needed_runs": [], "pending_candidates": [], "active_findings": [],
+        },
+        "source_errors": [],
+    }
+
+
+def test_review_repositories_isolate_two_owners_with_shared_view_name_and_capture_key() -> None:
+    """Tenant-local review identities never disclose or mutate the other owner's rows."""
+    project_a = store.create_project("Review A", owner_id="owner.a")
+    project_b = store.create_project("Review B", owner_id="owner.b")
+    note_a = review_state.create_note(
+        project_a.project_id, owner_id="owner.a", event_id="run:a", event_type="experiment_run",
+        body="Owner A note", created_by="owner",
+    )
+    note_b = review_state.create_note(
+        project_b.project_id, owner_id="owner.b", event_id="run:b", event_type="experiment_run",
+        body="Owner B note", created_by="owner",
+    )
+    view_a = review_state.create_saved_view(
+        project_a.project_id, owner_id="owner.a", name="Daily", filters={"limit": 25},
+        created_by="owner",
+    )
+    view_b = review_state.create_saved_view(
+        project_b.project_id, owner_id="owner.b", name="Daily", filters={"limit": 25},
+        created_by="owner",
+    )
+    capture_key = "2ba56d22-7094-4a8d-9bf5-b84a4e8f083f"
+    snapshot_a = review_snapshot_store.capture_snapshot(
+        project_a.project_id, owner_id="owner.a", label="Daily", capture_key=capture_key,
+        created_by="owner", source_loader=lambda _project: _empty_review_source(),
+    )
+    snapshot_b = review_snapshot_store.capture_snapshot(
+        project_b.project_id, owner_id="owner.b", label="Daily", capture_key=capture_key,
+        created_by="owner", source_loader=lambda _project: _empty_review_source(),
+    )
+    owner_b_before = (
+        review_state.list_notes(project_b.project_id, owner_id="owner.b"),
+        review_state.list_saved_views(project_b.project_id, owner_id="owner.b"),
+        review_snapshot_store.list_snapshots(project_b.project_id, owner_id="owner.b"),
+    )
+
+    updated = review_state.update_note(
+        project_a.project_id, note_a.note_id, owner_id="owner.a", base_revision=0,
+        body="Owner A changed only its own note",
+    )
+    assert updated.revision == 1
+    assert view_a.name == view_b.name == "Daily"
+    assert snapshot_a.capture_key == snapshot_b.capture_key == capture_key
+    assert review_snapshot_store.capture_snapshot(
+        project_a.project_id, owner_id="owner.a", label="Daily", capture_key=capture_key,
+        created_by="owner", source_loader=lambda _project: pytest.fail("retry must not load source"),
+    ) == snapshot_a
+    assert (
+        review_state.list_notes(project_b.project_id, owner_id="owner.b"),
+        review_state.list_saved_views(project_b.project_id, owner_id="owner.b"),
+        review_snapshot_store.list_snapshots(project_b.project_id, owner_id="owner.b"),
+    ) == owner_b_before == ((note_b,), (view_b,), owner_b_before[2])
+
+    def note_miss(note_id: str):
+        with pytest.raises(review_state.ReviewStateNotFound) as caught:
+            review_state.update_note(
+                project_b.project_id, note_id, owner_id="owner.b", base_revision=0, body="nope",
+            )
+        return type(caught.value), caught.value.args
+
+    assert note_miss(note_a.note_id) == note_miss("note.absent")
+    with pytest.raises(review_snapshot_store.SnapshotNotFound) as wrong_owner:
+        review_snapshot_store.get_snapshot(
+            project_b.project_id, snapshot_a.snapshot_id, owner_id="owner.b"
+        )
+    with pytest.raises(review_snapshot_store.SnapshotNotFound) as absent:
+        review_snapshot_store.get_snapshot(
+            project_b.project_id, "snapshot.absent", owner_id="owner.b"
+        )
+    assert (type(wrong_owner.value), wrong_owner.value.args) == (
+        type(absent.value), absent.value.args
+    )
+
+
+def test_review_repository_selects_start_with_owner_scope() -> None:
+    project = store.create_project("Owner-first review", owner_id="owner.a")
+    review_state.create_note(
+        project.project_id, owner_id="owner.a", event_id="run:scope", event_type="experiment_run",
+        body="The first predicate owns the row.", created_by="owner",
+    )
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "project_review_notes" in statement:
+            statements.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        assert review_state.list_notes(project.project_id, owner_id="owner.a")
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    query = next(statement for statement in statements if "where" in statement)
+    assert query.index("project_review_notes.owner_id") < query.index(
+        "project_review_notes.project_id"
+    )
 
 
 def test_project_and_graph_loads_require_owner_and_hide_other_owner() -> None:
