@@ -649,6 +649,9 @@ def _table_contract(engine, table: str) -> dict:
         "columns": [(column["name"], str(column["type"]), bool(column["nullable"]),
                      str(column.get("default")))
                     for column in inspector.get_columns(table)],
+        # Position is part of a composite identity.  Sorting this away lets a
+        # migration silently reverse an otherwise identical key.
+        "primary_key": tuple(inspector.get_pk_constraint(table)["constrained_columns"]),
         "foreign_keys": sorted((tuple(fk["constrained_columns"]), fk["referred_table"],
                                 tuple(fk["referred_columns"]), fk.get("name"))
                                for fk in inspector.get_foreign_keys(table)),
@@ -777,6 +780,7 @@ def _revision_0020_contract(engine, table: str) -> dict:
         "columns": [(column["name"], str(column["type"]), bool(column["nullable"]),
                      str(column.get("default")))
                     for column in inspector.get_columns(table)],
+        "primary_key": tuple(inspector.get_pk_constraint(table)["constrained_columns"]),
         "foreign_keys": sorted(foreign_keys),
         "unique": sorted((tuple(item["column_names"]), item.get("name"))
                          for item in inspector.get_unique_constraints(table)),
@@ -907,6 +911,63 @@ def _at_revision_0020(tmp_path, name: str):
     return engine
 
 
+def _insert_populated_0020_graph_lineage(connection) -> dict[str, tuple[tuple[object, ...], ...]]:
+    """Create literal 0020 values whose preservation a rebuild cannot fake."""
+    stamp = "2026-08-12 09:10:11"
+    graph_json = '{"identifier":"graph.legacy","version":1,"nodes":["n1"]}'
+    address = "sha256:" + "c" * 64
+    connection.execute(sa.text(
+        "INSERT INTO broker_accounts VALUES ('account.legacy','owner','kite','external','Legacy','active',:t,:t)"
+    ), {"t": stamp})
+    connection.execute(sa.text(
+        "INSERT INTO deployments (id,name,strategy_key,strategy_version,broker_account_id,universe_mode,params_json,status,armed,notes,created_at,updated_at,owner_id) "
+        "VALUES (701,'legacy-deployment','legacy','v1','account.legacy','legacy','{}','active',0,'provenance',:t,:t,'owner')"
+    ), {"t": stamp})
+    connection.execute(sa.text(
+        "INSERT INTO projects VALUES ('project.legacy','owner','Legacy Project','legacy payload','archived',:t,'2026-08-12 09:10:12')"
+    ), {"t": stamp})
+    connection.execute(sa.text(
+        "INSERT INTO graph_artifacts VALUES ('graph.legacy','project.legacy','Exact legacy graph',:json,7,1,1,:t,'2026-08-12 09:10:12')"
+    ), {"json": graph_json, "t": stamp})
+    connection.execute(sa.text(
+        "INSERT INTO graph_versions VALUES ('graph.legacy',1,:json,:address,'PRIVATE','2026-08-12 09:10:13')"
+    ), {"json": graph_json, "address": address})
+    connection.execute(sa.text("INSERT INTO ir_graph_layouts VALUES ('graph.legacy',1,9,'2026-08-12 09:10:14')"))
+    connection.execute(sa.text("INSERT INTO ir_graph_layout_positions VALUES ('graph.legacy',1,'n1',12.25,24.5)"))
+    connection.execute(sa.text(
+        "INSERT INTO ir_graph_layout_groups VALUES ('graph.legacy',1,'group.1','Exact group',1.5,2.5,30.5,40.5,1)"))
+    connection.execute(sa.text(
+        "INSERT INTO ir_graph_layout_group_members VALUES ('graph.legacy',1,'group.1','n1')"))
+    connection.execute(sa.text(
+        "INSERT INTO ir_graph_layout_orphan_archive VALUES ('orphan.graph',3,11,'2026-08-12 09:10:15','2026-08-12 09:10:16')"))
+    connection.execute(sa.text(
+        "INSERT INTO ir_graph_layout_position_orphan_archive VALUES ('orphan.graph',3,'gone',6.25,7.75)"))
+    for table, mode, authority, state, extra in (
+        ("ir_paper_deployments", "paper", "authoritative", "paper_active", ",rollback_strategy_key"),
+        ("ir_shadow_deployments", "shadow", "non_authoritative", "shadow_active", ""),
+    ):
+        columns = (
+            "id,project_id,graph_identifier,graph_version,graph_content_address,evidence_run_id,"
+            "evidence_candidate_id,evidence_content_address,evidence_verified_at,deployment_id,instrument_key,"
+            "interval,strategy_key" + extra + ",runtime_source,execution_mode,authority,admission_ok,"
+            "admission_reason,state,revision,note,created_at,updated_at,owner_id,broker_account_id"
+        )
+        values = (
+            ":id,'project.legacy','graph.legacy',1,:address,91,92,'sha256:evidence',:t,701,"
+            "'NSE:ABC','1m','graph.strategy'" + (",'rollback'" if extra else "") +
+            ",'ir_graph',:mode,:authority,1,'accepted',:state,6,'exact money provenance',:t,:t,'owner','account.legacy'"
+        )
+        connection.execute(sa.text(f"INSERT INTO {table} ({columns}) VALUES ({values})"), {
+            "id": 801 if mode == "paper" else 802, "address": address, "t": stamp,
+            "mode": mode, "authority": authority, "state": state,
+        })
+    tables = AFFECTED_0021_TABLES
+    return {
+        table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
+        for table in tables
+    }
+
+
 AFFECTED_0021_TABLES = (
     "projects",
     "graph_artifacts",
@@ -933,6 +994,64 @@ def test_revision_0021_fresh_and_upgraded_contracts_match_for_every_affected_tab
         assert _semantic_contract(_revision_0021_contract(upgraded, table)) == _semantic_contract(
             _revision_0021_contract(fresh, table)
         )
+
+
+def test_revision_0021_preserves_a_populated_0020_graph_layout_and_money_lineage(tmp_path):
+    """0021 adds ownership without altering authored bytes or MONEY provenance."""
+    engine = _at_revision_0020(tmp_path, "0021-populated-preservation.db")
+    with engine.begin() as connection:
+        before = _insert_populated_0020_graph_lineage(connection)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        after = {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} WHERE " + (
+                "project_id='project.legacy'" if table == "projects" else
+                "identifier='graph.legacy'" if table == "graph_artifacts" else
+                "graph_identifier IN ('graph.legacy','orphan.graph')" if table.startswith("ir_graph_layout") else
+                "graph_identifier='graph.legacy'" if table == "graph_versions" else
+                "id IN (801,802)"
+            ) + " ORDER BY rowid")).all())
+            for table in AFFECTED_0021_TABLES
+        }
+
+    assert after["projects"] == (before["projects"][-1],)
+    for table in ("graph_artifacts", "graph_versions", "ir_graph_layouts",
+                  "ir_graph_layout_positions", "ir_graph_layout_groups", "ir_graph_layout_group_members",
+                  "ir_graph_layout_orphan_archive", "ir_graph_layout_position_orphan_archive"):
+        assert all(row[0] == "owner" for row in after[table])
+        assert tuple(row[1:] for row in after[table]) == before[table][-len(after[table]):]
+    for table in ("ir_paper_deployments", "ir_shadow_deployments"):
+        assert after[table] == before[table]
+        assert not any(fk["referred_table"] == "graph_versions"
+                       for fk in sa.inspect(engine).get_foreign_keys(table))
+    version = after["graph_versions"][0]
+    assert version[2:5] == (1, '{"identifier":"graph.legacy","version":1,"nodes":["n1"]}', "sha256:" + "c" * 64)
+
+
+def test_revision_0021_populated_legacy_round_trip_restores_rows_and_contracts(tmp_path):
+    """A sole legacy lineage can cross 0021 and return with its exact 0020 shape."""
+    engine = _at_revision_0020(tmp_path, "0021-populated-round-trip.db")
+    with engine.begin() as connection:
+        before_rows = _insert_populated_0020_graph_lineage(connection)
+        before_contracts = {table: _revision_0020_contract(engine, table) for table in AFFECTED_0021_TABLES}
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.downgrade(migrate.alembic_config(connection), "0020")
+        restored_rows = {
+            table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
+            for table in AFFECTED_0021_TABLES
+        }
+    assert migrate.schema_version(engine) == "0020"
+    assert restored_rows == before_rows
+    assert {
+        table: _semantic_contract(_revision_0020_contract(engine, table))
+        for table in AFFECTED_0021_TABLES
+    } == {
+        table: _semantic_contract(contract) for table, contract in before_contracts.items()
+    }
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    assert migrate.schema_version(engine) == HEAD
+    assert all("owner_id" in {column["name"] for column in sa.inspect(engine).get_columns(table)}
+               for table in AFFECTED_0021_TABLES[:-2])
 
 
 def test_revision_0021_downgrade_refuses_two_owner_same_identifier_before_ddl(tmp_path):
@@ -1024,6 +1143,43 @@ def test_revision_0021_downgrade_post_rename_retry_recovers_before_owner_refusal
     assert failed
     assert migrate.schema_version(engine) == "0020"
     assert _semantic_contract(_revision_0021_contract(engine, table)) == _semantic_contract(expected)
+    assert not any(name.endswith("__0021") for name in sa.inspect(engine).get_table_names())
+
+
+@pytest.mark.parametrize("table", AFFECTED_0021_TABLES)
+@pytest.mark.parametrize(
+    ("phase", "marker"),
+    (("stale-temp", "CREATE TABLE {table}__0021"),
+     ("completed-temp", "DROP TABLE {table}")),
+)
+def test_revision_0021_downgrade_retry_recovers_every_custom_rebuild_shape(tmp_path, table, phase, marker):
+    """Both durable downgrade crash shapes converge with rows, DDL, version and FK state intact."""
+    engine = _at_revision_0020(tmp_path, f"0021-{table}-{phase}-downgrade.db")
+    with engine.begin() as connection:
+        expected_rows = _insert_populated_0020_graph_lineage(connection)
+        expected_contract = _revision_0020_contract(engine, table)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_shape(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and marker.format(table=table) in statement:
+            failed = True
+            raise RuntimeError(f"injected {phase} downgrade interruption for {table}")
+
+    with pytest.raises(RuntimeError, match=f"injected {phase} downgrade interruption"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0020")
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0020")
+
+    assert failed
+    assert migrate.schema_version(engine) == "0020"
+    assert _semantic_contract(_revision_0020_contract(engine, table)) == _semantic_contract(expected_contract)
+    with engine.connect() as connection:
+        assert tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()) == expected_rows[table]
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 1
     assert not any(name.endswith("__0021") for name in sa.inspect(engine).get_table_names())
 
 
