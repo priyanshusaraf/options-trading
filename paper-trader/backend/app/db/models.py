@@ -194,9 +194,7 @@ class Deployment(Base):
         Index("ix_deployments_owner_account", "owner_id", "broker_account_id"),
     )
     #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID, index=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
 
@@ -212,8 +210,7 @@ class Deployment(Base):
     # The broker account this book belongs to. One account today; the column exists
     # so that adding a second is a row, not a schema change.
     broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False,
-        default=LEGACY_BROKER_ACCOUNT_ID, server_default=LEGACY_BROKER_ACCOUNT_ID)
+        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
     # legacy | watchlist | explicit — how this deployment's instruments are decided.
     universe_mode: Mapped[str] = mapped_column(String(16), default="legacy",
                                                server_default="legacy")
@@ -366,9 +363,7 @@ class CapitalState(Base):
     # `id` remains a compatibility address for historic diagnostics. The composite key is
     # the identity: two customer accounts may both have a paper or live book.
     id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
-    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
-                                                    default=LEGACY_BROKER_ACCOUNT_ID,
-                                                    server_default=LEGACY_BROKER_ACCOUNT_ID)
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     book: Mapped[str] = mapped_column(String(8), primary_key=True, server_default="live")
     initial_capital: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
@@ -380,9 +375,7 @@ class CapitalState(Base):
 
 class InstrumentState(Base):
     __tablename__ = "instrument_state"
-    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True,
-                                          default=LEGACY_OWNER_ID,
-                                          server_default=LEGACY_OWNER_ID)
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(32), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     live_interval: Mapped[str] = mapped_column(String(12), default="15minute")
@@ -1421,9 +1414,7 @@ class DailyAccountSnapshot(Base):
     straight from the Trade ledger). Recorded forward from go-live, so history
     builds from the first live day."""
     __tablename__ = "daily_account_snapshot"
-    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
-                                                    default=LEGACY_BROKER_ACCOUNT_ID,
-                                                    server_default=LEGACY_BROKER_ACCOUNT_ID)
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     day: Mapped[str] = mapped_column(String(10), primary_key=True)   # "YYYY-MM-DD" IST
     account_net: Mapped[float] = mapped_column(Float, default=0.0)        # total account equity (margins.net)
     account_available: Mapped[float] = mapped_column(Float, default=0.0)  # free funds (live_balance)

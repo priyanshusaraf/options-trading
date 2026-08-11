@@ -162,10 +162,19 @@ def _upgrade_deployments() -> None:
 
 def _remove_legacy_scope_defaults() -> None:
     """Backfill defaults belong to the upgrade, never to future application writes."""
-    for table in ACCOUNT_TABLES:
+    # 0018/0019 use temporary defaults while a new NOT NULL scope is backfilled.  They
+    # must not survive the revision: silently assigning a future write to the legacy
+    # tenant is unsafe.  Include the three singleton-identity replacements and
+    # deployments, which do not belong to ACCOUNT_TABLES' account-FK rebuild loop.
+    for table in (*ACCOUNT_TABLES, "deployments"):
         with op.batch_alter_table(table, recreate="always") as batch:
             batch.alter_column("broker_account_id", server_default=None)
             batch.alter_column("owner_id", server_default=None)
+    with op.batch_alter_table("instrument_state", recreate="always") as batch:
+        batch.alter_column("owner_id", server_default=None)
+    for table in ("capital_state", "daily_account_snapshot"):
+        with op.batch_alter_table(table, recreate="always") as batch:
+            batch.alter_column("broker_account_id", server_default=None)
 
 
 def _downgrade_deployments() -> None:

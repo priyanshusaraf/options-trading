@@ -25,7 +25,8 @@ def _evidence_trade(owner_id: str, mode: str):
     import datetime as dt
     from app.db.models import Trade
 
-    return Trade(owner_id=owner_id, deployment_id=None, instrument_key=f"NSE_EQ|{owner_id}-{mode}",
+    return Trade(owner_id=owner_id, broker_account_id="account.default", deployment_id=None,
+                 instrument_key=f"NSE_EQ|{owner_id}-{mode}",
                  direction="LONG", option_type="EQ", tradingsymbol="X", exchange="NSE",
                  segment="equity_intraday", strike=0, expiry=dt.date(2026, 8, 11), qty=1,
                  entry_premium=1, entry_cost=1, entry_spot=1, entry_time=dt.datetime(2026, 8, 11, 9),

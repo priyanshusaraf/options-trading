@@ -444,7 +444,7 @@ def test_the_policy_refuses_a_foreign_row_even_if_the_store_filter_hands_one_ove
     class LeakyStore:
         """A store whose owner filter has been lost in a refactor."""
         def get(self, connection_id):
-            row = BrokerConnection(id=connection_id, broker="kite", scope="kite:x")
+            row = BrokerConnection(owner_id='owner', broker_account_id='account.default', id=connection_id, broker="kite", scope="kite:x")
             row.owner_id = "someone-else"
             return row
 

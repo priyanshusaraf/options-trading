@@ -23,7 +23,7 @@ ENTRY = dt.datetime(2026, 8, 3, 10, 0)
 
 def _pos(segment, *, entry=500.0, last=None, qty=200, days=0,
          entry_cost=25_000.0, entry_charges=0.0, direction="LONG"):
-    return Position(
+    return Position(owner_id='owner', broker_account_id='account.default',
         instrument_key="X", segment=segment, direction=direction,
         entry_premium=entry, last_premium=(entry if last is None else last),
         qty=qty, entry_cost=entry_cost, entry_charges=entry_charges,
@@ -72,7 +72,7 @@ def test_carry_never_raises_on_a_malformed_row():
     conservative direction and the intended one: over-stating a cost is safe,
     under-stating it flatters the position. The contract asserted here is
     therefore "never raises, always a sane number" — not "zero"."""
-    broken = Position(instrument_key="X", segment="mtf", direction="LONG",
+    broken = Position(owner_id='owner', broker_account_id='account.default', instrument_key="X", segment="mtf", direction="LONG",
                       entry_premium=100.0, last_premium=100.0, qty=10,
                       entry_cost=None, entry_time=None, last_mark_time=None)
     carry = broken.accrued_carry()

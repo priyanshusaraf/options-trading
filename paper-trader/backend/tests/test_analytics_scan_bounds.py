@@ -31,7 +31,7 @@ import pytest
 from sqlalchemy import event, text
 
 from app.core.execution_book import LIVE, PAPER
-from app.db.models import Trade
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, Trade
 from app.db.session import SessionLocal, init_db
 from app.engine import analytics
 from tests.legacy_money_scope import LegacyMoneyScope
@@ -67,6 +67,8 @@ def _seed(n: int = 40) -> None:
     with SessionLocal() as s:
         for i in range(n):
             s.add(Trade(
+                owner_id=LEGACY_OWNER_ID,
+                broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
                 instrument_key=f"NSE:SYM{i % 5}",
                 segment=segments[i % 3],
                 strategy_key=strategies[i % 2],

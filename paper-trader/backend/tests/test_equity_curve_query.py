@@ -11,7 +11,7 @@ analytics = LegacyMoneyScope(analytics, "equity_curve")
 
 
 def _snap(t, eq):
-    return EquitySnapshot(time=t, equity=eq, cash=eq, invested=0.0,
+    return EquitySnapshot(owner_id='owner', broker_account_id='account.default', time=t, equity=eq, cash=eq, invested=0.0,
                           realized_pnl=0.0, open_count=0)
 
 

@@ -76,9 +76,9 @@ def _seed_positions(s):
                   entry_premium=100.0, entry_charges=1.0, entry_cost=1001.0,
                   entry_spot=100.0, entry_time=dt.datetime(2026, 6, 1, 10, 0),
                   stop_price=99.0, target_price=102.0, last_premium=100.0)
-    s.add(Position(instrument_key="NIFTY", option_type="CE", exchange="NFO",
+    s.add(Position(owner_id='owner', broker_account_id='account.default', instrument_key="NIFTY", option_type="CE", exchange="NFO",
                    segment="options", **common))
-    s.add(Position(instrument_key="SBIN", option_type="EQ", exchange="NSE_INTRADAY",
+    s.add(Position(owner_id='owner', broker_account_id='account.default', instrument_key="SBIN", option_type="EQ", exchange="NSE_INTRADAY",
                    segment="equity_intraday", **common))
 
 
@@ -93,7 +93,7 @@ def test_positions_segment_filter():
 
 
 def _seed_trade(s, seg, net):
-    s.add(Trade(instrument_key="X", direction="LONG", option_type="EQ" if seg == "equity_intraday" else "CE",
+    s.add(Trade(owner_id='owner', broker_account_id='account.default', instrument_key="X", direction="LONG", option_type="EQ" if seg == "equity_intraday" else "CE",
                 tradingsymbol="X", exchange="NSE_INTRADAY" if seg == "equity_intraday" else "NFO",
                 segment=seg, strike=0.0, expiry=dt.date(2026, 7, 31), qty=10,
                 entry_premium=100.0, entry_cost=1000.0, entry_spot=100.0,

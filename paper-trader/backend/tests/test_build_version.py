@@ -245,7 +245,7 @@ def _make_trade(**kw):
         return_pct=0.6, holding_minutes=15.0, win=True,
     )
     base.update(kw)
-    return Trade(**base)
+    return Trade(owner_id='owner', broker_account_id='account.default', **base)
 
 
 def test_new_trade_is_stamped_with_the_running_build(tmp_path, monkeypatch):

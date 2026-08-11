@@ -24,9 +24,10 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
+import pytest
 import sqlalchemy as sa
 
-from app.db.models import LEGACY_OWNER_ID, Base
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, Base
 from app.db.planes import TABLE_PLANES, Plane
 
 
@@ -68,14 +69,12 @@ def test_every_money_table_is_accounted_for():
         f"in a migration, or add the table to SINGLETON_KEYED with the key that prevents it.")
 
 
-def test_the_ten_owned_tables_carry_a_non_null_owner_defaulted_to_the_original_owner():
+def test_the_ten_owned_tables_require_an_explicit_owner():
     for table in rev0017.TABLES:
         col = Base.metadata.tables[table].columns["owner_id"]
         assert col.nullable is False, f"{table}.owner_id must be NOT NULL"
-        assert col.server_default is not None, (
-            f"{table}.owner_id needs a server_default: existing rows ARE the original owner's, "
-            f"and recording that as NULL loses a fact we actually know")
-        assert col.server_default.arg == LEGACY_OWNER_ID
+        assert col.server_default is None, (
+            f"{table}.owner_id must not silently assign the legacy owner")
         assert col.index is True, (
             f"{table}.owner_id joins a WHERE clause on a table that grows per trade or per bar")
 
@@ -89,34 +88,30 @@ def test_the_replacement_keys_make_each_former_singleton_tenant_addressable():
     assert getattr(models, "LEGACY_BROKER_ACCOUNT_ID", None) == "account.default"
 
 
-def test_a_new_row_gets_an_owner_without_anyone_passing_one(tmp_path):
-    """An insert path that has never been taught about tenancy must land on the owner, not on
-    NULL and not on an error. Same property `deployment_id`'s `LEGACY_DEPLOYMENT_ID` default has
-    had since Phase B, for the same reason."""
+def test_a_new_deployment_rejects_omitted_scope_and_accepts_explicit_scope(tmp_path):
     engine = sa.create_engine(f"sqlite:///{tmp_path/'t.db'}")
     Base.metadata.create_all(engine)
     from app.db.models import Deployment
 
     with sa.orm.Session(engine) as s:
-        d = Deployment(name="fresh")
+        s.add(Deployment(name="missing-scope"))
+        with pytest.raises(sa.exc.IntegrityError):
+            s.commit()
+        s.rollback()
+        d = Deployment(owner_id=LEGACY_OWNER_ID,
+                       broker_account_id=LEGACY_BROKER_ACCOUNT_ID, name="fresh")
         s.add(d)
         s.commit()
-        assert d.owner_id == LEGACY_OWNER_ID
+        assert (d.owner_id, d.broker_account_id) == (
+            LEGACY_OWNER_ID, LEGACY_BROKER_ACCOUNT_ID)
 
 
-def test_a_legacy_row_written_before_the_column_existed_reads_as_the_owner(tmp_path):
-    """Written with raw SQL, not the ORM: `Model(col=None)` applies the column DEFAULT rather
-    than NULL, so seeding a "legacy" row through the ORM would silently create a normal one and
-    every assertion here would go vacuous. That trap is in the migrations rule for a reason."""
+def test_raw_sql_also_rejects_omitted_deployment_scope(tmp_path):
     engine = sa.create_engine(f"sqlite:///{tmp_path/'t.db'}")
     Base.metadata.create_all(engine)
     with engine.begin() as c:
-        # `created_at` is supplied because its default is Python-side and raw SQL does not run
-        # it. `owner_id` is deliberately NOT supplied — that omission is the whole test.
-        c.execute(sa.text(
-            "INSERT INTO deployments (id, name, created_at, updated_at) "
-            "VALUES (99, 'written-without-an-owner', "
-            "'2026-08-01 09:15:00', '2026-08-01 09:15:00')"))
-        got = c.execute(sa.text(
-            "SELECT owner_id FROM deployments WHERE id = 99")).scalar_one()
-    assert got == LEGACY_OWNER_ID
+        with pytest.raises(sa.exc.IntegrityError):
+            c.execute(sa.text(
+                "INSERT INTO deployments (id, name, created_at, updated_at) "
+                "VALUES (99, 'written-without-an-owner', "
+                "'2026-08-01 09:15:00', '2026-08-01 09:15:00')"))

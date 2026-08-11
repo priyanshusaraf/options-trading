@@ -11,7 +11,7 @@ analytics = LegacyMoneyScope(
 
 
 def _trade(s, *, key="GOLDM", net, hold=60.0, exit_time):
-    s.add(Trade(instrument_key=key, direction="LONG", option_type="CE",
+    s.add(Trade(owner_id='owner', broker_account_id='account.default', instrument_key=key, direction="LONG", option_type="CE",
                 tradingsymbol=key, exchange="NFO", segment="options",
                 strategy_key="trend_impulse_v3", strike=0.0,
                 expiry=dt.date(2026, 7, 31), qty=10,

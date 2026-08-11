@@ -362,7 +362,7 @@ class TestRollback:
             row = staged(s)
             s.commit()
             pa.activate(s, row.id, revision=0)
-            s.add(Trade(
+            s.add(Trade(owner_id='owner', broker_account_id='account.default',
                 instrument_key=INSTRUMENT, direction="LONG", option_type="CE",
                 tradingsymbol="X", exchange="MCX", segment="equity_intraday",
                 strike=0.0, expiry=dt.date(2030, 1, 1), qty=1,

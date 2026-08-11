@@ -50,7 +50,7 @@ def _broker(mode):
 
 
 def _open_row(session, *, mode, key="NIFTY", entry_cost=1_000.0):
-    row = Position(
+    row = Position(owner_id='owner', broker_account_id='account.default',
         instrument_key=key, direction="LONG", option_type="CE",
         tradingsymbol=f"{key}{mode.upper()}", exchange="NFO", segment="equity_intraday",
         strike=0.0, expiry=dt.date(2030, 1, 1), qty=1, lot_size=1,
@@ -64,7 +64,7 @@ def _open_row(session, *, mode, key="NIFTY", entry_cost=1_000.0):
 
 
 def _closed_row(session, *, mode, net, key="NIFTY", when=dt.datetime(2026, 1, 1, 11, 0)):
-    session.add(Trade(
+    session.add(Trade(owner_id='owner', broker_account_id='account.default',
         instrument_key=key, direction="LONG", option_type="CE",
         tradingsymbol=f"{key}{mode.upper()}", exchange="NFO", segment="equity_intraday",
         strike=0.0, expiry=dt.date(2030, 1, 1), qty=1,
@@ -295,7 +295,7 @@ class TestRestartAndLegacyBehaviour:
         from app.db.models import EquitySnapshot
 
         with SessionLocal() as s:
-            s.add(EquitySnapshot(time=dt.datetime(2026, 1, 1, 9, 0), equity=1.0, cash=1.0,
+            s.add(EquitySnapshot(owner_id='owner', broker_account_id='account.default', time=dt.datetime(2026, 1, 1, 9, 0), equity=1.0, cash=1.0,
                                  invested=0.0, realized_pnl=0.0, open_count=0))
             s.commit()
             rows = list(s.scalars(__import__("sqlalchemy").select(EquitySnapshot)))

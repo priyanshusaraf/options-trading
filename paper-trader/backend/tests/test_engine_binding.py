@@ -45,7 +45,7 @@ def assign(instrument_key: str, strategy_key: str | None) -> None:
     with SessionLocal() as session:
         row = session.get(InstrumentState, ("owner", instrument_key))
         if row is None:
-            row = InstrumentState(instrument_key=instrument_key)
+            row = InstrumentState(owner_id='owner', instrument_key=instrument_key)
             session.add(row)
         row.strategy_key = strategy_key
         session.commit()

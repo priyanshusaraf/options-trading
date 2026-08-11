@@ -464,6 +464,28 @@ def test_revision_0019_preserves_every_account_money_payload_and_adds_real_scope
     )
 
 
+def test_revision_0019_removes_legacy_defaults_from_every_tenant_scope(tmp_path):
+    """Defaults backfill old rows once; a new write must name its tenant explicitly."""
+    engine = _build_from_baseline(tmp_path)
+    inspector = sa.inspect(engine)
+    scope_columns = {
+        "deployments": ("owner_id", "broker_account_id"),
+        "instrument_state": ("owner_id",),
+        "capital_state": ("broker_account_id",),
+        "daily_account_snapshot": ("broker_account_id",),
+        **{table: ("owner_id", "broker_account_id") for table in (
+            "positions", "trades", "equity_snapshots", "order_journal", "signal_events",
+            "execution_intents", "execution_order_events", "broker_connections",
+            "ir_paper_deployments", "ir_shadow_deployments", "ir_shadow_divergences",
+        )},
+    }
+    for table, columns in scope_columns.items():
+        actual = {column["name"]: column.get("default")
+                  for column in inspector.get_columns(table)}
+        for column in columns:
+            assert actual[column] is None, f"{table}.{column} retains a legacy server default"
+
+
 def test_revision_0019_refuses_lossy_tenant_name_downgrade(tmp_path):
     engine = _build_from_baseline(tmp_path)
     with engine.begin() as connection:

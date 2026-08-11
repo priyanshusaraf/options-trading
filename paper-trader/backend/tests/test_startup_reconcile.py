@@ -26,7 +26,7 @@ def _journal(symbol, when):
     """`placed_at` is stamped on the ENGINE clock (provider.now()), not wall time — the
     mock provider runs at 2025-01-09, so a wall-clock stamp would never match "today"."""
     with SessionLocal() as s:
-        s.add(OrderJournal(
+        s.add(OrderJournal(owner_id='owner', broker_account_id='account.default',
             order_id=f"OID-{symbol}", tradingsymbol=symbol, instrument_key=symbol,
             side="BUY", kind="equity", intent="ENTRY", qty=10, status="TERMINAL",
             placed_at=when))

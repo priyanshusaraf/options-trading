@@ -344,7 +344,7 @@ class TestNoLiveOrderSeamIsReached:
 
 class TestBooksStayApartWhileAGraphTrades:
     def _paper_position(self, session, *, mode):
-        session.add(Position(
+        session.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key=INSTRUMENT, direction="LONG", option_type="CE",
             tradingsymbol=f"{INSTRUMENT}{mode}", exchange="MCX",
             segment="equity_intraday", strike=0.0, expiry=dt.date(2030, 1, 1),
@@ -381,7 +381,7 @@ class TestBooksStayApartWhileAGraphTrades:
 
         with SessionLocal() as s:
             _deploy(s)
-            s.add(Trade(
+            s.add(Trade(owner_id='owner', broker_account_id='account.default',
                 instrument_key=INSTRUMENT, direction="LONG", option_type="CE",
                 tradingsymbol="X", exchange="MCX", segment="equity_intraday",
                 strike=0.0, expiry=dt.date(2030, 1, 1), qty=1, entry_premium=100.0,

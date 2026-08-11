@@ -59,7 +59,7 @@ def test_open_position_is_flattened_before_a_release_window():
     exposed to the print."""
     r = _runner()
     with SessionLocal() as s:
-        s.add(Position(
+        s.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key="NATURALGAS", direction="LONG", option_type="CE",
             tradingsymbol="NATURALGAS26AUG250CE", exchange="MCX", segment="options",
             strike=250.0, expiry=dt.date(2026, 8, 25), lot_size=1250, qty=1250,
@@ -79,7 +79,7 @@ def test_open_position_is_flattened_before_a_release_window():
 def test_position_is_left_alone_well_before_the_window():
     r = _runner()
     with SessionLocal() as s:
-        s.add(Position(
+        s.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key="NATURALGAS", direction="LONG", option_type="CE",
             tradingsymbol="NATURALGAS26AUG250CE", exchange="MCX", segment="options",
             strike=250.0, expiry=dt.date(2026, 8, 25), lot_size=1250, qty=1250,
@@ -97,7 +97,7 @@ def test_position_is_left_alone_well_before_the_window():
 def test_unrelated_instrument_is_never_flattened():
     r = _runner()
     with SessionLocal() as s:
-        s.add(Position(
+        s.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key="GOLDM", direction="LONG", option_type="CE",
             tradingsymbol="GOLDM26AUG72000CE", exchange="MCX", segment="options",
             strike=72000.0, expiry=dt.date(2026, 8, 28), lot_size=10, qty=10,
@@ -116,7 +116,7 @@ def test_flatten_can_be_switched_off():
     r = _runner()
     r.params["event_risk_flatten"] = False
     with SessionLocal() as s:
-        s.add(Position(
+        s.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key="NATURALGAS", direction="LONG", option_type="CE",
             tradingsymbol="NATURALGAS26AUG250CE", exchange="MCX", segment="options",
             strike=250.0, expiry=dt.date(2026, 8, 25), lot_size=1250, qty=1250,

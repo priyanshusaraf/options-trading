@@ -26,7 +26,7 @@ def test_signals_carry_counts_and_suggestion_and_flag():
     now = r.provider.now()
     with SessionLocal() as s:
         for _ in range(3):
-            s.add(SignalEvent(time=now, instrument_key="GOLDM", signal="LONG_ENTRY"))
+            s.add(SignalEvent(owner_id='owner', broker_account_id='account.default', time=now, instrument_key="GOLDM", signal="LONG_ENTRY"))
         s.commit()
     rows = {x["key"]: x for x in c.get("/api/signals").json()["instruments"]}
     assert rows["GOLDM"]["signals_today"] >= 3

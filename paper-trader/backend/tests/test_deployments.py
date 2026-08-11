@@ -16,7 +16,9 @@ from sqlalchemy import select
 
 from app.core import deployments as dep
 from app.db.models import (
+    LEGACY_BROKER_ACCOUNT_ID,
     LEGACY_DEPLOYMENT_ID,
+    LEGACY_OWNER_ID,
     Deployment,
     EquitySnapshot,
     Position,
@@ -159,9 +161,10 @@ def test_inserts_that_omit_deployment_id_land_in_the_legacy_book():
     from app.db.session import engine
     with engine.begin() as conn:
         conn.execute(text(
-            "INSERT INTO signal_events (time, instrument_key, signal, z, slope, "
-            "close, acted, note) VALUES ('2026-08-02 10:00:00', 'NIFTY', "
-            "'LONG_ENTRY', 1.2, 0.3, 100.0, 1, '')"))
+            "INSERT INTO signal_events (owner_id, broker_account_id, time, instrument_key, "
+            "signal, z, slope, close, acted, note) VALUES "
+            f"('{LEGACY_OWNER_ID}', '{LEGACY_BROKER_ACCOUNT_ID}', "
+            "'2026-08-02 10:00:00', 'NIFTY', 'LONG_ENTRY', 1.2, 0.3, 100.0, 1, '')"))
         got = conn.execute(text(
             "SELECT deployment_id FROM signal_events")).scalar_one()
     assert got == LEGACY_DEPLOYMENT_ID

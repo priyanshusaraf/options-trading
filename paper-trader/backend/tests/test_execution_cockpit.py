@@ -175,7 +175,7 @@ class TestTheCockpitCanAnswer:
     def test_what_positions_and_money_it_created(self, runner):
         with SessionLocal() as s:
             _deploy(s)
-            s.add(Position(
+            s.add(Position(owner_id='owner', broker_account_id='account.default',
                 instrument_key=INSTRUMENT, direction="LONG", option_type="EQ",
                 tradingsymbol="X", exchange="MCX", segment="equity_intraday",
                 strike=0.0, expiry=dt.date(2030, 1, 1), qty=1, lot_size=1,

@@ -38,7 +38,7 @@ def _intent(*, side="BUY", decision_price=100.0):
 
 
 def _row(kind, offset_ms, *, status="", filled=0, avg=0.0):
-    return ExecutionOrderEvent(
+    return ExecutionOrderEvent(owner_id='owner', broker_account_id='account.default',
         client_intent_id="intent-1",
         source="engine" if kind in {"INTENT_CREATED", "SUBMIT_STARTED"} else "broker",
         source_event_id=f"{kind.lower()}-{offset_ms}",

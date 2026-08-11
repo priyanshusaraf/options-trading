@@ -55,7 +55,7 @@ class _KiteFunds:
 
 
 def _closed_trade(exit_time):
-    return Trade(
+    return Trade(owner_id='owner', broker_account_id='account.default',
         instrument_key="NIFTY", direction="LONG", option_type="CE",
         tradingsymbol="NIFTY26JAN20000CE", exchange="NFO", segment="options",
         strike=20000.0, expiry=dt.date(2026, 1, 29), qty=50,
@@ -144,7 +144,7 @@ def test_does_not_reanchor_once_today_has_traded():
 def test_does_not_reanchor_when_position_open():
     r = _runner()
     with SessionLocal() as s:
-        s.add(Position(
+        s.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key="NIFTY", direction="LONG", option_type="CE",
             tradingsymbol="NIFTY26JAN20000CE", exchange="NFO", segment="options",
             strike=20000.0, expiry=dt.date(2026, 1, 29), lot_size=50, qty=50,

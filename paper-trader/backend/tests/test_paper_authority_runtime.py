@@ -129,7 +129,7 @@ def _runner() -> EngineRunner:
 def _open_paper_position(session, *, strategy_version: str, key: str = IR_KEY) -> int:
     """A position exactly as a paper fill leaves it. Constructed rather than traded, so no
     test here depends on the mock feed admitting an entry on a particular bar."""
-    row = Position(
+    row = Position(owner_id='owner', broker_account_id='account.default',
         instrument_key=INSTRUMENT, direction="LONG", option_type="EQ",
         tradingsymbol=f"{INSTRUMENT}-EQ", exchange="MCX", segment="equity_intraday",
         strike=0.0, expiry=dt.date(2030, 1, 1), qty=1, lot_size=1,

@@ -18,7 +18,7 @@ from app.db.models import MARGIN_SEGMENTS, Position
 
 
 def _pos(segment, direction, entry, last, qty=50, entry_cost=25_000.0):
-    return Position(instrument_key="NIFTY", segment=segment, direction=direction,
+    return Position(owner_id='owner', broker_account_id='account.default', instrument_key="NIFTY", segment=segment, direction=direction,
                     entry_premium=entry, last_premium=last, qty=qty,
                     entry_cost=entry_cost, tradingsymbol="NIFTYFUT")
 

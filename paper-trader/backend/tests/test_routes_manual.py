@@ -130,7 +130,7 @@ def test_session_redirects_to_frontend_after_login(monkeypatch):
 def _seed_trade(s, *, exit_dt, net, mode):
     import datetime as dt
     from app.db.models import Trade
-    s.add(Trade(
+    s.add(Trade(owner_id='owner', broker_account_id='account.default',
         instrument_key="NIFTY", direction="LONG", option_type="CE",
         tradingsymbol="NIFTY24CE", exchange="NFO", strike=24000.0,
         expiry=dt.date(2026, 7, 31), qty=75,

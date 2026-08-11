@@ -36,9 +36,9 @@ def _seed():
                              option_type="CE", ts=ts, spot=24000.0, ltp=100.0,
                              bid=99.0, ask=101.0, volume=10, oi=1000, iv=0.12,
                              delta=0.5))
-            s.add(SignalEvent(instrument_key="NIFTY", time=ts, signal="LONG_ENTRY",
+            s.add(SignalEvent(owner_id='owner', broker_account_id='account.default', instrument_key="NIFTY", time=ts, signal="LONG_ENTRY",
                               close=24000.0, z=1.2, slope=1.0))
-            s.add(IrShadowDivergence(
+            s.add(IrShadowDivergence(owner_id='owner', broker_account_id='account.default',
                 observed_at=ts, bar_time=ts, instrument_key="NIFTY",
                 authoritative_strategy_key="expanding_z_v4",
                 shadow_strategy_key="ir.strategy.expanding_z_impulse",
@@ -48,14 +48,14 @@ def _seed():
                 market_open=True))
         # equity: one row a minute for the last two hours, plus older days
         for i in range(120):
-            s.add(EquitySnapshot(time=NOW - dt.timedelta(minutes=i), equity=50000.0,
+            s.add(EquitySnapshot(owner_id='owner', broker_account_id='account.default', time=NOW - dt.timedelta(minutes=i), equity=50000.0,
                                  cash=50000.0, invested=0.0, realized_pnl=0.0,
                                  open_count=0))
         for i in range(120):
-            s.add(EquitySnapshot(time=NOW - dt.timedelta(days=30, minutes=i),
+            s.add(EquitySnapshot(owner_id='owner', broker_account_id='account.default', time=NOW - dt.timedelta(days=30, minutes=i),
                                  equity=49000.0, cash=49000.0, invested=0.0,
                                  realized_pnl=0.0, open_count=0))
-        s.add(Trade(
+        s.add(Trade(owner_id='owner', broker_account_id='account.default',
             instrument_key="NIFTY", direction="LONG", option_type="CE",
             tradingsymbol="OLDTRADE", exchange="NFO", segment="options",
             strike=24000.0, expiry=dt.date(2025, 1, 29), qty=75,
@@ -65,7 +65,7 @@ def _seed():
             exit_time=NOW - dt.timedelta(days=300), exit_reason="TARGET",
             gross_pnl=750.0, charges_total=20.0, net_pnl=730.0,
             return_pct=9.7, holding_minutes=30.0, win=True))
-        s.add(OrderJournal(order_id="OLD", tradingsymbol="X", instrument_key="X",
+        s.add(OrderJournal(owner_id='owner', broker_account_id='account.default', order_id="OLD", tradingsymbol="X", instrument_key="X",
                            side="BUY", kind="equity", intent="ENTRY", qty=1,
                            status="TERMINAL",
                            placed_at=NOW - dt.timedelta(days=300)))

@@ -24,7 +24,7 @@ def _client():
 
 
 def _trade(s, *, seg, strat, net, hours):
-    s.add(Trade(instrument_key="X", direction="LONG",
+    s.add(Trade(owner_id='owner', broker_account_id='account.default', instrument_key="X", direction="LONG",
                 option_type="EQ" if seg == "equity_intraday" else "CE",
                 tradingsymbol="X", exchange="NSE_INTRADAY" if seg == "equity_intraday" else "NFO",
                 segment=seg, strategy_key=strat, strike=0.0, expiry=dt.date(2026, 7, 31), qty=10,

@@ -35,6 +35,8 @@ def _intent() -> ExecutionIntent:
     return ExecutionIntent(
         client_intent_id="entry-000000000000000000000001",
         deployment_id=1,
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
         broker="upstox",
         account_scope="account.default",
         connection_scope="connection.default",
@@ -51,7 +53,7 @@ def _intent() -> ExecutionIntent:
 
 
 def _event(client_intent_id: str, source_event_id: str = "event-1") -> ExecutionOrderEvent:
-    return ExecutionOrderEvent(
+    return ExecutionOrderEvent(owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
         client_intent_id=client_intent_id,
         source="broker",
         source_event_id=source_event_id,
@@ -65,7 +67,7 @@ def test_execution_intent_and_events_survive_a_fresh_session(tmp_path):
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
         _roots(session)
-        session.add(Deployment(id=1, name="default"))
+        session.add(Deployment(owner_id='owner', broker_account_id='account.default', id=1, name="default"))
         intent = _intent()
         session.add(intent)
         session.add(_event(intent.client_intent_id))
@@ -86,7 +88,7 @@ def test_execution_event_identity_is_unique_per_intent_and_source(tmp_path):
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
         _roots(session)
-        session.add(Deployment(id=1, name="default"))
+        session.add(Deployment(owner_id='owner', broker_account_id='account.default', id=1, name="default"))
         intent = _intent()
         session.add(intent)
         session.add(_event(intent.client_intent_id))
@@ -101,7 +103,7 @@ def test_execution_events_are_append_only_in_the_database(tmp_path):
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
         _roots(session)
-        session.add(Deployment(id=1, name="default"))
+        session.add(Deployment(owner_id='owner', broker_account_id='account.default', id=1, name="default"))
         intent = _intent()
         session.add(intent)
         session.add(_event(intent.client_intent_id))

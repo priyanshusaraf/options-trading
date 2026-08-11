@@ -89,7 +89,7 @@ def _event(kind: str, *, source_event_id: str, observed_at: dt.datetime,
 
 
 def _row(intent_id: str, event: NewExecutionEvent, observed_at: dt.datetime) -> ExecutionOrderEvent:
-    return ExecutionOrderEvent(
+    return ExecutionOrderEvent(owner_id='owner', broker_account_id='account.default',
         client_intent_id=intent_id,
         source=event.source,
         source_event_id=event.source_event_id,
