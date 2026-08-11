@@ -162,6 +162,10 @@ migration suite passed (35 tests), as did account/money isolation (106 tests) an
 
 ### Task 3: Own product, graph, research and review objects
 
+**Detailed design and execution plan:**
+- `docs/superpowers/specs/2026-08-12-user-research-ownership-design.md`
+- `docs/superpowers/plans/2026-08-12-phase1-task3-user-research-ownership.md`
+
 **Files:**
 - Create: next Alembic revision
 - Modify: `backend/app/db/models.py`, `app/db/planes.py`
@@ -174,6 +178,8 @@ migration suite passed (35 tests), as did account/money isolation (106 tests) an
 - Consumes: organization identity.
 - Produces: owner-scoped project, graph, watchlist, strategy, research and review identities.
 - Preserves: executable graph bytes and content addresses; owner is provenance, not graph content.
+- Preserves: private-only access in Task 3. An immutable “published graph revision” is not a public
+  release; sharing/publication mechanics remain behind a separate future authorization boundary.
 
 - [ ] Write tests proving two organizations can use identical human-facing names and cannot
   read each other's guessed project/graph/review IDs.
@@ -181,6 +187,9 @@ migration suite passed (35 tests), as did account/money isolation (106 tests) an
 - [ ] Add owner dimensions and tenant-local unique constraints without altering canonical IR.
 - [ ] Update repositories so scope is present in the query that loads the object.
 - [ ] Prove existing graph content addresses are byte-identical after migration.
+- [ ] Add explicit versioned migration for the separate research database; do not rely on
+  `create_all()` to mutate existing private research tables.
+- [ ] Prove identical cross-owner hashes reveal no global existence or entitlement signal.
 - [ ] Run focused user-plane, migration and IR regressions; commit.
 
 ### Task 4: Own backtests, jobs and reusable caches
