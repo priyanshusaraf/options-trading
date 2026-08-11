@@ -60,6 +60,45 @@ def test_project_and_graph_loads_require_owner_and_hide_other_owner() -> None:
         store.load_version(project_a.project_id, "owner.a.graph", 1)
 
 
+def test_load_version_uses_one_absent_shape_for_owner_graph_and_version_misses() -> None:
+    project = store.create_project("Owner A", owner_id="owner.a")
+    store.create_artifact(
+        project.project_id, "owner.a.graph", _graph("owner.a.graph"), owner_id="owner.a"
+    )
+    store.publish_draft(project.project_id, "owner.a.graph", base_revision=0, owner_id="owner.a")
+
+    def absent_shape(**request):
+        with pytest.raises(store.GraphNotFound) as caught:
+            store.load_version(**request)
+        return type(caught.value), caught.value.args, str(caught.value)
+
+    wrong_owner = absent_shape(
+        project_id=project.project_id, identifier="owner.a.graph", version=1, owner_id="owner.b"
+    )
+    absent_version = absent_shape(
+        project_id=project.project_id, identifier="owner.a.graph", version=2, owner_id="owner.a"
+    )
+    absent_graph = absent_shape(
+        project_id=project.project_id, identifier="absent.graph", version=1, owner_id="owner.a"
+    )
+
+    assert wrong_owner == absent_version == absent_graph
+
+
+def test_list_versions_hides_another_owners_graph_as_an_absent_graph() -> None:
+    project = store.create_project("Owner A", owner_id="owner.a")
+    store.create_artifact(
+        project.project_id, "owner.a.graph", _graph("owner.a.graph"), owner_id="owner.a"
+    )
+
+    with pytest.raises(store.GraphNotFound) as wrong_owner:
+        store.list_versions(project.project_id, "owner.a.graph", owner_id="owner.b")
+    with pytest.raises(store.GraphNotFound) as absent_graph:
+        store.list_versions(project.project_id, "absent.graph", owner_id="owner.a")
+
+    assert type(wrong_owner.value) is type(absent_graph.value) is store.GraphNotFound
+
+
 def test_project_version_events_do_not_duplicate_for_another_owned_project() -> None:
     project = store.create_project("First", owner_id="owner.a")
     store.create_project("Second", owner_id="owner.a")

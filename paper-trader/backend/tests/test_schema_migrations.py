@@ -948,6 +948,42 @@ def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and
         assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
 
 
+def test_revision_0020_downgrade_refuses_two_valid_owner_same_name_before_destructive_ddl(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-downgrade-two-owner-same-name.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        connection.execute(sa.text("UPDATE projects SET name = 'Shared' WHERE owner_id = 'owner'"))
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES "
+            "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO projects "
+            "(project_id,owner_id,name,description,status,created_at,updated_at) VALUES "
+            "('project.other','owner.other','Shared','payload','active',"
+            "'2026-08-11 10:00:00','2026-08-11 10:00:00')"))
+
+    before = {table: _revision_0020_contract(engine, table)
+              for table in ("projects", "graph_versions")}
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text(
+            "SELECT project_id,owner_id,name FROM projects ORDER BY project_id"
+        )).all()
+        foreign_keys = connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one()
+
+    with pytest.raises(RuntimeError, match="tenant-local project names would collide"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    assert migrate.schema_version(engine) == HEAD
+    assert {table: _revision_0020_contract(engine, table)
+            for table in ("projects", "graph_versions")} == before
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT project_id,owner_id,name FROM projects ORDER BY project_id"
+        )).all() == rows
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
 def test_revision_0020_downgrade_and_reupgrade_round_trip_legacy_owner_losslessly(tmp_path):
     engine = _at_revision_0019(tmp_path, "0020-downgrade-reupgrade.db")
     with engine.begin() as connection:

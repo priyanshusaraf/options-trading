@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import inspect
 import pytest
 from sqlalchemy import select
 
@@ -135,6 +136,31 @@ def test_different_immutable_json_cannot_claim_one_executable_identity():
                 content_address=first.content_address,
                 created_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
             ))
+
+
+def test_owner_provenance_stays_out_of_graph_bytes_hashes_and_repository_hash_lookups(monkeypatch):
+    project = store.create_project("Desk", owner_id="owner")
+    graph = _graph("strategy.desk")
+    hash_inputs = []
+    real_content_address = store.content_address
+
+    def record_hash_input(document):
+        hash_inputs.append(copy.deepcopy(document))
+        return real_content_address(document)
+
+    monkeypatch.setattr(store, "content_address", record_hash_input)
+    store.create_artifact(project.project_id, "strategy.desk", graph, owner_id="owner")
+    published = store.publish_draft(
+        project.project_id, "strategy.desk", base_revision=0, owner_id="owner"
+    )
+
+    with SessionLocal() as session:
+        version = session.get(GraphVersion, ("strategy.desk", published.version))
+
+    assert version.artifact_json == canonical_json(published.graph)
+    assert all("owner" not in document and "owner_id" not in document for document in hash_inputs)
+    assert "GraphVersion.content_address" not in inspect.getsource(store.load_version)
+    assert "GraphVersion.content_address" not in inspect.getsource(store.list_versions)
 
 
 def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(monkeypatch):

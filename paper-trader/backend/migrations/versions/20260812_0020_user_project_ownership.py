@@ -185,14 +185,14 @@ def _downgrade_refusal_check() -> None:
         return
     bind = op.get_bind()
     if bind.execute(sa.text(
+        "SELECT 1 FROM projects GROUP BY name HAVING COUNT(*) > 1 LIMIT 1"
+    )).scalar() is not None:
+        raise RuntimeError("project ownership downgrade refused: tenant-local project names would collide")
+    if bind.execute(sa.text(
         "SELECT 1 FROM projects WHERE owner_id != :owner LIMIT 1"),
         {"owner": LEGACY_OWNER_ID},
     ).scalar() is not None:
         raise RuntimeError("project ownership downgrade refused: non-legacy owner would be lost")
-    if bind.execute(sa.text(
-        "SELECT 1 FROM projects GROUP BY name HAVING COUNT(*) > 1 LIMIT 1"
-    )).scalar() is not None:
-        raise RuntimeError("project ownership downgrade refused: tenant-local project names would collide")
 
 
 def downgrade() -> None:

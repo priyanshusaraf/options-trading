@@ -586,7 +586,6 @@ def apply_presentation(
 
 def load_version(project_id: str, identifier: str, version: int, *, owner_id: str) -> PublishedGraph:
     with SessionLocal() as session:
-        _owned_artifact(session, project_id, identifier, owner_id)
         published = session.scalar(select(GraphVersion).join(
             GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier
         ).join(Project).where(
@@ -594,7 +593,7 @@ def load_version(project_id: str, identifier: str, version: int, *, owner_id: st
             GraphArtifact.project_id == project_id, Project.owner_id == owner_id,
         ))
         if published is None:
-            raise GraphNotFound((project_id, identifier, version))
+            raise GraphNotFound()
         return _published_record(project_id, published)
 
 
