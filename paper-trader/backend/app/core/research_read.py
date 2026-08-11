@@ -368,6 +368,7 @@ def project_review_source(project_id: str, *, owner_id: str) -> dict:
 
         candidates = (
             session.query(PromotionCandidate)
+            .filter(PromotionCandidate.owner_id == owner_id)
             .order_by(PromotionCandidate.id.asc()).all()
         )
         for candidate in candidates:

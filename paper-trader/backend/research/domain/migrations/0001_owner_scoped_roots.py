@@ -3,7 +3,9 @@
 VERSION = "0001"
 
 # Migration 0001 is intentionally bound to this pre-Task 1B.1 table/column
-# contract.  Future metadata changes need a new migration rather than silently
+# contract.  The runner hashes names, types, nullability, defaults, PKs, unique
+# constraints, foreign keys, indexes and immutable triggers before it calls this
+# migration. Future metadata changes need a new migration rather than silently
 # changing the historical rebuild's meaning.
 TABLE_SIGNATURE = {
     "research_block_edge": (
@@ -44,9 +46,14 @@ TABLE_SIGNATURE = {
     ),
 }
 
+# Filled from the deterministic complete contract represented by TABLE_SIGNATURE
+# and the frozen model metadata at the time 0001 was introduced.  Kept separate
+# from the explanatory table map so a reviewer can inspect the covered shape.
+SCHEMA_DIGEST = "105bb87242135b9ebb404910242470c53598290f2d36a9415d3e2f2ec0f05830"
 
-def upgrade(connection, rebuild, *, table_signature) -> None:
+
+def upgrade(connection, rebuild, *, schema_digest) -> None:
     """Run the durable owner-scoping rebuild supplied by the migration runner."""
-    if table_signature != TABLE_SIGNATURE:
+    if schema_digest != SCHEMA_DIGEST:
         raise RuntimeError("0001 owner-scoping contract does not match live metadata")
     rebuild(connection)

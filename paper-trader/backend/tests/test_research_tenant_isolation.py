@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import sqlite3
+import contextlib
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from research.domain.base import ResearchBase, init_research_db, make_engine
@@ -44,6 +45,38 @@ def test_empty_initialization_stamps_research_owned_schema_version(tmp_path):
             if column["name"] == "owner_id"
         )
         assert owner_column["nullable"] is False
+    finally:
+        engine.dispose()
+
+
+def test_c823_head_marker_is_upgraded_in_place_without_touching_payload(tmp_path):
+    """The committed one-column 0001 marker must remain a valid head database."""
+    engine = make_engine(str(tmp_path / "c823-head.db"))
+    try:
+        init_research_db(engine)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO research_program (owner_id, name, thesis, status, created_at) "
+                "VALUES ('owner', 'program', 'payload', 'active', '2026-08-12 00:00:00')"
+            )
+            before = connection.exec_driver_sql(
+                "SELECT owner_id, id, name, thesis, status, created_at FROM research_program"
+            ).all()
+            connection.exec_driver_sql("ALTER TABLE research_schema_version RENAME TO marker_old")
+            connection.exec_driver_sql(
+                "CREATE TABLE research_schema_version (version VARCHAR(16) NOT NULL PRIMARY KEY)"
+            )
+            connection.exec_driver_sql("INSERT INTO research_schema_version VALUES ('0001')")
+            connection.exec_driver_sql("DROP TABLE marker_old")
+        init_research_db(engine)
+        with engine.connect() as connection:
+            assert tuple(row[1] for row in connection.exec_driver_sql(
+                "PRAGMA table_info(research_schema_version)"
+            )) == ("version", "schema_cookie")
+            assert connection.exec_driver_sql(
+                "SELECT owner_id, id, name, thesis, status, created_at FROM research_program"
+            ).all() == before
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     finally:
         engine.dispose()
 
@@ -374,6 +407,24 @@ def test_project_reads_hide_a_foreign_run_like_an_absent_run(tmp_path, monkeypat
         owned_candidate = research_read.get_promotion(foreign_candidate_id, owner_id="owner-a")
         assert owned_candidate is not None
         assert owned_candidate["generated_source"] == "owner-a"
+        statements: list[str] = []
+
+        def capture(_conn, _cursor, statement, _parameters, _context, _many):
+            if "research_promotion_candidate" in statement:
+                statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture)
+        monkeypatch.setattr(research_read, "make_engine", lambda _path: engine)
+        try:
+            research_read.project_review_source("project", owner_id="owner-a")
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+        candidate_sql = next(
+            sql for sql in statements
+            if "FROM research_promotion_candidate" in sql
+            and "ORDER BY research_promotion_candidate.id ASC" in sql
+        )
+        assert "WHERE research_promotion_candidate.owner_id" in candidate_sql
     finally:
         engine.dispose()
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
+import json
 import re
 from collections.abc import Callable
 
@@ -324,12 +326,37 @@ def _rebuild_unversioned(connection) -> None:
     _stamp(connection)
 
 
-def _migration_table_signature() -> dict[str, tuple[str, ...]]:
-    """The 0001 contract must not silently acquire future model columns/tables."""
-    return {
-        table.name: tuple(column.name for column in table.columns)
-        for table in ResearchBase.metadata.sorted_tables
-    }
+def _migration_schema_digest(connection) -> str:
+    """Freeze every schema dimension consumed by the historical 0001 rebuild."""
+    contract = {}
+    for table in ResearchBase.metadata.sorted_tables:
+        contract[table.name] = {
+            "columns": [
+                (column.name, str(column.type.compile(dialect=connection.dialect)).upper(),
+                 bool(column.nullable), _expected_default(column, connection.dialect),
+                 bool(column.primary_key))
+                for column in table.columns
+            ],
+            "primary_key": tuple(column.name for column in table.primary_key.columns),
+            "uniques": sorted(
+                tuple(column.name for column in constraint.columns)
+                for constraint in table.constraints if isinstance(constraint, UniqueConstraint)
+            ),
+            "indexes": sorted(
+                (tuple(index.columns.keys()), bool(index.unique)) for index in table.indexes
+            ),
+            "foreign_keys": sorted(
+                (tuple(fk.column_keys), fk.referred_table.name,
+                 tuple(element.column.name for element in fk.elements))
+                for fk in table.foreign_key_constraints
+            ),
+        }
+    contract["triggers"] = sorted(
+        (name, _normalise_sql(sql)) for name, sql in _expected_triggers().items()
+    )
+    return hashlib.sha256(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _recover_interrupted_swaps(connection) -> None:
@@ -360,6 +387,15 @@ def migrate_research_db(engine: Engine) -> None:
         present_tables = _table_names(connection)
         if version == HEAD_VERSION:
             if expected_tables.issubset(present_tables):
+                # c8230d9 stamped the valid 0001 head with a one-column
+                # marker. Validate that head before adding the fast-path cookie;
+                # an invalid database must never become trusted by a marker-only
+                # upgrade.
+                if marker_cookie is None:
+                    _validate_schema(connection, include_marker=False)
+                    _stamp(connection)
+                    connection.commit()
+                    return
                 if marker_cookie == _schema_cookie(connection):
                     if int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()) != 1:
                         raise ResearchMigrationError("research foreign-key enforcement is disabled")
@@ -402,7 +438,7 @@ def migrate_research_db(engine: Engine) -> None:
             )
             migration.upgrade(
                 connection, _rebuild_unversioned,
-                table_signature=_migration_table_signature(),
+                schema_digest=_migration_schema_digest(connection),
             )
             connection.commit()
         except Exception:
