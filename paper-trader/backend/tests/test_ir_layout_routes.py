@@ -8,7 +8,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.db.models import Organization
 from app.db.session import SessionLocal, init_db
+from app.editor import graph_artifacts as graph_store
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.ir.experiment import record
 from app.ir.hashing import content_address
@@ -39,6 +42,26 @@ def client():
 
 def _position(instance_id: str = "n_ema", x: float = 12.5, y: float = -8.0):
     return {"instance_id": instance_id, "x": x, "y": y}
+
+
+def test_layout_routes_load_a_graph_owned_by_the_resolved_principal(client, monkeypatch):
+    owner_id = "owner.layout"
+    identifier = "strategy.layout_owner"
+    monkeypatch.setattr(get_settings(), "owner_id", owner_id)
+    with SessionLocal.begin() as session:
+        session.add(Organization(organization_id=owner_id, name="Layout owner"))
+    project = graph_store.create_project("Layout", owner_id=owner_id)
+    graph = copy.deepcopy(GRAPH)
+    graph["identifier"] = identifier
+    graph["version"] = 1
+    graph.pop("parent_version", None)
+    graph_store.create_artifact(project.project_id, identifier, graph, owner_id=owner_id)
+    graph_store.publish_draft(project.project_id, identifier, base_revision=0, owner_id=owner_id)
+
+    response = client.get(f"/api/ir/graphs/{identifier}/versions/1/layout")
+
+    assert response.status_code == 200
+    assert response.json()["graph_identifier"] == identifier
 
 
 def test_missing_layout_is_an_empty_revision_zero_document(client):

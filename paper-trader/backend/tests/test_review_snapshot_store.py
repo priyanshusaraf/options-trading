@@ -136,11 +136,11 @@ def test_snapshot_is_project_isolated_archived_readable_and_database_immutable()
         CATALOGUE_PROJECT_ID, label="Archive me", capture_key=CAPTURE_KEY,
         created_by="owner", source_loader=lambda _project: _source(),
     )
-    other = graph_artifacts.create_project("Other")
+    other = graph_artifacts.create_project("Other", owner_id="owner")
     with pytest.raises(review_snapshot_store.SnapshotNotFound):
         review_snapshot_store.get_snapshot(other.project_id, captured.snapshot_id)
 
-    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived")
+    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived", owner_id="owner")
     assert review_snapshot_store.get_snapshot(
         CATALOGUE_PROJECT_ID, captured.snapshot_id
     ) == captured
@@ -251,7 +251,7 @@ def test_database_refuses_delete_as_well_as_update():
 
 
 def test_capture_refuses_an_archived_project_before_reading_any_source():
-    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived")
+    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived", owner_id="owner")
 
     with pytest.raises(graph_artifacts.InvalidTransition):
         review_snapshot_store.capture_snapshot(

@@ -21,7 +21,7 @@ def _database(monkeypatch):
     init_db(reset=True)
     monkeypatch.setattr(get_settings(), "research_enabled", True)
     monkeypatch.setattr(get_settings(), "api_token", "")
-    monkeypatch.setattr(review_snapshot_store, "project_review_source", lambda _project: {
+    monkeypatch.setattr(review_snapshot_store, "project_review_source", lambda _project, *, owner_id: {
         "events": [],
         "queues": {
             "review_needed_runs": [], "pending_candidates": [], "active_findings": [],
@@ -76,7 +76,7 @@ def test_capture_retry_and_source_failure_feedback_are_exact(client, monkeypatch
     assert conflict.status_code == 409
     assert conflict.json()["code"] == "REVIEW_SNAPSHOT_CAPTURE_CONFLICT"
 
-    monkeypatch.setattr(review_snapshot_store, "project_review_source", lambda _project: {
+    monkeypatch.setattr(review_snapshot_store, "project_review_source", lambda _project, *, owner_id: {
         "events": [],
         "queues": {
             "review_needed_runs": [], "pending_candidates": [], "active_findings": [],
@@ -186,7 +186,7 @@ def test_archived_project_serves_history_but_refuses_further_capture(client):
 
     created = client.post(BASE, json=CAPTURE)
     assert created.status_code == 201
-    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived")
+    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived", owner_id="owner")
 
     assert client.get(BASE).status_code == 200
     assert client.get(f"{BASE}/{created.json()['snapshot_id']}").status_code == 200

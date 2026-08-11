@@ -9,9 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.db.models import IrGraphLayout, IrGraphLayoutPosition
+from app.core.config import get_settings
+from app.db.models import IrGraphLayout, IrGraphLayoutPosition, Organization
 from app.db.session import SessionLocal
 from app.db.session import init_db
+from app.editor import graph_artifacts as graph_store
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.ir.strategies.expanding_z import GRAPH
 
@@ -71,6 +73,28 @@ def _post_presentation(
         "base_presentation_revision": presentation_revision,
         "edits": batch,
     })
+
+
+def test_editor_routes_load_a_graph_owned_by_the_resolved_principal(client, monkeypatch):
+    owner_id = "owner.editor"
+    identifier = "strategy.editor_owner"
+    monkeypatch.setattr(get_settings(), "owner_id", owner_id)
+    with SessionLocal.begin() as session:
+        session.add(Organization(organization_id=owner_id, name="Editor owner"))
+    project = graph_store.create_project("Editor", owner_id=owner_id)
+    graph = copy.deepcopy(GRAPH)
+    graph["identifier"] = identifier
+    graph["version"] = 1
+    graph.pop("parent_version", None)
+    graph_store.create_artifact(project.project_id, identifier, graph, owner_id=owner_id)
+    graph_store.publish_draft(project.project_id, identifier, base_revision=0, owner_id=owner_id)
+
+    response = client.get(
+        f"/api/ir/projects/{project.project_id}/graphs/{identifier}/editor"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["project_id"] == project.project_id
 
 
 def _create_group(client, *, members: list[str] | None = None):

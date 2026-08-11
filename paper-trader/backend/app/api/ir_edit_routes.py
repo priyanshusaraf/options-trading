@@ -6,15 +6,15 @@ import re
 from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api import ir_layout_routes, ir_routes
+from app.api.principal import Principal, get_principal, owner_id_for
 from app.editor import descriptors
 from app.editor import graph_artifacts as store
 from app.editor import layouts
-from app.db.models import LEGACY_OWNER_ID
 from app.ir import edit as ir_edit
 from app.ir.kernels import KernelDeclarationError
 from app.ir.library import LIBRARY
@@ -668,9 +668,15 @@ def _document(
     "/projects/{project_id}/graphs/{identifier}/editor",
     response_model=EditorDocumentResponse,
 )
-def get_editor_document(project_id: str, identifier: str):
+def get_editor_document(
+    project_id: str,
+    identifier: str,
+    principal: Principal = Depends(get_principal),
+):
     try:
-        snapshot = store.load_editor_snapshot(project_id, identifier, owner_id=LEGACY_OWNER_ID)
+        snapshot = store.load_editor_snapshot(
+            project_id, identifier, owner_id=owner_id_for(principal)
+        )
         return _document(snapshot, snapshot.layout, include_receipt=False)
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc
@@ -683,7 +689,12 @@ def get_editor_document(project_id: str, identifier: str):
     response_model=EditorDocumentResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
+def post_graph_edit(
+    project_id: str,
+    identifier: str,
+    body: GraphEditRequest,
+    principal: Principal = Depends(get_principal),
+):
     try:
         return store.apply_and_publish(
             project_id,
@@ -697,7 +708,7 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
             response_factory=lambda publication, layout: _document(
                 publication, layout, include_receipt=True
             ),
-            owner_id=LEGACY_OWNER_ID,
+            owner_id=owner_id_for(principal),
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc
@@ -767,7 +778,10 @@ def post_graph_edit(project_id: str, identifier: str, body: GraphEditRequest):
     status_code=status.HTTP_201_CREATED,
 )
 def post_presentation_edit(
-    project_id: str, identifier: str, body: PresentationBatchRequest
+    project_id: str,
+    identifier: str,
+    body: PresentationBatchRequest,
+    principal: Principal = Depends(get_principal),
 ):
     operations = tuple(
         edit.model_dump(mode="python") for edit in body.edits
@@ -782,7 +796,7 @@ def post_presentation_edit(
             response_factory=lambda publication, layout: _document(
                 publication, layout, include_receipt=True
             ),
-            owner_id=LEGACY_OWNER_ID,
+            owner_id=owner_id_for(principal),
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise HTTPException(status_code=404, detail="graph artefact not found") from exc

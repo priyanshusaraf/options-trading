@@ -635,6 +635,7 @@ def list_project_version_events(
         rows = session.execute(
             select(GraphVersion, GraphArtifact)
             .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
+            .join(Project, Project.project_id == GraphArtifact.project_id)
             .where(GraphArtifact.project_id == project_id, Project.owner_id == owner_id)
             .order_by(GraphVersion.created_at, GraphVersion.graph_identifier, GraphVersion.version)
         ).all()

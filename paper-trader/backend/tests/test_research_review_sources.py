@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core import research_read
+from app.core import review_aggregation
 from app.core.config import get_settings
 from app.db.session import init_db
 from app.editor.graph_artifacts import (
@@ -89,13 +90,21 @@ def _seed_candidates(run_id: int) -> tuple[int, int]:
 
 
 def test_project_graph_version_source_verifies_owned_immutable_rows():
-    events = list_project_version_events(CATALOGUE_PROJECT_ID)
+    events = list_project_version_events(CATALOGUE_PROJECT_ID, owner_id="owner")
 
     assert [(item.identifier, item.version) for item in events] == [(IDENTIFIER, VERSION)]
     assert events[0].content_address.startswith("sha256:")
     assert events[0].created_at is not None
     with pytest.raises(ProjectNotFound):
-        list_project_version_events("project.other")
+        list_project_version_events("project.other", owner_id="owner")
+
+
+def test_review_aggregation_requires_the_callers_graph_owner_scope():
+    source = review_aggregation.project_review_source(CATALOGUE_PROJECT_ID, owner_id="owner")
+
+    assert [event["event_id"] for event in source["events"]] == [
+        f"graph:{IDENTIFIER}:{VERSION}"
+    ]
 
 
 def test_project_review_source_derives_events_and_current_queues_once(client, monkeypatch):

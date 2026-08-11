@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from sqlalchemy import select
@@ -184,12 +185,18 @@ def capture_snapshot(
     capture_key: str,
     created_by: str,
     source_loader: Callable[[str], Mapping[str, Any]] | None = None,
+    graph_owner_id: str | None = None,
 ) -> ReviewSnapshot:
     normalized_label = _label(label)
     normalized_key = _capture_key(capture_key)
     if created_by != "owner":
         raise SnapshotCaptureRejected("snapshot owner is invalid")
-    loader = project_review_source if source_loader is None else source_loader
+    if source_loader is None:
+        if graph_owner_id is None:
+            raise SnapshotCaptureRejected("graph source owner is required")
+        loader = partial(project_review_source, owner_id=graph_owner_id)
+    else:
+        loader = source_loader
 
     with SessionLocal() as session:
         existing = _existing(session, project_id, normalized_key)

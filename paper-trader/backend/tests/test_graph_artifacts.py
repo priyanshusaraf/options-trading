@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
-from functools import partial
-
 import pytest
 from sqlalchemy import select
 
@@ -13,18 +11,6 @@ from app.db.session import SessionLocal, init_db
 from app.editor import graph_artifacts as store
 from app.ir.hashing import canonical_json, content_address
 from app.ir.strategies.expanding_z import GRAPH
-
-
-@pytest.fixture(autouse=True)
-def _legacy_owner_scope(monkeypatch):
-    """Existing behaviour tests exercise the explicit legacy composition seam."""
-    for name in (
-        "create_project", "set_project_status", "list_projects", "create_artifact",
-        "load_draft", "load_editor_snapshot", "save_draft", "publish_draft",
-        "apply_and_publish", "apply_presentation", "load_version", "list_versions",
-        "list_project_version_events", "load_owned_version_for_experiment",
-    ):
-        monkeypatch.setattr(store, name, partial(getattr(store, name), owner_id="owner"))
 
 
 @pytest.fixture(autouse=True)
@@ -42,8 +28,8 @@ def _graph(identifier: str, display_name: str = "Test graph") -> dict:
 
 
 def test_project_owns_an_optimistic_graph_draft():
-    project = store.create_project("Desk", "Editor work")
-    created = store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
+    project = store.create_project("Desk", "Editor work", owner_id="owner")
+    created = store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
 
     assert created.project_id == project.project_id
     assert created.identifier == "strategy.desk"
@@ -52,63 +38,63 @@ def test_project_owns_an_optimistic_graph_draft():
     assert created.graph["identifier"] == "strategy.desk"
     assert created.graph["version"] == 1
     assert "parent_version" not in created.graph
-    assert store.load_draft(project.project_id, "strategy.desk") == created
+    assert store.load_draft(project.project_id, "strategy.desk", owner_id="owner") == created
 
 
 def test_draft_revision_conflict_keeps_the_winning_document():
-    project = store.create_project("Desk")
-    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
+    project = store.create_project("Desk", owner_id="owner")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
 
     winner_graph = _graph("strategy.desk", "Winner")
     winner = store.save_draft(
-        project.project_id, "strategy.desk", base_revision=0, graph=winner_graph
+        project.project_id, "strategy.desk", base_revision=0, graph=winner_graph, owner_id="owner"
     )
     with pytest.raises(store.GraphConflict) as caught:
         store.save_draft(
             project.project_id,
             "strategy.desk",
             base_revision=0,
-            graph=_graph("strategy.desk", "Stale"),
+            graph=_graph("strategy.desk", "Stale"), owner_id="owner",
         )
 
     assert caught.value.current_revision == 1
-    assert store.load_draft(project.project_id, "strategy.desk") == winner
+    assert store.load_draft(project.project_id, "strategy.desk", owner_id="owner") == winner
 
 
 def test_ownership_and_archive_state_fail_closed():
-    owner = store.create_project("Owner")
-    other = store.create_project("Other")
-    store.create_artifact(owner.project_id, "strategy.owner", _graph("strategy.owner"))
+    owner = store.create_project("Owner", owner_id="owner")
+    other = store.create_project("Other", owner_id="owner")
+    store.create_artifact(owner.project_id, "strategy.owner", _graph("strategy.owner"), owner_id="owner")
 
     with pytest.raises(store.GraphNotFound):
-        store.load_draft(other.project_id, "strategy.owner")
+        store.load_draft(other.project_id, "strategy.owner", owner_id="owner")
 
-    archived = store.set_project_status(owner.project_id, "archived")
+    archived = store.set_project_status(owner.project_id, "archived", owner_id="owner")
     assert archived.status == "archived"
     with pytest.raises(store.InvalidTransition, match="archived"):
         store.save_draft(
             owner.project_id,
             "strategy.owner",
             base_revision=0,
-            graph=_graph("strategy.owner", "Blocked"),
+            graph=_graph("strategy.owner", "Blocked"), owner_id="owner",
         )
-    restored = store.set_project_status(owner.project_id, "active")
+    restored = store.set_project_status(owner.project_id, "active", owner_id="owner")
     assert restored.status == "active"
     assert store.save_draft(
         owner.project_id,
         "strategy.owner",
         base_revision=0,
-        graph=_graph("strategy.owner", "Restored"),
+        graph=_graph("strategy.owner", "Restored"), owner_id="owner",
     ).revision == 1
     with pytest.raises(store.InvalidTransition):
-        store.set_project_status(owner.project_id, "deleted")
+        store.set_project_status(owner.project_id, "deleted", owner_id="owner")
 
 
 def test_publish_is_append_only_and_server_assigns_version_identity():
-    project = store.create_project("Desk")
-    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
+    project = store.create_project("Desk", owner_id="owner")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
 
-    first = store.publish_draft(project.project_id, "strategy.desk", base_revision=0)
+    first = store.publish_draft(project.project_id, "strategy.desk", base_revision=0, owner_id="owner")
     assert first.version == 1
     assert first.graph["version"] == 1
     assert "parent_version" not in first.graph
@@ -118,23 +104,23 @@ def test_publish_is_append_only_and_server_assigns_version_identity():
         project.project_id,
         "strategy.desk",
         base_revision=0,
-        graph=_graph("strategy.desk", "Second"),
+        graph=_graph("strategy.desk", "Second"), owner_id="owner",
     )
     assert draft.graph["version"] == 2
     assert draft.graph["parent_version"] == 1
-    second = store.publish_draft(project.project_id, "strategy.desk", base_revision=1)
+    second = store.publish_draft(project.project_id, "strategy.desk", base_revision=1, owner_id="owner")
 
     assert second.version == 2
     assert second.graph["display_name"] == "Second"
-    assert first == store.load_version(project.project_id, "strategy.desk", 1)
+    assert first == store.load_version(project.project_id, "strategy.desk", 1, owner_id="owner")
     with pytest.raises(store.InvalidTransition, match="already published"):
-        store.publish_draft(project.project_id, "strategy.desk", base_revision=1)
+        store.publish_draft(project.project_id, "strategy.desk", base_revision=1, owner_id="owner")
 
 
 def test_different_immutable_json_cannot_claim_one_executable_identity():
-    project = store.create_project("Desk")
-    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
-    first = store.publish_draft(project.project_id, "strategy.desk", base_revision=0)
+    project = store.create_project("Desk", owner_id="owner")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
+    first = store.publish_draft(project.project_id, "strategy.desk", base_revision=0, owner_id="owner")
     different = copy.deepcopy(first.graph)
     different["version"] = 2
     different["parent_version"] = 1
@@ -152,15 +138,15 @@ def test_different_immutable_json_cannot_claim_one_executable_identity():
 
 
 def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(monkeypatch):
-    project = store.create_project("Desk")
-    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"))
+    project = store.create_project("Desk", owner_id="owner")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
 
     def fail_after_insert(*_args):
         raise RuntimeError("injected failure after immutable version insert")
 
     monkeypatch.setattr(store, "_after_version_insert", fail_after_insert)
     with pytest.raises(RuntimeError, match="injected failure"):
-        store.publish_draft(project.project_id, "strategy.desk", base_revision=0)
+        store.publish_draft(project.project_id, "strategy.desk", base_revision=0, owner_id="owner")
 
     with SessionLocal() as session:
         artifact = session.get(GraphArtifact, "strategy.desk")
@@ -197,6 +183,7 @@ def test_identity_changing_edit_creates_reconciled_presentation_head():
         presentation_operations=(),
         transform=add_constant,
         response_factory=lambda published, carried: (published, carried),
+        owner_id="owner",
     )
 
     assert publication.published.version == GRAPH["version"] + 1

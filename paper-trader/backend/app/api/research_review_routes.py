@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.principal import Principal, get_principal, require
+from app.api.principal import Principal, get_principal, owner_id_for, require
 from app.core import review_snapshot_store, review_state
 from app.core.config import get_settings
 from app.core.review_aggregation import project_review_source
@@ -108,6 +108,7 @@ def get_project_review(
     status: list[str] | None = Query(default=None),
     after: str | None = Query(default=None, max_length=40),
     before: str | None = Query(default=None, max_length=40),
+    principal: Principal = Depends(get_principal),
 ):
     """Derive verified timeline facts without invoking any research write or run seam."""
     unknown = sorted(set(request.query_params) - _QUERY_FIELDS)
@@ -119,7 +120,9 @@ def get_project_review(
         return _query_rejected("review filters must not contain duplicates")
 
     try:
-        project_source = project_review_source(project_id)
+        project_source = project_review_source(
+            project_id, owner_id=owner_id_for(principal)
+        )
     except store.ProjectNotFound as exc:
         raise HTTPException(status_code=404, detail="project not found") from exc
     source_errors = list(project_source["source_errors"])
@@ -242,8 +245,8 @@ _STATE_EXCEPTIONS = (
 )
 
 
-def _event_types(project_id: str) -> dict[str, str]:
-    source = project_review_source(project_id)
+def _event_types(project_id: str, *, owner_id: str) -> dict[str, str]:
+    source = project_review_source(project_id, owner_id=owner_id)
     return {event["event_id"]: event["type"] for event in source["events"]}
 
 
@@ -394,6 +397,7 @@ def post_review_snapshot(
             label=body.label,
             capture_key=body.capture_key,
             created_by=actor,
+            graph_owner_id=owner_id_for(principal),
         )
     except _SNAPSHOT_EXCEPTIONS as exc:
         return _snapshot_error(exc)
@@ -472,7 +476,9 @@ def search_project_review(
         return _search_rejected(str(exc))
 
     try:
-        source = project_review_source(project_id)
+        source = project_review_source(
+            project_id, owner_id=owner_id_for(principal)
+        )
         notes = review_state.list_notes(project_id)
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -527,7 +533,7 @@ def get_review_notes(
 ):
     _owner(principal, "read review notes", project_id)
     try:
-        event_types = _event_types(project_id)
+        event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         notes = review_state.list_notes(project_id)
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -545,7 +551,7 @@ def post_review_note(
 ):
     actor = _owner(principal, "create review note", project_id)
     try:
-        event_types = _event_types(project_id)
+        event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         event_type = event_types.get(body.event_id)
         if event_type is None:
             return JSONResponse(
@@ -576,7 +582,7 @@ def patch_review_note(
 ):
     _owner(principal, "update review note", project_id)
     try:
-        event_types = _event_types(project_id)
+        event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         note = review_state.update_note(
             project_id, note_id, base_revision=body.base_revision, body=body.body
         )

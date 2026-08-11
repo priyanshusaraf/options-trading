@@ -37,7 +37,7 @@ def test_note_create_reload_update_delete_preserves_immutable_anchor():
 
 
 def test_note_stale_and_wrong_project_writes_make_no_partial_change():
-    other = graph_artifacts.create_project("Other")
+    other = graph_artifacts.create_project("Other", owner_id="owner")
     note = review_state.create_note(
         CATALOGUE_PROJECT_ID, event_id="run:12", event_type="experiment_run",
         body="Keep exact context.", created_by="owner",
@@ -126,7 +126,7 @@ def test_review_state_never_changes_graph_or_presentation_identity():
     from app.editor.graph_artifacts import load_editor_snapshot
     from app.ir.hashing import content_address
 
-    before = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse")
+    before = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse", owner_id="owner")
     note = review_state.create_note(
         CATALOGUE_PROJECT_ID,
         event_id="graph:strategy.expanding_z_impulse:4",
@@ -137,7 +137,7 @@ def test_review_state_never_changes_graph_or_presentation_identity():
         CATALOGUE_PROJECT_ID, name="Published", filters={"status": "published"},
         created_by="owner",
     )
-    after = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse")
+    after = load_editor_snapshot(CATALOGUE_PROJECT_ID, "strategy.expanding_z_impulse", owner_id="owner")
 
     assert note.note_id and view.view_id
     assert after == before
@@ -162,7 +162,7 @@ def test_review_state_rejects_invalid_values_and_archived_writes():
             created_by="owner",
         )
 
-    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived")
+    graph_artifacts.set_project_status(CATALOGUE_PROJECT_ID, "archived", owner_id="owner")
     with pytest.raises(graph_artifacts.InvalidTransition):
         review_state.create_note(
             CATALOGUE_PROJECT_ID, event_id="run:1", event_type="experiment_run",

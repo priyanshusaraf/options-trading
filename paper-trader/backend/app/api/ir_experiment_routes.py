@@ -11,8 +11,8 @@ from app.core.config import get_settings
 from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
+from app.api.principal import Principal, get_principal, owner_id_for
 from app.editor import graph_artifacts as store
-from app.db.models import LEGACY_OWNER_ID
 from app.editor.comparison import GraphComparisonRejected, compare_graph_versions
 from research.compare import compare_experiment_evidence
 from research.config import research_db_path
@@ -258,6 +258,7 @@ def post_graph_experiment(
     identifier: str,
     version: int,
     body: GraphExperimentRequest,
+    principal: Principal = Depends(get_principal),
 ) -> GraphExperimentResponse:
     if version < 1:
         raise _error(
@@ -267,7 +268,7 @@ def post_graph_experiment(
         )
     try:
         published = store.load_owned_version_for_experiment(
-            project_id, identifier, version, owner_id=LEGACY_OWNER_ID
+            project_id, identifier, version, owner_id=owner_id_for(principal)
         )
     except store.ProjectNotFound as exc:
         raise _error(404, "EXPERIMENT_PROJECT_NOT_FOUND", "project not found") from exc
@@ -412,11 +413,11 @@ def post_graph_experiment_comparison(
 
 
 def _load_comparison_graph(
-    project_id: str, selection: VersionComparisonSelection
+    project_id: str, selection: VersionComparisonSelection, *, owner_id: str
 ):
     try:
         return store.load_version(
-            project_id, selection.graph_identifier, selection.graph_version, owner_id=LEGACY_OWNER_ID
+            project_id, selection.graph_identifier, selection.graph_version, owner_id=owner_id
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _error(
@@ -480,10 +481,13 @@ def _comparison_run(
     response_model=VersionComparisonResponse,
 )
 def post_version_comparison(
-    project_id: str, body: VersionComparisonRequest
+    project_id: str,
+    body: VersionComparisonRequest,
+    principal: Principal = Depends(get_principal),
 ) -> VersionComparisonResponse:
-    left_graph = _load_comparison_graph(project_id, body.left)
-    right_graph = _load_comparison_graph(project_id, body.right)
+    owner_id = owner_id_for(principal)
+    left_graph = _load_comparison_graph(project_id, body.left, owner_id=owner_id)
+    right_graph = _load_comparison_graph(project_id, body.right, owner_id=owner_id)
     try:
         graph_result = compare_graph_versions(
             {"graph": left_graph.graph, "content_address": left_graph.content_address},

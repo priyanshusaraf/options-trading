@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.editor import graph_artifacts as store
-from app.db.models import LEGACY_OWNER_ID
+from app.api.principal import Principal, get_principal, owner_id_for
 
 
 router = APIRouter(prefix="/api/ir")
@@ -116,8 +116,8 @@ def _not_found(exc: Exception) -> HTTPException:
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
-def get_projects() -> list[ProjectResponse]:
-    return [_project_response(project) for project in store.list_projects(owner_id=LEGACY_OWNER_ID)]
+def get_projects(principal: Principal = Depends(get_principal)) -> list[ProjectResponse]:
+    return [_project_response(project) for project in store.list_projects(owner_id=owner_id_for(principal))]
 
 
 @router.post(
@@ -125,16 +125,16 @@ def get_projects() -> list[ProjectResponse]:
     response_model=ProjectResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def post_project(body: ProjectCreateRequest) -> ProjectResponse:
-    return _project_response(store.create_project(body.name, body.description, owner_id=LEGACY_OWNER_ID))
+def post_project(body: ProjectCreateRequest, principal: Principal = Depends(get_principal)) -> ProjectResponse:
+    return _project_response(store.create_project(body.name, body.description, owner_id=owner_id_for(principal)))
 
 
 @router.put("/projects/{project_id}/status", response_model=ProjectResponse)
 def put_project_status(
-    project_id: str, body: ProjectStatusRequest
+    project_id: str, body: ProjectStatusRequest, principal: Principal = Depends(get_principal)
 ) -> ProjectResponse:
     try:
-        return _project_response(store.set_project_status(project_id, body.status, owner_id=LEGACY_OWNER_ID))
+        return _project_response(store.set_project_status(project_id, body.status, owner_id=owner_id_for(principal)))
     except store.ProjectNotFound as exc:
         raise _not_found(exc) from exc
     except store.InvalidTransition as exc:
@@ -146,12 +146,12 @@ def put_project_status(
     response_model=list[PublishedGraphIdentityResponse],
 )
 def get_graph_versions(
-    project_id: str, identifier: str
+    project_id: str, identifier: str, principal: Principal = Depends(get_principal)
 ) -> list[PublishedGraphIdentityResponse]:
     try:
         return [
             PublishedGraphIdentityResponse(**vars(version))
-            for version in store.list_versions(project_id, identifier, owner_id=LEGACY_OWNER_ID)
+            for version in store.list_versions(project_id, identifier, owner_id=owner_id_for(principal))
         ]
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _not_found(exc) from exc
@@ -165,11 +165,11 @@ def get_graph_versions(
     status_code=status.HTTP_201_CREATED,
 )
 def post_graph_artifact(
-    project_id: str, body: GraphArtifactCreateRequest
+    project_id: str, body: GraphArtifactCreateRequest, principal: Principal = Depends(get_principal)
 ) -> GraphDraftResponse:
     try:
         return _draft_response(
-            store.create_artifact(project_id, body.identifier, body.graph, owner_id=LEGACY_OWNER_ID)
+            store.create_artifact(project_id, body.identifier, body.graph, owner_id=owner_id_for(principal))
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _not_found(exc) from exc
@@ -191,9 +191,9 @@ def post_graph_artifact(
     "/projects/{project_id}/graphs/{identifier}/draft",
     response_model=GraphDraftResponse,
 )
-def get_graph_draft(project_id: str, identifier: str) -> GraphDraftResponse:
+def get_graph_draft(project_id: str, identifier: str, principal: Principal = Depends(get_principal)) -> GraphDraftResponse:
     try:
-        return _draft_response(store.load_draft(project_id, identifier, owner_id=LEGACY_OWNER_ID))
+        return _draft_response(store.load_draft(project_id, identifier, owner_id=owner_id_for(principal)))
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _not_found(exc) from exc
 
@@ -204,14 +204,14 @@ def get_graph_draft(project_id: str, identifier: str) -> GraphDraftResponse:
     status_code=status.HTTP_201_CREATED,
 )
 def post_graph_version(
-    project_id: str, identifier: str, body: GraphPublishRequest
+    project_id: str, identifier: str, body: GraphPublishRequest, principal: Principal = Depends(get_principal)
 ):
     try:
         return _published_response(store.publish_draft(
             project_id,
             identifier,
             base_revision=body.base_revision,
-            owner_id=LEGACY_OWNER_ID,
+            owner_id=owner_id_for(principal),
         ))
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _not_found(exc) from exc
@@ -234,11 +234,11 @@ def post_graph_version(
     response_model=PublishedGraphResponse,
 )
 def get_graph_version(
-    project_id: str, identifier: str, version: int
+    project_id: str, identifier: str, version: int, principal: Principal = Depends(get_principal)
 ) -> PublishedGraphResponse:
     try:
         return _published_response(
-            store.load_version(project_id, identifier, version, owner_id=LEGACY_OWNER_ID)
+            store.load_version(project_id, identifier, version, owner_id=owner_id_for(principal))
         )
     except (store.ProjectNotFound, store.GraphNotFound) as exc:
         raise _not_found(exc) from exc

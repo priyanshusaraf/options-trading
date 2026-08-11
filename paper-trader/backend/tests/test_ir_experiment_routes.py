@@ -5,7 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.db.session import init_db
+from app.db.models import Organization
+from app.db.session import SessionLocal, init_db
 from app.db.session import engine as execution_engine
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.editor import graph_artifacts as graph_store
@@ -95,6 +96,32 @@ def test_starts_existing_experiment_from_exact_project_owned_version(client):
     assert mirrored.json()["run_id"] != body["run_id"]
 
 
+def test_experiment_route_loads_a_graph_owned_by_the_resolved_principal(client, monkeypatch):
+    owner_id = "owner.experiment"
+    identifier = "strategy.experiment_owner"
+    monkeypatch.setattr(get_settings(), "owner_id", owner_id)
+    with SessionLocal.begin() as session:
+        session.add(Organization(organization_id=owner_id, name="Experiment owner"))
+    project = graph_store.create_project("Experiment", owner_id=owner_id)
+    graph = copy.deepcopy(GRAPH)
+    graph["identifier"] = identifier
+    graph["version"] = 1
+    graph.pop("parent_version", None)
+    graph_store.create_artifact(project.project_id, identifier, graph, owner_id=owner_id)
+    published = graph_store.publish_draft(
+        project.project_id, identifier, base_revision=0, owner_id=owner_id
+    )
+
+    response = client.post(
+        f"/api/ir/projects/{project.project_id}/graphs/{identifier}/versions/"
+        f"{published.version}/experiments",
+        json=_request(),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["binding"]["graph"]["project_id"] == project.project_id
+
+
 def test_raw_graph_and_client_selected_identity_are_rejected(client):
     for forbidden in (
         {"graph": copy.deepcopy(GRAPH)},
@@ -180,7 +207,7 @@ def test_wrong_owner_and_unpublished_graph_are_rejected(client):
 
 
 def test_unpublished_draft_cannot_be_mistaken_for_the_selected_version(client):
-    draft = graph_store.load_draft(CATALOGUE_PROJECT_ID, IDENTIFIER)
+    draft = graph_store.load_draft(CATALOGUE_PROJECT_ID, IDENTIFIER, owner_id="owner")
     graph = copy.deepcopy(draft.graph)
     graph["display_name"] = "Unpublished mutable intent"
     graph_store.save_draft(
@@ -188,6 +215,7 @@ def test_unpublished_draft_cannot_be_mistaken_for_the_selected_version(client):
         IDENTIFIER,
         base_revision=draft.revision,
         graph=graph,
+        owner_id="owner",
     )
 
     response = client.post(URL, json=_request())

@@ -58,3 +58,14 @@ def test_project_and_graph_loads_require_owner_and_hide_other_owner() -> None:
         store.load_draft(project_a.project_id, "owner.a.graph")
     with pytest.raises(TypeError):
         store.load_version(project_a.project_id, "owner.a.graph", 1)
+
+
+def test_project_version_events_do_not_duplicate_for_another_owned_project() -> None:
+    project = store.create_project("First", owner_id="owner.a")
+    store.create_project("Second", owner_id="owner.a")
+    store.create_artifact(project.project_id, "owner.a.events", _graph("owner.a.events"), owner_id="owner.a")
+    store.publish_draft(project.project_id, "owner.a.events", base_revision=0, owner_id="owner.a")
+
+    assert [event.identifier for event in store.list_project_version_events(
+        project.project_id, owner_id="owner.a"
+    )] == ["owner.a.events"]

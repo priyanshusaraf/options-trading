@@ -1,13 +1,13 @@
 """Sparse presentation-state routes for the IR graph editor."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.editor import graph_artifacts
 from app.editor import layouts as ir_layouts
-from app.db.models import LEGACY_OWNER_ID
+from app.api.principal import Principal, get_principal, owner_id_for
 
 
 router = APIRouter(prefix="/api/ir")
@@ -57,9 +57,9 @@ class IrLayoutResponse(BaseModel):
     groups: list[IrLayoutGroup]
 
 
-def _graph(identifier: str, version: int):
+def _graph(identifier: str, version: int, *, owner_id: str):
     try:
-        return graph_artifacts.load_published_graph(identifier, version, owner_id=LEGACY_OWNER_ID).graph
+        return graph_artifacts.load_published_graph(identifier, version, owner_id=owner_id).graph
     except graph_artifacts.GraphNotFound as exc:
         raise HTTPException(
             status_code=404,
@@ -102,8 +102,12 @@ def layout_response(layout: ir_layouts.Layout) -> IrLayoutResponse:
     "/graphs/{identifier}/versions/{version}/layout",
     response_model=IrLayoutResponse,
 )
-def get_layout(identifier: str, version: int) -> IrLayoutResponse:
-    graph = _graph(identifier, version)
+def get_layout(
+    identifier: str,
+    version: int,
+    principal: Principal = Depends(get_principal),
+) -> IrLayoutResponse:
+    graph = _graph(identifier, version, owner_id=owner_id_for(principal))
     return layout_response(ir_layouts.load_layout(
         identifier,
         version,
@@ -115,8 +119,13 @@ def get_layout(identifier: str, version: int) -> IrLayoutResponse:
     "/graphs/{identifier}/versions/{version}/layout",
     response_model=IrLayoutResponse,
 )
-def put_layout(identifier: str, version: int, body: IrLayoutWrite):
-    graph = _graph(identifier, version)
+def put_layout(
+    identifier: str,
+    version: int,
+    body: IrLayoutWrite,
+    principal: Principal = Depends(get_principal),
+):
+    graph = _graph(identifier, version, owner_id=owner_id_for(principal))
     valid_ids = _authored_ids(graph)
     ids = [position.instance_id for position in body.positions]
     if len(ids) != len(set(ids)):
