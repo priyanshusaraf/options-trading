@@ -762,9 +762,10 @@ def test_failure_after_layout_prepare_rolls_back_graph_and_layout(client, monkey
     assert draft["current_version"] == GRAPH["version"]
     with SessionLocal() as session:
         assert session.get(
-            IrGraphLayout, (IDENTIFIER, GRAPH["version"] + 1)
+            IrGraphLayout, ("owner", IDENTIFIER, GRAPH["version"] + 1)
         ) is None
         positions = tuple(session.scalars(select(IrGraphLayoutPosition).where(
+            IrGraphLayoutPosition.owner_id == "owner",
             IrGraphLayoutPosition.graph_identifier == IDENTIFIER,
             IrGraphLayoutPosition.graph_version == GRAPH["version"] + 1,
         )))

@@ -155,7 +155,7 @@ def test_owner_provenance_stays_out_of_graph_bytes_hashes_and_repository_hash_lo
     )
 
     with SessionLocal() as session:
-        version = session.get(GraphVersion, ("strategy.desk", published.version))
+        version = session.get(GraphVersion, ("owner", "strategy.desk", published.version))
 
     assert version.artifact_json == canonical_json(published.graph)
     assert all("owner" not in document and "owner_id" not in document for document in hash_inputs)
@@ -175,8 +175,9 @@ def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(mon
         store.publish_draft(project.project_id, "strategy.desk", base_revision=0, owner_id="owner")
 
     with SessionLocal() as session:
-        artifact = session.get(GraphArtifact, "strategy.desk")
+        artifact = session.get(GraphArtifact, ("owner", "strategy.desk"))
         versions = tuple(session.scalars(select(GraphVersion).where(
+            GraphVersion.owner_id == "owner",
             GraphVersion.graph_identifier == "strategy.desk"
         )))
     assert artifact.current_version is None

@@ -49,14 +49,14 @@ def _graph_document(version: int = 1) -> dict:
 
 def seed_graph(session, version: int = 1) -> GraphVersion:
     if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, name="paper"))
-    if session.get(GraphArtifact, GRAPH) is None:
-        session.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                   display_name="mirror", draft_json="{}",
                                   draft_revision=0))
     session.flush()
     document = _graph_document(version)
-    row = GraphVersion(graph_identifier=GRAPH, version=version,
+    row = GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
                        artifact_json=canonical_json(document),
                        content_address=content_address(document))
     session.add(row)

@@ -196,10 +196,9 @@ def _owned_artifact(
     session: Session, project_id: str, identifier: str, owner_id: str
 ) -> GraphArtifact:
     artifact = session.scalar(select(GraphArtifact).where(
+        GraphArtifact.owner_id == owner_id,
         GraphArtifact.identifier == identifier,
         GraphArtifact.project_id == project_id,
-        GraphArtifact.project_id == Project.project_id,
-        Project.owner_id == owner_id,
     ))
     if artifact is None:
         raise GraphNotFound((project_id, identifier))
@@ -292,11 +291,12 @@ def create_artifact(
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
         _active_project(session, project_id, owner_id)
-        existing = session.get(GraphArtifact, identifier)
+        existing = session.get(GraphArtifact, (owner_id, identifier))
         if existing is not None:
             raise GraphConflict(existing.draft_revision)
         document, encoded = _normalise_graph(identifier, graph, current_version=None)
         artifact = GraphArtifact(
+            owner_id=owner_id,
             identifier=identifier,
             project_id=project_id,
             display_name=str(document["display_name"]),
@@ -329,7 +329,7 @@ def load_editor_snapshot(project_id: str, identifier: str, *, owner_id: str) -> 
             raise InvalidTransition("graph has no published version")
         if artifact.published_revision != artifact.draft_revision:
             raise InvalidTransition("graph has unpublished draft changes")
-        version = session.get(GraphVersion, (identifier, artifact.current_version))
+        version = session.get(GraphVersion, (owner_id, identifier, artifact.current_version))
         if version is None:
             raise GraphNotFound((project_id, identifier, artifact.current_version))
         published = _published_record(project_id, version)
@@ -346,14 +346,16 @@ def load_editor_snapshot(project_id: str, identifier: str, *, owner_id: str) -> 
 def load_published_graph(identifier: str, version: int, *, owner_id: str) -> PublishedGraph:
     """Load one globally identified immutable graph for presentation routes."""
     with SessionLocal() as session:
-        artifact = session.scalar(select(GraphArtifact).join(Project).where(
-            GraphArtifact.identifier == identifier, Project.owner_id == owner_id,
+        artifact = session.scalar(select(GraphArtifact).where(
+            GraphArtifact.owner_id == owner_id, GraphArtifact.identifier == identifier,
         ))
         published = session.scalar(select(GraphVersion).join(
-            GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier
-        ).join(Project).where(
+            GraphArtifact,
+            (GraphArtifact.owner_id == GraphVersion.owner_id)
+            & (GraphArtifact.identifier == GraphVersion.graph_identifier),
+        ).where(
+            GraphVersion.owner_id == owner_id,
             GraphVersion.graph_identifier == identifier, GraphVersion.version == version,
-            Project.owner_id == owner_id,
         ))
         if artifact is None or published is None:
             raise GraphNotFound((identifier, version))
@@ -381,6 +383,7 @@ def save_draft(
             update(GraphArtifact)
             .where(
                 GraphArtifact.identifier == identifier,
+                GraphArtifact.owner_id == owner_id,
                 GraphArtifact.project_id == project_id,
                 GraphArtifact.draft_revision == base_revision,
             )
@@ -426,6 +429,7 @@ def publish_draft(
         )
         _require_resolvable(document)
         version = GraphVersion(
+            owner_id=owner_id,
             graph_identifier=identifier,
             version=int(document["version"]),
             artifact_json=encoded,
@@ -477,6 +481,7 @@ def apply_and_publish(
         _require_resolvable(document)
         next_revision = base_revision + 1
         version = GraphVersion(
+            owner_id=owner_id,
             graph_identifier=identifier,
             version=int(document["version"]),
             artifact_json=encoded,
@@ -508,6 +513,7 @@ def apply_and_publish(
             update(GraphArtifact)
             .where(
                 GraphArtifact.identifier == identifier,
+                GraphArtifact.owner_id == owner_id,
                 GraphArtifact.project_id == project_id,
                 GraphArtifact.draft_revision == base_revision,
             )
@@ -560,7 +566,7 @@ def apply_presentation(
             raise InvalidTransition("graph has no published version")
         if artifact.published_revision != artifact.draft_revision:
             raise InvalidTransition("graph has unpublished draft changes")
-        version = session.get(GraphVersion, (identifier, artifact.current_version))
+        version = session.get(GraphVersion, (owner_id, identifier, artifact.current_version))
         if version is None:
             raise GraphNotFound((project_id, identifier, artifact.current_version))
         published = _published_record(project_id, version)
@@ -590,10 +596,13 @@ def apply_presentation(
 def load_version(project_id: str, identifier: str, version: int, *, owner_id: str) -> PublishedGraph:
     with SessionLocal() as session:
         published = session.scalar(select(GraphVersion).join(
-            GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier
-        ).join(Project).where(
+            GraphArtifact,
+            (GraphArtifact.owner_id == GraphVersion.owner_id)
+            & (GraphArtifact.identifier == GraphVersion.graph_identifier),
+        ).where(
+            GraphVersion.owner_id == owner_id,
             GraphVersion.graph_identifier == identifier, GraphVersion.version == version,
-            GraphArtifact.project_id == project_id, Project.owner_id == owner_id,
+            GraphArtifact.project_id == project_id, GraphArtifact.owner_id == owner_id,
         ))
         if published is None:
             raise GraphNotFound()
@@ -607,10 +616,10 @@ def list_versions(
         _owned_artifact(session, project_id, identifier, owner_id)
         versions = session.scalars(
             select(GraphVersion)
-            .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
-            .join(Project)
-            .where(GraphVersion.graph_identifier == identifier, GraphArtifact.project_id == project_id,
-                   Project.owner_id == owner_id)
+            .join(GraphArtifact, (GraphArtifact.owner_id == GraphVersion.owner_id)
+                  & (GraphArtifact.identifier == GraphVersion.graph_identifier))
+            .where(GraphVersion.owner_id == owner_id, GraphVersion.graph_identifier == identifier,
+                   GraphArtifact.project_id == project_id, GraphArtifact.owner_id == owner_id)
             .order_by(GraphVersion.version)
         ).all()
         identities = []
@@ -636,9 +645,9 @@ def list_project_version_events(
             raise ProjectNotFound(project_id)
         rows = session.execute(
             select(GraphVersion, GraphArtifact)
-            .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
-            .join(Project, Project.project_id == GraphArtifact.project_id)
-            .where(GraphArtifact.project_id == project_id, Project.owner_id == owner_id)
+            .join(GraphArtifact, (GraphArtifact.owner_id == GraphVersion.owner_id)
+                  & (GraphArtifact.identifier == GraphVersion.graph_identifier))
+            .where(GraphArtifact.project_id == project_id, GraphArtifact.owner_id == owner_id)
             .order_by(GraphVersion.created_at, GraphVersion.graph_identifier, GraphVersion.version)
         ).all()
         events = []
@@ -666,10 +675,12 @@ def load_owned_version_for_experiment(
         if artifact.published_revision != artifact.draft_revision:
             raise InvalidTransition("graph has unpublished draft changes")
         published = session.scalar(select(GraphVersion).join(
-            GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier
-        ).join(Project).where(
+            GraphArtifact, (GraphArtifact.owner_id == GraphVersion.owner_id)
+            & (GraphArtifact.identifier == GraphVersion.graph_identifier)
+        ).where(
+            GraphVersion.owner_id == owner_id,
             GraphVersion.graph_identifier == identifier, GraphVersion.version == version,
-            GraphArtifact.project_id == project_id, Project.owner_id == owner_id,
+            GraphArtifact.project_id == project_id, GraphArtifact.owner_id == owner_id,
         ))
         if published is None:
             raise GraphVersionNotFound((project_id, identifier, version))
@@ -705,9 +716,10 @@ def ensure_catalogue_seed(session: Session) -> None:
         raise RuntimeError(
             "repository catalogue graph changed without a new immutable version"
         )
-    artifact = session.get(GraphArtifact, identifier)
+    artifact = session.get(GraphArtifact, (LEGACY_OWNER_ID, identifier))
     if artifact is None:
         session.add(GraphArtifact(
+            owner_id=LEGACY_OWNER_ID,
             identifier=identifier,
             project_id=CATALOGUE_PROJECT_ID,
             display_name=str(GRAPH["display_name"]),
@@ -719,9 +731,10 @@ def ensure_catalogue_seed(session: Session) -> None:
             updated_at=now,
         ))
 
-    published = session.get(GraphVersion, (identifier, version))
+    published = session.get(GraphVersion, (LEGACY_OWNER_ID, identifier, version))
     if published is None:
         session.add(GraphVersion(
+            owner_id=LEGACY_OWNER_ID,
             graph_identifier=identifier,
             version=version,
             artifact_json=encoded,

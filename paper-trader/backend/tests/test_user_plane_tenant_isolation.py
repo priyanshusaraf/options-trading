@@ -62,6 +62,72 @@ def test_project_and_graph_loads_require_owner_and_hide_other_owner() -> None:
         store.load_version(project_a.project_id, "owner.a.graph", 1)
 
 
+def test_two_owners_can_persist_the_same_graph_and_layout_identities() -> None:
+    """Tenant-local graph/layout keys keep overlapping authored presentation isolated."""
+    project_a = store.create_project("Same project", owner_id="owner.a")
+    project_b = store.create_project("Same project", owner_id="owner.b")
+    identifier = "same.graph"
+    graph = _graph(identifier)
+    store.create_artifact(project_a.project_id, identifier, graph, owner_id="owner.a")
+    store.create_artifact(project_b.project_id, identifier, graph, owner_id="owner.b")
+
+    published_a = store.publish_draft(
+        project_a.project_id, identifier, base_revision=0, owner_id="owner.a"
+    )
+    published_b = store.publish_draft(
+        project_b.project_id, identifier, base_revision=0, owner_id="owner.b"
+    )
+    assert published_a.graph == published_b.graph
+    assert published_a.content_address == published_b.content_address
+
+    layout_a = layouts.save_layout(
+        identifier,
+        1,
+        base_revision=0,
+        positions=(layouts.Position("n_ema", 10.0, 20.0),),
+        owner_id="owner.a",
+    )
+    layout_b = layouts.save_layout(
+        identifier,
+        1,
+        base_revision=0,
+        positions=(layouts.Position("n_ema", 30.0, 40.0),),
+        owner_id="owner.b",
+    )
+    grouped_a = layouts.save_groups(
+        identifier,
+        1,
+        base_revision=layout_a.revision,
+        groups=(layouts.VisualGroup(
+            "same.group", "Owner A", layouts.GroupFrame(1.0, 2.0, 3.0, 4.0),
+            False, ("n_ema",),
+        ),),
+        valid_instance_ids=frozenset({"n_ema"}),
+        owner_id="owner.a",
+    )
+    grouped_b = layouts.save_groups(
+        identifier,
+        1,
+        base_revision=layout_b.revision,
+        groups=(layouts.VisualGroup(
+            "same.group", "Owner B", layouts.GroupFrame(5.0, 6.0, 7.0, 8.0),
+            True, ("n_ema",),
+        ),),
+        valid_instance_ids=frozenset({"n_ema"}),
+        owner_id="owner.b",
+    )
+
+    assert store.load_version(project_a.project_id, identifier, 1, owner_id="owner.a") == published_a
+    assert store.load_version(project_b.project_id, identifier, 1, owner_id="owner.b") == published_b
+    assert layouts.load_layout(
+        identifier, 1, valid_instance_ids=frozenset({"n_ema"}), owner_id="owner.a"
+    ).groups[0].display_name == "Owner A"
+    assert layouts.load_layout(
+        identifier, 1, valid_instance_ids=frozenset({"n_ema"}), owner_id="owner.b"
+    ).groups[0].display_name == "Owner B"
+    assert grouped_a.revision == grouped_b.revision == 2
+
+
 def test_load_version_uses_one_absent_shape_for_owner_graph_and_version_misses() -> None:
     project = store.create_project("Owner A", owner_id="owner.a")
     store.create_artifact(

@@ -76,14 +76,14 @@ def a_clean_registry():
 
 def _deploy(session, *, activate: bool = True) -> IrPaperDeployment:
     if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, name="cockpit"))
-    if session.get(GraphArtifact, GRAPH) is None:
-        session.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="cockpit"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                   display_name="m", draft_json="{}", draft_revision=0))
     session.flush()
     document = _graph_document(1)
-    if session.get(GraphVersion, (GRAPH, 1)) is None:
-        session.add(GraphVersion(graph_identifier=GRAPH, version=1,
+    if session.get(GraphVersion, ("owner", GRAPH, 1)) is None:
+        session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
                                  artifact_json=canonical_json(document),
                                  content_address=content_address(document)))
     session.flush()

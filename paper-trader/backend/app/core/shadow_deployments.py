@@ -181,7 +181,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     admission are checked at activation, because those are the things that make it *run*.
     """
     _require_money_scope(session, deployment_id, owner_id, broker_account_id)
-    version = _graph_version(session, graph_identifier, graph_version)
+    version = _graph_version(session, graph_identifier, graph_version, owner_id=owner_id)
     address = _verified_address(version)
     _require_known_instrument(instrument_key)
     _require_known_interval(interval)
@@ -214,7 +214,7 @@ def activate(session, row_id: int, *, revision: int, owner_id: str,
             f"shadow deployment {row_id} is {row.state!r}; only {STAGED!r} or {PAUSED!r} "
             f"can be activated")
 
-    version = _graph_version(session, row.graph_identifier, row.graph_version)
+    version = _graph_version(session, row.graph_identifier, row.graph_version, owner_id=row.owner_id)
     address = _verified_address(version)
     if address != row.graph_content_address:
         raise BindingUnverifiable(
@@ -293,7 +293,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
         .order_by(IrShadowDeployment.id))
     for row in rows:
         try:
-            version = _graph_version(session, row.graph_identifier, row.graph_version)
+            version = _graph_version(session, row.graph_identifier, row.graph_version, owner_id=row.owner_id)
             address = _verified_address(version)
             if address != row.graph_content_address:
                 raise BindingUnverifiable(
@@ -359,8 +359,8 @@ def _transition(session, row: IrShadowDeployment, state: str) -> IrShadowDeploym
     return row
 
 
-def _graph_version(session, graph_identifier: str, graph_version: int) -> GraphVersion:
-    version = session.get(GraphVersion, (graph_identifier, graph_version))
+def _graph_version(session, graph_identifier: str, graph_version: int, *, owner_id: str) -> GraphVersion:
+    version = session.get(GraphVersion, (owner_id, graph_identifier, graph_version))
     if version is None:
         raise BindingUnverifiable(
             f"graph {graph_identifier!r} v{graph_version} does not exist")

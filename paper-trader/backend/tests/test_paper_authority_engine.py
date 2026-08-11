@@ -82,14 +82,14 @@ def a_clean_registry():
 
 def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeployment:
     if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, name="paper"))
-    if session.get(GraphArtifact, GRAPH) is None:
-        session.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                   display_name="mirror", draft_json="{}",
                                   draft_revision=0))
     session.flush()
     document = _graph_document(version)
-    session.add(GraphVersion(graph_identifier=GRAPH, version=version,
+    session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
                              artifact_json=canonical_json(document),
                              content_address=content_address(document)))
     session.flush()
@@ -154,14 +154,14 @@ class TestBindingThroughTheRunner:
 
         with SessionLocal() as s:
             if s.get(Project, PROJECT) is None:
-                s.add(Project(project_id=PROJECT, name="paper"))
-            if s.get(GraphArtifact, GRAPH) is None:
-                s.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+                s.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+            if s.get(GraphArtifact, ("owner", GRAPH)) is None:
+                s.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                     display_name="mirror", draft_json="{}",
                                     draft_revision=0))
             s.flush()
             document = _graph_document(1)
-            s.add(GraphVersion(graph_identifier=GRAPH, version=1,
+            s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
                                artifact_json=canonical_json(document),
                                content_address=content_address(document)))
             s.flush()
@@ -215,7 +215,7 @@ class TestExactVersion:
         with SessionLocal() as s:
             row = _deploy(s, version=1)
             document = _graph_document(2)
-            s.add(GraphVersion(graph_identifier=GRAPH, version=2,
+            s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=2,
                                artifact_json=canonical_json(document),
                                content_address=content_address(document)))
             s.commit()

@@ -141,6 +141,7 @@ class PaperBinding:
     """
 
     deployment_row_id: int
+    owner_id: str
     project_id: str
     graph_identifier: str
     graph_version: int
@@ -195,7 +196,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     checked at activation, because those are what make it *trade*.
     """
     _require_money_scope(session, deployment_id, owner_id, broker_account_id)
-    version = _graph_version(session, graph_identifier, graph_version)
+    version = _graph_version(session, graph_identifier, graph_version, owner_id=owner_id)
     address = _verified_address(version)
     _require_known_instrument(instrument_key)
     _require_known_interval(interval)
@@ -228,7 +229,7 @@ def activate(session, row_id: int, *, revision: int, owner_id: str,
             f"paper deployment {row_id} is {row.state!r}; only {STAGED!r} or {PAUSED!r} "
             f"can be activated")
 
-    version = _graph_version(session, row.graph_identifier, row.graph_version)
+    version = _graph_version(session, row.graph_identifier, row.graph_version, owner_id=row.owner_id)
     address = _verified_address(version)
     if address != row.graph_content_address:
         raise BindingUnverifiable(
@@ -324,7 +325,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
         .order_by(IrPaperDeployment.id))
     for row in rows:
         try:
-            version = _graph_version(session, row.graph_identifier, row.graph_version)
+            version = _graph_version(session, row.graph_identifier, row.graph_version, owner_id=row.owner_id)
             address = _verified_address(version)
             if address != row.graph_content_address:
                 raise BindingUnverifiable(
@@ -341,7 +342,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
                 on_problem(str(exc))
             continue
         out.append(PaperBinding(
-            deployment_row_id=row.id, project_id=row.project_id,
+            deployment_row_id=row.id, owner_id=row.owner_id, project_id=row.project_id,
             graph_identifier=row.graph_identifier, graph_version=row.graph_version,
             content_address=row.graph_content_address,
             evidence_run_id=row.evidence_run_id,
@@ -372,7 +373,9 @@ def adapter_for(session, binding: PaperBinding):
     from app.ir.library import IMPLEMENTATIONS, LIBRARY
     from app.strategy.ir_adapter import IRGraphStrategy
 
-    version = _graph_version(session, binding.graph_identifier, binding.graph_version)
+    version = _graph_version(
+        session, binding.graph_identifier, binding.graph_version, owner_id=binding.owner_id
+    )
     address = _verified_address(version)
     if address != binding.content_address:
         raise BindingUnverifiable(
@@ -449,8 +452,8 @@ def _transition(session, row: IrPaperDeployment, state: str) -> IrPaperDeploymen
     return row
 
 
-def _graph_version(session, graph_identifier: str, graph_version: int) -> GraphVersion:
-    version = session.get(GraphVersion, (graph_identifier, graph_version))
+def _graph_version(session, graph_identifier: str, graph_version: int, *, owner_id: str) -> GraphVersion:
+    version = session.get(GraphVersion, (owner_id, graph_identifier, graph_version))
     if version is None:
         raise BindingUnverifiable(
             f"graph {graph_identifier!r} v{graph_version} does not exist")

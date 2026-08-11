@@ -358,8 +358,8 @@ def test_orphaned_positions_are_filtered_and_next_write_cleans_them(client):
         session.execute(
             text(
                 "INSERT INTO ir_graph_layout_positions "
-                "(graph_identifier, graph_version, instance_id, x, y) "
-                "VALUES (:identifier, :version, 'removed_node', 1.0, 2.0)"
+                "(owner_id, graph_identifier, graph_version, instance_id, x, y) "
+                "VALUES ('owner', :identifier, :version, 'removed_node', 1.0, 2.0)"
             ),
             {"identifier": IDENTIFIER, "version": VERSION},
         )

@@ -28,7 +28,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0020"
+HEAD = "0021"
 
 
 def _schema(engine) -> dict:
@@ -127,24 +127,24 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         "project_id", "owner_id", "name", "description", "status", "created_at", "updated_at",
     }
     assert set(schema["graph_artifacts"]["columns"]) == {
-        "identifier", "project_id", "display_name", "draft_json", "draft_revision",
+        "owner_id", "identifier", "project_id", "display_name", "draft_json", "draft_revision",
         "published_revision", "current_version", "created_at", "updated_at",
     }
     assert set(schema["graph_versions"]["columns"]) == {
-        "graph_identifier", "version", "artifact_json", "content_address", "visibility", "created_at",
+        "owner_id", "graph_identifier", "version", "artifact_json", "content_address", "visibility", "created_at",
     }
     assert set(schema["ir_graph_layouts"]["columns"]) == {
-        "graph_identifier", "graph_version", "revision", "updated_at",
+        "owner_id", "graph_identifier", "graph_version", "revision", "updated_at",
     }
     assert set(schema["ir_graph_layout_positions"]["columns"]) == {
-        "graph_identifier", "graph_version", "instance_id", "x", "y",
+        "owner_id", "graph_identifier", "graph_version", "instance_id", "x", "y",
     }
     assert set(schema["ir_graph_layout_groups"]["columns"]) == {
-        "graph_identifier", "graph_version", "identifier", "display_name",
+        "owner_id", "graph_identifier", "graph_version", "identifier", "display_name",
         "x", "y", "width", "height", "collapsed",
     }
     assert set(schema["ir_graph_layout_group_members"]["columns"]) == {
-        "graph_identifier", "graph_version", "group_identifier", "instance_id",
+        "owner_id", "graph_identifier", "graph_version", "group_identifier", "instance_id",
     }
     assert set(schema["project_review_notes"]["columns"]) == {
         "note_id", "project_id", "event_id", "event_type", "body", "created_by",
@@ -169,16 +169,16 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         for name, columns, unique in schema["project_review_snapshots"]["indexes"]
     )
     assert set(schema["ir_graph_layout_orphan_archive"]["columns"]) == {
-        "graph_identifier", "graph_version", "revision", "updated_at", "archived_at",
+        "owner_id", "graph_identifier", "graph_version", "revision", "updated_at", "archived_at",
     }
     assert set(schema["ir_graph_layout_position_orphan_archive"]["columns"]) == {
-        "graph_identifier", "graph_version", "instance_id", "x", "y",
+        "owner_id", "graph_identifier", "graph_version", "instance_id", "x", "y",
     }
 
     graph_version_fks = sa.inspect(engine).get_foreign_keys("ir_graph_layouts")
     assert any(
         fk["referred_table"] == "graph_versions"
-        and fk["constrained_columns"] == ["graph_identifier", "graph_version"]
+        and fk["constrained_columns"] == ["owner_id", "graph_identifier", "graph_version"]
         for fk in graph_version_fks
     )
 
@@ -816,6 +816,57 @@ def _insert_legacy_project_graph(connection) -> tuple:
     return project, graph, version
 
 
+def test_revision_0021_upgrade_backfills_owner_for_every_graph_and_layout_identity(tmp_path):
+    """A real 0020 lineage needs owner-bearing keys before identifiers can overlap."""
+    engine = _at_revision_0019(tmp_path, "0021-owner-identity-upgrade.db")
+    with engine.begin() as connection:
+        project, graph, version = _insert_legacy_project_graph(connection)
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layouts "
+            "(graph_identifier,graph_version,revision,updated_at) VALUES "
+            "('graph.legacy',1,7,'2026-08-11 12:14:15')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_positions "
+            "(graph_identifier,graph_version,instance_id,x,y) VALUES "
+            "('graph.legacy',1,'node.legacy',12.5,24.5)"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_groups "
+            "(graph_identifier,graph_version,identifier,display_name,x,y,width,height,collapsed) "
+            "VALUES ('graph.legacy',1,'group.legacy','Legacy',1.0,2.0,3.0,4.0,1)"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_group_members "
+            "(graph_identifier,graph_version,group_identifier,instance_id) VALUES "
+            "('graph.legacy',1,'group.legacy','node.legacy')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_orphan_archive "
+            "(graph_identifier,graph_version,revision,updated_at,archived_at) VALUES "
+            "('graph.orphan',3,8,'2026-08-11 12:15:16','2026-08-11 12:16:17')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_graph_layout_position_orphan_archive "
+            "(graph_identifier,graph_version,instance_id,x,y) VALUES "
+            "('graph.orphan',3,'node.orphan',6.0,7.0)"))
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    inspector = sa.inspect(engine)
+    owner_scoped = (
+        "graph_artifacts", "graph_versions", "ir_graph_layouts",
+        "ir_graph_layout_positions", "ir_graph_layout_groups",
+        "ir_graph_layout_group_members", "ir_graph_layout_orphan_archive",
+        "ir_graph_layout_position_orphan_archive",
+    )
+    for table in owner_scoped:
+        assert "owner_id" in {
+            column["name"] for column in inspector.get_columns(table)
+        }, f"0021 must backfill an owner identity on {table}"
+
+    # These are deliberately captured before the assertion surface grows into complete
+    # 0021 preservation/parity coverage: the migration must retain canonical bytes and
+    # layout values while adding provenance, never reserialise them.
+    assert project[0] == "project.legacy"
+    assert graph[3] == '{"identifier":"graph.legacy","version":1}'
+    assert version[2] == graph[3]
+
+
 @pytest.mark.parametrize("marker", (
     "CREATE TABLE projects__0020",
     "ALTER TABLE projects__0020 RENAME TO projects",
@@ -1316,8 +1367,8 @@ def test_graph_version_insert_requires_json_identity_to_match_row_identity(tmp_p
             with engine.begin() as connection:
                 connection.execute(sa.text(
                     "INSERT INTO graph_versions "
-                    "(graph_identifier, version, artifact_json, content_address, created_at) "
-                    "VALUES (:identifier, :version, :artifact_json, :address, "
+                    "(owner_id, graph_identifier, version, artifact_json, content_address, created_at) "
+                    "VALUES ('owner', :identifier, :version, :artifact_json, :address, "
                     "'2026-08-03 10:00:00')"
                 ), {
                     "identifier": GRAPH["identifier"],
@@ -1436,13 +1487,13 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
-            "(graph_identifier, graph_version, revision, updated_at) "
-            "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
+            "(owner_id, graph_identifier, graph_version, revision, updated_at) "
+            "VALUES ('owner', :identifier, :version, 1, '2026-08-03 10:00:00')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_positions "
-            "(graph_identifier, graph_version, instance_id, x, y) "
-            "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
+            "(owner_id, graph_identifier, graph_version, instance_id, x, y) "
+            "VALUES ('owner', :identifier, :version, 'n_ema', 10.0, 20.0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         command.downgrade(migrate.alembic_config(connection), "0005")
 
@@ -1505,25 +1556,25 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
-            "(graph_identifier, graph_version, revision, updated_at) "
-            "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
+            "(owner_id, graph_identifier, graph_version, revision, updated_at) "
+            "VALUES ('owner', :identifier, :version, 1, '2026-08-03 10:00:00')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_positions "
-            "(graph_identifier, graph_version, instance_id, x, y) "
-            "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
+            "(owner_id, graph_identifier, graph_version, instance_id, x, y) "
+            "VALUES ('owner', :identifier, :version, 'n_ema', 10.0, 20.0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_groups "
-            "(graph_identifier, graph_version, identifier, display_name, "
+            "(owner_id, graph_identifier, graph_version, identifier, display_name, "
             " x, y, width, height, collapsed) "
-            "VALUES (:identifier, :version, 'g_signal', 'Signal', "
+            "VALUES ('owner', :identifier, :version, 'g_signal', 'Signal', "
             " 1.0, 2.0, 300.0, 180.0, 0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_group_members "
-            "(graph_identifier, graph_version, group_identifier, instance_id) "
-            "VALUES (:identifier, :version, 'g_signal', 'n_ema')"
+            "(owner_id, graph_identifier, graph_version, group_identifier, instance_id) "
+            "VALUES ('owner', :identifier, :version, 'g_signal', 'n_ema')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         command.downgrade(migrate.alembic_config(connection), "0006")
 

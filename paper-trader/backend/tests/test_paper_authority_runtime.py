@@ -99,14 +99,14 @@ def a_clean_registry():
 
 def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeployment:
     if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, name="paper"))
-    if session.get(GraphArtifact, GRAPH) is None:
-        session.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                   display_name="mirror", draft_json="{}",
                                   draft_revision=0))
     session.flush()
     document = _graph_document(version)
-    session.add(GraphVersion(graph_identifier=GRAPH, version=version,
+    session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
                              artifact_json=canonical_json(document),
                              content_address=content_address(document)))
     session.flush()
@@ -235,16 +235,16 @@ class TestRestartAndReload:
             r.broker.close()
 
     def test_a_deployment_cannot_name_a_graph_version_that_does_not_exist(self):
-        """The other database-level guarantee this slice depends on. A dangling deployment
-        is not a state a partial restore can reach, because the foreign key refuses it —
-        so "the row survived and the artefact did not" needs no runtime handling."""
-        from sqlalchemy.exc import IntegrityError
-
+        """By-value provenance keeps the money row; owner-scoped reload fails closed."""
         with SessionLocal() as s:
             _deploy(s)
-            with pytest.raises(IntegrityError, match="FOREIGN KEY"):
-                s.query(IrPaperDeployment).update({"graph_version": 99})
-                s.commit()
+            s.query(IrPaperDeployment).update({"graph_version": 99})
+            s.commit()
+        problems: list[str] = []
+        with SessionLocal() as s:
+            assert pa.active_bindings(s, owner_id="owner", broker_account_id="account.default",
+                                      on_problem=problems.append) == []
+        assert problems and "does not exist" in problems[0]
 
     def test_one_unbuildable_binding_does_not_take_the_others_down(self):
         """Partial recovery, in the shape that *is* reachable: one deployment cannot be
@@ -661,14 +661,14 @@ class TestShadowAndPaperAuthorityRemainSeparate:
 
         with SessionLocal() as s:
             if s.get(Project, PROJECT) is None:
-                s.add(Project(project_id=PROJECT, name="paper"))
-            if s.get(GraphArtifact, GRAPH) is None:
-                s.add(GraphArtifact(identifier=GRAPH, project_id=PROJECT,
+                s.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+            if s.get(GraphArtifact, ("owner", GRAPH)) is None:
+                s.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
                                     display_name="m", draft_json="{}", draft_revision=0))
             s.flush()
             document = _graph_document(1)
-            if s.get(GraphVersion, (GRAPH, 1)) is None:
-                s.add(GraphVersion(graph_identifier=GRAPH, version=1,
+            if s.get(GraphVersion, ("owner", GRAPH, 1)) is None:
+                s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
                                    artifact_json=canonical_json(document),
                                    content_address=content_address(document)))
             s.commit()

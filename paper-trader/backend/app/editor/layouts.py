@@ -90,9 +90,11 @@ def _require_owned_graph_version(
     """Refuse a graph/version outside the caller's owner before touching layout rows."""
     graph_version_row = session.scalar(
         select(GraphVersion)
-        .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
+        .join(GraphArtifact, (GraphArtifact.owner_id == GraphVersion.owner_id)
+              & (GraphArtifact.identifier == GraphVersion.graph_identifier))
         .join(Project, Project.project_id == GraphArtifact.project_id)
         .where(
+            GraphVersion.owner_id == owner_id,
             GraphVersion.graph_identifier == graph_identifier,
             GraphVersion.version == graph_version,
             Project.owner_id == owner_id,
@@ -114,6 +116,7 @@ def _current_revision(
         )
         revision = session.scalar(
             select(IrGraphLayout.revision).where(
+                IrGraphLayout.owner_id == owner_id,
                 IrGraphLayout.graph_identifier == graph_identifier,
                 IrGraphLayout.graph_version == graph_version,
             )
@@ -149,23 +152,26 @@ def load_layout_in_session(
     _require_owned_graph_version(
         session, graph_identifier, graph_version, owner_id=owner_id
     )
-    head = session.get(IrGraphLayout, (graph_identifier, graph_version))
+    head = session.get(IrGraphLayout, (owner_id, graph_identifier, graph_version))
     if head is None:
         return Layout(graph_identifier, graph_version, 0, ())
     position_rows = session.scalars(
         select(IrGraphLayoutPosition).where(
+            IrGraphLayoutPosition.owner_id == owner_id,
             IrGraphLayoutPosition.graph_identifier == graph_identifier,
             IrGraphLayoutPosition.graph_version == graph_version,
         ).order_by(IrGraphLayoutPosition.instance_id)
     ).all()
     group_rows = session.scalars(
         select(IrGraphLayoutGroup).where(
+            IrGraphLayoutGroup.owner_id == owner_id,
             IrGraphLayoutGroup.graph_identifier == graph_identifier,
             IrGraphLayoutGroup.graph_version == graph_version,
         ).order_by(IrGraphLayoutGroup.identifier)
     ).all()
     member_rows = session.scalars(
         select(IrGraphLayoutGroupMember).where(
+            IrGraphLayoutGroupMember.owner_id == owner_id,
             IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
             IrGraphLayoutGroupMember.graph_version == graph_version,
         ).order_by(
@@ -398,6 +404,7 @@ def carry_and_reconcile_presentation(
 
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     target = IrGraphLayout(
+        owner_id=owner_id,
         graph_identifier=graph_identifier,
         graph_version=to_version,
         revision=1,
@@ -407,6 +414,7 @@ def carry_and_reconcile_presentation(
     session.flush()
     session.add_all([
         IrGraphLayoutPosition(
+            owner_id=owner_id,
             graph_identifier=graph_identifier,
             graph_version=to_version,
             instance_id=position.instance_id,
@@ -417,7 +425,7 @@ def carry_and_reconcile_presentation(
     ])
     ordered_groups = _validate_groups(tuple(groups.values()), target_instance_ids)
     _replace_groups_in_session(
-        session, graph_identifier, to_version, ordered_groups
+        session, graph_identifier, to_version, ordered_groups, owner_id=owner_id
     )
     session.flush()
     _after_layout_prepare(session, target)
@@ -450,7 +458,7 @@ def save_layout(
             _require_owned_graph_version(
                 session, graph_identifier, graph_version, owner_id=owner_id
             )
-            current = session.get(IrGraphLayout, (graph_identifier, graph_version))
+            current = session.get(IrGraphLayout, (owner_id, graph_identifier, graph_version))
             current_revision = current.revision if current is not None else 0
             if current_revision != base_revision:
                 raise LayoutConflict(current_revision)
@@ -458,6 +466,7 @@ def save_layout(
             next_revision = base_revision + 1
             if current is None:
                 session.add(IrGraphLayout(
+                    owner_id=owner_id,
                     graph_identifier=graph_identifier,
                     graph_version=graph_version,
                     revision=next_revision,
@@ -468,6 +477,7 @@ def save_layout(
                 claimed = session.execute(
                     update(IrGraphLayout)
                     .where(
+                        IrGraphLayout.owner_id == owner_id,
                         IrGraphLayout.graph_identifier == graph_identifier,
                         IrGraphLayout.graph_version == graph_version,
                         IrGraphLayout.revision == base_revision,
@@ -483,12 +493,14 @@ def save_layout(
 
             session.execute(
                 delete(IrGraphLayoutPosition).where(
+                    IrGraphLayoutPosition.owner_id == owner_id,
                     IrGraphLayoutPosition.graph_identifier == graph_identifier,
                     IrGraphLayoutPosition.graph_version == graph_version,
                 )
             )
             session.add_all([
                 IrGraphLayoutPosition(
+                    owner_id=owner_id,
                     graph_identifier=graph_identifier,
                     graph_version=graph_version,
                     instance_id=position.instance_id,
@@ -506,6 +518,7 @@ def save_layout(
                     row.instance_id
                     for row in session.scalars(
                         select(IrGraphLayoutGroupMember).where(
+                            IrGraphLayoutGroupMember.owner_id == owner_id,
                             IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
                             IrGraphLayoutGroupMember.graph_version == graph_version,
                         )
@@ -569,13 +582,14 @@ def save_groups(
             _require_owned_graph_version(
                 session, graph_identifier, graph_version, owner_id=owner_id
             )
-            current = session.get(IrGraphLayout, (graph_identifier, graph_version))
+            current = session.get(IrGraphLayout, (owner_id, graph_identifier, graph_version))
             current_revision = current.revision if current is not None else 0
             if current_revision != base_revision:
                 raise LayoutConflict(current_revision)
             next_revision = base_revision + 1
             if current is None:
                 session.add(IrGraphLayout(
+                    owner_id=owner_id,
                     graph_identifier=graph_identifier,
                     graph_version=graph_version,
                     revision=next_revision,
@@ -586,6 +600,7 @@ def save_groups(
                 claimed = session.execute(
                     update(IrGraphLayout)
                     .where(
+                        IrGraphLayout.owner_id == owner_id,
                         IrGraphLayout.graph_identifier == graph_identifier,
                         IrGraphLayout.graph_version == graph_version,
                         IrGraphLayout.revision == base_revision,
@@ -600,15 +615,18 @@ def save_groups(
                         )
                     )
             session.execute(delete(IrGraphLayoutGroupMember).where(
+                IrGraphLayoutGroupMember.owner_id == owner_id,
                 IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
                 IrGraphLayoutGroupMember.graph_version == graph_version,
             ))
             session.execute(delete(IrGraphLayoutGroup).where(
+                IrGraphLayoutGroup.owner_id == owner_id,
                 IrGraphLayoutGroup.graph_identifier == graph_identifier,
                 IrGraphLayoutGroup.graph_version == graph_version,
             ))
             session.add_all([
                 IrGraphLayoutGroup(
+                    owner_id=owner_id,
                     graph_identifier=graph_identifier,
                     graph_version=graph_version,
                     identifier=group.identifier,
@@ -624,6 +642,7 @@ def save_groups(
             session.flush()
             session.add_all([
                 IrGraphLayoutGroupMember(
+                    owner_id=owner_id,
                     graph_identifier=graph_identifier,
                     graph_version=graph_version,
                     group_identifier=group.identifier,
@@ -669,14 +688,17 @@ def _claim_layout_revision_in_session(
     graph_identifier: str,
     graph_version: int,
     base_revision: int,
+    *,
+    owner_id: str,
 ) -> None:
-    current = session.get(IrGraphLayout, (graph_identifier, graph_version))
+    current = session.get(IrGraphLayout, (owner_id, graph_identifier, graph_version))
     current_revision = current.revision if current is not None else 0
     if current_revision != base_revision:
         raise LayoutConflict(current_revision)
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     if current is None:
         session.add(IrGraphLayout(
+            owner_id=owner_id,
             graph_identifier=graph_identifier,
             graph_version=graph_version,
             revision=1,
@@ -687,6 +709,7 @@ def _claim_layout_revision_in_session(
     claimed = session.execute(
         update(IrGraphLayout)
         .where(
+            IrGraphLayout.owner_id == owner_id,
             IrGraphLayout.graph_identifier == graph_identifier,
             IrGraphLayout.graph_version == graph_version,
             IrGraphLayout.revision == base_revision,
@@ -702,17 +725,22 @@ def _replace_groups_in_session(
     graph_identifier: str,
     graph_version: int,
     groups: tuple[VisualGroup, ...],
+    *,
+    owner_id: str,
 ) -> None:
     session.execute(delete(IrGraphLayoutGroupMember).where(
+        IrGraphLayoutGroupMember.owner_id == owner_id,
         IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
         IrGraphLayoutGroupMember.graph_version == graph_version,
     ))
     session.execute(delete(IrGraphLayoutGroup).where(
+        IrGraphLayoutGroup.owner_id == owner_id,
         IrGraphLayoutGroup.graph_identifier == graph_identifier,
         IrGraphLayoutGroup.graph_version == graph_version,
     ))
     session.add_all([
         IrGraphLayoutGroup(
+            owner_id=owner_id,
             graph_identifier=graph_identifier,
             graph_version=graph_version,
             identifier=group.identifier,
@@ -728,6 +756,7 @@ def _replace_groups_in_session(
     session.flush()
     session.add_all([
         IrGraphLayoutGroupMember(
+            owner_id=owner_id,
             graph_identifier=graph_identifier,
             graph_version=graph_version,
             group_identifier=group.identifier,
@@ -744,13 +773,17 @@ def _replace_positions_in_session(
     graph_identifier: str,
     graph_version: int,
     positions: Iterable[Position],
+    *,
+    owner_id: str,
 ) -> None:
     session.execute(delete(IrGraphLayoutPosition).where(
+        IrGraphLayoutPosition.owner_id == owner_id,
         IrGraphLayoutPosition.graph_identifier == graph_identifier,
         IrGraphLayoutPosition.graph_version == graph_version,
     ))
     session.add_all([
         IrGraphLayoutPosition(
+            owner_id=owner_id,
             graph_identifier=graph_identifier,
             graph_version=graph_version,
             instance_id=position.instance_id,
@@ -951,11 +984,13 @@ def apply_presentation_batch_in_session(
 
     ordered = _validate_groups(tuple(groups.values()), valid_instance_ids)
     _claim_layout_revision_in_session(
-        session, graph_identifier, graph_version, base_revision
+        session, graph_identifier, graph_version, base_revision, owner_id=owner_id
     )
-    _replace_groups_in_session(session, graph_identifier, graph_version, ordered)
+    _replace_groups_in_session(
+        session, graph_identifier, graph_version, ordered, owner_id=owner_id
+    )
     _replace_positions_in_session(
-        session, graph_identifier, graph_version, positions.values()
+        session, graph_identifier, graph_version, positions.values(), owner_id=owner_id
     )
     result = load_layout_in_session(
         session,

@@ -1036,6 +1036,7 @@ class Project(Base):
     __table_args__ = (
         CheckConstraint("status IN ('active', 'archived')", name="ck_projects_status"),
         UniqueConstraint("owner_id", "name", name="uq_projects_owner_name"),
+        UniqueConstraint("owner_id", "project_id", name="uq_projects_owner_project"),
     )
 
     project_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1056,6 +1057,12 @@ class GraphArtifact(Base):
     """One stable graph lineage with an optimistic-concurrency working draft."""
     __tablename__ = "graph_artifacts"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["owner_id", "project_id"],
+            ["projects.owner_id", "projects.project_id"],
+            ondelete="RESTRICT",
+            name="fk_graph_artifacts_owner_project",
+        ),
         CheckConstraint("draft_revision >= 0", name="ck_graph_artifacts_draft_revision"),
         CheckConstraint(
             "published_revision IS NULL OR "
@@ -1068,9 +1075,9 @@ class GraphArtifact(Base):
         ),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
-    project_id: Mapped[str] = mapped_column(
-        ForeignKey("projects.project_id", ondelete="RESTRICT"), nullable=False, index=True)
+    project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     draft_json: Mapped[str] = mapped_column(Text, nullable=False)
     draft_revision: Mapped[int] = mapped_column(
@@ -1088,7 +1095,9 @@ class GraphVersion(Base):
     __tablename__ = "graph_versions"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["graph_identifier"], ["graph_artifacts.identifier"], ondelete="RESTRICT"
+            ["owner_id", "graph_identifier"],
+            ["graph_artifacts.owner_id", "graph_artifacts.identifier"],
+            ondelete="RESTRICT",
         ),
         CheckConstraint("version >= 1", name="ck_graph_versions_version"),
         CheckConstraint(
@@ -1106,6 +1115,7 @@ class GraphVersion(Base):
         Index("ix_graph_versions_content_address", "content_address"),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1160,13 +1170,14 @@ class IrGraphLayout(Base):
     __tablename__ = "ir_graph_layouts"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["graph_identifier", "graph_version"],
-            ["graph_versions.graph_identifier", "graph_versions.version"],
+            ["owner_id", "graph_identifier", "graph_version"],
+            ["graph_versions.owner_id", "graph_versions.graph_identifier", "graph_versions.version"],
             ondelete="RESTRICT",
             name="fk_ir_graph_layouts_graph_version",
         ),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1179,12 +1190,13 @@ class IrGraphLayoutPosition(Base):
     __tablename__ = "ir_graph_layout_positions"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["graph_identifier", "graph_version"],
-            ["ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
+            ["owner_id", "graph_identifier", "graph_version"],
+            ["ir_graph_layouts.owner_id", "ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
             ondelete="CASCADE",
         ),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -1197,8 +1209,8 @@ class IrGraphLayoutGroup(Base):
     __tablename__ = "ir_graph_layout_groups"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["graph_identifier", "graph_version"],
-            ["ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
+            ["owner_id", "graph_identifier", "graph_version"],
+            ["ir_graph_layouts.owner_id", "ir_graph_layouts.graph_identifier", "ir_graph_layouts.graph_version"],
             ondelete="CASCADE",
             name="fk_ir_graph_layout_groups_layout",
         ),
@@ -1208,6 +1220,7 @@ class IrGraphLayoutGroup(Base):
         CheckConstraint("height > 0", name="ck_ir_groups_height"),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -1226,8 +1239,9 @@ class IrGraphLayoutGroupMember(Base):
     __tablename__ = "ir_graph_layout_group_members"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["graph_identifier", "graph_version", "group_identifier"],
+            ["owner_id", "graph_identifier", "graph_version", "group_identifier"],
             [
+                "ir_graph_layout_groups.owner_id",
                 "ir_graph_layout_groups.graph_identifier",
                 "ir_graph_layout_groups.graph_version",
                 "ir_graph_layout_groups.identifier",
@@ -1237,6 +1251,7 @@ class IrGraphLayoutGroupMember(Base):
         ),
     )
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     group_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -1247,6 +1262,7 @@ class IrGraphLayoutOrphanArchive(Base):
     """Reversible quarantine for a pre-0006 layout with no graph version."""
     __tablename__ = "ir_graph_layout_orphan_archive"
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1258,6 +1274,7 @@ class IrGraphLayoutPositionOrphanArchive(Base):
     """Sparse positions quarantined with an orphan layout parent."""
     __tablename__ = "ir_graph_layout_position_orphan_archive"
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
     graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -1592,9 +1609,6 @@ class IrPaperDeployment(Base):
     __tablename__ = "ir_paper_deployments"
     __table_args__ = (
         ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="RESTRICT"),
-        ForeignKeyConstraint(["graph_identifier", "graph_version"],
-                             ["graph_versions.graph_identifier", "graph_versions.version"],
-                             ondelete="RESTRICT"),
         ForeignKeyConstraint(["deployment_id"], ["deployments.id"], ondelete="RESTRICT"),
         # One live paper authority per (deployment, instrument, interval). Retired rows are
         # excluded so superseding frees the slot without deleting what once traded there.
@@ -1736,9 +1750,6 @@ class IrShadowDeployment(Base):
     __tablename__ = "ir_shadow_deployments"
     __table_args__ = (
         ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="RESTRICT"),
-        ForeignKeyConstraint(["graph_identifier", "graph_version"],
-                             ["graph_versions.graph_identifier", "graph_versions.version"],
-                             ondelete="RESTRICT"),
         ForeignKeyConstraint(["deployment_id"], ["deployments.id"], ondelete="RESTRICT"),
         # One live shadow evaluator per (deployment, instrument, interval). Retired and
         # paused rows are excluded so a retirement frees the slot without deleting the
