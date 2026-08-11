@@ -11,10 +11,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    GraphArtifact,
+    GraphVersion,
     IrGraphLayout,
     IrGraphLayoutGroup,
     IrGraphLayoutGroupMember,
     IrGraphLayoutPosition,
+    Project,
 )
 from app.db.session import SessionLocal
 
@@ -77,8 +80,38 @@ class LayoutRejected(Exception):
         self.path = path
 
 
-def _current_revision(graph_identifier: str, graph_version: int) -> int:
+def _require_owned_graph_version(
+    session: Session,
+    graph_identifier: str,
+    graph_version: int,
+    *,
+    owner_id: str,
+) -> None:
+    """Refuse a graph/version outside the caller's owner before touching layout rows."""
+    graph_version_row = session.scalar(
+        select(GraphVersion)
+        .join(GraphArtifact, GraphArtifact.identifier == GraphVersion.graph_identifier)
+        .join(Project, Project.project_id == GraphArtifact.project_id)
+        .where(
+            GraphVersion.graph_identifier == graph_identifier,
+            GraphVersion.version == graph_version,
+            Project.owner_id == owner_id,
+        )
+    )
+    if graph_version_row is None:
+        # Import lazily: graph_artifacts imports this module for layout composition.
+        from app.editor.graph_artifacts import GraphNotFound
+
+        raise GraphNotFound()
+
+
+def _current_revision(
+    graph_identifier: str, graph_version: int, *, owner_id: str
+) -> int:
     with SessionLocal() as session:
+        _require_owned_graph_version(
+            session, graph_identifier, graph_version, owner_id=owner_id
+        )
         revision = session.scalar(
             select(IrGraphLayout.revision).where(
                 IrGraphLayout.graph_identifier == graph_identifier,
@@ -93,10 +126,15 @@ def load_layout(
     graph_version: int,
     *,
     valid_instance_ids: frozenset[str],
+    owner_id: str,
 ) -> Layout:
     with SessionLocal() as session:
         return load_layout_in_session(
-            session, graph_identifier, graph_version, valid_instance_ids
+            session,
+            graph_identifier,
+            graph_version,
+            valid_instance_ids,
+            owner_id=owner_id,
         )
 
 
@@ -105,7 +143,12 @@ def load_layout_in_session(
     graph_identifier: str,
     graph_version: int,
     valid_instance_ids: frozenset[str],
+    *,
+    owner_id: str,
 ) -> Layout:
+    _require_owned_graph_version(
+        session, graph_identifier, graph_version, owner_id=owner_id
+    )
     head = session.get(IrGraphLayout, (graph_identifier, graph_version))
     if head is None:
         return Layout(graph_identifier, graph_version, 0, ())
@@ -178,10 +221,21 @@ def carry_and_reconcile_presentation(
     source_instance_ids: frozenset[str],
     target_instance_ids: frozenset[str],
     operations: Sequence[Mapping[str, Any]] = (),
+    owner_id: str,
 ) -> tuple[Layout, PresentationDelta]:
     """Carry presentation to an immutable graph version and prune removed nodes."""
+    _require_owned_graph_version(
+        session, graph_identifier, from_version, owner_id=owner_id
+    )
+    _require_owned_graph_version(
+        session, graph_identifier, to_version, owner_id=owner_id
+    )
     source = load_layout_in_session(
-        session, graph_identifier, from_version, source_instance_ids
+        session,
+        graph_identifier,
+        from_version,
+        source_instance_ids,
+        owner_id=owner_id,
     )
     if source.revision != base_revision:
         raise LayoutConflict(source.revision)
@@ -370,7 +424,11 @@ def carry_and_reconcile_presentation(
     _after_presentation_reconcile(session, target)
     return (
         load_layout_in_session(
-            session, graph_identifier, to_version, target_instance_ids
+            session,
+            graph_identifier,
+            to_version,
+            target_instance_ids,
+            owner_id=owner_id,
         ),
         PresentationDelta(tuple(forward), tuple(inverse)),
     )
@@ -382,12 +440,16 @@ def save_layout(
     *,
     base_revision: int,
     positions: Iterable[Position],
+    owner_id: str,
 ) -> Layout:
     """Replace a sparse set if and only if its revision is still current."""
     ordered = tuple(sorted(positions, key=lambda item: item.instance_id))
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     try:
         with SessionLocal() as session:
+            _require_owned_graph_version(
+                session, graph_identifier, graph_version, owner_id=owner_id
+            )
             current = session.get(IrGraphLayout, (graph_identifier, graph_version))
             current_revision = current.revision if current is not None else 0
             if current_revision != base_revision:
@@ -415,7 +477,9 @@ def save_layout(
                 if claimed.rowcount != 1:
                     session.rollback()
                     raise LayoutConflict(
-                        _current_revision(graph_identifier, graph_version))
+                        _current_revision(
+                            graph_identifier, graph_version, owner_id=owner_id
+                        ))
 
             session.execute(
                 delete(IrGraphLayoutPosition).where(
@@ -447,11 +511,14 @@ def save_layout(
                         )
                     )
                 ),
+                owner_id=owner_id,
             )
             session.commit()
     except IntegrityError as exc:
         raise LayoutConflict(
-            _current_revision(graph_identifier, graph_version)) from exc
+            _current_revision(
+                graph_identifier, graph_version, owner_id=owner_id
+            )) from exc
 
     return result
 
@@ -492,12 +559,16 @@ def save_groups(
     base_revision: int,
     groups: Iterable[VisualGroup],
     valid_instance_ids: frozenset[str],
+    owner_id: str,
 ) -> Layout:
     """Replace visual groups while preserving positions under one revision."""
     ordered = _validate_groups(tuple(groups), valid_instance_ids)
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     try:
         with SessionLocal() as session:
+            _require_owned_graph_version(
+                session, graph_identifier, graph_version, owner_id=owner_id
+            )
             current = session.get(IrGraphLayout, (graph_identifier, graph_version))
             current_revision = current.revision if current is not None else 0
             if current_revision != base_revision:
@@ -524,7 +595,9 @@ def save_groups(
                 if claimed.rowcount != 1:
                     session.rollback()
                     raise LayoutConflict(
-                        _current_revision(graph_identifier, graph_version)
+                        _current_revision(
+                            graph_identifier, graph_version, owner_id=owner_id
+                        )
                     )
             session.execute(delete(IrGraphLayoutGroupMember).where(
                 IrGraphLayoutGroupMember.graph_identifier == graph_identifier,
@@ -561,12 +634,16 @@ def save_groups(
             ])
             session.flush()
             result = load_layout_in_session(
-                session, graph_identifier, graph_version, valid_instance_ids
+                session,
+                graph_identifier,
+                graph_version,
+                valid_instance_ids,
+                owner_id=owner_id,
             )
             session.commit()
     except IntegrityError as exc:
         raise LayoutConflict(
-            _current_revision(graph_identifier, graph_version)
+            _current_revision(graph_identifier, graph_version, owner_id=owner_id)
         ) from exc
     return result
 
@@ -703,10 +780,15 @@ def apply_presentation_batch_in_session(
     base_revision: int,
     operations: Sequence[Mapping[str, Any]],
     valid_instance_ids: frozenset[str],
+    owner_id: str,
 ) -> tuple[Layout, PresentationDelta]:
     """Apply a closed presentation batch and return its exact replay delta."""
     current = load_layout_in_session(
-        session, graph_identifier, graph_version, valid_instance_ids
+        session,
+        graph_identifier,
+        graph_version,
+        valid_instance_ids,
+        owner_id=owner_id,
     )
     if current.revision != base_revision:
         raise LayoutConflict(current.revision)
@@ -876,6 +958,10 @@ def apply_presentation_batch_in_session(
         session, graph_identifier, graph_version, positions.values()
     )
     result = load_layout_in_session(
-        session, graph_identifier, graph_version, valid_instance_ids
+        session,
+        graph_identifier,
+        graph_version,
+        valid_instance_ids,
+        owner_id=owner_id,
     )
     return result, PresentationDelta(tuple(forward), tuple(inverse))

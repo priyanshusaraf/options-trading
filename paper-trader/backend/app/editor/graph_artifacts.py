@@ -338,6 +338,7 @@ def load_editor_snapshot(project_id: str, identifier: str, *, owner_id: str) -> 
             identifier,
             version.version,
             _authored_ids(published.graph),
+            owner_id=owner_id,
         )
         return EditorSnapshot(artifact.draft_revision, published, layout)
 
@@ -500,6 +501,7 @@ def apply_and_publish(
             source_instance_ids=_authored_ids(original),
             target_instance_ids=valid_ids,
             operations=presentation_operations,
+            owner_id=owner_id,
         )
 
         claimed = session.execute(
@@ -569,6 +571,7 @@ def apply_presentation(
             base_revision=base_presentation_revision,
             operations=operations,
             valid_instance_ids=_authored_ids(published.graph),
+            owner_id=owner_id,
         )
         publication = PresentationPublication(
             draft_revision=artifact.draft_revision,

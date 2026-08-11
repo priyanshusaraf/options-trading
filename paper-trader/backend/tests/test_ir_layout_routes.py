@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Organization
+from app.db.models import LEGACY_OWNER_ID, Organization
 from app.db.session import SessionLocal, init_db
 from app.editor import graph_artifacts as graph_store
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
@@ -62,6 +63,34 @@ def test_layout_routes_load_a_graph_owned_by_the_resolved_principal(client, monk
 
     assert response.status_code == 200
     assert response.json()["graph_identifier"] == identifier
+
+
+def test_layout_route_forwards_each_resolved_owner_to_graph_and_layout_store(client, monkeypatch):
+    """The request principal selects scope; request JSON never does."""
+    from app.api import ir_layout_routes
+
+    graph_owners: list[str] = []
+    layout_owners: list[str] = []
+
+    def fake_graph(identifier, version, *, owner_id):
+        graph_owners.append(owner_id)
+        return SimpleNamespace(graph=GRAPH)
+
+    def fake_layout(identifier, version, *, valid_instance_ids, owner_id):
+        layout_owners.append(owner_id)
+        return ir_layout_routes.ir_layouts.Layout(
+            identifier, version, 0, ()
+        )
+
+    monkeypatch.setattr(ir_layout_routes.graph_artifacts, "load_published_graph", fake_graph)
+    monkeypatch.setattr(ir_layout_routes.ir_layouts, "load_layout", fake_layout)
+
+    monkeypatch.setattr(get_settings(), "owner_id", "owner.a")
+    assert client.get(LAYOUT_URL).status_code == 200
+    monkeypatch.setattr(get_settings(), "owner_id", "owner.b")
+    assert client.get(LAYOUT_URL).status_code == 200
+
+    assert graph_owners == layout_owners == ["owner.a", "owner.b"]
 
 
 def test_missing_layout_is_an_empty_revision_zero_document(client):
@@ -232,6 +261,7 @@ def test_failure_after_revision_claim_rolls_back_head_and_positions(client, monk
             VERSION,
             base_revision=1,
             positions=[layouts.Position("n_atr", 5.0, 6.0)],
+            owner_id=LEGACY_OWNER_ID,
         )
 
     persisted = client.get(LAYOUT_URL).json()

@@ -107,11 +107,13 @@ def get_layout(
     version: int,
     principal: Principal = Depends(get_principal),
 ) -> IrLayoutResponse:
-    graph = _graph(identifier, version, owner_id=owner_id_for(principal))
+    owner_id = owner_id_for(principal)
+    graph = _graph(identifier, version, owner_id=owner_id)
     return layout_response(ir_layouts.load_layout(
         identifier,
         version,
         valid_instance_ids=_authored_ids(graph),
+        owner_id=owner_id,
     ))
 
 
@@ -125,7 +127,8 @@ def put_layout(
     body: IrLayoutWrite,
     principal: Principal = Depends(get_principal),
 ):
-    graph = _graph(identifier, version, owner_id=owner_id_for(principal))
+    owner_id = owner_id_for(principal)
+    graph = _graph(identifier, version, owner_id=owner_id)
     valid_ids = _authored_ids(graph)
     ids = [position.instance_id for position in body.positions]
     if len(ids) != len(set(ids)):
@@ -146,6 +149,7 @@ def put_layout(
                 ir_layouts.Position(position.instance_id, position.x, position.y)
                 for position in body.positions
             ),
+            owner_id=owner_id,
         )
     except ir_layouts.LayoutConflict as exc:
         return JSONResponse(

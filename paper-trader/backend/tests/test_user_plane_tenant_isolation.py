@@ -4,10 +4,12 @@ from __future__ import annotations
 import copy
 
 import pytest
+from sqlalchemy import event, text
 
 from app.db.models import Organization
-from app.db.session import SessionLocal, init_db
+from app.db.session import SessionLocal, engine, init_db
 from app.editor import graph_artifacts as store
+from app.editor import layouts
 from app.ir.strategies.expanding_z import GRAPH
 
 
@@ -108,3 +110,140 @@ def test_project_version_events_do_not_duplicate_for_another_owned_project() -> 
     assert [event.identifier for event in store.list_project_version_events(
         project.project_id, owner_id="owner.a"
     )] == ["owner.a.events"]
+
+
+def test_layout_repository_operations_require_an_explicit_owner() -> None:
+    """Removing the owner keyword must reject the repository call at its boundary."""
+    project = store.create_project("Owner A", owner_id="owner.a")
+    store.create_artifact(
+        project.project_id, "owner.a.layout", _graph("owner.a.layout"), owner_id="owner.a"
+    )
+    store.publish_draft(project.project_id, "owner.a.layout", base_revision=0, owner_id="owner.a")
+
+    with pytest.raises(TypeError):
+        layouts.load_layout("owner.a.layout", 1, valid_instance_ids=frozenset())
+    with pytest.raises(TypeError):
+        layouts.save_layout("owner.a.layout", 1, base_revision=0, positions=())
+    with pytest.raises(TypeError):
+        layouts.save_groups(
+            "owner.a.layout", 1, base_revision=0, groups=(), valid_instance_ids=frozenset()
+        )
+    with SessionLocal.begin() as session:
+        with pytest.raises(TypeError):
+            layouts.apply_presentation_batch_in_session(
+                session,
+                "owner.a.layout",
+                1,
+                base_revision=0,
+                operations=(),
+                valid_instance_ids=frozenset(),
+            )
+    with SessionLocal.begin() as session:
+        with pytest.raises(TypeError):
+            layouts.carry_and_reconcile_presentation(
+                session,
+                "owner.a.layout",
+                1,
+                1,
+                base_revision=0,
+                source_instance_ids=frozenset(),
+                target_instance_ids=frozenset(),
+            )
+
+
+def test_layout_store_scopes_reads_and_refuses_other_owner_before_layout_sql() -> None:
+    """A guessed graph/version cannot materialize or change another owner's layout."""
+    project = store.create_project("Owner A", owner_id="owner.a")
+    store.create_artifact(
+        project.project_id, "owner.a.layout", _graph("owner.a.layout"), owner_id="owner.a"
+    )
+    store.publish_draft(project.project_id, "owner.a.layout", base_revision=0, owner_id="owner.a")
+    valid_ids = frozenset({"n_ema", "n_impulse"})
+    saved = layouts.save_layout(
+        "owner.a.layout",
+        1,
+        base_revision=0,
+        positions=(layouts.Position("n_ema", 12.0, 24.0),),
+        owner_id="owner.a",
+    )
+    grouped = layouts.save_groups(
+        "owner.a.layout",
+        1,
+        base_revision=saved.revision,
+        groups=(layouts.VisualGroup(
+            "group.a",
+            "Owner A",
+            layouts.GroupFrame(1.0, 2.0, 3.0, 4.0),
+            False,
+            ("n_ema",),
+        ),),
+        valid_instance_ids=valid_ids,
+        owner_id="owner.a",
+    )
+    assert layouts.load_layout(
+        "owner.a.layout", 1, valid_instance_ids=valid_ids, owner_id="owner.a"
+    ).revision == grouped.revision == 2
+
+    def layout_rows() -> tuple[tuple[str, tuple[tuple[object, ...], ...]], ...]:
+        tables = (
+            "ir_graph_layouts",
+            "ir_graph_layout_positions",
+            "ir_graph_layout_groups",
+            "ir_graph_layout_group_members",
+            "ir_graph_layout_orphan_archive",
+            "ir_graph_layout_position_orphan_archive",
+        )
+        with SessionLocal() as session:
+            return tuple(
+                (table, tuple(session.execute(text(f"SELECT * FROM {table}")).all()))
+                for table in tables
+            )
+
+    before = layout_rows()
+
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement.lower())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with pytest.raises(store.GraphNotFound) as wrong_owner:
+            layouts.load_layout(
+                "owner.a.layout", 1, valid_instance_ids=valid_ids, owner_id="owner.b"
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    with pytest.raises(store.GraphNotFound) as absent_version:
+        layouts.load_layout(
+            "owner.a.layout", 2, valid_instance_ids=valid_ids, owner_id="owner.a"
+        )
+    assert (
+        type(wrong_owner.value), wrong_owner.value.args, str(wrong_owner.value)
+    ) == (type(absent_version.value), absent_version.value.args, str(absent_version.value))
+    assert statements and "graph_versions" in statements[0]
+    assert "ir_graph_layout" not in statements[0]
+
+    with pytest.raises(store.GraphNotFound):
+        layouts.save_layout(
+            "owner.a.layout", 1, base_revision=2, positions=(), owner_id="owner.b"
+        )
+    with pytest.raises(store.GraphNotFound):
+        layouts.save_groups(
+            "owner.a.layout", 1, base_revision=2, groups=(),
+            valid_instance_ids=valid_ids, owner_id="owner.b"
+        )
+    with SessionLocal.begin() as session:
+        with pytest.raises(store.GraphNotFound):
+            layouts.apply_presentation_batch_in_session(
+                session,
+                "owner.a.layout",
+                1,
+                base_revision=2,
+                operations=(),
+                valid_instance_ids=valid_ids,
+                owner_id="owner.b",
+            )
+
+    assert layout_rows() == before

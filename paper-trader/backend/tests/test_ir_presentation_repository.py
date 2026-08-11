@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.db.session import SessionLocal, init_db
+from app.db.models import LEGACY_OWNER_ID
 from app.editor import layouts
 from app.ir.strategies.expanding_z import GRAPH
 
@@ -34,6 +35,7 @@ def test_visual_groups_round_trip_and_preserve_sparse_positions():
         VERSION,
         base_revision=0,
         positions=(layouts.Position("n_ema", 12.0, 24.0),),
+        owner_id=LEGACY_OWNER_ID,
     )
 
     grouped = layouts.save_groups(
@@ -42,9 +44,10 @@ def test_visual_groups_round_trip_and_preserve_sparse_positions():
         base_revision=positioned.revision,
         groups=(_group("n_ema", "n_impulse"),),
         valid_instance_ids=AUTHORED_IDS,
+        owner_id=LEGACY_OWNER_ID,
     )
     loaded = layouts.load_layout(
-        IDENTIFIER, VERSION, valid_instance_ids=AUTHORED_IDS
+        IDENTIFIER, VERSION, valid_instance_ids=AUTHORED_IDS, owner_id=LEGACY_OWNER_ID
     )
 
     assert grouped.revision == 2
@@ -61,6 +64,7 @@ def test_visual_group_members_must_be_current_authored_nodes():
             base_revision=0,
             groups=(_group("n_atr/n_internal"),),
             valid_instance_ids=AUTHORED_IDS,
+            owner_id=LEGACY_OWNER_ID,
         )
 
 
@@ -99,6 +103,7 @@ def test_presentation_batch_returns_exact_forward_and_inverse_operations():
             base_revision=0,
             operations=operations,
             valid_instance_ids=AUTHORED_IDS,
+            owner_id=LEGACY_OWNER_ID,
         )
 
     assert result.revision == 1
@@ -121,6 +126,7 @@ def test_presentation_batch_returns_exact_forward_and_inverse_operations():
             base_revision=1,
             operations=delta.inverse_operations,
             valid_instance_ids=AUTHORED_IDS,
+            owner_id=LEGACY_OWNER_ID,
         )
     assert restored.groups == ()
 
@@ -142,8 +148,9 @@ def test_rejected_presentation_batch_does_not_advance_revision():
                     "collapsed": False,
                 },),
                 valid_instance_ids=AUTHORED_IDS,
+                owner_id=LEGACY_OWNER_ID,
             )
 
     assert layouts.load_layout(
-        IDENTIFIER, VERSION, valid_instance_ids=AUTHORED_IDS
+        IDENTIFIER, VERSION, valid_instance_ids=AUTHORED_IDS, owner_id=LEGACY_OWNER_ID
     ).revision == 0
