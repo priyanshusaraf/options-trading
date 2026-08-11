@@ -36,7 +36,7 @@ def test_a_winning_equity_short_reads_as_a_profit():
     assert pos.unrealized_pnl() == 50.0        # the direction-aware truth
 
     with SessionLocal() as s:
-        res = account_pnl(s, FakeKite())
+        res = account_pnl(s, FakeKite(), broker_account_id="account.default")
 
     assert res["available"] is True
     assert res["bot_pnl"] == 50.0, (
@@ -53,6 +53,6 @@ def test_a_long_is_unaffected():
     r.broker.commit()
 
     with SessionLocal() as s:
-        res = account_pnl(s, FakeKite())
+        res = account_pnl(s, FakeKite(), broker_account_id="account.default")
 
     assert res["bot_pnl"] == 50.0, res

@@ -111,6 +111,7 @@ class EngineRunner:
         # literal because the whole point of Phase B is that "which book" becomes a
         # parameter of execution instead of an assumption baked into every query.
         self.deployment_id = LEGACY_DEPLOYMENT_ID
+        self.owner_id = LEGACY_OWNER_ID
         # Disarm every deployment on process start — the same invariant the global
         # `armed` flag has (it is False below), for the same reason: nobody was
         # watching when the process went down, so no arm state may be inherited
@@ -257,13 +258,14 @@ class EngineRunner:
     # ── instrument enable/disable ─────────────────────────────────────────
     def _load_enabled(self) -> set[str]:
         with SessionLocal() as s:
-            rows = list(s.scalars(select(InstrumentState)))
+            rows = list(s.scalars(select(InstrumentState).where(
+                InstrumentState.owner_id == self.owner_id)))
             en = {r.instrument_key for r in rows if r.enabled}
         return en or {i.key for i in all_instruments()}
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         with SessionLocal() as s:
-            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+            r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.enabled = enabled
                 s.commit()
@@ -295,11 +297,13 @@ class EngineRunner:
     def _load_intervals(self) -> dict[str, str]:
         with SessionLocal() as s:
             return {r.instrument_key: normalize_live_interval(r.live_interval or "")
-                    for r in s.scalars(select(InstrumentState))}
+                    for r in s.scalars(select(InstrumentState).where(
+                        InstrumentState.owner_id == self.owner_id))}
 
     def _load_entry_blocks(self) -> set[str]:
         with SessionLocal() as s:
-            return {r.instrument_key for r in s.scalars(select(InstrumentState))
+            return {r.instrument_key for r in s.scalars(select(InstrumentState).where(
+                InstrumentState.owner_id == self.owner_id))
                     if r.entries_blocked}
 
     def _load_instr_config(self) -> tuple[dict, dict, dict, dict]:
@@ -309,7 +313,8 @@ class EngineRunner:
         from app.core.watchlists import effective_strategy_map
         products, strategies, priority, overtrade = {}, {}, {}, {}
         with SessionLocal() as s:
-            for r in s.scalars(select(InstrumentState)):
+            for r in s.scalars(select(InstrumentState).where(
+                    InstrumentState.owner_id == self.owner_id)):
                 products[r.instrument_key] = r.product or "options"
                 if r.strategy_key:
                     strategies[r.instrument_key] = r.strategy_key
@@ -573,7 +578,7 @@ class EngineRunner:
     def set_interval(self, key: str, interval: str) -> str:
         iv = normalize_live_interval(interval)
         with SessionLocal() as s:
-            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+            r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.live_interval = iv
                 s.commit()
@@ -600,7 +605,8 @@ class EngineRunner:
         """
         from app.core.scoped_config import resolve
         with SessionLocal() as s:
-            return resolve(s, self.settings, deployment_id=self.deployment_id)
+            return resolve(s, self.settings, deployment_id=self.deployment_id,
+                           owner_id=self.owner_id)
 
     def refresh_params(self) -> None:
         """Re-read runtime overrides so live Settings edits take effect."""
@@ -608,7 +614,7 @@ class EngineRunner:
 
     def set_entries_blocked(self, key: str, blocked: bool) -> None:
         with SessionLocal() as s:
-            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+            r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.entries_blocked = blocked
                 s.commit()
@@ -633,9 +639,9 @@ class EngineRunner:
         after the `with` only runs if the write actually landed.
         """
         with SessionLocal() as s:
-            r = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+            r = s.get(InstrumentState, (self.owner_id, key))
             if r is None:
-                r = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=key)
+                r = InstrumentState(owner_id=self.owner_id, instrument_key=key)
                 s.add(r)
             yield r
             s.commit()
@@ -2734,9 +2740,9 @@ class EngineRunner:
         day = self.provider.now().date().isoformat()
         try:
             with SessionLocal() as s:
-                row = s.get(DailyAccountSnapshot, (LEGACY_BROKER_ACCOUNT_ID, day))
+                row = s.get(DailyAccountSnapshot, (self.broker.broker_account_id, day))
                 if row is None:
-                    row = DailyAccountSnapshot(broker_account_id=LEGACY_BROKER_ACCOUNT_ID, day=day)
+                    row = DailyAccountSnapshot(broker_account_id=self.broker.broker_account_id, day=day)
                     s.add(row)
                 row.account_net = float(funds.get("net", 0.0) or 0.0)
                 row.account_available = float(funds.get("available", 0.0) or 0.0)

@@ -9,7 +9,7 @@ from app.providers.mock import MockProvider
 
 def test_trade_to_dict_exposes_spots_and_moves():
     init_db(reset=True)
-    b = PaperBroker(MockProvider())
+    b = PaperBroker(MockProvider(), broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = b.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),

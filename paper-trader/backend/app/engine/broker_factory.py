@@ -90,7 +90,11 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
     `ConnectionCannotExecute` for why silence there is the dangerous option."""
     named = execution_connection is not None
     conn = execution_connection if named else connection_for(provider)
-    book = {} if deployment_id is None else {'deployment_id': deployment_id}
+    # Outermost legacy process boundary until principal/deployment account binding lands.
+    from app.db.models import LEGACY_BROKER_ACCOUNT_ID
+    book = {"broker_account_id": LEGACY_BROKER_ACCOUNT_ID}
+    if deployment_id is not None:
+        book["deployment_id"] = deployment_id
 
     if not live_execution_enabled():
         return PaperBroker(provider, **book)

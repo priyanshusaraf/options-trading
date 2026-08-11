@@ -218,7 +218,7 @@ def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
 
 
 def test_the_guard_does_not_fire_on_the_paper_broker():
-    bf._refuse_live_broker_under_pytest(PaperBroker(MockProvider()))
+    bf._refuse_live_broker_under_pytest(PaperBroker(MockProvider(), broker_account_id="account.default"))
 
 
 def test_the_guard_tolerates_the_stubbed_live_broker_used_by_wiring_tests():

@@ -131,8 +131,8 @@ class Membership(Base):
                         name="ck_memberships_status"),
     )
 
-    organization_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), primary_key=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="member",
                                       server_default="member")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active",
@@ -349,10 +349,10 @@ class CapitalState(Base):
     in place, so a paper fill debiting the live book's cash could not be prevented by
     filtering a query — this table needed a row per book, not a predicate.
 
-    `book` is NULL on exactly one row: the single pre-L1.3B ledger, whose owning book is
-    decided once from the `mode` already stamped on the money rows it produced
-    (`core/execution_book.capital_for_book`). NULL therefore means "written before
-    2026-08-07 and not yet attributed", never "shared"."""
+    A pre-0018 NULL `book` is migrated to the durable ``legacy`` sentinel because a
+    composite primary key cannot contain NULL.  It is claimed once from the `mode`
+    already stamped on the money rows it produced (`core.execution_book.capital_for_book`);
+    it never means a shared book."""
 
     __tablename__ = "capital_state"
     # `id` remains a compatibility address for historic diagnostics. The composite key is

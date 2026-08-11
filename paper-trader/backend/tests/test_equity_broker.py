@@ -19,7 +19,7 @@ NOW = dt.datetime(2024, 1, 2, 10, 0)
 
 def _broker() -> PaperBroker:
     init_db(reset=True)
-    return PaperBroker(MockProvider())
+    return PaperBroker(MockProvider(), broker_account_id="account.default")
 
 
 def test_open_equity_books_margin_not_full_notional():
@@ -103,5 +103,5 @@ def test_portfolio_equity_is_margin_plus_pnl_not_full_notional():
     assert snap.equity == pytest.approx(expected, abs=0.01)
     assert snap.equity < full_notional_equity - 10_000   # not the inflated figure
 
-    cap = analytics_capital_dict(b.s)
+    cap = analytics_capital_dict(b.s, broker_account_id="account.default")
     assert cap["equity"] == pytest.approx(expected, abs=0.01)

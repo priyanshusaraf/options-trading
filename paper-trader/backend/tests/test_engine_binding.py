@@ -43,7 +43,7 @@ def assign(instrument_key: str, strategy_key: str | None) -> None:
     table, bypassing every service. The engine must be safe against what is *in* the
     database, not only against what its own setters would have put there."""
     with SessionLocal() as session:
-        row = session.get(InstrumentState, instrument_key)
+        row = session.get(InstrumentState, ("owner", instrument_key))
         if row is None:
             row = InstrumentState(instrument_key=instrument_key)
             session.add(row)
@@ -241,7 +241,7 @@ def test_assigning_a_graph_strategy_through_the_route_is_refused(monkeypatch):
         runner.set_strategy("NIFTY", strategy.key)
 
     with SessionLocal() as session:
-        row = session.get(InstrumentState, "NIFTY")
+        row = session.get(InstrumentState, ("owner", "NIFTY"))
     assert row is None or row.strategy_key != strategy.key
     assert runner.strategy_keys.get("NIFTY") != strategy.key
 
@@ -332,10 +332,10 @@ def test_adding_an_instrument_with_a_graph_strategy_is_refused(monkeypatch):
     strategy = graph_strategy(monkeypatch)
     with pytest.raises(binding.AuthorityNotGranted):
         universe_resolver.add_instrument("NIFTY", EngineRunner().provider,
-                                         strategy_key=strategy.key)
+                                         strategy_key=strategy.key, owner_id="owner")
 
     with SessionLocal() as session:
-        row = session.get(InstrumentState, "NIFTY")
+        row = session.get(InstrumentState, ("owner", "NIFTY"))
     assert row is None or row.strategy_key != strategy.key
 
 

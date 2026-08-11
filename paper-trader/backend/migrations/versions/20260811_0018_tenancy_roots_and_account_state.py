@@ -22,6 +22,9 @@ depends_on = None
 LEGACY_OWNER_ID = "owner"
 LEGACY_USER_ID = "owner-user"
 LEGACY_BROKER_ACCOUNT_ID = "account.default"
+# `capital_state.book` is VARCHAR(8).  This is intentionally a durable address rather
+# than NULL because the rebuilt composite primary key cannot contain NULL.
+LEGACY_UNATTRIBUTED_BOOK = "legacy"
 
 
 def upgrade() -> None:
@@ -56,6 +59,8 @@ def upgrade() -> None:
                            name="ck_memberships_role"),
         sa.CheckConstraint("status IN ('active', 'invited', 'revoked')",
                            name="ck_memberships_status"),
+        sa.ForeignKeyConstraint(["organization_id"], ["organizations.organization_id"]),
+        sa.ForeignKeyConstraint(["user_id"], ["users.user_id"]),
     )
     op.create_table(
         "broker_accounts",
@@ -108,7 +113,7 @@ def upgrade() -> None:
     op.execute(sa.text(f"""
         INSERT INTO capital_state__0018
         (id, broker_account_id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at)
-        SELECT id, '{LEGACY_BROKER_ACCOUNT_ID}', COALESCE(book, 'live'), initial_capital, cash,
+        SELECT id, '{LEGACY_BROKER_ACCOUNT_ID}', COALESCE(book, '{LEGACY_UNATTRIBUTED_BOOK}'), initial_capital, cash,
                realized_pnl, account_baseline, anchored_at, updated_at
         FROM capital_state
     """))
@@ -163,6 +168,25 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Dropping tenant roots is reversible only while this revision's single legacy
+    # compatibility root is the *only* root.  A later customer must never disappear
+    # merely because an operator asks Alembic to walk backwards.
+    root_counts = {
+        "organizations": ("organization_id", LEGACY_OWNER_ID),
+        "users": ("user_id", LEGACY_USER_ID),
+        "broker_accounts": ("broker_account_id", LEGACY_BROKER_ACCOUNT_ID),
+    }
+    for table, (key, legacy_id) in root_counts.items():
+        if bind.execute(sa.text(
+            f"SELECT 1 FROM {table} WHERE {key} != :legacy_id LIMIT 1"
+        ), {"legacy_id": legacy_id}).scalar() is not None:
+            raise RuntimeError(
+                f"tenancy downgrade refused: non-legacy {table} root would be lost")
+    if bind.execute(sa.text(
+        "SELECT 1 FROM memberships WHERE organization_id != :organization_id "
+        "OR user_id != :user_id LIMIT 1"
+    ), {"organization_id": LEGACY_OWNER_ID, "user_id": LEGACY_USER_ID}).scalar() is not None:
+        raise RuntimeError("tenancy downgrade refused: non-legacy membership would be lost")
     collisions = {
         "capital_state": "book",
         "instrument_state": "instrument_key",

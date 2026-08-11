@@ -35,8 +35,8 @@ from app.providers.base import MarketDataProvider, OptionQuote
 class PaperBroker:
     MODE = "paper"   # stamped on every Position/Trade this broker creates (LiveBroker overrides to "live")
 
-    def __init__(self, provider: MarketDataProvider,
-                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
+    def __init__(self, provider: MarketDataProvider, deployment_id: int = LEGACY_DEPLOYMENT_ID,
+                 *, broker_account_id: str) -> None:
         self.provider = provider
         self.settings = get_settings()
         self.s = SessionLocal()
@@ -52,9 +52,7 @@ class PaperBroker:
         # (`core/execution_book.py`) — a broker that cannot say which book it writes to
         # must not be assumed harmless.
         self.book = book_of(self)
-        # Task 2 threads this from the resolved deployment/account binding; this legacy
-        # broker is the compatibility boundary for the current single-owner runtime.
-        self.broker_account_id = LEGACY_BROKER_ACCOUNT_ID
+        self.broker_account_id = broker_account_id
         # Attribute this book's ledger once, here, at construction. Doing it lazily on
         # the first `capital()` call would put a bootstrap write in the middle of a fill.
         capital_for_book(self.s, self.book, broker_account_id=self.broker_account_id)

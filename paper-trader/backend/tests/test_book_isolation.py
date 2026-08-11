@@ -43,7 +43,8 @@ class _LiveLikeBroker(PaperBroker):
 
 
 def _broker(mode):
-    return _LiveLikeBroker(MockProvider()) if mode == LIVE else PaperBroker(MockProvider())
+    return (_LiveLikeBroker(MockProvider(), broker_account_id="account.default")
+            if mode == LIVE else PaperBroker(MockProvider(), broker_account_id="account.default"))
 
 
 def _open_row(session, *, mode, key="NIFTY", entry_cost=1_000.0):
@@ -215,8 +216,8 @@ class TestRealisedAndUnrealisedPnlStayApart:
         _claim_both_ledgers()
         with SessionLocal() as s:
             _open_row(s, mode=LIVE, entry_cost=3_000.0)
-            assert analytics.capital_dict(s, book=PAPER)["open_count"] == 0
-            assert analytics.capital_dict(s, book=LIVE)["open_count"] == 1
+            assert analytics.capital_dict(s, book=PAPER, broker_account_id="account.default")["open_count"] == 0
+            assert analytics.capital_dict(s, book=LIVE, broker_account_id="account.default")["open_count"] == 1
 
 
 # ── invariants 3 (trades), 9 ──────────────────────────────────────────────────

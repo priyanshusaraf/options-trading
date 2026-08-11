@@ -14,7 +14,7 @@ from app.core.instruments import Instrument
 from app.core.logging import log
 from sqlalchemy import select
 
-from app.db.models import LEGACY_OWNER_ID, InstrumentState, Position, UniverseInstrument
+from app.db.models import InstrumentState, Position, UniverseInstrument
 from app.db.session import SessionLocal
 
 # cache of {key: Instrument} resolved from the Kite-built universe, per day
@@ -55,7 +55,7 @@ def resolve_spec(key: str, provider) -> Instrument | None:
 
 def add_instrument(key: str, provider, on_home: bool = True,
                    interval: str | None = None, strategy_key: str | None = None,
-                   product: str | None = None) -> dict:
+                   product: str | None = None, *, owner_id: str) -> dict:
     # Before any write: this function assigns `InstrumentState.strategy_key` directly and
     # validates only against the registry, so it is a second route from "a graph-backed
     # strategy is registered" to "a graph-backed strategy is assigned". Raising here
@@ -86,9 +86,9 @@ def add_instrument(key: str, provider, on_home: bool = True,
         else:
             row.active = True
             row.on_home = on_home
-        st = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+        st = s.get(InstrumentState, (owner_id, key))
         if st is None:
-            st = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=key, enabled=True)
+            st = InstrumentState(owner_id=owner_id, instrument_key=key, enabled=True)
             s.add(st)
         else:
             st.enabled = True
@@ -120,7 +120,7 @@ def add_instrument(key: str, provider, on_home: bool = True,
     return out
 
 
-def remove_instrument(key: str) -> dict:
+def remove_instrument(key: str, *, owner_id: str) -> dict:
     """Un-pin from the homepage and disable trading. User-added instruments are
     deactivated entirely; seed instruments are kept but disabled/un-pinned."""
     with SessionLocal() as s:
@@ -136,7 +136,7 @@ def remove_instrument(key: str) -> dict:
         row.on_home = False
         if row.source == "user":
             row.active = False
-        st = s.get(InstrumentState, (LEGACY_OWNER_ID, key))
+        st = s.get(InstrumentState, (owner_id, key))
         if st is not None:
             st.enabled = False
         s.commit()

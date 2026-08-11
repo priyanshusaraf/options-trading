@@ -70,7 +70,7 @@ def status(request: Request):
         # the live gates or the Kite provider are absent, so the setting and the broker
         # that was actually built can disagree. The cockpit must report the book the
         # engine is writing.
-        cap = analytics.capital_dict(s, book=r.book)
+        cap = analytics.capital_dict(s, book=r.book, broker_account_id=r.broker.broker_account_id)
     return {
         "provider": p.name,
         "authenticated": p.is_authenticated(),
@@ -209,7 +209,8 @@ def portfolio_add(body: AddInstrument, request: Request):
     r = _runner(request)
     res = universe_resolver.add_instrument(body.key, r.provider, on_home=body.on_home,
                                            interval=body.interval,
-                                           strategy_key=body.strategy_key, product=body.product)
+                                           strategy_key=body.strategy_key, product=body.product,
+                                           owner_id=r.owner_id)
     if "error" not in res:
         r.apply_universe_entry(body.key, res)   # config-then-enable (H11); live next tick
     return res
@@ -219,7 +220,7 @@ def portfolio_add(body: AddInstrument, request: Request):
 def portfolio_remove(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
-    res = universe_resolver.remove_instrument(body.key)
+    res = universe_resolver.remove_instrument(body.key, owner_id=r.owner_id)
     r.remove_universe_entry(body.key)   # disable-first (H11)
     return res
 
@@ -248,7 +249,7 @@ def portfolio_add_bulk(body: BulkAdd, request: Request):
         try:
             res = universe_resolver.add_instrument(
                 it.key, r.provider, on_home=it.on_home, interval=it.interval,
-                strategy_key=it.strategy_key, product=it.product)
+                strategy_key=it.strategy_key, product=it.product, owner_id=r.owner_id)
         except Exception as e:
             skipped.append({"key": it.key, "reason": str(e)})
             continue
@@ -354,7 +355,8 @@ def account_pnl_route(request: Request):
     """Bot-vs-you split on the shared real account (live only)."""
     r = _runner(request)
     with SessionLocal() as s:
-        return analytics.account_pnl(s, r.provider, book=r.book)
+        return analytics.account_pnl(s, r.provider, book=r.book,
+                                     broker_account_id=r.broker.broker_account_id)
 
 
 @router.get("/api/dashboard")
@@ -374,7 +376,8 @@ def dashboard(request: Request, segment: str | None = None, strategy: str | None
         equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
                   else analytics.realized_curve(s, seg, strat, since))
         return {
-            "capital": analytics.capital_dict(s, book=r.book),
+            "capital": analytics.capital_dict(
+                s, book=r.book, broker_account_id=r.broker.broker_account_id),
             "summary": analytics.summary(s, seg, strat, since),
             "equity_curve": equity,
             "instrument_curves": analytics.per_instrument_curves(s, seg, strat, since),

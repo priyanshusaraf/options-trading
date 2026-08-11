@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db.models import Base
 from app.db.planes import Plane, TABLE_PLANES
+from app.db.session import SessionLocal, init_db
 
 
 ROOTS = {
@@ -47,5 +48,40 @@ def test_tenancy_root_models_enforce_normalized_identity_constraints(tmp_path):
         session.commit()
         session.add(models.User(
             user_id="user.b", email_normalized=" A@EXAMPLE.TEST ", display_name="B"))
+        with __import__("pytest").raises(IntegrityError):
+            session.commit()
+
+
+def test_fresh_reset_bootstrap_seeds_exactly_one_legacy_root_set_idempotently():
+    """`create_all` does not run migration DML, so init_db owns this compatibility seed."""
+    from app.db.models import (BrokerAccount, LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID,
+                               LEGACY_USER_ID, Membership, Organization, User)
+
+    init_db(reset=True)
+    init_db(reset=False)
+    with SessionLocal() as session:
+        assert session.query(Organization).filter_by(organization_id=LEGACY_OWNER_ID).count() == 1
+        assert session.query(User).filter_by(user_id=LEGACY_USER_ID).count() == 1
+        assert session.query(Membership).filter_by(
+            organization_id=LEGACY_OWNER_ID, user_id=LEGACY_USER_ID).count() == 1
+        assert session.query(BrokerAccount).filter_by(
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID).count() == 1
+
+
+def test_membership_refuses_dangling_same_plane_roots(tmp_path):
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'membership-fks.db'}")
+    with engine.connect() as connection:
+        connection.execute(sa.text("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    with sa.orm.Session(engine) as session:
+        session.add_all([
+            __import__("app.db.models", fromlist=["Organization"]).Organization(
+                organization_id="org.a", name="A"),
+            __import__("app.db.models", fromlist=["User"]).User(
+                user_id="user.a", email_normalized="a@example.test", display_name="A"),
+        ])
+        session.commit()
+        session.add(__import__("app.db.models", fromlist=["Membership"]).Membership(
+            organization_id="org.a", user_id="missing", role="member"))
         with __import__("pytest").raises(IntegrityError):
             session.commit()

@@ -379,7 +379,7 @@ def test_unrelated_legacy_position_does_not_consume_lifecycle_recovery():
     init_db(reset=True)
     provider = MockProvider()
     inst, quote, context = _option_context(provider)
-    legacy = PaperBroker(provider).open_position(
+    legacy = PaperBroker(provider, broker_account_id="account.default").open_position(
         inst, "LONG", quote, "legacy", NOW, context["spot"], params={})
     with SessionLocal() as session:
         stored_legacy = session.get(Position, legacy.id)

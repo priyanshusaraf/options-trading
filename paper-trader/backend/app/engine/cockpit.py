@@ -453,7 +453,9 @@ def view(runner, session) -> CockpitView:
                    for key in keys]
 
     try:
-        capital = analytics.capital_dict(session, book=book)
+        from app.db.models import LEGACY_BROKER_ACCOUNT_ID
+        capital = analytics.capital_dict(
+            session, book=book, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     except Exception as exc:
         capital = {"error": f"{type(exc).__name__}: {exc}"}
     try:

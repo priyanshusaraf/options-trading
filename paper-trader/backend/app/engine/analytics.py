@@ -94,12 +94,11 @@ def bot_vs_you(account_equity_now: float | None, account_baseline: float | None,
     }
 
 
-def account_pnl(s: Session, provider, book: str | None = None) -> dict:
+def account_pnl(s: Session, provider, book: str | None = None, *, broker_account_id: str) -> dict:
     """Bot-vs-you split from a caller-owned session + the live provider. Records the
     account baseline once, on the first successful live equity read."""
     book = book or configured_execution_mode()
-    # Task 2 replaces this legacy compatibility boundary with caller-derived account scope.
-    cap = capital_for_book(s, book, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
+    cap = capital_for_book(s, book, broker_account_id=broker_account_id)
     eq = (provider.account_equity()
           if caps.provider_supports(provider, caps.ACCOUNT_EQUITY) else None)
     if eq is not None and not cap.account_baseline:
@@ -113,7 +112,7 @@ def account_pnl(s: Session, provider, book: str | None = None) -> dict:
     return bot_vs_you(eq, cap.account_baseline, cap.realized_pnl, bot_unrealized)
 
 
-def capital_dict(s: Session, book: str | None = None) -> dict:
+def capital_dict(s: Session, book: str | None = None, *, broker_account_id: str) -> dict:
     """Capital snapshot from a caller-owned session (thread-safe for API use).
 
     `book` names the execution book. It is optional only so that a caller with no
@@ -121,8 +120,7 @@ def capital_dict(s: Session, book: str | None = None) -> dict:
     is what every production caller means. It is never "both": cash and realised P&L
     from two ledgers cannot be summed into one meaningful figure."""
     book = book or configured_execution_mode()
-    # Task 2 replaces this legacy compatibility boundary with caller-derived account scope.
-    cap = capital_for_book(s, book, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
+    cap = capital_for_book(s, book, broker_account_id=broker_account_id)
     opens = open_positions(s, book)
     # segment-aware: leveraged MIS contributes margin + unrealized P&L, not full
     # notional (raw last × qty), which double-counts leverage and inflates equity.

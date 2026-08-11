@@ -6,8 +6,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core import instruments as inst_registry
-from app.db.models import (Base, CapitalState, InstrumentState, LEGACY_BROKER_ACCOUNT_ID,
-                           LEGACY_OWNER_ID, Position, UniverseInstrument)
+from app.db.models import (Base, BrokerAccount, CapitalState, InstrumentState,
+                           LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, LEGACY_USER_ID,
+                           Membership, Organization, Position, UniverseInstrument, User)
 from app.engine.charges import compute_charges
 
 _settings = get_settings()
@@ -75,6 +76,21 @@ def _sync_seed_universe(sess) -> None:
         row.has_options = inst.has_options
         row.mock_spot = inst.mock_spot
         row.mock_vol = inst.mock_vol
+
+
+def _ensure_legacy_tenancy_roots(sess) -> None:
+    """Fresh create_all databases skip revision DML; seed the one explicit legacy boundary."""
+    if sess.get(Organization, LEGACY_OWNER_ID) is None:
+        sess.add(Organization(organization_id=LEGACY_OWNER_ID, name="Legacy owner"))
+    if sess.get(User, LEGACY_USER_ID) is None:
+        sess.add(User(user_id=LEGACY_USER_ID, email_normalized="owner@legacy.local",
+                      display_name="Legacy owner"))
+    if sess.get(Membership, (LEGACY_OWNER_ID, LEGACY_USER_ID)) is None:
+        sess.add(Membership(organization_id=LEGACY_OWNER_ID, user_id=LEGACY_USER_ID, role="owner"))
+    if sess.get(BrokerAccount, LEGACY_BROKER_ACCOUNT_ID) is None:
+        sess.add(BrokerAccount(broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
+                               owner_id=LEGACY_OWNER_ID, broker="legacy",
+                               external_account_id="default", display_name="Default account"))
 
 
 def _repair_open_position_lot_sizes(sess) -> int:
@@ -292,6 +308,7 @@ def init_db(reset: bool = False) -> None:
                 legacy_migrate=_migrate_schema)
     s = get_settings()
     with SessionLocal() as sess:
+        _ensure_legacy_tenancy_roots(sess)
         # The legacy deployment must exist before anything can write a row: every
         # executed-row table carries a NOT NULL deployment_id defaulting to it.
         # Seeded here for databases built by create_all (which runs no revision) and

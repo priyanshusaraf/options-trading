@@ -80,3 +80,53 @@ def test_revision_0018_downgrade_refuses_lossy_account_collapse(tmp_path):
     with pytest.raises(RuntimeError, match="lossy"):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0017")
+
+
+@__import__("pytest").mark.parametrize(("table", "insert"), [
+    ("capital_state", "('account.a', 'paper', 1, 1, 0, CURRENT_TIMESTAMP), "
+                      "('account.b', 'paper', 2, 2, 0, CURRENT_TIMESTAMP)"),
+    ("instrument_state", "('org.a', 'NSE_EQ|ABC', 1, '15minute', 0, 0, 'options', 0, '{}'), "
+                         "('org.b', 'NSE_EQ|ABC', 1, '15minute', 0, 0, 'options', 0, '{}')"),
+    ("daily_account_snapshot", "('account.a', '2026-08-10', 1, 1, CURRENT_TIMESTAMP), "
+                               "('account.b', '2026-08-10', 2, 2, CURRENT_TIMESTAMP)"),
+])
+def test_revision_0018_downgrade_refuses_each_scoped_key_collision(tmp_path, table, insert):
+    engine = _engine(tmp_path)
+    Base.metadata.create_all(engine)
+    migrate.stamp(engine, "0018")
+    columns = {
+        "capital_state": "broker_account_id, book, initial_capital, cash, realized_pnl, updated_at",
+        "instrument_state": "owner_id, instrument_key, enabled, live_interval, entries_blocked, priority_flag, product, overtrade_flag, params_json",
+        "daily_account_snapshot": "broker_account_id, day, account_net, account_available, updated_at",
+    }[table]
+    with engine.begin() as connection:
+        connection.execute(sa.text(f"INSERT INTO {table} ({columns}) VALUES {insert}"))
+    import pytest
+    with pytest.raises(RuntimeError, match="lossy"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0017")
+
+
+def test_revision_0018_downgrade_refuses_nonlegacy_tenancy_root_loss(tmp_path):
+    engine = _engine(tmp_path)
+    Base.metadata.create_all(engine)
+    migrate.stamp(engine, "0018")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO organizations (organization_id, name, status, created_at, updated_at) "
+            "VALUES ('org.second', 'Second', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+    import pytest
+    with pytest.raises(RuntimeError, match="tenancy"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0017")
+
+
+def test_upgraded_0018_database_exposes_actual_composite_keys_and_membership_foreign_keys(tmp_path):
+    engine = _engine(tmp_path)
+    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    inspector = sa.inspect(engine)
+    assert inspector.get_pk_constraint("capital_state")["constrained_columns"] == ["broker_account_id", "book"]
+    assert inspector.get_pk_constraint("instrument_state")["constrained_columns"] == ["owner_id", "instrument_key"]
+    assert inspector.get_pk_constraint("daily_account_snapshot")["constrained_columns"] == ["broker_account_id", "day"]
+    membership_targets = {fk["referred_table"] for fk in inspector.get_foreign_keys("memberships")}
+    assert membership_targets == {"organizations", "users"}

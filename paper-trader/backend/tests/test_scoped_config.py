@@ -73,7 +73,7 @@ def test_instrument_scope_overrides_deployment():
         assert row is not None, "expected the seeded universe to contain NIFTY"
         row.params_json = json.dumps({"intraday_stop_loss_pct": 0.005})
         s.commit()
-        got = sc.resolve(s, deployment_id=d.id, instrument_key="NIFTY")
+        got = sc.resolve(s, deployment_id=d.id, instrument_key="NIFTY", owner_id="owner")
         assert got["intraday_stop_loss_pct"] == 0.005, "instrument is narrowest"
 
 

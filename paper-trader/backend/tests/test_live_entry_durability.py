@@ -434,7 +434,7 @@ def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
 def test_paper_entry_remains_unlinked():
     init_db(reset=True)
     provider = MockProvider()
-    broker = PaperBroker(provider)
+    broker = PaperBroker(provider, broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),

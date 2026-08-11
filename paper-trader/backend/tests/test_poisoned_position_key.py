@@ -82,7 +82,7 @@ def test_removing_an_instrument_with_an_open_position_is_refused():
     r = _runner()
     _open_option(r, "GOLDM")
 
-    res = universe_resolver.remove_instrument("GOLDM")
+    res = universe_resolver.remove_instrument("GOLDM", owner_id="owner")
 
     assert "error" in res, f"removal should have been refused, got {res}"
     assert get_instrument("GOLDM") is not None      # still resolvable

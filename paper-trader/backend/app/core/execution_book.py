@@ -29,6 +29,7 @@ LIVE = "live"
 #: and its own entries in `GRANTS`; naming them here means adding one is a deliberate
 #: edit rather than a new string appearing in a column.
 BOOKS = (PAPER, LIVE)
+LEGACY_UNATTRIBUTED_BOOK = "legacy"
 
 
 #: What happens to the single pre-slice ledger when the evidence is contradictory —
@@ -110,6 +111,21 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     if row is not None:
         return row
 
+    # 0018 must represent an old NULL primary-key component without assigning its
+    # money to paper or live.  The migration stores it under this short, durable
+    # sentinel; claim it only when historic fill evidence is unambiguous.
+    legacy = session.get(CapitalState, (broker_account_id, LEGACY_UNATTRIBUTED_BOOK))
+    if legacy is not None:
+        owners = _books_with_money_rows(session)
+        if len(owners) > 1:
+            log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,
+                                                    owners=sorted(owners), book=book),
+                     event="LEDGER_UNATTRIBUTED")
+        elif not owners or owners == {book}:
+            legacy.book = book
+            _commit_the_bootstrap(session)
+            return legacy
+
     seed = get_settings().initial_capital
     row = CapitalState(broker_account_id=broker_account_id, book=book,
                        initial_capital=seed, cash=seed, realized_pnl=0.0)
@@ -153,6 +169,6 @@ def foreign_book_positions(session, book: str) -> list:
             if resolve_book(p.mode) != book]
 
 
-__all__ = ["BOOKS", "LEGACY_LEDGER_AMBIGUOUS", "LIVE", "PAPER", "book_of",
+__all__ = ["BOOKS", "LEGACY_LEDGER_AMBIGUOUS", "LEGACY_UNATTRIBUTED_BOOK", "LIVE", "PAPER", "book_of",
            "capital_for_book", "configured_execution_mode", "foreign_book_positions",
            "resolve_book"]
