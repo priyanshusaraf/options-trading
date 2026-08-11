@@ -38,6 +38,13 @@ Phase 1; PostgreSQL support begins in Phase 2.
 
 ### Task 1: Own projects, graph versions, layouts and reviews
 
+**Accepted execution decomposition:** this dependency is delivered through independently runnable
+and reviewed slices. Task 1A.1 owns the project root and graph repository access; Task 1A.2 scopes
+layout repositories; Task 1A.3 rebuilds graph/layout identities so owners may reuse graph
+identifiers; research roots then land before review persistence so review aggregation never mixes
+owned graphs with globally scanned research rows. The final Task 1 acceptance criteria remain
+unchanged.
+
 **Files:**
 - Create: `backend/migrations/versions/20260812_0020_user_graph_review_ownership.py`
 - Modify: `backend/app/db/models.py`
