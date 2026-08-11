@@ -1628,11 +1628,6 @@ class IrPaperDeployment(Base):
         CheckConstraint("graph_version >= 1", name="ck_ir_paper_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_paper_deployment_revision"),
     )
-    #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
-
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     #: The exact immutable artefact. An edit mints a new version and cannot inherit this row.
@@ -1688,6 +1683,13 @@ class IrPaperDeployment(Base):
                                                     default=dt.datetime.now)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
                                                     default=dt.datetime.now)
+    #: Whose money this row records. Kept at the historical physical-column tail
+    #: so fresh SQLite schema matches migrated live ledgers exactly.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    broker_account_id: Mapped[str] = mapped_column(
+        ForeignKey("broker_accounts.broker_account_id",
+                   name="fk_ir_paper_deployments_broker_account_id_broker_accounts"),
+        nullable=False)
 
     def to_dict(self) -> dict:
         return {
@@ -1770,11 +1772,6 @@ class IrShadowDeployment(Base):
         CheckConstraint("graph_version >= 1", name="ck_ir_shadow_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_shadow_deployment_revision"),
     )
-    #: Whose money this row records. See migration 0017.
-    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    broker_account_id: Mapped[str] = mapped_column(
-        ForeignKey("broker_accounts.broker_account_id"), nullable=False)
-
     id: Mapped[int] = mapped_column(primary_key=True)
     #: Which project owns the logic. Not derivable from the graph identifier.
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -1824,6 +1821,13 @@ class IrShadowDeployment(Base):
                                                     default=dt.datetime.now)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
                                                     default=dt.datetime.now)
+    #: Whose money this row records. Kept at the historical physical-column tail
+    #: so fresh SQLite schema matches migrated live ledgers exactly.
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    broker_account_id: Mapped[str] = mapped_column(
+        ForeignKey("broker_accounts.broker_account_id",
+                   name="fk_ir_shadow_deployments_broker_account_id_broker_accounts"),
+        nullable=False)
 
     def to_dict(self) -> dict:
         return {

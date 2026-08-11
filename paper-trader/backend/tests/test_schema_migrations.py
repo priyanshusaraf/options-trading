@@ -15,6 +15,8 @@ two things stay true forever, and neither is checked by any other test:
 """
 from __future__ import annotations
 
+import re
+
 import sqlalchemy as sa
 import pytest
 from alembic import command
@@ -747,6 +749,9 @@ def _revision_0020_contract(engine, table: str) -> dict:
     """SQLite-visible migration contract; do not weaken the older retry helper."""
     inspector = sa.inspect(engine)
     with engine.connect() as connection:
+        table_sql = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"
+        ), {"table": table}).scalar_one()
         indexes = connection.execute(sa.text(
             "SELECT name, sql FROM sqlite_master WHERE type='index' "
             "AND tbl_name=:table AND sql IS NOT NULL ORDER BY name"
@@ -755,13 +760,24 @@ def _revision_0020_contract(engine, table: str) -> dict:
             "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
             "AND tbl_name=:table ORDER BY name"
         ), {"table": table}).all()
+    foreign_keys = []
+    for match in re.finditer(
+            r"(?:CONSTRAINT\s+(?P<name>\w+)\s+)?FOREIGN\s+KEY\s*\((?P<columns>[^)]*)\)"
+            r"\s+REFERENCES\s+(?P<target>\w+)\s*\((?P<target_columns>[^)]*)\)"
+            r"(?:\s+ON\s+DELETE\s+(?P<delete>\w+))?",
+            table_sql, flags=re.I | re.S):
+        foreign_keys.append((
+            tuple(part.strip() for part in match.group("columns").split(",")),
+            match.group("target"),
+            tuple(part.strip() for part in match.group("target_columns").split(",")),
+            match.group("name"),
+            match.group("delete"),
+        ))
     return {
         "columns": [(column["name"], str(column["type"]), bool(column["nullable"]),
                      str(column.get("default")))
                     for column in inspector.get_columns(table)],
-        "foreign_keys": sorted((tuple(fk["constrained_columns"]), fk["referred_table"],
-                                tuple(fk["referred_columns"]), fk.get("name"))
-                               for fk in inspector.get_foreign_keys(table)),
+        "foreign_keys": sorted(foreign_keys),
         "unique": sorted((tuple(item["column_names"]), item.get("name"))
                          for item in inspector.get_unique_constraints(table)),
         "indexes": indexes,
@@ -865,6 +881,214 @@ def test_revision_0021_upgrade_backfills_owner_for_every_graph_and_layout_identi
     assert project[0] == "project.legacy"
     assert graph[3] == '{"identifier":"graph.legacy","version":1}'
     assert version[2] == graph[3]
+
+
+def _revision_0021_contract(engine, table: str) -> dict:
+    """The visible 0021 contract, including ordered columns and executable DDL."""
+    return _revision_0020_contract(engine, table)
+
+
+def _semantic_contract(contract: dict) -> dict:
+    """SQLite's reflection preserves DDL whitespace; it is not schema meaning."""
+    def compact(sql: str) -> str:
+        return "".join(sql.split())
+
+    normalized = dict(contract)
+    normalized["checks"] = [(name, compact(sql)) for name, sql in contract["checks"]]
+    normalized["indexes"] = [(name, compact(sql)) for name, sql in contract["indexes"]]
+    normalized["triggers"] = [(name, compact(sql)) for name, sql in contract["triggers"]]
+    return normalized
+
+
+def _at_revision_0020(tmp_path, name: str):
+    engine = _at_revision_0019(tmp_path, name)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0020")
+    return engine
+
+
+AFFECTED_0021_TABLES = (
+    "projects",
+    "graph_artifacts",
+    "graph_versions",
+    "ir_graph_layouts",
+    "ir_graph_layout_positions",
+    "ir_graph_layout_groups",
+    "ir_graph_layout_group_members",
+    "ir_graph_layout_orphan_archive",
+    "ir_graph_layout_position_orphan_archive",
+    "ir_paper_deployments",
+    "ir_shadow_deployments",
+)
+
+
+def test_revision_0021_fresh_and_upgraded_contracts_match_for_every_affected_table(tmp_path):
+    """Fresh and historical 0020 upgrades expose the same complete 0021 schema."""
+    fresh = _build_from_models(tmp_path)
+    upgraded = _at_revision_0020(tmp_path, "0021-complete-contract-upgrade.db")
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    for table in AFFECTED_0021_TABLES:
+        assert _semantic_contract(_revision_0021_contract(upgraded, table)) == _semantic_contract(
+            _revision_0021_contract(fresh, table)
+        )
+
+
+def test_revision_0021_downgrade_refuses_two_owner_same_identifier_before_ddl(tmp_path):
+    """Two tenant-local graph identities cannot collapse into the 0020 global key."""
+    engine = _at_revision_0020(tmp_path, "0021-identifier-collision.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES "
+            "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        for owner, project in (("owner", "project.one"), ("owner.other", "project.two")):
+            connection.execute(sa.text(
+                "INSERT INTO projects (project_id,owner_id,name,description,status,created_at,updated_at) "
+                "VALUES (:project,:owner,:project,'','active','2026-08-12 08:00:00','2026-08-12 08:00:00')"
+            ), {"owner": owner, "project": project})
+            connection.execute(sa.text(
+                "INSERT INTO graph_artifacts "
+                "(owner_id,identifier,project_id,display_name,draft_json,draft_revision,published_revision,"
+                "current_version,created_at,updated_at) VALUES "
+                "(:owner,'shared.graph',:project,'Shared',:draft,"
+                "1,1,1,'2026-08-12 08:00:00','2026-08-12 08:00:00')"
+            ), {"owner": owner, "project": project,
+                "draft": '{"identifier":"shared.graph","version":1}'})
+            connection.execute(sa.text(
+                "INSERT INTO graph_versions "
+                "(owner_id,graph_identifier,version,artifact_json,content_address,visibility,created_at) VALUES "
+                "(:owner,'shared.graph',1,:artifact,:address,'PRIVATE',"
+                "'2026-08-12 08:00:00')"
+            ), {"owner": owner, "artifact": '{"identifier":"shared.graph","version":1}',
+                "address": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
+
+    before = {table: _revision_0021_contract(engine, table) for table in AFFECTED_0021_TABLES}
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text(
+            "SELECT owner_id,identifier,project_id FROM graph_artifacts ORDER BY owner_id"
+        )).all()
+        foreign_keys = connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one()
+
+    with pytest.raises(RuntimeError, match="graph identifiers would collide"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0020")
+
+    assert migrate.schema_version(engine) == HEAD
+    assert {table: _revision_0021_contract(engine, table) for table in AFFECTED_0021_TABLES} == before
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT owner_id,identifier,project_id FROM graph_artifacts ORDER BY owner_id"
+        )).all() == rows
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+@pytest.mark.parametrize("table", (
+    "projects",
+    "graph_artifacts",
+    "graph_versions",
+    "ir_graph_layouts",
+    "ir_graph_layout_positions",
+    "ir_graph_layout_groups",
+    "ir_graph_layout_group_members",
+    "ir_graph_layout_orphan_archive",
+    "ir_graph_layout_position_orphan_archive",
+    "ir_paper_deployments",
+    "ir_shadow_deployments",
+))
+def test_revision_0021_downgrade_post_rename_retry_recovers_before_owner_refusal(tmp_path, table):
+    """A completed 0020 temp table is authoritative before downgrade refusal reads it."""
+    engine = _at_revision_0020(tmp_path, f"0021-{table}-downgrade-post-rename.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    expected = _revision_0021_contract(_at_revision_0020(
+        tmp_path, f"0021-{table}-downgrade-expected.db"), table)
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_rename(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and f"ALTER TABLE {table}__0021 RENAME TO {table}" in statement:
+            failed = True
+            raise RuntimeError(f"injected interruption after {table} downgrade rename")
+
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0020")
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0020")
+
+    assert failed
+    assert migrate.schema_version(engine) == "0020"
+    assert _semantic_contract(_revision_0021_contract(engine, table)) == _semantic_contract(expected)
+    assert not any(name.endswith("__0021") for name in sa.inspect(engine).get_table_names())
+
+
+@pytest.mark.parametrize("table", AFFECTED_0021_TABLES)
+@pytest.mark.parametrize(
+    ("phase", "marker"),
+    (("stale-temp", "CREATE TABLE {table}__0021"),
+     ("completed-temp", "DROP TABLE {table}")),
+)
+def test_revision_0021_upgrade_retry_recovers_each_custom_temp_shape(tmp_path, table, phase, marker):
+    """Every custom rebuild converges from source+temp and source-absent+temp states."""
+    expected_engine = _at_revision_0020(tmp_path, f"0021-{table}-{phase}-expected.db")
+    with expected_engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    expected = _revision_0021_contract(expected_engine, table)
+    engine = _at_revision_0020(tmp_path, f"0021-{table}-{phase}.db")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_shape(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and marker.format(table=table) in statement:
+            failed = True
+            raise RuntimeError(f"injected {phase} interruption for {table}")
+
+    with pytest.raises(RuntimeError, match=f"injected {phase} interruption"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert _semantic_contract(_revision_0021_contract(engine, table)) == _semantic_contract(expected)
+    assert not any(name.endswith("__0021") for name in sa.inspect(engine).get_table_names())
+
+
+@pytest.mark.parametrize("table", ("ir_paper_deployments", "ir_shadow_deployments"))
+def test_revision_0021_upgrade_money_post_rename_retry_restores_full_contract(tmp_path, table):
+    """MONEY provenance rebuilds retain their partial authority indexes after a retry."""
+    expected_engine = _at_revision_0020(tmp_path, f"0021-{table}-upgrade-expected.db")
+    with expected_engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    expected = _revision_0021_contract(expected_engine, table)
+
+    engine = _at_revision_0020(tmp_path, f"0021-{table}-upgrade-post-rename.db")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_rename(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and f"ALTER TABLE {table}__0021 RENAME TO {table}" in statement:
+            failed = True
+            raise RuntimeError(f"injected interruption after {table} upgrade rename")
+
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert _revision_0021_contract(engine, table) == expected
 
 
 @pytest.mark.parametrize("marker", (
