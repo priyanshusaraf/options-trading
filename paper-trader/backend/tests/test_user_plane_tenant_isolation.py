@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict
 
 import pytest
 from sqlalchemy import event, text
@@ -11,6 +12,7 @@ from app.db.session import SessionLocal, engine, init_db
 from app.editor import graph_artifacts as store
 from app.editor import layouts
 from app.ir.strategies.expanding_z import GRAPH
+from app.ir.hashing import canonical_json
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +128,72 @@ def test_two_owners_can_persist_the_same_graph_and_layout_identities() -> None:
         identifier, 1, valid_instance_ids=frozenset({"n_ema"}), owner_id="owner.b"
     ).groups[0].display_name == "Owner B"
     assert grouped_a.revision == grouped_b.revision == 2
+
+
+def test_owner_a_graph_and_presentation_changes_leave_owner_b_lineage_byte_for_byte_intact() -> None:
+    """Composite graph/layout keys isolate drafts, carries, archives, and public bytes."""
+    identifier = "shared.mutation.graph"
+    projects = {
+        owner: store.create_project("Shared", owner_id=owner)
+        for owner in ("owner.a", "owner.b")
+    }
+    published = {}
+    for owner, project in projects.items():
+        store.create_artifact(project.project_id, identifier, _graph(identifier), owner_id=owner)
+        published[owner] = store.publish_draft(project.project_id, identifier, base_revision=0, owner_id=owner)
+        saved = layouts.save_layout(
+            identifier, 1, base_revision=0,
+            positions=(layouts.Position("n_ema", 10.0 if owner == "owner.a" else 30.0, 20.0),),
+            owner_id=owner,
+        )
+        layouts.save_groups(
+            identifier, 1, base_revision=saved.revision,
+            groups=(layouts.VisualGroup(
+                "shared.group", owner, layouts.GroupFrame(1.0, 2.0, 3.0, 4.0), False, ("n_ema",),
+            ),), valid_instance_ids=frozenset({"n_ema"}), owner_id=owner,
+        )
+
+    tables = (
+        "graph_artifacts", "graph_versions", "ir_graph_layouts", "ir_graph_layout_positions",
+        "ir_graph_layout_groups", "ir_graph_layout_group_members", "ir_graph_layout_orphan_archive",
+        "ir_graph_layout_position_orphan_archive",
+    )
+    with SessionLocal() as session:
+        owner_b_rows = {
+            table: tuple(session.execute(text(
+                f"SELECT * FROM {table} WHERE owner_id='owner.b' ORDER BY rowid"
+            )).all()) for table in tables
+        }
+
+    changed = _graph(identifier)
+    changed["display_name"] = "Owner A revision two"
+    store.save_draft(projects["owner.a"].project_id, identifier, base_revision=0, graph=changed, owner_id="owner.a")
+    second = store.publish_draft(projects["owner.a"].project_id, identifier, base_revision=1, owner_id="owner.a")
+    with SessionLocal.begin() as session:
+        layouts.carry_and_reconcile_presentation(
+            session, identifier, 1, second.version, base_revision=2,
+            source_instance_ids=frozenset({"n_ema"}), target_instance_ids=frozenset(), owner_id="owner.a",
+        )
+
+    assert store.load_version(projects["owner.b"].project_id, identifier, 1, owner_id="owner.b") == published["owner.b"]
+    assert layouts.load_layout(identifier, 1, valid_instance_ids=frozenset({"n_ema"}), owner_id="owner.b").revision == 2
+    with SessionLocal() as session:
+        assert {
+            table: tuple(session.execute(text(
+                f"SELECT * FROM {table} WHERE owner_id='owner.b' ORDER BY rowid"
+            )).all()) for table in tables
+        } == owner_b_rows
+        stored = session.execute(text(
+            "SELECT artifact_json, content_address FROM graph_versions "
+            "WHERE owner_id IN ('owner.a','owner.b') AND graph_identifier=:identifier AND version=1 ORDER BY owner_id"
+        ), {"identifier": identifier}).all()
+    assert stored[0] == stored[1]
+    for record in (published["owner.a"], published["owner.b"]):
+        public = asdict(record)
+        assert "owner_id" not in public
+        assert "visibility" not in public
+        assert "owner_id" not in canonical_json(record.graph)
+        assert "visibility" not in canonical_json(record.graph)
 
 
 def test_load_version_uses_one_absent_shape_for_owner_graph_and_version_misses() -> None:

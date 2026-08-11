@@ -36,7 +36,16 @@ pytest -q tests/test_schema_migrations.py --tb=short
 
 The migration suite passed. The existing broker/provider files remained unedited and unstaged.
 
-## Concern
+## Runtime isolation evidence
 
-This evidence change is migration-only. The existing tenant suite already covers same-identifier
-graph/layout isolation and canonical identity; no runtime repository behavior was changed.
+The follow-up tenant node creates byte-identical `shared.mutation.graph` lineages for two owners,
+then has owner A save and publish a second draft and carry presentation from version 1 to version
+2 with the only node removed. That path creates both archive row types. It snapshots owner B's
+artifact/version, layout head, child rows, and both archives before the mutation and proves the
+complete snapshot and B's layout revision remain unchanged afterwards. It also reads both stored
+version rows to prove identical `artifact_json` and `content_address`, then checks canonical graph
+JSON and the owner-facing published records for absent owner and visibility fields.
+
+`c737a8d` was deliberately a migration-evidence checkpoint after its focused suite, compile, and
+diff checks passed. The runtime checklist remained open, so this report and runtime evidence ship
+in the follow-up commit.
