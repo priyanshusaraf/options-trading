@@ -108,7 +108,7 @@ def _runner_with_provider(provider):
     from app.db.session import init_db
     from app.engine.runner import EngineRunner
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.provider = provider
     return r
 
@@ -140,7 +140,7 @@ def test_runner_sizer_none_on_mock_provider():
     from app.db.session import init_db
     from app.engine.runner import EngineRunner
     init_db(reset=True)
-    r = EngineRunner()                              # default mock provider
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")                              # default mock provider
     assert r._intraday_margin_sizer() is None       # → select uses the leverage model
 
 

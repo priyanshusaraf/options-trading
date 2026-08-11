@@ -65,7 +65,7 @@ def _databases(monkeypatch):
 def client():
     from app.main import app
 
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     return TestClient(app)
 
 

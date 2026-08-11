@@ -130,3 +130,22 @@ def test_upgraded_0018_database_exposes_actual_composite_keys_and_membership_for
     assert inspector.get_pk_constraint("daily_account_snapshot")["constrained_columns"] == ["broker_account_id", "day"]
     membership_targets = {fk["referred_table"] for fk in inspector.get_foreign_keys("memberships")}
     assert membership_targets == {"organizations", "users"}
+
+
+def test_revision_0018_downgrade_round_trips_legacy_sentinel_to_null_book(tmp_path):
+    engine = _engine(tmp_path)
+    Base.metadata.create_all(engine)
+    migrate.stamp(engine, "0018")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO capital_state "
+            "(id, broker_account_id, book, initial_capital, cash, realized_pnl, anchored_at, updated_at) "
+            "VALUES (91, 'account.default', 'legacy', 10.5, 9.25, -1.25, "
+            "'2026-08-11 09:00:00', '2026-08-11 09:01:00')"))
+        command.downgrade(migrate.alembic_config(connection), "0017")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT id, book, initial_capital, cash, realized_pnl, anchored_at, updated_at "
+            "FROM capital_state WHERE id = 91")).one() == (
+                91, None, 10.5, 9.25, -1.25,
+                "2026-08-11 09:00:00", "2026-08-11 09:01:00")

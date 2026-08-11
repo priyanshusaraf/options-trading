@@ -319,7 +319,7 @@ class TestOrphansFromTheOtherBookAreLoud:
 
         with SessionLocal() as s:
             _open_row(s, mode=LIVE, key="NIFTY")
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         try:
             reported = r.report_foreign_book_positions()
             assert reported == ["NIFTY"]
@@ -331,7 +331,7 @@ class TestOrphansFromTheOtherBookAreLoud:
 
         with SessionLocal() as s:
             _open_row(s, mode=PAPER, key="NIFTY")
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         try:
             assert r.report_foreign_book_positions() == []
         finally:

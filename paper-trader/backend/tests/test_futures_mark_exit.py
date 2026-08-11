@@ -52,7 +52,7 @@ def _close(obj):
 @pytest.fixture
 def runner():
     init_db(reset=True)
-    obj = EngineRunner()
+    obj = EngineRunner(owner_id="owner", broker_account_id="account.default")
     yield obj
     _close(obj)
 

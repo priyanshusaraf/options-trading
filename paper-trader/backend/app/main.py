@@ -90,7 +90,9 @@ async def lifespan(app: FastAPI):
     else:
         log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — generated strategies "
                  "not registered; portfolio/research API is gated off")
-    runner = EngineRunner()  # factory logs the chosen provider
+    from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+    runner = EngineRunner(owner_id=LEGACY_OWNER_ID,
+                          broker_account_id=LEGACY_BROKER_ACCOUNT_ID)  # factory logs the chosen provider
     app.state.runner = runner
 
     manager.bind(asyncio.get_running_loop())

@@ -13,7 +13,7 @@ from app.main import app
 
 def _client():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     # No warmup ticks: /api/signals lists all instruments regardless of state, and
     # a clean book keeps manual-open deterministic (ticking can auto-open NIFTY).
     app.state.runner = r

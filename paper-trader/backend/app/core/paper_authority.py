@@ -268,7 +268,7 @@ def resume(session, row_id: int, *, revision: int) -> IrPaperDeployment:
 
 
 def retire(session, row_id: int, *, revision: int,
-           restore_strategy_key: str | None) -> IrPaperDeployment:
+           restore_strategy_key: str | None, owner_id: str) -> IrPaperDeployment:
     """Terminal, and the only place authority is handed back.
 
     `restore_strategy_key` is **required** — passing it explicitly, even as `None`, is the
@@ -286,7 +286,8 @@ def retire(session, row_id: int, *, revision: int,
         raise IllegalTransition(f"paper deployment {row_id} is already retired")
     _validate_rollback_target(restore_strategy_key)
     row.rollback_strategy_key = restore_strategy_key
-    _restore_instrument_authority(session, row.instrument_key, restore_strategy_key)
+    _restore_instrument_authority(session, row.instrument_key, restore_strategy_key,
+                                  owner_id=owner_id)
     return _transition(session, row, RETIRED)
 
 
@@ -552,19 +553,18 @@ def _validate_rollback_target(strategy_key: str | None) -> None:
 
 
 def _restore_instrument_authority(session, instrument_key: str,
-                                  strategy_key: str | None) -> None:
+                                  strategy_key: str | None, *, owner_id: str) -> None:
     """Write the named target onto the instrument row, or clear it.
 
     Clearing means "the platform default applies", which is what the instrument row means
     when it is NULL everywhere else in this codebase. It is chosen explicitly by passing
     `None`, never arrived at by omission.
     """
-    from app.db.models import LEGACY_OWNER_ID
-    row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
+    row = session.get(InstrumentState, (owner_id, instrument_key))
     if row is None:
         if strategy_key is None:
             return
-        row = InstrumentState(owner_id=LEGACY_OWNER_ID, instrument_key=instrument_key)
+        row = InstrumentState(owner_id=owner_id, instrument_key=instrument_key)
         session.add(row)
     row.strategy_key = strategy_key
     session.flush()

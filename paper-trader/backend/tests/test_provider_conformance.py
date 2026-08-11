@@ -874,7 +874,7 @@ def test_the_futures_entry_path_refuses_when_no_contract_can_be_named(monkeypatc
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     cap = r.broker.capital()
     cap.initial_capital = cap.cash = 1_000_000.0

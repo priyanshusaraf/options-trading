@@ -106,7 +106,7 @@ def _runner(monkeypatch, interval="15minute"):
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -238,7 +238,7 @@ def test_an_admitted_pairing_that_keeps_refusing_is_demoted_rather_than_left_to_
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = True
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -266,7 +266,7 @@ def test_a_demotion_is_cleared_by_an_interval_change_like_any_other_rejection(mo
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = True
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"

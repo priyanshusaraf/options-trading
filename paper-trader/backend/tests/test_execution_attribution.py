@@ -98,7 +98,7 @@ def _intraday_runner(assigned: str | None) -> tuple[EngineRunner, list[str]]:
             session.add(row)                     # exactly what no setter would let you write
         session.commit()
 
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.armed = True
     runner.params["intraday_enabled"] = True
     runner.params["notify_enabled"] = False
@@ -204,7 +204,7 @@ def test_restarting_the_engine_preserves_the_corrected_attribution():
         row.strategy_key = "expanding_z_v4"      # reassign after the fact
         session.commit()
 
-    reborn = EngineRunner()
+    reborn = EngineRunner(owner_id="owner", broker_account_id="account.default")
     held = [p for p in reborn.broker.open_positions()
             if p.instrument_key == position.instrument_key]
     assert held and held[0].strategy_key == DEFAULT_STRATEGY_KEY
@@ -336,7 +336,7 @@ def test_the_futures_entry_path_attributes_what_executed(monkeypatch, give_futur
     Modelled on `test_futures_entries`, with a stale assignment: it trades the default and
     must say so."""
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.armed = True
     cap = runner.broker.capital()
     cap.initial_capital = 1_000_000.0

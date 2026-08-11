@@ -99,7 +99,7 @@ def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeplo
 
 
 def _runner():
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.refresh_paper_authority()
     return r
 
@@ -296,7 +296,7 @@ class TestRestart:
     def test_a_retired_deployment_does_not_resurrect(self):
         with SessionLocal() as s:
             row = _deploy(s)
-            pa.retire(s, row.id, revision=row.revision, restore_strategy_key=None)
+            pa.retire(s, row.id, revision=row.revision, restore_strategy_key=None, owner_id="owner")
             s.commit()
         r = _runner()
         try:

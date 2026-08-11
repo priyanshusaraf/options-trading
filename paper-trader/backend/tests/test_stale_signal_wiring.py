@@ -16,7 +16,7 @@ from app.engine.runner import EngineRunner
 def _runner(key="NIFTY", product="equity_intraday", bar: dt.datetime | None = None,
             signal="LONG_ENTRY"):
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.enabled = {key}
     r.products[key] = product
     r.params = {**r.params, "intraday_enabled": True,

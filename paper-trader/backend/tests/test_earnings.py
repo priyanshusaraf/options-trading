@@ -210,7 +210,7 @@ def test_earnings_route_only_returns_nse_bse_stocks_with_fresh_cache():
                              purpose="Quarterly Results", fetched_at=dt.datetime.now()))
         s.commit()
     inst_registry.load_universe()
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     client = TestClient(app)
 
     res = client.get("/api/earnings").json()

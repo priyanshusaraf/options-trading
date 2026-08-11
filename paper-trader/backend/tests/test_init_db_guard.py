@@ -65,7 +65,7 @@ def test_init_db_reset_refused_and_preserves_data_when_not_mock(monkeypatch):
     # arrange: clean mock DB with a sentinel cash value
     sess_mod.init_db(reset=True)  # mock mode — allowed
     with sess_mod.SessionLocal() as s:
-        s.get(CapitalState, 1).cash = 12345.67
+        s.get(CapitalState, ("account.default", "live")).cash = 12345.67
         s.commit()
 
     # act: pretend we're live and attempt a destructive reset
@@ -79,14 +79,14 @@ def test_init_db_reset_refused_and_preserves_data_when_not_mock(monkeypatch):
     # assert: nothing was dropped — the sentinel row survived
     monkeypatch.undo()
     with sess_mod.SessionLocal() as s:
-        assert s.get(CapitalState, 1).cash == 12345.67
+        assert s.get(CapitalState, ("account.default", "live")).cash == 12345.67
 
 
 def test_init_db_reset_allowed_in_mock():
     # the legitimate path: mock mode resets cleanly and reseeds, no raise
     sess_mod.init_db(reset=True)
     with sess_mod.SessionLocal() as s:
-        assert s.get(CapitalState, 1) is not None
+        assert s.get(CapitalState, ("account.default", "live")) is not None
 
 
 def test_reset_releases_pooled_connections_before_dropping(monkeypatch):

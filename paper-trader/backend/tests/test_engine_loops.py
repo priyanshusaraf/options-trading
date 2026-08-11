@@ -12,7 +12,7 @@ from app.core import config
 
 def _runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def test_runner_has_split_methods_and_state():

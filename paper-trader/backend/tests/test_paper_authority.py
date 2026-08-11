@@ -272,7 +272,7 @@ class TestLifecycle:
             row = staged(s)
             s.commit()
             pa.activate(s, row.id, revision=0)
-            pa.retire(s, row.id, revision=1, restore_strategy_key=None)
+            pa.retire(s, row.id, revision=1, restore_strategy_key=None, owner_id="owner")
             with pytest.raises(pa.IllegalTransition):
                 pa.activate(s, row.id, revision=row.revision)
 
@@ -288,7 +288,7 @@ class TestLifecycle:
         with SessionLocal() as s:
             first = staged(s)
             s.commit()
-            pa.retire(s, first.id, revision=0, restore_strategy_key=None)
+            pa.retire(s, first.id, revision=0, restore_strategy_key=None, owner_id="owner")
             s.commit()
             second = stage(s)
             s.commit()
@@ -311,7 +311,7 @@ class TestRollback:
             pa.activate(s, row.id, revision=0)
             s.commit()
 
-            pa.retire(s, row.id, revision=1, restore_strategy_key="expanding_z_v4")
+            pa.retire(s, row.id, revision=1, restore_strategy_key="expanding_z_v4", owner_id="owner")
             s.commit()
 
             assert s.get(IrPaperDeployment, row.id).rollback_strategy_key == "expanding_z_v4"
@@ -324,7 +324,7 @@ class TestRollback:
             row = staged(s)
             s.commit()
             pa.activate(s, row.id, revision=0)
-            pa.retire(s, row.id, revision=1, restore_strategy_key=None)
+            pa.retire(s, row.id, revision=1, restore_strategy_key=None, owner_id="owner")
             s.commit()
             state = s.get(InstrumentState, ("owner", INSTRUMENT))
             assert state is None or state.strategy_key is None
@@ -337,7 +337,7 @@ class TestRollback:
             s.commit()
             pa.activate(s, row.id, revision=0)
             with pytest.raises(pa.RollbackTargetInvalid):
-                pa.retire(s, row.id, revision=1, restore_strategy_key=f"ir.{GRAPH}")
+                pa.retire(s, row.id, revision=1, restore_strategy_key=f"ir.{GRAPH}", owner_id="owner")
 
     def test_a_rollback_target_that_does_not_exist_is_refused(self):
         with SessionLocal() as s:
@@ -345,7 +345,7 @@ class TestRollback:
             s.commit()
             pa.activate(s, row.id, revision=0)
             with pytest.raises(pa.RollbackTargetInvalid):
-                pa.retire(s, row.id, revision=1, restore_strategy_key="no_such_strategy")
+                pa.retire(s, row.id, revision=1, restore_strategy_key="no_such_strategy", owner_id="owner")
 
     def test_money_records_are_never_rewritten_by_a_rollback(self):
         """Rollback changes what runs next. It says nothing about what already traded."""
@@ -370,7 +370,7 @@ class TestRollback:
                 strategy_version=row.graph_content_address))
             s.commit()
 
-            pa.retire(s, row.id, revision=1, restore_strategy_key="expanding_z_v4")
+            pa.retire(s, row.id, revision=1, restore_strategy_key="expanding_z_v4", owner_id="owner")
             s.commit()
 
             trade = s.scalars(__import__("sqlalchemy").select(Trade)).one()
@@ -399,7 +399,7 @@ class TestActiveBindings:
             pa.pause(s, row.id, revision=1)
             s.commit()
             assert pa.active_bindings(s) == []
-            pa.retire(s, row.id, revision=2, restore_strategy_key=None)
+            pa.retire(s, row.id, revision=2, restore_strategy_key=None, owner_id="owner")
             s.commit()
             assert pa.active_bindings(s) == []
 
@@ -602,14 +602,14 @@ class TestPermittedTransitions:
         session.commit()
         if state == pa.PAUSED:
             return row
-        pa.retire(session, row.id, revision=row.revision, restore_strategy_key=None)
+        pa.retire(session, row.id, revision=row.revision, restore_strategy_key=None, owner_id="owner")
         session.commit()
         return row
 
     def _attempt(self, session, row, action: str):
         if action == "retire":
             return pa.retire(session, row.id, revision=row.revision,
-                             restore_strategy_key=None)
+                             restore_strategy_key=None, owner_id="owner")
         return getattr(pa, action)(session, row.id, revision=row.revision)
 
     @pytest.mark.parametrize("state", pa.STATES)

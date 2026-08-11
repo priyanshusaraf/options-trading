@@ -21,7 +21,7 @@ ENTRY, EXIT, QTY = 100.0, 95.0, 10
 
 def _short():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "SHORT", ENTRY, QTY,
                                         SEG, "t", r.provider.now(), params={})
     return r, pos
@@ -48,7 +48,7 @@ def test_short_round_trip_charges_match_the_real_order_sequence():
 def test_long_legs_are_unchanged():
     """A LONG is BUY-to-open / SELL-to-close — the existing behaviour, pinned."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "LONG", ENTRY, QTY,
                                         SEG, "t", r.provider.now(), params={})
     assert pos.entry_charges == compute_charges(SEG, "BUY", ENTRY, QTY)["total"]

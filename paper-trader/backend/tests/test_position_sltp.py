@@ -13,7 +13,7 @@ from app.main import app
 
 def _client():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     app.state.runner = r
     r.arm(True)  # SEC-3: manual-open now requires ARM; this file exercises manual-open directly
     return TestClient(app), r
@@ -79,7 +79,7 @@ def test_manual_target_survives_reinforcement():
     """An owner-set target is not auto-extended by a reinforcement; the stop still
     ratchets into profit."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),

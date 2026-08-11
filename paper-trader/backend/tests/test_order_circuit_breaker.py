@@ -18,7 +18,7 @@ from app.engine.runner import EngineRunner
 
 def _armed_runner(streak: int, threshold: int = 3, key="NIFTY"):
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.enabled = {key}
     r.products[key] = "equity_intraday"
     r.params = {**r.params, "intraday_enabled": True, "intraday_block_weekday": -1,

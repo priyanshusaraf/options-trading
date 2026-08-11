@@ -16,7 +16,7 @@ from app.main import app
 
 def _client():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     app.state.runner = r
     r.arm(True)
     return TestClient(app), r

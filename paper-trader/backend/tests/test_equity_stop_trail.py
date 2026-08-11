@@ -10,7 +10,7 @@ from app.engine.runner import EngineRunner
 
 def _runner_with_long_equity():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     pos = r.broker.open_equity_position(inst, "LONG", 100.0, 500, "NSE_INTRADAY",
                                         "t", r.provider.now(), params={})

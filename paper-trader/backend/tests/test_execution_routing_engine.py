@@ -9,7 +9,7 @@ from app.engine.execution_policy import OrderPlan
 
 def _runner():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.arm(True)
     return r
 

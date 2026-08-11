@@ -22,7 +22,7 @@ def _mk_candles(entry_ts, seq):
 
 def test_live_ratchet_incremental_drive_matches_a_single_drive():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     nifty = get_instrument("NIFTY")
     q = r.provider.get_option_chain(nifty).quotes[0]
     entry_ts = r.provider.now()
@@ -54,7 +54,7 @@ def test_live_ratchet_incremental_drive_matches_a_single_drive():
 
 def test_default_strategy_position_is_not_ratchet_managed():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     nifty = get_instrument("NIFTY")
     q = r.provider.get_option_chain(nifty).quotes[0]
     pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), 20000.0, params={})

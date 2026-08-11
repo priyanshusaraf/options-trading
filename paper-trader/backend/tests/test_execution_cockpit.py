@@ -93,7 +93,7 @@ def _deploy(session, *, activate: bool = True) -> IrPaperDeployment:
 
 @pytest.fixture
 def runner():
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.refresh_paper_authority()
     try:
         yield r
@@ -112,7 +112,7 @@ class TestTheCockpitCanAnswer:
         with SessionLocal() as s:
             row = _deploy(s)
             approved = row.graph_content_address
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             with SessionLocal() as s:
@@ -131,7 +131,7 @@ class TestTheCockpitCanAnswer:
         with SessionLocal() as s:
             row = _deploy(s)
             approved = row.graph_content_address
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             with SessionLocal() as s:
@@ -200,7 +200,7 @@ class TestTheCockpitCanAnswer:
     def test_which_lifecycle_actions_are_available(self):
         with SessionLocal() as s:
             _deploy(s)
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             with SessionLocal() as s:
@@ -222,7 +222,7 @@ class TestTheCockpitCanAnswer:
             s.query(IrPaperDeployment).update(
                 {"graph_content_address": "sha256:" + "0" * 64})
             s.commit()
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             with SessionLocal() as s:
@@ -240,7 +240,7 @@ class TestItIsNotASecondOpinion:
     def test_the_binding_is_the_engines_own_binding(self):
         with SessionLocal() as s:
             _deploy(s)
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             engine_binding = r._binding_for(INSTRUMENT)
@@ -340,7 +340,7 @@ class TestTheRoute:
         with SessionLocal() as s:
             _deploy(s)
         client = TestClient(app)
-        app.state.runner = r = EngineRunner()
+        app.state.runner = r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         try:
             body = client.get("/api/execution/cockpit").json()
@@ -572,7 +572,7 @@ class TestLifecycleCapability:
             return _instrument(cockpit.view(runner, s).to_dict(), key)
 
     def _fresh_runner(self):
-        r = EngineRunner()
+        r = EngineRunner(owner_id="owner", broker_account_id="account.default")
         r.refresh_paper_authority()
         return r
 
@@ -619,7 +619,7 @@ class TestLifecycleCapability:
     def test_retired_exposes_no_resurrection_path(self):
         with SessionLocal() as s:
             row = _deploy(s)
-            pa.retire(s, row.id, revision=row.revision, restore_strategy_key=None)
+            pa.retire(s, row.id, revision=row.revision, restore_strategy_key=None, owner_id="owner")
             s.commit()
         r = self._fresh_runner()
         try:

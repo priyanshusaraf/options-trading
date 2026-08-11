@@ -25,7 +25,7 @@ NOW = dt.datetime(2026, 8, 3, 11, 0)
 @pytest.fixture
 def runner(monkeypatch, give_futures_price_feed):
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     # Fund the ledger. ONE NIFTY lot is ~₹18 lakh of notional and blocks ~₹2.1
     # lakh of margin at the 12% estimate, so the default ₹50,000 paper ledger

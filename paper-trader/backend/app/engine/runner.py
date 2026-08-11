@@ -101,7 +101,7 @@ _INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 6
 
 
 class EngineRunner:
-    def __init__(self) -> None:
+    def __init__(self, *, owner_id: str, broker_account_id: str) -> None:
         self.settings = get_settings()
         self.provider = get_provider()
         self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
@@ -111,7 +111,8 @@ class EngineRunner:
         # literal because the whole point of Phase B is that "which book" becomes a
         # parameter of execution instead of an assumption baked into every query.
         self.deployment_id = LEGACY_DEPLOYMENT_ID
-        self.owner_id = LEGACY_OWNER_ID
+        self.owner_id = owner_id
+        self.broker_account_id = broker_account_id
         # Disarm every deployment on process start — the same invariant the global
         # `armed` flag has (it is False below), for the same reason: nobody was
         # watching when the process went down, so no arm state may be inherited
@@ -144,7 +145,8 @@ class EngineRunner:
             _execution_connection = configured_execution_connection(self.provider)
         self.broker = make_broker(self.provider, self.notifier,
                                   deployment_id=self.deployment_id,
-                                  execution_connection=_execution_connection)
+                                  execution_connection=_execution_connection,
+                                  broker_account_id=self.broker_account_id)
         # Which execution book this runner's money state belongs to. Taken from the
         # broker that was actually built rather than from configuration, because that
         # object is the one doing the writing (`core/execution_book.py`).

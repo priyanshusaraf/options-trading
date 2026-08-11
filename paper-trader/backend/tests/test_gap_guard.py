@@ -52,7 +52,7 @@ def _runner():
     from app.db.session import init_db
     from app.engine.runner import EngineRunner
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.params["gap_guard_enabled"] = True
     r.params["gap_guard_pct"] = 0.6
     r.params["gap_guard_resume"] = "11:00"

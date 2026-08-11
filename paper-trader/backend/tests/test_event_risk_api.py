@@ -16,7 +16,7 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def _runner():
     init_db(reset=True)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def _get(day):

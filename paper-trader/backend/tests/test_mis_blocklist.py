@@ -16,7 +16,7 @@ def test_is_mis_blocked_normalizes_exchange_prefix(monkeypatch):
 def test_set_product_refuses_intraday_for_blocked_name(monkeypatch):
     monkeypatch.setattr(mb, "_blocked", lambda: frozenset({"BLOCKEDNAME"}))
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     with pytest.raises(ValueError):
         r.set_product("BLOCKEDNAME", "equity_intraday")
     assert r.set_product("BLOCKEDNAME", "options") == "options"        # options always fine

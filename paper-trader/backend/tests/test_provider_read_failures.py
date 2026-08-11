@@ -127,7 +127,7 @@ def test_the_scan_records_a_failure_and_latches_the_token_instead_of_reporting_h
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     try:
         failing = _provider(history_fails=True)
         failing.now = lambda: dt.datetime(2026, 8, 3, 11, 0)

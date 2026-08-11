@@ -19,7 +19,7 @@ def _rows() -> int:
 
 def test_cache_sweep_writes_for_untraded_option_instruments():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     # no positions, no signals acted on — pure research snapshot of the watchlist
     import app.options.cache as cache
     cache._last_snapshot.clear()
@@ -35,7 +35,7 @@ def test_cache_sweep_writes_for_untraded_option_instruments():
 
 def test_cache_sweep_respects_enable_flag():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     import app.options.cache as cache
     cache._last_snapshot.clear()
     r.params["option_cache_enabled"] = False

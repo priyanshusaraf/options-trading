@@ -33,7 +33,7 @@ def test_paper_broker_by_default(monkeypatch):
     monkeypatch.delenv("PT_LIVE_ACK", raising=False)
     init_db(reset=True)
     assert live_execution_enabled() is False
-    assert isinstance(make_broker(MockProvider()), PaperBroker)
+    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default"), PaperBroker)
 
 
 def test_both_flags_required(monkeypatch):
@@ -61,7 +61,7 @@ def test_live_flags_but_mock_provider_stays_paper(monkeypatch):
     _open_the_live_gate(monkeypatch)
     init_db(reset=True)
     # even with both flags, the mock provider can never place a real order
-    assert isinstance(make_broker(MockProvider()), PaperBroker)
+    assert isinstance(make_broker(MockProvider(), broker_account_id="account.default"), PaperBroker)
 
 
 def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
@@ -86,7 +86,7 @@ def test_make_broker_uses_a_bounded_configurable_order_timeout(monkeypatch):
         return "LB"
 
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", fake_lb)
-    assert make_broker(prov) == "LB"
+    assert make_broker(prov, broker_account_id="account.default") == "LB"
     from app.core.config import get_settings
     s = get_settings()
     assert captured["timeout"] == s.order_timeout_seconds
@@ -116,7 +116,7 @@ def test_make_broker_passes_configured_market_protection_to_order_client(monkeyp
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker",
                         lambda *a, **k: "LB")
-    assert make_broker(prov) == "LB"
+    assert make_broker(prov, broker_account_id="account.default") == "LB"
     from app.core.config import get_settings
     assert captured["market_protection"] == get_settings().market_protection_pct
 
@@ -145,7 +145,7 @@ def test_make_broker_wires_the_provider_tick_size_as_the_tick_source(monkeypatch
 
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
-    assert make_broker(prov) == "LB"
+    assert make_broker(prov, broker_account_id="account.default") == "LB"
     assert captured["tick_source"] is prov.tick_size
     assert captured["tick_source"]("LT", "NSE") == 0.10
 
@@ -172,7 +172,7 @@ def test_make_broker_tick_source_is_none_when_the_provider_has_no_tick_size(monk
 
     monkeypatch.setattr("app.engine.kite_order_client.KiteOrderClient", fake_client)
     monkeypatch.setattr("app.engine.live_broker.LiveBroker", lambda *a, **k: "LB")
-    assert make_broker(prov) == "LB"
+    assert make_broker(prov, broker_account_id="account.default") == "LB"
     assert captured["tick_source"] is None
 
 

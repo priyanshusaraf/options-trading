@@ -10,7 +10,7 @@ from app.engine.runner import EngineRunner
 
 def _runner_with_long_option():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),

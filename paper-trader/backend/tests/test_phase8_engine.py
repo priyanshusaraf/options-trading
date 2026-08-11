@@ -8,7 +8,7 @@ from app.core import runtime_config
 
 def _runner_with_long():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     nifty = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(nifty)
     # near-ATM call -> stable, modest cost regardless of the shared mock cursor
@@ -63,7 +63,7 @@ def test_overnight_squareoff_closes_position():
 
 def test_option_cache_persist_and_throttle():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     from app.options import cache
     cache._last_snapshot.clear()
     nifty = get_instrument("NIFTY")

@@ -23,7 +23,7 @@ from app.engine.runner import EngineRunner
 @pytest.fixture
 def runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def _checked_out() -> int:

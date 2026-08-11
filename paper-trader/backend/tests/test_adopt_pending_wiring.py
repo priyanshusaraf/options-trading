@@ -7,7 +7,7 @@ from app.engine.runner import EngineRunner
 
 def test_reconcile_pass_runs_the_adoption_sweep():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     calls = []
     r.broker.adopt_pending_entries = lambda now: calls.append(now) or []
     r.broker.reconcile_orphans = lambda now: []

@@ -70,7 +70,8 @@ def live_execution_enabled() -> bool:
     return execution == "live" and ack == _ACK
 
 
-def make_broker(provider, notifier=None, deployment_id=None, execution_connection=None):
+def make_broker(provider, notifier=None, deployment_id=None, execution_connection=None,
+                *, broker_account_id: str):
     """Build the broker for `deployment_id`'s book.
 
     `deployment_id=None` means "the legacy deployment" — resolved inside the broker
@@ -90,9 +91,7 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
     `ConnectionCannotExecute` for why silence there is the dangerous option."""
     named = execution_connection is not None
     conn = execution_connection if named else connection_for(provider)
-    # Outermost legacy process boundary until principal/deployment account binding lands.
-    from app.db.models import LEGACY_BROKER_ACCOUNT_ID
-    book = {"broker_account_id": LEGACY_BROKER_ACCOUNT_ID}
+    book = {"broker_account_id": broker_account_id}
     if deployment_id is not None:
         book["deployment_id"] = deployment_id
 

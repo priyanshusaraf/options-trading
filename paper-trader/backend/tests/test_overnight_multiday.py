@@ -20,7 +20,7 @@ def _live_runner(monkeypatch, minutes_to_close: int = 5):
     """An EngineRunner whose overnight handler runs the live (non-mock) path with
     a controllable minutes-to-close so we can simulate session closes."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     monkeypatch.setattr(r.provider, "name", "live", raising=False)
     from app.core import market_hours
     monkeypatch.setattr(market_hours, "minutes_to_close",

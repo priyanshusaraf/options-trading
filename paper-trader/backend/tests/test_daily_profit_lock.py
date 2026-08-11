@@ -69,7 +69,7 @@ def test_giveback_frac_scales_floor():
 
 def _runner(lock_pct: float = 0.02, giveback_frac: float = 0.5) -> EngineRunner:
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.params["entry_min_days_to_expiry"] = 0
     r.params["daily_profit_lock_pct"] = lock_pct
     r.params["daily_profit_giveback_frac"] = giveback_frac

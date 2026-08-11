@@ -26,7 +26,7 @@ NOW = dt.datetime(2026, 8, 3, 11, 0)
 @pytest.fixture
 def runner():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     cap = r.broker.capital()
     cap.initial_capital = 500_000.0

@@ -127,7 +127,7 @@ def started(runner: EngineRunner) -> EngineRunner:
 
 def test_the_runner_loads_active_managed_deployments_at_startup():
     activate_binding()
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     assert INSTRUMENT in runner.shadow_deployments
     assert runner.shadow_deployments[INSTRUMENT].graph_identifier == GRAPH
 
@@ -141,7 +141,7 @@ def test_paused_and_retired_deployments_do_not_resurrect_across_a_restart():
         sd.pause(session, row.id, revision=row.revision)
         session.commit()
 
-    assert started(EngineRunner()).shadow_deployments == {}
+    assert started(EngineRunner(owner_id="owner", broker_account_id="account.default")).shadow_deployments == {}
 
     with SessionLocal() as session:
         from app.db.models import IrShadowDeployment
@@ -149,12 +149,12 @@ def test_paused_and_retired_deployments_do_not_resurrect_across_a_restart():
         sd.retire(session, row.id, revision=row.revision)
         session.commit()
 
-    assert started(EngineRunner()).shadow_deployments == {}
+    assert started(EngineRunner(owner_id="owner", broker_account_id="account.default")).shadow_deployments == {}
 
 
 def test_two_runners_built_from_the_same_database_agree():
     activate_binding()
-    first, second = started(EngineRunner()), started(EngineRunner())
+    first, second = started(EngineRunner(owner_id="owner", broker_account_id="account.default")), started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     assert first.shadow_deployments == second.shadow_deployments
 
 
@@ -166,7 +166,7 @@ def test_a_binding_whose_graph_moved_is_dropped_and_reported():
             "sha256:" + "9" * 64)
         session.commit()
 
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     assert runner.shadow_deployments == {}
     assert runner.shadow_deployment_problems
 
@@ -175,7 +175,7 @@ def test_the_runner_does_not_read_deployments_per_instrument_per_tick(monkeypatc
     """Loaded at startup and at controlled refresh boundaries. A DB round-trip per
     instrument per ~2.5 s scan is the shape that took the box down in July."""
     activate_binding()
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
 
     reads = []
     real = sd.active_bindings
@@ -187,7 +187,7 @@ def test_the_runner_does_not_read_deployments_per_instrument_per_tick(monkeypatc
 
 
 def test_refreshing_picks_up_a_new_activation_without_a_restart():
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     assert runner.shadow_deployments == {}
     activate_binding()
     runner.refresh_shadow_deployments()
@@ -201,7 +201,7 @@ def test_a_managed_shadow_scan_reaches_no_broker_or_order_seam(monkeypatch):
     from app.engine import kite_order_client
 
     activate_binding()
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
 
     sprung: list[str] = []
@@ -229,7 +229,7 @@ def test_a_managed_shadow_deployment_writes_no_money_record(monkeypatch):
     from app.db.models import Position, Trade
 
     activate_binding()
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
     runner.scan_signals()
 
@@ -243,7 +243,7 @@ def test_a_managed_shadow_deployment_is_never_the_author_of_a_signal(monkeypatch
     fill is attributed to. A shadow source reaching it would put a graph's identity onto a
     money record — the one thing L1.2b just finished making impossible."""
     activate_binding()
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
 
     authors: list[str] = []
@@ -261,7 +261,7 @@ def test_a_managed_shadow_deployment_is_never_the_author_of_a_signal(monkeypatch
 def test_the_managed_binding_does_not_change_authoritative_selection(monkeypatch):
     """The comparison that makes this a shadow: the authoritative strategy chosen for each
     instrument is identical with the managed deployment active and absent."""
-    # ONE runner per side, not one per instrument. `EngineRunner()` inside the comprehension
+    # ONE runner per side, not one per instrument. `EngineRunner(owner_id="owner", broker_account_id="account.default")` inside the comprehension
     # built a runner for every enabled instrument, and each holds a `PaperBroker` session for
     # its lifetime — twenty-odd checkouts against a fifteen-connection pool, inside a single
     # test, so the pool timed out mid-comprehension and the failure surfaced as
@@ -269,10 +269,10 @@ def test_the_managed_binding_does_not_change_authoritative_selection(monkeypatch
     # Two runners is also what the comparison actually means: the second is built AFTER
     # `activate_binding()` because construction reads no database and the load happens when the
     # lane starts (see `started`), so a runner cannot observe a binding created after it.
-    before = EngineRunner()
+    before = EngineRunner(owner_id="owner", broker_account_id="account.default")
     without = {k: before._binding_for(k).strategy_key for k in sorted(before.enabled)}
     activate_binding()
-    after = EngineRunner()
+    after = EngineRunner(owner_id="owner", broker_account_id="account.default")
     with_managed = {k: after._binding_for(k).strategy_key for k in sorted(after.enabled)}
     assert with_managed == without
 
@@ -307,7 +307,7 @@ def test_the_runner_consumes_a_boundary_refusal_rather_than_evaluating(monkeypat
     from app.core.logging import log
 
     activate_binding(interval="5minute")
-    runner = started(EngineRunner())
+    runner = started(EngineRunner(owner_id="owner", broker_account_id="account.default"))
     assert runner.shadow_deployments[INSTRUMENT].interval == "5minute"
     assert runner._interval_for(INSTRUMENT) != "5minute", (
         "the instrument runs the interval the deployment names — no refusal to consume")

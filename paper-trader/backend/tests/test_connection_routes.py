@@ -43,7 +43,7 @@ OWNER = "acct-7"
 def client(monkeypatch):
     init_db(reset=True)
     monkeypatch.setattr(get_settings(), "owner_id", OWNER)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     return TestClient(app)
 
 

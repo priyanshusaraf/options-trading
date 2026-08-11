@@ -147,7 +147,7 @@ def test_make_broker_raises_if_it_ever_resolves_a_real_live_broker(monkeypatch):
     assert bf.live_execution_enabled() is True, "precondition: the gate is open"
 
     with pytest.raises(RuntimeError, match="real LiveBroker inside a pytest run"):
-        bf.make_broker(_kite_looking_provider())
+        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
 
 
 def test_the_raise_names_the_offending_test(monkeypatch):
@@ -156,7 +156,7 @@ def test_the_raise_names_the_offending_test(monkeypatch):
     _stub_the_kite_plumbing(monkeypatch)
 
     with pytest.raises(RuntimeError) as e:
-        bf.make_broker(_kite_looking_provider())
+        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
     assert "test_the_raise_names_the_offending_test" in str(e.value)
     assert "REAL orders" in str(e.value)
 
@@ -198,14 +198,14 @@ def test_make_broker_really_does_construct_a_genuine_live_broker(monkeypatch):
     _stub_the_kite_plumbing(monkeypatch)
     monkeypatch.setattr(bf, "_refuse_live_broker_under_pytest", lambda b: None)
 
-    broker = bf.make_broker(_kite_looking_provider())
+    broker = bf.make_broker(_kite_looking_provider(), broker_account_id="account.default")
     assert type(broker) is LiveBroker
     assert type(broker).__module__ == bf._LIVE_BROKER_MODULE
 
 
 def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
     """Outside a test run the guard is inert — production must still get its
-    LiveBroker. Proven directly on the guard, since make_broker() cannot be called
+    LiveBroker. Proven directly on the guard, since make_broker(, broker_account_id="account.default") cannot be called
     without PYTEST_CURRENT_TEST from in here."""
     from app.engine.live_broker import LiveBroker
 

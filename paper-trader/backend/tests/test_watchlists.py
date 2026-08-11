@@ -122,5 +122,5 @@ def test_engine_prefers_active_watchlist_strategy_over_instrument_state():
         s.commit()
         wl.assign_instrument(s, "GOLDM", a.id)
         s.commit()
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     assert r.strategy_keys.get("GOLDM") == "expanding_z_v4"   # watchlist wins

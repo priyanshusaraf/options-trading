@@ -70,7 +70,7 @@ def runner():
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.enabled = {"NIFTY"}
     r.last_scan_ok["NIFTY"] = BEFORE     # a stale-but-present prior scan
     yield r

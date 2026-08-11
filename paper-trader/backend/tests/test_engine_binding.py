@@ -79,7 +79,7 @@ def test_every_assignment_the_engine_can_hold_selects_the_same_strategy_as_befor
     """The equivalence proof, over the whole space of values `strategy_keys` can take:
     unset, the default, another registered strategy, and a stale key that no longer
     resolves. `get_strategy` is what the engine called before this slice."""
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     for assigned in (None, DEFAULT_STRATEGY_KEY, "expanding_z_v4", "no_such_strategy"):
         if assigned is None:
             runner.strategy_keys.pop("NIFTY", None)
@@ -100,7 +100,7 @@ def test_the_engine_asks_the_contract_rather_than_resolving_on_its_own(monkeypat
         return real(**kwargs)
 
     monkeypatch.setattr(binding, "bind", spy)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.strategy_keys["NIFTY"] = "expanding_z_v4"
     runner._strategy_for("NIFTY")
 
@@ -117,7 +117,7 @@ def test_a_full_signal_scan_resolves_every_instrument_through_the_contract(monke
     monkeypatch.setattr(binding, "bind",
                         lambda **kw: (seen.append(kw["instrument_key"]), real(**kw))[1])
 
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.scan_signals()
 
     assert seen, "the scan resolved no strategy through the contract"
@@ -127,7 +127,7 @@ def test_a_full_signal_scan_resolves_every_instrument_through_the_contract(monke
 def test_the_binding_the_engine_uses_carries_its_provenance():
     """What the wiring buys: the engine's selection is now an artefact that can be
     reviewed — version, source, deciding layer, reason — not a bare key."""
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.strategy_keys["NIFTY"] = "expanding_z_v4"
     result = runner._binding_for("NIFTY")
 
@@ -143,7 +143,7 @@ def test_the_binding_the_engine_uses_carries_its_provenance():
 def test_a_stale_assignment_still_falls_back_and_the_book_keeps_trading():
     """The legacy fail-safe is deliberate and must survive the refactor: one stale config
     row must not stop the book. What is new is that the substitution is *reported*."""
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.strategy_keys["NIFTY"] = "withdrawn_strategy"
     result = runner._binding_for("NIFTY")
 
@@ -156,8 +156,8 @@ def test_reconstructing_the_runner_produces_the_same_binding():
     """Restart equivalence. The decision must come from persisted state, not from
     whatever the previous process happened to hold in memory."""
     assign("NIFTY", "expanding_z_v4")
-    first = EngineRunner()._binding_for("NIFTY")
-    second = EngineRunner()._binding_for("NIFTY")
+    first = EngineRunner(owner_id="owner", broker_account_id="account.default")._binding_for("NIFTY")
+    second = EngineRunner(owner_id="owner", broker_account_id="account.default")._binding_for("NIFTY")
     assert first == second
     assert first.strategy_key == "expanding_z_v4"
 
@@ -173,7 +173,7 @@ def test_a_watchlist_assignment_reaches_the_engine_through_the_same_contract():
         wl.assign_instrument(session, "NIFTY", w.id)
         session.commit()
 
-    result = EngineRunner()._binding_for("NIFTY")
+    result = EngineRunner(owner_id="owner", broker_account_id="account.default")._binding_for("NIFTY")
     assert result.strategy_key == "expanding_z_v4"
     assert result.origin == binding.ORIGIN_INSTRUMENT
 
@@ -185,7 +185,7 @@ def test_a_registered_graph_strategy_is_refused_execution_by_the_engine(monkeypa
     contract in isolation: once a graph-backed strategy is registered, the registry
     resolves it and the pre-wiring engine would have traded it."""
     strategy = graph_strategy(monkeypatch)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.strategy_keys["NIFTY"] = strategy.key
 
     with pytest.raises(binding.AuthorityNotGranted):
@@ -198,7 +198,7 @@ def test_the_engine_skips_a_refused_instrument_and_substitutes_nothing(monkeypat
     class the whole registry split exists to prevent — and it must not stop the other
     instruments either, because the risk lane must never be blocked."""
     strategy = graph_strategy(monkeypatch)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     for key in list(runner.enabled):
         runner.strategy_keys[key] = DEFAULT_STRATEGY_KEY
     refused = sorted(runner.enabled)[0]
@@ -215,7 +215,7 @@ def test_a_refused_instrument_reaches_no_broker_or_order_seam(monkeypatch):
     from app.engine import broker as broker_module
 
     strategy = graph_strategy(monkeypatch)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     for key in list(runner.enabled):
         runner.strategy_keys[key] = strategy.key
 
@@ -235,7 +235,7 @@ def test_assigning_a_graph_strategy_through_the_route_is_refused(monkeypatch):
     without the gate at the write, `POST /api/instruments/NIFTY/strategy` is the whole
     path from "a graph exists" to "a graph trades real money"."""
     strategy = graph_strategy(monkeypatch)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
 
     with pytest.raises(binding.AuthorityNotGranted):
         runner.set_strategy("NIFTY", strategy.key)
@@ -259,7 +259,7 @@ def test_a_deployment_pinning_a_graph_is_refused_rather_than_falling_through(mon
 def test_an_unregistered_graph_assignment_fails_with_a_stable_explicit_error():
     """Requirement 8. The message must name the key: "some strategy is missing" is not
     actionable at 09:20 on a Monday."""
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.strategy_keys["NIFTY"] = "ir.strategy.no_such_graph"
     with pytest.raises(StrategyNotFound) as raised:
         runner._strategy_for("NIFTY")
@@ -274,7 +274,7 @@ def test_the_shadow_lane_still_observes_what_authority_refuses(monkeypatch):
     assert observed.authority == binding.SHADOW
     assert observed.source == binding.SOURCE_IR_GRAPH
 
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -331,7 +331,7 @@ def test_adding_an_instrument_with_a_graph_strategy_is_refused(monkeypatch):
 
     strategy = graph_strategy(monkeypatch)
     with pytest.raises(binding.AuthorityNotGranted):
-        universe_resolver.add_instrument("NIFTY", EngineRunner().provider,
+        universe_resolver.add_instrument("NIFTY", EngineRunner(owner_id="owner", broker_account_id="account.default").provider,
                                          strategy_key=strategy.key, owner_id="owner")
 
     with SessionLocal() as session:
@@ -405,7 +405,7 @@ def test_the_engine_rejects_a_forged_binding_from_a_drifted_resolver(monkeypatch
         origin=binding.ORIGIN_INSTRUMENT, reason="a resolver that granted itself authority")
     monkeypatch.setattr(binding, "bind", lambda **kw: forged)
 
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     with pytest.raises(binding.AuthorityNotGranted):
         runner._strategy_for("NIFTY")
 

@@ -38,7 +38,7 @@ def test_intraday_equity_trades_end_to_end():
             s.add(row)
         s.commit()
 
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     r.params["intraday_enabled"] = True
     r.params["notify_enabled"] = False
@@ -88,7 +88,7 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
         row.product = "equity_intraday"
         s.add(row)
         s.commit()
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     r.params["intraday_enabled"] = True
     r.params["notify_enabled"] = False
@@ -126,7 +126,7 @@ def test_equity_intraday_equity_uses_margin_not_notional():
     full leveraged notional — the bug that ballooned equity to ~₹169k on a ₹50k base."""
     from app.core.instruments import get_instrument
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument(_cheap_keys(1)[0])
     price = r.provider._candles[inst.key][r.provider._cursor].close
     qty = int(50000 / price)                      # ~₹50k notional -> ~₹10k margin at 5x
@@ -145,7 +145,7 @@ def test_lockstep_ratchets_both_sl_and_tp_on_an_open_position():
     the stop AND the target up together and floors the stop at break-even."""
     from app.core.instruments import get_instrument
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument(_cheap_keys(1)[0])
     price = r.provider._candles[inst.key][r.provider._cursor].close
     qty = int(50000 / price)
@@ -164,7 +164,7 @@ def test_options_path_untouched_when_intraday_disabled():
     """With intraday off (the default), an instrument left as product='options'
     still trades options exactly as before — the equity branch is inert."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.armed = True
     # intraday_enabled defaults False; do NOT enable it
     for _ in range(200):

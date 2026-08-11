@@ -173,7 +173,7 @@ def _trap_every_seam(monkeypatch) -> list[str]:
 
 def _runner_with_shadow(monkeypatch) -> EngineRunner:
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -277,7 +277,7 @@ def test_a_disagreement_seen_by_the_engine_reaches_the_record(monkeypatch):
 
 def _authoritative_state(enabled: bool) -> tuple[dict, dict, dict]:
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = enabled
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -302,7 +302,7 @@ def test_the_shadow_lane_writes_nothing_into_the_engine_state():
     """Constraint 2 and 4: the IR verdict may be recorded, never fed back. No state entry
     may carry a shadow field for the entry pass to read."""
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = True
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -322,7 +322,7 @@ def test_a_failure_anywhere_in_the_lane_leaves_the_authoritative_output_unchange
     baseline, _, _ = _authoritative_state(False)
 
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = True
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -350,7 +350,7 @@ def test_a_shadow_failure_does_not_stop_later_instruments_being_scanned(monkeypa
     failure would silently stop scanning the rest of the book — the E1 poisoned-key
     shape."""
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.params["ir_shadow_enabled"] = True
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -369,7 +369,7 @@ def test_the_signal_iteration_reports_what_the_shadow_cost_it():
     init_db(reset=True)
     runtime_config.set_override("ir_shadow_enabled", True)
     try:
-        runner = EngineRunner()
+        runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
         for key in list(runner.enabled):
             runner.strategy_keys[key] = "expanding_z_v4"
 
@@ -388,7 +388,7 @@ def test_the_signal_iteration_reports_what_the_shadow_cost_it():
 def test_the_iteration_reports_no_shadow_cost_when_the_lane_is_off():
     """The complement: with the flag off the cost measure must read zero, not "unknown"."""
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
 
@@ -403,7 +403,7 @@ def test_the_iteration_reports_no_shadow_cost_when_the_lane_is_off():
 
 def test_the_flag_is_off_by_default_and_the_lane_is_inert():
     init_db(reset=True)
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     assert runner.params["ir_shadow_enabled"] is False
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
@@ -419,7 +419,7 @@ def test_the_flag_is_live_editable_without_a_restart():
     `refresh_params` is what the settings route already calls."""
     init_db(reset=True)
     assert "ir_shadow_enabled" in runtime_config.OVERRIDABLE
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     assert runner.params["ir_shadow_enabled"] is False
 
     runtime_config.set_override("ir_shadow_enabled", True)
@@ -441,7 +441,7 @@ def test_an_uncoercible_flag_value_fails_closed():
         session.get(RuntimeConfig, "ir_shadow_enabled").value = "banana"
         session.commit()
 
-    runner = EngineRunner()
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     try:
         assert runner.params["ir_shadow_enabled"] is False
     finally:

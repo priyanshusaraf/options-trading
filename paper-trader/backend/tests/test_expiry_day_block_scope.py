@@ -101,7 +101,7 @@ def test_weekday_guard_off_blocks_nothing():
 # the live wiring stays broken) ──────────────────────────────────────────
 def _runner(key, product, bar, block_keys):
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.enabled = {key}
     r.products[key] = product
     r.params = {**r.params, "intraday_enabled": True,

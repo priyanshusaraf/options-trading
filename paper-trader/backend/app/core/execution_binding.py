@@ -306,14 +306,15 @@ def _describe_paper_authority(deployment_id, instrument_key,
                 f"at {record.interval} in the paper book"))
 
 
-def resolve_binding(session, *, deployment_id: int, instrument_key: str) -> ExecutionBinding:
+def resolve_binding(session, *, deployment_id: int, instrument_key: str,
+                    owner_id: str) -> ExecutionBinding:
     """`bind`, with the deployment pin and the instrument assignment read from the
     database. The entry point for callers that hold a session and no cached config."""
     from app.core.deployments import resolve_deployment_strategy
 
     return bind(deployment_id=deployment_id, instrument_key=instrument_key,
                 deployment_pin=resolve_deployment_strategy(session, deployment_id),
-                assigned_key=_assigned_strategy_key(session, instrument_key))
+                assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id))
 
 
 def _bind_assigned(deployment_id, instrument_key, assigned) -> ExecutionBinding:
@@ -428,10 +429,10 @@ def shadow_source_for(*, instrument_key: str, authoritative_key: str | None,
         execution_mode="shadow", authority=SHADOW, deployment_row_id=None)
 
 
-def _assigned_strategy_key(session, instrument_key: str) -> str | None:
-    from app.db.models import InstrumentState, LEGACY_OWNER_ID
+def _assigned_strategy_key(session, instrument_key: str, *, owner_id: str) -> str | None:
+    from app.db.models import InstrumentState
 
-    row = session.get(InstrumentState, (LEGACY_OWNER_ID, instrument_key))
+    row = session.get(InstrumentState, (owner_id, instrument_key))
     return (row.strategy_key or None) if row is not None else None
 
 

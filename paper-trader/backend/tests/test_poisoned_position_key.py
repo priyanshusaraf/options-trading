@@ -16,7 +16,7 @@ GHOST = "GHOST_DELISTED"
 
 def _runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def _open_option(r, key):

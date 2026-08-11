@@ -34,7 +34,7 @@ def _runner(live=True):
     # post-hoc instance flip would leave the broker live and its `capital_state` row
     # paper, which is not a state any real broker can be in.
     PaperBroker.MODE = "live" if live else "paper"
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 class _KiteFunds:
@@ -88,7 +88,7 @@ def test_live_ledger_reanchors_to_real_equity():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:            # the DB row itself was written
-        cap = s.get(CapitalState, 1)
+        cap = s.get(CapitalState, ("account.default", "live"))
         assert cap.initial_capital == 73_250.0
         assert cap.cash == 73_250.0
         assert cap.realized_pnl == 0.0
@@ -119,7 +119,7 @@ def test_reanchors_a_ledger_that_has_traded_on_earlier_days():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 73_250.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 73_250.0
     assert r._reanchored is True
 
 
@@ -136,7 +136,7 @@ def test_does_not_reanchor_once_today_has_traded():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 50_000.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 50_000.0
     assert r._reanchored is False
     assert "traded today" in r._reanchor_reason
 
@@ -161,7 +161,7 @@ def test_does_not_reanchor_when_position_open():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 50_000.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 50_000.0
     assert r._reanchored is False
     assert "flat" in r._reanchor_reason
 
@@ -175,7 +175,7 @@ def test_paper_broker_on_a_kite_feed_never_reanchors():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 50_000.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 50_000.0
     assert r._reanchored is False
 
 
@@ -185,7 +185,7 @@ def test_mock_provider_never_reanchors():
     r._maybe_refresh_funds()   # provider.name != "kite" -> early return, no-op
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 50_000.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 50_000.0
     assert r._reanchored is False
 
 
@@ -203,7 +203,7 @@ def test_second_refresh_the_same_day_is_a_noop():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        cap = s.get(CapitalState, 1)
+        cap = s.get(CapitalState, ("account.default", "live"))
         assert cap.initial_capital == 73_250.0
         assert cap.cash == 73_250.0
     assert "already re-anchored today" in r._reanchor_reason
@@ -216,7 +216,7 @@ def test_drift_within_tolerance_leaves_the_ledger_alone():
     r._maybe_refresh_funds()
 
     with SessionLocal() as s:
-        assert s.get(CapitalState, 1).initial_capital == 50_000.0
+        assert s.get(CapitalState, ("account.default", "live")).initial_capital == 50_000.0
     assert r._reanchored is False
     assert "tolerance" in r._reanchor_reason
 

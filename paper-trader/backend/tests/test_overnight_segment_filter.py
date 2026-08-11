@@ -14,7 +14,7 @@ from app.engine.runner import EngineRunner
 
 def _runner_with_mis():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "LONG", 100.0, 10,
                                         "NSE_INTRADAY", "t", r.provider.now(), params={})
     return r, pos
@@ -35,7 +35,7 @@ def test_mis_position_is_not_given_an_overnight_decision():
 def test_an_options_position_still_gets_its_decision():
     """Guard against filtering out the segment this function actually exists for."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(inst)
     r.broker.open_position(inst, "LONG", chain.quotes[0], "t", r.provider.now(), chain.spot)

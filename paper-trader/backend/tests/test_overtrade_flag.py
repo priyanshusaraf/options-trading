@@ -5,7 +5,7 @@ from app.engine.runner import EngineRunner
 
 def _fresh_runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def test_set_overtrade_flag_live_and_persisted():
@@ -16,7 +16,7 @@ def test_set_overtrade_flag_live_and_persisted():
     finally:
         r.broker.close()
     # a fresh runner reloads the flag from the DB
-    r2 = EngineRunner()
+    r2 = EngineRunner(owner_id="owner", broker_account_id="account.default")
     try:
         assert r2.overtrade_flags.get("GOLDM") is True
         r2.set_overtrade_flag("GOLDM", False)

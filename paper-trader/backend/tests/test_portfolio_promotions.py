@@ -130,7 +130,7 @@ def client(tmp_path, monkeypatch):
         except Exception:
             pass
     init_db(reset=True)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     return TestClient(app), cid
 
 
@@ -157,7 +157,7 @@ def test_promotions_empty_when_no_research_db(tmp_path, monkeypatch):
         except Exception:
             pass
     init_db(reset=True)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     c = TestClient(app)
     assert c.get("/api/portfolio/promotions").json()["promotions"] == []
 
@@ -225,7 +225,7 @@ def gen_client(tmp_path, monkeypatch):
         except Exception:
             pass
     init_db(reset=True)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     yield TestClient(app)
     from app.strategy import registry
     registry._REGISTRY.pop("gen_api_test_v1", None)

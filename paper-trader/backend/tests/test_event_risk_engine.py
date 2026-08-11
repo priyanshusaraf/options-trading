@@ -13,7 +13,7 @@ from app.engine.runner import EngineRunner
 
 def _runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def test_engine_skips_an_instrument_inside_its_release_window(monkeypatch):

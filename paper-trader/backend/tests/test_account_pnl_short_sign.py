@@ -23,7 +23,7 @@ class FakeKite:
 
 def _short_in_profit():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "SHORT", 100.0, 10,
                                         "NSE_INTRADAY", "t", r.provider.now(), params={})
     pos.last_premium = 95.0        # price FELL 5 → a short is up 5 × 10 = +50
@@ -46,7 +46,7 @@ def test_a_winning_equity_short_reads_as_a_profit():
 def test_a_long_is_unaffected():
     """Guard against fixing the short by breaking the long."""
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "LONG", 100.0, 10,
                                         "NSE_INTRADAY", "t", r.provider.now(), params={})
     pos.last_premium = 105.0                   # price rose 5 → a long is up +50

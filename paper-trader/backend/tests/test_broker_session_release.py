@@ -32,7 +32,7 @@ RUNNERS = 8
 def test_a_leaves_eight_runners_behind():
     init_db(reset=True)
     for _ in range(RUNNERS):
-        EngineRunner()
+        EngineRunner(owner_id="owner", broker_account_id="account.default")
     assert engine.pool.checkedout() > 0, (
         "no connections were checked out at all — if EngineRunner stopped holding a broker "
         "session, this guard is measuring nothing and should be re-derived, not deleted")

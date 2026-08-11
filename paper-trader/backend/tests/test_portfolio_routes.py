@@ -24,7 +24,7 @@ def _client():
         except Exception:
             pass
     init_db(reset=True)
-    app.state.runner = EngineRunner()
+    app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     return TestClient(app)
 
 

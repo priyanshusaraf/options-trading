@@ -33,7 +33,14 @@ def setup_function() -> None:
 def resolve(instrument_key="NIFTY", deployment_id=LEGACY_DEPLOYMENT_ID):
     with SessionLocal() as session:
         return binding.resolve_binding(session, deployment_id=deployment_id,
-                                       instrument_key=instrument_key)
+                                       instrument_key=instrument_key, owner_id=LEGACY_OWNER_ID)
+
+
+def test_resolve_binding_requires_explicit_owner_scope():
+    with SessionLocal() as session:
+        with pytest.raises(TypeError):
+            binding.resolve_binding(session, deployment_id=LEGACY_DEPLOYMENT_ID,
+                                    instrument_key="NIFTY")
 
 
 def assign(instrument_key: str, strategy_key: str | None) -> None:

@@ -104,7 +104,7 @@ def test_apply_lockstep_prefers_frozen_pcts_over_changed_globals():
     pos.last_premium = 100.0
 
     r = EngineRunner(session=broker.s) if "session" in inspect.signature(
-        EngineRunner.__init__).parameters else EngineRunner()
+        EngineRunner.__init__).parameters else EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.broker = broker
     # globals retuned AFTER entry to something narrower — must be ignored for this row
     r.params = {"intraday_lockstep_enabled": True, "intraday_lockstep_trigger_pct": 0.02,

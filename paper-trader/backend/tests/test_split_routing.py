@@ -125,7 +125,7 @@ def test_prices_come_from_upstox_while_the_order_credential_is_zerodhas(
     seeded with the DATA connection's token authenticates as the wrong account — or, with
     Upstox, as nothing at all, and every order is rejected unauthenticated."""
     data, _, captured = upstox_data_kite_execution
-    broker = make_broker(data, execution_connection=configured_execution_connection(data))
+    broker = make_broker(data, execution_connection=configured_execution_connection(data), broker_account_id="account.default")
 
     assert broker == "LB"
     assert captured["data_provider"] is data, "prices must still come from Upstox"
@@ -143,7 +143,7 @@ def test_the_tick_source_follows_execution_not_data(upstox_data_kite_execution):
     `tick_size` at all, so a tick_source pointing at the data side would be None and the
     client would silently fall back to the 0.05 grid that caused the incident."""
     data, kite, captured = upstox_data_kite_execution
-    make_broker(data, execution_connection=configured_execution_connection(data))
+    make_broker(data, execution_connection=configured_execution_connection(data), broker_account_id="account.default")
     tick_source = captured.get("tick_source")
     assert tick_source is not None
     assert tick_source == getattr(kite, "tick_size"), (
@@ -167,7 +167,7 @@ def test_naming_a_data_only_connection_for_execution_refuses_rather_than_paper_t
     conn = configured_execution_connection(data)
     assert conn is not None and conn.broker == "upstox"
     with pytest.raises(ConnectionCannotExecute) as e:
-        make_broker(data, execution_connection=conn)
+        make_broker(data, execution_connection=conn, broker_account_id="account.default")
     assert caps.LIVE_EXECUTION in str(e.value)
 
 
@@ -187,7 +187,7 @@ def test_a_split_config_under_paper_still_produces_a_paper_broker(monkeypatch):
     monkeypatch.setattr(get_settings(), "execution", "paper")
     monkeypatch.delenv("PT_EXECUTION", raising=False)
     data = UpstoxProvider()
-    assert isinstance(make_broker(data), PaperBroker)
+    assert isinstance(make_broker(data, broker_account_id="account.default"), PaperBroker)
 
 
 # ── a stored connection outranks the environment, and a missing one refuses ──

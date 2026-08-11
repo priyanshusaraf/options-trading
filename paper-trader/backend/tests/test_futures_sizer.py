@@ -23,7 +23,7 @@ from app.providers.kite import KiteProvider as _KiteForCaps
 @pytest.fixture
 def runner():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     yield r
     try:
         r.broker.s.close()

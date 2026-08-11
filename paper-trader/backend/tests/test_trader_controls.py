@@ -57,7 +57,7 @@ def _client():
     from app.engine.runner import EngineRunner
     from app.main import app
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     for _ in range(160):
         r.tick(); r.provider.advance()
     app.state.runner = r

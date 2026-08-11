@@ -101,7 +101,9 @@ def calendar(request: Request, days: int = 120):
     bot_n_by_day: dict[str, int] = defaultdict(int)
     with SessionLocal() as s:
         trades = list(s.scalars(select(Trade).where(Trade.mode == "live")))
-        snaps = {row.day: row.account_net for row in s.scalars(select(DailyAccountSnapshot))}
+        snaps = {row.day: row.account_net for row in s.scalars(
+            select(DailyAccountSnapshot).where(
+                DailyAccountSnapshot.broker_account_id == r.broker.broker_account_id))}
     for t in trades:
         if not t.exit_time:
             continue
@@ -1326,16 +1328,17 @@ def retire_paper_deployment(row_id: int, body: PaperRetireIn, request: Request):
     """
     from app.core import paper_authority
 
+    r = _runner(request)
     with SessionLocal() as s:
         try:
             row = paper_authority.retire(
                 s, row_id, revision=body.revision,
-                restore_strategy_key=body.restore_strategy_key)
+                restore_strategy_key=body.restore_strategy_key, owner_id=r.owner_id)
             s.commit()
         except paper_authority.RevisionConflict as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except paper_authority.PaperAuthorityError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
         result = row.to_dict()
-    _runner(request).refresh_paper_authority()
+    r.refresh_paper_authority()
     return result

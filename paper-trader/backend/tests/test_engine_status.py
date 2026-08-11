@@ -17,7 +17,7 @@ from app.providers.kite import KiteProvider as _KiteForCaps
 
 def _runner():
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 def test_snapshot_carries_engine_status_keys():

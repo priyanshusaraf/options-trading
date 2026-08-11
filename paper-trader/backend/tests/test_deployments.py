@@ -215,7 +215,7 @@ def test_engine_arm_mirrors_onto_the_deployment_row():
     """Phase B runtime state. The in-memory flag stays the master switch — the row
     is a durable record of what it says, never a second gate that could disagree."""
     from app.engine.runner import EngineRunner
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     with SessionLocal() as s:
         assert s.get(Deployment, LEGACY_DEPLOYMENT_ID).armed is False, \
             "a fresh process must start disarmed, persisted state included"
@@ -233,7 +233,7 @@ def test_a_disarm_still_succeeds_when_the_row_cannot_be_written(monkeypatch):
     stop taking new entries is the failure mode that matters here."""
     from app.core import deployments as dep_mod
     from app.engine.runner import EngineRunner
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.arm(True)
     monkeypatch.setattr(dep_mod, "set_armed",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db down")))

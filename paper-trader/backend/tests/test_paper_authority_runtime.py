@@ -116,7 +116,7 @@ def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeplo
 
 
 def _runner() -> EngineRunner:
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.refresh_paper_authority()
     return r
 
@@ -314,7 +314,7 @@ class TestStaleBindingWithdrawal:
             with SessionLocal() as s:
                 current = s.get(IrPaperDeployment, row.id)
                 pa.retire(s, current.id, revision=current.revision,
-                          restore_strategy_key=None)
+                          restore_strategy_key=None, owner_id="owner")
                 s.commit()
             r.refresh_paper_authority()
 
@@ -356,7 +356,7 @@ class TestStaleBindingWithdrawal:
             with SessionLocal() as s:
                 current = s.get(IrPaperDeployment, row.id)
                 pa.retire(s, current.id, revision=current.revision,
-                          restore_strategy_key=None)
+                          restore_strategy_key=None, owner_id="owner")
                 s.commit()
             r.refresh_paper_authority()
             r.process_entries()
@@ -381,7 +381,7 @@ class TestStaleBindingWithdrawal:
             with SessionLocal() as s:
                 current = s.get(IrPaperDeployment, row.id)
                 pa.retire(s, current.id, revision=current.revision,
-                          restore_strategy_key=None)
+                          restore_strategy_key=None, owner_id="owner")
                 s.commit()
             r.refresh_paper_authority()
 
@@ -432,7 +432,7 @@ class TestExitOwnershipSurvivesWithdrawal:
             with SessionLocal() as s:
                 current = s.get(IrPaperDeployment, row.id)
                 pa.retire(s, current.id, revision=current.revision,
-                          restore_strategy_key=None)
+                          restore_strategy_key=None, owner_id="owner")
                 s.commit()
             r.refresh_paper_authority()
 
@@ -736,7 +736,7 @@ class TestWithdrawalIdentityScope:
             with SessionLocal() as s:
                 current = s.get(IrPaperDeployment, row.id)
                 pa.retire(s, current.id, revision=current.revision,
-                          restore_strategy_key=None)
+                          restore_strategy_key=None, owner_id="owner")
                 s.commit()
             r.refresh_paper_authority()
 

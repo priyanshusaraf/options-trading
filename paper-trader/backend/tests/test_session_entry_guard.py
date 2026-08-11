@@ -16,7 +16,7 @@ def _intraday_runner(key="NIFTY", bar=None):
     `now` or the #15 signal-age guard (correctly) drops the entry first."""
     from app.core.market_hours import ist_epoch
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.enabled = {key}
     r.products[key] = "equity_intraday"
     r.params = {**r.params, "intraday_enabled": True}

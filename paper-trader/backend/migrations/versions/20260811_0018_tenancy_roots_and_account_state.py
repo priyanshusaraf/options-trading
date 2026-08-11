@@ -217,7 +217,8 @@ def downgrade() -> None:
     op.execute(sa.text("""
         INSERT INTO capital_state__0017
         (id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at)
-        SELECT id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at
+        SELECT id, CASE WHEN book = 'legacy' THEN NULL ELSE book END,
+               initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at
         FROM capital_state
     """))
     op.execute(sa.text("DROP TABLE capital_state"))

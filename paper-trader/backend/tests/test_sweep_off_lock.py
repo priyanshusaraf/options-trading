@@ -14,7 +14,7 @@ from app.engine.runner import EngineRunner
 
 def test_option_sweep_runs_off_the_engine_lock():
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.params["option_cache_enabled"] = True
     r._next_cache_sweep_epoch = 0.0          # force the sweep to run this iteration
     seen = {}
@@ -31,7 +31,7 @@ def test_option_sweep_runs_off_the_engine_lock():
 def test_signal_iteration_blocking_no_longer_runs_the_sweep():
     # the lock-held body must not include the sweep (that's what starved the risk loop)
     init_db(reset=True)
-    r = EngineRunner()
+    r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.params["option_cache_enabled"] = True
     r._next_cache_sweep_epoch = 0.0
     calls = {"n": 0}

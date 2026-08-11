@@ -21,7 +21,7 @@ def _session():
 def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     s = _session()
     now = dt.datetime(2026, 6, 19, 9, 30)
-    s.add(CapitalState(id=1, initial_capital=50_000, cash=49_611.07, realized_pnl=0))
+    s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=49_611.07, realized_pnl=0))
     s.add(UniverseInstrument(
         key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
         spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
@@ -48,7 +48,7 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     assert pos.lot_size == 100
     assert pos.entry_charges == pytest.approx(expected_charges, abs=0.01)
     assert pos.entry_cost == pytest.approx(expected_cost, abs=0.01)
-    assert s.get(CapitalState, 1).cash == pytest.approx(49_611.07 - (expected_cost - 388.93), abs=0.01)
+    assert s.get(CapitalState, ("account.default", "paper")).cash == pytest.approx(49_611.07 - (expected_cost - 388.93), abs=0.01)
 
 
 def test_repair_leaves_a_genuine_partial_fill_untouched():
@@ -58,7 +58,7 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     unclosable). The discriminator: a partial has pos.lot_size == inst.lot_size."""
     s = _session()
     now = dt.datetime(2026, 6, 19, 9, 30)
-    s.add(CapitalState(id=1, initial_capital=50_000, cash=40_000.0, realized_pnl=0))
+    s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=40_000.0, realized_pnl=0))
     s.add(UniverseInstrument(
         key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
         spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
@@ -75,7 +75,7 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
         target_price=584.16, last_premium=370.0, last_spot=7119,
     ))
     s.commit()
-    cash_before = s.get(CapitalState, 1).cash
+    cash_before = s.get(CapitalState, ("account.default", "paper")).cash
 
     fixed = _repair_open_position_lot_sizes(s)
 
@@ -83,4 +83,4 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     assert fixed == 0
     assert pos.qty == 25                                     # partial NOT inflated
     assert pos.lot_size == 100
-    assert s.get(CapitalState, 1).cash == cash_before        # no phantom cash debit
+    assert s.get(CapitalState, ("account.default", "paper")).cash == cash_before        # no phantom cash debit

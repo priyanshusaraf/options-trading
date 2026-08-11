@@ -72,7 +72,7 @@ def _runner():
     from app.engine.runner import EngineRunner
 
     init_db(reset=True)
-    return EngineRunner()
+    return EngineRunner(owner_id="owner", broker_account_id="account.default")
 
 
 NIFTY = get_instrument("NIFTY")

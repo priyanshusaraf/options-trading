@@ -71,15 +71,22 @@ def configured_execution_mode() -> str:
     return resolve_book(getattr(get_settings(), "execution", None))
 
 
-def _books_with_money_rows(session) -> set[str]:
+def _books_with_money_rows(session, *, broker_account_id: str) -> set[str] | None:
     """Which books already own persisted money records. Immutable evidence: `mode` was
     stamped on every fill long before this slice, by the broker that made it."""
     from sqlalchemy import select
 
-    from app.db.models import Position, Trade
+    from app.db.models import BrokerAccount, Position, Trade
 
-    return ({resolve_book(m) for m in session.scalars(select(Position.mode).distinct())}
-            | {resolve_book(m) for m in session.scalars(select(Trade.mode).distinct())})
+    account = session.get(BrokerAccount, broker_account_id)
+    if account is None:
+        return None
+    owner_id = account.owner_id
+
+    return ({resolve_book(m) for m in session.scalars(
+                select(Position.mode).where(Position.owner_id == owner_id).distinct())}
+            | {resolve_book(m) for m in session.scalars(
+                select(Trade.mode).where(Trade.owner_id == owner_id).distinct())})
 
 
 def capital_for_book(session, book: str, *, broker_account_id: str):
@@ -116,8 +123,11 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     # sentinel; claim it only when historic fill evidence is unambiguous.
     legacy = session.get(CapitalState, (broker_account_id, LEGACY_UNATTRIBUTED_BOOK))
     if legacy is not None:
-        owners = _books_with_money_rows(session)
-        if len(owners) > 1:
+        owners = _books_with_money_rows(session, broker_account_id=broker_account_id)
+        if owners is None:
+            log.warn(f"capital_state row {legacy.id} cannot be claimed: broker account "
+                     f"{broker_account_id!r} has no tenancy root", event="LEDGER_UNATTRIBUTED")
+        elif len(owners) > 1:
             log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,
                                                     owners=sorted(owners), book=book),
                      event="LEDGER_UNATTRIBUTED")
