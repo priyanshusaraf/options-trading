@@ -65,9 +65,19 @@ def _request(**changes) -> NewExecutionIntent:
         "strategy_key": "mean-revert",
         "strategy_version": "v1",
         "context": {"setup": "test"},
+        "owner_id": LEGACY_OWNER_ID,
+        "broker_account_id": LEGACY_BROKER_ACCOUNT_ID,
     }
     values.update(changes)
     return NewExecutionIntent(**values)
+
+
+def test_new_execution_intent_requires_explicit_money_scope():
+    values = _request().__dict__.copy()
+    values.pop("owner_id")
+    values.pop("broker_account_id")
+    with pytest.raises(TypeError):
+        NewExecutionIntent(**values)
 
 
 def _event(kind: str, *, source_event_id: str, observed_at: dt.datetime,

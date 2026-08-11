@@ -356,7 +356,8 @@ class TestOrphansFromTheOtherBookAreLoud:
             s.commit()
         with SessionLocal() as s:
             from app.db.session import _repair_open_position_lot_sizes
-            _repair_open_position_lot_sizes(s)
+            _repair_open_position_lot_sizes(
+                s, owner_id="owner", broker_account_id="account.default")
             s.commit()
         with SessionLocal() as s:
             assert eb.capital_for_book(s, LIVE, broker_account_id="account.default").cash == live_cash_before

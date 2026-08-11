@@ -17,6 +17,8 @@ BASE = dt.datetime(2026, 8, 9, 9, 15)
 def _intent(*, side="BUY", decision_price=100.0):
     return NewExecutionIntent(
         deployment_id=1,
+        owner_id="owner",
+        broker_account_id="account.default",
         broker="kite",
         account_scope="default",
         connection_scope="kite:legacy",

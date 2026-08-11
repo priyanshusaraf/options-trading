@@ -19,8 +19,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     BrokerAccount,
-    LEGACY_BROKER_ACCOUNT_ID,
-    LEGACY_OWNER_ID,
     ExecutionIntent,
     ExecutionOrderEvent,
 )
@@ -88,14 +86,11 @@ class NewExecutionIntent:
     signal_at: dt.datetime | None
     strategy_key: str | None
     strategy_version: str | None
+    #: Whose money this intent moves. This must be named at every write boundary;
+    #: unresolved-entry recovery uses it to prevent cross-account adoption.
+    owner_id: str
+    broker_account_id: str
     context: Mapping[str, Any] = field(default_factory=dict)
-    #: Whose money this intent moves. Defaulted rather than required so every existing writer
-    #: keeps working and lands on the legacy owner — which is not a convenience, it is TRUE of
-    #: those rows: this system had exactly one owner when they were written. Matched by
-    #: `unresolved_entries`, so it decides which unresolved live entries a restarting broker may
-    #: adopt.
-    owner_id: str = LEGACY_OWNER_ID
-    broker_account_id: str = LEGACY_BROKER_ACCOUNT_ID
 
 
 @dataclass(frozen=True)

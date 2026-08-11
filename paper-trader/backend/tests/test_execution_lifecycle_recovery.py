@@ -226,8 +226,9 @@ def _option_context(provider):
 
 
 def _seed_lifecycle(context, *, symbol, exchange, qty, account_scope="default",
-                    connection_scope="kite:legacy", deployment_id=1,
-                    decision_price=100.0, broker="mock", owner_id="owner"):
+                        connection_scope="kite:legacy", deployment_id=1,
+                        decision_price=100.0, broker="mock", owner_id="owner",
+                        broker_account_id="account.default"):
     """Seed a durable intent as the broker-under-test would have written it.
 
     `broker` defaults to `"mock"`, not `"kite"`, and that is the point: these tests build a
@@ -242,9 +243,10 @@ def _seed_lifecycle(context, *, symbol, exchange, qty, account_scope="default",
         intent = store.create_intent(
             NewExecutionIntent(
                 deployment_id=deployment_id,
-                broker=broker,
-                owner_id=owner_id,
-                account_scope=account_scope,
+                    broker=broker,
+                    owner_id=owner_id,
+                    broker_account_id=broker_account_id,
+                    account_scope=account_scope,
                 connection_scope=connection_scope,
                 intent="ENTRY",
                 instrument_key=context["inst_key"],
@@ -977,6 +979,7 @@ def test_journal_stop_failure_rolls_back_and_same_session_remains_usable(monkeyp
     intent = ExecutionLifecycleStore(broker.s).create_intent(
         NewExecutionIntent(
             deployment_id=1, broker="kite", account_scope="default",
+            owner_id="owner", broker_account_id="account.default",
             connection_scope="kite:legacy", intent="ENTRY", instrument_key="NIFTY",
             tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",
             order_type="MARKET", requested_qty=4, limit_price=None,

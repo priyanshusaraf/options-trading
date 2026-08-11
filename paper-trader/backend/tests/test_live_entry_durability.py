@@ -538,6 +538,8 @@ def test_journal_commit_failure_rolls_back_before_lifecycle_write(monkeypatch):
     intent = live_broker_module.ExecutionLifecycleStore(broker.s).create_intent(
         live_broker_module.NewExecutionIntent(
             deployment_id=1, broker="kite", account_scope="default",
+            owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
             connection_scope=live_broker_module.KITE_LEGACY_CONNECTION_SCOPE,
             intent="ENTRY", instrument_key="NIFTY",
             tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",

@@ -93,15 +93,19 @@ def _ensure_legacy_tenancy_roots(sess) -> None:
                                external_account_id="default", display_name="Default account"))
 
 
-def _repair_open_position_lot_sizes(sess) -> int:
-    """Repair old open fills that were recorded as one unit instead of one lot."""
+def _repair_open_position_lot_sizes(
+        sess, *, owner_id: str, broker_account_id: str) -> int:
+    """Repair one explicitly selected account's old one-unit open fills."""
     from app.core.execution_book import capital_for_book, resolve_book
 
-    if sess.scalar(select(CapitalState).limit(1)) is None:
+    if sess.scalar(select(CapitalState).where(
+            CapitalState.broker_account_id == broker_account_id).limit(1)) is None:
         return 0
     fixed = 0
     rows = {r.key: r for r in sess.scalars(select(UniverseInstrument))}
-    for pos in sess.scalars(select(Position)):
+    for pos in sess.scalars(select(Position).where(
+            Position.owner_id == owner_id,
+            Position.broker_account_id == broker_account_id)):
         inst = rows.get(pos.instrument_key)
         if not inst or not inst.active or inst.lot_size <= 0:
             continue

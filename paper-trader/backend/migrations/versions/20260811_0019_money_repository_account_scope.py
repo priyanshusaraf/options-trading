@@ -74,6 +74,36 @@ def _recreate_event_guards() -> None:
             "SELECT RAISE(ABORT, 'execution_order_events are immutable'); END"))
 
 
+def _table_names() -> set[str]:
+    return set(sa.inspect(op.get_bind()).get_table_names())
+
+
+def _recover_sqlite_rebuild_temp(table: str, *, temporary: str | None = None) -> None:
+    """Make retry safe after SQLite DDL commits between batch rebuild statements."""
+    temporary = temporary or f"_alembic_tmp_{table}"
+    names = _table_names()
+    if table in names and temporary in names:
+        # CREATE TEMP completed, but the original table remains authoritative.
+        op.execute(sa.text(f"DROP TABLE {temporary}"))
+    elif table not in names and temporary in names:
+        # DROP original completed before RENAME TEMP; its rows and rebuilt shape are intact.
+        op.execute(sa.text(f"ALTER TABLE {temporary} RENAME TO {table}"))
+
+
+def _restore_account_index(table: str) -> None:
+    op.execute(sa.text(
+        f"CREATE INDEX IF NOT EXISTS {_account_index(table)} "
+        f"ON {table} (owner_id, broker_account_id)"))
+
+
+def _restore_deployment_indexes() -> None:
+    op.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_deployments_owner_id ON deployments (owner_id)"))
+    op.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_deployments_owner_account "
+        "ON deployments (owner_id, broker_account_id)"))
+
+
 def _restore_inline_entry_fk(table: str) -> None:
     """Restore 0014's inline SQLite FK so its immutable downgrade remains runnable."""
     bind = op.get_bind()
@@ -116,8 +146,11 @@ def _restore_inline_entry_fk(table: str) -> None:
 
 
 def _upgrade_deployments() -> None:
+    _recover_sqlite_rebuild_temp(
+        "deployments", temporary="deployments__0019")
     columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("deployments")}
     if "broker_account_id" in columns and "account_id" not in columns:
+        _restore_deployment_indexes()
         return
     op.execute(sa.text(
         "UPDATE deployments SET account_id='account.default' WHERE account_id='default'"))
@@ -155,9 +188,7 @@ def _upgrade_deployments() -> None:
     """))
     op.execute(sa.text("DROP TABLE deployments"))
     op.execute(sa.text("ALTER TABLE deployments__0019 RENAME TO deployments"))
-    op.create_index("ix_deployments_owner_id", "deployments", ["owner_id"])
-    op.create_index("ix_deployments_owner_account", "deployments",
-                    ["owner_id", "broker_account_id"])
+    _restore_deployment_indexes()
 
 
 def _remove_legacy_scope_defaults() -> None:
@@ -217,7 +248,9 @@ def upgrade() -> None:
     try:
         _upgrade_deployments()
         for table in ACCOUNT_TABLES:
+            _recover_sqlite_rebuild_temp(table)
             if "broker_account_id" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}:
+                _restore_account_index(table)
                 continue
             reflect_args = ()
             if table in ("positions", "trades"):
@@ -243,6 +276,7 @@ def upgrade() -> None:
                 if table == "ir_shadow_divergences":
                     batch.drop_index("uq_ir_shadow_divergence_bar")
                     batch.create_index("uq_ir_shadow_divergence_bar", ["owner_id", "broker_account_id", "instrument_key", "bar_time", "graph_address", "reason"], unique=True)
+            _restore_account_index(table)
         _remove_legacy_scope_defaults()
         _recreate_event_guards()
     finally:

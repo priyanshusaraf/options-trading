@@ -44,7 +44,8 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     ))
     s.commit()
 
-    fixed = _repair_open_position_lot_sizes(s)
+    fixed = _repair_open_position_lot_sizes(
+        s, owner_id="owner", broker_account_id="account.default")
 
     pos = s.query(Position).one()
     expected_charges = compute_charges("MCX", "BUY", 365.10, 100)["total"]
@@ -87,13 +88,49 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     s.commit()
     cash_before = s.get(CapitalState, ("account.default", "paper")).cash
 
-    fixed = _repair_open_position_lot_sizes(s)
+    fixed = _repair_open_position_lot_sizes(
+        s, owner_id="owner", broker_account_id="account.default")
 
     pos = s.query(Position).one()
     assert fixed == 0
     assert pos.qty == 25                                     # partial NOT inflated
     assert pos.lot_size == 100
     assert s.get(CapitalState, ("account.default", "paper")).cash == cash_before        # no phantom cash debit
+
+
+def test_repair_is_limited_to_the_explicit_owner_and_broker_account():
+    s = _session()
+    now = dt.datetime(2026, 6, 19, 9, 30)
+    s.add_all([
+        BrokerAccount(owner_id="owner-a", broker_account_id="account.a", broker="kite",
+                      external_account_id="a", display_name="A"),
+        BrokerAccount(owner_id="owner-b", broker_account_id="account.b", broker="kite",
+                      external_account_id="b", display_name="B"),
+        CapitalState(id=1, broker_account_id="account.a", book="paper", initial_capital=50_000, cash=40_000, realized_pnl=0),
+        CapitalState(id=2, broker_account_id="account.b", book="paper", initial_capital=50_000, cash=40_000, realized_pnl=0),
+        UniverseInstrument(key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
+                           spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
+                           strike_step=50, priority=4, has_options=True, source="seed", on_home=True,
+                           active=True, mock_spot=6500, mock_vol=0.30),
+    ])
+    for owner_id, account_id in (("owner-a", "account.a"), ("owner-b", "account.b")):
+        s.add(Position(
+            owner_id=owner_id, broker_account_id=account_id, instrument_key="CRUDEOIL",
+            direction="LONG", option_type="CE", tradingsymbol="CRUDEOIL26JUL7200CE",
+            exchange="MCX", strike=7200, expiry=dt.date(2026, 7, 16), lot_size=1, qty=1,
+            entry_premium=365.10, entry_charges=23.83, entry_cost=388.93, entry_spot=7119,
+            entry_time=now, entry_reason="old bad fill", stop_price=237.315,
+            target_price=584.16, last_premium=370.0, last_spot=7119))
+    s.commit()
+
+    assert _repair_open_position_lot_sizes(
+        s, owner_id="owner-a", broker_account_id="account.a") == 1
+
+    a = s.query(Position).filter_by(broker_account_id="account.a").one()
+    b = s.query(Position).filter_by(broker_account_id="account.b").one()
+    assert a.qty == 100
+    assert b.qty == 1
+    assert s.get(CapitalState, ("account.b", "paper")).cash == 40_000
 
 
 def test_ordinary_database_initialization_does_not_run_global_money_repair():

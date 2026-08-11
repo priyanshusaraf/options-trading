@@ -502,19 +502,19 @@ def test_revision_0019_refuses_lossy_tenant_name_downgrade(tmp_path):
             command.downgrade(migrate.alembic_config(connection), "0018")
 
 
-def test_revision_0019_retry_after_interrupted_rebuild_preserves_rows_and_guards(tmp_path):
+def test_revision_0019_retry_after_interrupted_positions_rebuild_preserves_rows_and_guards(tmp_path):
     """SQLite may retain DDL before an upgrade error; retrying must reach head safely."""
     engine = _fresh_engine(tmp_path, "0019-interrupted-retry.db")
     _apply_baseline_ddl(engine)
     migrate.stamp(engine, "0001")
     failed = False
 
-    @sa.event.listens_for(engine, "before_cursor_execute")
-    def interrupt_after_deployments(_conn, _cursor, statement, _parameters, _context, _many):
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_positions_temp(_conn, _cursor, statement, _parameters, _context, _many):
         nonlocal failed
         if not failed and "_alembic_tmp_positions" in statement:
             failed = True
-            raise RuntimeError("injected interruption after deployments rebuild")
+            raise RuntimeError("injected interruption after positions temp creation")
 
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0018")
@@ -535,6 +535,104 @@ def test_revision_0019_retry_after_interrupted_rebuild_preserves_rows_and_guards
 
     assert failed
     assert migrate.schema_version(engine) == HEAD
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        assert "_alembic_tmp_positions" not in inspector.get_table_names()
+        assert any(index["column_names"] == ["owner_id", "broker_account_id"]
+                   for index in inspector.get_indexes("positions"))
+        assert any(fk["constrained_columns"] == ["broker_account_id"]
+                   and fk["referred_table"] == "broker_accounts"
+                   for fk in inspector.get_foreign_keys("positions"))
+        triggers = {name for (name,) in connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        ))}
+        assert {"execution_order_events_refuse_update",
+                "execution_order_events_refuse_delete"} <= triggers
+
+
+def test_revision_0019_retry_after_deployments_rename_interruption_restores_indexes(tmp_path):
+    """A DROP-before-RENAME interruption leaves only the custom temp table behind."""
+    engine = _fresh_engine(tmp_path, "0019-deployments-rename-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_deployments_rename(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "ALTER TABLE deployments__0019 RENAME TO deployments" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after deployments rename")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    inspector = sa.inspect(engine)
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert "deployments__0019" not in inspector.get_table_names()
+    assert any(index["column_names"] == ["owner_id"]
+               for index in inspector.get_indexes("deployments"))
+    assert any(index["column_names"] == ["owner_id", "broker_account_id"]
+               for index in inspector.get_indexes("deployments"))
+    assert any(set(constraint["column_names"]) == {"owner_id", "name"}
+               for constraint in inspector.get_unique_constraints("deployments"))
+
+
+def test_revision_0019_discards_stale_custom_deployments_temp_before_retry(tmp_path):
+    engine = _fresh_engine(tmp_path, "0019-deployments-temp-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_deployments_temp(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE deployments__0019" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after deployments temp creation")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert "deployments__0019" not in sa.inspect(engine).get_table_names()
+
+
+def test_revision_0019_retry_after_positions_rename_restores_account_index(tmp_path):
+    """Batch index creation happens after the table rename and must be recoverable."""
+    engine = _fresh_engine(tmp_path, "0019-positions-rename-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_positions_rename(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "ALTER TABLE _alembic_tmp_positions RENAME TO positions" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after positions rename")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    inspector = sa.inspect(engine)
+    assert any(index["column_names"] == ["owner_id", "broker_account_id"]
+               for index in inspector.get_indexes("positions"))
+    assert any(fk["constrained_columns"] == ["broker_account_id"]
+               for fk in inspector.get_foreign_keys("positions"))
 
 
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):

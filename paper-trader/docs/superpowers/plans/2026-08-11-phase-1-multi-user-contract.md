@@ -138,6 +138,16 @@ Phase 1; PostgreSQL support begins in Phase 2.
 - [ ] Re-run focused tests plus lifecycle recovery and accounting regressions.
 - [ ] Commit as `feat(tenancy): isolate money repositories by account`.
 
+**Recovery follow-up (2026-08-11, local only):** revision `0019` now resumes safely after
+SQLite interrupts its deployment rebuild or an account-table batch rebuild. If both source and
+temporary tables remain, it discards the stale temporary table; if only the temporary rebuilt
+table remains, it promotes it. The resumed migration restores deployment/account indexes and
+the immutable-event guards. Four injected interruption points passed (deployment temp creation,
+deployment rename, positions temp creation, positions rename), as did the full migration suite
+(29 tests), lifecycle/recovery (65), telemetry/live-entry (18), and position/book isolation (24).
+`NewExecutionIntent` and the lot-size repair boundary now require explicit owner/account scope.
+No frontend work or deployment was performed.
+
 ### Task 3: Own product, graph, research and review objects
 
 **Files:**
