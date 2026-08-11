@@ -121,7 +121,9 @@ class EngineRunner:
         try:
             from app.core.deployments import disarm_all
             with SessionLocal() as _s:
-                if disarm_all(_s):
+                if disarm_all(
+                        _s, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id):
                     _s.commit()
         except Exception as e:
             log.warn(f"could not clear persisted deployment arm state at boot: {e}",
@@ -140,9 +142,12 @@ class EngineRunner:
         if (get_settings().execution_connection or "").strip():
             with SessionLocal() as _conn_s:
                 _execution_connection = configured_execution_connection(
-                    self.provider, session=_conn_s)
+                    self.provider, session=_conn_s, owner_id=self.owner_id,
+                    broker_account_id=self.broker_account_id)
         else:
-            _execution_connection = configured_execution_connection(self.provider)
+            _execution_connection = configured_execution_connection(
+                self.provider, owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id)
         self.broker = make_broker(self.provider, self.notifier,
                                   deployment_id=self.deployment_id,
                                   execution_connection=_execution_connection,
@@ -335,7 +340,9 @@ class EngineRunner:
         deployment, which pins nothing and resolves per instrument by design."""
         from app.core.deployments import resolve_deployment_strategy
         with SessionLocal() as s:
-            return resolve_deployment_strategy(s, self.deployment_id)
+            return resolve_deployment_strategy(
+                s, self.deployment_id, owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id)
 
     def _binding_for(self, key: str):
         """What executes for `key`, and on whose say-so.
@@ -411,7 +418,9 @@ class EngineRunner:
         try:
             with SessionLocal() as s:
                 bindings = paper_authority.register_active_adapters(
-                    s, on_problem=problems.append)
+                    s, owner_id=self.owner_id,
+                    broker_account_id=self.broker_account_id,
+                    on_problem=problems.append)
         except Exception as e:
             log.error(f"could not load paper-authority deployments: {e}",
                       event="PAPER_AUTHORITY_LOAD_FAIL")
@@ -504,7 +513,9 @@ class EngineRunner:
         try:
             with SessionLocal() as s:
                 keys = sorted({p.instrument_key
-                               for p in execution_book.foreign_book_positions(s, self.book)})
+                               for p in execution_book.foreign_book_positions(
+                                   s, self.book, owner_id=self.owner_id,
+                                   broker_account_id=self.broker_account_id)})
         except Exception as e:
             log.error(f"could not check for foreign-book positions: {e}",
                       event="FOREIGN_BOOK_CHECK_FAIL")
@@ -535,7 +546,9 @@ class EngineRunner:
 
             with SessionLocal() as session:
                 for found in shadow_deployments.active_bindings(
-                        session, on_problem=problems.append):
+                        session, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id,
+                        on_problem=problems.append):
                     loaded[found.instrument_key] = found
         except Exception as e:      # noqa: BLE001 — see the docstring
             problems.append(f"could not load managed shadow deployments: {e}")
@@ -608,7 +621,8 @@ class EngineRunner:
         from app.core.scoped_config import resolve
         with SessionLocal() as s:
             return resolve(s, self.settings, deployment_id=self.deployment_id,
-                           owner_id=self.owner_id)
+                           owner_id=self.owner_id,
+                           broker_account_id=self.broker_account_id)
 
     def refresh_params(self) -> None:
         """Re-read runtime overrides so live Settings edits take effect."""
@@ -975,7 +989,9 @@ class EngineRunner:
             self.shadow_metrics.observe(observation, market_open=True)
             self._shadow_track_refusals(key, observation)
             if observation.reason != ir_shadow.AGREEMENT:
-                if ir_shadow_store.record(observation, market_open=True):
+                if ir_shadow_store.record(
+                        observation, market_open=True, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id):
                     log.warn(f"IR shadow disagreement: {observation.reason} — "
                              f"{observation.detail}", instrument=key,
                              event="IR_SHADOW_DIVERGENCE")
@@ -2211,13 +2227,17 @@ class EngineRunner:
         a conservative approximation — it is wrong in both directions."""
         from app.engine.analytics import realized_on
         with SessionLocal() as s:
-            return realized_on(s, today, self.book)
+            return realized_on(
+                s, today, self.book, owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id)
 
     def _today_round_trips(self, today) -> int:
         """This book's completed round trips today — the hard daily round-trip cap (#10)."""
         from app.engine.analytics import round_trips_on
         with SessionLocal() as s:
-            return round_trips_on(s, today, self.book)
+            return round_trips_on(
+                s, today, self.book, owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id)
 
     def _open_unrealized(self) -> float:
         """Mark-to-market P&L across all currently open positions (can be negative).
@@ -2393,7 +2413,9 @@ class EngineRunner:
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
         with SessionLocal() as s:
-            s.add(SignalEvent(deployment_id=self.deployment_id,
+            s.add(SignalEvent(owner_id=self.owner_id,
+                              broker_account_id=self.broker_account_id,
+                              deployment_id=self.deployment_id,
                               time=now, instrument_key=key, signal=st["signal"],
                               z=st["z"], slope=st["slope"], close=st["close"],
                               acted=True, note=note))
@@ -2537,7 +2559,9 @@ class EngineRunner:
             from app.db.models import OrderJournal
             today = self.provider.now().date()
             with SessionLocal() as s:
-                rows = s.query(OrderJournal.tradingsymbol, OrderJournal.placed_at).all()
+                rows = s.query(OrderJournal.tradingsymbol, OrderJournal.placed_at).filter(
+                    OrderJournal.owner_id == self.owner_id,
+                    OrderJournal.broker_account_id == self.broker_account_id).all()
             return {sym for sym, placed in rows
                     if placed is not None and placed.date() == today}
         except Exception as e:
@@ -2700,7 +2724,7 @@ class EngineRunner:
                 equity_full_days=int(self.params.get("retention_equity_full_days", 7)),
                 equity_downsample_minutes=int(self.params.get(
                     "retention_equity_downsample_minutes", 15)),
-            ))
+            ), owner_id=self.owner_id, broker_account_id=self.broker_account_id)
             if any(report.values()):
                 log.info("RETENTION pruned " + ", ".join(
                     f"{k} −{v:,}" for k, v in report.items() if v),
@@ -2967,7 +2991,9 @@ class EngineRunner:
         try:
             from app.core.deployments import set_armed as _set_deployment_armed
             with SessionLocal() as s:
-                _set_deployment_armed(s, self.deployment_id, self.armed)
+                _set_deployment_armed(
+                    s, self.deployment_id, self.armed, owner_id=self.owner_id,
+                    broker_account_id=self.broker_account_id)
                 s.commit()
         except Exception as e:
             log.warn(f"could not persist arm state for deployment "

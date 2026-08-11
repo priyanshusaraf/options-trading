@@ -13,7 +13,7 @@ from app.engine.broker import PaperBroker
 def _broker():
     init_db(reset=True)
     from app.providers.mock import MockProvider
-    return PaperBroker(MockProvider(), broker_account_id="account.default")
+    return PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
 
 
 def _now():

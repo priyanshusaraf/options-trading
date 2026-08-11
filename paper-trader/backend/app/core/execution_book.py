@@ -84,9 +84,13 @@ def _books_with_money_rows(session, *, broker_account_id: str) -> set[str] | Non
     owner_id = account.owner_id
 
     return ({resolve_book(m) for m in session.scalars(
-                select(Position.mode).where(Position.owner_id == owner_id).distinct())}
+                select(Position.mode).where(
+                    Position.owner_id == owner_id,
+                    Position.broker_account_id == broker_account_id).distinct())}
             | {resolve_book(m) for m in session.scalars(
-                select(Trade.mode).where(Trade.owner_id == owner_id).distinct())})
+                select(Trade.mode).where(
+                    Trade.owner_id == owner_id,
+                    Trade.broker_account_id == broker_account_id).distinct())})
 
 
 def capital_for_book(session, book: str, *, broker_account_id: str):
@@ -171,7 +175,8 @@ def _commit_the_bootstrap(session) -> None:
     session.commit()
 
 
-def foreign_book_positions(session, book: str) -> list:
+def foreign_book_positions(session, book: str, *, owner_id: str,
+                           broker_account_id: str) -> list:
     """Open positions belonging to a book **other** than `book`.
 
     The compensating control for scoping the exit lane. `broker.open_positions()` is now
@@ -185,7 +190,9 @@ def foreign_book_positions(session, book: str) -> list:
 
     from app.db.models import Position
 
-    return [p for p in session.scalars(select(Position))
+    return [p for p in session.scalars(select(Position).where(
+                Position.owner_id == owner_id,
+                Position.broker_account_id == broker_account_id))
             if resolve_book(p.mode) != book]
 
 

@@ -1,14 +1,14 @@
-"""Durable broker connections, always scoped to an owner.
+"""Durable broker connections, always scoped to an owner and broker account.
 
 This is the persistence side of `app/providers/connection.py`. The two are deliberately
 separate: a `BrokerConnection` row is what an owner **has**; a `Connection` is what a running
 engine **uses**. Merging them would put a database session on the order path, and the order path
 already has enough reasons to block.
 
-**Every read is owner-scoped, and there is no unscoped one.** Not by convention — there is no
-function here that can return another owner's connection, because the alternative is a helper
-that "just needs the id" and a caller that forgets. Cross-owner isolation on the table that
-grants the authority to trade is not a thing to enforce at the call site.
+**Every read is owner/account-scoped, and there is no unscoped one.** Not by convention — there
+is no function here that can return another account's connection, because the alternative is a
+helper that "just needs the id" and a caller that forgets. Isolation on the table that grants
+the authority to trade is not a thing to enforce at the call site.
 
 Revocation is a status change. "This credential was revoked at 14:02" is a fact someone will
 need to establish, and a deleted row establishes nothing.
@@ -25,7 +25,7 @@ from app.core.credential_vault import (
     unseal,
 )
 from app.core.logging import log
-from app.db.models import LEGACY_OWNER_ID, BrokerConnection
+from app.db.models import LEGACY_OWNER_ID, BrokerAccount, BrokerConnection
 from app.providers import capabilities as caps
 from app.providers.brokers import BrokerNotSupported, spec
 from app.providers.connection import Connection
@@ -73,16 +73,24 @@ class ConnectionNotFound(LookupError):
 
 
 class OwnedConnectionStore:
-    """CRUD over one owner's connections. The owner is fixed at construction.
+    """CRUD over one owner's broker-account connections. Both scopes are fixed at construction.
 
     Taking the owner in the constructor rather than per call is the whole design: a method that
     accepts `owner_id` can be called with the wrong one, and this class has no method that can.
     """
 
-    def __init__(self, session, owner_id: str = _UNSPECIFIED,
+    def __init__(self, session, *, owner_id: str, broker_account_id: str,
                  session_factory=None) -> None:
         self.s = session
         self.owner_id = _resolve_owner(owner_id)
+        self.broker_account_id = (broker_account_id or "").strip()
+        account = self.s.query(BrokerAccount).filter(
+            BrokerAccount.broker_account_id == self.broker_account_id,
+            BrokerAccount.owner_id == self.owner_id,
+            BrokerAccount.status == "active",
+        ).one_or_none()
+        if account is None:
+            raise ValueError("broker account is not available to this owner")
         # Used ONLY by `live_connection`'s late credential read, which outlives this store.
         # Injectable so a test can point it at its own session without a global.
         self._session_factory = session_factory or _default_session_factory
@@ -95,7 +103,8 @@ class OwnedConnectionStore:
 
     def list(self, *, include_revoked: bool = False) -> list[BrokerConnection]:
         q = self.s.query(BrokerConnection).filter(
-            BrokerConnection.owner_id == self.owner_id)
+            BrokerConnection.owner_id == self.owner_id,
+            BrokerConnection.broker_account_id == self.broker_account_id)
         if not include_revoked:
             q = q.filter(BrokerConnection.status == "active")
         return q.order_by(BrokerConnection.id).limit(self.MAX_CONNECTIONS).all()
@@ -103,7 +112,8 @@ class OwnedConnectionStore:
     def get(self, connection_id: int) -> BrokerConnection:
         row = self.s.query(BrokerConnection).filter(
             BrokerConnection.id == connection_id,
-            BrokerConnection.owner_id == self.owner_id).one_or_none()
+            BrokerConnection.owner_id == self.owner_id,
+            BrokerConnection.broker_account_id == self.broker_account_id).one_or_none()
         if row is None:
             # Logged with the distinction the caller is not given, so a real cross-owner probe
             # is visible to whoever reads the logs.
@@ -115,6 +125,7 @@ class OwnedConnectionStore:
     def by_scope(self, scope: str) -> BrokerConnection | None:
         return self.s.query(BrokerConnection).filter(
             BrokerConnection.owner_id == self.owner_id,
+            BrokerConnection.broker_account_id == self.broker_account_id,
             BrokerConnection.scope == scope).one_or_none()
 
     # ── writes ────────────────────────────────────────────────────────────
@@ -141,7 +152,8 @@ class OwnedConnectionStore:
             declared = frozenset(getattr(data_cls, "CAPABILITIES", frozenset())
                                  if data_cls else frozenset())
         row = BrokerConnection(
-            owner_id=self.owner_id, broker=s.key, scope=scope, label=label,
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
+            broker=s.key, scope=scope, label=label,
             capabilities_json=json.dumps(sorted(caps.validate(frozenset(declared)))),
             status="active", created_at=dt.datetime.now(), updated_at=dt.datetime.now())
         self.s.add(row)
@@ -216,7 +228,8 @@ class OwnedConnectionStore:
         if row.status != "active":
             raise ConnectionNotFound(
                 f"connection {connection_id} is {row.status}, not active")
-        owner_id, cid = self.owner_id, row.id
+        owner_id, broker_account_id, cid = (
+            self.owner_id, self.broker_account_id, row.id)
         make_session = self._session_factory
 
         def token_source():
@@ -225,6 +238,7 @@ class OwnedConnectionStore:
                     fresh = s.query(BrokerConnection).filter(
                         BrokerConnection.id == cid,
                         BrokerConnection.owner_id == owner_id,
+                        BrokerConnection.broker_account_id == broker_account_id,
                         BrokerConnection.status == "active").one_or_none()
                     ciphertext = fresh.credential_ciphertext if fresh is not None else None
             except Exception as e:                      # noqa: BLE001
@@ -273,6 +287,7 @@ class OwnedConnectionStore:
                     fresh = s.query(BrokerConnection).filter(
                         BrokerConnection.id == cid,
                         BrokerConnection.owner_id == owner_id,
+                        BrokerConnection.broker_account_id == broker_account_id,
                         BrokerConnection.status == "active").one_or_none()
                     ciphertext = fresh.credential_ciphertext if fresh is not None else None
                 return unseal(ciphertext) if ciphertext else {}

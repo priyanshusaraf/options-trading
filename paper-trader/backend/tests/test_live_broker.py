@@ -314,7 +314,7 @@ def test_reconcile_paper_broker_unaffected():
     """PaperBroker's reconcile_orphans stays a no-op — this change is LiveBroker-only."""
     from app.engine.broker import PaperBroker
     from app.providers.mock import MockProvider
-    pb = PaperBroker(MockProvider(), broker_account_id="account.default")
+    pb = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     assert pb.reconcile_orphans(pb.provider.now()) == []
 
 

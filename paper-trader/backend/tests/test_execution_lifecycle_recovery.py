@@ -11,7 +11,8 @@ from app.db.models import (
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.engine.execution_lifecycle import (
-    ExecutionLifecycleStore, NewExecutionEvent, NewExecutionIntent)
+    ExecutionLifecycleStore as _ExecutionLifecycleStore,
+    NewExecutionEvent, NewExecutionIntent)
 from app.engine.live_broker import LiveBroker
 from app.engine.kite_order_client import PreWireProtectionRejected
 from app.providers import capabilities as caps
@@ -20,6 +21,12 @@ from app.providers.mock import MockProvider
 
 
 NOW = dt.datetime(2026, 8, 9, 10, 30)
+
+
+def ExecutionLifecycleStore(session, **scope):
+    scope.setdefault("owner_id", LEGACY_OWNER_ID)
+    scope.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _ExecutionLifecycleStore(session, **scope)
 
 
 class _RecoveryClient:
@@ -331,7 +338,9 @@ def test_startup_recovers_lifecycle_only_intent_in_exact_scope_and_ignores_wrong
         context, symbol="WRONG-SCOPE", exchange=quote.exchange, qty=quote.lot_size,
         account_scope="other", connection_scope="kite:other")
     with SessionLocal() as session:
-        session.add(Deployment(id=2, name="other-deployment", account_id="default"))
+        session.add(Deployment(
+            id=2, name="other-deployment", owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID))
         session.commit()
     wrong_deployment_id, _ = _seed_lifecycle(
         context, symbol="WRONG-DEPLOYMENT", exchange=quote.exchange, qty=quote.lot_size,
@@ -381,7 +390,7 @@ def test_unrelated_legacy_position_does_not_consume_lifecycle_recovery():
     init_db(reset=True)
     provider = MockProvider()
     inst, quote, context = _option_context(provider)
-    legacy = PaperBroker(provider, broker_account_id="account.default").open_position(
+    legacy = PaperBroker(provider, owner_id="owner", broker_account_id="account.default").open_position(
         inst, "LONG", quote, "legacy", NOW, context["spot"], params={})
     with SessionLocal() as session:
         stored_legacy = session.get(Position, legacy.id)

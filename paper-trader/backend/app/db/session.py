@@ -127,7 +127,7 @@ def _repair_open_position_lot_sizes(sess) -> int:
         # Task 2 supplies the account from the owning position/binding; startup repair is
         # still the explicit legacy-runtime compatibility boundary.
         capital_for_book(sess, resolve_book(pos.mode),
-                         broker_account_id=LEGACY_BROKER_ACCOUNT_ID).cash -= pos.entry_cost - old_cost
+                         broker_account_id=pos.broker_account_id).cash -= pos.entry_cost - old_cost
         fixed += 1
     return fixed
 
@@ -316,7 +316,9 @@ def init_db(reset: bool = False) -> None:
         # first, the other is a no-op.
         from app.core.deployments import ensure_legacy_deployment
         from app.editor.graph_artifacts import ensure_catalogue_seed
-        ensure_legacy_deployment(sess)
+        ensure_legacy_deployment(
+            sess, owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
         ensure_catalogue_seed(sess)
         if sess.query(CapitalState).count() == 0:
             sess.add(CapitalState(id=1, broker_account_id=LEGACY_BROKER_ACCOUNT_ID, book="live",

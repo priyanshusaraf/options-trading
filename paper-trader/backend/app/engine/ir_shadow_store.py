@@ -36,7 +36,8 @@ def _naive(value: dt.datetime | None) -> dt.datetime | None:
     return value.replace(tzinfo=None)
 
 
-def record(observation: ShadowObservation, *, market_open: bool) -> bool:
+def record(observation: ShadowObservation, *, market_open: bool, owner_id: str,
+           broker_account_id: str) -> bool:
     """Persist one disagreement. Returns True only when a row was written.
 
     False means "nothing to write" (the lanes agreed), "already written" (the same
@@ -48,6 +49,7 @@ def record(observation: ShadowObservation, *, market_open: bool) -> bool:
     try:
         with SessionLocal() as session:
             row = IrShadowDivergence(
+                owner_id=owner_id, broker_account_id=broker_account_id,
                 observed_at=_naive(observation.observed_at),
                 bar_time=_naive(observation.bar_time),
                 instrument_key=observation.instrument_key,
@@ -81,18 +83,23 @@ def _already_recorded(session, row: IrShadowDivergence) -> bool:
     """The unique index is the real guard; this avoids provoking it on every re-scan."""
     existing = session.scalar(
         select(IrShadowDivergence.id)
-        .where(IrShadowDivergence.instrument_key == row.instrument_key,
+        .where(IrShadowDivergence.owner_id == row.owner_id,
+               IrShadowDivergence.broker_account_id == row.broker_account_id,
+               IrShadowDivergence.instrument_key == row.instrument_key,
                IrShadowDivergence.bar_time == row.bar_time,
                IrShadowDivergence.graph_address == row.graph_address,
                IrShadowDivergence.reason == row.reason))
     return existing is not None
 
 
-def recent(limit: int = 50, instrument_key: str | None = None) -> list[dict]:
+def recent(*, owner_id: str, broker_account_id: str, limit: int = 50,
+           instrument_key: str | None = None) -> list[dict]:
     """The newest disagreements, for the observability endpoint. Never raises."""
     try:
         with SessionLocal() as session:
-            query = select(IrShadowDivergence).order_by(
+            query = select(IrShadowDivergence).where(
+                IrShadowDivergence.owner_id == owner_id,
+                IrShadowDivergence.broker_account_id == broker_account_id).order_by(
                 IrShadowDivergence.observed_at.desc(), IrShadowDivergence.id.desc())
             if instrument_key:
                 query = query.where(IrShadowDivergence.instrument_key == instrument_key)
@@ -102,7 +109,7 @@ def recent(limit: int = 50, instrument_key: str | None = None) -> list[dict]:
         return []
 
 
-def counts_by_reason() -> dict[str, int]:
+def counts_by_reason(*, owner_id: str, broker_account_id: str) -> dict[str, int]:
     """How many of each classification have ever been recorded. Never raises."""
     from sqlalchemy import func
 
@@ -110,13 +117,16 @@ def counts_by_reason() -> dict[str, int]:
         with SessionLocal() as session:
             return {reason: int(total) for reason, total in session.execute(
                 select(IrShadowDivergence.reason, func.count())
+                .where(IrShadowDivergence.owner_id == owner_id,
+                       IrShadowDivergence.broker_account_id == broker_account_id)
                 .group_by(IrShadowDivergence.reason))}
     except Exception as error:                            # noqa: BLE001
         log.error(f"shadow divergence count failed: {error}", event="IR_SHADOW_STORE")
         return {}
 
 
-def prune(cutoff: dt.datetime | None) -> int:
+def prune(cutoff: dt.datetime | None, *, owner_id: str,
+          broker_account_id: str) -> int:
     """Delete rows observed strictly before `cutoff`. A `None` cutoff deletes nothing —
     the standing retention rule here is that "keep forever" never means "delete
     everything" (`app/engine/retention.py`)."""
@@ -126,7 +136,9 @@ def prune(cutoff: dt.datetime | None) -> int:
         with SessionLocal() as session:
             deleted = session.execute(
                 delete(IrShadowDivergence)
-                .where(IrShadowDivergence.observed_at < cutoff)).rowcount or 0
+                .where(IrShadowDivergence.owner_id == owner_id,
+                       IrShadowDivergence.broker_account_id == broker_account_id,
+                       IrShadowDivergence.observed_at < cutoff)).rowcount or 0
             session.commit()
             return int(deleted)
     except Exception as error:                            # noqa: BLE001

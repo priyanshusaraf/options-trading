@@ -29,6 +29,12 @@ from app.db.session import SessionLocal, init_db
 from app.engine import cockpit
 from app.engine.runner import EngineRunner
 from app.ir.hashing import canonical_json, content_address
+from tests.legacy_money_scope import LegacyMoneyScope
+
+pa = LegacyMoneyScope(
+    pa, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "register_active_adapters", "listing")
+cockpit = LegacyMoneyScope(cockpit, "paper_deployments")
 
 PROJECT = "proj-cockpit"
 GRAPH = "strategy.expanding_z_impulse"
@@ -112,6 +118,7 @@ def test_cockpit_reads_capital_from_the_runners_broker_account(monkeypatch, runn
     captured = {}
     monkeypatch.setattr(analytics, "capital_dict", lambda _session, **kwargs:
                         captured.update(kwargs) or {"cash": 12})
+    runner.broker_account_id = "account.nonlegacy"
     runner.broker.broker_account_id = "account.nonlegacy"
     with SessionLocal() as session:
         cockpit.view(runner, session)
@@ -335,7 +342,7 @@ class TestReadOnly:
         `paper_authority`; arm and kill stay with the runner."""
         import inspect
 
-        source = inspect.getsource(cockpit)
+        source = inspect.getsource(cockpit._module)
         for verb in ("def pause", "def resume", "def retire", "def activate",
                      "def arm", "def kill", "session.add", "session.commit",
                      "session.delete"):

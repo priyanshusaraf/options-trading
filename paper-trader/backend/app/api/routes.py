@@ -70,7 +70,9 @@ def status(request: Request):
         # the live gates or the Kite provider are absent, so the setting and the broker
         # that was actually built can disagree. The cockpit must report the book the
         # engine is writing.
-        cap = analytics.capital_dict(s, book=r.book, broker_account_id=r.broker.broker_account_id)
+        cap = analytics.capital_dict(
+            s, book=r.book, owner_id=r.owner_id,
+            broker_account_id=r.broker_account_id)
     return {
         "provider": p.name,
         "authenticated": p.is_authenticated(),
@@ -100,10 +102,13 @@ def calendar(request: Request, days: int = 120):
     bot_by_day: dict[str, float] = defaultdict(float)
     bot_n_by_day: dict[str, int] = defaultdict(int)
     with SessionLocal() as s:
-        trades = list(s.scalars(select(Trade).where(Trade.mode == "live")))
+        trades = list(s.scalars(select(Trade).where(
+            Trade.owner_id == r.owner_id,
+            Trade.broker_account_id == r.broker_account_id,
+            Trade.mode == "live")))
         snaps = {row.day: row.account_net for row in s.scalars(
             select(DailyAccountSnapshot).where(
-                DailyAccountSnapshot.broker_account_id == r.broker.broker_account_id))}
+                DailyAccountSnapshot.broker_account_id == r.broker_account_id))}
     for t in trades:
         if not t.exit_time:
             continue
@@ -222,7 +227,9 @@ def portfolio_add(body: AddInstrument, request: Request):
 def portfolio_remove(body: AddInstrument, request: Request):
     from app.core import universe_resolver
     r = _runner(request)
-    res = universe_resolver.remove_instrument(body.key, owner_id=r.owner_id)
+    res = universe_resolver.remove_instrument(
+        body.key, owner_id=r.owner_id,
+        broker_account_id=r.broker_account_id)
     r.remove_universe_entry(body.key)   # disable-first (H11)
     return res
 
@@ -316,6 +323,8 @@ def option_candles(key: str, request: Request):
         # same instrument can be open in both, and an unscoped read would show whichever
         # row SQLite returned first.
         pos = s.scalar(select(Position).where(Position.instrument_key == key,
+                                              Position.owner_id == r.owner_id,
+                                              Position.broker_account_id == r.broker_account_id,
                                               Position.mode == r.book))
         if not pos:
             return {"candles": [], "tradingsymbol": None}
@@ -358,7 +367,8 @@ def account_pnl_route(request: Request):
     r = _runner(request)
     with SessionLocal() as s:
         return analytics.account_pnl(s, r.provider, book=r.book,
-                                     broker_account_id=r.broker.broker_account_id)
+                                     owner_id=r.owner_id,
+                                     broker_account_id=r.broker_account_id)
 
 
 @router.get("/api/dashboard")
@@ -375,18 +385,23 @@ def dashboard(request: Request, segment: str | None = None, strategy: str | None
         # The equity curve stays unfiltered on purpose: points written before 2026-08-07
         # carry no book, so scoping it would drop the entire pre-slice history from the
         # cockpit (ADR 0012 §6.3). Everything derived from live rows is book-scoped.
-        equity = (analytics.equity_curve(s, since=since) if not (seg or strat)
-                  else analytics.realized_curve(s, seg, strat, since))
+        scope = {"owner_id": r.owner_id,
+                 "broker_account_id": r.broker_account_id}
+        equity = (analytics.equity_curve(s, since=since, **scope) if not (seg or strat)
+                  else analytics.realized_curve(s, seg, strat, since, **scope))
         return {
             "capital": analytics.capital_dict(
-                s, book=r.book, broker_account_id=r.broker.broker_account_id),
-            "summary": analytics.summary(s, seg, strat, since),
+                s, book=r.book, **scope),
+            "summary": analytics.summary(s, seg, strat, since, **scope),
             "equity_curve": equity,
-            "instrument_curves": analytics.per_instrument_curves(s, seg, strat, since),
-            "segment_curves": analytics.segment_curves(s, since),
-            "strategy_curves": analytics.strategy_curves(s, seg, since),
-            "recent_trades": analytics.recent_trades(s, 50, segment=seg, strategy=strat, since=since),
-            "open_positions": [p.to_dict() for p in analytics.open_positions(s, r.book)],
+            "instrument_curves": analytics.per_instrument_curves(
+                s, seg, strat, since, **scope),
+            "segment_curves": analytics.segment_curves(s, since, **scope),
+            "strategy_curves": analytics.strategy_curves(s, seg, since, **scope),
+            "recent_trades": analytics.recent_trades(
+                s, 50, segment=seg, strategy=strat, since=since, **scope),
+            "open_positions": [p.to_dict() for p in analytics.open_positions(
+                s, r.book, **scope)],
             "segment": seg, "strategy": strat, "period": period or "all",
         }
 
@@ -400,10 +415,15 @@ def instrument_detail(key: str, request: Request, segment: str | None = None,
         inst = get_instrument(key)
     except KeyError:
         inst = None
-    since = _period_since(period, _runner(request).provider.now()) if (period and period != "all") else None
+    r = _runner(request)
+    since = _period_since(period, r.provider.now()) if (period and period != "all") else None
+    scope = {"owner_id": r.owner_id,
+             "broker_account_id": r.broker_account_id}
     with SessionLocal() as s:
-        stats = analytics.instrument_stats(s, key, segment or None, strategy or None, since)
-        trades = analytics.instrument_trades(s, key, segment or None, strategy or None, since)
+        stats = analytics.instrument_stats(
+            s, key, segment or None, strategy or None, since, **scope)
+        trades = analytics.instrument_trades(
+            s, key, segment or None, strategy or None, since, **scope)
     return {"key": key, "name": inst.name if inst else key,
             "segment": inst.segment if inst else None,
             "stats": stats, "trades": trades, "period": period or "all"}
@@ -414,8 +434,11 @@ def trades(request: Request, limit: int = Query(default=100, ge=1, le=MAX_PAGE),
            mode: str | None = None):
     # mode="paper"|"live" filters the log to one ledger; omitted returns both
     # (each row still carries its own `mode` so the UI can split them).
+    r = _runner(request)
     with SessionLocal() as s:
-        return {"trades": analytics.recent_trades(s, limit, mode)}
+        return {"trades": analytics.recent_trades(
+            s, limit, mode, owner_id=r.owner_id,
+            broker_account_id=r.broker_account_id)}
 
 
 @router.get("/api/logs")
@@ -451,7 +474,9 @@ def signals(request: Request):
     roll_thr = int(eff.get("overtrade_rolling_threshold", 15))
     roll_days = int(eff.get("overtrade_rolling_days", 7))
     with SessionLocal() as _s:
-        sig_counts = analytics.signal_counts(_s, now, rolling_days=roll_days)
+        sig_counts = analytics.signal_counts(
+            _s, now, owner_id=r.owner_id,
+            broker_account_id=r.broker_account_id, rolling_days=roll_days)
     out = []
     any_market_open = False
     for inst in all_instruments():
@@ -972,8 +997,11 @@ def ir_shadow_observability(request: Request, limit: int = Query(default=50, ge=
             "rejected": dict(getattr(runner.shadow_metrics, "rejections", {})),
         },
         "reasons": list(ir_shadow.DISAGREEMENT_REASONS),
-        "recorded_by_reason": ir_shadow_store.counts_by_reason(),
-        "divergences": ir_shadow_store.recent(limit=limit),
+        "recorded_by_reason": ir_shadow_store.counts_by_reason(
+            owner_id=runner.owner_id, broker_account_id=runner.broker_account_id),
+        "divergences": ir_shadow_store.recent(
+            owner_id=runner.owner_id, broker_account_id=runner.broker_account_id,
+            limit=limit),
     }
 
 
@@ -984,8 +1012,11 @@ def analytics_split(request: Request, segment: str | None = None):
     headline split AND the per-segment block to one window. All figures are net of
     the full charge stack (Trade.net_pnl is gross − charges)."""
     from app.options.cache import stats as option_stats
+    runner = _runner(request)
     with SessionLocal() as s:
-        all_trades = list(s.scalars(select(Trade)))
+        all_trades = list(s.scalars(select(Trade).where(
+            Trade.owner_id == runner.owner_id,
+            Trade.broker_account_id == runner.broker_account_id)))
 
     def seg_of(t):
         return t.segment or "options"
@@ -1038,7 +1069,8 @@ async def ws_main(ws: WebSocket):
         manager.disconnect(ws)
 
 
-def _instrument_payload(provider, key: str, book: str) -> dict:
+def _instrument_payload(provider, key: str, book: str, *, owner_id: str,
+                        broker_account_id: str) -> dict:
     """H1: the blocking per-tick fetch for /ws/instrument — synchronous Kite calls
     (get_live_price, option_ltp) plus a DB read. Kept as a plain function so the WS
     handler can run it OFF the event loop via asyncio.to_thread; called directly on the
@@ -1051,6 +1083,8 @@ def _instrument_payload(provider, key: str, book: str) -> dict:
         # from configuration, because `make_broker` can build a paper broker under a live
         # setting — the tile must show the book the engine actually writes.
         pos = s.scalar(select(Position).where(Position.instrument_key == key,
+                                              Position.owner_id == owner_id,
+                                              Position.broker_account_id == broker_account_id,
                                               Position.mode == book))
         contract = (pos.tradingsymbol, pos.strike, pos.expiry, pos.option_type) if pos else None
     opt = provider.option_ltp(inst, *contract) if contract else None
@@ -1073,7 +1107,9 @@ async def ws_instrument(ws: WebSocket, key: str):
     r = _runner(ws)
     try:
         while True:
-            payload = await asyncio.to_thread(_instrument_payload, r.provider, key, r.book)
+            payload = await asyncio.to_thread(
+                _instrument_payload, r.provider, key, r.book,
+                owner_id=r.owner_id, broker_account_id=r.broker_account_id)
             await ws.send_json(payload)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
@@ -1097,7 +1133,7 @@ class ShadowTransitionIn(BaseModel):
 
 
 @router.get("/api/ir-shadow/deployments")
-def list_shadow_deployments(include_retired: bool = False):
+def list_shadow_deployments(request: Request, include_retired: bool = False):
     """Managed, non-authoritative shadow deployments (L1.3A).
 
     Typed contract only — there is deliberately no frontend here. Every row states its
@@ -1107,9 +1143,12 @@ def list_shadow_deployments(include_retired: bool = False):
     """
     from app.core import shadow_deployments
 
+    runner = _runner(request)
     with SessionLocal() as s:
         return {"deployments": shadow_deployments.listing(
-            s, include_retired=include_retired)}
+            s, owner_id=runner.owner_id,
+            broker_account_id=runner.broker_account_id,
+            include_retired=include_retired)}
 
 
 @router.post("/api/ir-shadow/deployments")
@@ -1118,6 +1157,7 @@ def stage_shadow_deployment(body: ShadowDeploymentIn, request: Request):
     is a separate call because it is the one that verifies evidence and admission."""
     from app.core import shadow_deployments
 
+    runner = _runner(request)
     with SessionLocal() as s:
         try:
             row = shadow_deployments.stage(
@@ -1127,6 +1167,8 @@ def stage_shadow_deployment(body: ShadowDeploymentIn, request: Request):
                                if body.deployment_id is not None
                                else _runner(request).deployment_id),
                 instrument_key=body.instrument_key, interval=body.interval,
+                owner_id=runner.owner_id,
+                broker_account_id=runner.broker_account_id,
                 note=body.note)
             s.commit()
         except shadow_deployments.ShadowDeploymentError as e:
@@ -1153,9 +1195,12 @@ def transition_shadow_deployment(row_id: int, action: str, body: ShadowTransitio
         raise HTTPException(status_code=404,
                             detail=f"unknown transition {action!r}; "
                                    f"expected one of {sorted(moves)}")
+    runner = _runner(request)
     with SessionLocal() as s:
         try:
-            row = moves[action](s, row_id, revision=body.revision)
+            row = moves[action](
+                s, row_id, revision=body.revision, owner_id=runner.owner_id,
+                broker_account_id=runner.broker_account_id)
             s.commit()
         except shadow_deployments.RevisionConflict as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
@@ -1164,7 +1209,7 @@ def transition_shadow_deployment(row_id: int, action: str, body: ShadowTransitio
         result = row.to_dict()
     # The engine holds its bindings in memory, so a transition that did not reach it would
     # be a decision the operator can see and the loop cannot.
-    _runner(request).refresh_shadow_deployments()
+    runner.refresh_shadow_deployments()
     return result
 
 
@@ -1205,7 +1250,7 @@ class PaperRetireIn(BaseModel):
 
 
 @router.get("/api/ir-paper/deployments")
-def list_paper_deployments(include_retired: bool = False):
+def list_paper_deployments(request: Request, include_retired: bool = False):
     """Paper-authoritative IR deployments (L1.3C).
 
     Typed contract only — no frontend here. Every row states its project, exact graph
@@ -1215,9 +1260,12 @@ def list_paper_deployments(include_retired: bool = False):
     """
     from app.core import paper_authority
 
+    runner = _runner(request)
     with SessionLocal() as s:
         return {"deployments": paper_authority.listing(
-            s, include_retired=include_retired)}
+            s, owner_id=runner.owner_id,
+            broker_account_id=runner.broker_account_id,
+            include_retired=include_retired)}
 
 
 @router.get("/api/execution/cockpit")
@@ -1250,7 +1298,7 @@ def execution_cockpit(request: Request):
 
 
 @router.get("/api/execution/cockpit/deployments")
-def execution_cockpit_deployments(include_retired: bool = True):
+def execution_cockpit_deployments(request: Request, include_retired: bool = True):
     """Every paper-authority deployment record with its lifecycle state and provenance.
 
     Straight through to `paper_authority.listing` — the same rows
@@ -1259,8 +1307,11 @@ def execution_cockpit_deployments(include_retired: bool = True):
     """
     from app.engine import cockpit
 
+    runner = _runner(request)
     with SessionLocal() as s:
-        return {"deployments": cockpit.paper_deployments(s)}
+        return {"deployments": cockpit.paper_deployments(
+            s, owner_id=runner.owner_id,
+            broker_account_id=runner.broker_account_id)}
 
 
 @router.post("/api/ir-paper/deployments")
@@ -1269,6 +1320,7 @@ def stage_paper_deployment(body: PaperDeploymentIn, request: Request):
     call because it is the one that verifies evidence and admission."""
     from app.core import paper_authority
 
+    runner = _runner(request)
     with SessionLocal() as s:
         try:
             row = paper_authority.stage(
@@ -1278,6 +1330,8 @@ def stage_paper_deployment(body: PaperDeploymentIn, request: Request):
                                if body.deployment_id is not None
                                else _runner(request).deployment_id),
                 instrument_key=body.instrument_key, interval=body.interval,
+                owner_id=runner.owner_id,
+                broker_account_id=runner.broker_account_id,
                 note=body.note)
             s.commit()
         except paper_authority.PaperAuthorityError as e:
@@ -1306,16 +1360,19 @@ def transition_paper_deployment(row_id: int, action: str, body: PaperTransitionI
                             detail=f"unknown transition {action!r}; expected one of "
                                    f"{sorted(moves)} (retirement has its own route "
                                    f"because it must name a rollback target)")
+    runner = _runner(request)
     with SessionLocal() as s:
         try:
-            row = moves[action](s, row_id, revision=body.revision)
+            row = moves[action](
+                s, row_id, revision=body.revision, owner_id=runner.owner_id,
+                broker_account_id=runner.broker_account_id)
             s.commit()
         except paper_authority.RevisionConflict as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except paper_authority.PaperAuthorityError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
         result = row.to_dict()
-    _runner(request).refresh_paper_authority()
+    runner.refresh_paper_authority()
     return result
 
 
@@ -1333,7 +1390,8 @@ def retire_paper_deployment(row_id: int, body: PaperRetireIn, request: Request):
         try:
             row = paper_authority.retire(
                 s, row_id, revision=body.revision,
-                restore_strategy_key=body.restore_strategy_key, owner_id=r.owner_id)
+                restore_strategy_key=body.restore_strategy_key, owner_id=r.owner_id,
+                broker_account_id=r.broker_account_id)
             s.commit()
         except paper_authority.RevisionConflict as e:
             raise HTTPException(status_code=409, detail=str(e)) from e

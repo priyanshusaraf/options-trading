@@ -307,13 +307,15 @@ def _describe_paper_authority(deployment_id, instrument_key,
 
 
 def resolve_binding(session, *, deployment_id: int, instrument_key: str,
-                    owner_id: str) -> ExecutionBinding:
+                    owner_id: str, broker_account_id: str) -> ExecutionBinding:
     """`bind`, with the deployment pin and the instrument assignment read from the
     database. The entry point for callers that hold a session and no cached config."""
     from app.core.deployments import resolve_deployment_strategy
 
     return bind(deployment_id=deployment_id, instrument_key=instrument_key,
-                deployment_pin=resolve_deployment_strategy(session, deployment_id),
+                deployment_pin=resolve_deployment_strategy(
+                    session, deployment_id, owner_id=owner_id,
+                    broker_account_id=broker_account_id),
                 assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id))
 
 

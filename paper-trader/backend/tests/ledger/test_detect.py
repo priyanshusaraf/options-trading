@@ -3,9 +3,16 @@ from datetime import datetime
 from sqlalchemy.orm import sessionmaker
 
 from app.ledger.db import init_ledger_db, make_engine
-from app.ledger.detect import detect_manual_fills
+from app.ledger.detect import detect_manual_fills as _detect_manual_fills
 from app.ledger.models import LedgerManualFill
 from app.providers.kite import KiteProvider as _KiteForCaps
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+
+
+def detect_manual_fills(*args, **kwargs):
+    kwargs.setdefault("owner_id", LEGACY_OWNER_ID)
+    kwargs.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _detect_manual_fills(*args, **kwargs)
 
 
 class _Provider:

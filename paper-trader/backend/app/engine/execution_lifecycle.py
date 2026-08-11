@@ -17,7 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import LEGACY_OWNER_ID, ExecutionIntent, ExecutionOrderEvent
+from app.db.models import (
+    BrokerAccount,
+    LEGACY_BROKER_ACCOUNT_ID,
+    LEGACY_OWNER_ID,
+    ExecutionIntent,
+    ExecutionOrderEvent,
+)
 
 
 _TERMINAL_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED", "FAILED"})
@@ -89,6 +95,7 @@ class NewExecutionIntent:
     #: `unresolved_entries`, so it decides which unresolved live entries a restarting broker may
     #: adopt.
     owner_id: str = LEGACY_OWNER_ID
+    broker_account_id: str = LEGACY_BROKER_ACCOUNT_ID
 
 
 @dataclass(frozen=True)
@@ -327,8 +334,18 @@ def reduce_execution_events(
 class ExecutionLifecycleStore:
     """Commit immutable lifecycle facts with explicit, retry-safe collision handling."""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, *, owner_id: str,
+                 broker_account_id: str):
         self.session = session
+        self.owner_id = owner_id
+        self.broker_account_id = broker_account_id
+        account = session.scalar(select(BrokerAccount).where(
+            BrokerAccount.broker_account_id == broker_account_id,
+            BrokerAccount.owner_id == owner_id,
+            BrokerAccount.status == "active",
+        ))
+        if account is None:
+            raise ValueError("broker account is not available to this owner")
 
     def create_intent(
         self,
@@ -336,12 +353,16 @@ class ExecutionLifecycleStore:
         context: dict,
         now: dt.datetime,
     ) -> ExecutionIntent:
+        if (request.owner_id != self.owner_id
+                or request.broker_account_id != self.broker_account_id):
+            raise ValueError("execution intent scope does not match lifecycle store")
         for attempt in range(3):
             client_intent_id = make_intent_id()
             row = ExecutionIntent(
                 client_intent_id=client_intent_id,
                 deployment_id=request.deployment_id,
-                owner_id=request.owner_id,
+                owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
                 broker=request.broker,
                 account_scope=request.account_scope,
                 connection_scope=request.connection_scope,
@@ -364,6 +385,8 @@ class ExecutionLifecycleStore:
             )
             self.session.add(row)
             self.session.add(ExecutionOrderEvent(
+                owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
                 client_intent_id=client_intent_id,
                 source="engine",
                 source_event_id="intent-created",
@@ -404,8 +427,13 @@ class ExecutionLifecycleStore:
         event: NewExecutionEvent,
         now: dt.datetime,
     ) -> ExecutionOrderEvent:
+        intent = self._intent(client_intent_id)
+        if intent is None:
+            raise LookupError(f"unknown execution intent {client_intent_id}")
         payload_json = _canonical_json(event.payload)
         row = ExecutionOrderEvent(
+            owner_id=self.owner_id,
+            broker_account_id=self.broker_account_id,
             client_intent_id=client_intent_id,
             source=event.source,
             source_event_id=event.source_event_id,
@@ -427,6 +455,8 @@ class ExecutionLifecycleStore:
             existing = self.session.scalar(
                 select(ExecutionOrderEvent).where(
                     ExecutionOrderEvent.client_intent_id == client_intent_id,
+                    ExecutionOrderEvent.owner_id == self.owner_id,
+                    ExecutionOrderEvent.broker_account_id == self.broker_account_id,
                     ExecutionOrderEvent.source == event.source,
                     ExecutionOrderEvent.source_event_id == event.source_event_id,
                 ))
@@ -452,13 +482,24 @@ class ExecutionLifecycleStore:
             and existing.anomaly == candidate.anomaly
         )
 
+    def _intent(self, client_intent_id: str) -> ExecutionIntent | None:
+        return self.session.scalar(select(ExecutionIntent).where(
+            ExecutionIntent.client_intent_id == client_intent_id,
+            ExecutionIntent.owner_id == self.owner_id,
+            ExecutionIntent.broker_account_id == self.broker_account_id,
+        ))
+
     def state_for(self, client_intent_id: str) -> ExecutionState:
-        intent = self.session.get(ExecutionIntent, client_intent_id)
+        intent = self._intent(client_intent_id)
         if intent is None:
             raise LookupError(f"unknown execution intent {client_intent_id}")
         events = list(self.session.scalars(
             select(ExecutionOrderEvent)
-            .where(ExecutionOrderEvent.client_intent_id == client_intent_id)
+            .where(
+                ExecutionOrderEvent.client_intent_id == client_intent_id,
+                ExecutionOrderEvent.owner_id == self.owner_id,
+                ExecutionOrderEvent.broker_account_id == self.broker_account_id,
+            )
             .order_by(ExecutionOrderEvent.id)))
         return reduce_execution_events(intent, events)
 
@@ -469,7 +510,6 @@ class ExecutionLifecycleStore:
         connection_scope: str,
         *,
         broker: str,
-        owner_id: str,
     ) -> list[ExecutionIntent]:
         """Live entries this broker may adopt on restart.
 
@@ -500,7 +540,8 @@ class ExecutionLifecycleStore:
                 ExecutionIntent.account_scope == account_scope,
                 ExecutionIntent.connection_scope == connection_scope,
                 ExecutionIntent.broker == broker,
-                ExecutionIntent.owner_id == owner_id,
+                ExecutionIntent.owner_id == self.owner_id,
+                ExecutionIntent.broker_account_id == self.broker_account_id,
             )
             .order_by(ExecutionIntent.created_at, ExecutionIntent.client_intent_id)))
         if not intents:
@@ -511,7 +552,11 @@ class ExecutionLifecycleStore:
         }
         events = self.session.scalars(
             select(ExecutionOrderEvent)
-            .where(ExecutionOrderEvent.client_intent_id.in_(intent_ids))
+            .where(
+                ExecutionOrderEvent.client_intent_id.in_(intent_ids),
+                ExecutionOrderEvent.owner_id == self.owner_id,
+                ExecutionOrderEvent.broker_account_id == self.broker_account_id,
+            )
             .order_by(ExecutionOrderEvent.id))
         for event in events:
             events_by_intent[event.client_intent_id].append(event)

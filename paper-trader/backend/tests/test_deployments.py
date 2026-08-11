@@ -24,6 +24,13 @@ from app.db.models import (
     Trade,
 )
 from app.db.session import SessionLocal, init_db
+from tests.legacy_money_scope import LegacyMoneyScope
+
+dep = LegacyMoneyScope(
+    dep, "ensure_legacy_deployment", "create_deployment", "active_deployments",
+    "get_deployment", "get_by_name", "all_deployments", "set_status", "set_armed",
+    "disarm_all", "resolve_deployment_strategy", "deployment_strategy_version",
+    "deployment_params")
 
 
 @pytest.fixture(autouse=True)

@@ -42,7 +42,12 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from tests.legacy_money_scope import LEGACY_SCOPE, LegacyMoneyScope
 from app.ir.hashing import canonical_json, content_address
+
+pa = LegacyMoneyScope(
+    pa, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "register_active_adapters", "listing")
 
 PROJECT = "proj-paper-runtime"
 GRAPH = "strategy.expanding_z_impulse"
@@ -259,7 +264,8 @@ class TestRestartAndReload:
             import app.core.paper_authority as module
             original, module.adapter_for = module.adapter_for, refuse
             try:
-                loaded = module.register_active_adapters(s, on_problem=problems.append)
+                loaded = module.register_active_adapters(
+                    s, on_problem=problems.append, **LEGACY_SCOPE)
             finally:
                 module.adapter_for = original
         assert loaded == []
@@ -635,8 +641,9 @@ class TestNoLiveSeamIsReached:
             row = _deploy(s)
             _open_paper_position(s, strategy_version=row.graph_content_address)
         with SessionLocal() as s:
-            assert [p.instrument_key for p in foreign_book_positions(s, LIVE)] == [INSTRUMENT]
-            assert foreign_book_positions(s, PAPER) == []
+            assert [p.instrument_key for p in foreign_book_positions(
+                s, LIVE, **LEGACY_SCOPE)] == [INSTRUMENT]
+            assert foreign_book_positions(s, PAPER, **LEGACY_SCOPE) == []
 
 
 # ── shadow and paper stay different things ──────────────────────────────────────
@@ -667,8 +674,9 @@ class TestShadowAndPaperAuthorityRemainSeparate:
             s.commit()
             row = sd.stage(s, project_id=PROJECT, graph_identifier=GRAPH,
                            graph_version=1, deployment_id=LEGACY_DEPLOYMENT_ID,
-                           instrument_key=INSTRUMENT, interval=INTERVAL)
-            sd.activate(s, row.id, revision=row.revision)
+                           instrument_key=INSTRUMENT, interval=INTERVAL,
+                           **LEGACY_SCOPE)
+            sd.activate(s, row.id, revision=row.revision, **LEGACY_SCOPE)
             s.commit()
         r = _runner()
         try:

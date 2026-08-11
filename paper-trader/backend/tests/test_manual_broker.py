@@ -8,7 +8,7 @@ from app.core.config import get_settings
 
 def _broker():
     init_db(reset=True)
-    return PaperBroker(MockProvider(), broker_account_id="account.default")
+    return PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
 
 
 def test_mark_sets_freshness_and_high_water():

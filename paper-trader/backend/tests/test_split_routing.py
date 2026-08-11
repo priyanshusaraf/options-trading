@@ -22,14 +22,21 @@ import types
 import pytest
 
 from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import ConnectionCannotExecute, make_broker
 from app.providers import capabilities as caps
-from app.providers.connection import configured_execution_connection
+from app.providers.connection import (
+    configured_execution_connection as _configured_execution_connection)
 from app.providers.factory import provider_named
 from app.providers.upstox import UpstoxProvider
+
+
+def configured_execution_connection(provider, session=None, **scope):
+    scope.setdefault("owner_id", LEGACY_OWNER_ID)
+    scope.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _configured_execution_connection(provider, session=session, **scope)
 
 
 def _open_the_live_gate(monkeypatch):
@@ -210,7 +217,9 @@ def test_a_stored_connection_is_preferred_over_the_environment_variable(monkeypa
     init_db(reset=True)
     _vault_key(monkeypatch)
     with SessionLocal() as s:
-        OwnedConnectionStore(s, "owner").create(
+        OwnedConnectionStore(
+            s, owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID).create(
             broker="kite", scope="kite:stored", label="the owner's own")
         s.commit()
 
@@ -251,7 +260,9 @@ def test_a_revoked_stored_connection_refuses_rather_than_falling_back(monkeypatc
     init_db(reset=True)
     _vault_key(monkeypatch)
     with SessionLocal() as s:
-        store = OwnedConnectionStore(s, "owner")
+        store = OwnedConnectionStore(
+            s, owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
         row = store.create(broker="kite", scope="kite:stored")
         s.commit()
         store.revoke(row.id)

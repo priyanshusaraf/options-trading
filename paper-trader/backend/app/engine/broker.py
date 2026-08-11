@@ -17,6 +17,7 @@ from app.core.market_hours import now_ist
 from app.core.instruments import Instrument
 from app.core.logging import log
 from app.db.models import (
+    BrokerAccount,
     LEGACY_BROKER_ACCOUNT_ID,
     LEGACY_DEPLOYMENT_ID,
     CapitalState,
@@ -36,7 +37,7 @@ class PaperBroker:
     MODE = "paper"   # stamped on every Position/Trade this broker creates (LiveBroker overrides to "live")
 
     def __init__(self, provider: MarketDataProvider, deployment_id: int = LEGACY_DEPLOYMENT_ID,
-                 *, broker_account_id: str) -> None:
+                 *, owner_id: str, broker_account_id: str) -> None:
         self.provider = provider
         self.settings = get_settings()
         self.s = SessionLocal()
@@ -46,6 +47,7 @@ class PaperBroker:
         # Defaults to the legacy deployment, which is what the single existing book
         # is — so this changes nothing until a second deployment exists.
         self.deployment_id = deployment_id
+        self.owner_id = owner_id
         # Which *book* this broker reads and writes. Distinct from `deployment_id`:
         # a deployment says which strategy configuration is trading, a book says whose
         # money it is. Resolved from the object actually built, and fail-closed to live
@@ -53,6 +55,15 @@ class PaperBroker:
         # must not be assumed harmless.
         self.book = book_of(self)
         self.broker_account_id = broker_account_id
+        account = self.s.scalar(select(BrokerAccount).where(
+            BrokerAccount.broker_account_id == self.broker_account_id,
+            BrokerAccount.owner_id == self.owner_id,
+            BrokerAccount.status == "active",
+        ))
+        if account is None:
+            self.s.close()
+            raise ValueError("broker account is not available to this owner")
+        self.account = account
         # Attribute this book's ledger once, here, at construction. Doing it lazily on
         # the first `capital()` call would put a bootstrap write in the middle of a fill.
         capital_for_book(self.s, self.book, broker_account_id=self.broker_account_id)
@@ -86,7 +97,11 @@ class PaperBroker:
         residual is made loud instead of silent by
         `execution_book.foreign_book_positions`, reported at startup and on `/api/health`.
         """
-        stmt = select(Position).where(Position.mode == self.book)
+        stmt = select(Position).where(
+            Position.mode == self.book,
+            Position.owner_id == self.owner_id,
+            Position.broker_account_id == self.broker_account_id,
+        )
         if deployment_id is not None:
             stmt = stmt.where(Position.deployment_id == deployment_id)
         return list(self.s.scalars(stmt))
@@ -100,13 +115,20 @@ class PaperBroker:
         open in both books at once, holding different contracts at different prices.
         """
         stmt = select(Position).where(Position.instrument_key == key,
-                                      Position.mode == self.book)
+                                      Position.mode == self.book,
+                                      Position.owner_id == self.owner_id,
+                                      Position.broker_account_id == self.broker_account_id)
         if deployment_id is not None:
             stmt = stmt.where(Position.deployment_id == deployment_id)
         return self.s.scalar(stmt)
 
     def commit(self) -> None:
         self.s.commit()
+
+    def _require_owned_position(self, pos: Position) -> None:
+        if (pos.owner_id != self.owner_id
+                or pos.broker_account_id != self.broker_account_id):
+            raise ValueError("position is not available to this broker account")
 
     # ── fills ─────────────────────────────────────────────────────────────
     def open_position(self, inst: Instrument, direction: str, q: OptionQuote,
@@ -132,6 +154,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=entry_intent_id,
             instrument_key=inst.key, direction=direction, option_type=q.option_type,
@@ -204,6 +227,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=entry_intent_id,
             instrument_key=inst.key, direction=direction, option_type="EQ",
@@ -235,6 +259,7 @@ class PaperBroker:
         """Close an intraday equity position. Releases the blocked margin and books
         direction-aware P&L (a SHORT profits when price falls), net of both legs'
         charges. proceeds = entry_cost + net, so the ledger invariant stays exact."""
+        self._require_owned_position(pos)
         qty = pos.qty
         _, exit_side = legs_for(pos.direction)      # E7: a SHORT closes by BUYING to cover
         charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
@@ -251,6 +276,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
@@ -305,6 +331,7 @@ class PaperBroker:
     def reinforce_position(self, pos: Position, params: dict, now: dt.datetime) -> dict:
         """Apply a same-direction reinforcement to a held position: ratchet the
         stop, optionally extend the target, bump the count. No quantity change."""
+        self._require_owned_position(pos)
         from app.engine.exit_monitor import apply_reinforcement
         prem = pos.last_premium or pos.entry_premium
         r = apply_reinforcement(pos.entry_premium, pos.stop_price, pos.target_price,
@@ -327,6 +354,7 @@ class PaperBroker:
 
     def mark(self, pos: Position, premium: float | None, spot: float | None,
              now: dt.datetime | None = None) -> None:
+        self._require_owned_position(pos)
         # Use explicit None checks: a real 0.0 premium (option decayed to zero —
         # the buyer's maximum loss) is a VALID mark and must advance freshness, or
         # the staleness guard would suppress the stop at the worst possible time.
@@ -396,6 +424,7 @@ class PaperBroker:
         cap.updated_at = now
 
         pos = Position(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             instrument_key=inst.key, direction=direction, option_type="FUT",
             tradingsymbol=getattr(inst, "option_name", "") or inst.key,
@@ -421,6 +450,7 @@ class PaperBroker:
         """Close an index-futures position. Releases the blocked margin and books
         direction-aware P&L net of both legs' charges, so
         `proceeds = entry_cost + net` and the ledger invariant stays exact."""
+        self._require_owned_position(pos)
         qty = pos.qty
         _, exit_side = legs_for(pos.direction)
         charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
@@ -437,6 +467,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
@@ -468,6 +499,7 @@ class PaperBroker:
     def close_position(self, pos: Position, exit_premium: float, reason: str,
                        now: dt.datetime, spot: float,
                        exit_price_estimated: bool = False) -> Trade:
+        self._require_owned_position(pos)
         qty = pos.qty
         charges = compute_charges(pos.exchange, "SELL", exit_premium, qty)["total"]
         proceeds = exit_premium * qty - charges
@@ -481,6 +513,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
@@ -520,6 +553,7 @@ class PaperBroker:
         can still be managed/exited. Keeps the cash reconciliation invariant exact:
         the realized entry-cost slice and the remaining entry_cost sum to the original.
         """
+        self._require_owned_position(pos)
         qty = min(int(qty), pos.qty)
         charges = compute_charges(pos.exchange, "SELL", exit_premium, qty)["total"]
         proceeds = exit_premium * qty - charges
@@ -538,6 +572,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
@@ -577,6 +612,7 @@ class PaperBroker:
         proportionally so the cash invariant stays exact (the realized slice + the
         remaining entry_cost sum to the original). The position stays open at the
         reduced qty so the remainder can be re-stopped and exited later."""
+        self._require_owned_position(pos)
         qty = min(int(qty), pos.qty)
         _, exit_side = legs_for(pos.direction)      # E7: a SHORT covers with a BUY
         exit_charges = compute_charges(pos.exchange, exit_side, exit_price, qty)["total"]
@@ -596,6 +632,7 @@ class PaperBroker:
         cap.updated_at = now
 
         tr = Trade(
+            owner_id=self.owner_id, broker_account_id=self.broker_account_id,
             deployment_id=self.deployment_id,
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
@@ -661,7 +698,9 @@ class PaperBroker:
         # last × qty double-counts MIS leverage and inflates the persisted equity curve.
         mtm = sum(p.mtm_value() for p in opens)
         cap = self.capital()
-        snap = EquitySnapshot(deployment_id=self.deployment_id, book=self.book,
+        snap = EquitySnapshot(owner_id=self.owner_id,
+                              broker_account_id=self.broker_account_id,
+                              deployment_id=self.deployment_id, book=self.book,
                               time=now, equity=cap.cash + mtm, cash=cap.cash,
                               invested=invested, realized_pnl=cap.realized_pnl,
                               open_count=len(opens))

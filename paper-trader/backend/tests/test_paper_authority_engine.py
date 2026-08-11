@@ -29,7 +29,12 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from tests.legacy_money_scope import LEGACY_SCOPE, LegacyMoneyScope
 from app.ir.hashing import canonical_json, content_address
+
+pa = LegacyMoneyScope(
+    pa, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "register_active_adapters", "listing")
 
 PROJECT = "proj-paper-engine"
 GRAPH = "strategy.expanding_z_impulse"
@@ -162,7 +167,8 @@ class TestBindingThroughTheRunner:
             s.flush()
             shadow = sd.stage(s, project_id=PROJECT, graph_identifier=GRAPH,
                               graph_version=1, deployment_id=LEGACY_DEPLOYMENT_ID,
-                              instrument_key=INSTRUMENT, interval=INTERVAL)
+                              instrument_key=INSTRUMENT, interval=INTERVAL,
+                              **LEGACY_SCOPE)
             s.commit()
             # ACTIVE, not merely staged. A staged shadow row is inert everywhere, so a
             # test that stopped there would pass against a runner that happily promoted
@@ -171,7 +177,7 @@ class TestBindingThroughTheRunner:
                 "run_id": 7, "candidate_id": 3, "project_id": PROJECT,
                 "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
                 "content_address": "sha256:" + "e" * 64, "decision": "approved"})
-            sd.activate(s, shadow.id, revision=shadow.revision)
+            sd.activate(s, shadow.id, revision=shadow.revision, **LEGACY_SCOPE)
             s.commit()
         r = _runner()
         try:
@@ -362,7 +368,7 @@ class TestBooksStayApartWhileAGraphTrades:
             self._paper_position(s, mode=PAPER)
         live = LiveLike.__new__(LiveLike)
         live.__init__(__import__("app.providers.mock", fromlist=["MockProvider"])
-                      .MockProvider(), broker_account_id="account.default")
+                      .MockProvider(), owner_id="owner", broker_account_id="account.default")
         try:
             assert live.open_positions() == []
             assert live.position_for(INSTRUMENT) is None
@@ -387,8 +393,8 @@ class TestBooksStayApartWhileAGraphTrades:
                 mode=PAPER, strategy_key=IR_KEY))
             s.commit()
             day = dt.date(2026, 1, 1)
-            assert analytics.realized_on(s, day, book=LIVE) == 0.0
-            assert analytics.realized_on(s, day, book=PAPER) == 50.0
+            assert analytics.realized_on(s, day, book=LIVE, **LEGACY_SCOPE) == 0.0
+            assert analytics.realized_on(s, day, book=PAPER, **LEGACY_SCOPE) == 50.0
 
 
 def pa_origin() -> str:

@@ -14,10 +14,14 @@ import pytest
 
 from app.core import scoped_config as sc
 from app.core.config import get_settings
-from app.core.deployments import create_deployment
+from app.core import deployments as _deployments
 from app.core.runtime_config import effective, set_override
 from app.db.models import LEGACY_DEPLOYMENT_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
+from tests.legacy_money_scope import LEGACY_SCOPE, LegacyMoneyScope
+
+create_deployment = LegacyMoneyScope(_deployments, "create_deployment").create_deployment
+sc = LegacyMoneyScope(sc, "resolve", "explain")
 
 
 @pytest.fixture(autouse=True)
@@ -49,7 +53,8 @@ def test_legacy_deployment_scope_changes_nothing():
     indistinguishable from not resolving through anything."""
     set_override("max_daily_loss", 2000.0)
     with SessionLocal() as s:
-        assert sc.resolve(s, deployment_id=LEGACY_DEPLOYMENT_ID) == effective()
+        assert sc.resolve(s, deployment_id=LEGACY_DEPLOYMENT_ID,
+                          **LEGACY_SCOPE) == effective()
 
 
 def test_deployment_scope_overrides_platform():

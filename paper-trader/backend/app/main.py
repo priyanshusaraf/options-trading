@@ -132,7 +132,8 @@ async def lifespan(app: FastAPI):
     from app.ledger.lane import run_manual_detect_loop
     detect_task = asyncio.create_task(run_manual_detect_loop(
         runner.provider, SessionLocal, ledger_sessionmaker(),
-        get_settings(), runner.provider.now))
+        get_settings(), runner.provider.now, owner_id=runner.owner_id,
+        broker_account_id=runner.broker_account_id))
     log.info("backend ready — open the dashboard")
     try:
         yield

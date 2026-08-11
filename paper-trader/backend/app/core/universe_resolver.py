@@ -120,7 +120,7 @@ def add_instrument(key: str, provider, on_home: bool = True,
     return out
 
 
-def remove_instrument(key: str, *, owner_id: str) -> dict:
+def remove_instrument(key: str, *, owner_id: str, broker_account_id: str) -> dict:
     """Un-pin from the homepage and disable trading. User-added instruments are
     deactivated entirely; seed instruments are kept but disabled/un-pinned."""
     with SessionLocal() as s:
@@ -131,7 +131,10 @@ def remove_instrument(key: str, *, owner_id: str) -> dict:
         # poisoning the position's key. The risk loop now survives that, but refuse it
         # at the source anyway — an open position must stay resolvable.
         # (the Position table holds the OPEN book only — closes become Trade rows)
-        if s.scalar(select(Position.id).where(Position.instrument_key == key).limit(1)):
+        if s.scalar(select(Position.id).where(
+                Position.owner_id == owner_id,
+                Position.broker_account_id == broker_account_id,
+                Position.instrument_key == key).limit(1)):
             return {"error": f"'{key}' has an open position — close it before removing"}
         row.on_home = False
         if row.source == "user":

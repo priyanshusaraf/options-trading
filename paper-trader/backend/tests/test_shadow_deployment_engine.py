@@ -20,6 +20,7 @@ from app.core import shadow_deployments as sd
 from app.db.models import LEGACY_DEPLOYMENT_ID
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from tests.legacy_money_scope import LegacyMoneyScope
 
 from tests.test_shadow_deployments import (  # noqa: F401 — the fixture is used by name
     GRAPH,
@@ -28,6 +29,10 @@ from tests.test_shadow_deployments import (  # noqa: F401 — the fixture is use
     evidence_bridge,
     seed_graph,
 )
+
+sd = LegacyMoneyScope(
+    sd, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "listing")
 
 INSTRUMENT = "SILVERM"
 INTERVAL = "30minute"

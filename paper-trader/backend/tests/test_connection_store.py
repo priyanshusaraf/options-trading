@@ -21,14 +21,31 @@ import pytest
 
 from app.core import credential_vault as vault
 from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID, BrokerConnection
+from app.db.models import BrokerAccount, LEGACY_OWNER_ID, BrokerConnection
 from app.db.session import SessionLocal, init_db
 from app.providers import capabilities as caps
 from app.providers.brokers import BrokerNotSupported
-from app.providers.connection_store import ConnectionNotFound, OwnedConnectionStore
+from app.providers.connection_store import (
+    ConnectionNotFound, OwnedConnectionStore as _OwnedConnectionStore)
 
 KEY = base64.b64encode(b"k" * 32).decode()
 OTHER_KEY = base64.b64encode(b"z" * 32).decode()
+
+
+def _store(session, owner_id: str = LEGACY_OWNER_ID, *, session_factory=None):
+    if not isinstance(owner_id, str) or not owner_id.strip():
+        return _OwnedConnectionStore(
+            session, owner_id=owner_id, broker_account_id="account.invalid",
+            session_factory=session_factory)
+    broker_account_id = f"account.{owner_id}"
+    if session.get(BrokerAccount, broker_account_id) is None:
+        session.add(BrokerAccount(
+            broker_account_id=broker_account_id, owner_id=owner_id, broker="kite",
+            external_account_id=owner_id, display_name=owner_id))
+        session.flush()
+    return _OwnedConnectionStore(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        session_factory=session_factory)
 
 
 @pytest.fixture()
@@ -53,8 +70,8 @@ def vault_key(monkeypatch):
 def test_one_owners_connection_is_invisible_to_another(session):
     """The failure this prevents has no degraded form: it is one customer trading on another
     customer's account."""
-    alice = OwnedConnectionStore(session, "alice")
-    bob = OwnedConnectionStore(session, "bob")
+    alice = _store(session, "alice")
+    bob = _store(session, "bob")
     row = alice.create(broker="kite", scope="kite:main", label="Alice's Zerodha")
     session.flush()
 
@@ -68,10 +85,10 @@ def test_one_owners_connection_is_invisible_to_another(session):
 def test_the_refusal_does_not_reveal_that_the_connection_exists(session):
     """One error for "does not exist" and for "belongs to someone else". Distinguishing them
     confirms the existence of another owner's connection, and an integer id is guessable."""
-    alice = OwnedConnectionStore(session, "alice")
+    alice = _store(session, "alice")
     row = alice.create(broker="kite", scope="kite:main")
     session.flush()
-    bob = OwnedConnectionStore(session, "bob")
+    bob = _store(session, "bob")
 
     with pytest.raises(ConnectionNotFound) as real:
         bob.get(row.id)
@@ -84,15 +101,15 @@ def test_two_owners_may_hold_the_same_scope(session):
     """The uniqueness constraint is per owner, not global. Two owners each holding a
     `kite:legacy` connection is the normal case, not a conflict — a global constraint would mean
     the second customer to connect gets an integrity error."""
-    a = OwnedConnectionStore(session, "alice").create(broker="kite", scope="kite:legacy")
-    b = OwnedConnectionStore(session, "bob").create(broker="kite", scope="kite:legacy")
+    a = _store(session, "alice").create(broker="kite", scope="kite:legacy")
+    b = _store(session, "bob").create(broker="kite", scope="kite:legacy")
     session.flush()
     assert a.id != b.id and a.owner_id != b.owner_id
 
 
 def test_the_same_owner_cannot_hold_one_scope_twice(session):
     from sqlalchemy.exc import IntegrityError
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     store.create(broker="kite", scope="kite:legacy")
     # `create` flushes, so the constraint fires inside the second call rather than at a later
     # commit. That is deliberate: the caller learns about the collision at the operation that
@@ -104,7 +121,7 @@ def test_the_same_owner_cannot_hold_one_scope_twice(session):
 def test_an_unnamed_owner_is_the_legacy_owner_not_null(session):
     """On a table that grants the authority to trade, "belongs to the original owner" and "we do
     not know whose this is" must never be the same value."""
-    row = OwnedConnectionStore(session).create(broker="kite", scope="kite:legacy")
+    row = _store(session).create(broker="kite", scope="kite:legacy")
     session.flush()
     assert row.owner_id == LEGACY_OWNER_ID
     assert row.owner_id is not None
@@ -116,7 +133,7 @@ def test_a_connection_to_an_unsupported_broker_is_refused_at_creation(session):
     """Refusing here rather than at first use is the point. A connection naming a broker with no
     adapter is a row that looks configured and can never work — and the operator finds out at
     09:15 instead of at the moment they created it."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     with pytest.raises(BrokerNotSupported):
         store.create(broker="angelone", scope="angel:main")   # PLANNED, no adapter
     with pytest.raises(BrokerNotSupported):
@@ -124,7 +141,7 @@ def test_a_connection_to_an_unsupported_broker_is_refused_at_creation(session):
 
 
 def test_declared_capabilities_default_to_the_adapters(session):
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="upstox", scope="upstox:data")
     session.flush()
     assert set(json.loads(row.capabilities_json)) == {caps.HISTORICAL_DATA, caps.LIVE_QUOTES}
@@ -136,7 +153,7 @@ def test_declared_capabilities_default_to_the_adapters(session):
 def test_the_stored_credential_is_not_the_token(session, vault_key):
     """The database file is rsynced, backed up and copied between environments. A plaintext
     token in it is the account."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "SUPER-SECRET-TOKEN"})
@@ -150,7 +167,7 @@ def test_the_stored_credential_is_not_the_token(session, vault_key):
 def test_the_serialisable_form_carries_no_credential_field_at_all(session, vault_key):
     """`to_dict` reaches the API, the logs and the operator's browser. Absence of the field is
     stronger than a redacted value: there is nothing to accidentally un-redact."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -162,7 +179,7 @@ def test_the_serialisable_form_carries_no_credential_field_at_all(session, vault
 def test_a_round_trip_returns_the_bundle_not_just_a_token(session, vault_key):
     """One bundle shape for every broker. Dhan needs a token AND a client id; a TOTP broker
     stores a seed. A per-broker credential shape would put a broker branch in the vault."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="dhan", scope="dhan:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T", "client_id": "1000000001"})
@@ -174,7 +191,7 @@ def test_no_key_means_refusal_not_plaintext(session, monkeypatch):
     """Fail closed. Quietly storing plaintext when unconfigured is how a development default
     reaches production, and it is invisible exactly where it matters."""
     monkeypatch.delenv(vault.ENV_KEY, raising=False)
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     with pytest.raises(vault.CredentialVaultUnavailable):
@@ -185,7 +202,7 @@ def test_no_key_means_refusal_not_plaintext(session, monkeypatch):
 def test_a_tampered_ciphertext_fails_to_authenticate(session, vault_key):
     """AES-GCM is authenticated, and that is why. An attacker who can write to the database but
     not read the key must not be able to flip a stored credential to one they control."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -199,7 +216,7 @@ def test_a_tampered_ciphertext_fails_to_authenticate(session, vault_key):
 def test_a_rotated_key_is_a_loud_failure_not_a_silent_absence(session, vault_key, monkeypatch):
     """A credential that silently reads as absent looks exactly like "this owner never
     connected", and the operator would reconnect rather than investigate a key mismatch."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -214,7 +231,7 @@ def test_a_rotated_key_is_a_loud_failure_not_a_silent_absence(session, vault_key
 def test_the_key_is_never_a_row(session, vault_key):
     """ADR 0015's central claim, checked rather than trusted: nothing in the money plane holds
     key material, so a database compromise alone is not a credential compromise."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -234,7 +251,7 @@ def test_revoking_destroys_the_credential_but_keeps_the_row(session, vault_key):
     """"This credential was revoked at 14:02" is a fact someone will need to establish, and a
     deleted row establishes nothing. But keeping the ciphertext would mean a revoked connection
     is still a credential at rest, which is what revocation is supposed to end."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -254,7 +271,7 @@ def test_the_live_connection_reads_the_credential_late_not_once(session, vault_k
     """Kite tokens expire ~06:00 IST. `token_source` is a source rather than a value so a daily
     re-login propagates without a backend restart — and so a revoked connection stops producing
     a token at the NEXT ORDER rather than at the next restart."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "MORNING"})
@@ -278,7 +295,7 @@ def test_the_live_connection_reads_the_credential_late_not_once(session, vault_k
 
 
 def test_a_revoked_connection_cannot_be_bound_at_all(session, vault_key):
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.revoke(row.id)
@@ -290,7 +307,7 @@ def test_the_live_connection_carries_the_declared_capabilities(session, vault_ke
     """`make_broker` decides whether to build a live broker from these. A connection whose
     stored capabilities did not survive the round trip would be refused for execution despite
     being a perfectly good Kite login."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main",
                        capabilities=frozenset({caps.LIVE_EXECUTION, caps.MARKET_ORDERS}))
     session.flush()
@@ -303,7 +320,7 @@ def test_a_missing_vault_key_refuses_the_order_rather_than_sending_it_unauthenti
     """The engine keeps running; this connection simply cannot authenticate. `None` is what the
     order client turns into a rejected-unauthenticated order, which is the safe outcome — the
     unsafe one would be an exception escaping into the risk loop."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.flush()
     store.store_credential(row.id, {"access_token": "T"})
@@ -337,10 +354,10 @@ def test_an_explicitly_empty_owner_is_refused_rather_than_defaulted(session):
     credential — is principal substitution enabled by a convenience, and it becomes reachable
     the moment connection routes exist.
     """
-    assert OwnedConnectionStore(session).owner_id == LEGACY_OWNER_ID   # omitted: fine
+    assert _store(session).owner_id == LEGACY_OWNER_ID   # omitted: fine
     for empty in ("", "   ", None):
         with pytest.raises(ValueError):
-            OwnedConnectionStore(session, empty)
+            _store(session, empty)
 
 
 def test_the_late_credential_read_stops_if_the_row_changes_owner(session, vault_key):
@@ -349,7 +366,7 @@ def test_the_late_credential_read_stops_if_the_row_changes_owner(session, vault_
     the process. If the row is reassigned to another owner (an ownership transfer, a support
     action, a bad migration), the credential must stop flowing to the old owner's engine at the
     next order rather than at the next restart."""
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.commit()
     store.store_credential(row.id, {"access_token": "ALICE-TOKEN"})
@@ -382,7 +399,7 @@ def test_a_withdrawn_credential_refuses_at_the_order_client_not_just_the_store(s
     """
     from app.engine.kite_order_client import CredentialWithdrawn, KiteOrderClient
 
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.commit()
     store.store_credential(row.id, {"access_token": "LIVE-TOKEN"})
@@ -422,7 +439,7 @@ def test_a_rotated_vault_key_also_stops_orders(session, vault_key, monkeypatch):
     must stop rather than keep using the token it read this morning."""
     from app.engine.kite_order_client import CredentialWithdrawn, KiteOrderClient
 
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.commit()
     store.store_credential(row.id, {"access_token": "LIVE-TOKEN"})
@@ -494,7 +511,7 @@ def test_revocation_after_startup_refuses_even_though_the_client_never_synced(se
     """
     from app.engine.kite_order_client import CredentialWithdrawn
 
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.commit()
     store.store_credential(row.id, {"access_token": "LIVE-TOKEN"})
@@ -518,7 +535,7 @@ def test_the_refusal_is_latched_and_does_not_fire_only_once(session, vault_key):
     a blanked token and failed as a generic error that `find_fill` swallows into `None`."""
     from app.engine.kite_order_client import CredentialWithdrawn
 
-    store = OwnedConnectionStore(session, "alice")
+    store = _store(session, "alice")
     row = store.create(broker="kite", scope="kite:main")
     session.commit()
     store.store_credential(row.id, {"access_token": "LIVE-TOKEN"})
@@ -545,7 +562,7 @@ def test_a_stored_connection_carries_a_real_tick_reader(session, vault_key, monk
     from app.providers.connection import configured_execution_connection
     from app.providers.upstox import UpstoxProvider
 
-    store = OwnedConnectionStore(session, "owner")
+    store = _store(session, "owner")
     store.create(broker="kite", scope="kite:stored")
     session.commit()
 
@@ -555,7 +572,9 @@ def test_a_stored_connection_carries_a_real_tick_reader(session, vault_key, monk
     monkeypatch.setattr(s, "execution_connection", "kite:stored")
 
     with SessionLocal() as lookup:
-        conn = configured_execution_connection(UpstoxProvider(), session=lookup)
+            conn = configured_execution_connection(
+                UpstoxProvider(), session=lookup, owner_id="owner",
+                broker_account_id="account.owner")
 
     assert conn is not None
     assert callable(conn.tick_source), (

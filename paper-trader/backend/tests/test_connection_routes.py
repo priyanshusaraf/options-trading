@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.core import credential_vault as vault
 from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID, BrokerConnection
+from app.db.models import BrokerAccount, LEGACY_OWNER_ID, BrokerConnection
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.main import app
@@ -39,9 +39,23 @@ KEY = base64.b64encode(b"r" * 32).decode()
 OWNER = "acct-7"
 
 
+def _store(session, owner_id: str):
+    account_id = f"account.{owner_id}"
+    if session.get(BrokerAccount, account_id) is None:
+        session.add(BrokerAccount(
+            broker_account_id=account_id, owner_id=owner_id, broker="kite",
+            external_account_id=owner_id, display_name=owner_id))
+        session.flush()
+    return OwnedConnectionStore(
+        session, owner_id=owner_id, broker_account_id=account_id)
+
+
 @pytest.fixture()
 def client(monkeypatch):
     init_db(reset=True)
+    with SessionLocal() as session:
+        _store(session, OWNER)
+        session.commit()
     monkeypatch.setattr(get_settings(), "owner_id", OWNER)
     app.state.runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     return TestClient(app)
@@ -55,7 +69,7 @@ def vault_key(monkeypatch):
 
 def _rows(owner: str = OWNER) -> list[BrokerConnection]:
     with SessionLocal() as s:
-        return OwnedConnectionStore(s, owner).list(include_revoked=True)
+        return _store(s, owner).list(include_revoked=True)
 
 
 def _create(client, **kw) -> dict:
@@ -231,7 +245,7 @@ def test_revoke_keeps_the_row_and_destroys_the_credential(client, vault_key):
 
 def _foreign_connection() -> int:
     with SessionLocal() as s:
-        row = OwnedConnectionStore(s, "alice").create(broker="kite", scope="kite:alice")
+        row = _store(s, "alice").create(broker="kite", scope="kite:alice")
         s.commit()
         return row.id
 
@@ -304,7 +318,7 @@ def test_a_connection_created_over_http_is_the_one_the_engine_resolves(client, v
     client.post(f"/api/connections/{created['id']}/credential",
                 json={"secrets": {"access_token": "morning-token"}})
     with SessionLocal() as s:
-        conn = OwnedConnectionStore(s, OWNER).live_connection(created["id"])
+        conn = _store(s, OWNER).live_connection(created["id"])
     assert conn.broker == "kite" and conn.scope == "kite:main"
     assert conn.token_source() == "morning-token"
 
@@ -314,7 +328,7 @@ def test_a_revoked_connection_stops_producing_a_token(client, vault_key):
     client.post(f"/api/connections/{created['id']}/credential",
                 json={"secrets": {"access_token": "morning-token"}})
     with SessionLocal() as s:
-        conn = OwnedConnectionStore(s, OWNER).live_connection(created["id"])
+        conn = _store(s, OWNER).live_connection(created["id"])
     assert conn.token_source() == "morning-token"
 
     client.delete(f"/api/connections/{created['id']}")
@@ -484,7 +498,7 @@ def test_a_long_lived_key_broker_refuses_a_login_url_instead_of_inventing_one(cl
     """Dhan issues its token in a dashboard. Returning a URL would send the user to a 404 with
     no way to distinguish that from a broker outage."""
     with SessionLocal() as s:
-        row = OwnedConnectionStore(s, OWNER).create(broker="dhan", scope="dhan:main")
+        row = _store(s, OWNER).create(broker="dhan", scope="dhan:main")
         s.commit()
         dhan_id = row.id
     res = client.get(f"/api/connections/{dhan_id}/login")
@@ -573,7 +587,7 @@ def test_a_broker_with_no_registered_login_flow_refuses_with_its_docs_url(client
     is how a flow that looks right fails at 06:00. It must refuse and name the documentation,
     not fall through to an AttributeError 500 that reads as a server fault."""
     with SessionLocal() as s:
-        row = OwnedConnectionStore(s, OWNER).create(broker="upstox", scope="upstox:data")
+        row = _store(s, OWNER).create(broker="upstox", scope="upstox:data")
         s.commit()
         upstox_id = row.id
     res = client.get(f"/api/connections/{upstox_id}/login")

@@ -26,6 +26,11 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal, init_db
 from app.ir.hashing import canonical_json, content_address
+from tests.legacy_money_scope import LegacyMoneyScope
+
+pa = LegacyMoneyScope(
+    pa, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "register_active_adapters", "listing")
 
 PROJECT = "proj-paper"
 GRAPH = "strategy.expanding_z_impulse"

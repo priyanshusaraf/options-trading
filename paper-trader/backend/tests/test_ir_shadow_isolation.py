@@ -26,6 +26,10 @@ import pytest
 from app.core import runtime_config
 from app.db.session import init_db
 from app.engine import ir_shadow, ir_shadow_store
+from tests.legacy_money_scope import LegacyMoneyScope
+
+ir_shadow_store = LegacyMoneyScope(
+    ir_shadow_store, "record", "recent", "counts_by_reason", "prune")
 from app.engine.runner import EngineRunner
 
 #: Modules the shadow lane may never reach, directly or transitively. These are the seams

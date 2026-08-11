@@ -17,7 +17,11 @@ from app.db.models import (
     SignalEvent, Trade,
 )
 from app.db.session import SessionLocal, init_db
-from app.engine.retention import RetentionPolicy, prune
+from app.engine import retention as _retention
+from app.engine.retention import RetentionPolicy
+from tests.legacy_money_scope import LegacyMoneyScope
+
+prune = LegacyMoneyScope(_retention, "prune").prune
 
 NOW = dt.datetime(2026, 8, 1, 18, 0)
 

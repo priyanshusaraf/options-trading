@@ -17,7 +17,13 @@ ignored. This is the alert that guards hard invariant #2.
 """
 import datetime as dt
 
-from app.db.models import OrderJournal, Position
+from app.db.models import (
+    LEGACY_BROKER_ACCOUNT_ID,
+    LEGACY_DEPLOYMENT_ID,
+    LEGACY_OWNER_ID,
+    OrderJournal,
+    Position,
+)
 from app.db.session import SessionLocal, init_db
 from app.engine.live_broker import TAG, LiveBroker
 
@@ -37,6 +43,9 @@ def _broker(orderbook, monkeypatch):
     b = LiveBroker.__new__(LiveBroker)          # no live wiring; the sweep is self-contained
     b.s = SessionLocal()
     b.client = _Client(orderbook)
+    b.owner_id = LEGACY_OWNER_ID
+    b.broker_account_id = LEGACY_BROKER_ACCOUNT_ID
+    b.deployment_id = LEGACY_DEPLOYMENT_ID
     b.alerts = []
     b._notify = lambda msg: b.alerts.append(msg)
     return b
@@ -44,6 +53,9 @@ def _broker(orderbook, monkeypatch):
 
 def _journal_row(order_id, symbol, intent="ENTRY"):
     return OrderJournal(
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
+        deployment_id=LEGACY_DEPLOYMENT_ID,
         order_id=order_id, tradingsymbol=symbol, instrument_key=symbol, side="BUY",
         kind="equity", intent=intent, qty=10, status="TERMINAL",
         placed_at=dt.datetime(2026, 7, 31, 9, 30))
@@ -51,6 +63,9 @@ def _journal_row(order_id, symbol, intent="ENTRY"):
 
 def _position(symbol, stop_order_id):
     return Position(
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
+        deployment_id=LEGACY_DEPLOYMENT_ID,
         instrument_key=symbol, direction="LONG", option_type="", tradingsymbol=symbol,
         exchange="NSE", segment="equity_intraday", strike=0.0,
         expiry=dt.date(2026, 7, 31),

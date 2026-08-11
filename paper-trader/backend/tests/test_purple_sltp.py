@@ -22,7 +22,7 @@ def test_purple_sltp_defaults_exist_and_are_wider_than_normal():
 
 def _broker():
     init_db(reset=True)
-    return PaperBroker(SessionLocal(), broker_account_id="account.default")
+    return PaperBroker(SessionLocal(), owner_id="owner", broker_account_id="account.default")
 
 
 def _now():

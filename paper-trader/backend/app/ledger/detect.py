@@ -24,25 +24,31 @@ from app.ledger.models import LedgerManualFill
 _FILLED = {"COMPLETE"}
 
 
-def bot_order_ids(exec_session) -> set[str]:
+def bot_order_ids(exec_session, *, owner_id: str, broker_account_id: str) -> set[str]:
     """order_ids the bot placed, from the local order_journal.
 
     NULLs are dropped: a crash between _journal_open and the placement ack
     leaves order_id NULL, and a None here must never match a real order."""
     from app.db.models import OrderJournal
 
-    rows = exec_session.scalars(select(OrderJournal.order_id)).all()
+    rows = exec_session.scalars(select(OrderJournal.order_id).where(
+        OrderJournal.owner_id == owner_id,
+        OrderJournal.broker_account_id == broker_account_id)).all()
     return {str(r) for r in rows if r is not None}
 
 
-def bot_symbols_today(exec_session) -> set[str]:
+def bot_symbols_today(exec_session, *, owner_id: str,
+                      broker_account_id: str) -> set[str]:
     """Symbols the bot placed or held. Used only to force NEEDS_REVIEW on an
     untagged order — the GTT hole. See classify.py for why."""
     from app.db.models import OrderJournal, Position
 
     syms: set[str] = set()
     for col in (OrderJournal.tradingsymbol, Position.tradingsymbol):
-        for r in exec_session.scalars(select(col)).all():
+        model = col.class_
+        for r in exec_session.scalars(select(col).where(
+                model.owner_id == owner_id,
+                model.broker_account_id == broker_account_id)).all():
             if r:
                 syms.add(str(r).strip().upper())
     return syms
@@ -54,6 +60,7 @@ def _is_filled(o: dict) -> bool:
 
 
 def detect_manual_fills(provider, exec_session, ledger_sm, now: datetime,
+                        *, owner_id: str, broker_account_id: str,
                         bot_ids: set[str] | None = None,
                         bot_symbols: set[str] | None = None) -> int:
     """Poll once. Returns the number of NEW rows written. Never raises."""
@@ -65,9 +72,13 @@ def detect_manual_fills(provider, exec_session, ledger_sm, now: datetime,
         return 0
 
     if bot_ids is None:
-        bot_ids = bot_order_ids(exec_session) if exec_session is not None else set()
+        bot_ids = (bot_order_ids(exec_session, owner_id=owner_id,
+                                 broker_account_id=broker_account_id)
+                   if exec_session is not None else set())
     if bot_symbols is None:
-        bot_symbols = (bot_symbols_today(exec_session)
+        bot_symbols = (bot_symbols_today(
+            exec_session, owner_id=owner_id,
+            broker_account_id=broker_account_id)
                        if exec_session is not None else set())
 
     keep: list[tuple[dict, str]] = []

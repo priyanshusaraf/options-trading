@@ -23,6 +23,8 @@ from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
 from app.providers.mock import MockProvider
 
+SCOPE = {"owner_id": "owner", "broker_account_id": "account.default"}
+
 
 @pytest.fixture(autouse=True)
 def a_fresh_ledger():
@@ -43,8 +45,8 @@ class _LiveLikeBroker(PaperBroker):
 
 
 def _broker(mode):
-    return (_LiveLikeBroker(MockProvider(), broker_account_id="account.default")
-            if mode == LIVE else PaperBroker(MockProvider(), broker_account_id="account.default"))
+    return (_LiveLikeBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
+            if mode == LIVE else PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default"))
 
 
 def _open_row(session, *, mode, key="NIFTY", entry_cost=1_000.0):
@@ -206,9 +208,10 @@ class TestRealisedAndUnrealisedPnlStayApart:
             finally:
                 b.close()
         with SessionLocal() as s:
-            assert len(analytics.equity_curve(s, book=PAPER)) == 1
-            assert len(analytics.equity_curve(s, book=LIVE)) == 1
-            assert len(analytics.equity_curve(s)) == 2   # explicit cross-book default
+            scope = {"owner_id": "owner", "broker_account_id": "account.default"}
+            assert len(analytics.equity_curve(s, book=PAPER, **scope)) == 1
+            assert len(analytics.equity_curve(s, book=LIVE, **scope)) == 1
+            assert len(analytics.equity_curve(s, **scope)) == 2
 
     def test_capital_dict_reports_one_books_cash_and_open_count(self):
         from app.engine import analytics
@@ -216,8 +219,8 @@ class TestRealisedAndUnrealisedPnlStayApart:
         _claim_both_ledgers()
         with SessionLocal() as s:
             _open_row(s, mode=LIVE, entry_cost=3_000.0)
-            assert analytics.capital_dict(s, book=PAPER, broker_account_id="account.default")["open_count"] == 0
-            assert analytics.capital_dict(s, book=LIVE, broker_account_id="account.default")["open_count"] == 1
+            assert analytics.capital_dict(s, book=PAPER, owner_id="owner", broker_account_id="account.default")["open_count"] == 0
+            assert analytics.capital_dict(s, book=LIVE, owner_id="owner", broker_account_id="account.default")["open_count"] == 1
 
 
 # ── invariants 3 (trades), 9 ──────────────────────────────────────────────────
@@ -231,8 +234,8 @@ class TestTradeAggregatesDeclareTheirBook:
         with SessionLocal() as s:
             _closed_row(s, mode=LIVE, net=-5_000.0, when=today)
             _closed_row(s, mode=PAPER, net=+4_000.0, when=today, key="BANKNIFTY")
-            assert analytics.realized_on(s, today.date(), book=LIVE) == -5_000.0
-            assert analytics.realized_on(s, today.date(), book=PAPER) == 4_000.0
+            assert analytics.realized_on(s, today.date(), book=LIVE, **SCOPE) == -5_000.0
+            assert analytics.realized_on(s, today.date(), book=PAPER, **SCOPE) == 4_000.0
 
     def test_the_round_trip_cap_counts_only_its_own_books_trades(self):
         from app.engine import analytics
@@ -242,8 +245,8 @@ class TestTradeAggregatesDeclareTheirBook:
             _closed_row(s, mode=LIVE, net=1.0, when=today)
             _closed_row(s, mode=LIVE, net=1.0, when=today, key="BANKNIFTY")
             _closed_row(s, mode=PAPER, net=1.0, when=today, key="RELIANCE")
-            assert analytics.round_trips_on(s, today.date(), book=LIVE) == 2
-            assert analytics.round_trips_on(s, today.date(), book=PAPER) == 1
+            assert analytics.round_trips_on(s, today.date(), book=LIVE, **SCOPE) == 2
+            assert analytics.round_trips_on(s, today.date(), book=PAPER, **SCOPE) == 1
 
     def test_reporting_surfaces_stay_cross_book_on_purpose(self):
         """Not every query should be isolated. `recent_trades` is a reporting surface
@@ -253,8 +256,8 @@ class TestTradeAggregatesDeclareTheirBook:
         with SessionLocal() as s:
             _closed_row(s, mode=LIVE, net=1.0)
             _closed_row(s, mode=PAPER, net=1.0, key="BANKNIFTY")
-            assert len(analytics.recent_trades(s)) == 2
-            assert len(analytics.recent_trades(s, mode=LIVE)) == 1
+            assert len(analytics.recent_trades(s, **SCOPE)) == 2
+            assert len(analytics.recent_trades(s, mode=LIVE, **SCOPE)) == 1
 
 
 # ── invariants 7, 10, 11, 12 ──────────────────────────────────────────────────
@@ -305,9 +308,9 @@ class TestRestartAndLegacyBehaviour:
 
         with SessionLocal() as s:
             _open_row(s, mode=LIVE, key="NIFTY")
-            foreign = eb.foreign_book_positions(s, PAPER)
+            foreign = eb.foreign_book_positions(s, PAPER, **SCOPE)
             assert [p.instrument_key for p in foreign] == ["NIFTY"]
-            assert eb.foreign_book_positions(s, LIVE) == []
+            assert eb.foreign_book_positions(s, LIVE, **SCOPE) == []
 
 
 # ── the compensating control ──────────────────────────────────────────────────

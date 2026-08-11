@@ -4,6 +4,9 @@ import datetime as dt
 from app.db.models import SignalEvent
 from app.db.session import SessionLocal, init_db
 from app.engine import analytics
+from tests.legacy_money_scope import LegacyMoneyScope
+
+analytics = LegacyMoneyScope(analytics, "signal_counts")
 
 
 def test_signal_counts_today_and_rolling():

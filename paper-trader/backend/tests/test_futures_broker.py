@@ -49,7 +49,7 @@ def _close(obj):
 @pytest.fixture
 def broker():
     init_db(reset=True)
-    obj = PaperBroker(MockProvider(), broker_account_id="account.default")
+    obj = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     yield obj
     _close(obj)
 

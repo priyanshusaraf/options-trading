@@ -97,7 +97,7 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
 
     # PaperBroker owns the legacy deployment default. Passing ``None`` explicitly
     # suppresses that constructor default and makes position reads unscoped.
-    paper_book = {"broker_account_id": broker_account_id}
+    paper_book = {"broker_account_id": broker_account_id, "owner_id": owner_id}
     if deployment_id is not None:
         paper_book["deployment_id"] = deployment_id
 

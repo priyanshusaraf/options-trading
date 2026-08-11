@@ -50,7 +50,7 @@ def test_paper_broker_stamps_mode_on_position_and_trade():
 
     init_db(reset=True)
     prov = MockProvider()
-    broker = PaperBroker(prov, broker_account_id="account.default")
+    broker = PaperBroker(prov, owner_id="owner", broker_account_id="account.default")
     assert broker.MODE == "paper"
     inst = get_instrument("NIFTY")
     now = dt.datetime(2026, 6, 21, 10, 0, 0)

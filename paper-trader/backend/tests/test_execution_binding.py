@@ -21,9 +21,13 @@ from app.core import deployments as dep
 from app.core import execution_binding as binding
 from app.core.execution_book import LIVE as LIVE_BOOK
 from app.core.execution_book import configured_execution_mode
-from app.db.models import LEGACY_DEPLOYMENT_ID, LEGACY_OWNER_ID, InstrumentState
+from app.db.models import (
+    LEGACY_BROKER_ACCOUNT_ID, LEGACY_DEPLOYMENT_ID, LEGACY_OWNER_ID, InstrumentState)
 from app.db.session import SessionLocal, init_db
 from app.strategy.registry import DEFAULT_STRATEGY_KEY, StrategyNotFound
+from tests.legacy_money_scope import LegacyMoneyScope
+
+dep = LegacyMoneyScope(dep, "create_deployment")
 
 
 def setup_function() -> None:
@@ -33,7 +37,8 @@ def setup_function() -> None:
 def resolve(instrument_key="NIFTY", deployment_id=LEGACY_DEPLOYMENT_ID):
     with SessionLocal() as session:
         return binding.resolve_binding(session, deployment_id=deployment_id,
-                                       instrument_key=instrument_key, owner_id=LEGACY_OWNER_ID)
+                                       instrument_key=instrument_key, owner_id=LEGACY_OWNER_ID,
+                                       broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
 
 def test_resolve_binding_requires_explicit_owner_scope():

@@ -408,7 +408,8 @@ def instrument_view(runner, key: str, *, positions: dict, now,
         **binding)
 
 
-def live_deployment_rows(session) -> dict[str, dict[str, dict]]:
+def live_deployment_rows(session, *, owner_id: str,
+                         broker_account_id: str) -> dict[str, dict[str, dict]]:
     """Live (non-retired) deployment rows, indexed by instrument then plane.
 
     Read through each service's own listing — the cockpit maintains no second view of
@@ -422,7 +423,9 @@ def live_deployment_rows(session) -> dict[str, dict[str, dict]]:
     for plane, service in ((PLANE_PAPER, paper_authority),
                            (PLANE_SHADOW, shadow_deployments)):
         try:
-            rows = service.listing(session, include_retired=False)
+            rows = service.listing(
+                session, owner_id=owner_id,
+                broker_account_id=broker_account_id, include_retired=False)
         except Exception:      # a read model may never break the cockpit
             continue
         for row in rows:
@@ -442,7 +445,9 @@ def view(runner, session) -> CockpitView:
     book = runner.book
     positions = {p.instrument_key: p for p in runner.broker.open_positions()}
 
-    deployments = live_deployment_rows(session)
+    deployments = live_deployment_rows(
+        session, owner_id=runner.owner_id,
+        broker_account_id=runner.broker_account_id)
     # A staged or paused deployment names an instrument that may be in no other set. It
     # must still appear, or its lifecycle controls are invisible to an operator.
     keys = sorted(set(runner.enabled) | set(runner.paper_authority)
@@ -454,12 +459,15 @@ def view(runner, session) -> CockpitView:
 
     try:
         capital = analytics.capital_dict(
-            session, book=book, broker_account_id=runner.broker.broker_account_id)
+            session, book=book, owner_id=runner.owner_id,
+            broker_account_id=runner.broker_account_id)
     except Exception as exc:
         capital = {"error": f"{type(exc).__name__}: {exc}"}
     try:
         foreign = [p.instrument_key
-                   for p in execution_book.foreign_book_positions(session, book)]
+                   for p in execution_book.foreign_book_positions(
+                       session, book, owner_id=runner.owner_id,
+                       broker_account_id=runner.broker_account_id)]
     except Exception:
         foreign = []
 
@@ -519,13 +527,15 @@ def _health(runner) -> dict[str, Any]:
     return out
 
 
-def paper_deployments(session) -> list[dict]:
+def paper_deployments(session, *, owner_id: str, broker_account_id: str) -> list[dict]:
     """Every paper-authority deployment record, including its lifecycle state.
 
     Straight through to the domain service's own listing — the cockpit does not maintain a
     second view of deployment state.
     """
-    return paper_authority.listing(session, include_retired=True)
+    return paper_authority.listing(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        include_retired=True)
 
 
 __all__ = ["BOOK_LEVEL_GATES", "CockpitView", "EntryEligibility",

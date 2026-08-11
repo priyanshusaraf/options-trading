@@ -18,7 +18,7 @@ import types
 import pytest
 
 from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.broker_factory import make_broker
@@ -27,11 +27,17 @@ from app.providers.connection import (
     KITE_LEGACY_CONNECTION_SCOPE,
     Connection,
     ConnectionCannotExecute,
-    configured_execution_connection,
+    configured_execution_connection as _configured_execution_connection,
     connection_for,
 )
 from app.providers.factory import UnknownProvider
 from app.providers.mock import MockProvider
+
+
+def configured_execution_connection(provider, session=None, **scope):
+    scope.setdefault("owner_id", LEGACY_OWNER_ID)
+    scope.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _configured_execution_connection(provider, session=session, **scope)
 
 
 def _open_the_live_gate(monkeypatch):

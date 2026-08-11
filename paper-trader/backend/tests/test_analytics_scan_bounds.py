@@ -34,6 +34,9 @@ from app.core.execution_book import LIVE, PAPER
 from app.db.models import Trade
 from app.db.session import SessionLocal, init_db
 from app.engine import analytics
+from tests.legacy_money_scope import LegacyMoneyScope
+
+analytics = LegacyMoneyScope(analytics, "recent_trades")
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
 
 BASE = dt.datetime(2026, 8, 1, 10, 0, 0)

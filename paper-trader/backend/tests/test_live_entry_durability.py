@@ -22,10 +22,24 @@ from app.providers.connection import KITE_LEGACY_CONNECTION_SCOPE, Connection
 from app.engine.order_executor import OrderRequest
 from app.providers.mock import MockProvider
 
+_ExecutionLifecycleStore = live_broker_module.ExecutionLifecycleStore
+
+
+def _legacy_lifecycle_store(session, **scope):
+    scope.setdefault("owner_id", LEGACY_OWNER_ID)
+    scope.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _ExecutionLifecycleStore(session, **scope)
+
+
+live_broker_module.ExecutionLifecycleStore = _legacy_lifecycle_store
+
 
 class _Session:
     def get(self, model, key):
         return SimpleNamespace(id=key, account_id="account-7")
+
+    def scalar(self, statement):
+        return SimpleNamespace(id=7)
 
 
 class _Client:
@@ -61,6 +75,8 @@ def _broker(timeline):
     # Same reason as the connection above: the constructor is bypassed, so the owner has to be
     # set by hand. It is stamped onto every intent and matched by the restart-recovery query.
     broker.owner_id = LEGACY_OWNER_ID
+    broker.broker_account_id = LEGACY_BROKER_ACCOUNT_ID
+    broker.account = SimpleNamespace(external_account_id="account-7")
     broker._journal_open = lambda *args, **kwargs: None
     broker._journal_resolve = lambda *args, **kwargs: None
     return broker
@@ -81,7 +97,7 @@ def test_entry_does_not_call_place_when_intent_commit_fails(monkeypatch):
     timeline = []
 
     class _FailingStore:
-        def __init__(self, session):
+        def __init__(self, session, **scope):
             pass
 
         def create_intent(self, request, context, now):
@@ -102,7 +118,7 @@ def test_entry_commits_intent_and_submit_started_before_place(monkeypatch):
     timeline = []
 
     class _Store:
-        def __init__(self, session):
+        def __init__(self, session, **scope):
             pass
 
         def create_intent(self, request, context, now):
@@ -450,7 +466,7 @@ def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
 def test_paper_entry_remains_unlinked():
     init_db(reset=True)
     provider = MockProvider()
-    broker = PaperBroker(provider, broker_account_id="account.default")
+    broker = PaperBroker(provider, owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
@@ -537,9 +553,16 @@ def test_journal_terminalization_is_deployment_scoped():
                         timeout_seconds=0.0, deployment_id=1,
                         owner_id=LEGACY_OWNER_ID,
                         broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
-    broker.s.add(Deployment(id=2, name="other", account_id="other"))
+    broker.s.add(Deployment(
+        id=2,
+        name="other",
+        owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
+    ))
     for deployment_id in (2, 1):
         broker.s.add(OrderJournal(
+            owner_id=LEGACY_OWNER_ID,
+            broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
             deployment_id=deployment_id, order_id="SAME", tradingsymbol="RELIANCE",
             instrument_key="NIFTY", side="BUY", kind="equity", intent="ENTRY",
             qty=1, status="WORKING", placed_at=dt.datetime(2026, 8, 9, 10)))

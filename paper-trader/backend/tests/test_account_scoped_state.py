@@ -17,7 +17,7 @@ def _migrated_null_ledger(tmp_path):
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
             "VALUES (99, NULL, 100.25, 90.75, -9.5, 98.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00')"))
-        command.upgrade(migrate.alembic_config(connection), "0018")
+        command.upgrade(migrate.alembic_config(connection), "head")
     return engine
 
 
@@ -60,7 +60,8 @@ def test_raw_null_ledger_migrates_to_sentinel_then_runtime_claims_without_collis
         claimed = capital_for_book(session, LIVE, broker_account_id="account.default")
         assert (claimed.id, claimed.broker_account_id, claimed.book, claimed.cash,
                 claimed.realized_pnl) == (99, "account.default", LIVE, 90.75, -9.5)
-        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 1
+        assert session.query(CapitalState).filter_by(
+            broker_account_id="account.default").count() == 1
 
 
 @__import__("pytest").mark.parametrize(("evidence", "requested", "expected"), [
@@ -79,7 +80,8 @@ def test_raw_null_ledger_claims_only_its_accounts_evidence(tmp_path, evidence, r
         row = capital_for_book(session, requested, broker_account_id="account.default")
         assert (row.id, row.book, row.cash, row.updated_at.isoformat(sep=" ")) == (
             99, expected, 90.75, "2026-08-10 09:31:00")
-        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 1
+        assert session.query(CapitalState).filter_by(
+            broker_account_id="account.default").count() == 1
 
 
 def test_raw_null_ledger_remains_unclaimed_when_live_and_paper_evidence_conflict(tmp_path):
@@ -92,7 +94,8 @@ def test_raw_null_ledger_remains_unclaimed_when_live_and_paper_evidence_conflict
         fresh = capital_for_book(session, "live", broker_account_id="account.default")
         sentinel = session.get(CapitalState, ("account.default", LEGACY_UNATTRIBUTED_BOOK))
         assert fresh.id != 99 and (sentinel.id, sentinel.cash, sentinel.book) == (99, 90.75, LEGACY_UNATTRIBUTED_BOOK)
-        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 2
+        assert session.query(CapitalState).filter_by(
+            broker_account_id="account.default").count() == 2
 
 
 def test_raw_null_ledger_does_not_collide_with_a_preexisting_named_live_row(tmp_path):
@@ -108,7 +111,8 @@ def test_raw_null_ledger_does_not_collide_with_a_preexisting_named_live_row(tmp_
         assert (paper.id, paper.book) != (99, "paper")
         assert session.get(CapitalState, ("account.default", "live")).cash == 6
         assert session.get(CapitalState, ("account.default", LEGACY_UNATTRIBUTED_BOOK)).cash == 90.75
-        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 3
+        assert session.query(CapitalState).filter_by(
+            broker_account_id="account.default").count() == 3
 
 
 def _engine(tmp_path):
@@ -168,7 +172,7 @@ def test_revision_0018_preserves_legacy_money_rows_under_legacy_scope(tmp_path):
             "INSERT INTO daily_account_snapshot "
             "(day, account_net, account_available, updated_at) "
             "VALUES ('2026-08-10', 112345.67, 99876.54, '2026-08-10 15:30:00')"))
-        command.upgrade(migrate.alembic_config(connection), "0018")
+        command.upgrade(migrate.alembic_config(connection), "head")
 
     with engine.connect() as connection:
         assert connection.execute(sa.text(
@@ -353,7 +357,7 @@ def test_upgrade_preserves_null_and_live_ledgers_and_paper_request_creates_a_thi
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
             "VALUES (41, NULL, 101.0, 91.0, -10.0, 99.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00'), "
             "(42, 'live', 202.0, 192.0, -10.0, 198.0, '2026-08-10 10:30:00', '2026-08-10 10:31:00')"))
-        command.upgrade(migrate.alembic_config(connection), "0018")
+        command.upgrade(migrate.alembic_config(connection), "head")
 
     with sa.orm.Session(engine) as session:
         before = {(row.id, row.book): (row.initial_capital, row.cash, row.realized_pnl,
@@ -370,7 +374,8 @@ def test_upgrade_preserves_null_and_live_ledgers_and_paper_request_creates_a_thi
         assert paper.book == "paper"
         assert session.get(CapitalState, ("account.default", LEGACY_UNATTRIBUTED_BOOK)).id == 41
         assert session.get(CapitalState, ("account.default", "live")).id == 42
-        assert session.query(CapitalState).filter_by(broker_account_id="account.default").count() == 3
+        assert session.query(CapitalState).filter_by(
+            broker_account_id="account.default").count() == 3
 
 
 def test_revision_0018_downgrade_round_trips_legacy_sentinel_to_null_book(tmp_path):

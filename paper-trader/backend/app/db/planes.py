@@ -61,23 +61,10 @@ TABLE_PLANES: dict[str, Plane] = {
     # in any plane — it comes from the environment, so a database compromise alone is not a
     # credential compromise.
     #
-    # **KNOWN GAP — the owner dimension stops here.** `broker_connections` is the only
-    # money-plane table with an `owner_id`. `deployments` and `execution_intents` have none, and
-    # `execution_lifecycle.unresolved_entries` recovers live entries on
-    # `(deployment_id, account_scope, connection_scope)` with no owner in the predicate.
-    #
-    # `(owner_id, scope)` being unique rather than `scope` — deliberate, and correct — means two
-    # owners may both legitimately hold `kite:legacy`. That is the collision the recovery query
-    # cannot currently disambiguate, and `providers/connection.py` calls that outcome "a silent
-    # cross-account mix — the worst available failure" while solving it only for the second
-    # *connection*, not the second *owner*.
-    #
-    # Not reachable today: one owner, one deployment, and no route creates a second owner. But
-    # the constraint that PERMITS the collision shipped before the query that must handle it,
-    # which is the wrong order. Found by an independent security review, 2026-08-10. Fixing it
-    # is an owner column across the money plane plus a recovery-predicate change — a reviewed
-    # slice of its own, and a prerequisite for onboarding a second owner. Recorded in
-    # WS-02 §5 rather than patched here.
+    # Every account-specific table in this plane carries both the organization owner and the
+    # durable Strategy OS broker-account identity.  Broker/external labels remain observations;
+    # they are never repository boundaries.  This is what lets two owners use identical broker,
+    # connection-scope and external-account strings without lifecycle recovery crossing tenants.
 
     # ── user: irreplaceable creative work ──
     "projects": Plane.USER,

@@ -8,9 +8,11 @@ import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, Deployment, ExecutionOrderEvent
+from app.db.models import (
+    Base, BrokerAccount, Deployment, ExecutionOrderEvent,
+    LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID)
 from app.engine.execution_lifecycle import (
-    ExecutionLifecycleStore,
+    ExecutionLifecycleStore as _ExecutionLifecycleStore,
     NewExecutionEvent,
     NewExecutionIntent,
     broker_observation_id,
@@ -18,6 +20,12 @@ from app.engine.execution_lifecycle import (
     make_intent_id,
     reduce_execution_events,
 )
+
+
+def ExecutionLifecycleStore(session, **scope):
+    scope.setdefault("owner_id", LEGACY_OWNER_ID)
+    scope.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return _ExecutionLifecycleStore(session, **scope)
 
 
 BASE_TIME = dt.datetime(2026, 8, 9, 9, 15)
@@ -28,7 +36,11 @@ def _session(tmp_path):
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, future=True, expire_on_commit=False)
     session = Session()
-    session.add(Deployment(id=1, name="default"))
+    session.add(BrokerAccount(
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID, owner_id=LEGACY_OWNER_ID,
+        broker="legacy", external_account_id="default", display_name="Default account"))
+    session.add(Deployment(id=1, name="default", owner_id=LEGACY_OWNER_ID,
+                           broker_account_id=LEGACY_BROKER_ACCOUNT_ID))
     session.commit()
     return session
 
@@ -494,7 +506,8 @@ def test_unresolved_entries_scope_on_all_five_fields_and_use_two_queries(tmp_pat
     # predicate cannot separate, and adopting another venue's working orders means polling one
     # broker for an order id that only exists at another.
     different_broker = store.create_intent(_request(broker="dhan"), {}, BASE_TIME)
-    different_owner = store.create_intent(_request(owner_id="someone-else"), {}, BASE_TIME)
+    with pytest.raises(ValueError, match="scope does not match"):
+        store.create_intent(_request(owner_id="someone-else"), {}, BASE_TIME)
     for intent in scoped[: max(0, count - 1)]:
         store.append_event(intent.client_intent_id, _event(
             "STATUS_OBSERVED", source_event_id=f"open-{intent.client_intent_id}",
@@ -511,9 +524,6 @@ def test_unresolved_entries_scope_on_all_five_fields_and_use_two_queries(tmp_pat
     store.append_event(different_broker.client_intent_id, _event(
         "STATUS_OBSERVED", source_event_id="other-broker", observed_at=BASE_TIME,
         broker_status="OPEN"), BASE_TIME)
-    store.append_event(different_owner.client_intent_id, _event(
-        "STATUS_OBSERVED", source_event_id="other-owner", observed_at=BASE_TIME,
-        broker_status="OPEN"), BASE_TIME)
 
     statements: list[str] = []
 
@@ -523,7 +533,7 @@ def test_unresolved_entries_scope_on_all_five_fields_and_use_two_queries(tmp_pat
 
     try:
         unresolved = store.unresolved_entries(
-            1, "account.default", "kite:legacy", broker="kite", owner_id="owner")
+            1, "account.default", "kite:legacy", broker="kite")
     finally:
         sa.event.remove(session.get_bind(), "before_cursor_execute", count_queries)
 
@@ -536,9 +546,8 @@ def test_unresolved_entries_scope_on_all_five_fields_and_use_two_queries(tmp_pat
     assert different_broker.client_intent_id not in adopted, (
         "a live entry belonging to ANOTHER VENUE was adopted; the broker would poll Kite for an "
         "order id that only exists at Dhan")
-    assert different_owner.client_intent_id not in adopted, (
-        "a live entry belonging to ANOTHER OWNER was adopted — the worst failure this system "
-        "has available")
+    assert "owner_id" in statements[0]
+    assert "broker_account_id" in statements[0]
 
 
 def test_identifiers_follow_the_entry_lifecycle_contract():

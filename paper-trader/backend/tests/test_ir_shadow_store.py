@@ -16,6 +16,9 @@ from app.db.models import IrShadowDivergence
 from app.db.session import SessionLocal, init_db
 from app.engine import ir_shadow
 from app.engine import ir_shadow_store as store
+from tests.legacy_money_scope import LegacyMoneyScope
+
+store = LegacyMoneyScope(store, "record", "recent", "counts_by_reason", "prune")
 
 from .test_ir_adapter import frame
 from .test_ir_shadow import authoritative, series
@@ -131,7 +134,7 @@ def test_the_store_uses_its_own_session_not_the_engine_shared_one():
     failed write on that session poisons it for the authoritative path (H3). The shadow
     store therefore opens and closes its own."""
     import inspect
-    source = inspect.getsource(store)
+    source = inspect.getsource(store._module)
     assert "SessionLocal()" in source
 
 

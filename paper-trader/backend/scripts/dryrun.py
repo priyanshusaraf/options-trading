@@ -44,9 +44,16 @@ def main() -> int:
             break
 
     with SessionLocal() as s:
-        trades = list(s.scalars(select(Trade)))
-        n_signals = s.scalar(select(func.count()).select_from(SignalEvent))
-        n_snaps = s.scalar(select(func.count()).select_from(EquitySnapshot))
+        scope = (
+            Trade.owner_id == LEGACY_OWNER_ID,
+            Trade.broker_account_id == LEGACY_BROKER_ACCOUNT_ID)
+        trades = list(s.scalars(select(Trade).where(*scope)))
+        n_signals = s.scalar(select(func.count()).select_from(SignalEvent).where(
+            SignalEvent.owner_id == LEGACY_OWNER_ID,
+            SignalEvent.broker_account_id == LEGACY_BROKER_ACCOUNT_ID))
+        n_snaps = s.scalar(select(func.count()).select_from(EquitySnapshot).where(
+            EquitySnapshot.owner_id == LEGACY_OWNER_ID,
+            EquitySnapshot.broker_account_id == LEGACY_BROKER_ACCOUNT_ID))
 
     wins = [t for t in trades if t.win]
     losses = [t for t in trades if not t.win]

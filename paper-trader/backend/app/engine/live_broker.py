@@ -82,6 +82,7 @@ class LiveBroker(PaperBroker):
                  lifecycle_clock=None, connection: Connection | None = None,
                  venue=None) -> None:
         super().__init__(provider, deployment_id=deployment_id,
+                         owner_id=owner_id,
                          broker_account_id=broker_account_id)
         self.client = order_client
         # The wire seam. Every protective-stop call goes through here, so this broker
@@ -169,18 +170,25 @@ class LiveBroker(PaperBroker):
         submit. A persistence failure after placement returns the known broker order
         id with reconciliation required and assumes no fill.
         """
-        deployment = self.s.get(Deployment, self.deployment_id)
+        deployment = self.s.scalar(select(Deployment).where(
+            Deployment.id == self.deployment_id,
+            Deployment.owner_id == self.owner_id,
+            Deployment.broker_account_id == self.broker_account_id,
+        ))
         if deployment is None:
             raise LookupError(f"unknown deployment {self.deployment_id}")
 
-        store = ExecutionLifecycleStore(self.s)
+        store = ExecutionLifecycleStore(
+            self.s, owner_id=self.owner_id,
+            broker_account_id=self.broker_account_id)
         durable_context = dict(context or {})
         intent_row = store.create_intent(
             NewExecutionIntent(
                 deployment_id=self.deployment_id,
                 owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
                 broker=self.connection.broker,
-                account_scope=deployment.account_id,
+                account_scope=self.account.external_account_id,
                 connection_scope=self.connection.scope,
                 intent="ENTRY",
                 instrument_key=durable_context.get("inst_key", ""),
@@ -304,7 +312,8 @@ class LiveBroker(PaperBroker):
     def _mark_position_booked(self, client_intent_id: str, row_id: int | None,
                               pos: Position, res, filled: int, avg: float) -> bool:
         """Close the durable broker-to-ledger gap after the Position commit."""
-        if ExecutionLifecycleStore(self.s).state_for(
+        if ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                   broker_account_id=self.broker_account_id).state_for(
                 client_intent_id).protected_qty < pos.qty:
             log.error(
                 f"position booking refused for {pos.tradingsymbol}: protection is not "
@@ -313,12 +322,15 @@ class LiveBroker(PaperBroker):
         source_event_id = f"position:{pos.id}:{pos.qty}"
         existing = self.s.scalar(select(ExecutionOrderEvent).where(
             ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.owner_id == self.owner_id,
+            ExecutionOrderEvent.broker_account_id == self.broker_account_id,
             ExecutionOrderEvent.source == "engine",
             ExecutionOrderEvent.source_event_id == source_event_id,
         ))
         if existing is None:
             try:
-                ExecutionLifecycleStore(self.s).append_event(
+                ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                        broker_account_id=self.broker_account_id).append_event(
                     client_intent_id,
                     NewExecutionEvent(
                         source="engine", source_event_id=source_event_id,
@@ -343,13 +355,16 @@ class LiveBroker(PaperBroker):
         source_event_id = f"position-protected:{pos.id}:{pos.qty}:{protection_id}"
         existing = self.s.scalar(select(ExecutionOrderEvent).where(
             ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.owner_id == self.owner_id,
+            ExecutionOrderEvent.broker_account_id == self.broker_account_id,
             ExecutionOrderEvent.source == "engine",
             ExecutionOrderEvent.source_event_id == source_event_id,
         ))
         if existing is not None:
             return True
         try:
-            ExecutionLifecycleStore(self.s).append_event(
+            ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                    broker_account_id=self.broker_account_id).append_event(
                 client_intent_id,
                 NewExecutionEvent(
                     source="engine", source_event_id=source_event_id,
@@ -408,7 +423,8 @@ class LiveBroker(PaperBroker):
     def _ensure_entry_protected(self, pos: Position, last_price: float,
                                 client_intent_id: str) -> bool:
         """Protect a filled entry, resolving uncertain prior stop submissions first."""
-        store = ExecutionLifecycleStore(self.s)
+        store = ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                        broker_account_id=self.broker_account_id)
         state = store.state_for(client_intent_id)
         if state.protected_qty >= pos.qty and protective_order_id(pos):
             return True
@@ -420,6 +436,8 @@ class LiveBroker(PaperBroker):
 
         events = list(self.s.scalars(select(ExecutionOrderEvent).where(
             ExecutionOrderEvent.client_intent_id == client_intent_id,
+            ExecutionOrderEvent.owner_id == self.owner_id,
+            ExecutionOrderEvent.broker_account_id == self.broker_account_id,
             ExecutionOrderEvent.kind.in_({
                 "PROTECTION_SUBMIT_STARTED", "PROTECTION_ACKNOWLEDGED",
                 "PROTECTION_RETRY_ALLOWED"}),
@@ -597,6 +615,8 @@ class LiveBroker(PaperBroker):
             return None
         try:
             row = OrderJournal(
+                owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
                 deployment_id=self.deployment_id,
                 order_id=None, tradingsymbol=req.tradingsymbol,
                 instrument_key=(context or {}).get("inst_key", ""), side=req.side,
@@ -613,7 +633,11 @@ class LiveBroker(PaperBroker):
 
     def _journal_set_order_id(self, row_id: int, order_id: str) -> None:
         try:
-            row = self.s.get(OrderJournal, row_id)
+            row = self.s.scalar(select(OrderJournal).where(
+                OrderJournal.id == row_id,
+                OrderJournal.owner_id == self.owner_id,
+                OrderJournal.broker_account_id == self.broker_account_id,
+            ))
             if row:
                 row.order_id = order_id
                 self.s.commit()
@@ -644,7 +668,11 @@ class LiveBroker(PaperBroker):
         if row_id is None:
             return
         try:
-            row = self.s.get(OrderJournal, row_id)
+            row = self.s.scalar(select(OrderJournal).where(
+                OrderJournal.id == row_id,
+                OrderJournal.owner_id == self.owner_id,
+                OrderJournal.broker_account_id == self.broker_account_id,
+            ))
             if not row:
                 return
             resolution = self._journal_resolution(res, filled, row.qty)
@@ -669,6 +697,8 @@ class LiveBroker(PaperBroker):
             row = self.s.scalars(
                 select(OrderJournal).where(OrderJournal.order_id == order_id,
                                            OrderJournal.deployment_id == self.deployment_id,
+                                           OrderJournal.owner_id == self.owner_id,
+                                           OrderJournal.broker_account_id == self.broker_account_id,
                                            OrderJournal.status == "WORKING")).first()
             if row:
                 row.status = "TERMINAL"
@@ -746,7 +776,8 @@ class LiveBroker(PaperBroker):
                       event="ENTRY_RECONCILE_FAIL")
             return
 
-        store = ExecutionLifecycleStore(self.s)
+        store = ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                        broker_account_id=self.broker_account_id)
         for symbol, ctx in uncertain:
             matches = [order for order in orders
                        if order.get("tag") == ctx["broker_tag"]]
@@ -759,6 +790,8 @@ class LiveBroker(PaperBroker):
                 source_event_id = "tag-multiple:" + ctx["broker_tag"]
                 existing = self.s.scalar(select(ExecutionOrderEvent).where(
                     ExecutionOrderEvent.client_intent_id == ctx["client_intent_id"],
+                    ExecutionOrderEvent.owner_id == self.owner_id,
+                    ExecutionOrderEvent.broker_account_id == self.broker_account_id,
                     ExecutionOrderEvent.source == "recovery",
                     ExecutionOrderEvent.source_event_id == source_event_id,
                 ))
@@ -818,7 +851,9 @@ class LiveBroker(PaperBroker):
         recovered: list[str] = []
         rows = self.s.scalars(
             select(OrderJournal).where(OrderJournal.status == "WORKING",
-                                       OrderJournal.deployment_id == self.deployment_id)).all()
+                                       OrderJournal.deployment_id == self.deployment_id,
+                                       OrderJournal.owner_id == self.owner_id,
+                                       OrderJournal.broker_account_id == self.broker_account_id)).all()
         for row in rows:
             if not row.order_id:
                 if row.intent == "ENTRY":
@@ -827,7 +862,9 @@ class LiveBroker(PaperBroker):
                         pending = self._rebuild_pending(row, ctx)
                         client_intent_id = ctx.get("client_intent_id")
                         if client_intent_id:
-                            state = ExecutionLifecycleStore(self.s).state_for(
+                            state = ExecutionLifecycleStore(
+                                self.s, owner_id=self.owner_id,
+                                broker_account_id=self.broker_account_id).state_for(
                                 client_intent_id)
                             pending["order_id"] = state.broker_order_id
                             if state.broker_order_id:
@@ -860,9 +897,12 @@ class LiveBroker(PaperBroker):
                     self._inflight[row.tradingsymbol] = row.order_id
                     self._pending_entries[row.tradingsymbol] = self._rebuild_pending(row, ctx)
             else:   # EXIT
-                pos = self.s.get(Position, ctx["position_id"]) if ctx.get("position_id") else None
-                if pos is not None and pos.deployment_id != self.deployment_id:
-                    pos = None
+                pos = self.s.scalar(select(Position).where(
+                    Position.id == ctx["position_id"],
+                    Position.deployment_id == self.deployment_id,
+                    Position.owner_id == self.owner_id,
+                    Position.broker_account_id == self.broker_account_id,
+                )) if ctx.get("position_id") else None
                 if filled >= row.qty and pos is not None:
                     if pos.segment == "equity_intraday":
                         PaperBroker.close_equity_position(self, pos, avg, "RECOVERED_EXIT_FILL", now)
@@ -877,15 +917,19 @@ class LiveBroker(PaperBroker):
         # The lifecycle log is the authoritative entry record. A crash can happen
         # after SUBMIT_STARTED even when the best-effort journal never committed, so
         # rebuild those blockers independently and under the exact broker scope.
-        deployment = self.s.get(Deployment, self.deployment_id)
+        deployment = self.s.scalar(select(Deployment).where(
+            Deployment.id == self.deployment_id,
+            Deployment.owner_id == self.owner_id,
+            Deployment.broker_account_id == self.broker_account_id,
+        ))
         if deployment is not None:
-            store = ExecutionLifecycleStore(self.s)
+            store = ExecutionLifecycleStore(self.s, owner_id=self.owner_id,
+                                            broker_account_id=self.broker_account_id)
             intents = store.unresolved_entries(
                 self.deployment_id,
-                deployment.account_id,
+                self.account.external_account_id,
                 self.connection.scope,
                 broker=self.connection.broker,
-                owner_id=self.owner_id,
             )
             pending_ids = {ctx.get("client_intent_id")
                            for ctx in self._pending_entries.values()}
@@ -949,16 +993,26 @@ class LiveBroker(PaperBroker):
 
         deployment_id = getattr(self, "deployment_id", LEGACY_DEPLOYMENT_ID)
         known = {sid(r.order_id) for r in self.s.scalars(
-            select(OrderJournal).where(OrderJournal.deployment_id == deployment_id)).all()
+            select(OrderJournal).where(
+                OrderJournal.deployment_id == deployment_id,
+                OrderJournal.owner_id == self.owner_id,
+                OrderJournal.broker_account_id == self.broker_account_id)).all()
                  if r.order_id}
         lifecycle_intents = self.s.scalars(select(ExecutionIntent).where(
-            ExecutionIntent.deployment_id == deployment_id)).all()
-        lifecycle_store = ExecutionLifecycleStore(self.s)
+            ExecutionIntent.deployment_id == deployment_id,
+            ExecutionIntent.owner_id == self.owner_id,
+            ExecutionIntent.broker_account_id == self.broker_account_id)).all()
+        lifecycle_store = ExecutionLifecycleStore(
+            self.s, owner_id=self.owner_id,
+            broker_account_id=self.broker_account_id)
         known |= {sid(lifecycle_store.state_for(intent.client_intent_id).broker_order_id)
                   for intent in lifecycle_intents}
         # Resting protective stops of positions still open …
         known |= {sid(protective_order_id(p)) for p in self.s.scalars(
-            select(Position).where(Position.deployment_id == deployment_id)).all()
+            select(Position).where(
+                Position.deployment_id == deployment_id,
+                Position.owner_id == self.owner_id,
+                Position.broker_account_id == self.broker_account_id)).all()
                   if protective_order_id(p)}
         known.discard("")
 
@@ -1661,6 +1715,8 @@ class LiveBroker(PaperBroker):
         to hand it a second owner."""
         try:
             self.s.add(OrderJournal(
+                owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
                 deployment_id=self.deployment_id,
                 order_id=str(order_id), tradingsymbol=pos.tradingsymbol,
                 instrument_key=pos.instrument_key, side=side, kind="equity",
@@ -2019,12 +2075,16 @@ class LiveBroker(PaperBroker):
             source_event_id = broker_observation_id(str(ctx["order_id"]), payload)
             existing_event = self.s.scalar(select(ExecutionOrderEvent).where(
                 ExecutionOrderEvent.client_intent_id == ctx.get("client_intent_id"),
+                ExecutionOrderEvent.owner_id == self.owner_id,
+                ExecutionOrderEvent.broker_account_id == self.broker_account_id,
                 ExecutionOrderEvent.source == "broker",
                 ExecutionOrderEvent.source_event_id == source_event_id,
             ))
             if existing_event is None and ctx.get("client_intent_id"):
                 try:
-                    ExecutionLifecycleStore(self.s).append_event(
+                    ExecutionLifecycleStore(
+                        self.s, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id).append_event(
                         ctx["client_intent_id"],
                         NewExecutionEvent(
                             source="broker", source_event_id=source_event_id,
@@ -2069,11 +2129,15 @@ class LiveBroker(PaperBroker):
                         self._pending_entries.pop(sym, None)
                         self._inflight.pop(sym, None)
                     continue
-                lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                lifecycle_state = ExecutionLifecycleStore(
+                    self.s, owner_id=self.owner_id,
+                    broker_account_id=self.broker_account_id).state_for(
                     client_intent_id)
                 pos = self.s.scalar(select(Position).where(
                     Position.entry_intent_id == ctx.get("client_intent_id"),
                     Position.deployment_id == self.deployment_id,
+                    Position.owner_id == self.owner_id,
+                    Position.broker_account_id == self.broker_account_id,
                 ))
                 existing = self.position_for(inst.key, deployment_id=self.deployment_id)
                 if pos is None and existing is not None:
@@ -2132,7 +2196,9 @@ class LiveBroker(PaperBroker):
                             ctx["client_intent_id"], ctx.get("row_id"), pos,
                             first_result, filled, avg):
                         continue
-                    lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                    lifecycle_state = ExecutionLifecycleStore(
+                        self.s, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id).state_for(
                         ctx["client_intent_id"])
                 elif pos.qty > lifecycle_state.booked_qty:
                     # The ledger commit won a crash race against POSITION_BOOKED.
@@ -2150,7 +2216,9 @@ class LiveBroker(PaperBroker):
                             ctx["client_intent_id"], ctx.get("row_id"), pos,
                             gap_result, pos.qty, pos.entry_premium):
                         continue
-                    lifecycle_state = ExecutionLifecycleStore(self.s).state_for(
+                    lifecycle_state = ExecutionLifecycleStore(
+                        self.s, owner_id=self.owner_id,
+                        broker_account_id=self.broker_account_id).state_for(
                         ctx["client_intent_id"])
                 if pos is not None and filled > lifecycle_state.booked_qty:
                     # POSITION_BOOKED is the durable debit watermark. The Position

@@ -25,7 +25,7 @@ from app.providers.mock import MockProvider
 
 def test_close_releases_the_session():
     init_db(reset=True)
-    b = PaperBroker(MockProvider(), broker_account_id="account.default")
+    b = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     b.close()
     assert not b.s.is_active or True     # closed sessions report inactive or reset
 
@@ -33,14 +33,14 @@ def test_close_releases_the_session():
 def test_closing_twice_is_safe():
     """Shutdown paths run more than once in tests and during a failed boot."""
     init_db(reset=True)
-    b = PaperBroker(MockProvider(), broker_account_id="account.default")
+    b = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     b.close()
     b.close()
 
 
 def test_close_never_raises_even_on_a_broken_session(monkeypatch):
     init_db(reset=True)
-    b = PaperBroker(MockProvider(), broker_account_id="account.default")
+    b = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     real_close = b.s.close
     monkeypatch.setattr(b.s, "close",
                         lambda: (_ for _ in ()).throw(RuntimeError("already gone")))
@@ -60,7 +60,7 @@ def test_a_reset_after_close_is_not_locked():
     """The exact failure this exists to prevent: passing in isolation, failing in
     the suite, with 'database is locked' pointing at innocent code."""
     init_db(reset=True)
-    b = PaperBroker(MockProvider(), broker_account_id="account.default")
+    b = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
     b.capital()                # force a real connection
     b.close()
     init_db(reset=True)        # must not raise

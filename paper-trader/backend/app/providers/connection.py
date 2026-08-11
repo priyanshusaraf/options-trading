@@ -146,7 +146,8 @@ def _tick_source_for(broker: str):
     return reader
 
 
-def configured_execution_connection(data_provider, session=None) -> Connection | None:
+def configured_execution_connection(data_provider, session=None, *, owner_id: str,
+                                    broker_account_id: str) -> Connection | None:
     """Resolve the connection that will place orders.
 
     Two sources, checked in this order:
@@ -189,8 +190,12 @@ def configured_execution_connection(data_provider, session=None) -> Connection |
         # to the default here — that was a second copy of the fallback the store itself now
         # refuses, and two copies of a security default is one too many.
         configured_owner = (getattr(s, "owner_id", "") or "").strip()
-        store = (OwnedConnectionStore(session, configured_owner) if configured_owner
-                 else OwnedConnectionStore(session))
+        if configured_owner and configured_owner != owner_id:
+            raise UnknownConnection(
+                "configured owner does not match the runner composition scope")
+        store = OwnedConnectionStore(
+            session, owner_id=owner_id,
+            broker_account_id=broker_account_id)
         row = store.by_scope(stored_scope)
         if row is None or row.status != "active":
             # Loud, and specifically not a fall-through to the env var. An operator who named a

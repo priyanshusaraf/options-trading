@@ -8,7 +8,16 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, Deployment, ExecutionIntent, ExecutionOrderEvent
+from app.db.models import (
+    Base, BrokerAccount, Deployment, ExecutionIntent, ExecutionOrderEvent,
+    LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID)
+
+
+def _roots(session):
+    session.add(BrokerAccount(
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID, owner_id=LEGACY_OWNER_ID,
+        broker="legacy", external_account_id="default", display_name="Default account"))
+    session.flush()
 
 
 def _session_factory(tmp_path):
@@ -55,6 +64,7 @@ def test_execution_intent_and_events_survive_a_fresh_session(tmp_path):
     """Removing either lifecycle table or its foreign key loses durable intent history."""
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
+        _roots(session)
         session.add(Deployment(id=1, name="default"))
         intent = _intent()
         session.add(intent)
@@ -75,6 +85,7 @@ def test_execution_event_identity_is_unique_per_intent_and_source(tmp_path):
     """Dropping the event source identity constraint permits duplicate broker facts."""
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
+        _roots(session)
         session.add(Deployment(id=1, name="default"))
         intent = _intent()
         session.add(intent)
@@ -89,6 +100,7 @@ def test_execution_events_are_append_only_in_the_database(tmp_path):
     """Removing either trigger lets an existing broker fact be rewritten or erased."""
     Session = _session_factory(tmp_path)
     with Session.begin() as session:
+        _roots(session)
         session.add(Deployment(id=1, name="default"))
         intent = _intent()
         session.add(intent)

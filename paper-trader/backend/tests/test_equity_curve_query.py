@@ -5,6 +5,9 @@ import datetime as dt
 from app.db.models import EquitySnapshot
 from app.db.session import SessionLocal, init_db
 from app.engine import analytics
+from tests.legacy_money_scope import LegacyMoneyScope
+
+analytics = LegacyMoneyScope(analytics, "equity_curve")
 
 
 def _snap(t, eq):

@@ -94,7 +94,8 @@ def bot_vs_you(account_equity_now: float | None, account_baseline: float | None,
     }
 
 
-def account_pnl(s: Session, provider, book: str | None = None, *, broker_account_id: str) -> dict:
+def account_pnl(s: Session, provider, book: str | None = None, *, owner_id: str,
+                broker_account_id: str) -> dict:
     """Bot-vs-you split from a caller-owned session + the live provider. Records the
     account baseline once, on the first successful live equity read."""
     book = book or configured_execution_mode()
@@ -104,7 +105,8 @@ def account_pnl(s: Session, provider, book: str | None = None, *, broker_account
     if eq is not None and not cap.account_baseline:
         cap.account_baseline = eq
         s.commit()
-    opens = open_positions(s, book)
+    opens = open_positions(
+        s, book, owner_id=owner_id, broker_account_id=broker_account_id)
     # E8: defer to the direction-aware Position.unrealized_pnl() — the inlined
     # (last - entry) * qty formula inverted the sign of an open equity SHORT, showing a
     # winning short as a loss and mis-attributing the gap to the owner's own trades.
@@ -112,7 +114,8 @@ def account_pnl(s: Session, provider, book: str | None = None, *, broker_account
     return bot_vs_you(eq, cap.account_baseline, cap.realized_pnl, bot_unrealized)
 
 
-def capital_dict(s: Session, book: str | None = None, *, broker_account_id: str) -> dict:
+def capital_dict(s: Session, book: str | None = None, *, owner_id: str,
+                 broker_account_id: str) -> dict:
     """Capital snapshot from a caller-owned session (thread-safe for API use).
 
     `book` names the execution book. It is optional only so that a caller with no
@@ -121,7 +124,8 @@ def capital_dict(s: Session, book: str | None = None, *, broker_account_id: str)
     from two ledgers cannot be summed into one meaningful figure."""
     book = book or configured_execution_mode()
     cap = capital_for_book(s, book, broker_account_id=broker_account_id)
-    opens = open_positions(s, book)
+    opens = open_positions(
+        s, book, owner_id=owner_id, broker_account_id=broker_account_id)
     # segment-aware: leveraged MIS contributes margin + unrealized P&L, not full
     # notional (raw last × qty), which double-counts leverage and inflates equity.
     mtm = sum(p.mtm_value() for p in opens)
@@ -134,19 +138,28 @@ def capital_dict(s: Session, book: str | None = None, *, broker_account_id: str)
     }
 
 
-def open_positions(s: Session, book: str | None = None) -> list[Position]:
+def open_positions(s: Session, book: str | None = None, *, owner_id: str,
+                   broker_account_id: str) -> list[Position]:
     """One book's open positions. Isolated, not cross-book: an open position is a claim
     on one ledger's cash, and mixing the two makes every figure derived from it wrong."""
     book = book or configured_execution_mode()
-    return list(s.scalars(select(Position).where(Position.mode == book)))
+    return list(s.scalars(select(Position).where(
+        Position.mode == book,
+        Position.owner_id == owner_id,
+        Position.broker_account_id == broker_account_id,
+    )))
 
 
 def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = None,
-                 book: str | None = None) -> list[dict]:
+                 book: str | None = None, *, owner_id: str,
+                 broker_account_id: str) -> list[dict]:
     # Filter + tail-limit in SQL: this feeds /api/dashboard's 5s poll, and the old
     # version materialized the whole table (~72k rows on the live VPS) per call —
     # the second allocator-churn leak of the 2026-07-23 outage (with signal_counts).
-    q = select(EquitySnapshot).order_by(EquitySnapshot.time.desc(), EquitySnapshot.id.desc())
+    q = select(EquitySnapshot).where(
+        EquitySnapshot.owner_id == owner_id,
+        EquitySnapshot.broker_account_id == broker_account_id,
+    ).order_by(EquitySnapshot.time.desc(), EquitySnapshot.id.desc())
     # Book is opt-in here and only here among the isolated queries: points written before
     # 2026-08-07 carry no book (ADR 0012 §6.3), so defaulting to one would silently drop
     # the entire pre-slice curve. Callers plotting a single book pass it explicitly.
@@ -159,31 +172,43 @@ def equity_curve(s: Session, limit: int = 2000, since: "dt.datetime | None" = No
     return [sn.to_dict() for sn in reversed(snaps)]
 
 
-def _closed_on(s: Session, day, book: str):
+def _closed_on(s: Session, day, book: str, *, owner_id: str,
+               broker_account_id: str):
     """One book's trades closed on `day`. The shared half of the two risk controls below.
 
     Both were `select(Trade)` with a Python-side date filter and no book predicate, so a
     paper loss could halt the live book and a paper win could mask a live loss. A risk
     control that counts the wrong book's money is not a conservative approximation — it
     is wrong in both directions."""
-    return [t for t in s.scalars(select(Trade).where(Trade.mode == book))
+    return [t for t in s.scalars(select(Trade).where(
+                Trade.mode == book,
+                Trade.owner_id == owner_id,
+                Trade.broker_account_id == broker_account_id))
             if t.exit_time and t.exit_time.date() == day]
 
 
-def realized_on(s: Session, day, book: str) -> float:
+def realized_on(s: Session, day, book: str, *, owner_id: str,
+                broker_account_id: str) -> float:
     """Net realised P&L booked by `book` on `day` — the daily-loss circuit breaker."""
-    return sum(t.net_pnl for t in _closed_on(s, day, book))
+    return sum(t.net_pnl for t in _closed_on(
+        s, day, book, owner_id=owner_id, broker_account_id=broker_account_id))
 
 
-def round_trips_on(s: Session, day, book: str) -> int:
+def round_trips_on(s: Session, day, book: str, *, owner_id: str,
+                   broker_account_id: str) -> int:
     """Completed round trips booked by `book` on `day` — the daily round-trip cap (#10)."""
-    return len(_closed_on(s, day, book))
+    return len(_closed_on(
+        s, day, book, owner_id=owner_id, broker_account_id=broker_account_id))
 
 
 def per_instrument_curves(s: Session, segment: str | None = None,
                           strategy: str | None = None,
-                          since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
-    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy, since)
+                          since: "dt.datetime | None" = None, *, owner_id: str,
+                          broker_account_id: str) -> dict[str, list[dict]]:
+    trades = _apply(list(s.scalars(select(Trade).where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    ).order_by(Trade.exit_time))), segment, strategy, since)
     curves: dict[str, list[dict]] = {}
     cum: dict[str, float] = {}
     for t in trades:
@@ -195,15 +220,23 @@ def per_instrument_curves(s: Session, segment: str | None = None,
 
 def realized_curve(s: Session, segment: str | None = None,
                    strategy: str | None = None,
-                   since: "dt.datetime | None" = None) -> list[dict]:
+                   since: "dt.datetime | None" = None, *, owner_id: str,
+                   broker_account_id: str) -> list[dict]:
     """Cumulative realized net-P&L curve for a (segment, strategy) slice."""
-    return _cumulative_curve(_apply(list(s.scalars(select(Trade))), segment, strategy, since))
+    return _cumulative_curve(_apply(list(s.scalars(select(Trade).where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    ))), segment, strategy, since))
 
 
-def segment_curves(s: Session, since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
+def segment_curves(s: Session, since: "dt.datetime | None" = None, *, owner_id: str,
+                   broker_account_id: str) -> dict[str, list[dict]]:
     """One realized curve per segment (options vs equity_intraday) — the portfolio
     overlay so options and outrights are visible side by side."""
-    trades = list(s.scalars(select(Trade)))
+    trades = list(s.scalars(select(Trade).where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    )))
     if since is not None:
         cut = since.replace(tzinfo=None) if since.tzinfo else since
         trades = [t for t in trades if t.exit_time >= cut]
@@ -212,10 +245,14 @@ def segment_curves(s: Session, since: "dt.datetime | None" = None) -> dict[str, 
 
 
 def strategy_curves(s: Session, segment: str | None = None,
-                    since: "dt.datetime | None" = None) -> dict[str, list[dict]]:
+                    since: "dt.datetime | None" = None, *, owner_id: str,
+                    broker_account_id: str) -> dict[str, list[dict]]:
     """One realized curve per strategy (optionally within a segment) — so you can see
     how each strategy performed inside options and inside outrights."""
-    trades = list(s.scalars(select(Trade)))
+    trades = list(s.scalars(select(Trade).where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    )))
     if since is not None:
         cut = since.replace(tzinfo=None) if since.tzinfo else since
         trades = [t for t in trades if t.exit_time >= cut]
@@ -226,8 +263,12 @@ def strategy_curves(s: Session, segment: str | None = None,
 
 
 def summary(s: Session, segment: str | None = None, strategy: str | None = None,
-            since: "dt.datetime | None" = None) -> dict:
-    trades = _apply(list(s.scalars(select(Trade).order_by(Trade.exit_time))), segment, strategy, since)
+            since: "dt.datetime | None" = None, *, owner_id: str,
+            broker_account_id: str) -> dict:
+    trades = _apply(list(s.scalars(select(Trade).where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    ).order_by(Trade.exit_time))), segment, strategy, since)
     n = len(trades)
     wins = [t for t in trades if t.win]
     net = sum(t.net_pnl for t in trades)
@@ -256,7 +297,9 @@ def summary(s: Session, segment: str | None = None, strategy: str | None = None,
     }
 
 
-def _narrow(q, segment: str | None, strategy: str | None, since: "dt.datetime | None"):
+def _narrow(q, segment: str | None, strategy: str | None,
+            since: "dt.datetime | None", *, owner_id: str,
+            broker_account_id: str):
     """`_apply`'s predicates, expressed in SQL rather than over a materialised list.
 
     The normalisation is the whole reason this filtering used to live in Python: an unset
@@ -272,6 +315,10 @@ def _narrow(q, segment: str | None, strategy: str | None, since: "dt.datetime | 
     `test_analytics_scan_bounds.py` compares every filter combination against the old
     implementation over both shapes so the two cannot drift.
     """
+    q = q.where(
+        Trade.owner_id == owner_id,
+        Trade.broker_account_id == broker_account_id,
+    )
     if since is not None:
         q = q.where(Trade.exit_time >= (since.replace(tzinfo=None) if since.tzinfo else since))
     if segment:
@@ -284,7 +331,8 @@ def _narrow(q, segment: str | None, strategy: str | None, since: "dt.datetime | 
 
 def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
                   segment: str | None = None, strategy: str | None = None,
-                  since: "dt.datetime | None" = None) -> list[dict]:
+                  since: "dt.datetime | None" = None, *, owner_id: str,
+                  broker_account_id: str) -> list[dict]:
     # Filter AND limit in SQL. This used to select every `Trade` row, filter in Python and
     # slice — so `limit` bounded the response and not the read. That is the same shape as
     # the `equity_curve`/`signal_counts` leaks of the 2026-07-23 outage (see the note at
@@ -293,31 +341,40 @@ def recent_trades(s: Session, limit: int = 50, mode: str | None = None,
     q = select(Trade).order_by(Trade.exit_time.desc())
     if mode in ("paper", "live"):
         q = q.where(Trade.mode == mode)   # keep paper and real trades cleanly separated
-    trades = list(s.scalars(_narrow(q, segment, strategy, since).limit(limit)))
+    trades = list(s.scalars(_narrow(
+        q, segment, strategy, since, owner_id=owner_id,
+        broker_account_id=broker_account_id).limit(limit)))
     return [t.to_dict() for t in trades]
 
 
 def instrument_stats(s: Session, key: str, segment: str | None = None,
-                     strategy: str | None = None, since: "dt.datetime | None" = None) -> dict:
+                     strategy: str | None = None, since: "dt.datetime | None" = None,
+                     *, owner_id: str, broker_account_id: str) -> dict:
     """Full stat block for one instrument (segment/strategy/period aware).
 
     Deliberately unlimited: a statistic over a subset of its own population is wrong, not
     merely partial. The scan is bounded by `instrument_key` instead, which is indexed.
     """
     q = select(Trade).where(Trade.instrument_key == key)
-    return _stat_block(list(s.scalars(_narrow(q, segment, strategy, since))))
+    return _stat_block(list(s.scalars(_narrow(
+        q, segment, strategy, since, owner_id=owner_id,
+        broker_account_id=broker_account_id))))
 
 
 def instrument_trades(s: Session, key: str, segment: str | None = None,
                       strategy: str | None = None, since: "dt.datetime | None" = None,
-                      limit: int = 500) -> list[dict]:
+                      limit: int = 500, *, owner_id: str,
+                      broker_account_id: str) -> list[dict]:
     """That instrument's trades, newest first (segment/strategy/period aware)."""
     q = select(Trade).where(Trade.instrument_key == key).order_by(Trade.exit_time.desc())
-    trades = list(s.scalars(_narrow(q, segment, strategy, since).limit(limit)))
+    trades = list(s.scalars(_narrow(
+        q, segment, strategy, since, owner_id=owner_id,
+        broker_account_id=broker_account_id).limit(limit)))
     return [t.to_dict() for t in trades]
 
 
-def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7) -> dict[str, dict]:
+def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7, *, owner_id: str,
+                  broker_account_id: str) -> dict[str, dict]:
     """Per-instrument entry-signal tallies: `today` (since IST start-of-day) and
     `rolling` (last `rolling_days`). `now` must be naive IST wall-clock so it
     compares correctly against SignalEvent.time. Only instruments that fired in
@@ -337,7 +394,11 @@ def signal_counts(s: Session, now: dt.datetime, rolling_days: int = 7) -> dict[s
             func.count().label("rolling"),
             func.sum(case((SignalEvent.time >= start_today, 1), else_=0)).label("today"),
         )
-        .where(SignalEvent.time >= start_roll)
+        .where(
+            SignalEvent.time >= start_roll,
+            SignalEvent.owner_id == owner_id,
+            SignalEvent.broker_account_id == broker_account_id,
+        )
         .group_by(SignalEvent.instrument_key)
     )
     return {key: {"today": int(today or 0), "rolling": int(rolling)}

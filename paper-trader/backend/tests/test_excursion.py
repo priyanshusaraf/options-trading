@@ -28,7 +28,7 @@ PARAMS = {"intraday_leverage": 5.0, "intraday_stop_loss_pct": 0.5,
 
 def _broker() -> PaperBroker:
     init_db(reset=True)
-    return PaperBroker(MockProvider(), broker_account_id="account.default")
+    return PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
 
 
 def test_options_long_mfe_mae_exact():

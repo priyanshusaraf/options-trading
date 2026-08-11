@@ -19,19 +19,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import get_settings
-from app.db.models import EquitySnapshot, OptionData, Position, SignalEvent, Trade
+from app.db.models import (
+    EquitySnapshot, LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, OptionData, Position,
+    SignalEvent, Trade)
 from app.db.session import SessionLocal
 from app.engine.retention import RetentionPolicy, prune, vacuum
 
 
 def _sizes():
     with SessionLocal() as s:
+        scope = {"owner_id": LEGACY_OWNER_ID,
+                 "broker_account_id": LEGACY_BROKER_ACCOUNT_ID}
         return {
             "option_data": s.query(OptionData).count(),
-            "signal_events": s.query(SignalEvent).count(),
-            "equity_snapshots": s.query(EquitySnapshot).count(),
-            "trades (never pruned)": s.query(Trade).count(),
-            "open positions": s.query(Position).count(),
+            "signal_events": s.query(SignalEvent).filter_by(**scope).count(),
+            "equity_snapshots": s.query(EquitySnapshot).filter_by(**scope).count(),
+            "trades (never pruned)": s.query(Trade).filter_by(**scope).count(),
+            "open positions": s.query(Position).filter_by(**scope).count(),
         }
 
 
@@ -83,7 +87,9 @@ def main() -> None:
         print("\nDRY-RUN — re-run with --commit to apply.")
         return
 
-    report = prune(dt.datetime.now(), policy)
+    report = prune(
+        dt.datetime.now(), policy, owner_id=LEGACY_OWNER_ID,
+        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     print("\nRemoved: " + ", ".join(f"{k} −{v:,}" for k, v in report.items()))
     if args.vacuum:
         print("VACUUM (rewriting the file; this takes a while and locks the DB)…")

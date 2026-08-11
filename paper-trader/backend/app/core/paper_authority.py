@@ -39,7 +39,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.models import GraphVersion, InstrumentState, IrPaperDeployment
+from app.db.models import (
+    BrokerAccount, Deployment, GraphVersion, InstrumentState, IrPaperDeployment)
 from app.ir.hashing import canonical_json, content_address
 
 #: The lifecycle. Four states, mirroring the shadow record's because an operator asks the
@@ -185,6 +186,7 @@ def verified_decision(*, project_id: str, graph_identifier: str, graph_version: 
 
 def stage(session, *, project_id: str, graph_identifier: str, graph_version: int,
           deployment_id: int, instrument_key: str, interval: str,
+          owner_id: str, broker_account_id: str,
           note: str = "") -> IrPaperDeployment:
     """Describe a paper-authority deployment. Verified enough to exist; not yet authoritative.
 
@@ -192,6 +194,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     to what they claim, the instrument and interval are real. Evidence and admission are
     checked at activation, because those are what make it *trade*.
     """
+    _require_money_scope(session, deployment_id, owner_id, broker_account_id)
     version = _graph_version(session, graph_identifier, graph_version)
     address = _verified_address(version)
     _require_known_instrument(instrument_key)
@@ -199,6 +202,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
 
     now = dt.datetime.now()
     row = IrPaperDeployment(
+        owner_id=owner_id, broker_account_id=broker_account_id,
         project_id=project_id, graph_identifier=graph_identifier,
         graph_version=graph_version, graph_content_address=address,
         deployment_id=deployment_id, instrument_key=instrument_key, interval=interval,
@@ -210,13 +214,15 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     return row
 
 
-def activate(session, row_id: int, *, revision: int) -> IrPaperDeployment:
+def activate(session, row_id: int, *, revision: int, owner_id: str,
+             broker_account_id: str) -> IrPaperDeployment:
     """Staged or paused → paper-active, after re-verifying everything that could move.
 
     The heaviest transition in the module, deliberately: it is the only one that lets a
     graph author a signal that becomes a position.
     """
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state not in (STAGED, PAUSED):
         raise IllegalTransition(
             f"paper deployment {row_id} is {row.state!r}; only {STAGED!r} or {PAUSED!r} "
@@ -246,29 +252,35 @@ def activate(session, row_id: int, *, revision: int) -> IrPaperDeployment:
     return _transition(session, row, PAPER_ACTIVE)
 
 
-def pause(session, row_id: int, *, revision: int) -> IrPaperDeployment:
+def pause(session, row_id: int, *, revision: int, owner_id: str,
+          broker_account_id: str) -> IrPaperDeployment:
     """Active → paused. Authority stops at the next refresh boundary; nothing is rewritten,
     and any position the graph already opened stays under the ordinary risk lane."""
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state != PAPER_ACTIVE:
         raise IllegalTransition(f"only a {PAPER_ACTIVE!r} deployment can be paused; "
                                 f"{row_id} is {row.state!r}")
     return _transition(session, row, PAUSED)
 
 
-def resume(session, row_id: int, *, revision: int) -> IrPaperDeployment:
+def resume(session, row_id: int, *, revision: int, owner_id: str,
+           broker_account_id: str) -> IrPaperDeployment:
     """Paused → active, re-verifying exactly as activation does. A pause is a gap in which
     the world can move, and resuming on trust would make it the one window where a graph
     could change unnoticed."""
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state != PAUSED:
         raise IllegalTransition(f"only a {PAUSED!r} deployment can be resumed; {row_id} "
                                 f"is {row.state!r}")
-    return activate(session, row_id, revision=revision)
+    return activate(session, row_id, revision=revision, owner_id=owner_id,
+                    broker_account_id=broker_account_id)
 
 
 def retire(session, row_id: int, *, revision: int,
-           restore_strategy_key: str | None, owner_id: str) -> IrPaperDeployment:
+           restore_strategy_key: str | None, owner_id: str,
+           broker_account_id: str) -> IrPaperDeployment:
     """Terminal, and the only place authority is handed back.
 
     `restore_strategy_key` is **required** — passing it explicitly, even as `None`, is the
@@ -281,7 +293,8 @@ def retire(session, row_id: int, *, revision: int,
     Terminal on purpose. A retired binding that could be revived would let a graph nobody
     re-approved come back, most likely across a restart.
     """
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state == RETIRED:
         raise IllegalTransition(f"paper deployment {row_id} is already retired")
     _validate_rollback_target(restore_strategy_key)
@@ -293,7 +306,8 @@ def retire(session, row_id: int, *, revision: int,
 
 # ── reading ─────────────────────────────────────────────────────────────────────
 
-def active_bindings(session, *, on_problem=None) -> list[PaperBinding]:
+def active_bindings(session, *, owner_id: str, broker_account_id: str,
+                    on_problem=None) -> list[PaperBinding]:
     """Every paper-authority binding the engine should honour, re-verified.
 
     Called at startup and at controlled refresh boundaries — never per instrument per tick.
@@ -304,7 +318,9 @@ def active_bindings(session, *, on_problem=None) -> list[PaperBinding]:
     out: list[PaperBinding] = []
     rows = session.scalars(
         select(IrPaperDeployment)
-        .where(IrPaperDeployment.state == PAPER_ACTIVE)
+        .where(IrPaperDeployment.owner_id == owner_id,
+               IrPaperDeployment.broker_account_id == broker_account_id,
+               IrPaperDeployment.state == PAPER_ACTIVE)
         .order_by(IrPaperDeployment.id))
     for row in rows:
         try:
@@ -366,7 +382,8 @@ def adapter_for(session, binding: PaperBinding):
     return IRGraphStrategy(json.loads(version.artifact_json), (LIBRARY, IMPLEMENTATIONS))
 
 
-def register_active_adapters(session, *, on_problem=None) -> list[PaperBinding]:
+def register_active_adapters(session, *, owner_id: str, broker_account_id: str,
+                             on_problem=None) -> list[PaperBinding]:
     """Load every paper-authoritative binding and make its graph resolvable.
 
     Registration is what lets the ONE registry answer for a graph-backed key, so nothing
@@ -381,7 +398,9 @@ def register_active_adapters(session, *, on_problem=None) -> list[PaperBinding]:
     """
     from app.strategy.registry import register
 
-    bindings = active_bindings(session, on_problem=on_problem)
+    bindings = active_bindings(session, owner_id=owner_id,
+                               broker_account_id=broker_account_id,
+                               on_problem=on_problem)
     out: list[PaperBinding] = []
     for binding in bindings:
         try:
@@ -394,8 +413,12 @@ def register_active_adapters(session, *, on_problem=None) -> list[PaperBinding]:
     return out
 
 
-def listing(session, *, include_retired: bool = False) -> list[dict]:
-    stmt = select(IrPaperDeployment).order_by(IrPaperDeployment.id)
+def listing(session, *, owner_id: str, broker_account_id: str,
+            include_retired: bool = False) -> list[dict]:
+    stmt = (select(IrPaperDeployment)
+            .where(IrPaperDeployment.owner_id == owner_id,
+                   IrPaperDeployment.broker_account_id == broker_account_id)
+            .order_by(IrPaperDeployment.id))
     if not include_retired:
         stmt = stmt.where(IrPaperDeployment.state != RETIRED)
     return [row.to_dict() for row in session.scalars(stmt)]
@@ -403,8 +426,12 @@ def listing(session, *, include_retired: bool = False) -> list[dict]:
 
 # ── internals ───────────────────────────────────────────────────────────────────
 
-def _for_update(session, row_id: int, revision: int) -> IrPaperDeployment:
-    row = session.get(IrPaperDeployment, row_id)
+def _for_update(session, row_id: int, revision: int, *, owner_id: str,
+                broker_account_id: str) -> IrPaperDeployment:
+    row = session.scalar(select(IrPaperDeployment).where(
+        IrPaperDeployment.id == row_id,
+        IrPaperDeployment.owner_id == owner_id,
+        IrPaperDeployment.broker_account_id == broker_account_id))
     if row is None:
         raise BindingUnverifiable(f"no paper deployment with id {row_id}")
     if row.revision != revision:
@@ -428,6 +455,20 @@ def _graph_version(session, graph_identifier: str, graph_version: int) -> GraphV
         raise BindingUnverifiable(
             f"graph {graph_identifier!r} v{graph_version} does not exist")
     return version
+
+
+def _require_money_scope(session, deployment_id: int, owner_id: str,
+                         broker_account_id: str) -> None:
+    account = session.scalar(select(BrokerAccount).where(
+        BrokerAccount.broker_account_id == broker_account_id,
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.status == "active"))
+    deployment = session.scalar(select(Deployment.id).where(
+        Deployment.id == deployment_id,
+        Deployment.owner_id == owner_id,
+        Deployment.broker_account_id == broker_account_id))
+    if account is None or deployment is None:
+        raise BindingUnverifiable("deployment and broker account must belong to this owner")
 
 
 def _verified_address(version: GraphVersion) -> str:

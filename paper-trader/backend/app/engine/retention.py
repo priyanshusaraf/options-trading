@@ -38,7 +38,8 @@ class RetentionPolicy:
     equity_downsample_minutes: int = 15  # outside it, keep ~1 row per this many minutes
 
 
-def prune(now: dt.datetime, policy: RetentionPolicy | None = None) -> dict[str, int]:
+def prune(now: dt.datetime, policy: RetentionPolicy | None = None, *, owner_id: str,
+          broker_account_id: str) -> dict[str, int]:
     """Apply `policy` and return {table: rows_removed}. Idempotent."""
     p = policy or RetentionPolicy()
     report = {"option_data": 0, "signal_events": 0, "equity_snapshots": 0,
@@ -54,23 +55,30 @@ def prune(now: dt.datetime, policy: RetentionPolicy | None = None) -> dict[str, 
         if p.signal_events_days > 0:
             cutoff = now - dt.timedelta(days=p.signal_events_days)
             report["signal_events"] = s.execute(
-                delete(SignalEvent).where(SignalEvent.time < cutoff)).rowcount or 0
+                delete(SignalEvent).where(
+                    SignalEvent.owner_id == owner_id,
+                    SignalEvent.broker_account_id == broker_account_id,
+                    SignalEvent.time < cutoff)).rowcount or 0
             # L1 Stage 1 shadow disagreements share the signal-telemetry window on
             # purpose: same class of row, and a disagreement is not worth keeping longer
             # than the signal it concerns. Sharing the knob also avoids shipping a
             # Settings field with no UI to show it.
             report["ir_shadow_divergences"] = s.execute(
                 delete(IrShadowDivergence)
-                .where(IrShadowDivergence.observed_at < cutoff)).rowcount or 0
+                .where(IrShadowDivergence.owner_id == owner_id,
+                       IrShadowDivergence.broker_account_id == broker_account_id,
+                       IrShadowDivergence.observed_at < cutoff)).rowcount or 0
         if p.equity_full_days > 0 and p.equity_downsample_minutes > 0:
             report["equity_snapshots"] = _downsample_equity(
                 s, now - dt.timedelta(days=p.equity_full_days),
-                p.equity_downsample_minutes)
+                p.equity_downsample_minutes, owner_id=owner_id,
+                broker_account_id=broker_account_id)
         s.commit()
     return report
 
 
-def _downsample_equity(s, cutoff: dt.datetime, bucket_minutes: int) -> int:
+def _downsample_equity(s, cutoff: dt.datetime, bucket_minutes: int, *, owner_id: str,
+                       broker_account_id: str) -> int:
     """Keep the FIRST snapshot in each `bucket_minutes` window older than `cutoff`;
     delete the rest.
 
@@ -80,7 +88,9 @@ def _downsample_equity(s, cutoff: dt.datetime, bucket_minutes: int) -> int:
     first also makes the operation obviously bounded and inspectable."""
     rows = s.execute(
         select(EquitySnapshot.id, EquitySnapshot.time, EquitySnapshot.segment)
-        .where(EquitySnapshot.time < cutoff)
+        .where(EquitySnapshot.owner_id == owner_id,
+               EquitySnapshot.broker_account_id == broker_account_id,
+               EquitySnapshot.time < cutoff)
         .order_by(EquitySnapshot.time)).all()
     if not rows:
         return 0
@@ -104,7 +114,10 @@ def _downsample_equity(s, cutoff: dt.datetime, bucket_minutes: int) -> int:
     for i in range(0, len(doomed), 500):          # bounded IN() lists
         chunk = doomed[i:i + 500]
         removed += s.execute(
-            delete(EquitySnapshot).where(EquitySnapshot.id.in_(chunk))).rowcount or 0
+            delete(EquitySnapshot).where(
+                EquitySnapshot.owner_id == owner_id,
+                EquitySnapshot.broker_account_id == broker_account_id,
+                EquitySnapshot.id.in_(chunk))).rowcount or 0
     return removed
 
 

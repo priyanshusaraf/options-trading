@@ -28,7 +28,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0018"
+HEAD = "0019"
 
 
 def _schema(engine) -> dict:
@@ -207,7 +207,8 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
         # `owner_id` arrived in 0016. This test upgrades to HEAD, so it asserts the CURRENT
         # shape; the 0014-specific property it guards is that the legacy rows are not rewritten,
         # which the value assertions below still check.
-        "client_intent_id", "deployment_id", "owner_id", "broker", "account_scope",
+        "client_intent_id", "deployment_id", "owner_id", "broker_account_id",
+        "broker", "account_scope",
         "connection_scope",
         "broker_tag", "intent", "instrument_key", "tradingsymbol", "exchange", "side",
         "product", "order_type", "requested_qty", "limit_price", "decision_price",
@@ -216,7 +217,8 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
     assert {column["name"] for column in inspector.get_columns("execution_order_events")} == {
         # `owner_id` arrived in 0017, for the same reason it is asserted above rather than
         # excluded: this test upgrades to HEAD, so it pins the CURRENT shape.
-        "id", "client_intent_id", "owner_id", "source", "source_event_id", "kind",
+        "id", "client_intent_id", "owner_id", "broker_account_id", "source",
+        "source_event_id", "kind",
         "broker_order_id",
         "broker_status", "cumulative_filled_qty", "avg_price", "observed_at", "payload_json",
         "anomaly",
@@ -303,6 +305,179 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
             "SELECT order_id, status, filled_qty FROM order_journal "
             "WHERE order_id = 'legacy-order'"
         )).one() == ("legacy-order", "WORKING", 0)
+
+
+def test_revision_0019_preserves_every_account_money_payload_and_adds_real_scope(tmp_path):
+    """0019 copies complete rows, not selected fields, and creates enforceable account scope."""
+    engine = _fresh_engine(tmp_path, "money-account-scope.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0018")
+        connection.execute(sa.text(
+            "UPDATE deployments SET notes='deployment-marker', created_at='2026-08-11 09:00:01', "
+            "updated_at='2026-08-11 09:00:02' WHERE id=1"))
+        connection.execute(sa.text(
+            "INSERT INTO execution_intents (client_intent_id,deployment_id,broker,account_scope,"
+            "connection_scope,broker_tag,intent,instrument_key,tradingsymbol,exchange,side,product,"
+            "order_type,requested_qty,limit_price,decision_price,signal_at,strategy_key,"
+            "strategy_version,context_json,created_at,owner_id) VALUES "
+            "('intent-marker',1,'kite','external-marker','kite:marker','tag-marker','ENTRY',"
+            "'RELIANCE','RELIANCE','NSE','BUY','MIS','LIMIT',7,101.25,100.5,"
+            "'2026-08-11 09:01:01','s','v','{}','2026-08-11 09:01:02','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO execution_order_events (id,client_intent_id,source,source_event_id,kind,"
+            "broker_order_id,broker_status,cumulative_filled_qty,avg_price,observed_at,payload_json,"
+            "anomaly,owner_id) VALUES (91,'intent-marker','broker','event-marker','ACKNOWLEDGED',"
+            "'order-marker','OPEN',3,101.5,'2026-08-11 09:02:01','{}',"
+            "'event-anomaly','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO positions (id,instrument_key,direction,option_type,tradingsymbol,exchange,"
+            "segment,strategy_key,strike,expiry,lot_size,qty,entry_premium,entry_charges,entry_cost,"
+            "entry_spot,entry_time,entry_reason,stop_price,target_price,last_premium,last_spot,"
+            "high_water_premium,mfe,mae,reinforcement_count,held_overnight,overnight_pnl,"
+            "session_close_premium,manual_target,no_take_profit,mode,deployment_id,strategy_version,"
+            "entry_intent_id,owner_id) VALUES (92,'RELIANCE','LONG','EQ','RELIANCE','NSE',"
+            "'equity_intraday','s',0,'2026-08-28',7,7,100.5,1.25,704.75,100.5,"
+            "'2026-08-11 09:03:01','position-marker',90,120,101,101,102,5,-2,1,0,0,0,0,0,"
+            "'live',1,'v','intent-marker','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO trades (id,instrument_key,direction,option_type,tradingsymbol,exchange,"
+            "segment,strategy_key,strike,expiry,qty,entry_premium,entry_cost,entry_spot,entry_time,"
+            "exit_premium,exit_charges,exit_spot,exit_time,exit_reason,gross_pnl,charges_total,"
+            "net_pnl,return_pct,holding_minutes,win,held_overnight,overnight_pnl,intraday_pnl,"
+            "reinforcements,mode,exit_price_estimated,mfe,mae,build_sha,deployment_id,"
+            "strategy_version,entry_intent_id,owner_id) VALUES (93,'RELIANCE','LONG','EQ',"
+            "'RELIANCE','NSE','equity_intraday','s',0,'2026-08-28',7,100.5,704.75,100.5,"
+            "'2026-08-11 09:03:01',103.5,1.5,103.5,'2026-08-11 09:08:01','trade-marker',"
+            "21,2.75,18.25,2.5,5,1,0,0,18.25,1,'live',0,5,-2,'sha-marker',1,'v',"
+            "'intent-marker','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO equity_snapshots (id,time,equity,cash,invested,realized_pnl,open_count,"
+            "segment,strategy_key,deployment_id,book,owner_id) VALUES (94,'2026-08-11 09:09:01',"
+            "1234.5,1000.5,234,18.25,1,'equity_intraday','s',1,'live','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO order_journal (id,order_id,tradingsymbol,instrument_key,side,kind,intent,"
+            "qty,context_json,status,resolution,filled_qty,avg_price,placed_at,deployment_id,owner_id)"
+            " VALUES (95,'order-marker','RELIANCE','RELIANCE','BUY','equity','ENTRY',7,"
+            "'{}','TERMINAL','FILLED',7,101.5,'2026-08-11 09:10:01',1,'owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO signal_events (id,time,instrument_key,signal,z,slope,close,acted,note,"
+            "deployment_id,owner_id) VALUES (96,'2026-08-11 09:11:01','RELIANCE','LONG_ENTRY',"
+            "1.2,0.3,100.5,1,'signal-marker',1,'owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO broker_connections (id,owner_id,broker,scope,label,capabilities_json,"
+            "credential_ciphertext,credential_key_id,status,created_at,updated_at,"
+            "last_authenticated_at,revoked_at) VALUES (97,'owner','kite','kite:marker',"
+            "'connection-marker','[\"orders\"]','cipher-marker','key-marker','active',"
+            "'2026-08-11 09:12:01','2026-08-11 09:12:02','2026-08-11 09:12:03',NULL)"))
+        connection.execute(sa.text(
+            "INSERT INTO projects (project_id,name,description,status,created_at,updated_at) VALUES "
+            "('project-marker','Project','marker','active','2026-08-11 09:13:01',"
+            "'2026-08-11 09:13:02')"))
+        connection.execute(sa.text(
+            "INSERT INTO graph_artifacts (identifier,project_id,display_name,draft_json,"
+            "draft_revision,published_revision,current_version,created_at,updated_at) VALUES "
+            "('graph-marker','project-marker','Graph','{}',1,1,1,'2026-08-11 09:13:03',"
+            "'2026-08-11 09:13:04')"))
+        connection.execute(sa.text(
+            "INSERT INTO graph_versions (graph_identifier,version,artifact_json,content_address,"
+            "created_at) VALUES ('graph-marker',1,json_object('identifier','graph-marker',"
+            "'version',1),'sha256:graph-marker','2026-08-11 09:13:05')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_paper_deployments (id,project_id,graph_identifier,graph_version,"
+            "graph_content_address,evidence_run_id,evidence_candidate_id,evidence_content_address,"
+            "evidence_verified_at,deployment_id,instrument_key,interval,strategy_key,"
+            "rollback_strategy_key,runtime_source,execution_mode,authority,admission_ok,"
+            "admission_reason,state,revision,note,created_at,updated_at,owner_id) VALUES "
+            "(98,'project-marker','graph-marker',1,'sha256:graph-marker',1,2,'sha256:graph-marker',"
+            "'2026-08-11 09:14:01',1,'RELIANCE','5minute','s',NULL,'ir_graph','paper',"
+            "'authoritative',1,'ok','staged',3,'paper-marker','2026-08-11 09:14:02',"
+            "'2026-08-11 09:14:03','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_shadow_deployments (id,project_id,graph_identifier,graph_version,"
+            "graph_content_address,evidence_run_id,evidence_candidate_id,evidence_content_address,"
+            "evidence_verified_at,deployment_id,instrument_key,interval,strategy_key,runtime_source,"
+            "execution_mode,authority,admission_ok,admission_reason,state,revision,note,created_at,"
+            "updated_at,owner_id) VALUES (99,'project-marker','graph-marker',1,"
+            "'sha256:graph-marker',1,2,'sha256:graph-marker','2026-08-11 09:15:01',1,"
+            "'RELIANCE','15minute','s','ir_graph','shadow','non_authoritative',1,'ok','staged',"
+            "4,'shadow-marker','2026-08-11 09:15:02','2026-08-11 09:15:03','owner')"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_shadow_divergences (id,observed_at,bar_time,instrument_key,"
+            "authoritative_strategy_key,shadow_strategy_key,graph_address,authoritative_json,"
+            "ir_json,warmup_state,declared_warmup,frame_id,frame_bars,frame_first_ts,frame_last_ts,"
+            "reason,detail,eval_ms,market_open,owner_id) VALUES (100,'2026-08-11 09:16:01',"
+            "'2026-08-11 09:15:00','RELIANCE','a','s','sha256:graph-marker','{}','{}','settled',"
+            "10,'frame-marker',20,'2026-08-11 08:00:00','2026-08-11 09:15:00','VALUE',"
+            "'divergence-marker',1.25,1,'owner')"))
+
+        tables = {
+            "deployments": 1, "execution_intents": "intent-marker",
+            "execution_order_events": 91, "positions": 92, "trades": 93,
+            "equity_snapshots": 94, "order_journal": 95, "signal_events": 96,
+            "broker_connections": 97, "ir_paper_deployments": 98,
+            "ir_shadow_deployments": 99, "ir_shadow_divergences": 100,
+        }
+        before = {}
+        for table, key in tables.items():
+            pk = "client_intent_id" if table == "execution_intents" else "id"
+            before[table] = dict(connection.execute(sa.text(
+                f"SELECT * FROM {table} WHERE {pk}=:key"), {"key": key}).mappings().one())
+
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+        for table, key in tables.items():
+            pk = "client_intent_id" if table == "execution_intents" else "id"
+            after = dict(connection.execute(sa.text(
+                f"SELECT * FROM {table} WHERE {pk}=:key"), {"key": key}).mappings().one())
+            for column, value in before[table].items():
+                if table == "deployments" and column == "account_id":
+                    continue
+                assert after[column] == value, f"0019 changed {table}.{column}"
+            assert after["broker_account_id"] == "account.default"
+
+    inspector = sa.inspect(engine)
+    account_tables = (
+        "positions", "trades", "equity_snapshots", "order_journal", "signal_events",
+        "execution_intents", "execution_order_events", "broker_connections",
+        "ir_paper_deployments", "ir_shadow_deployments", "ir_shadow_divergences",
+    )
+    for table in account_tables:
+        column = next(c for c in inspector.get_columns(table)
+                      if c["name"] == "broker_account_id")
+        assert column["nullable"] is False
+        assert any(
+            fk["constrained_columns"] == ["broker_account_id"]
+            and fk["referred_table"] == "broker_accounts"
+            for fk in inspector.get_foreign_keys(table)
+        )
+        assert any(
+            index["column_names"] == ["owner_id", "broker_account_id"]
+            for index in inspector.get_indexes(table)
+        )
+
+    assert "account_id" not in {c["name"] for c in inspector.get_columns("deployments")}
+    assert any(
+        set(constraint["column_names"]) == {"owner_id", "name"}
+        for constraint in inspector.get_unique_constraints("deployments")
+    )
+
+
+def test_revision_0019_refuses_lossy_tenant_name_downgrade(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES ('org-b','B','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO broker_accounts (broker_account_id,owner_id,broker,external_account_id,"
+            "display_name,status,created_at,updated_at) VALUES ('account.b','org-b','kite','b','B',"
+            "'active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO deployments (owner_id,broker_account_id,name,created_at,updated_at) "
+            "VALUES ('org-b','account.b','default',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        with pytest.raises(RuntimeError, match="lossy"):
+            command.downgrade(migrate.alembic_config(connection), "0018")
 
 
 def test_catalogue_graph_is_seeded_with_derived_identity(tmp_path):

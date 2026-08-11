@@ -206,7 +206,7 @@ def test_make_broker_really_does_construct_a_genuine_live_broker(monkeypatch):
 
 def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
     """Outside a test run the guard is inert — production must still get its
-    LiveBroker. Proven directly on the guard, since make_broker(, broker_account_id="account.default") cannot be called
+    LiveBroker. Proven directly on the guard, since make_broker(, owner_id="owner", broker_account_id="account.default") cannot be called
     without PYTEST_CURRENT_TEST from in here."""
     from app.engine.live_broker import LiveBroker
 
@@ -219,7 +219,7 @@ def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
 
 
 def test_the_guard_does_not_fire_on_the_paper_broker():
-    bf._refuse_live_broker_under_pytest(PaperBroker(MockProvider(), broker_account_id="account.default"))
+    bf._refuse_live_broker_under_pytest(PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default"))
 
 
 def test_the_guard_tolerates_the_stubbed_live_broker_used_by_wiring_tests():

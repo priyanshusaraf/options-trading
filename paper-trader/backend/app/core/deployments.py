@@ -27,7 +27,7 @@ import json
 
 from sqlalchemy import select
 
-from app.db.models import LEGACY_DEPLOYMENT_ID, Deployment
+from app.db.models import BrokerAccount, LEGACY_DEPLOYMENT_ID, Deployment
 
 # A deployment is only scanned for entries in `active`. The others are real states,
 # not decoration: `paused` keeps the book and its open positions but stops new
@@ -41,7 +41,16 @@ STATUSES = (DRAFT, ACTIVE, PAUSED, ARCHIVED)
 LEGACY_NAME = "default"
 
 
-def ensure_legacy_deployment(session) -> Deployment:
+def _account_belongs_to_owner(session, *, owner_id: str, broker_account_id: str) -> bool:
+    return session.scalar(select(BrokerAccount.broker_account_id).where(
+        BrokerAccount.broker_account_id == broker_account_id,
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.status == "active",
+    )) is not None
+
+
+def ensure_legacy_deployment(session, *, owner_id: str,
+                             broker_account_id: str) -> Deployment:
     """Create the legacy deployment if it is absent. Idempotent.
 
     Called from `init_db`. Also seeded by migration 0002 — deliberately both, so a
@@ -49,15 +58,18 @@ def ensure_legacy_deployment(session) -> Deployment:
     (fresh install, no revision ran) or migrated (existing install). Whichever runs
     first wins; the other is a no-op.
     """
-    row = session.get(Deployment, LEGACY_DEPLOYMENT_ID)
+    row = get_deployment(
+        session, LEGACY_DEPLOYMENT_ID,
+        owner_id=owner_id, broker_account_id=broker_account_id)
     if row is not None:
         return row
     row = Deployment(
         id=LEGACY_DEPLOYMENT_ID,
+        owner_id=owner_id,
         name=LEGACY_NAME,
         strategy_key=None,        # resolve per instrument, exactly as before
         strategy_version=None,
-        account_id="default",
+        broker_account_id=broker_account_id,
         universe_mode="legacy",   # per-instrument config + active watchlists
         params_json="{}",         # inherit every platform default
         allocation=None,          # the whole account
@@ -71,31 +83,50 @@ def ensure_legacy_deployment(session) -> Deployment:
     return row
 
 
-def get_deployment(session, deployment_id: int) -> Deployment | None:
-    return session.get(Deployment, deployment_id)
+def get_deployment(session, deployment_id: int, *, owner_id: str,
+                   broker_account_id: str) -> Deployment | None:
+    return session.scalar(select(Deployment).where(
+        Deployment.id == deployment_id,
+        Deployment.owner_id == owner_id,
+        Deployment.broker_account_id == broker_account_id,
+    ))
 
 
-def get_by_name(session, name: str) -> Deployment | None:
+def get_by_name(session, name: str, *, owner_id: str,
+                broker_account_id: str) -> Deployment | None:
     return session.scalars(
-        select(Deployment).where(Deployment.name == name)).one_or_none()
+        select(Deployment).where(
+            Deployment.name == name,
+            Deployment.owner_id == owner_id,
+            Deployment.broker_account_id == broker_account_id,
+        )).one_or_none()
 
 
-def all_deployments(session, *, include_archived: bool = False) -> list[Deployment]:
-    stmt = select(Deployment)
+def all_deployments(session, *, owner_id: str, broker_account_id: str,
+                    include_archived: bool = False) -> list[Deployment]:
+    stmt = select(Deployment).where(
+        Deployment.owner_id == owner_id,
+        Deployment.broker_account_id == broker_account_id,
+    )
     if not include_archived:
         stmt = stmt.where(Deployment.status != ARCHIVED)
     return list(session.scalars(stmt.order_by(Deployment.id)))
 
 
-def active_deployments(session) -> list[Deployment]:
+def active_deployments(session, *, owner_id: str,
+                       broker_account_id: str) -> list[Deployment]:
     """The deployments the engine scans. Today: exactly the legacy one."""
     return list(session.scalars(
-        select(Deployment).where(Deployment.status == ACTIVE).order_by(Deployment.id)))
+        select(Deployment).where(
+            Deployment.status == ACTIVE,
+            Deployment.owner_id == owner_id,
+            Deployment.broker_account_id == broker_account_id,
+        ).order_by(Deployment.id)))
 
 
 def create_deployment(session, name: str, *, strategy_key: str | None = None,
                       strategy_version: str | None = None,
-                      account_id: str = "default",
+                      owner_id: str, broker_account_id: str,
                       universe_mode: str = "explicit",
                       watchlist_id: int | None = None,
                       params: dict | None = None,
@@ -105,11 +136,16 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     deliberately, never by the act of describing it."""
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {STATUSES}")
-    if get_by_name(session, name) is not None:
+    if not _account_belongs_to_owner(
+            session, owner_id=owner_id, broker_account_id=broker_account_id):
+        raise ValueError("broker account is not available to this owner")
+    if get_by_name(session, name, owner_id=owner_id,
+                   broker_account_id=broker_account_id) is not None:
         raise ValueError(f"a deployment named {name!r} already exists")
     row = Deployment(
+        owner_id=owner_id, broker_account_id=broker_account_id,
         name=name, strategy_key=strategy_key, strategy_version=strategy_version,
-        account_id=account_id, universe_mode=universe_mode, watchlist_id=watchlist_id,
+        universe_mode=universe_mode, watchlist_id=watchlist_id,
         params_json=json.dumps(params or {}), allocation=allocation,
         status=status, armed=False, notes=notes)
     session.add(row)
@@ -117,7 +153,8 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     return row
 
 
-def set_status(session, deployment_id: int, status: str) -> Deployment:
+def set_status(session, deployment_id: int, status: str, *, owner_id: str,
+               broker_account_id: str) -> Deployment:
     """Move a deployment through its lifecycle.
 
     Archiving the legacy deployment is refused: `deployment_id` is NOT NULL across
@@ -127,7 +164,8 @@ def set_status(session, deployment_id: int, status: str) -> Deployment:
     """
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {STATUSES}")
-    row = session.get(Deployment, deployment_id)
+    row = get_deployment(session, deployment_id, owner_id=owner_id,
+                         broker_account_id=broker_account_id)
     if row is None:
         raise ValueError(f"no deployment with id {deployment_id}")
     if deployment_id == LEGACY_DEPLOYMENT_ID and status == ARCHIVED:
@@ -143,14 +181,16 @@ def set_status(session, deployment_id: int, status: str) -> Deployment:
     return row
 
 
-def set_armed(session, deployment_id: int, armed: bool) -> Deployment:
+def set_armed(session, deployment_id: int, armed: bool, *, owner_id: str,
+              broker_account_id: str) -> Deployment:
     """Arm or disarm one deployment.
 
     Arming a deployment that is not `active` is refused rather than silently
     ignored: "armed but not running" is precisely the kind of state that reads as
     safe on a dashboard and is not.
     """
-    row = session.get(Deployment, deployment_id)
+    row = get_deployment(session, deployment_id, owner_id=owner_id,
+                         broker_account_id=broker_account_id)
     if row is None:
         raise ValueError(f"no deployment with id {deployment_id}")
     if armed and row.status != ACTIVE:
@@ -164,19 +204,23 @@ def set_armed(session, deployment_id: int, armed: bool) -> Deployment:
     return row
 
 
-def disarm_all(session) -> int:
+def disarm_all(session, *, owner_id: str, broker_account_id: str) -> int:
     """Disarm every deployment. Called at process start, mirroring the global
     disarm-on-boot invariant: a restart must never inherit an arm state, because
     nobody was watching when the process went down."""
     n = 0
-    for row in session.scalars(select(Deployment).where(Deployment.armed.is_(True))):
+    for row in session.scalars(select(Deployment).where(
+            Deployment.armed.is_(True),
+            Deployment.owner_id == owner_id,
+            Deployment.broker_account_id == broker_account_id)):
         row.armed = False
         n += 1
     session.flush()
     return n
 
 
-def resolve_deployment_strategy(session, deployment_id: int):
+def resolve_deployment_strategy(session, deployment_id: int, *, owner_id: str,
+                                broker_account_id: str):
     """The Strategy a deployment runs — FAIL-CLOSED (Phase D).
 
     This is the call site audit finding C4 was about. `get_strategy()` fails OPEN:
@@ -197,7 +241,8 @@ def resolve_deployment_strategy(session, deployment_id: int):
     """
     from app.strategy.registry import resolve_strategy
 
-    row = session.get(Deployment, deployment_id)
+    row = get_deployment(session, deployment_id, owner_id=owner_id,
+                         broker_account_id=broker_account_id)
     if row is None:
         raise ValueError(f"no deployment with id {deployment_id}")
     if row.strategy_key is None:
@@ -205,19 +250,24 @@ def resolve_deployment_strategy(session, deployment_id: int):
     return resolve_strategy(row.strategy_key)          # raises StrategyNotFound
 
 
-def deployment_strategy_version(session, deployment_id: int) -> str | None:
+def deployment_strategy_version(session, deployment_id: int, *, owner_id: str,
+                                broker_account_id: str) -> str | None:
     """The content hash of the strategy this deployment runs, or None if it pins
     none. Resolved through the fail-closed path, so an unresolvable strategy raises
     rather than reporting the default's version as if it were the deployment's."""
-    strat = resolve_deployment_strategy(session, deployment_id)
+    strat = resolve_deployment_strategy(
+        session, deployment_id, owner_id=owner_id,
+        broker_account_id=broker_account_id)
     return None if strat is None else strat.version
 
 
-def deployment_params(session, deployment_id: int) -> dict:
+def deployment_params(session, deployment_id: int, *, owner_id: str,
+                      broker_account_id: str) -> dict:
     """The deployment's own parameter overrides (Phase C resolves these against
     platform defaults). Malformed JSON returns {} rather than raising — a bad row
     must degrade to 'inherit everything', never take the engine down."""
-    row = session.get(Deployment, deployment_id)
+    row = get_deployment(session, deployment_id, owner_id=owner_id,
+                         broker_account_id=broker_account_id)
     if row is None:
         return {}
     try:

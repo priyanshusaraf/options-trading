@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.db.models import GraphVersion, IrShadowDeployment
+from app.db.models import BrokerAccount, Deployment, GraphVersion, IrShadowDeployment
 from app.ir.hashing import canonical_json, content_address
 
 #: The lifecycle. Four states, and no more: each one answers a question an operator
@@ -172,6 +172,7 @@ def verified_decision(*, project_id: str, graph_identifier: str, graph_version: 
 
 def stage(session, *, project_id: str, graph_identifier: str, graph_version: int,
           deployment_id: int, instrument_key: str, interval: str,
+          owner_id: str, broker_account_id: str,
           note: str = "") -> IrShadowDeployment:
     """Describe a shadow deployment. Verified enough to exist; not yet evaluated.
 
@@ -179,6 +180,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     bytes hash to what they claim, that the instrument and interval are real. Evidence and
     admission are checked at activation, because those are the things that make it *run*.
     """
+    _require_money_scope(session, deployment_id, owner_id, broker_account_id)
     version = _graph_version(session, graph_identifier, graph_version)
     address = _verified_address(version)
     _require_known_instrument(instrument_key)
@@ -186,6 +188,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
 
     now = dt.datetime.now()
     row = IrShadowDeployment(
+        owner_id=owner_id, broker_account_id=broker_account_id,
         project_id=project_id, graph_identifier=graph_identifier,
         graph_version=graph_version, graph_content_address=address,
         deployment_id=deployment_id, instrument_key=instrument_key, interval=interval,
@@ -197,13 +200,15 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     return row
 
 
-def activate(session, row_id: int, *, revision: int) -> IrShadowDeployment:
+def activate(session, row_id: int, *, revision: int, owner_id: str,
+             broker_account_id: str) -> IrShadowDeployment:
     """Staged or paused → shadow-active, after re-verifying everything that could move.
 
     Deliberately the heaviest transition in the module: it is the only one that starts
     evaluation, so it is the only place worth paying for full verification.
     """
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state not in (STAGED, PAUSED):
         raise IllegalTransition(
             f"shadow deployment {row_id} is {row.state!r}; only {STAGED!r} or {PAUSED!r} "
@@ -233,29 +238,36 @@ def activate(session, row_id: int, *, revision: int) -> IrShadowDeployment:
     return _transition(session, row, SHADOW_ACTIVE)
 
 
-def pause(session, row_id: int, *, revision: int) -> IrShadowDeployment:
-    row = _for_update(session, row_id, revision)
+def pause(session, row_id: int, *, revision: int, owner_id: str,
+          broker_account_id: str) -> IrShadowDeployment:
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state != SHADOW_ACTIVE:
         raise IllegalTransition(f"only a {SHADOW_ACTIVE!r} deployment can be paused; "
                                 f"{row_id} is {row.state!r}")
     return _transition(session, row, PAUSED)
 
 
-def resume(session, row_id: int, *, revision: int) -> IrShadowDeployment:
+def resume(session, row_id: int, *, revision: int, owner_id: str,
+           broker_account_id: str) -> IrShadowDeployment:
     """Paused → active. Re-verifies exactly as activation does: a pause is a gap during
     which the world could have changed, and resuming on trust would make the pause the one
     window in which a graph could move unnoticed."""
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state != PAUSED:
         raise IllegalTransition(f"only a {PAUSED!r} deployment can be resumed; {row_id} "
                                 f"is {row.state!r}")
-    return activate(session, row_id, revision=revision)
+    return activate(session, row_id, revision=revision, owner_id=owner_id,
+                    broker_account_id=broker_account_id)
 
 
-def retire(session, row_id: int, *, revision: int) -> IrShadowDeployment:
+def retire(session, row_id: int, *, revision: int, owner_id: str,
+           broker_account_id: str) -> IrShadowDeployment:
     """Terminal, and terminal on purpose. A retired binding that could be revived would let
     a graph nobody re-approved come back — quietly, and most likely across a restart."""
-    row = _for_update(session, row_id, revision)
+    row = _for_update(session, row_id, revision, owner_id=owner_id,
+                      broker_account_id=broker_account_id)
     if row.state == RETIRED:
         raise IllegalTransition(f"shadow deployment {row_id} is already retired")
     return _transition(session, row, RETIRED)
@@ -263,7 +275,8 @@ def retire(session, row_id: int, *, revision: int) -> IrShadowDeployment:
 
 # ── reading ─────────────────────────────────────────────────────────────────────
 
-def active_bindings(session, *, on_problem=None) -> list[ShadowBinding]:
+def active_bindings(session, *, owner_id: str, broker_account_id: str,
+                    on_problem=None) -> list[ShadowBinding]:
     """Every binding the observer should evaluate, re-verified.
 
     Called at startup and at controlled refresh boundaries — never per instrument per tick.
@@ -274,7 +287,9 @@ def active_bindings(session, *, on_problem=None) -> list[ShadowBinding]:
     out: list[ShadowBinding] = []
     rows = session.scalars(
         select(IrShadowDeployment)
-        .where(IrShadowDeployment.state == SHADOW_ACTIVE)
+        .where(IrShadowDeployment.owner_id == owner_id,
+               IrShadowDeployment.broker_account_id == broker_account_id,
+               IrShadowDeployment.state == SHADOW_ACTIVE)
         .order_by(IrShadowDeployment.id))
     for row in rows:
         try:
@@ -308,8 +323,12 @@ def active_bindings(session, *, on_problem=None) -> list[ShadowBinding]:
     return out
 
 
-def listing(session, *, include_retired: bool = False) -> list[dict]:
-    stmt = select(IrShadowDeployment).order_by(IrShadowDeployment.id)
+def listing(session, *, owner_id: str, broker_account_id: str,
+            include_retired: bool = False) -> list[dict]:
+    stmt = (select(IrShadowDeployment)
+            .where(IrShadowDeployment.owner_id == owner_id,
+                   IrShadowDeployment.broker_account_id == broker_account_id)
+            .order_by(IrShadowDeployment.id))
     if not include_retired:
         stmt = stmt.where(IrShadowDeployment.state != RETIRED)
     return [row.to_dict() for row in session.scalars(stmt)]
@@ -317,8 +336,12 @@ def listing(session, *, include_retired: bool = False) -> list[dict]:
 
 # ── internals ───────────────────────────────────────────────────────────────────
 
-def _for_update(session, row_id: int, revision: int) -> IrShadowDeployment:
-    row = session.get(IrShadowDeployment, row_id)
+def _for_update(session, row_id: int, revision: int, *, owner_id: str,
+                broker_account_id: str) -> IrShadowDeployment:
+    row = session.scalar(select(IrShadowDeployment).where(
+        IrShadowDeployment.id == row_id,
+        IrShadowDeployment.owner_id == owner_id,
+        IrShadowDeployment.broker_account_id == broker_account_id))
     if row is None:
         raise BindingUnverifiable(f"no shadow deployment with id {row_id}")
     if row.revision != revision:
@@ -342,6 +365,20 @@ def _graph_version(session, graph_identifier: str, graph_version: int) -> GraphV
         raise BindingUnverifiable(
             f"graph {graph_identifier!r} v{graph_version} does not exist")
     return version
+
+
+def _require_money_scope(session, deployment_id: int, owner_id: str,
+                         broker_account_id: str) -> None:
+    account = session.scalar(select(BrokerAccount).where(
+        BrokerAccount.broker_account_id == broker_account_id,
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.status == "active"))
+    deployment = session.scalar(select(Deployment.id).where(
+        Deployment.id == deployment_id,
+        Deployment.owner_id == owner_id,
+        Deployment.broker_account_id == broker_account_id))
+    if account is None or deployment is None:
+        raise BindingUnverifiable("deployment and broker account must belong to this owner")
 
 
 def _verified_address(version: GraphVersion) -> str:

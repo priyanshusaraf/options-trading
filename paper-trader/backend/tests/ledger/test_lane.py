@@ -1,10 +1,18 @@
 import asyncio
 from datetime import datetime
 
-from app.ledger.lane import _tick_guarded, run_manual_detect_loop, should_run_now
+from app.ledger.lane import (
+    _tick_guarded, run_manual_detect_loop as _run_manual_detect_loop, should_run_now)
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
 from app.providers.kite import KiteProvider as _KiteForCaps
 
 BASE = datetime(2026, 7, 31, 10, 0, 0)
+
+
+async def run_manual_detect_loop(*args, **kwargs):
+    kwargs.setdefault("owner_id", LEGACY_OWNER_ID)
+    kwargs.setdefault("broker_account_id", LEGACY_BROKER_ACCOUNT_ID)
+    return await _run_manual_detect_loop(*args, **kwargs)
 
 
 def test_runs_when_it_has_never_run():

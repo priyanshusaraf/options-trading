@@ -32,6 +32,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 
 from app.api.principal import (
     Principal,
@@ -42,6 +43,7 @@ from app.api.principal import (
 )
 from app.core.credential_vault import CredentialVaultUnavailable
 from app.providers.broker_auth import BrokerAuthError, NoInteractiveLogin
+from app.db.models import BrokerAccount
 from app.db.session import SessionLocal
 from app.providers import brokers as registry
 from app.providers import capabilities as caps
@@ -98,7 +100,17 @@ _MAX_SECRET_KEY_LEN = 64
 def _open(session, principal: Principal) -> OwnedConnectionStore:
     """One place that binds a session to an owner, so no route can resolve the owner its own
     slightly different way."""
-    return OwnedConnectionStore(session, owner_id_for(principal))
+    owner_id = owner_id_for(principal)
+    accounts = list(session.scalars(select(BrokerAccount).where(
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.status == "active").order_by(BrokerAccount.broker_account_id).limit(2)))
+    if len(accounts) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="owner must have exactly one active broker account for this endpoint")
+    return OwnedConnectionStore(
+        session, owner_id=owner_id,
+        broker_account_id=accounts[0].broker_account_id)
 
 
 def _authorized(store: OwnedConnectionStore, principal: Principal,
@@ -184,13 +196,14 @@ def create_connection(body: ConnectionCreate,
     The refusals are the interesting part. An unknown broker and a `planned` one both become 400
     with the registry's own message — which names the documentation URL — because a connection
     that looks configured and can never work is discovered at 09:15 otherwise. A duplicate
-    `(owner, scope)` becomes 409 rather than a 500 from the unique constraint: two connections
-    sharing a scope would make `ExecutionIntent.connection_scope` ambiguous, and that column is
-    what restart recovery matches on.
+    `(owner, broker account, scope)` becomes 409 rather than a 500 from the unique constraint:
+    two connections sharing a scope inside one account would make lifecycle attribution
+    ambiguous.
     """
     require(principal, "create:connection")
     # Refused, not silently stripped. `"kite:main "` and `"kite:main"` are different strings to
-    # `uq_broker_connection_owner_scope`, so the 409 above never fires and the owner ends up with
+    # `uq_broker_connection_owner_account_scope`, so the 409 above never fires and the account
+    # ends up with
     # two visually identical scopes — worse than two literally identical ones, because
     # `ExecutionIntent.connection_scope` is what restart recovery matches on. Normalising it
     # instead would leave the caller's record disagreeing with what they asked for, and
@@ -216,7 +229,8 @@ def create_connection(body: ConnectionCreate,
             s.rollback()
             raise HTTPException(
                 status_code=409,
-                detail=f"a connection with scope {body.scope!r} already exists for this owner",
+                detail=(f"a connection with scope {body.scope!r} already exists for this "
+                        "broker account"),
             ) from e
         return row.to_dict()
 

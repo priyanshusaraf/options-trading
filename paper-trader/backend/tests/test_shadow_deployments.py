@@ -37,6 +37,11 @@ from app.db.models import (
 )
 from app.db.session import SessionLocal, init_db
 from app.ir.hashing import canonical_json, content_address
+from tests.legacy_money_scope import LegacyMoneyScope
+
+sd = LegacyMoneyScope(
+    sd, "stage", "activate", "pause", "resume", "retire", "active_bindings",
+    "listing")
 
 PROJECT = "proj-shadow"
 #: The real mirror artefact, not a stub. Admission resolves the graph to read its declared

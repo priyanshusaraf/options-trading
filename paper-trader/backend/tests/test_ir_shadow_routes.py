@@ -16,10 +16,17 @@ from app.api.routes import router
 from app.db.session import init_db
 from app.engine import ir_shadow, ir_shadow_store
 from app.engine.ir_shadow_metrics import ShadowMetrics
+from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+from tests.legacy_money_scope import LegacyMoneyScope
+
+ir_shadow_store = LegacyMoneyScope(
+    ir_shadow_store, "record", "recent", "counts_by_reason", "prune")
 
 
 class FakeRunner:
     def __init__(self):
+        self.owner_id = LEGACY_OWNER_ID
+        self.broker_account_id = LEGACY_BROKER_ACCOUNT_ID
         self.shadow_metrics = ShadowMetrics()
         self.params = {"ir_shadow_enabled": False}
         self.strategy_keys = {"NIFTY": "expanding_z_v4", "GOLDM": "trend_impulse_v3"}

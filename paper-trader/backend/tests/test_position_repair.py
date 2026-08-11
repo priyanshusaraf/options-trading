@@ -22,7 +22,7 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     s = _session()
     now = dt.datetime(2026, 6, 19, 9, 30)
     s.add(BrokerAccount(
-        broker_account_id="account.default", owner_id="owner", broker="kite",
+        owner_id="owner", broker_account_id="account.default", broker="kite",
         external_account_id="legacy", display_name="Legacy account"))
     s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=49_611.07, realized_pnl=0))
     s.add(UniverseInstrument(

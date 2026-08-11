@@ -4,6 +4,10 @@ import datetime as dt
 from app.db.models import Trade
 from app.db.session import SessionLocal, init_db
 from app.engine import analytics
+from tests.legacy_money_scope import LegacyMoneyScope
+
+analytics = LegacyMoneyScope(
+    analytics, "summary", "instrument_stats", "instrument_trades", "recent_trades")
 
 
 def _trade(s, *, key="GOLDM", net, hold=60.0, exit_time):

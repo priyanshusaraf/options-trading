@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select
 
-from app.db.models import LEGACY_BROKER_ACCOUNT_ID, CapitalState, Position
+from app.db.models import BrokerAccount, LEGACY_BROKER_ACCOUNT_ID, CapitalState, Position
 from app.db.session import SessionLocal
 from app.engine.ledger_reconcile import plan_reanchor
 
@@ -55,7 +55,14 @@ def main() -> None:
         if cap is None:
             print("no capital_state row — nothing to reconcile")
             return
-        open_positions = list(sess.scalars(select(Position)))
+        account = sess.get(BrokerAccount, cap.broker_account_id)
+        if account is None:
+            print("broker account row is missing — refusing unattributed reconciliation")
+            return
+        open_positions = list(sess.scalars(select(Position).where(
+            Position.owner_id == account.owner_id,
+            Position.broker_account_id == cap.broker_account_id,
+            Position.mode == cap.book)))
         open_cost = sum(p.entry_cost for p in open_positions)
         equity = args.equity if args.equity is not None else _real_equity_from_kite()
         if equity is None:

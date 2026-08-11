@@ -122,7 +122,8 @@ def _json_params(raw: str | None) -> dict:
 def resolve(session=None, settings: Settings | None = None, *,
             deployment_id: int | None = None,
             instrument_key: str | None = None,
-            owner_id: str | None = None) -> dict:
+            owner_id: str | None = None,
+            broker_account_id: str | None = None) -> dict:
     """THE configuration resolution path. Returns the merged parameter dict.
 
     With no scope arguments this is exactly `effective()` — same keys, same values.
@@ -138,8 +139,11 @@ def resolve(session=None, settings: Settings | None = None, *,
         return out
 
     if deployment_id is not None:
+        if owner_id is None or broker_account_id is None:
+            raise TypeError("owner_id and broker_account_id are required for deployment config")
         from app.core.deployments import get_deployment
-        row = get_deployment(session, deployment_id)
+        row = get_deployment(session, deployment_id, owner_id=owner_id,
+                             broker_account_id=broker_account_id)
         if row is not None:
             _apply_layer(out, _json_params(row.params_json), DEPLOYMENT,
                          f"#{deployment_id} ({row.name})", settings)
@@ -159,7 +163,8 @@ def resolve(session=None, settings: Settings | None = None, *,
 def explain(session, settings: Settings | None = None, *,
             deployment_id: int | None = None,
             instrument_key: str | None = None,
-            owner_id: str | None = None) -> dict[str, dict]:
+            owner_id: str | None = None,
+            broker_account_id: str | None = None) -> dict[str, dict]:
     """Per-key provenance: which scope decided each value.
 
     Exists because "why is this stop 0.8%?" is a question that gets asked during an
@@ -169,12 +174,17 @@ def explain(session, settings: Settings | None = None, *,
     settings = settings or get_settings()
     platform = effective(settings)
     final = resolve(session, settings, deployment_id=deployment_id,
-                    instrument_key=instrument_key, owner_id=owner_id)
+                    instrument_key=instrument_key, owner_id=owner_id,
+                    broker_account_id=broker_account_id)
 
     scope_of = {k: PLATFORM for k in platform}
     if deployment_id is not None:
+        if owner_id is None or broker_account_id is None:
+            raise TypeError("owner_id and broker_account_id are required for deployment config")
         from app.core.deployments import get_deployment
-        row = get_deployment(session, deployment_id) if session else None
+        row = (get_deployment(session, deployment_id, owner_id=owner_id,
+                              broker_account_id=broker_account_id)
+               if session else None)
         if row is not None:
             for k in _json_params(row.params_json):
                 if k in scope_of and final.get(k) != platform.get(k):

@@ -14,7 +14,7 @@ from app.core.runtime_config import set_override, clear_override, effective
 
 def _broker():
     init_db(reset=True)
-    return PaperBroker(MockProvider(), broker_account_id="account.default")
+    return PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
 
 
 def test_sltp_override_applies_to_new_entry():

@@ -172,6 +172,7 @@ def test_calendar_reads_same_day_snapshots_only_from_the_runners_broker_account(
     from app.db.models import DailyAccountSnapshot
 
     c, runner = _client()
+    runner.broker_account_id = "account.second"
     runner.broker.broker_account_id = "account.second"
     today = runner.provider.now().date()
     yesterday = today - dt.timedelta(days=1)

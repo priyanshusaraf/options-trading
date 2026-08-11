@@ -48,7 +48,8 @@ async def _tick_guarded(fn) -> None:
 
 
 async def run_manual_detect_loop(provider, exec_sessionmaker, ledger_sm,
-                                 settings, clock) -> None:
+                                 settings, clock, *, owner_id: str,
+                                 broker_account_id: str) -> None:
     """Poll the Kite orderbook for trades the owner placed by hand.
 
     READ-ONLY with respect to the execution ledger. It reads order_journal and
@@ -76,7 +77,9 @@ async def run_manual_detect_loop(provider, exec_sessionmaker, ledger_sm,
 
                 def tick() -> None:
                     with exec_sessionmaker() as exec_s:
-                        n = detect_manual_fills(provider, exec_s, ledger_sm, now)
+                        n = detect_manual_fills(
+                            provider, exec_s, ledger_sm, now, owner_id=owner_id,
+                            broker_account_id=broker_account_id)
                     if n:
                         log.info(f"manual-detect: {n} new manual fill(s) "
                                  f"awaiting your reasoning")
