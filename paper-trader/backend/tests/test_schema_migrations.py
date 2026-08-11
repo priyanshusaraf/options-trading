@@ -656,6 +656,443 @@ def _table_contract(engine, table: str) -> dict:
     }
 
 
+def test_revision_0020_downgrade_retry_after_graph_versions_temp_creation_restores_fk(tmp_path):
+    """A failed 0020 rollback must leave enforcement on and retry from its temp table."""
+    engine = _fresh_engine(tmp_path, "0020-graph-versions-downgrade-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_graph_versions_temp_create(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE graph_versions__0019" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after graph_versions temp creation")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    with engine.connect() as connection:
+        names = set(sa.inspect(connection).get_table_names())
+        assert "graph_versions" in names
+        assert "graph_versions__0019" in names
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 1
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0019")
+
+    assert failed
+    assert migrate.schema_version(engine) == "0019"
+
+
+def test_revision_0020_downgrade_retry_after_graph_versions_temp_creation_discards_stale_temp(tmp_path):
+    """The source table remains authoritative when a rollback stops after CREATE."""
+    engine = _fresh_engine(tmp_path, "0020-graph-versions-downgrade-create-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_graph_versions_temp_create(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE graph_versions__0019" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after graph_versions temp creation")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0019")
+
+    assert failed
+    assert migrate.schema_version(engine) == "0019"
+
+
+def test_revision_0020_downgrade_retry_after_projects_temp_creation_discards_stale_temp(tmp_path):
+    """The second rollback rebuild also discards its stale temp before retrying."""
+    engine = _fresh_engine(tmp_path, "0020-projects-downgrade-create-retry.db")
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_projects_temp_create(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE projects__0019" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after projects temp creation")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0019")
+
+    assert failed
+    assert migrate.schema_version(engine) == "0019"
+
+
+def _revision_0020_contract(engine, table: str) -> dict:
+    """SQLite-visible migration contract; do not weaken the older retry helper."""
+    inspector = sa.inspect(engine)
+    with engine.connect() as connection:
+        indexes = connection.execute(sa.text(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' "
+            "AND tbl_name=:table AND sql IS NOT NULL ORDER BY name"
+        ), {"table": table}).all()
+        triggers = connection.execute(sa.text(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' "
+            "AND tbl_name=:table ORDER BY name"
+        ), {"table": table}).all()
+    return {
+        "columns": [(column["name"], str(column["type"]), bool(column["nullable"]),
+                     str(column.get("default")))
+                    for column in inspector.get_columns(table)],
+        "foreign_keys": sorted((tuple(fk["constrained_columns"]), fk["referred_table"],
+                                tuple(fk["referred_columns"]), fk.get("name"))
+                               for fk in inspector.get_foreign_keys(table)),
+        "unique": sorted((tuple(item["column_names"]), item.get("name"))
+                         for item in inspector.get_unique_constraints(table)),
+        "indexes": indexes,
+        "checks": sorted((item.get("name"), item["sqltext"])
+                         for item in inspector.get_check_constraints(table)),
+        "triggers": triggers,
+    }
+
+
+def _at_revision_0019(tmp_path, name: str):
+    engine = _fresh_engine(tmp_path, name)
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0019")
+    return engine
+
+
+def _insert_legacy_project_graph(connection) -> tuple:
+    project = (
+        "project.legacy", "Legacy Project", "legacy payload", "archived",
+        "2026-08-11 09:10:11", "2026-08-11 12:13:14",
+    )
+    graph = (
+        "graph.legacy", "project.legacy", "Legacy graph",
+        '{"identifier":"graph.legacy","version":1}', 1, 1, 1,
+        "2026-08-11 10:11:12", "2026-08-11 12:13:14",
+    )
+    version = (
+        "graph.legacy", 1, '{"identifier":"graph.legacy","version":1}',
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "2026-08-11 12:13:14",
+    )
+    connection.execute(sa.text(
+        "INSERT INTO projects "
+        "(project_id,name,description,status,created_at,updated_at) "
+        "VALUES (:project_id,:name,:description,:status,:created_at,:updated_at)"
+    ), dict(zip(("project_id", "name", "description", "status", "created_at", "updated_at"), project)))
+    connection.execute(sa.text(
+        "INSERT INTO graph_artifacts "
+        "(identifier,project_id,display_name,draft_json,draft_revision,published_revision,"
+        "current_version,created_at,updated_at) VALUES "
+        "(:identifier,:project_id,:display_name,:draft_json,:draft_revision,"
+        ":published_revision,:current_version,:created_at,:updated_at)"
+    ), dict(zip(("identifier", "project_id", "display_name", "draft_json", "draft_revision",
+                 "published_revision", "current_version", "created_at", "updated_at"), graph)))
+    connection.execute(sa.text(
+        "INSERT INTO graph_versions "
+        "(graph_identifier,version,artifact_json,content_address,created_at) VALUES "
+        "(:graph_identifier,:version,:artifact_json,:content_address,:created_at)"
+    ), dict(zip(("graph_identifier", "version", "artifact_json", "content_address", "created_at"), version)))
+    return project, graph, version
+
+
+@pytest.mark.parametrize("marker", (
+    "CREATE TABLE projects__0020",
+    "ALTER TABLE projects__0020 RENAME TO projects",
+), ids=("project-temp-create", "project-post-rename"))
+def test_revision_0020_upgrade_retry_recovers_project_rebuild_at_each_sqlite_boundary(tmp_path, marker):
+    """Both durable SQLite interruption shapes converge to the 0020 project contract."""
+    engine = _at_revision_0019(tmp_path, f"0020-{marker[:12]}.db")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_project_rebuild(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and marker in statement:
+            failed = True
+            raise RuntimeError(f"injected interruption at {marker}")
+
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert "projects__0020" not in set(sa.inspect(engine).get_table_names())
+    assert any(index["name"] == "ix_projects_owner_id"
+               for index in sa.inspect(engine).get_indexes("projects"))
+
+
+def test_revision_0020_upgrade_retry_after_graph_versions_rename_restores_content_index(tmp_path):
+    """A retry after the final graph-table rename must restore its named index."""
+    engine = _at_revision_0019(tmp_path, "0020-graph-versions-post-rename.db")
+    failed = False
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_after_graph_versions_rename(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "ALTER TABLE graph_versions__0020 RENAME TO graph_versions" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after graph_versions rename")
+
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    assert failed
+    assert migrate.schema_version(engine) == HEAD
+    assert any(index["name"] == "ix_graph_versions_content_address"
+               for index in sa.inspect(engine).get_indexes("graph_versions"))
+
+
+def test_revision_0020_upgrade_preserves_real_0019_project_and_graph_payloads(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-legacy-preservation.db")
+    with engine.begin() as connection:
+        project, graph, version = _insert_legacy_project_graph(connection)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        migrated_project = connection.execute(sa.text(
+            "SELECT project_id,owner_id,name,description,status,created_at,updated_at "
+            "FROM projects WHERE project_id='project.legacy'"
+        )).one()
+        migrated_graph = connection.execute(sa.text(
+            "SELECT identifier,project_id,display_name,draft_json,draft_revision,published_revision,"
+            "current_version,created_at,updated_at FROM graph_artifacts WHERE identifier='graph.legacy'"
+        )).one()
+        migrated_version = connection.execute(sa.text(
+            "SELECT graph_identifier,version,artifact_json,content_address,visibility,created_at "
+            "FROM graph_versions WHERE graph_identifier='graph.legacy'"
+        )).one()
+
+    assert migrated_project == (project[0], "owner", *project[1:])
+    assert migrated_graph == graph
+    assert migrated_version == (*version[:4], "PRIVATE", version[4])
+
+
+def test_revision_0020_fresh_and_upgraded_contracts_match_completely(tmp_path):
+    """0020 owns its historical DDL; parity includes defaults, guards and index SQL."""
+    fresh = _build_from_models(tmp_path)
+    upgraded = _at_revision_0019(tmp_path, "0020-contract-upgrade.db")
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    for table in ("projects", "graph_versions"):
+        assert _revision_0020_contract(upgraded, table) == _revision_0020_contract(fresh, table)
+
+    from app.db.models import GraphVersion, Project
+
+    assert Project.__table__.c.description.default.arg == ""
+    assert Project.__table__.c.status.default.arg == "active"
+    assert Project.__table__.c.description.server_default.arg == ""
+    assert Project.__table__.c.status.server_default.arg == "active"
+    assert GraphVersion.__table__.c.visibility.default.arg == "PRIVATE"
+    assert GraphVersion.__table__.c.visibility.server_default.arg == "PRIVATE"
+
+
+def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and_fk_state(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-downgrade-refusal.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES "
+            "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO projects "
+            "(project_id,owner_id,name,description,status,created_at,updated_at) VALUES "
+            "('project.other','owner.other','Shared','payload','active',"
+            "'2026-08-11 10:00:00','2026-08-11 10:00:00')"))
+
+    before = {table: _revision_0020_contract(engine, table)
+              for table in ("projects", "graph_versions")}
+    with engine.connect() as connection:
+        rows = connection.execute(sa.text(
+            "SELECT project_id,owner_id,name,description,status,created_at,updated_at "
+            "FROM projects ORDER BY project_id"
+        )).all()
+        foreign_keys = connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one()
+
+    with pytest.raises(RuntimeError, match="non-legacy owner"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    assert migrate.schema_version(engine) == HEAD
+    assert {table: _revision_0020_contract(engine, table)
+            for table in ("projects", "graph_versions")} == before
+    with engine.connect() as connection:
+        assert connection.execute(sa.text(
+            "SELECT project_id,owner_id,name,description,status,created_at,updated_at "
+            "FROM projects ORDER BY project_id"
+        )).all() == rows
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+def test_revision_0020_downgrade_and_reupgrade_round_trip_legacy_owner_losslessly(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-downgrade-reupgrade.db")
+    with engine.begin() as connection:
+        project, graph, version = _insert_legacy_project_graph(connection)
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.downgrade(migrate.alembic_config(connection), "0019")
+        rolled_project = connection.execute(sa.text(
+            "SELECT project_id,name,description,status,created_at,updated_at "
+            "FROM projects WHERE project_id='project.legacy'"
+        )).one()
+        rolled_version = connection.execute(sa.text(
+            "SELECT graph_identifier,version,artifact_json,content_address,created_at "
+            "FROM graph_versions WHERE graph_identifier='graph.legacy'"
+        )).one()
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        restored_project = connection.execute(sa.text(
+            "SELECT project_id,owner_id,name,description,status,created_at,updated_at "
+            "FROM projects WHERE project_id='project.legacy'"
+        )).one()
+        restored_graph = connection.execute(sa.text(
+            "SELECT identifier,project_id,display_name,draft_json,draft_revision,published_revision,"
+            "current_version,created_at,updated_at FROM graph_artifacts WHERE identifier='graph.legacy'"
+        )).one()
+        restored_version = connection.execute(sa.text(
+            "SELECT graph_identifier,version,artifact_json,content_address,visibility,created_at "
+            "FROM graph_versions WHERE graph_identifier='graph.legacy'"
+        )).one()
+
+    assert rolled_project == project
+    assert rolled_version == version
+    assert restored_project == (project[0], "owner", *project[1:])
+    assert restored_graph == graph
+    assert restored_version == (*version[:4], "PRIVATE", version[4])
+
+
+def test_revision_0020_upgrade_failure_restores_an_already_disabled_foreign_key_state(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-fk-caller-state.db")
+    failed = False
+    raw = engine.raw_connection()
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.commit()
+    finally:
+        raw.close()
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_project_create(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE projects__0020" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after project temp creation")
+
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 0
+    assert failed
+
+
+def test_revision_0020_downgrade_failure_restores_an_already_disabled_foreign_key_state(tmp_path):
+    engine = _at_revision_0019(tmp_path, "0020-downgrade-fk-caller-state.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    failed = False
+    raw = engine.raw_connection()
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.commit()
+    finally:
+        raw.close()
+
+    @sa.event.listens_for(engine, "after_cursor_execute")
+    def interrupt_graph_versions_create(
+            _conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal failed
+        if not failed and "CREATE TABLE graph_versions__0019" in statement:
+            failed = True
+            raise RuntimeError("injected interruption after graph_versions temp creation")
+
+    with pytest.raises(RuntimeError, match="injected interruption"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0019")
+
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 0
+    assert failed
+
+
+def test_revision_0020_downgrade_retry_promotes_completed_0019_temp_tables(tmp_path):
+    """A DROP-before-RENAME crash leaves rebuilt tables ready to promote, not recreate."""
+    engine = _at_revision_0019(tmp_path, "0020-downgrade-promote-temp.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+
+    raw = engine.raw_connection()
+    try:
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute("""
+            CREATE TABLE graph_versions__0019 (
+                graph_identifier VARCHAR(128) NOT NULL, version INTEGER NOT NULL,
+                artifact_json TEXT NOT NULL, content_address VARCHAR(71) NOT NULL,
+                created_at DATETIME NOT NULL, PRIMARY KEY (graph_identifier, version),
+                FOREIGN KEY(graph_identifier) REFERENCES graph_artifacts(identifier) ON DELETE RESTRICT,
+                CONSTRAINT ck_graph_versions_version CHECK (version >= 1),
+                CONSTRAINT ck_graph_versions_valid_json CHECK (json_valid(artifact_json)),
+                CONSTRAINT ck_graph_versions_identifier_matches_json CHECK (json_extract(artifact_json, '$.identifier') IS graph_identifier),
+                CONSTRAINT ck_graph_versions_version_matches_json CHECK (json_extract(artifact_json, '$.version') IS version)
+            )
+        """)
+        raw.execute("""
+            INSERT INTO graph_versions__0019
+            (graph_identifier,version,artifact_json,content_address,created_at)
+            SELECT graph_identifier,version,artifact_json,content_address,created_at FROM graph_versions
+        """)
+        raw.execute("DROP TABLE graph_versions")
+        raw.execute("""
+            CREATE TABLE projects__0019 (
+                project_id VARCHAR(64) NOT NULL PRIMARY KEY, name VARCHAR(128) NOT NULL,
+                description TEXT NOT NULL DEFAULT '', status VARCHAR(16) NOT NULL DEFAULT 'active',
+                created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+                CONSTRAINT ck_projects_status CHECK (status IN ('active', 'archived'))
+            )
+        """)
+        raw.execute("""
+            INSERT INTO projects__0019 (project_id,name,description,status,created_at,updated_at)
+            SELECT project_id,name,description,status,created_at,updated_at FROM projects
+        """)
+        raw.execute("DROP TABLE projects")
+        raw.execute("PRAGMA foreign_keys=ON")
+        raw.commit()
+    finally:
+        raw.close()
+
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0019")
+
+    inspector = sa.inspect(engine)
+    assert migrate.schema_version(engine) == "0019"
+    assert "owner_id" not in {column["name"] for column in inspector.get_columns("projects")}
+    assert "visibility" not in {column["name"] for column in inspector.get_columns("graph_versions")}
+    assert {"projects__0019", "graph_versions__0019"}.isdisjoint(inspector.get_table_names())
+
+
 def _canonical_0019_contract(tmp_path, table: str) -> dict:
     engine = _fresh_engine(tmp_path, f"canonical-{table}.db")
     _apply_baseline_ddl(engine)
