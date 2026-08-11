@@ -151,8 +151,8 @@ def test_calendar_combines_bot_ledger_and_account_snapshots():
     today = r.provider.now().date()
     yday = today - dt.timedelta(days=1)
     with SessionLocal() as s:
-        s.add(DailyAccountSnapshot(day=yday.isoformat(), account_net=100_000.0, account_available=100_000.0))
-        s.add(DailyAccountSnapshot(day=today.isoformat(), account_net=112_400.0, account_available=112_400.0))
+        s.add(DailyAccountSnapshot(broker_account_id="account.default", day=yday.isoformat(), account_net=100_000.0, account_available=100_000.0))
+        s.add(DailyAccountSnapshot(broker_account_id="account.default", day=today.isoformat(), account_net=112_400.0, account_available=112_400.0))
         _seed_trade(s, exit_dt=dt.datetime.combine(today, dt.time(10, 0)), net=3_100.0, mode="live")
         _seed_trade(s, exit_dt=dt.datetime.combine(today, dt.time(11, 0)), net=9_999.0, mode="paper")  # ignored
         s.commit()

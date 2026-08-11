@@ -710,8 +710,8 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
@@ -751,8 +751,8 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
 
     with engine.begin() as connection:
@@ -779,8 +779,8 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
@@ -827,8 +827,8 @@ def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_pa
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         command.downgrade(migrate.alembic_config(connection), "0007")
 
@@ -873,8 +873,8 @@ def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO project_review_notes "

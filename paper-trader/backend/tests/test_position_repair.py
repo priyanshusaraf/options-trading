@@ -26,7 +26,7 @@ def test_repair_open_position_reprices_entry_cost_to_universe_lot_size():
     s.add(BrokerAccount(
         owner_id="owner", broker_account_id="account.default", broker="kite",
         external_account_id="legacy", display_name="Legacy account"))
-    s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=49_611.07, realized_pnl=0))
+    s.add(CapitalState(id=1, broker_account_id="account.default", book="paper", initial_capital=50_000, cash=49_611.07, realized_pnl=0))
     s.add(UniverseInstrument(
         key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
         spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
@@ -67,7 +67,7 @@ def test_repair_leaves_a_genuine_partial_fill_untouched():
     s.add(BrokerAccount(
         owner_id="owner", broker_account_id="account.default", broker="kite",
         external_account_id="legacy", display_name="Legacy account"))
-    s.add(CapitalState(id=1, book="paper", initial_capital=50_000, cash=40_000.0, realized_pnl=0))
+    s.add(CapitalState(id=1, broker_account_id="account.default", book="paper", initial_capital=50_000, cash=40_000.0, realized_pnl=0))
     s.add(UniverseInstrument(
         key="CRUDEOIL", name="CRUDE OIL", segment="MCX", spot_exchange="MCX",
         spot_symbol="CRUDEOIL", option_name="CRUDEOIL", lot_size=100,
