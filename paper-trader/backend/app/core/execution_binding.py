@@ -216,7 +216,7 @@ def _require_paper_authority(binding, strategy, mode) -> None:
         raise AuthorityNotGranted(binding.strategy_key, SOURCE_IR_GRAPH)
 
 
-def assert_may_execute(strategy_key: str | None) -> None:
+def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None) -> None:
     """Refuse, at the moment somebody asks, to record an assignment that could never
     execute. `None` means "the platform default", which is not a claim about a source.
 
@@ -228,6 +228,10 @@ def assert_may_execute(strategy_key: str | None) -> None:
     source = source_of(strategy_key)
     if AUTHORITY_BY_SOURCE.get(source, SHADOW) != AUTHORITATIVE:
         raise AuthorityNotGranted(strategy_key, source)
+    if source == SOURCE_GENERATED:
+        # Generated code is an owner-local artefact. Namespace authority alone cannot
+        # prove that this owner has the bytes the key names.
+        resolve_strategy(strategy_key, owner_id=owner_id)
 
 
 def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
@@ -262,7 +266,8 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
     the legacy deployment, which pins nothing and resolves per instrument by design.
     """
     if paper_authority is not None and configured_execution_mode() == PAPER:
-        return _describe_paper_authority(deployment_id, instrument_key, paper_authority)
+        return _describe_paper_authority(
+            deployment_id, instrument_key, paper_authority, owner_id=owner_id)
     if deployment_pin is not None:
         return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                          strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
@@ -273,7 +278,7 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
 
 
 def _describe_paper_authority(deployment_id, instrument_key,
-                              record) -> ExecutionBinding:
+                              record, *, owner_id: str | None = None) -> ExecutionBinding:
     """The binding a paper-authority deployment produces, verified as it is produced.
 
     **Precedence: first.** A record that names *this instrument*, *this interval* and one
@@ -293,7 +298,7 @@ def _describe_paper_authority(deployment_id, instrument_key,
     an authoritative binding that cannot be honoured is not an invitation to trade
     something else.
     """
-    strategy = resolve_strategy(record.strategy_key)
+    strategy = resolve_strategy(record.strategy_key, owner_id=owner_id)
     if not record.content_address or strategy.version != record.content_address:
         raise AuthorityNotGranted(record.strategy_key, SOURCE_IR_GRAPH)
     return ExecutionBinding(
@@ -304,7 +309,7 @@ def _describe_paper_authority(deployment_id, instrument_key,
         reason=(f"paper deployment {record.deployment_row_id} makes "
                 f"{record.graph_identifier!r} v{record.graph_version} "
                 f"({record.content_address[:19]}…) authoritative for {instrument_key} "
-                f"at {record.interval} in the paper book"))
+                f"at {record.interval} in the paper book"), owner_id=owner_id)
 
 
 def resolve_binding(session, *, deployment_id: int, instrument_key: str,
@@ -331,8 +336,8 @@ def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | N
     try:
         strategy = resolve_strategy(assigned, owner_id=owner_id)
     except StrategyNotFound:
-        if source_of(assigned) == SOURCE_IR_GRAPH:
-            # A graph-backed key never falls back: it would trade one logic while the
+        if source_of(assigned) in (SOURCE_IR_GRAPH, SOURCE_GENERATED):
+            # Graph-backed and generated keys never fall back: they would trade one logic while the
             # instrument row, the trade row and the experiment binding all name another.
             raise
         strategy = resolve_strategy(DEFAULT_STRATEGY_KEY)
@@ -347,17 +352,17 @@ def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | N
 
 
 def resolve_shadow_binding(strategy_key: str,
-                           instrument_key: str = "") -> ExecutionBinding:
+                           instrument_key: str = "", *, owner_id: str | None = None) -> ExecutionBinding:
     """The same description for a strategy that may be *observed* but not executed.
 
     Refusing authority must not refuse observation, or the gate would have undone the
     shadow lane it exists to protect.
     """
     return _describe(deployment_id=0, instrument_key=instrument_key,
-                     strategy=resolve_strategy(strategy_key), origin=ORIGIN_INSTRUMENT,
+                     strategy=resolve_strategy(strategy_key, owner_id=owner_id), origin=ORIGIN_INSTRUMENT,
                      reason=(f"{strategy_key!r} is observed by the shadow lane, "
                              f"never executed"),
-                     enforce_authority=False)
+                     enforce_authority=False, owner_id=owner_id)
 
 
 #: Which layer decided what gets *observed*. Two sources, one boundary, stated precedence —

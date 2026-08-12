@@ -201,7 +201,7 @@ def measure_sweep(n_instruments: int, intervals: list[str], workers: int) -> dic
     universe = [i.key for i in liquid_universe(provider)][:n_instruments]
 
     t0 = time.perf_counter()
-    run_id = sweep_mod.start_sweep(scope="liquid", intervals=intervals,
+    run_id = sweep_mod.start_sweep(owner_id="owner", scope="liquid", intervals=intervals,
                                    instruments=universe, provider=provider,
                                    workers=workers)
     sweep_mod._join()

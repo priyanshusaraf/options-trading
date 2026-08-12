@@ -299,7 +299,7 @@ def retire(session, row_id: int, *, revision: int,
                       broker_account_id=broker_account_id)
     if row.state == RETIRED:
         raise IllegalTransition(f"paper deployment {row_id} is already retired")
-    _validate_rollback_target(restore_strategy_key)
+    _validate_rollback_target(restore_strategy_key, owner_id=owner_id)
     row.rollback_strategy_key = restore_strategy_key
     _restore_instrument_authority(session, row.instrument_key, restore_strategy_key,
                                   owner_id=owner_id)
@@ -581,7 +581,7 @@ def _admission_for(row: IrPaperDeployment, version_json: str):
         warmup=warmup)
 
 
-def _validate_rollback_target(strategy_key: str | None) -> None:
+def _validate_rollback_target(strategy_key: str | None, *, owner_id: str) -> None:
     """`None` is valid and means "no previous authority". Anything else must be a strategy
     that exists and may itself execute."""
     if strategy_key is None:
@@ -590,8 +590,8 @@ def _validate_rollback_target(strategy_key: str | None) -> None:
     from app.strategy.registry import StrategyNotFound, resolve_strategy
 
     try:
-        resolve_strategy(strategy_key)
-        assert_may_execute(strategy_key)
+        resolve_strategy(strategy_key, owner_id=owner_id)
+        assert_may_execute(strategy_key, owner_id=owner_id)
     except (StrategyNotFound, AuthorityNotGranted) as exc:
         raise RollbackTargetInvalid(
             f"{strategy_key!r} cannot be the rollback target: {exc}") from exc

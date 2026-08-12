@@ -6,16 +6,9 @@ back into research.db at runtime — the composition is copied across the plane 
 once, at the human-gated deploy. At startup `register_all` reconstructs each row through
 the sandboxed builder and registers it in the strategy registry.
 
-`register_all` is resilient: a row that fails to rebuild (corrupt JSON, a block removed
-from the grammar) is logged and skipped, never crashing engine startup. That row's
-`gen_*` key then simply falls back to the default strategy — fail-safe, not fail-open.
-
-**That last sentence is the C4 defect, and it is only tolerable while there is one
-owner.** Under a marketplace a skipped row means the customer's capital trades the
-platform default under the customer's strategy name. The fail-closed half of the fix
-lives in `app.strategy.registry.resolve_strategy`; any deployment-bound caller must use
-it rather than `get_strategy`, so a row that failed to load here becomes a halted
-deployment instead of a silent substitution.
+`register_all` is resilient and fail-closed: it rebuilds an owner's partition off to the
+side, then replaces that partition atomically. A corrupt or removed current row therefore
+evicts any executable loaded from older bytes instead of leaving stale code live.
 
 Each rebuilt strategy is pinned to a content hash of its PERSISTED composition
 (`app/strategy/identity.py`), so `(key, version)` identifies the artifact. `key` alone
@@ -43,8 +36,20 @@ def save_generated(session, key: str, composition_json: str, *, owner_id: str, s
     happens to contain today. Making identity `(key, version)` is tracked as
     remaining work in docs/reports/2026-08-02-architecture-migration.md.
     """
+    from app.strategy.registry import is_generated_key
+    if not is_generated_key(key):
+        raise ValueError(
+            f"generated strategy key {key!r} must match 'gen_' followed by "
+            "letters, digits, or underscores")
     try:
-        version = generated_version(json.loads(composition_json))
+        composition = json.loads(composition_json)
+    except Exception:
+        composition = None
+    if isinstance(composition, dict) and composition.get("key") != key:
+        raise ValueError(
+            f"composition key {composition.get('key')!r} does not match persisted key {key!r}")
+    try:
+        version = generated_version(composition)
     except Exception:
         # A composition that will not parse cannot register either; record it as
         # unidentifiable rather than failing the write, matching build_sha's
@@ -106,10 +111,18 @@ def register_all(session, *, owner_id: str) -> int:
     from research.strategy.builder.load import build_strategy
     from app.strategy import registry
 
-    count = 0
+    rebuilt = {}
     for row in list_generated(session, owner_id=owner_id):
         try:
-            comp = Composition.from_dict(json.loads(row.composition_json))
+            from app.strategy.registry import is_generated_key
+            document = json.loads(row.composition_json)
+            if not is_generated_key(row.key):
+                raise ValueError(f"invalid generated strategy key {row.key!r}")
+            if not isinstance(document, dict) or document.get("key") != row.key:
+                raise ValueError(
+                    f"composition key {getattr(document, 'get', lambda *_: None)('key')!r} "
+                    f"does not match persisted key {row.key!r}")
+            comp = Composition.from_dict(document)
             strat = build_strategy(comp)
             # Pin BEFORE registering: a registered strategy must never be observable
             # without its version, or a caller can read `(key, <lazily-derived>)` and
@@ -117,10 +130,17 @@ def register_all(session, *, owner_id: str) -> int:
             strat.pin_version(generated_version(
                 comp, default_params=getattr(strat, "default_params", None),
                 risk_model=getattr(strat, "risk_model", None)))
-            registry.register(strat, owner_id=owner_id)
-            count += 1
+            rebuilt[row.key] = strat
         except Exception as e:  # corrupt/incompatible row — skip, don't crash startup
             log.warn(f"generated strategy {row.key!r} failed to load, skipping: {e}")
+    # Replace, never merge: the database is the current owner partition. Removing or
+    # corrupting a row must withdraw older executable bytes already held by this process.
+    for registered_owner, key in list(registry._GENERATED_REGISTRY):
+        if registered_owner == owner_id:
+            del registry._GENERATED_REGISTRY[(registered_owner, key)]
+    for strat in rebuilt.values():
+        registry.register(strat, owner_id=owner_id)
+    count = len(rebuilt)
     if count:
         log.info(f"registered {count} deployed generated strateg"
                  f"{'y' if count == 1 else 'ies'}")

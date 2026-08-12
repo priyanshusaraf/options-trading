@@ -101,3 +101,84 @@ def test_same_generated_key_is_registered_per_owner_and_foreign_resolution_fails
         from app.strategy import registry
         registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
         registry._GENERATED_REGISTRY.pop(("owner.other", "gen_exec_test_v1"), None)
+
+
+def test_rehydrating_a_corrupt_current_row_evicts_the_previously_loaded_executable():
+    init_db(reset=True)
+    from app.strategy import registry
+    from app.strategy.registry import StrategyNotFound, resolve_strategy
+    try:
+        with SessionLocal() as session:
+            gs.save_generated(
+                session, "gen_exec_test_v1", json.dumps(_COMP), owner_id="owner")
+            session.commit()
+            assert gs.register_all(session, owner_id="owner") == 1
+            assert resolve_strategy("gen_exec_test_v1", owner_id="owner")
+            session.get(gs.GeneratedStrategyRow, ("owner", "gen_exec_test_v1")).composition_json = "{}"
+            session.commit()
+            assert gs.register_all(session, owner_id="owner") == 0
+        with pytest.raises(StrategyNotFound):
+            resolve_strategy("gen_exec_test_v1", owner_id="owner")
+    finally:
+        registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
+
+
+@pytest.mark.parametrize("key", ("trend_impulse_v3", "generated.bad", "gen_"))
+def test_save_rejects_keys_outside_the_canonical_generated_namespace(key):
+    init_db(reset=True)
+    with SessionLocal() as session:
+        composition = dict(_COMP, key=key)
+        with pytest.raises(ValueError, match="generated strategy key"):
+            gs.save_generated(session, key, json.dumps(composition), owner_id="owner")
+        assert gs.list_generated(session, owner_id="owner") == []
+
+
+def test_save_rejects_a_composition_whose_key_differs_from_the_persisted_identity():
+    init_db(reset=True)
+    with SessionLocal() as session:
+        with pytest.raises(ValueError, match="composition key"):
+            gs.save_generated(
+                session, "gen_exec_test_v1", json.dumps(dict(_COMP, key="gen_sibling")),
+                owner_id="owner")
+        assert gs.list_generated(session, owner_id="owner") == []
+
+
+def test_strategy_metadata_combines_builtins_with_only_the_requested_owner_partition():
+    init_db(reset=True)
+    from app.strategy import registry
+    other = dict(_COMP, key="gen_owner_other")
+    try:
+        with SessionLocal() as session:
+            session.execute(__import__("sqlalchemy").text(
+                "INSERT INTO organizations VALUES "
+                "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+            gs.save_generated(session, "gen_exec_test_v1", json.dumps(_COMP), owner_id="owner")
+            gs.save_generated(session, "gen_owner_other", json.dumps(other), owner_id="owner.other")
+            session.commit()
+            gs.register_all(session, owner_id="owner")
+            gs.register_all(session, owner_id="owner.other")
+        owner_keys = {row["key"] for row in registry.strategy_meta(owner_id="owner")}
+        other_keys = {row["key"] for row in registry.strategy_meta(owner_id="owner.other")}
+        assert {"trend_impulse_v3", "expanding_z_v4", "gen_exec_test_v1"} <= owner_keys
+        assert "gen_owner_other" not in owner_keys
+        assert "gen_owner_other" in other_keys and "gen_exec_test_v1" not in other_keys
+    finally:
+        registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
+        registry._GENERATED_REGISTRY.pop(("owner.other", "gen_owner_other"), None)
+
+
+def test_strategy_metadata_routes_forward_the_composed_principal_owner(monkeypatch):
+    from app.api import backtest_routes, routes
+    from app.api.principal import Principal
+    from app.strategy import registry
+
+    seen = []
+    monkeypatch.setattr(registry, "strategy_meta", lambda *, owner_id: seen.append(owner_id) or [])
+    monkeypatch.setattr(routes, "owner_id_for", lambda _principal: "owner.route")
+    monkeypatch.setattr(backtest_routes, "owner_id_for", lambda _principal: "owner.route")
+    principal = Principal(id="caller", kind="owner", scopes=frozenset({"*"}))
+
+    assert routes.strategies(principal) == {"strategies": []}
+    response = backtest_routes.instruments("liquid", principal)
+    assert response["strategies"] == []
+    assert seen == ["owner.route", "owner.route"]

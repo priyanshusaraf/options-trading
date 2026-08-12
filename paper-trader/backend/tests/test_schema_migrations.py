@@ -2707,6 +2707,22 @@ STRATEGY_CONFIG_0023_TABLES = (
 )
 
 
+def _seed_0023_strategy_config_payload(connection):
+    connection.execute(sa.text(
+        "INSERT INTO watchlists VALUES "
+        "(923,'proof watch','trend_impulse_v3','active',NULL,'proof',CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO watchlist_membership VALUES ('NIFTY',923,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO strategy_lifecycle VALUES "
+        "(923,'proof.strategy','candidate','builtin',923,1.0,'proof',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO generated_strategies (key,created_at,version,composition_json,source) "
+        "VALUES ('gen_proof_restart',CURRENT_TIMESTAMP,'v','{}','proof')"))
+    connection.execute(sa.text(
+        "INSERT INTO runtime_config VALUES ('max_daily_loss','123',CURRENT_TIMESTAMP)"))
+
+
 def test_revision_0023_fresh_and_upgraded_strategy_configuration_contracts_match(tmp_path):
     """Rows, constraints, keys, indexes, checks and triggers converge at head."""
     upgraded = _at_revision_0020(tmp_path, "0023-contract-upgraded.db")
@@ -2983,3 +2999,109 @@ def test_revision_0023_retries_after_final_proof_cleanup_before_alembic_stamp(tm
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0023")
     assert migrate.schema_version(engine) == "0023"
+
+
+@pytest.mark.parametrize("table", STRATEGY_CONFIG_0023_TABLES)
+def test_revision_0023_retry_after_rename_before_proof_delete_cleans_all_proof_state(
+        tmp_path, table):
+    """A durable proof is recovery metadata, never a permanent application table."""
+    engine = _at_revision_0020(tmp_path, f"0023-post-rename-proof-{table}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        _seed_0023_strategy_config_payload(connection)
+        source_count = connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=1")
+
+    interrupted = False
+
+    def stop_before_proof_delete(_conn, _cursor, statement, params, _context, _many):
+        nonlocal interrupted
+        normalized = " ".join(statement.upper().split())
+        parameter_values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        if (not interrupted and normalized.startswith(
+                "DELETE FROM _STRATEGY_CONFIG_0023_REBUILD_PROOFS")
+                and (table in parameter_values or f"TABLE_NAME='{table.upper()}'" in normalized)):
+            interrupted = True
+            raise RuntimeError(f"injected after {table} rename")
+
+    sa.event.listen(engine, "before_cursor_execute", stop_before_proof_delete)
+    try:
+        with pytest.raises(RuntimeError, match=f"injected after {table} rename"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0023")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_before_proof_delete)
+
+    with engine.begin() as connection:
+        names = sa.inspect(connection).get_table_names()
+        assert interrupted and table in names and f"{table}__0023" not in names
+        assert "_strategy_config_0023_rebuild_proofs" in names
+        assert connection.execute(sa.text(
+            "SELECT COUNT(*) FROM _strategy_config_0023_rebuild_proofs "
+            "WHERE table_name=:table"), {"table": table}).scalar_one() == 1
+        assert migrate.schema_version(engine) == "0022"
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        assert connection.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one() == source_count
+        assert f"{table}__0023" not in sa.inspect(connection).get_table_names()
+        assert "_strategy_config_0023_rebuild_proofs" not in sa.inspect(connection).get_table_names()
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 1
+    assert migrate.schema_version(engine) == "0023"
+
+
+@pytest.mark.parametrize("table", STRATEGY_CONFIG_0023_TABLES)
+def test_revision_0023_retry_refuses_a_promoted_source_mutated_before_proof_cleanup(
+        tmp_path, table):
+    engine = _at_revision_0020(tmp_path, f"0023-promoted-source-tamper-{table}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        _seed_0023_strategy_config_payload(connection)
+    interrupted = False
+
+    def stop_before_proof_delete(_conn, _cursor, statement, params, _context, _many):
+        nonlocal interrupted
+        normalized = " ".join(statement.upper().split())
+        parameter_values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        if (not interrupted and normalized.startswith(
+                "DELETE FROM _STRATEGY_CONFIG_0023_REBUILD_PROOFS")
+                and (table in parameter_values or f"TABLE_NAME='{table.upper()}'" in normalized)):
+            interrupted = True
+            raise RuntimeError(f"leave promoted {table}")
+
+    sa.event.listen(engine, "before_cursor_execute", stop_before_proof_delete)
+    try:
+        with pytest.raises(RuntimeError, match=f"leave promoted {table}"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0023")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_before_proof_delete)
+
+    mutation = {
+        "watchlists": "UPDATE watchlists SET notes='tampered'",
+        "watchlist_membership": "UPDATE watchlist_membership SET instrument_key='TAMPERED'",
+        "strategy_lifecycle": "UPDATE strategy_lifecycle SET note='tampered'",
+        "generated_strategies": "UPDATE generated_strategies SET source='tampered'",
+        "runtime_config": "UPDATE runtime_config SET value='tampered'",
+        "deployments": "UPDATE deployments SET name='tampered'",
+    }[table]
+    with engine.begin() as connection:
+        connection.execute(sa.text(mutation))
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        )).all())
+        payload = tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
+        foreign_keys = connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one()
+
+    with pytest.raises(RuntimeError, match="malformed completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0023")
+
+    with engine.connect() as connection:
+        assert interrupted and migrate.schema_version(engine) == "0022"
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        )).all()) == before
+        assert tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()) == payload
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys

@@ -75,6 +75,52 @@ def test_a_per_instrument_assignment_wins_over_the_default():
     assert result.origin == binding.ORIGIN_INSTRUMENT
 
 
+def test_a_missing_or_foreign_generated_assignment_never_substitutes_the_default(monkeypatch):
+    """Generated identities are tenant-local executable artefacts, not legacy typos."""
+    from app.strategy import registry
+    from app.strategy.registry.base import Strategy
+
+    generated = Strategy()
+    generated.key = "gen_owner_local"
+    generated.pin_version("sha256:owner-a")
+    monkeypatch.setitem(registry._GENERATED_REGISTRY, ("owner.a", generated.key), generated)
+
+    for owner_id in ("owner.b", "owner.missing"):
+        with pytest.raises(StrategyNotFound):
+            binding.bind(
+                deployment_id=LEGACY_DEPLOYMENT_ID,
+                instrument_key="NIFTY",
+                deployment_pin=None,
+                assigned_key=generated.key,
+                owner_id=owner_id,
+            )
+
+
+def test_paper_authority_resolves_generated_identity_in_the_binding_owner(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.strategy import registry
+    from app.strategy.registry.base import Strategy
+
+    generated = Strategy()
+    generated.key = "gen_paper_owner_local"
+    generated.pin_version("sha256:paper-owner-a")
+    monkeypatch.setitem(registry._GENERATED_REGISTRY, ("owner.a", generated.key), generated)
+    record = SimpleNamespace(
+        strategy_key=generated.key,
+        content_address=generated.version,
+        deployment_row_id=41,
+        graph_identifier="generated.paper",
+        graph_version=1,
+        interval="15minute",
+    )
+
+    described = binding._describe_paper_authority(1, "NIFTY", record, owner_id="owner.a")
+    assert described.owner_id == "owner.a"
+    with pytest.raises(StrategyNotFound):
+        binding._describe_paper_authority(1, "NIFTY", record, owner_id="owner.b")
+
+
 def test_a_deployment_that_pins_a_strategy_wins_over_the_instrument_row():
     """A deployment is a promise about which strategy is trading. If it pins one, a
     per-instrument row cannot quietly override it — that would make the promise false."""
@@ -258,7 +304,8 @@ def test_resolve_binding_is_that_same_decision_plus_the_database_reads():
     assign("NIFTY", "expanding_z_v4")
     from_db = resolve()
     pure = binding.bind(deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
-                        deployment_pin=None, assigned_key="expanding_z_v4")
+                        deployment_pin=None, assigned_key="expanding_z_v4",
+                        owner_id=LEGACY_OWNER_ID)
     assert from_db == pure
 
 

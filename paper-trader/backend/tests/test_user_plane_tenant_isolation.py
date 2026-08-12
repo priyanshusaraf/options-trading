@@ -819,8 +819,8 @@ def test_layout_store_scopes_reads_and_refuses_other_owner_before_layout_sql() -
 
 def test_strategy_configuration_repositories_keep_same_keys_private_to_each_owner() -> None:
     """Dropping any owner predicate would merge this deliberate same-key fixture."""
-    composition_a = '{"key":"gen.shared","clauses":[]}'
-    composition_b = '{"key":"gen.shared","clauses":["owner-b"]}'
+    composition_a = '{"key":"gen_shared","clauses":[]}'
+    composition_b = '{"key":"gen_shared","clauses":["owner-b"]}'
     with SessionLocal() as session:
         watchlist_a = watchlists.create_watchlist(
             session, "default", "trend_impulse_v3", owner_id="owner.a",
@@ -841,10 +841,10 @@ def test_strategy_configuration_repositories_keep_same_keys_private_to_each_owne
             session, "strategy.shared", owner_id="owner.b", note="B only",
         )
         generated_strategies.save_generated(
-            session, "gen.shared", composition_a, owner_id="owner.a",
+            session, "gen_shared", composition_a, owner_id="owner.a",
         )
         generated_strategies.save_generated(
-            session, "gen.shared", composition_b, owner_id="owner.b",
+            session, "gen_shared", composition_b, owner_id="owner.b",
         )
         session.commit()
 
@@ -876,7 +876,7 @@ def test_strategy_configuration_repositories_keep_same_keys_private_to_each_owne
         assert session.query(Watchlist).filter_by(name="default").count() == 2
         assert session.query(WatchlistMembership).filter_by(instrument_key="NIFTY").count() == 2
         assert session.query(StrategyLifecycle).filter_by(strategy_key="strategy.shared").count() == 2
-        assert session.query(GeneratedStrategyRow).filter_by(key="gen.shared").count() == 2
+        assert session.query(GeneratedStrategyRow).filter_by(key="gen_shared").count() == 2
         assert session.query(RuntimeConfig).filter_by(key="max_daily_loss").count() == 2
         with pytest.raises(TypeError):
             watchlists.get_watchlist(session, "default")
@@ -969,6 +969,14 @@ def test_two_runners_apply_their_own_same_instrument_watchlist_strategy() -> Non
     try:
         assert runner_a.strategy_keys["NIFTY"] == "trend_impulse_v3"
         assert runner_b.strategy_keys["NIFTY"] == "expanding_z_v4"
+        assert runner_a._strategy_for("NIFTY").key == "trend_impulse_v3"
+        assert runner_b._strategy_for("NIFTY").key == "expanding_z_v4"
+        with SessionLocal() as session:
+            first = watchlists.get_watchlist(session, "default", owner_id="owner.a")
+            first.strategy_key = "expanding_z_v4"
+            session.commit()
+        assert runner_a._load_instr_config()[1]["NIFTY"] == "expanding_z_v4"
+        assert runner_b._load_instr_config()[1]["NIFTY"] == "expanding_z_v4"
     finally:
         runner_a.broker.close()
         runner_b.broker.close()
@@ -997,3 +1005,85 @@ def test_deployment_keeps_watchlist_by_value_but_rejects_foreign_owner_value() -
         assert row.watchlist_id == local.id
         assert not any(foreign_key["constrained_columns"] == ["watchlist_id"]
                        for foreign_key in inspect(session.bind).get_foreign_keys("deployments"))
+
+
+def test_strategy_configuration_composite_constraints_reject_cross_owner_links() -> None:
+    with SessionLocal.begin() as session:
+        watchlist = watchlists.create_watchlist(
+            session, "owner-b", "trend_impulse_v3", owner_id="owner.b")
+        session.flush()
+        watchlist_id = watchlist.id
+    with SessionLocal.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "INSERT INTO watchlist_membership "
+                "(owner_id,instrument_key,watchlist_id,added_at) "
+                "VALUES ('owner.a','CROSS',:watchlist,CURRENT_TIMESTAMP)"
+            ), {"watchlist": watchlist_id})
+    with SessionLocal.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "INSERT INTO strategy_lifecycle "
+                "(owner_id,strategy_key,status,source,deployed_watchlist_id,last_dsr,note,created_at,updated_at) "
+                "VALUES ('owner.a','cross.strategy','running','builtin',:watchlist,NULL,'',"
+                "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            ), {"watchlist": watchlist_id})
+
+
+def test_wrong_owner_strategy_configuration_operations_are_absent_and_do_not_mutate() -> None:
+    with SessionLocal() as session:
+        foreign = watchlists.create_watchlist(
+            session, "foreign-only", "trend_impulse_v3", owner_id="owner.b")
+        strategy_archive.record_strategy(
+            session, "foreign.strategy", owner_id="owner.b", note="unchanged")
+        session.commit()
+        before = tuple(session.execute(text(
+            "SELECT owner_id,name,strategy_key,status FROM watchlists ORDER BY owner_id,id"
+        )).all())
+        with pytest.raises(ValueError, match=f"no watchlist with id {foreign.id}"):
+            watchlists.assign_instrument(
+                session, "NIFTY", foreign.id, owner_id="owner.a")
+        assert watchlists.get_watchlist(
+            session, "foreign-only", owner_id="owner.a") is None
+        assert strategy_archive.get(
+            session, "foreign.strategy", owner_id="owner.a") is None
+        with pytest.raises(ValueError, match="not in the archive"):
+            strategy_archive.set_status(
+                session, "foreign.strategy", "running", owner_id="owner.a")
+        assert tuple(session.execute(text(
+            "SELECT owner_id,name,strategy_key,status FROM watchlists ORDER BY owner_id,id"
+        )).all()) == before
+
+
+def test_every_public_strategy_configuration_repository_requires_owner_scope() -> None:
+    with SessionLocal() as session:
+        calls = (
+            lambda: watchlists.create_watchlist(session, "x", "trend_impulse_v3"),
+            lambda: watchlists.get_watchlist(session, "x"),
+            lambda: watchlists.assign_instrument(session, "NIFTY", 1),
+            lambda: watchlists.unassign_instrument(session, "NIFTY"),
+            lambda: watchlists.watchlist_of(session, "NIFTY"),
+            lambda: watchlists.effective_strategy_map(session),
+            lambda: watchlists.membership_map(session),
+            lambda: watchlists.in_watchlist_keys(session),
+            lambda: watchlists.list_watchlists(session),
+            lambda: strategy_archive.get(session, "x"),
+            lambda: strategy_archive.record_strategy(session, "x"),
+            lambda: strategy_archive.set_status(session, "x", "running"),
+            lambda: strategy_archive.by_status(session, "running"),
+            lambda: strategy_archive.list_archive(session),
+            lambda: generated_strategies.save_generated(session, "gen_x", '{"key":"gen_x"}'),
+            lambda: generated_strategies.list_generated(session),
+            lambda: generated_strategies.register_all(session),
+        )
+        for call in calls:
+            with pytest.raises(TypeError):
+                call()
+    for call in (
+        lambda: runtime_config.effective(),
+        lambda: runtime_config.schema(),
+        lambda: runtime_config.set_override("max_daily_loss", 1),
+        lambda: runtime_config.clear_override("max_daily_loss"),
+    ):
+        with pytest.raises(TypeError):
+            call()

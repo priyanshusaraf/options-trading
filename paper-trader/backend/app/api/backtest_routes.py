@@ -14,7 +14,7 @@ import csv
 import io
 import json
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
 from app.api.paging import MAX_PAGE
@@ -26,6 +26,7 @@ from app.core.config import get_settings
 from app.core.instruments import get_instrument
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal
+from app.api.principal import Principal, get_principal, owner_id_for
 
 
 def _budget(request: Request) -> float:
@@ -67,7 +68,7 @@ class SweepRequest(BaseModel):
 
 
 @router.post("/sweep")
-def start(body: SweepRequest):
+def start(body: SweepRequest, principal: Principal = Depends(get_principal)):
     if sweep.is_running():
         return {"error": "a sweep is already running"}
     try:
@@ -75,14 +76,14 @@ def start(body: SweepRequest):
             scope=body.scope, intervals=body.intervals, capital=body.capital,
             instruments=body.instruments, lookback_days=body.lookback_days,
             start_date=body.start_date, end_date=body.end_date,
-            strategies=body.strategies)
+            strategies=body.strategies, owner_id=owner_id_for(principal))
     except Exception as e:
         return {"error": str(e)}
     return {"run_id": run_id, "running": True}
 
 
 @router.get("/instruments")
-def instruments(scope: str = "liquid"):
+def instruments(scope: str = "liquid", principal: Principal = Depends(get_principal)):
     """The resolvable backtest universe (for the instrument picker), plus the
     preset lookback windows and per-interval max history the UI discloses."""
     from app.backtest.universe import full_universe, liquid_universe
@@ -95,7 +96,7 @@ def instruments(scope: str = "liquid"):
                  key=lambda d: (d["segment"], d["key"]))
     return {"instruments": out, "presets": list(sweep.PRESET_DAYS.keys()),
             "preset_days": sweep.PRESET_DAYS, "max_days": sweep.MAX_DAYS,
-            "strategies": strategy_meta()}
+            "strategies": strategy_meta(owner_id=owner_id_for(principal))}
 
 
 @router.get("/status")

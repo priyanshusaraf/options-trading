@@ -46,7 +46,7 @@ def _nifty(provider):
 
 
 def _cold(provider, intervals=INTERVALS, strategies=STRATEGIES, **kwargs):
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=intervals, capital=50_000,
         instruments=["NIFTY"], provider=provider, strategies=strategies,
         **kwargs)
@@ -56,7 +56,7 @@ def _cold(provider, intervals=INTERVALS, strategies=STRATEGIES, **kwargs):
 
 def _pinned(provider, pins, *, workers=WORKERS, intervals=INTERVALS,
             strategies=STRATEGIES, **kwargs):
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=intervals, capital=50_000,
         instruments=["NIFTY"], provider=provider, strategies=strategies,
         pinned_datasets=pins, workers=workers, **kwargs)

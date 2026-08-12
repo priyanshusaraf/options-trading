@@ -278,7 +278,7 @@ def test_no_options_cell_sets_premium_error_via_sweep():
         s.commit()
     inst_registry.load_universe()
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"], capital=50_000,
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
                             instruments=["NOOPT_C6"], provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -300,7 +300,7 @@ def test_options_cell_populates_premium_metrics_via_sweep():
 
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"], capital=50_000,
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
                             instruments=["NIFTY"], provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -422,7 +422,7 @@ def test_premium_json_failure_degrades_to_premium_error_not_sweep_abort():
     from app.backtest.metrics import BTMetrics
     with patch("app.backtest.sweep.simulate_premium",
                return_value=([bad_trade], BTMetrics(trades=1))):
-        rid = sweep.start_sweep(scope="liquid", intervals=["day"], capital=50_000,
+        rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
                                 instruments=["NIFTY"], provider=prov)
         sweep._join()
     with SessionLocal() as s:

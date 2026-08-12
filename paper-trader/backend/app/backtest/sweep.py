@@ -253,7 +253,7 @@ def _join() -> None:
         t.join()
 
 
-def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
+def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | None = None,
                 capital: float = 50_000.0, provider=None,
                 instruments: list[str] | None = None,
                 lookback_days: int | None = None,
@@ -280,7 +280,7 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                      (default 1 = the serial reference path). Bounded by
                      `MAX_SWEEP_WORKERS` and the CPU count. Output is gated
                      bit-identical against serial."""
-    from app.strategy.registry import DEFAULT_STRATEGY_KEY, get_strategy
+    from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
     global _running, _worker
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
     worker_count = _worker_count(workers)
@@ -301,12 +301,12 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
         seen: set[str] = set()
         strat_objs = []
         for k in req_keys:
-            strat = get_strategy(k)
+            strat = resolve_strategy(k, owner_id=owner_id)
             if strat.key not in seen:
                 seen.add(strat.key)
                 strat_objs.append(strat)
         if not strat_objs:
-            strat_objs = [get_strategy(DEFAULT_STRATEGY_KEY)]
+            strat_objs = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
         provider = provider or get_provider()
         specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
         if instruments:
@@ -338,7 +338,7 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
                  + (f", {worker_count} worker processes" if worker_count > 1 else ""))
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
-                                   strat_objs, pinned, worker_count),
+                                   strat_objs, pinned, worker_count, owner_id),
                              daemon=True)
         _worker = t
         t.start()
@@ -349,16 +349,16 @@ def start_sweep(scope: str = "liquid", intervals: list[str] | None = None,
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None, workers=None) -> None:
+         pinned=None, workers=None, owner_id: str = "owner") -> None:
     global _running
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
-        from app.strategy.registry import get_strategy
-        strategies = [get_strategy(None)]
+        from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
+        strategies = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
     batch: list[dict] = []
     try:
         for values in _cell_values(provider, specs, intervals, capital,
-                                   win, strategies, pinned, workers):
+                                   win, strategies, pinned, workers, owner_id=owner_id):
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
                 _commit_batch(run_id, batch)
@@ -378,7 +378,7 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
 
 
 def _cell_values(provider, specs, intervals, capital, win, strategies,
-                 pinned, workers):
+                 pinned, workers, *, owner_id: str = "owner"):
     """Yield one serialized result payload per cell, in request order.
 
     Serial by default and by reference: `workers <= 1` walks the cells in this
@@ -388,7 +388,8 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
     count = _worker_count(workers)
     if count > 1:
         yield from _parallel_cell_values(
-            provider, specs, intervals, capital, win, strategies, pinned, count)
+            provider, specs, intervals, capital, win, strategies, pinned, count,
+            owner_id=owner_id)
         return
     for inst in specs:
         for interval in intervals:
@@ -447,7 +448,7 @@ def _worker_task(payload: dict) -> list[dict]:
     generated strategy does not exist in a spawned process — and the run would
     finish green with a different strategy's numbers under the requested key.
     """
-    from app.strategy.registry import resolve_strategy
+    from app.strategy.registry import StrategyNotFound, resolve_strategy
     candles = payload["candles"]
     inst, interval = payload["inst"], payload["interval"]
     meta = dict(bars=payload["bars"], first_ts=payload["first_ts"],
@@ -458,7 +459,17 @@ def _worker_task(payload: dict) -> list[dict]:
     out: list[dict] = []
     for cell in payload["cells"]:
         try:
-            strat = resolve_strategy(cell["strategy_key"])
+            owner_id = payload.get("owner_id", "owner")
+            try:
+                strat = resolve_strategy(cell["strategy_key"], owner_id=owner_id)
+            except StrategyNotFound:
+                if not cell["strategy_key"].startswith("gen_"):
+                    raise
+                from app.core.generated_strategies import register_all
+                from app.db.session import SessionLocal
+                with SessionLocal() as session:
+                    register_all(session, owner_id=owner_id)
+                strat = resolve_strategy(cell["strategy_key"], owner_id=owner_id)
             if strat.version != cell["strategy_version"]:
                 raise RuntimeError(
                     f"strategy {cell['strategy_key']!r} is version "
@@ -531,7 +542,7 @@ def _pinned_worker_task(payload: dict) -> dict:
 
 
 def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
-                  *, pinned_address: str = ""):
+                  *, pinned_address: str = "", owner_id: str = "owner"):
     """Split one dataset's cells into values this process already has and cells a
     worker must compute — keeping the ORDER the serial path would produce.
 
@@ -564,6 +575,7 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
     payload = None
     if pinned_address:
         payload = {"pinned": True, "address": pinned_address,
+                   "owner_id": owner_id,
                    "store_root": str(dataset_store.get_store().root),
                    "provider_identity": source_identity(
                        provider, fields=PROVIDER_IDENTITY_FIELDS),
@@ -575,6 +587,7 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
                    "slippage_pct": slippage_pct, "cells": cells}
     elif cells:
         payload = {"candles": prepared.candles, "inst": inst,
+                   "owner_id": owner_id,
                    "interval": interval, "capital": capital,
                    "slippage_pct": slippage_pct, "bars": prepared.bars,
                    "first_ts": prepared.first_ts, "last_ts": prepared.last_ts,
@@ -603,7 +616,7 @@ def _drain(slots, future) -> list[dict]:
 
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
-                          pinned, workers):
+                          pinned, workers, *, owner_id: str = "owner"):
     """Yield the same values as the serial path, in the same order, computed in
     `workers` processes.
 
@@ -635,7 +648,7 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     task, address = _worker_task, ""
                 slots, payload = _plan_dataset(
                     provider, inst, interval, capital, win, strategies, prepared,
-                    pinned_address=address)
+                    pinned_address=address, owner_id=owner_id)
                 future = pool.submit(task, payload) if payload else None
                 pending.append((future, slots))
                 # `prepared` (and its lazily-built frame) is dropped here: the

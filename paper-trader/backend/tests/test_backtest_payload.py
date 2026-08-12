@@ -25,7 +25,7 @@ def test_results_payload_carries_notional_and_lots():
     init_db(reset=True)
     prov = MockProvider()
     # large capital so index/commodity lots are affordable and trades fire
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"],
                             capital=20_000_000, provider=prov)
     sweep._join()
     c = TestClient(app)

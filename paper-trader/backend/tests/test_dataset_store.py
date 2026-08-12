@@ -147,7 +147,7 @@ def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatc
     try:
         init_db(reset=True)
         cold = CountingMockProvider()
-        rid = sweep.start_sweep(
+        rid = sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute", "30minute"], capital=50_000,
             instruments=["NIFTY"], provider=cold)
         sweep._join()
@@ -159,7 +159,7 @@ def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatc
         assert len(stored) == 2, stored
 
         warm = CountingMockProvider()
-        rid2 = sweep.start_sweep(
+        rid2 = sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute", "30minute"], capital=50_000,
             instruments=["NIFTY"], provider=warm)
         sweep._join()
@@ -184,7 +184,7 @@ def test_store_failure_never_breaks_a_sweep(tmp_path, monkeypatch):
     try:
         init_db(reset=True)
         provider = CountingMockProvider()
-        rid = sweep.start_sweep(scope="liquid", intervals=["15minute"],
+        rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"],
                                 capital=50_000, instruments=["NIFTY"],
                                 provider=provider)
         sweep._join()
@@ -213,7 +213,7 @@ def test_unaddressable_dataset_degrades_instead_of_killing_the_sweep(
     try:
         init_db(reset=True)
         provider = CountingMockProvider()
-        rid = sweep.start_sweep(scope="liquid", intervals=["15minute"],
+        rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"],
                                 capital=50_000, instruments=["NIFTY"],
                                 provider=provider)
         sweep._join()

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 
-from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 
 from app.api.paging import MAX_PAGE
@@ -28,6 +28,7 @@ from app.providers.base import ProviderReadError
 from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
+from app.api.principal import Principal, get_principal, owner_id_for
 from app.ws.manager import manager
 
 router = APIRouter()
@@ -770,10 +771,10 @@ def set_strategy(key: str, body: StrategyBody, request: Request):
 
 
 @router.get("/api/strategies")
-def strategies():
+def strategies(principal: Principal = Depends(get_principal)):
     """The registered strategies, for per-instrument assignment dropdowns."""
     from app.strategy.registry import strategy_meta
-    return {"strategies": strategy_meta()}
+    return {"strategies": strategy_meta(owner_id=owner_id_for(principal))}
 
 
 # ── manual paper overrides (F8) — never touch real Kite orders ───────────────

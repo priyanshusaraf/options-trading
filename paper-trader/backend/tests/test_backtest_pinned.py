@@ -75,7 +75,7 @@ def _artifacts(run_id) -> dict:
 
 
 def _cold_run(provider, **kwargs):
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=provider, strategies=STRATEGIES,
         **kwargs)
@@ -103,7 +103,7 @@ def test_pinned_rerun_makes_no_provider_call_and_reproduces_every_artifact(
     # follows is a real recomputation on stored bytes, not a row copy.
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    pinned_id = sweep.start_sweep(
+    pinned_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider, strategies=STRATEGIES,
         pinned_datasets=pins)
@@ -137,7 +137,7 @@ def test_unpinned_cell_fails_closed_and_the_run_continues(store_root):
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
         strategies=["trend_impulse_v3"], pinned_datasets=pins)
@@ -155,7 +155,7 @@ def test_unpinned_cell_fails_closed_and_the_run_continues(store_root):
 def test_pinned_dataset_missing_from_the_store_fails_closed(store_root):
     init_db(reset=True)
     provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=provider,
         strategies=["trend_impulse_v3"],
@@ -185,7 +185,7 @@ def test_pinned_dataset_whose_content_changed_is_refused_not_refetched(store_roo
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
         strategies=["trend_impulse_v3"], pinned_datasets=pins)
@@ -213,7 +213,7 @@ def test_pinned_address_describing_another_series_is_refused(store_root):
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
         strategies=["trend_impulse_v3"], pinned_datasets=swapped)
@@ -235,7 +235,7 @@ def test_pinned_address_from_a_different_window_is_refused(store_root):
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
         strategies=["trend_impulse_v3"], lookback_days=30,
@@ -253,7 +253,7 @@ def test_a_malformed_pinned_address_is_rejected_before_the_run_exists(store_root
     with SessionLocal() as session:
         before = len(list(session.scalars(select(BacktestRun))))
     with pytest.raises(RuntimeError, match="dataset address"):
-        sweep.start_sweep(
+        sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute"], capital=50_000,
             instruments=["NIFTY"], provider=provider,
             pinned_datasets={sweep.pin_key("NIFTY", "15minute"): "nope"})
@@ -325,7 +325,7 @@ def test_the_happy_path_actually_reads_the_store(store_root, monkeypatch):
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    sweep.start_sweep(
+    sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider, strategies=STRATEGIES,
         pinned_datasets=pins)

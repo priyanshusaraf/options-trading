@@ -27,7 +27,7 @@ def create_watchlist(session, name: str, strategy_key: str, *, owner_id: str, st
     # member (`effective_strategy_map`, read straight into the engine's resolution), so
     # this is an engine assignment by another name and passes the same authority gate.
     from app.core.execution_binding import assert_may_execute
-    assert_may_execute(strategy_key)
+    assert_may_execute(strategy_key, owner_id=owner_id)
     w = Watchlist(owner_id=owner_id, name=name, strategy_key=strategy_key, status=status,
                   interval=interval, notes=notes)
     session.add(w)
@@ -43,8 +43,9 @@ def get_watchlist(session, name: str, *, owner_id: str) -> Watchlist | None:
 def assign_instrument(session, instrument_key: str, watchlist_id: int, *, owner_id: str) -> WatchlistMembership:
     """Assign (or MOVE) an instrument into `watchlist_id`. Idempotent per instrument:
     the membership PK is the instrument, so a re-assign updates in place."""
-    target = session.get(Watchlist, watchlist_id)
-    if target is None or target.owner_id != owner_id:
+    target = session.scalars(select(Watchlist).where(
+        Watchlist.owner_id == owner_id, Watchlist.id == watchlist_id)).one_or_none()
+    if target is None:
         raise ValueError(f"no watchlist with id {watchlist_id}")
     m = session.get(WatchlistMembership, (owner_id, instrument_key))
     if m is None:

@@ -45,6 +45,27 @@ def test_deploy_creates_watchlist_assigns_and_archives_running():
         assert rec.status == "running" and rec.deployed_watchlist_id == res.watchlist_id
 
 
+def test_portfolio_route_forwards_the_composed_principal_owner(monkeypatch):
+    from app.api import portfolio_routes
+    from app.api.principal import Principal
+
+    seen = []
+    monkeypatch.setattr(portfolio_routes, "owner_id_for", lambda _principal: "owner.route")
+    monkeypatch.setattr(
+        portfolio_routes, "preview_deploy",
+        lambda _session, req, *, owner_id: (
+            seen.append(owner_id) or __import__("types").SimpleNamespace(
+                watchlist_name=req.watchlist_name, strategy_key=req.strategy_key,
+                accepted=[], rejected=[])))
+    body = portfolio_routes.DeployIn(
+        watchlist_name="route", strategy_key="trend_impulse_v3",
+        proposals=[], dry_run=True)
+    principal = Principal(id="caller", kind="owner", scopes=frozenset({"*"}))
+
+    assert portfolio_routes.portfolio_deploy(body, principal)["dry_run"] is True
+    assert seen == ["owner.route"]
+
+
 def test_deploy_blocks_incumbents_in_other_watchlists():
     _fresh()
     with SessionLocal() as s:

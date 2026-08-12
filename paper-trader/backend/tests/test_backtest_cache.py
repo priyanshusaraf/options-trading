@@ -19,9 +19,9 @@ def test_params_signature_stable_and_sensitive():
 def test_second_sweep_reuses_cache():
     init_db(reset=True)
     prov = MockProvider()
-    sweep.start_sweep(scope="liquid", intervals=["15minute"], capital=50000, provider=prov)
+    sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"], capital=50000, provider=prov)
     sweep._join()
-    rid2 = sweep.start_sweep(scope="liquid", intervals=["15minute"], capital=50000, provider=prov)
+    rid2 = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"], capital=50000, provider=prov)
     sweep._join()
     with SessionLocal() as s:
         rows2 = list(s.scalars(select(BacktestResult).where(BacktestResult.run_id == rid2)))
@@ -45,7 +45,7 @@ def test_revised_historical_candle_with_same_last_timestamp_is_cold():
                   capital=50_000, provider=provider)
 
     def run_once():
-        run_id = sweep.start_sweep(**kwargs)
+        run_id = sweep.start_sweep(owner_id="owner", **kwargs)
         sweep._join()
         with SessionLocal() as session:
             row = session.scalar(select(BacktestResult).where(
@@ -208,7 +208,7 @@ def test_cache_key_uses_ist_epoch_not_local_timestamp():
     last = candles[-1].ts
     expected = ist_epoch(last)
 
-    rid = sweep.start_sweep(scope="liquid", intervals=["15minute"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"],
                             instruments=["NIFTY"], capital=5_000_000, provider=prov)
     sweep._join()
     with SessionLocal() as s:

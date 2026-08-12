@@ -6,6 +6,8 @@ from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal, init_db
 from app.providers.mock import MockProvider
 from app.strategy.registry import get_strategy
+import json
+import pytest
 
 
 class CountingMockProvider(MockProvider):
@@ -16,6 +18,56 @@ class CountingMockProvider(MockProvider):
     def get_candles(self, inst, interval, days, end=None):
         self.candle_reads.append((inst.key, interval, days, end))
         return super().get_candles(inst, interval, days, end=end)
+
+
+_GENERATED = {
+    "key": "gen_sweep_owner",
+    "longEntry": {"all": ["ema_slope_up(50,5)"]},
+    "shortEntry": {"all": ["ema_slope_down(50,5)"]},
+    "longExit": {"any": ["zscore_lt(50,0.0)"]},
+    "shortExit": {"any": ["zscore_gt(50,0.0)"]},
+}
+
+
+@pytest.mark.parametrize("workers", (1, 2))
+def test_generated_sweep_resolves_and_worker_hydrates_only_the_requested_owner(workers):
+    from app.core import generated_strategies
+    from app.db.models import Organization
+    from app.strategy import registry
+
+    init_db(reset=True)
+    other_composition = dict(_GENERATED)
+    other_composition["longExit"] = {"any": ["zscore_lt(50,0.5)"]}
+    with SessionLocal() as session:
+        session.add(Organization(organization_id="owner.other", name="Other"))
+        generated_strategies.save_generated(
+            session, "gen_sweep_owner", json.dumps(_GENERATED), owner_id="owner")
+        generated_strategies.save_generated(
+            session, "gen_sweep_owner", json.dumps(other_composition),
+            owner_id="owner.other")
+        session.commit()
+        generated_strategies.register_all(session, owner_id="owner")
+        generated_strategies.register_all(session, owner_id="owner.other")
+    try:
+        with pytest.raises(Exception, match="refusing to substitute"):
+            sweep.start_sweep(
+                owner_id="owner.missing", scope="liquid", intervals=["15minute"],
+                instruments=["NIFTY"], provider=MockProvider(),
+                strategies=["gen_sweep_owner"], workers=workers)
+
+        run_id = sweep.start_sweep(
+            owner_id="owner.other", scope="liquid", intervals=["15minute"],
+            instruments=["NIFTY"], provider=MockProvider(),
+            strategies=["gen_sweep_owner"], workers=workers)
+        sweep._join()
+        with SessionLocal() as session:
+            row = session.scalar(select(BacktestResult).where(
+                BacktestResult.run_id == run_id,
+                BacktestResult.strategy_key == "gen_sweep_owner"))
+            assert row is not None and row.error == ""
+    finally:
+        registry._GENERATED_REGISTRY.pop(("owner", "gen_sweep_owner"), None)
+        registry._GENERATED_REGISTRY.pop(("owner.other", "gen_sweep_owner"), None)
 
 
 def test_default_strategy_signature_resolves_consistently():
@@ -34,7 +86,7 @@ def test_different_strategies_get_distinct_signatures():
 def test_sweep_runs_each_instrument_across_multiple_strategies():
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["15minute"], capital=50000,
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"], capital=50000,
                             instruments=["NIFTY"], provider=prov,
                             strategies=["trend_impulse_v3", "expanding_z_v4"])
     sweep._join()
@@ -49,7 +101,7 @@ def test_sweep_runs_each_instrument_across_multiple_strategies():
 def test_sweep_defaults_to_single_v3_when_no_strategies():
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["15minute"], capital=50000,
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"], capital=50000,
                             instruments=["NIFTY"], provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -61,7 +113,7 @@ def test_sweep_defaults_to_single_v3_when_no_strategies():
 def test_total_cell_count_includes_strategies():
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["15minute", "30minute"], capital=50000,
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute", "30minute"], capital=50000,
                             instruments=["NIFTY"], provider=prov,
                             strategies=["trend_impulse_v3", "expanding_z_v4"])
     sweep._join()
@@ -75,7 +127,7 @@ def test_total_cell_count_includes_strategies():
 def test_multi_strategy_sweep_reads_each_dataset_once():
     init_db(reset=True)
     provider = CountingMockProvider()
-    rid = sweep.start_sweep(
+    rid = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute", "30minute"], capital=50_000,
         instruments=["NIFTY"], provider=provider,
         strategies=["trend_impulse_v3", "expanding_z_v4"])
@@ -106,7 +158,7 @@ def test_shared_acquisition_preserves_exact_cold_strategy_results():
     independent_provider = CountingMockProvider()
     independent = {}
     for strategy in strategies:
-        rid = sweep.start_sweep(
+        rid = sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute"], capital=50_000,
             instruments=["NIFTY"], provider=independent_provider,
             strategies=[strategy])
@@ -119,7 +171,7 @@ def test_shared_acquisition_preserves_exact_cold_strategy_results():
 
     init_db(reset=True)
     shared_provider = CountingMockProvider()
-    rid = sweep.start_sweep(
+    rid = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=shared_provider, strategies=strategies)
     sweep._join()
@@ -140,7 +192,7 @@ def test_provider_failure_is_read_once_and_fanned_out_per_strategy():
 
     init_db(reset=True)
     provider = FailingProvider()
-    rid = sweep.start_sweep(
+    rid = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider, strategies=["trend_impulse_v3", "expanding_z_v4"])
     sweep._join()
@@ -160,7 +212,7 @@ def test_thin_dataset_is_read_once_and_fanned_out_per_strategy():
 
     init_db(reset=True)
     provider = ThinProvider()
-    rid = sweep.start_sweep(
+    rid = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider, strategies=["trend_impulse_v3", "expanding_z_v4"])
     sweep._join()
@@ -175,7 +227,7 @@ def test_thin_dataset_is_read_once_and_fanned_out_per_strategy():
 def test_out_of_range_window_is_fanned_out_without_provider_reads():
     init_db(reset=True)
     provider = CountingMockProvider()
-    rid = sweep.start_sweep(
+    rid = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider, start_date="2010-01-01", end_date="2010-01-31",
         strategies=["trend_impulse_v3", "expanding_z_v4"])
@@ -215,14 +267,14 @@ def test_cold_sweep_builds_one_frame_and_evaluates_strategy_once(monkeypatch):
     monkeypatch.setattr(premium, "_candles_to_df", premium_frame)
     monkeypatch.setattr(strategy, "signals", signals)
 
-    sweep.start_sweep(
+    sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider, strategies=[strategy.key])
     sweep._join()
     assert counts == {"engine_frame": 1, "premium_frame": 0, "signals": 1}
 
     counts.update(engine_frame=0, premium_frame=0, signals=0)
-    sweep.start_sweep(
+    sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider, strategies=[strategy.key])
     sweep._join()
@@ -248,7 +300,7 @@ def test_multiple_strategies_share_one_canonical_base_frame(monkeypatch):
 
     monkeypatch.setattr(engine, "_candles_to_df", engine_frame)
     monkeypatch.setattr(premium, "_candles_to_df", premium_frame)
-    sweep.start_sweep(
+    sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], instruments=["NIFTY"],
         provider=provider,
         strategies=["trend_impulse_v3", "expanding_z_v4"])

@@ -74,7 +74,7 @@ def deploy(session, req: DeployRequest, *, owner_id: str) -> DeployResult:
     # existing watchlist's strategy in place and never passes through the constructor, so
     # a gate on creation alone would let a redeploy install what a first deploy refused.
     from app.core.execution_binding import assert_may_execute
-    assert_may_execute(req.strategy_key)
+    assert_may_execute(req.strategy_key, owner_id=owner_id)
     target = wl.get_watchlist(session, req.watchlist_name, owner_id=owner_id)
     if target is None:
         target = wl.create_watchlist(session, req.watchlist_name, req.strategy_key, owner_id=owner_id,

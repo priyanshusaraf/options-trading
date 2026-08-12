@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+import re
 
 from app.core.logging import log
 
@@ -55,6 +56,8 @@ DEFAULT_STRATEGY_KEY = "trend_impulse_v3"
 #: Keys in this namespace are produced by `app/strategy/ir_adapter.py` from a Component IR
 #: graph. They are never substitutable — see `resolve_strategy`.
 IR_NAMESPACE = "ir."
+GENERATED_NAMESPACE = "gen_"
+_GENERATED_KEY = re.compile(r"^gen_[A-Za-z0-9][A-Za-z0-9_]*$")
 
 _REGISTRY: dict[str, Strategy] = {}
 _GENERATED_REGISTRY: dict[tuple[str, str], Strategy] = {}
@@ -102,7 +105,15 @@ def register(strat: Strategy, *, owner_id: str | None = None) -> None:
         if owner_id is None:
             _REGISTRY[strat.key] = strat
         else:
+            if not is_generated_key(strat.key):
+                raise ValueError(
+                    f"generated strategy key {strat.key!r} must match "
+                    "'gen_' followed by letters, digits, or underscores")
             _GENERATED_REGISTRY[(owner_id, strat.key)] = strat
+
+
+def is_generated_key(key: str | None) -> bool:
+    return bool(key and _GENERATED_KEY.fullmatch(key))
 
 
 def all_strategies() -> list[Strategy]:
@@ -129,7 +140,7 @@ def resolve_strategy(key: str | None, *, allow_fallback: bool = False,
     default is precisely the failure this function exists to prevent.
     """
     _discover()
-    if key and key.startswith("gen_"):
+    if key and key.startswith(GENERATED_NAMESPACE):
         strategy = _GENERATED_REGISTRY.get((owner_id or "", key))
         if strategy is not None:
             return strategy
@@ -175,7 +186,7 @@ def get_strategy(key: str | None, *, owner_id: str | None = None) -> Strategy:
     return resolve_strategy(key, allow_fallback=True, owner_id=owner_id)
 
 
-def strategy_meta() -> list[dict]:
+def strategy_meta(*, owner_id: str | None = None) -> list[dict]:
     """Lightweight list for the UI: key, version, label, default params.
 
     `version` is the content hash — `(key, version)` is the execution artifact, so a
@@ -191,7 +202,12 @@ def strategy_meta() -> list[dict]:
     """
     from app.strategy.spec import compile_spec
     out = []
-    for s in all_strategies():
+    strategies = list(all_strategies())
+    if owner_id is not None:
+        strategies.extend(
+            strategy for (registered_owner, _), strategy in _GENERATED_REGISTRY.items()
+            if registered_owner == owner_id)
+    for s in sorted(strategies, key=lambda strategy: strategy.key):
         entry = {"key": s.key, "version": s.version, "display_name": s.display_name,
                  "default_params": dict(s.default_params)}
         try:
@@ -205,4 +221,4 @@ def strategy_meta() -> list[dict]:
 
 __all__ = ["Strategy", "CANONICAL_COLUMNS", "DEFAULT_STRATEGY_KEY", "StrategyNotFound",
            "register", "all_strategies", "strategy_keys", "get_strategy",
-           "resolve_strategy", "strategy_meta"]
+           "resolve_strategy", "strategy_meta", "GENERATED_NAMESPACE", "is_generated_key"]

@@ -98,7 +98,7 @@ def _artifacts(run_id) -> dict:
 
 def _sweep(provider, *, workers, instruments=INSTRUMENTS, intervals=INTERVALS,
            strategies=STRATEGIES):
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=intervals, capital=50_000,
         instruments=instruments, provider=provider, strategies=strategies,
         workers=workers)
@@ -179,7 +179,7 @@ def test_a_pinned_parallel_run_makes_no_provider_call_and_matches_serial(store_r
 
     init_db(reset=True)
     pinned_provider = CountingMockProvider()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=INSTRUMENTS, provider=pinned_provider, strategies=STRATEGIES,
         pinned_datasets=pins, workers=4)
@@ -391,7 +391,7 @@ def test_in_flight_work_is_bounded_by_the_worker_count(store_root, monkeypatch):
 def test_a_parallel_sweep_still_reports_and_clears_is_running(store_root):
     init_db(reset=True)
     assert not sweep.is_running()
-    run_id = sweep.start_sweep(
+    run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=CountingMockProvider(),
         strategies=["trend_impulse_v3"], workers=2)
@@ -400,7 +400,7 @@ def test_a_parallel_sweep_still_reports_and_clears_is_running(store_root):
     with SessionLocal() as s:
         assert s.get(BacktestRun, run_id).status == "done"
     # a second sweep can start: the flag was released, not leaked
-    sweep.start_sweep(
+    sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=CountingMockProvider(),
         strategies=["trend_impulse_v3"], workers=2)

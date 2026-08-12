@@ -25,7 +25,7 @@ from app.db.session import SessionLocal, init_db  # noqa: E402
 
 def main() -> int:
     init_db(reset=True)
-    run_id = start_sweep(scope="liquid", intervals=["15minute", "day"], capital=50_000)
+    run_id = start_sweep(owner_id="owner", scope="liquid", intervals=["15minute", "day"], capital=50_000)
 
     # poll until the background thread finishes
     for _ in range(120):

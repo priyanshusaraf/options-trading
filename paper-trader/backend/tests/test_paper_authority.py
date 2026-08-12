@@ -352,6 +352,24 @@ class TestRollback:
             with pytest.raises(pa.RollbackTargetInvalid):
                 pa.retire(s, row.id, revision=1, restore_strategy_key="no_such_strategy", owner_id="owner")
 
+    def test_a_generated_rollback_target_is_resolved_for_the_retiring_owner(self, monkeypatch):
+        from app.strategy import registry
+        from app.strategy.registry.base import Strategy
+
+        generated = Strategy()
+        generated.key = "gen_owner_rollback"
+        generated.pin_version("sha256:owner")
+        monkeypatch.setitem(registry._GENERATED_REGISTRY, ("owner", generated.key), generated)
+
+        with SessionLocal() as s:
+            row = staged(s)
+            s.commit()
+            pa.activate(s, row.id, revision=0)
+            retired = pa.retire(
+                s, row.id, revision=1,
+                restore_strategy_key=generated.key, owner_id="owner")
+            assert retired.rollback_strategy_key == generated.key
+
     def test_money_records_are_never_rewritten_by_a_rollback(self):
         """Rollback changes what runs next. It says nothing about what already traded."""
         import datetime as dt

@@ -43,6 +43,33 @@ def test_instrument_belongs_to_at_most_one_watchlist():
         assert s.query(WatchlistMembership).filter_by(instrument_key="SILVERM").count() == 1
 
 
+def test_assigning_a_guessed_foreign_watchlist_id_does_not_materialize_the_foreign_row():
+    """Tenant predicates belong in SQL, before a row reaches the ORM identity map."""
+    from sqlalchemy import event
+    from app.db.models import Watchlist
+
+    _fresh()
+    loaded = []
+    with SessionLocal() as s:
+        from sqlalchemy import text
+        s.execute(text(
+            "INSERT INTO organizations VALUES "
+            "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        foreign = wl.create_watchlist(
+            s, "foreign", "trend_impulse_v3", owner_id="owner.other")
+        s.commit()
+        foreign_id = foreign.id
+        s.expunge_all()
+        event.listen(s, "loaded_as_persistent", lambda _session, row: loaded.append(row))
+
+        import pytest
+        with pytest.raises(ValueError, match=f"no watchlist with id {foreign_id}"):
+            wl.assign_instrument(s, "NIFTY", foreign_id, owner_id="owner")
+
+        assert not any(isinstance(row, Watchlist) and row.id == foreign_id for row in loaded)
+        assert s.get(WatchlistMembership, ("owner", "NIFTY")) is None
+
+
 def test_unassign_removes_membership():
     _fresh()
     with SessionLocal() as s:

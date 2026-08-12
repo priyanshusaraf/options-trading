@@ -708,8 +708,11 @@ class EngineRunner:
         something other than what was asked for is the failure mode, not the fix.
         """
         from app.strategy.registry import strategy_keys as _keys
-        execution_binding.assert_may_execute(strategy_key)
-        sk = strategy_key if (strategy_key and strategy_key in _keys()) else None
+        execution_binding.assert_may_execute(strategy_key, owner_id=self.owner_id)
+        if strategy_key and execution_binding.source_of(strategy_key) == execution_binding.SOURCE_GENERATED:
+            sk = strategy_key  # assert_may_execute resolved it in this owner's registry
+        else:
+            sk = strategy_key if (strategy_key and strategy_key in _keys()) else None
         with self._upsert_state(key) as r:
             r.strategy_key = sk
         if sk:

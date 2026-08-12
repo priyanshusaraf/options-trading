@@ -62,7 +62,7 @@ def add_instrument(key: str, provider, on_home: bool = True,
     # rather than dropping the key keeps the refusal visible — a silently ignored
     # strategy would add the instrument under the default and report success.
     from app.core.execution_binding import assert_may_execute
-    assert_may_execute(strategy_key)
+    assert_may_execute(strategy_key, owner_id=owner_id)
     spec = resolve_spec(key, provider)
     if spec is None:
         return {"error": f"could not resolve instrument '{key}'"}
@@ -99,8 +99,12 @@ def add_instrument(key: str, provider, on_home: bool = True,
             st.product = product
             applied_product = product
         if strategy_key:
-            from app.strategy.registry import strategy_keys as _skeys
-            if strategy_key in _skeys():
+            from app.strategy.registry import resolve_strategy
+            try:
+                resolve_strategy(strategy_key, owner_id=owner_id)
+            except LookupError:
+                pass
+            else:
                 st.strategy_key = strategy_key
                 applied_strategy = strategy_key
         s.commit()

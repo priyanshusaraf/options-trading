@@ -43,10 +43,19 @@ def _recover() -> None:
     names = _names()
     # Validate every completed source-absent temp before promoting any of them. A later
     # malformed proof must never leave an earlier table promoted in the same retry.
+    proven = set()
+    if PROOF_TABLE in names:
+        proven = set(op.get_bind().execute(sa.text(
+            f"SELECT table_name FROM {PROOF_TABLE}")).scalars())
     for table in TABLES:
         temp = f"{table}__0023"
         if table not in names and temp in names:
             _prove_temp(table, temp)
+        elif table in names and temp not in names and table in proven:
+            # Rename succeeded but proof cleanup did not. The renamed source is now the
+            # only recovery candidate, so validate both its bytes and schema before
+            # accepting or clearing the durable proof.
+            _prove_temp(table, table)
     for table in TABLES:
         temp = f"{table}__0023"
         if table in names and temp in names:
@@ -56,6 +65,9 @@ def _recover() -> None:
         elif table not in names and temp in names:
             op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
             op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
+        elif table in names and temp not in names and table in proven:
+            op.get_bind().execute(sa.text(
+                f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
 
 
 def _rows_proof(table: str) -> tuple[int, str]:
@@ -67,12 +79,14 @@ def _rows_proof(table: str) -> tuple[int, str]:
 def _schema_digest(table: str) -> str:
     """Digest the complete SQLite table contract, not merely its copied rows."""
     bind = op.get_bind()
+    logical_table = table.removesuffix("__0023")
     rows = bind.execute(sa.text(
         "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=:table "
         "AND type IN ('table','index','trigger') ORDER BY type,name"), {"table": table}).all()
     canonical = "\n".join(
-        f"{row.type}:{row.name}:" + " ".join((row.sql or "").replace(
-            table, "__TABLE__").replace('"', '').replace('`', '').split()).lower()
+        f"{row.type}:{row.name.replace(table, '__TABLE__').replace(logical_table, '__TABLE__')}:" +
+        " ".join((row.sql or "").replace(table, "__TABLE__").replace(
+            logical_table, "__TABLE__").replace('"', '').replace('`', '').split()).lower()
         for row in rows
     )
     return hashlib.sha256(canonical.encode()).hexdigest()

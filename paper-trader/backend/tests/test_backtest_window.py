@@ -42,7 +42,7 @@ def test_sweep_restricted_to_chosen_instruments_records_window():
     init_db(reset=True)
     prov = MockProvider()
     # mock universe = curated seed list; restrict to NIFTY only, 1-year window
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"], instruments=["NIFTY"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], instruments=["NIFTY"],
                             lookback_days=365, provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -110,7 +110,7 @@ def test_out_of_range_window_gets_distinct_status():
     max', NOT the generic, silently-hidden 'insufficient history'."""
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"], instruments=["NIFTY"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], instruments=["NIFTY"],
                             start_date="2018-01-01", end_date="2018-06-01", provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -144,7 +144,7 @@ def test_per_interval_results_record_true_span():
     init_db(reset=True)
     prov = MockProvider()
     # lookback 100d: 'minute' caps at 60d (CLAMPED), 'day' caps at 2000d (not clamped)
-    rid = sweep.start_sweep(scope="liquid", intervals=["minute", "day"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["minute", "day"],
                             instruments=["NIFTY"], lookback_days=100, provider=prov)
     sweep._join()
     c = TestClient(app)
@@ -186,7 +186,7 @@ def test_sweep_restricted_to_commodities():
     """An instruments-only sweep runs EXACTLY the chosen keys, nothing else."""
     init_db(reset=True)
     prov = MockProvider()
-    rid = sweep.start_sweep(scope="liquid", intervals=["day"],
+    rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"],
                             instruments=["GOLDM", "SILVERM", "COPPERM"], provider=prov)
     sweep._join()
     with SessionLocal() as s:
@@ -209,7 +209,7 @@ def test_sweep_rejects_unknown_instrument():
     init_db(reset=True)
     prov = MockProvider()
     try:
-        sweep.start_sweep(scope="liquid", intervals=["day"],
+        sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"],
                           instruments=["NOT_A_REAL_INSTRUMENT"], provider=prov)
         assert False, "expected a failure for an unknown instrument"
     except RuntimeError as e:
