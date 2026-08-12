@@ -388,6 +388,35 @@ def test_in_flight_work_is_bounded_by_the_worker_count(store_root, monkeypatch):
         f"the parent is not applying back-pressure")
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("dataset failed"), sweep.ClaimLost("lost")])
+def test_parallel_failure_clears_owner_run_process_gauges(store_root, monkeypatch, failure):
+    """A failed parallel generator cannot leave capacity reported as consumed."""
+    init_db(reset=True)
+    run_id = 991
+
+    class Pool:
+        def __init__(self, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+
+    import concurrent.futures
+    monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", Pool)
+    if isinstance(failure, sweep.ClaimLost):
+        class Guard:
+            def ensure_active(self): raise failure
+        guard = Guard()
+    else:
+        guard = None
+        def fail_prepare(*_args, **_kwargs): raise failure
+        monkeypatch.setattr(sweep, "_prepare_dataset", fail_prepare)
+    with pytest.raises(type(failure)):
+        list(sweep._parallel_cell_values(object(), [object()], ["day"], 1.0,
+                                         {}, [], None, 2, owner_id="owner",
+                                         run_id=run_id, guard=guard))
+    assert sweep._measurement_gauges[("active_process_pools", "owner", run_id)] == 0
+    assert sweep._measurement_gauges[("inflight_datasets", "owner", run_id)] == 0
+
+
 # ── the background-thread contract is untouched ──────────────────────────────
 
 def test_a_parallel_sweep_still_reports_and_clears_is_running(store_root):

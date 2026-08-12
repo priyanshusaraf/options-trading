@@ -245,6 +245,74 @@ def test_unavailable_replay_artifact_releases_only_its_current_claim():
     assert run.status == "pending" and run.claim_token is None
 
 
+def test_cancel_during_pre_worker_resolution_terminalizes_and_cannot_dispatch(monkeypatch):
+    """A cancellation between dispatch claim and launch must not strand a run."""
+    init_db(reset=True)
+    descriptor = {
+        "scope": "liquid", "intervals": ["day"], "capital": 1.0,
+        "instruments": ["NIFTY"],
+        "strategies": [sweep._strategy_descriptor(
+            resolve_strategy("trend_impulse_v3", owner_id="owner"))],
+        "pinned_datasets": {}, "workers": 1,
+    }
+    with SessionLocal() as session:
+        run = repository.enqueue_run(session, owner_id="owner", scope="liquid",
+                                     intervals="day", capital=1.0, total=1,
+                                     request_json=__import__("json").dumps(descriptor))
+        session.commit()
+
+    real_resolve = sweep._resolve_descriptor_strategies
+    def cancel_while_resolving(**kwargs):
+        with SessionLocal() as session:
+            assert repository.request_cancel(session, owner_id="owner", run_id=run.id)
+            session.commit()
+        return real_resolve(**kwargs)
+
+    monkeypatch.setattr(sweep, "_resolve_descriptor_strategies", cancel_while_resolving)
+    assert sweep.dispatch_reclaimable(owner_id="owner", maximum=1) == []
+
+
+def test_cancel_during_fresh_start_resolution_terminalizes_before_worker_launch(monkeypatch):
+    """A newly admitted run has the same cancellation safety as restart dispatch."""
+    init_db(reset=True)
+    entered, release = threading.Event(), threading.Event()
+    real_thread = threading.Thread
+
+    def blocked_universe(_provider):
+        entered.set()
+        assert release.wait(timeout=2)
+        return [object()]
+
+    class NeverStart:
+        def __init__(self, *_args, **_kwargs): pass
+        def start(self): raise AssertionError("cancelled resolution launched a worker")
+        def is_alive(self): return False
+
+    monkeypatch.setattr(sweep, "liquid_universe", blocked_universe)
+    monkeypatch.setattr(sweep.threading, "Thread", NeverStart)
+    outcome = {}
+    def launch():
+        outcome["run_id"] = sweep.start_sweep(
+            owner_id="owner", provider=object(), intervals=["day"],
+            instruments=None, strategies=["trend_impulse_v3"])
+    runner = real_thread(target=launch)
+    runner.start()
+    assert entered.wait(timeout=2)
+    with SessionLocal() as session:
+        run = repository.latest_run(session, owner_id="owner")
+        assert repository.request_cancel(session, owner_id="owner", run_id=run.id)
+        session.commit()
+    release.set(); runner.join(timeout=3)
+    assert not runner.is_alive()
+    with SessionLocal() as session:
+        run = repository.latest_run(session, owner_id="owner")
+        assert run.status == "cancelled" and outcome["run_id"] == run.id
+    with SessionLocal() as session:
+        persisted = repository.get_run(session, owner_id="owner", run_id=run.id)
+        assert persisted.status == "cancelled"
+    assert sweep.dispatch_reclaimable(owner_id="owner", maximum=1) == []
+
+
 def test_exact_total_must_pass_admission_again_after_universe_resolution(monkeypatch):
     """A conservative reservation is not permission to exceed the real cell budget."""
     init_db(reset=True)
@@ -350,6 +418,15 @@ def test_measurements_are_owner_partitioned_and_snapshot_is_lock_safe(monkeypatc
     assert b_snapshot["batch_persists"] >= 1
 
 
+def test_same_owner_concurrent_run_gauges_are_additive():
+    """A later run must not overwrite a same-owner run's live gauge."""
+    init_db(reset=True)
+    first, second = _run("owner"), _run("owner")
+    sweep._measure_set("inflight_datasets", 2, owner_id="owner", run_id=first)
+    sweep._measure_set("inflight_datasets", 5, owner_id="owner", run_id=second)
+    assert sweep.measurement_snapshot(owner_id="owner")["inflight_datasets"] == 7
+
+
 def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):
     """Removing the one-transaction update would leave a durable partial batch."""
     init_db(reset=True)
@@ -397,6 +474,11 @@ def test_reconciliation_only_requeues_expired_claims():
         live = repository.get_run(session, owner_id="owner", run_id=live_id)
         assert expired.status == "pending" and expired.claim_token is None
         assert live.status == "running" and live.claimed_by == "live"
+
+
+def test_repository_does_not_export_an_unfenced_running_run_reconciler():
+    """A live lease must be recoverable only through expiry or its own token."""
+    assert not hasattr(repository, "reconcile_stale_runs")
 
 
 def test_admission_is_per_workload_not_a_process_global(monkeypatch):

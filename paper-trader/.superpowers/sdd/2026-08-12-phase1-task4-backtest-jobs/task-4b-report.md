@@ -2,6 +2,29 @@
 
 Status: implementation complete; final independent review remains pending.
 
+Final hardening after the first review:
+
+- Removed the unfenced repository-level `reconcile_stale_runs` mutator. Recovery now
+  changes only expired leases (or historical claimless rows), while release, cancellation,
+  result persistence and terminal transitions stay claim-token fenced.
+- A cancellation observed during descriptor/provider/universe resolution, whether after a
+  restart claim or a fresh `start_sweep` claim, now becomes the token-aware `cancelled`
+  terminal state before any worker thread starts. It cannot be dispatched again or be
+  converted into an error by the resolution exception path.
+- Parallel gauges are keyed by owner and run in production. Their process-pool and
+  in-flight values are cleared in `finally` for ordinary exceptions and a lost claim,
+  without overwriting another same-owner run's gauges.
+- A successful `0026 -> 0025` downgrade removes its empty recovery-proof table and the
+  resulting backtest table/index contract matches a clean 0025 database exactly.
+
+Final focused evidence:
+
+- `backend/.venv/bin/python -m pytest -q` over the six new fencing, cancellation,
+  gauge and migration cases: `6 passed`.
+- `backend/.venv/bin/python -m py_compile app/backtest/repository.py
+  app/backtest/sweep.py migrations/versions/20260812_0026_backtest_resume_cells.py`
+  and `git diff --check`: pass.
+
 Delivered:
 
 - Revision `0025` adds durable queue, claim, heartbeat, attempt, cancellation and requested-worker fields to `backtest_runs`, with owner/status/queue and lease-expiry indexes.

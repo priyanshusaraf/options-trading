@@ -48,6 +48,29 @@ def test_revision_0026_backfills_legacy_cells_and_refuses_duplicate_new_identity
         assert connection.execute(sa.text("SELECT cell_key FROM backtest_results WHERE id=942")).scalar_one() == "legacy:942"
 
 
+def test_revision_0026_successful_downgrade_removes_rebuild_proofs_and_matches_0025_schema(tmp_path):
+    """A completed reversible downgrade leaves neither working state nor schema drift."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0026-clean-downgrade.db", "0026")
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0025")
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='_backtest_0026_rebuild_proofs'"
+        )).first() is None
+        downgraded = connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE tbl_name IN ('backtest_runs','backtest_results') "
+            "OR (type='index' AND tbl_name IN ('backtest_runs','backtest_results')) "
+            "ORDER BY type,name")).all()
+    expected = _build_from_baseline_at_revision(tmp_path, "0025-schema-parity.db", "0025")
+    with expected.begin() as connection:
+        baseline = connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master "
+            "WHERE tbl_name IN ('backtest_runs','backtest_results') "
+            "OR (type='index' AND tbl_name IN ('backtest_runs','backtest_results')) "
+            "ORDER BY type,name")).all()
+    assert downgraded == baseline
+
+
 @pytest.mark.parametrize("foreign_keys", (0, 1))
 @pytest.mark.parametrize("needle", (
     "INSERT INTO BACKTEST_RESULTS__0026_DOWN",

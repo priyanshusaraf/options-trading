@@ -378,13 +378,3 @@ def reconcile_expired_claims(session, *, owner_id: str,
                 BacktestResult.run_id == BacktestRun.id).scalar_subquery(),
             note="interrupted legacy run without a durable worker claim"))
     return reclaimed + int(legacy.rowcount or 0)
-
-
-def reconcile_stale_runs(session, *, owner_id: str, note: str) -> int:
-    runs = list(session.scalars(select(BacktestRun).where(
-        BacktestRun.owner_id == owner_id, BacktestRun.status == "running")))
-    for run in runs:
-        run.status = "error"
-        run.done = durable_result_count(session, owner_id=owner_id, run_id=run.id)
-        run.note = note[:400]
-    return len(runs)

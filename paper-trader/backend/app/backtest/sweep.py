@@ -309,6 +309,24 @@ class ClaimLost(RuntimeError):
     """The durable token was cancelled, replaced, or allowed to expire."""
 
 
+def _terminalize_requested_cancel(*, owner_id: str, run_id: int,
+                                  claim_token: str) -> bool:
+    """Finish a cancellation safely when no worker exists yet."""
+    with SessionLocal() as session:
+        if not repository.is_cancel_requested(
+                session, owner_id=owner_id, run_id=run_id,
+                claim_token=claim_token):
+            return False
+        completed = repository.complete_claim(
+            session, owner_id=owner_id, run_id=run_id,
+            claim_token=claim_token, status="cancelled")
+        if completed:
+            session.commit()
+        else:
+            session.rollback()
+        return completed
+
+
 class ReplayUnavailable(RuntimeError):
     """A durable descriptor cannot be reconstructed without changing its meaning.
 
@@ -644,6 +662,10 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         try:
             resolving_guard.ensure_active()
             provider = provider or get_provider()
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=run_id,
+                                              claim_token=claim.claim_token):
+                resolving_guard.close()
+                return run_id
             specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
             if instruments:
                 want = {k.strip() for k in instruments if k.strip()}
@@ -673,9 +695,16 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                                + (f" · {worker_count} workers" if worker_count > 1 else ""))
                 resolved.commit()
             resolving_guard.ensure_active()
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=run_id,
+                                              claim_token=claim.claim_token):
+                resolving_guard.close()
+                return run_id
             total = exact_total
         except Exception as exc:
             resolving_guard.close()
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=run_id,
+                                              claim_token=claim.claim_token):
+                return run_id
             with SessionLocal() as failed:
                 repository.complete_claim(failed, owner_id=owner_id, run_id=run_id,
                                           claim_token=claim.claim_token, status="error",
@@ -741,7 +770,7 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
     try:
         for values in _cell_values(provider, specs, intervals, capital,
                                    win, strategies, pinned, workers, owner_id=owner_id,
-                                   guard=guard):
+                                   run_id=run_id, guard=guard):
             guard.ensure_active()
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
@@ -840,7 +869,15 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 register_all(hydrate, owner_id=owner_id)
             strategies = _resolve_descriptor_strategies(owner_id=owner_id,
                                                         descriptor=descriptor)
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=claim.id,
+                                              claim_token=claim.claim_token):
+                resolving_guard.close()
+                continue
             provider = get_provider()
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=claim.id,
+                                              claim_token=claim.claim_token):
+                resolving_guard.close()
+                continue
             scope = descriptor.get("scope", "liquid")
             specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
             requested = set(descriptor.get("instruments") or ())
@@ -857,6 +894,10 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
             if any(isinstance(item, dict) and item.get("composition_json") is not None
                    for item in descriptor["strategies"]):
                 workers = 1
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=claim.id,
+                                              claim_token=claim.claim_token):
+                resolving_guard.close()
+                continue
             thread = threading.Thread(
                 target=_run,
                 args=(claim.id, provider, specs, intervals, float(descriptor.get("capital", claim.capital)),
@@ -888,6 +929,9 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 resolving_guard.close()
             with _state_lock:
                 _workers.pop(claim.id, None)
+            if _terminalize_requested_cancel(owner_id=owner_id, run_id=claim.id,
+                                              claim_token=claim.claim_token):
+                continue
             with SessionLocal() as session:
                 repository.complete_claim(session, owner_id=owner_id, run_id=claim.id,
                                           claim_token=claim.claim_token, status="error",
@@ -912,7 +956,8 @@ def dispatch_all_reclaimable() -> list[int]:
 
 
 def _cell_values(provider, specs, intervals, capital, win, strategies,
-                 pinned, workers, *, owner_id: str, guard: _ClaimGuard | None = None):
+                 pinned, workers, *, owner_id: str, run_id: int | None = None,
+                 guard: _ClaimGuard | None = None):
     """Yield one serialized result payload per cell, in request order.
 
     Serial by default and by reference: `workers <= 1` walks the cells in this
@@ -923,7 +968,7 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
     if count > 1:
         yield from _parallel_cell_values(
             provider, specs, intervals, capital, win, strategies, pinned, count,
-            owner_id=owner_id, guard=guard)
+            owner_id=owner_id, run_id=run_id, guard=guard)
         return
     for inst in specs:
         if guard is not None:
@@ -1161,6 +1206,7 @@ def _drain(slots, future) -> list[dict]:
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                           pinned, workers, *, owner_id: str,
+                          run_id: int | None = None,
                           guard: _ClaimGuard | None = None):
     """Yield the same values as the serial path, in the same order, computed in
     `workers` processes.
@@ -1176,51 +1222,53 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
     max_inflight = max(2, workers * 2)
     pending: deque = deque()
     ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-        _measure_set("active_process_pools", 1, owner_id=owner_id)
-        for inst in specs:
-            if guard is not None:
-                guard.ensure_active()
-            for interval in intervals:
+    try:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            _measure_set("active_process_pools", 1, owner_id=owner_id, run_id=run_id)
+            for inst in specs:
                 if guard is not None:
                     guard.ensure_active()
-                if pinned is not None:
-                    # Pinned: the parent reads the manifest, never the bars. The
-                    # store read — and every refusal it can raise — belongs to
-                    # the worker (`_pinned_worker_task`).
-                    prepared = _pinned_header(
-                        provider, inst, interval, win, pinned,
-                        clamped=_is_clamped(interval, win.get("lookback_days"),
-                                            win.get("start")))
-                    task, address = _pinned_worker_task, prepared.dataset_address
-                else:
-                    prepared = _prepare_dataset(provider, inst, interval, win)
-                    task, address = _worker_task, ""
-                slots, payload = _plan_dataset(
-                    provider, inst, interval, capital, win, strategies, prepared,
-                    pinned_address=address, owner_id=owner_id)
-                if guard is not None:
-                    guard.ensure_active()
-                future = pool.submit(task, payload) if payload else None
-                pending.append((future, slots))
-                _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
-                # `prepared` (and its lazily-built frame) is dropped here: the
-                # parent never holds a dataset past its submission.
-                del prepared, payload
-                while len(pending) >= max_inflight:
+                for interval in intervals:
                     if guard is not None:
                         guard.ensure_active()
-                    future, slots = pending.popleft()
-                    _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
-                    yield from _drain(slots, future)
-        while pending:
-            if guard is not None:
-                guard.ensure_active()
-            future, slots = pending.popleft()
-            _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
-            yield from _drain(slots, future)
-    _measure_set("active_process_pools", 0, owner_id=owner_id)
-    _measure_set("inflight_datasets", 0, owner_id=owner_id)
+                    if pinned is not None:
+                        # Pinned: the parent reads the manifest, never the bars. The
+                        # store read — and every refusal it can raise — belongs to
+                        # the worker (`_pinned_worker_task`).
+                        prepared = _pinned_header(
+                            provider, inst, interval, win, pinned,
+                            clamped=_is_clamped(interval, win.get("lookback_days"),
+                                                win.get("start")))
+                        task, address = _pinned_worker_task, prepared.dataset_address
+                    else:
+                        prepared = _prepare_dataset(provider, inst, interval, win)
+                        task, address = _worker_task, ""
+                    slots, payload = _plan_dataset(
+                        provider, inst, interval, capital, win, strategies, prepared,
+                        pinned_address=address, owner_id=owner_id)
+                    if guard is not None:
+                        guard.ensure_active()
+                    future = pool.submit(task, payload) if payload else None
+                    pending.append((future, slots))
+                    _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
+                    # `prepared` (and its lazily-built frame) is dropped here: the
+                    # parent never holds a dataset past its submission.
+                    del prepared, payload
+                    while len(pending) >= max_inflight:
+                        if guard is not None:
+                            guard.ensure_active()
+                        future, slots = pending.popleft()
+                        _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
+                        yield from _drain(slots, future)
+            while pending:
+                if guard is not None:
+                    guard.ensure_active()
+                future, slots = pending.popleft()
+                _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
+                yield from _drain(slots, future)
+    finally:
+        _measure_set("active_process_pools", 0, owner_id=owner_id, run_id=run_id)
+        _measure_set("inflight_datasets", 0, owner_id=owner_id, run_id=run_id)
 
 
 def _prepare_dataset(provider, inst, interval, win, *,

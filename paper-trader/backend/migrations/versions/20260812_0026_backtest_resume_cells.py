@@ -294,6 +294,9 @@ def downgrade():
         run_columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("backtest_runs")}
         result_columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("backtest_results")}
         if "request_json" not in run_columns and "cell_key" not in result_columns:
+            if PROOF_TABLE in _names() and not op.get_bind().execute(sa.text(
+                    f"SELECT 1 FROM {PROOF_TABLE} LIMIT 1")).first():
+                op.execute(sa.text(f"DROP TABLE {PROOF_TABLE}"))
             return
         # Request descriptors and replay cell identities are durable execution
         # evidence; silently deleting them would make a formerly reproducible
@@ -313,5 +316,8 @@ def downgrade():
             _down_rebuild("backtest_runs", PREVIOUS.RUN_COLUMNS)
         if op.get_bind().execute(sa.text("PRAGMA foreign_key_check")).all():
             raise RuntimeError("0026 downgrade foreign-key validation failed")
+        if PROOF_TABLE in _names() and not op.get_bind().execute(sa.text(
+                f"SELECT 1 FROM {PROOF_TABLE} LIMIT 1")).first():
+            op.execute(sa.text(f"DROP TABLE {PROOF_TABLE}"))
     finally:
         raw.commit(); raw.execute(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
