@@ -322,3 +322,26 @@ def test_legacy_manifest_without_explicit_public_classification_is_refused(store
     manifest.pop("classification")
     store.manifest_path(address).write_text(__import__("json").dumps(manifest))
     assert store.get(address) is None
+
+
+@pytest.mark.parametrize("address", ("../secrets", "A" * 64, "a" * 63, "a" * 64 + "/x"))
+def test_public_address_rejects_malformed_values_before_any_path_or_database_io(store, monkeypatch, address):
+    calls = []
+    monkeypatch.setattr(store, "blob_path", lambda value: calls.append(("blob", value)))
+    monkeypatch.setattr(store, "manifest_path", lambda value: calls.append(("manifest", value)))
+    assert store.get(address) is None
+    assert store.manifest(address) is None
+    assert calls == []
+
+
+def test_lookup_refuses_malformed_address_read_from_public_index(store, monkeypatch):
+    provider = CountingMockProvider()
+    instrument = _nifty(provider)
+    key = store.request_key(provider=provider, instrument=instrument, interval="15minute",
+                            requested_window=REQUESTED)
+    store._conn.execute(
+        "INSERT INTO dataset_requests VALUES(?,?,?,?,?,?,?)",
+        (key, "p", "i", "15minute", "{}", "../private", "now"))
+    store._conn.commit()
+    assert store.lookup(provider=provider, instrument=instrument, interval="15minute",
+                        requested_window=REQUESTED) is None

@@ -70,6 +70,11 @@ class PublicComputationIntegrityError(RuntimeError):
     """A public address or public payload cannot be authenticated."""
 
 
+def _is_address(value: object) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value))
+
+
 def _canonical_json(value: Mapping) -> str:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -85,17 +90,26 @@ def canonical_public_payload(payload: Mapping) -> str:
     """
     if not isinstance(payload, Mapping):
         raise PublicComputationIntegrityError("public computation payload must be a mapping")
-    unknown = set(payload) - _PUBLIC_RESULT_FIELD_SET
-    if unknown:
+    keys = set(payload)
+    if keys != _PUBLIC_RESULT_FIELD_SET:
+        missing = sorted(_PUBLIC_RESULT_FIELD_SET - keys)
+        unknown = sorted(keys - _PUBLIC_RESULT_FIELD_SET)
         raise PublicComputationIntegrityError(
-            f"public computation payload key is not an allowed v{PUBLIC_PAYLOAD_VERSION} field: {sorted(unknown)!r}")
+            f"public computation payload must contain the exact v{PUBLIC_PAYLOAD_VERSION} schema; "
+            f"missing={missing!r} unknown={unknown!r}")
     return _canonical_json({"version": PUBLIC_PAYLOAD_VERSION,
                             "result": {key: payload[key] for key in PUBLIC_RESULT_FIELDS if key in payload}})
 
 
 def public_result_payload(values: Mapping) -> dict:
     """The only sweep-to-public boundary: copy the closed semantic field set."""
-    return {key: values[key] for key in PUBLIC_RESULT_FIELDS if key in values}
+    # Error rows are rejected before publication, so the ordinary successful
+    # serializer need not carry the ORM's empty-error default itself.
+    missing = _PUBLIC_RESULT_FIELD_SET - set(values) - {"error"}
+    if missing:
+        raise PublicComputationIntegrityError(
+            f"public result source misses required semantic fields: {sorted(missing)!r}")
+    return {key: values[key] if key in values else "" for key in PUBLIC_RESULT_FIELDS}
 
 
 def _decode_public_payload(payload_json: str) -> dict:
@@ -106,7 +120,7 @@ def _decode_public_payload(payload_json: str) -> dict:
     if (not isinstance(envelope, dict) or envelope.get("version") != PUBLIC_PAYLOAD_VERSION
             or not isinstance(envelope.get("result"), dict)
             or set(envelope) != {"version", "result"}
-            or not set(envelope["result"]) <= _PUBLIC_RESULT_FIELD_SET):
+            or set(envelope["result"]) != _PUBLIC_RESULT_FIELD_SET):
         raise PublicComputationIntegrityError("public computation payload has an invalid v1 envelope")
     return dict(envelope["result"])
 
@@ -149,11 +163,10 @@ def is_eligible(*, dataset_classification: str | None, strategy_key: str,
     """Deny by default before a caller can probe shared state."""
     if dataset_classification != MARKET_PUBLIC or not isinstance(execution_manifest, Mapping):
         return False
-    if not _REQUIRED_MANIFEST_KEYS <= set(execution_manifest):
+    if set(execution_manifest) != _REQUIRED_MANIFEST_KEYS:
         return False
     address = execution_manifest.get("dataset_address")
-    return (isinstance(address, str) and len(address) == 64
-            and all(char in "0123456789abcdef" for char in address)
+    return (_is_address(address)
             and execution_manifest.get("dataset_verified") is True
             and strategy_key in PUBLIC_STRATEGY_CATALOG
             and strategy_module == PUBLIC_STRATEGY_CATALOG[strategy_key]["module"])
@@ -173,7 +186,8 @@ def maybe_materialize(session, *, execution_address: str, dataset_classification
         return None
     item = PUBLIC_STRATEGY_CATALOG.get(strategy_key)
     if (item is None or strategy_version != item["version"]
-            or not isinstance(policy_address, str) or len(policy_address) != 64):
+            or not (_is_address(execution_address) and _is_address(policy_address))
+            or policy_address != execution_address):
         return None
     row = _lookup(session, execution_address=execution_address)
     if row is None:
@@ -184,13 +198,25 @@ def maybe_materialize(session, *, execution_address: str, dataset_classification
         raise PublicComputationIntegrityError("public computation metadata mismatch")
     if _digest(row.payload_json) != row.payload_digest:
         raise PublicComputationIntegrityError("public computation payload digest mismatch")
-    return dict(_decode_public_payload(row.payload_json), from_cache=True, computed_at=None)
+    payload = _decode_public_payload(row.payload_json)
+    if (payload["strategy_key"] != strategy_key
+            or payload["strategy_version"] != strategy_version
+            or payload["params_hash"] != execution_address):
+        raise PublicComputationIntegrityError("public computation payload semantic identity mismatch")
+    return dict(payload, from_cache=True, computed_at=None)
 
 
 def put_immutable(session, *, execution_address: str, dataset_address: str,
                   strategy_key: str, strategy_version: str, policy_address: str,
                   payload: Mapping) -> BacktestComputation:
     """Publish once; concurrent identical writers converge, conflicts refuse."""
+    if not (_is_address(execution_address) and _is_address(dataset_address)
+            and _is_address(policy_address) and policy_address == execution_address):
+        raise PublicComputationIntegrityError("public computation address identity is invalid")
+    if (payload.get("strategy_key") != strategy_key
+            or payload.get("strategy_version") != strategy_version
+            or payload.get("params_hash") != execution_address):
+        raise PublicComputationIntegrityError("public computation payload semantic identity mismatch")
     payload_json = canonical_public_payload(payload)
     digest = _digest(payload_json)
     candidate = BacktestComputation(

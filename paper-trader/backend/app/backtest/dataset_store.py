@@ -157,6 +157,12 @@ def _require_public(classification: str) -> None:
         raise DatasetStoreError("public dataset storage refuses non-public classification")
 
 
+def _is_public_address(value: object) -> bool:
+    """A content address is lower-case hex only; never treat it as a path."""
+    return (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value))
+
+
 # ── packed binary form ───────────────────────────────────────────────────────
 
 def _timestamp_us(value: dt.datetime) -> int:
@@ -278,7 +284,7 @@ class DatasetStore:
         if address is not None and address != recomputed_address:
             raise DatasetStoreError("supplied address does not name these dataset bytes")
         address = recomputed_address
-        if len(address) != 64 or any(c not in "0123456789abcdef" for c in address):
+        if not _is_public_address(address):
             raise DatasetStoreError(f"not a dataset address: {address!r}")
 
         # An immutable retry first checks the already-published pair.  This is
@@ -367,6 +373,8 @@ class DatasetStore:
         """Return the dataset at `address`, or None if it cannot be PROVEN to be
         that dataset. Every failure mode is a refusal, never a partial answer."""
         _require_public(classification)
+        if not _is_public_address(address):
+            return None
         started = dt.datetime.now().timestamp()
         self._measurements["get"] += 1
         blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
@@ -438,6 +446,8 @@ class DatasetStore:
         binds the dataset address, and a row whose stored last timestamp came
         from the real decoded bars.
         """
+        if not _is_public_address(address):
+            return None
         try:
             manifest = json.loads(self.manifest_path(address).read_text())
         except (OSError, ValueError):
@@ -464,7 +474,9 @@ class DatasetStore:
             row = self._conn.execute(
                 "SELECT request_key,address,fetched_at FROM dataset_requests"
                 " WHERE request_key=?", (key,)).fetchone()
-        return IndexEntry(*row) if row else None
+        if row is None or not _is_public_address(row[1]):
+            return None
+        return IndexEntry(*row)
 
     def stored_addresses(self) -> list[str]:
         return sorted(path.name[:-len(BLOB_SUFFIX)]

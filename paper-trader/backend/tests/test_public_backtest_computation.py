@@ -15,20 +15,23 @@ from app.db.models import BacktestComputation
 from app.db.session import SessionLocal, init_db
 
 
-def _payload() -> dict:
-    return {
+def _payload(address: str = "a" * 64) -> dict:
+    payload = {field: 0 for field in public_computation.PUBLIC_RESULT_FIELDS}
+    payload.update({
         "instrument_key": "NIFTY", "interval": "15minute",
-        "strategy_key": "trend_impulse_v3", "strategy_version": "v1",
-        "params_hash": "a" * 64, "last_candle_ts": 123,
+        "strategy_key": "trend_impulse_v3",
+        "strategy_version": public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+        "params_hash": address, "last_candle_ts": 123,
         "net_pnl": 42.0, "curve_json": "[]", "trades_json": "[]",
-    }
+    })
+    return payload
 
 
 def _expected(address: str) -> dict:
     catalog = public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]
     return dict(execution_address=address, dataset_classification=dataset_store.MARKET_PUBLIC,
                 strategy_key="trend_impulse_v3", strategy_module=catalog["module"],
-                strategy_version=catalog["version"], policy_address="d" * 64,
+                strategy_version=catalog["version"], policy_address=address,
                 execution_manifest={"dataset_address": "c" * 64, "dataset_verified": True})
 
 
@@ -40,7 +43,7 @@ def test_public_artifact_is_immutable_neutral_payload_and_materializes_locally()
         first = public_computation.put_immutable(
             session, execution_address=address, dataset_address="c" * 64,
             strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
-            policy_address="d" * 64, payload=_payload())
+            policy_address=address, payload=_payload(address))
         session.commit()
         assert first.execution_address == address
     with SessionLocal() as session:
@@ -62,15 +65,15 @@ def test_conflicting_public_bytes_refuse_without_overwriting_artifact():
         public_computation.put_immutable(
             session, execution_address=address, dataset_address="c" * 64,
             strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
-            policy_address="d" * 64, payload=_payload())
+                policy_address=address, payload=_payload(address))
         session.commit()
     with SessionLocal() as session:
-        changed = _payload() | {"net_pnl": 99.0}
+        changed = _payload(address) | {"net_pnl": 99.0}
         with pytest.raises(public_computation.PublicComputationIntegrityError):
             public_computation.put_immutable(
                 session, execution_address=address, dataset_address="c" * 64,
                 strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
-                policy_address="d" * 64, payload=changed)
+                policy_address=address, payload=changed)
         session.rollback()
         assert public_computation.maybe_materialize(session, **_expected(address))["net_pnl"] == 42.0
 
@@ -78,11 +81,11 @@ def test_conflicting_public_bytes_refuse_without_overwriting_artifact():
 def test_public_payload_rejects_owner_or_run_provenance():
     init_db(reset=True)
     with SessionLocal() as session:
-        with pytest.raises(public_computation.PublicComputationIntegrityError, match="not an allowed"):
+        with pytest.raises(public_computation.PublicComputationIntegrityError, match="exact v1"):
             public_computation.put_immutable(
                 session, execution_address="f" * 64, dataset_address="c" * 64,
                 strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
-                policy_address="d" * 64, payload=_payload() | {"owner_id": "a"})
+            policy_address="f" * 64, payload=_payload("f" * 64) | {"owner_id": "a"})
 
 
 def test_concurrent_identical_public_writers_converge_to_one_immutable_payload():
@@ -96,7 +99,7 @@ def test_concurrent_identical_public_writers_converge_to_one_immutable_payload()
                 public_computation.put_immutable(
                     session, execution_address="9" * 64, dataset_address="c" * 64,
                     strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
-                    policy_address="d" * 64, payload=_payload())
+                    policy_address="9" * 64, payload=_payload("9" * 64))
                 session.commit()
         except Exception as exc:
             errors.append(exc)
@@ -188,11 +191,69 @@ def test_public_payload_is_a_versioned_exact_allowlist_and_never_copies_local_me
     assert public_computation.PUBLIC_PAYLOAD_VERSION >= 1
     allowed = set(public_computation.PUBLIC_RESULT_FIELDS)
     assert allowed
-    with pytest.raises(public_computation.PublicComputationIntegrityError, match="not an allowed"):
+    with pytest.raises(public_computation.PublicComputationIntegrityError, match="exact v1"):
         public_computation.canonical_public_payload(
             {next(iter(allowed)): 1, "owner_id": "private"})
-    assert json.loads(public_computation.canonical_public_payload(
-        {next(iter(allowed)): 1}))["version"] == public_computation.PUBLIC_PAYLOAD_VERSION
+    with pytest.raises(public_computation.PublicComputationIntegrityError, match="exact v1"):
+        public_computation.canonical_public_payload({next(iter(allowed)): 1})
+
+
+def test_public_payload_requires_the_complete_v1_schema():
+    payload = {field: 0 for field in public_computation.PUBLIC_RESULT_FIELDS}
+    with pytest.raises(public_computation.PublicComputationIntegrityError, match="exact v1"):
+        public_computation.canonical_public_payload(
+            {key: value for key, value in payload.items() if key != "params_hash"})
+
+
+def test_public_payload_semantics_must_match_the_artifact_identity():
+    init_db(reset=True)
+    address = "a" * 64
+    payload = {field: 0 for field in public_computation.PUBLIC_RESULT_FIELDS}
+    payload.update(strategy_key="trend_impulse_v3", strategy_version="wrong",
+                   params_hash=address)
+    with SessionLocal() as session:
+        with pytest.raises(public_computation.PublicComputationIntegrityError, match="semantic"):
+            public_computation.put_immutable(
+                session, execution_address=address, dataset_address="b" * 64,
+                strategy_key="trend_impulse_v3",
+                strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+                policy_address=address, payload=payload)
+
+
+def test_manifest_private_or_extra_key_never_queries_shared_artifact(monkeypatch):
+    calls = []
+    monkeypatch.setattr(public_computation, "_lookup", lambda *args, **kwargs: calls.append(args))
+    manifest = {"dataset_address": "a" * 64, "dataset_verified": True,
+                "owner_id": "private"}
+    assert public_computation.maybe_materialize(
+        object(), execution_address="b" * 64, dataset_classification=dataset_store.MARKET_PUBLIC,
+        strategy_key="trend_impulse_v3", strategy_module="app.strategy.registry.trend_impulse_v3",
+        strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+        policy_address="b" * 64, execution_manifest=manifest) is None
+    assert calls == []
+
+
+def test_poisoned_stored_payload_identity_refuses_materialization():
+    init_db(reset=True)
+    address = "a" * 64
+    expected = _expected(address)
+    payload = {field: 0 for field in public_computation.PUBLIC_RESULT_FIELDS}
+    payload.update(strategy_key="trend_impulse_v3", strategy_version=expected["strategy_version"],
+                   params_hash=address)
+    with SessionLocal() as session:
+        public_computation.put_immutable(session, execution_address=address,
+            dataset_address="c" * 64, strategy_key="trend_impulse_v3",
+            strategy_version=expected["strategy_version"], policy_address=address,
+            payload=payload)
+        row = session.get(BacktestComputation, address)
+        envelope = json.loads(row.payload_json)
+        envelope["result"]["strategy_key"] = "poisoned"
+        row.payload_json = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+        row.payload_digest = __import__("hashlib").sha256(row.payload_json.encode()).hexdigest()
+        session.commit()
+    with SessionLocal() as session:
+        with pytest.raises(public_computation.PublicComputationIntegrityError, match="semantic"):
+            public_computation.maybe_materialize(session, **expected)
 
 
 def test_shared_lookup_requires_exact_expected_artifact_metadata_before_query(monkeypatch):

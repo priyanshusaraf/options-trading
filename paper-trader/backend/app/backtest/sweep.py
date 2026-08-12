@@ -1812,7 +1812,7 @@ def _result_values(inst, interval, m, trades, bars, error="",
         premium_error=premium_error)
     if m is None:
         return dict(error=error, **premium_common, **common)
-    return dict(trades=m.trades, wins=m.wins, win_rate=m.win_rate,
+    return dict(error="", trades=m.trades, wins=m.wins, win_rate=m.win_rate,
                 profit_factor=m.profit_factor, max_drawdown_pct=m.max_drawdown_pct,
                 return_pct=m.return_pct, net_pnl=m.net_pnl, gross_pnl=m.gross_pnl,
                 charges=m.charges, expectancy=m.expectancy, cagr=m.cagr,

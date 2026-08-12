@@ -14,6 +14,12 @@ allowlist. It never stores run, owner, row, cache-flag, or timestamp provenance.
 Lookup compares expected dataset, strategy/version, policy, schema, payload
 digest, and payload envelope before materialization.
 
+Review hardening requires the complete v1 payload shape, not merely an allowed
+subset. Its strategy key/version and execution address (`params_hash`) must
+match the immutable row and request at both publication and materialization.
+The two-field public manifest has an exact allowlist; `owner_id`, `run_id`,
+project identifiers, and all other extras are rejected before shared lookup.
+
 Dataset publication recomputes the asserted content address before filesystem
 I/O. A valid identical artifact is retained on retry; failures cannot delete an
 already valid pair. A storage descriptor lets pinned workers use the storage
@@ -50,6 +56,13 @@ PYTHONPATH=. .venv/bin/python scripts/public_backtest_computation_mutations.py
 All 6 mutations reddened their focused guard and restored original bytes:
 payload allowlist, catalog source authentication, asserted address, immutable
 retry retention, parallel shared lookup, and downgrade preflight.
+
+After review hardening, the mutation gate was rerun with 9/9 guards reddened:
+complete payload schema, manifest provenance rejection, payload semantic
+identity, catalog source authentication, asserted address, immutable retry
+retention, path-safe public address, parallel shared lookup, and downgrade
+preflight. Dataset `get` and `manifest` now refuse malformed/traversal/mixed-case
+addresses before constructing a path; `lookup` refuses malformed index values.
 
 The broad repository suite still has a pre-existing historical-test conflict:
 `test_account_scoped_state` downgrades the current head to `0017`, while the
