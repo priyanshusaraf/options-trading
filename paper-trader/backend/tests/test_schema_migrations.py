@@ -153,6 +153,83 @@ def test_revision_0027_downgrade_refuses_nonempty_artifact_without_mutation(tmp_
         assert connection.execute(sa.text("SELECT count(*) FROM backtest_computations")).scalar_one() == 1
 
 
+def test_revision_0027_nonempty_downgrade_preflight_performs_no_recovery_ddl(tmp_path):
+    """A downgrade request must refuse before it cleans any proof/index state."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-down-preflight.db", "0027")
+    statements = []
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(" ".join(statement.upper().split()))
+    sa.event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with engine.begin() as connection:
+            connection.execute(sa.text(
+                "INSERT INTO backtest_computations VALUES (:e,:d,'s','v',:p,8,'{}',:h)"),
+                {"e": "a" * 64, "d": "b" * 64, "p": "c" * 64, "h": "d" * 64})
+            with pytest.raises(RuntimeError, match="refuses"):
+                command.downgrade(migrate.alembic_config(connection), "0026")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", capture)
+    assert not any("DROP TABLE BACKTEST_COMPUTATIONS" in statement
+                   or "ALTER TABLE BACKTEST_COMPUTATIONS" in statement
+                   or "DELETE FROM _BACKTEST_0027" in statement for statement in statements)
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+@pytest.mark.parametrize("needle,recoverable", (
+    ("CREATE TABLE BACKTEST_COMPUTATIONS__0027", True),
+    # The proof write is the authentication boundary: without it a temp may
+    # never promote itself by merely having target-looking columns.
+    ("INSERT OR REPLACE INTO _BACKTEST_0027_CREATION_PROOFS", False),
+    ("ALTER TABLE BACKTEST_COMPUTATIONS__0027 RENAME TO BACKTEST_COMPUTATIONS", True),
+    ("DELETE FROM _BACKTEST_0027_CREATION_PROOFS", True),
+))
+def test_revision_0027_restart_matrix_is_target_bound_and_preserves_fk_mode(
+        tmp_path, foreign_keys, needle, recoverable):
+    engine = _build_from_baseline_at_revision(
+        tmp_path, f"0027-restart-{foreign_keys}-{abs(hash(needle))}.db", "0026")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and needle in " ".join(statement.upper().split()):
+            stopped = True
+            raise RuntimeError("0027 boundary")
+    with engine.begin() as connection:
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="boundary"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0027")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        if not recoverable:
+            schema = tuple(connection.execute(sa.text(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+            with pytest.raises(RuntimeError, match="(unproven|malformed)"):
+                command.upgrade(migrate.alembic_config(connection), "0027")
+            assert tuple(connection.execute(sa.text(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == schema
+            assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+            return
+        command.upgrade(migrate.alembic_config(connection), "0027")
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name='_backtest_0027_creation_proofs'")) .first() is None
+
+
+def test_revision_0027_empty_downgrade_has_exact_0026_schema_parity(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-empty-down.db", "0027")
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0026")
+        assert not {"backtest_computations", "backtest_computations__0027",
+                    "_backtest_0027_creation_proofs"} & set(
+                        sa.inspect(connection).get_table_names())
+    assert migrate.schema_version(engine) == "0026"
+
+
 def test_revision_0026_backfills_legacy_cells_and_refuses_duplicate_new_identity(tmp_path):
     engine = _build_from_baseline_at_revision(tmp_path, "0026-resume-cells.db", "0025")
     with engine.begin() as connection:

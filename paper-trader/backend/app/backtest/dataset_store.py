@@ -76,7 +76,7 @@ import uuid
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 from app.backtest.identity import (INSTRUMENT_IDENTITY_FIELDS,
                                    PROVIDER_IDENTITY_FIELDS,
@@ -149,6 +149,7 @@ class PublicDatasetStorage(Protocol):
     def get(self, address: str, *, classification: str = MARKET_PUBLIC) -> StoredDataset | None: ...
     def lookup(self, *, provider: Any, instrument: Any, interval: str,
                requested_window: Any, classification: str = MARKET_PUBLIC) -> IndexEntry | None: ...
+    def worker_descriptor(self) -> Mapping[str, str]: ...
 
 
 def _require_public(classification: str) -> None:
@@ -268,14 +269,29 @@ class DatasetStore:
                                             fields=PROVIDER_IDENTITY_FIELDS)
         instrument_identity = source_identity(instrument,
                                               fields=INSTRUMENT_IDENTITY_FIELDS)
-        if not address:
-            address = ordered_dataset_address(
-                candles, provider=provider_identity,
-                instrument=instrument_identity, interval=interval,
-                requested_window=requested_window,
-                effective_window=effective_window)
+        # Recompute even when a caller supplied an address.  The supplied value
+        # is an assertion, not a permission to put arbitrary bytes at its path.
+        recomputed_address = ordered_dataset_address(
+            candles, provider=provider_identity, instrument=instrument_identity,
+            interval=interval, requested_window=requested_window,
+            effective_window=effective_window)
+        if address is not None and address != recomputed_address:
+            raise DatasetStoreError("supplied address does not name these dataset bytes")
+        address = recomputed_address
         if len(address) != 64 or any(c not in "0123456789abcdef" for c in address):
             raise DatasetStoreError(f"not a dataset address: {address!r}")
+
+        # An immutable retry first checks the already-published pair.  This is
+        # both idempotent and protects a good prior artifact from an unrelated
+        # write failure on a later retry.
+        existing = self.get(address, classification=classification)
+        if existing is not None:
+            self._record(address, provider=provider, instrument=instrument,
+                         interval=interval, requested_window=requested_window,
+                         provider_identity=provider_identity,
+                         instrument_identity=instrument_identity)
+            self._measurements["put"] += 1
+            return address
 
         blob = encode_candles(candles)
         decoded = decode_candles(blob)
@@ -295,17 +311,12 @@ class DatasetStore:
 
         blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
         blob_path.parent.mkdir(parents=True, exist_ok=True)
-        written: list[Path] = []
         try:
             self._atomic_write(blob_path, blob)
-            written.append(blob_path)
             self._atomic_write(manifest_path, manifest.encode("utf-8"))
-            written.append(manifest_path)
         except Exception:
-            # A half-stored dataset must not survive: get() would refuse it
-            # anyway, but a refused file is disk we can never reclaim by address.
-            for path in written:
-                path.unlink(missing_ok=True)
+            # Never delete target paths here. An interrupted pair is refused by
+            # get(), while deleting can destroy an earlier valid immutable pair.
             raise
         self._record(address, provider=provider, instrument=instrument,
                      interval=interval, requested_window=requested_window,
@@ -395,7 +406,8 @@ class DatasetStore:
             self._measurements["corruption_refusals"] += 1
             self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
-        if manifest.get("classification", MARKET_PUBLIC) != MARKET_PUBLIC:
+        # Missing classification is a legacy/unknown namespace, never public.
+        if manifest.get("classification") != MARKET_PUBLIC:
             self._measurements["corruption_refusals"] += 1
             self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
@@ -465,6 +477,10 @@ class DatasetStore:
     def close(self) -> None:
         self._conn.close()
 
+    def worker_descriptor(self) -> dict[str, str]:
+        """Opaque local-adapter locator; sweep workers never know a root layout."""
+        return {"scheme": "local-dataset-store/1", "root": str(self.root)}
+
 
 # ── process-wide default ─────────────────────────────────────────────────────
 
@@ -499,8 +515,18 @@ def reset_default_store() -> None:
         _default_root = None
 
 
+def open_worker_storage(descriptor: Mapping[str, str]) -> PublicDatasetStorage:
+    """Resolve a parent-selected worker-readable storage port, fail closed."""
+    if not isinstance(descriptor, Mapping) or descriptor.get("scheme") != "local-dataset-store/1":
+        raise DatasetStoreError("unknown public dataset storage descriptor")
+    root = descriptor.get("root")
+    if not isinstance(root, str) or not root:
+        raise DatasetStoreError("invalid public dataset storage descriptor")
+    return DatasetStore(root)
+
+
 __all__ = ["BLOB_SUFFIX", "MANIFEST_SUFFIX", "STORE_SCHEME", "MARKET_PUBLIC", "DatasetStore",
            "DatasetStoreError", "IndexEntry", "StoredCandle", "StoredDataset",
            "PublicDatasetStorage",
-           "decode_candles", "encode_candles", "get_store",
+           "decode_candles", "encode_candles", "get_store", "open_worker_storage",
            "reset_default_store", "store_root"]

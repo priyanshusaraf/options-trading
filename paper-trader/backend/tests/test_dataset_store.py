@@ -286,3 +286,39 @@ def test_a_half_written_temp_file_is_neither_served_nor_counted(store):
 
     assert store.get(address) is not None            # the real one still serves
     assert store.stored_addresses() == [address]     # the temp is not a dataset
+
+
+def test_put_recomputes_supplied_address_before_any_filesystem_write(store, monkeypatch):
+    provider, instrument, candles = CountingMockProvider(), None, _candles()
+    instrument = _nifty(provider)
+    writes = []
+    monkeypatch.setattr(store, "_atomic_write", lambda *args: writes.append(args))
+    with pytest.raises(dataset_store.DatasetStoreError, match="supplied address"):
+        _put(store, provider, instrument, candles) if False else store.put(
+            candles, provider=provider, instrument=instrument, interval="15minute",
+            requested_window=REQUESTED, effective_window=_effective(candles), address="0" * 64)
+    assert writes == []
+
+
+def test_failed_idempotent_retry_never_deletes_prior_valid_artifact(store, monkeypatch):
+    provider, instrument, candles = CountingMockProvider(), None, _candles()
+    instrument = _nifty(provider)
+    address = _put(store, provider, instrument, candles)
+    original_blob = store.blob_path(address).read_bytes()
+    original_manifest = store.manifest_path(address).read_bytes()
+    monkeypatch.setattr(store, "_atomic_write", lambda *_args: (_ for _ in ()).throw(OSError("disk")))
+    # A same-content retry returns the already verified immutable artifact, and
+    # cannot overwrite or remove either half if the filesystem is failing.
+    assert _put(store, provider, instrument, candles) == address
+    assert store.blob_path(address).read_bytes() == original_blob
+    assert store.manifest_path(address).read_bytes() == original_manifest
+
+
+def test_legacy_manifest_without_explicit_public_classification_is_refused(store):
+    provider, instrument = CountingMockProvider(), None
+    instrument = _nifty(provider)
+    address = _put(store, provider, instrument, _candles())
+    manifest = __import__("json").loads(store.manifest_path(address).read_text())
+    manifest.pop("classification")
+    store.manifest_path(address).write_text(__import__("json").dumps(manifest))
+    assert store.get(address) is None

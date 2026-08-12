@@ -389,3 +389,8 @@ def reconcile_expired_claims(session, *, owner_id: str,
                 BacktestResult.run_id == BacktestRun.id).scalar_subquery(),
             note="interrupted legacy run without a durable worker claim"))
     return reclaimed + int(legacy.rowcount or 0)
+
+
+def reconcile_stale_runs(session, *, owner_id: str) -> int:
+    """Compatibility repository boundary with the same explicit owner contract."""
+    return reconcile_expired_claims(session, owner_id=owner_id)

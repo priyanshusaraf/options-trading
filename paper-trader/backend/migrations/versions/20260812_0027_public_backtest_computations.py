@@ -28,7 +28,7 @@ DDL = """CREATE TABLE __TABLE__ (
  PRIMARY KEY (execution_address)
 )"""
 INDEXES = (("ix_backtest_computations_dataset", "dataset_address"),
-           ("ix_backtest_computations_strategy", "strategy_key,strategy_version"))
+           ("ix_backtest_computations_strategy", "strategy_key, strategy_version"))
 
 
 def _names() -> set[str]:
@@ -43,7 +43,13 @@ def _digest(rows) -> str:
         sql = re.sub(r"backtest_computations(?:__0027)?", "__table__", sql)
         name = name.removesuffix("__0027")
         sql = sql.replace("__0027", "")
-        body.append(f"{typ}:{name}:" + " ".join(sql.replace('"', '').replace('`', '').split()).lower())
+        normalized = " ".join(sql.replace('"', '').replace('`', '').split()).lower()
+        # SQLite's ORM DDL spells `table (column)` while raw DDL spells
+        # `table(column)`; that presentation difference is not schema drift.
+        normalized = re.sub(r"\s*\(\s*", "(", normalized)
+        normalized = re.sub(r"\s*\)", ")", normalized)
+        normalized = re.sub(r"\s*,\s*", ",", normalized)
+        body.append(f"{typ}:{name}:" + normalized)
     return hashlib.sha256("\n".join(body).encode()).hexdigest()
 
 
@@ -151,6 +157,13 @@ def upgrade():
 
 
 def downgrade():
+    # Destructive downgrade must inspect durable user-visible artifacts before
+    # recovery performs *any* rename/index/proof cleanup.  A restart helper is
+    # allowed to finish an upgrade, never to mutate a populated artifact while a
+    # caller is asking to move backwards.
+    if TABLE in _names() and op.get_bind().execute(
+            sa.text(f"SELECT 1 FROM {TABLE} LIMIT 1")).first():
+        raise RuntimeError("0027 downgrade refuses to discard immutable public computation artifacts")
     _recover()
     if TABLE not in _names(): return
     if op.get_bind().execute(sa.text(f"SELECT 1 FROM {TABLE} LIMIT 1")).first():

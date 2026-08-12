@@ -227,6 +227,8 @@ _measurements: dict[str, int | float] = {
     "claim_latency_seconds": 0.0, "takeover_age_seconds": 0.0,
     # Origin is deliberately a bounded category, never an owner or cache key.
     "cache_owner_local": 0, "cache_public_shared": 0, "cache_cold": 0,
+    "cache_public_integrity_failures": 0, "cache_public_write_failures": 0,
+    "dataset_store_write_failures": 0,
 }
 _owner_measurements: dict[tuple[str, str], int | float] = {}
 _measurement_gauges: dict[tuple[str, str | None, int | None], int | float] = {}
@@ -1082,16 +1084,15 @@ def _worker_task(payload: dict) -> list[dict]:
     return out
 
 
-_WORKER_STORES: dict[str, dataset_store.DatasetStore] = {}
+_WORKER_STORES: dict[str, dataset_store.PublicDatasetStorage] = {}
 
 
-def _worker_store(root: str) -> dataset_store.DatasetStore:
-    """One store handle per (process, root). The root is carried in the payload
-    rather than resolved from settings, so a worker reads the same directory the
-    parent pinned against and cannot silently address a different corpus."""
-    store = _WORKER_STORES.get(root)
+def _worker_store(descriptor: dict) -> dataset_store.PublicDatasetStorage:
+    """One storage-port handle per worker descriptor, selected by the parent."""
+    key = json.dumps(descriptor, sort_keys=True, separators=(",", ":"))
+    store = _WORKER_STORES.get(key)
     if store is None:
-        store = _WORKER_STORES[root] = dataset_store.DatasetStore(root)
+        store = _WORKER_STORES[key] = dataset_store.open_worker_storage(descriptor)
     return store
 
 
@@ -1114,7 +1115,7 @@ def _pinned_worker_task(payload: dict) -> dict:
     """
     inst, interval = payload["inst"], payload["interval"]
     prepared = _pinned_dataset_from_store(
-        lambda address: _worker_store(payload["store_root"]).get(address),
+        lambda address: _worker_store(payload["storage_descriptor"]).get(address),
         address=payload["address"],
         key=pin_key(getattr(inst, "key", ""), interval),
         provider_identity=payload["provider_identity"],
@@ -1133,7 +1134,10 @@ def _pinned_worker_task(payload: dict) -> dict:
     return {"refused": False, "rows": _worker_task(dict(
         payload, candles=prepared.candles, bars=prepared.bars,
         first_ts=prepared.first_ts, last_ts=prepared.last_ts,
-        effective_days=prepared.effective_days, clamped=prepared.clamped))}
+        effective_days=prepared.effective_days, clamped=prepared.clamped)),
+        "public_dataset": {"dataset_address": prepared.dataset_address,
+                           "dataset_classification": prepared.dataset_classification,
+                           "dataset_verified": prepared.dataset_verified}}
 
 
 def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
@@ -1161,7 +1165,13 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
                                    slippage_pct)
         cached = _reusable_values(inst, interval, phash, prepared.last_ts, owner_id=owner_id)
         if cached is not None:
+            _measure("cache_owner_local", owner_id=owner_id)
             slots.append(("ready", cached))
+            continue
+        public = _public_reusable_values(prepared, strat, phash)
+        if public is not None:
+            _measure("cache_public_shared", owner_id=owner_id)
+            slots.append(("ready", public))
             continue
         slots.append(("worker", None))
         cells.append({"strategy_key": strat.key,
@@ -1172,7 +1182,7 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
     if pinned_address:
         payload = {"pinned": True, "address": pinned_address,
                    "owner_id": owner_id,
-                   "store_root": str(dataset_store.get_store().root),
+                   "storage_descriptor": dataset_store.get_store().worker_descriptor(),
                    "provider_identity": source_identity(
                        provider, fields=PROVIDER_IDENTITY_FIELDS),
                    "requested_window": _requested_window(interval, win),
@@ -1197,18 +1207,35 @@ def _merge(slots, computed) -> list[dict]:
     return [value if kind == "ready" else next(it) for kind, value in slots]
 
 
-def _drain(slots, future) -> list[dict]:
+def _drain_with_metadata(slots, future) -> tuple[list[dict], dict | None]:
     """One dataset's results, in slot order, from whichever task computed it."""
     if future is None:
-        return _merge(slots, ())
+        return _merge(slots, ()), None
     result = future.result()
     if isinstance(result, dict):          # a pinned dataset's verdict
         if result["refused"]:
             # The dataset itself is unservable: every cell of it is that
             # refusal, including cells the parent had planned from the cache.
-            return result["rows"]
-        return _merge(slots, result["rows"])
-    return _merge(slots, result)
+            return result["rows"], None
+        return _merge(slots, result["rows"]), result.get("public_dataset")
+    return _merge(slots, result), None
+
+
+def _drain(slots, future) -> list[dict]:
+    """Compatibility result-only drain used by focused worker tests."""
+    return _drain_with_metadata(slots, future)[0]
+
+
+def _publish_parallel_rows(prepared, strategies, rows) -> None:
+    """The parent owns shared DB publication after worker arithmetic completes."""
+    by_identity = {(strategy.key, strategy.version): strategy for strategy in strategies}
+    for row in rows:
+        if row.get("from_cache") or row.get("error"):
+            continue
+        strategy = by_identity.get((row.get("strategy_key"), row.get("strategy_version")))
+        if strategy is not None:
+            _measure("cache_cold")
+            _publish_public_computation(prepared, strategy, row.get("params_hash", ""), row)
 
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
@@ -1256,7 +1283,11 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     if guard is not None:
                         guard.ensure_active()
                     future = pool.submit(task, payload) if payload else None
-                    pending.append((future, slots))
+                    public_prepared = _PreparedDataset(
+                        dataset_address=prepared.dataset_address,
+                        dataset_classification=prepared.dataset_classification,
+                        dataset_verified=prepared.dataset_verified)
+                    pending.append((future, slots, public_prepared))
                     _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
                     # `prepared` (and its lazily-built frame) is dropped here: the
                     # parent never holds a dataset past its submission.
@@ -1264,15 +1295,29 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     while len(pending) >= max_inflight:
                         if guard is not None:
                             guard.ensure_active()
-                        future, slots = pending.popleft()
+                        future, slots, prepared = pending.popleft()
                         _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
-                        yield from _drain(slots, future)
+                        rows, verified = _drain_with_metadata(slots, future)
+                        if verified is not None:
+                            prepared = _PreparedDataset(
+                                dataset_address=verified["dataset_address"],
+                                dataset_classification=verified["dataset_classification"],
+                                dataset_verified=verified["dataset_verified"])
+                        _publish_parallel_rows(prepared, strategies, rows)
+                        yield from rows
             while pending:
                 if guard is not None:
                     guard.ensure_active()
-                future, slots = pending.popleft()
+                future, slots, prepared = pending.popleft()
                 _measure_set("inflight_datasets", len(pending), owner_id=owner_id, run_id=run_id)
-                yield from _drain(slots, future)
+                rows, verified = _drain_with_metadata(slots, future)
+                if verified is not None:
+                    prepared = _PreparedDataset(
+                        dataset_address=verified["dataset_address"],
+                        dataset_classification=verified["dataset_classification"],
+                        dataset_verified=verified["dataset_verified"])
+                _publish_parallel_rows(prepared, strategies, rows)
+                yield from rows
     finally:
         _measure_set("active_process_pools", 0, owner_id=owner_id, run_id=run_id)
         _measure_set("inflight_datasets", 0, owner_id=owner_id, run_id=run_id)
@@ -1356,6 +1401,7 @@ def _prepare_dataset(provider, inst, interval, win, *,
                 requested_window=requested_window,
                 effective_window=effective_window, address=dataset_address)
         except Exception as exc:
+            _measure("dataset_store_write_failures")
             log.warn(f"backtest dataset not stored for "
                      f"{inst.key}/{interval}: {exc}")
     return _PreparedDataset(
@@ -1618,12 +1664,24 @@ def _public_reusable_values(prepared: _PreparedDataset, strat, phash: str) -> di
                 strategy_key=strat.key, strategy_module=type(strat).__module__,
                 execution_manifest=manifest)):
         return None
-    with SessionLocal() as session:
-        return public_computation.maybe_materialize(
-            session, execution_address=phash,
-            dataset_classification=prepared.dataset_classification,
-            strategy_key=strat.key, strategy_module=type(strat).__module__,
-            execution_manifest=manifest)
+    try:
+        with SessionLocal() as session:
+            return public_computation.maybe_materialize(
+                session, execution_address=phash,
+                dataset_classification=prepared.dataset_classification,
+                strategy_key=strat.key, strategy_module=type(strat).__module__,
+                strategy_version=strat.version, policy_address=phash,
+                execution_manifest=manifest)
+    # A global cache problem cannot turn a valid customer computation into a
+    # failed run.  It is bounded telemetry, then a cold owner-local result.
+    except public_computation.PublicComputationIntegrityError as exc:
+        _measure("cache_public_integrity_failures")
+        log.error(f"public backtest computation integrity refusal: {exc}")
+        return None
+    except Exception as exc:
+        _measure("cache_public_write_failures")
+        log.warn(f"public backtest computation lookup unavailable: {exc}")
+        return None
 
 
 def _publish_public_computation(prepared: _PreparedDataset, strat, phash: str,
@@ -1645,12 +1703,17 @@ def _publish_public_computation(prepared: _PreparedDataset, strat, phash: str,
                 session, execution_address=phash, dataset_address=prepared.dataset_address,
                 strategy_key=strat.key, strategy_version=strat.version,
                 # phash binds every public policy/input that can change this payload.
-                policy_address=phash, payload=values)
+                policy_address=phash,
+                payload=public_computation.public_result_payload(values))
             session.commit()
     except public_computation.PublicComputationIntegrityError as exc:
         # Never overwrite or read a competing result. The caller still has a
         # fresh owner-local cold result, which is safer than suppressing evidence.
         log.error(f"public backtest computation integrity refusal: {exc}")
+        _measure("cache_public_integrity_failures")
+    except Exception as exc:
+        _measure("cache_public_write_failures")
+        log.warn(f"public backtest computation publish unavailable: {exc}")
 
 
 def _compute_values(candles, inst, interval, capital, strat, params,

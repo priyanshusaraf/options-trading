@@ -21,8 +21,15 @@ def _payload() -> dict:
         "strategy_key": "trend_impulse_v3", "strategy_version": "v1",
         "params_hash": "a" * 64, "last_candle_ts": 123,
         "net_pnl": 42.0, "curve_json": "[]", "trades_json": "[]",
-        "from_cache": False, "computed_at": "also-private",
     }
+
+
+def _expected(address: str) -> dict:
+    catalog = public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]
+    return dict(execution_address=address, dataset_classification=dataset_store.MARKET_PUBLIC,
+                strategy_key="trend_impulse_v3", strategy_module=catalog["module"],
+                strategy_version=catalog["version"], policy_address="d" * 64,
+                execution_manifest={"dataset_address": "c" * 64, "dataset_verified": True})
 
 
 def test_public_artifact_is_immutable_neutral_payload_and_materializes_locally():
@@ -32,18 +39,18 @@ def test_public_artifact_is_immutable_neutral_payload_and_materializes_locally()
     with SessionLocal() as session:
         first = public_computation.put_immutable(
             session, execution_address=address, dataset_address="c" * 64,
-            strategy_key="trend_impulse_v3", strategy_version="v1",
+            strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
             policy_address="d" * 64, payload=_payload())
         session.commit()
         assert first.execution_address == address
     with SessionLocal() as session:
         stored = session.get(BacktestComputation, address)
         assert stored is not None
-        raw = json.loads(stored.payload_json)
+        raw = json.loads(stored.payload_json)["result"]
         assert "owner_id" not in raw and "run_id" not in raw
         assert "computed_at" not in raw and "from_cache" not in raw
-        a = public_computation.materialize(session, execution_address=address)
-        b = public_computation.materialize(session, execution_address=address)
+        a = public_computation.maybe_materialize(session, **_expected(address))
+        b = public_computation.maybe_materialize(session, **_expected(address))
         assert a == b
         assert a["from_cache"] is True
 
@@ -54,7 +61,7 @@ def test_conflicting_public_bytes_refuse_without_overwriting_artifact():
     with SessionLocal() as session:
         public_computation.put_immutable(
             session, execution_address=address, dataset_address="c" * 64,
-            strategy_key="trend_impulse_v3", strategy_version="v1",
+            strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
             policy_address="d" * 64, payload=_payload())
         session.commit()
     with SessionLocal() as session:
@@ -62,19 +69,19 @@ def test_conflicting_public_bytes_refuse_without_overwriting_artifact():
         with pytest.raises(public_computation.PublicComputationIntegrityError):
             public_computation.put_immutable(
                 session, execution_address=address, dataset_address="c" * 64,
-                strategy_key="trend_impulse_v3", strategy_version="v1",
+                strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
                 policy_address="d" * 64, payload=changed)
         session.rollback()
-        assert public_computation.materialize(session, execution_address=address)["net_pnl"] == 42.0
+        assert public_computation.maybe_materialize(session, **_expected(address))["net_pnl"] == 42.0
 
 
 def test_public_payload_rejects_owner_or_run_provenance():
     init_db(reset=True)
     with SessionLocal() as session:
-        with pytest.raises(public_computation.PublicComputationIntegrityError, match="source identity"):
+        with pytest.raises(public_computation.PublicComputationIntegrityError, match="not an allowed"):
             public_computation.put_immutable(
                 session, execution_address="f" * 64, dataset_address="c" * 64,
-                strategy_key="trend_impulse_v3", strategy_version="v1",
+                strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
                 policy_address="d" * 64, payload=_payload() | {"owner_id": "a"})
 
 
@@ -88,7 +95,7 @@ def test_concurrent_identical_public_writers_converge_to_one_immutable_payload()
             with SessionLocal() as session:
                 public_computation.put_immutable(
                     session, execution_address="9" * 64, dataset_address="c" * 64,
-                    strategy_key="trend_impulse_v3", strategy_version="v1",
+                    strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
                     policy_address="d" * 64, payload=_payload())
                 session.commit()
         except Exception as exc:
@@ -112,6 +119,8 @@ def test_ineligible_or_private_input_never_queries_public_artifact(monkeypatch):
     assert public_computation.maybe_materialize(
         object(), execution_address="a" * 64, dataset_classification="BYOD_PRIVATE",
         strategy_key="trend_impulse_v3", strategy_module="app.strategy.registry.trend_impulse_v3",
+        strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+        policy_address="a" * 64,
         execution_manifest={"dataset_address": "a" * 64, "dataset_verified": True}) is None
     assert calls == []
 
@@ -168,5 +177,84 @@ def test_unverified_dataset_address_is_rejected_before_public_lookup(monkeypatch
     assert public_computation.maybe_materialize(
         object(), execution_address="b" * 64, dataset_classification=dataset_store.MARKET_PUBLIC,
         strategy_key="trend_impulse_v3", strategy_module="app.strategy.registry.trend_impulse_v3",
+        strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+        policy_address="b" * 64,
         execution_manifest={"dataset_address": "a" * 64, "dataset_verified": False}) is None
     assert calls == []
+
+
+def test_public_payload_is_a_versioned_exact_allowlist_and_never_copies_local_metadata():
+    """A public artifact is a closed pure-result format, not a filtered ORM row."""
+    assert public_computation.PUBLIC_PAYLOAD_VERSION >= 1
+    allowed = set(public_computation.PUBLIC_RESULT_FIELDS)
+    assert allowed
+    with pytest.raises(public_computation.PublicComputationIntegrityError, match="not an allowed"):
+        public_computation.canonical_public_payload(
+            {next(iter(allowed)): 1, "owner_id": "private"})
+    assert json.loads(public_computation.canonical_public_payload(
+        {next(iter(allowed)): 1}))["version"] == public_computation.PUBLIC_PAYLOAD_VERSION
+
+
+def test_shared_lookup_requires_exact_expected_artifact_metadata_before_query(monkeypatch):
+    calls = []
+    monkeypatch.setattr(public_computation, "_lookup", lambda *a, **k: calls.append(a))
+    manifest = {"dataset_address": "a" * 64, "dataset_verified": True}
+    assert public_computation.maybe_materialize(
+        object(), execution_address="b" * 64, dataset_classification=dataset_store.MARKET_PUBLIC,
+        strategy_key="trend_impulse_v3", strategy_module="app.strategy.registry.trend_impulse_v3",
+        strategy_version="not-in-the-public-catalog", policy_address="b" * 64,
+        execution_manifest=manifest) is None
+    assert calls == []
+
+
+def test_runtime_registry_mutation_cannot_become_platform_public():
+    from app.strategy.registry.base import Strategy
+    class RuntimeStrategy(Strategy):
+        key = "trend_impulse_v3"
+        default_params = {"ema_length": 50}
+    assert public_computation.strategy_is_platform_public(RuntimeStrategy()) is False
+
+
+def test_public_catalog_refuses_checked_in_strategy_when_its_source_digest_changes(monkeypatch):
+    from app.strategy.registry import resolve_strategy
+    strategy = resolve_strategy("trend_impulse_v3")
+    monkeypatch.setattr(public_computation, "_module_source_digest", lambda _strategy: "0" * 64)
+    assert public_computation.strategy_is_platform_public(strategy) is False
+
+
+def test_checked_in_public_catalog_matches_only_checked_in_registry_modules():
+    """Catalog drift disables sharing until a source-review updates its constants."""
+    from app.strategy.registry import resolve_strategy
+    for key, expected in public_computation.PUBLIC_STRATEGY_CATALOG.items():
+        strategy = resolve_strategy(key)
+        assert type(strategy).__module__ == expected["module"]
+        assert strategy.version == expected["version"]
+        assert strategy.default_params == expected["defaults"]
+        assert public_computation._module_source_digest(strategy) == expected["source_digest"]
+
+
+def test_parallel_shared_hit_is_planned_in_parent_and_cold_worker_publishes():
+    """Parallel paths have the same public cache contract as serial execution."""
+    from app.providers.mock import MockProvider
+    from app.db.models import Organization
+    init_db(reset=True)
+    with SessionLocal() as session:
+        session.add_all([Organization(organization_id="parallel-a", name="Parallel A"),
+                         Organization(organization_id="parallel-b", name="Parallel B")])
+        session.commit()
+    provider = MockProvider()
+    first = sweep.start_sweep(owner_id="parallel-a", scope="liquid", intervals=["15minute"],
+                              instruments=["NIFTY"], capital=50_000, provider=provider,
+                              workers=2)
+    sweep._join()
+    with SessionLocal() as session:
+        rows = list(session.scalars(select(BacktestComputation)))
+        assert len(rows) == 1
+    second = sweep.start_sweep(owner_id="parallel-b", scope="liquid", intervals=["15minute"],
+                               instruments=["NIFTY"], capital=50_000, provider=provider,
+                               workers=2)
+    sweep._join()
+    from app.db.models import BacktestResult
+    with SessionLocal() as session:
+        rows = list(session.scalars(select(BacktestResult).where(BacktestResult.run_id == second)))
+        assert len(rows) == 1 and rows[0].from_cache is True
