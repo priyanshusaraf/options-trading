@@ -24,24 +24,26 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def read_snapshot(sm) -> tuple[int, str] | None:
+def read_snapshot(sm, *, owner_id: str, broker_account_id: str) -> tuple[int, str] | None:
     with sm() as s:
-        row = s.get(LedgerSnapshot, 1)
+        row = s.get(LedgerSnapshot, (owner_id, broker_account_id, 1))
         return None if row is None else (row.version, row.payload)
 
 
-def write_snapshot(sm, payload: str, base_version: int | None) -> int:
+def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
+                   broker_account_id: str) -> int:
     """Compare-and-set. `base_version=None` asserts "no snapshot exists yet",
     which is what makes a first write racing two devices safe.
 
     Returns the new version. Raises VersionConflict on a mismatch, leaving the
     stored payload untouched."""
     with sm() as s, s.begin():
-        row = s.get(LedgerSnapshot, 1)
+        row = s.get(LedgerSnapshot, (owner_id, broker_account_id, 1))
         if row is None:
             if base_version is not None:
                 raise VersionConflict(0)
-            s.add(LedgerSnapshot(id=1, version=1, payload=payload, updated_at=_now()))
+            s.add(LedgerSnapshot(owner_id=owner_id, broker_account_id=broker_account_id,
+                                 id=1, version=1, payload=payload, updated_at=_now()))
             return 1
         if base_version != row.version:
             raise VersionConflict(row.version)
@@ -51,26 +53,29 @@ def write_snapshot(sm, payload: str, base_version: int | None) -> int:
         return row.version
 
 
-def put_artifact(sm, artifact_id: str, mime: str, data: bytes) -> str:
+def put_artifact(sm, artifact_id: str, mime: str, data: bytes, *, owner_id: str,
+                 broker_account_id: str) -> str:
     with sm() as s, s.begin():
-        row = s.get(LedgerArtifact, artifact_id)
+        row = s.get(LedgerArtifact, (owner_id, broker_account_id, artifact_id))
         if row is None:
-            s.add(LedgerArtifact(id=artifact_id, mime=mime, bytes=data,
+            s.add(LedgerArtifact(owner_id=owner_id, broker_account_id=broker_account_id,
+                                 id=artifact_id, mime=mime, bytes=data,
                                  created_at=_now()))
         else:
             row.mime, row.bytes = mime, data
     return artifact_id
 
 
-def get_artifact(sm, artifact_id: str) -> tuple[str, bytes] | None:
+def get_artifact(sm, artifact_id: str, *, owner_id: str,
+                 broker_account_id: str) -> tuple[str, bytes] | None:
     with sm() as s:
-        row = s.get(LedgerArtifact, artifact_id)
+        row = s.get(LedgerArtifact, (owner_id, broker_account_id, artifact_id))
         return None if row is None else (row.mime, row.bytes)
 
 
-def delete_artifact(sm, artifact_id: str) -> bool:
+def delete_artifact(sm, artifact_id: str, *, owner_id: str, broker_account_id: str) -> bool:
     with sm() as s, s.begin():
-        row = s.get(LedgerArtifact, artifact_id)
+        row = s.get(LedgerArtifact, (owner_id, broker_account_id, artifact_id))
         if row is None:
             return False
         s.delete(row)
@@ -88,9 +93,12 @@ class AlreadyClaimed(Exception):
         self.trade_id = trade_id
 
 
-def list_manual_fills(sm, unclaimed: bool = True) -> list[dict]:
+def list_manual_fills(sm, unclaimed: bool = True, *, owner_id: str,
+                      broker_account_id: str) -> list[dict]:
     with sm() as s:
-        q = select(LedgerManualFill)
+        q = select(LedgerManualFill).where(
+            LedgerManualFill.owner_id == owner_id,
+            LedgerManualFill.broker_account_id == broker_account_id)
         if unclaimed:
             q = q.where(LedgerManualFill.claimed_trade.is_(None))
         return [{
@@ -107,12 +115,15 @@ def list_manual_fills(sm, unclaimed: bool = True) -> list[dict]:
         } for r in s.scalars(q.order_by(LedgerManualFill.order_ts))]
 
 
-def claim_manual_fill(sm, order_id: str, trade_id: str) -> bool:
+def claim_manual_fill(sm, order_id: str, trade_id: str, *, owner_id: str,
+                      broker_account_id: str, trade_exists) -> bool:
     """Returns False if there is no such fill. Raises AlreadyClaimed if the
     owner has already supplied reasoning for it."""
     with sm() as s, s.begin():
-        row = s.get(LedgerManualFill, order_id)
+        row = s.get(LedgerManualFill, (owner_id, broker_account_id, order_id))
         if row is None:
+            return False
+        if not trade_exists(trade_id, owner_id, broker_account_id):
             return False
         if row.claimed_trade:
             raise AlreadyClaimed(row.claimed_trade)

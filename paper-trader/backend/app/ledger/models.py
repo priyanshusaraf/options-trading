@@ -21,7 +21,7 @@ from app.ledger.db import LedgerBase
 
 
 class LedgerSnapshot(LedgerBase):
-    """Exactly one row, id=1.
+    """One versioned snapshot per owner/account.
 
     `version` is the optimistic-concurrency token: a client PUT carries the
     version it last read, and a mismatch is a 409 rather than a silent clobber.
@@ -30,7 +30,10 @@ class LedgerSnapshot(LedgerBase):
     __tablename__ = "ledger_snapshot"
     __table_args__ = (CheckConstraint("id = 1", name="ck_ledger_snapshot_single_row"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="owner")
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                                    default="account.default")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     payload: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -45,6 +48,9 @@ class LedgerArtifact(LedgerBase):
 
     __tablename__ = "ledger_artifact"
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="owner")
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                                    default="account.default")
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     mime: Mapped[str] = mapped_column(String(64), nullable=False)
     bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -66,6 +72,9 @@ class LedgerManualFill(LedgerBase):
 
     __tablename__ = "ledger_manual_fill"
 
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="owner")
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True,
+                                                    default="account.default")
     order_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     tradingsymbol: Mapped[str] = mapped_column(String(64), nullable=False)
     exchange: Mapped[str | None] = mapped_column(String(16), nullable=True)

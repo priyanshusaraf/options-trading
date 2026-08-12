@@ -12,6 +12,7 @@ from app.core import research_read
 from app.core.instruments import get_instrument
 from app.core.version import get_build_sha
 from app.api.principal import Principal, get_principal, owner_id_for
+from app.api.execution_access import local_execution_cell
 from app.editor import graph_artifacts as store
 from app.editor.comparison import GraphComparisonRejected, compare_graph_versions
 from research.compare import compare_experiment_evidence
@@ -307,7 +308,7 @@ def post_graph_experiment(
                 f"unknown instrument {selection.instrument_key!r}",
             ) from exc
         dataset = materialize(
-            request.app.state.runner.provider,
+            local_execution_cell(request, principal).provider,
             instrument,
             selection.interval,
             selection.days,

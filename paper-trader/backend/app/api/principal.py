@@ -44,7 +44,7 @@ SCOPE_ALL = "*"
 READ_ACTIONS = frozenset({
     "read:project", "read:graph", "read:layout", "read:review",
     "read:research", "read:backtest", "read:watchlist", "read:archive",
-    "read:runtime-config", "read:portfolio",
+    "read:runtime-config", "read:portfolio", "read:execution",
 })
 MEMBER_ACTIONS = frozenset({
     "write:project", "write:graph", "publish:graph", "write:layout",
@@ -75,6 +75,33 @@ def action_for_request(method: str, path: str) -> str | None:
     unclassified path is never promoted into this vocabulary by accident.
     """
     method = method.upper()
+    if path == "/api/brokers":
+        return "read:brokers" if method == "GET" else None
+    if path == "/api/connections":
+        return "read:connections" if method == "GET" else (
+            "create:connection" if method == "POST" else None)
+    if path.startswith("/api/connections/"):
+        if path.endswith("/credential"):
+            return "write:credential" if method == "POST" else None
+        if path.endswith("/oauth/initiate"):
+            return "write:credential" if method == "POST" else None
+        if path.endswith("/login"):
+            return "read:connection" if method == "GET" else None
+        return "read:connection" if method == "GET" else (
+            "revoke:connection" if method == "DELETE" else None)
+    execution_exact = {
+        "/api/status", "/api/calendar", "/api/login", "/api/session", "/api/instruments",
+        "/api/trades", "/api/signals",
+        "/api/account-pnl", "/api/dashboard", "/api/positions", "/api/provider-health",
+        "/api/execution/state", "/api/execution/arm", "/api/execution/kill",
+        "/api/execution/cockpit", "/api/execution/cockpit/deployments",
+        "/api/ir-shadow/deployments", "/api/ir-paper/deployments",
+    }
+    if (path in execution_exact or path.startswith(("/api/ledger/", "/api/positions/", "/api/instruments/",
+                                                    "/api/ir-shadow/deployments/",
+                                                    "/api/ir-paper/deployments/"))):
+        return ("read:execution" if method == "GET" and path not in {"/api/login", "/api/session"}
+                else "authoritative:execution")
     if path.startswith("/api/backtest"):
         return "read:backtest" if method == "GET" else "write:backtest"
     if path == "/api/settings":
@@ -209,6 +236,7 @@ class Principal:
     user_id: str | None = None
     organization_id: str | None = None
     role: str | None = None
+    session_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.user_id is None and self.kind == "user":
@@ -388,14 +416,16 @@ def _principal_for_active_session(session: Session, user_session: UserSession) -
     # maintains the old API shape for dependency overrides and callers.
     if (user_session.user_id == LEGACY_USER_ID
             and user_session.organization_id == LEGACY_OWNER_ID):
-        return OWNER
+        return Principal(id=OWNER.id, kind=OWNER.kind, scopes=OWNER.scopes,
+                         user_id=OWNER.user_id, organization_id=OWNER.organization_id,
+                         role=OWNER.role, session_id=user_session.session_id)
     # Roles are persisted independently of scopes.  Task 5B introduces
     # resource-family permissions; active memberships retain the existing broad
     # route capability until that conversion is complete.
     return Principal(id=user_session.user_id, kind="user", scopes=frozenset({SCOPE_ALL}),
                      user_id=user_session.user_id,
                      organization_id=user_session.organization_id,
-                     role=membership.role)
+                     role=membership.role, session_id=user_session.session_id)
 
 
 def resolve_http_principal(request: Request) -> Principal | None:

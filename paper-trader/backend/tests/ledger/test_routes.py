@@ -92,6 +92,23 @@ def _seed_fill(order_id="o1", verdict="MANUAL"):
             verdict=verdict, raw="{}", seen_at=datetime(2026, 7, 31, 9, 31)))
 
 
+def _seed_trade(trade_id: int):
+    """A manual-fill claim may name only a real trade in this account's ledger."""
+    from datetime import date, datetime
+    from app.db.models import Trade
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as session, session.begin():
+        session.add(Trade(
+            id=trade_id, owner_id="owner", broker_account_id="account.default", deployment_id=1,
+            instrument_key="NIFTY", direction="LONG", option_type="CE", tradingsymbol="NIFTY",
+            exchange="NFO", segment="options", strike=1, expiry=date(2026, 7, 31), qty=1,
+            entry_premium=1, entry_cost=1, entry_spot=1, entry_time=datetime(2026, 7, 31, 9),
+            exit_premium=1, exit_charges=0, exit_spot=1, exit_time=datetime(2026, 7, 31, 10),
+            exit_reason="TEST", gross_pnl=0, charges_total=0, net_pnl=0, return_pct=0,
+            holding_minutes=1, win=False, mode="paper"))
+
+
 def test_lists_unclaimed_fills(client):
     _seed_fill()
     r = client.get("/api/ledger/manual-fills?unclaimed=true")
@@ -107,22 +124,37 @@ def test_the_broker_price_is_returned_so_the_owner_never_types_it(client):
 
 def test_claiming_removes_it_from_the_queue(client):
     _seed_fill()
+    _seed_trade(1)
     assert client.post("/api/ledger/manual-fills/o1/claim",
-                       json={"trade_id": "tr_1"}).status_code == 200
+                       json={"trade_id": "1"}).status_code == 200
     assert client.get("/api/ledger/manual-fills?unclaimed=true").json()["fills"] == []
 
 
 def test_claiming_twice_is_a_conflict_not_a_silent_overwrite(client):
     _seed_fill()
-    client.post("/api/ledger/manual-fills/o1/claim", json={"trade_id": "tr_1"})
-    r = client.post("/api/ledger/manual-fills/o1/claim", json={"trade_id": "tr_2"})
+    _seed_trade(1)
+    _seed_trade(2)
+    client.post("/api/ledger/manual-fills/o1/claim", json={"trade_id": "1"})
+    r = client.post("/api/ledger/manual-fills/o1/claim", json={"trade_id": "2"})
     assert r.status_code == 409
-    assert r.json()["trade_id"] == "tr_1"
+    assert r.json()["trade_id"] == "1"
 
 
 def test_claiming_an_unknown_order_is_404(client):
     r = client.post("/api/ledger/manual-fills/nope/claim", json={"trade_id": "t"})
     assert r.status_code == 404
+
+
+def test_claim_refuses_an_absent_trade_without_mutating_the_fill(client):
+    """Changing scoped trade lookup to treat SQL EXISTS False as present must fail this."""
+    _seed_fill()
+    r = client.post("/api/ledger/manual-fills/o1/claim", json={"trade_id": "missing"})
+    assert r.status_code == 404
+    assert client.get("/api/ledger/manual-fills?unclaimed=true").json()["fills"] == [{
+        "order_id": "o1", "tradingsymbol": "NIFTY25000CE", "exchange": "NFO",
+        "product": "NRML", "side": "BUY", "qty": 65, "avg_price": 120.5,
+        "order_ts": "2026-07-31T09:30:00", "verdict": "MANUAL", "claimed_trade": None,
+    }]
 
 
 def test_needs_review_rows_are_listed_and_flagged(client):

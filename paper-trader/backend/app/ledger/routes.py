@@ -8,12 +8,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.ledger import service
 from app.ledger.db import get_sessionmaker
+from app.api.execution_access import local_execution_cell
+from app.api.principal import Principal, get_principal
+from app.core.trade_claims import scoped_trade_exists
 
 router = APIRouter(prefix="/api/ledger", tags=["ledger"])
 
@@ -27,9 +30,16 @@ class PutSnapshotRequest(BaseModel):
     payload: Any = None
 
 
+def _scope(request: Request, principal: Principal, *, mutation: bool = False) -> tuple[str, str]:
+    runner = local_execution_cell(request, principal, mutation=mutation)
+    return runner.owner_id, runner.broker_account_id
+
+
 @router.get("/snapshot")
-def get_snapshot():
-    got = service.read_snapshot(get_sessionmaker())
+def get_snapshot(request: Request, principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal)
+    got = service.read_snapshot(get_sessionmaker(), owner_id=owner_id,
+                                broker_account_id=broker_account_id)
     if got is None:
         raise HTTPException(status_code=404, detail="no snapshot")
     version, payload = got
@@ -37,12 +47,15 @@ def get_snapshot():
 
 
 @router.put("/snapshot")
-def put_snapshot(req: PutSnapshotRequest):
+def put_snapshot(req: PutSnapshotRequest, request: Request,
+                 principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal, mutation=True)
     try:
         version = service.write_snapshot(
             get_sessionmaker(),
             json.dumps(req.payload, separators=(",", ":")),
             req.base_version,
+            owner_id=owner_id, broker_account_id=broker_account_id,
         )
     except service.VersionConflict as exc:
         # Flat body, not FastAPI's nested {"detail": {...}} — the client reads
@@ -55,18 +68,24 @@ def put_snapshot(req: PutSnapshotRequest):
 
 
 @router.post("/artifacts")
-async def post_artifact(artifact_id: str = Form(...), file: UploadFile = File(...)):
+async def post_artifact(request: Request, artifact_id: str = Form(...), file: UploadFile = File(...),
+                        principal: Principal = Depends(get_principal)):
     data = await file.read()
     if len(data) > MAX_ARTIFACT_BYTES:
         raise HTTPException(status_code=413, detail="artifact too large")
+    owner_id, broker_account_id = _scope(request, principal, mutation=True)
     service.put_artifact(get_sessionmaker(), artifact_id,
-                         file.content_type or "application/octet-stream", data)
+                         file.content_type or "application/octet-stream", data,
+                         owner_id=owner_id, broker_account_id=broker_account_id)
     return {"id": artifact_id}
 
 
 @router.get("/artifacts/{artifact_id}")
-def fetch_artifact(artifact_id: str):
-    got = service.get_artifact(get_sessionmaker(), artifact_id)
+def fetch_artifact(artifact_id: str, request: Request,
+                   principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal)
+    got = service.get_artifact(get_sessionmaker(), artifact_id, owner_id=owner_id,
+                               broker_account_id=broker_account_id)
     if got is None:
         raise HTTPException(status_code=404, detail="no such artifact")
     mime, data = got
@@ -76,8 +95,11 @@ def fetch_artifact(artifact_id: str):
 
 
 @router.delete("/artifacts/{artifact_id}")
-def remove_artifact(artifact_id: str):
-    if not service.delete_artifact(get_sessionmaker(), artifact_id):
+def remove_artifact(artifact_id: str, request: Request,
+                    principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal, mutation=True)
+    if not service.delete_artifact(get_sessionmaker(), artifact_id, owner_id=owner_id,
+                                   broker_account_id=broker_account_id):
         raise HTTPException(status_code=404, detail="no such artifact")
     return {"ok": True}
 
@@ -91,14 +113,24 @@ class ClaimRequest(BaseModel):
 
 
 @router.get("/manual-fills")
-def get_manual_fills(unclaimed: bool = True):
-    return {"fills": service.list_manual_fills(get_sessionmaker(), unclaimed)}
+def get_manual_fills(request: Request, unclaimed: bool = True,
+                     principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal)
+    return {"fills": service.list_manual_fills(get_sessionmaker(), unclaimed,
+                                                 owner_id=owner_id,
+                                                 broker_account_id=broker_account_id)}
 
 
 @router.post("/manual-fills/{order_id}/claim")
-def claim_manual_fill(order_id: str, req: ClaimRequest):
+def claim_manual_fill(order_id: str, req: ClaimRequest, request: Request,
+                      principal: Principal = Depends(get_principal)):
+    owner_id, broker_account_id = _scope(request, principal, mutation=True)
+
     try:
-        found = service.claim_manual_fill(get_sessionmaker(), order_id, req.trade_id)
+        found = service.claim_manual_fill(get_sessionmaker(), order_id, req.trade_id,
+                                          owner_id=owner_id,
+                                          broker_account_id=broker_account_id,
+                                          trade_exists=scoped_trade_exists)
     except service.AlreadyClaimed as exc:
         return JSONResponse(
             status_code=409,

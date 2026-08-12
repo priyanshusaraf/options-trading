@@ -34,7 +34,46 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0029"
+HEAD = "0030"
+
+
+def test_revision_0030_adds_digest_only_oauth_callback_state_and_refuses_lossy_downgrade(tmp_path):
+    """The new state is empty on upgrade and never downgraded through live state."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0030-oauth-state.db", "0029")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0030")
+        columns = {row[1] for row in connection.execute(sa.text(
+            "PRAGMA table_info(oauth_callback_states)"))}
+        assert columns == {"state_digest", "connection_id", "session_id", "user_id",
+                           "organization_id", "created_at", "expires_at", "consumed_at",
+                           "revoked_at"}
+        sql = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='oauth_callback_states'"
+        )).scalar_one().lower()
+        assert "state_digest" in sql and "state varchar" not in sql.replace("state_digest", "")
+        owner, user = connection.execute(sa.text(
+            "SELECT organization_id,user_id FROM memberships ORDER BY organization_id,user_id LIMIT 1"
+        )).one()
+        account, broker = connection.execute(sa.text(
+            "SELECT broker_account_id,broker FROM broker_accounts ORDER BY broker_account_id LIMIT 1"
+        )).one()
+        connection.execute(sa.text(
+            "INSERT INTO broker_connections "
+            "(owner_id,broker_account_id,broker,scope,label,capabilities_json,status,created_at,updated_at) "
+            "VALUES (:owner,:account,:broker,'test:0030','','[]','active','2026-08-12','2026-08-12')"),
+            {"owner": owner, "account": account, "broker": broker})
+        connection.execute(sa.text(
+            "INSERT INTO user_sessions "
+            "(session_id,token_digest,user_id,organization_id,issued_at,expires_at) "
+            "VALUES ('session',:digest,:user,:owner,'2026-08-12','2030-08-12')"),
+            {"digest": "b" * 64, "user": user, "owner": owner})
+        connection.execute(sa.text(
+            "INSERT INTO oauth_callback_states "
+            "(state_digest,connection_id,session_id,user_id,organization_id,created_at,expires_at) "
+            "VALUES (:digest,1,'session',:user,:owner,'2026-08-12','2026-08-12')"),
+            {"digest": "a" * 64, "user": user, "owner": owner})
+        with pytest.raises(RuntimeError, match="refuses to discard"):
+            command.downgrade(migrate.alembic_config(connection), "0029")
 
 
 def test_revision_0029_preserves_legacy_review_creator_bytes_and_allows_user_ids(tmp_path):

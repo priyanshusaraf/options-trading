@@ -29,6 +29,7 @@ from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
 from app.api.principal import Principal, get_principal, owner_id_for
+from app.api.execution_access import local_execution_cell
 from app.ws.manager import manager
 
 router = APIRouter()
@@ -36,6 +37,12 @@ settings = get_settings()
 
 
 def _runner(req_or_ws):
+    # HTTP never receives the process-global runner as a default.  The WebSocket
+    # surface has its own delivery/payload work and is deliberately outside 5C.
+    if isinstance(req_or_ws, Request):
+        return local_execution_cell(
+            req_or_ws, get_principal(req_or_ws),
+            mutation=req_or_ws.method not in {"GET", "HEAD", "OPTIONS"})
     return req_or_ws.app.state.runner
 
 
@@ -63,8 +70,8 @@ def _df(candles):
 
 # ── status / auth ─────────────────────────────────────────────────────────
 @router.get("/api/status")
-def status(request: Request):
-    r = _runner(request)
+def status(request: Request, principal: Principal = Depends(get_principal)):
+    r = local_execution_cell(request, principal)
     p = r.provider
     with SessionLocal() as s:
         # `r.book`, not the configured mode: `make_broker` returns a PaperBroker whenever
@@ -151,25 +158,15 @@ def calendar(request: Request, days: int = 120):
 
 
 @router.get("/api/login")
-def login(request: Request):
-    url = _runner(request).provider.login_url()
-    return RedirectResponse(url) if url else {"error": "provider has no login flow (mock)"}
+def login():
+    """Retired process-global OAuth entrypoint; use a bound connection flow."""
+    raise HTTPException(status_code=410, detail="use /api/connections/{id}/oauth/initiate")
 
 
 @router.get("/api/session")
-def session(request: Request):
-    """Kite OAuth redirects here with ?request_token=… after login."""
-    rt = request.query_params.get("request_token")
-    if not rt:
-        return {"error": "missing request_token"}
-    try:
-        _runner(request).provider.complete_session(rt)
-    except Exception as e:
-        return {"error": f"login failed: {e}"}
-    # Kite redirects here (the backend) with the request_token; now that the token is
-    # captured, bounce the browser to the FRONTEND so the user lands back on the UI
-    # (not the bare backend origin). Configurable via PT_FRONTEND_URL.
-    return RedirectResponse(settings.frontend_url or "/")
+def session():
+    """Retired process-global OAuth callback; state-bound callbacks use /api/oauth/callback."""
+    raise HTTPException(status_code=410, detail="use /api/oauth/callback")
 
 
 # ── instruments ─────────────────────────────────────────────────────────────
@@ -905,10 +902,11 @@ def execution_state(request: Request):
 
 
 @router.post("/api/execution/arm")
-def execution_arm(body: ArmBody, request: Request):
+def execution_arm(body: ArmBody, request: Request,
+                  principal: Principal = Depends(get_principal)):
     # arm/disarm only flips a flag + sends a notification — no broker-session access,
     # so a plain (threadpool) handler is safe here.
-    return {"armed": _runner(request).arm(body.armed)}
+    return {"armed": local_execution_cell(request, principal, mutation=True).arm(body.armed)}
 
 
 @router.post("/api/execution/kill")

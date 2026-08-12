@@ -262,7 +262,7 @@ async def editor_request_validation_handler(
         )
     return await request_validation_exception_handler(request, exc)
 
-_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login", "/api/session"}
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/oauth/callback"}
 
 
 @app.middleware("http")
@@ -472,16 +472,14 @@ def health():
     `ok` and `build` keep their old shape and meaning for existing consumers
     (deploy.sh parses `build.commit`), except that `ok` now tracks the verdict.
     """
-    try:
-        payload = _readiness_payload()
-    except Exception as e:                       # noqa: BLE001
-        log.error(f"readiness probe itself failed: {e}")
-        payload = {"ready": False, "status": "unready", "failed_checks": ["probe"],
-                   "checks": [{"name": "probe", "ok": False, "fatal": True,
-                               "detail": f"the readiness probe raised: {e}"}]}
-    body = {"ok": payload["ready"], "build": get_build_info(),
-            "schema": _schema_info(), **payload}
-    return JSONResponse(body, status_code=200 if payload["ready"] else 503)
+    # Public health is tenant-neutral process liveness. Execution readiness
+    # carries account-specific runner and position state and must not cross this
+    # unauthenticated boundary.
+    db_ok, _ = _probe_db()
+    return JSONResponse({"ok": db_ok, "ready": db_ok,
+                         "status": "ok" if db_ok else "unready",
+                         "build": get_build_info()},
+                        status_code=200 if db_ok else 503)
 
 
 # /api/health is declared on the app rather than on a router, so the versioning

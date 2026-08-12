@@ -21,24 +21,26 @@ from app.api.paging import MAX_PAGE
 from pydantic import BaseModel
 
 from app.backtest import sweep
-from app.core.config import get_settings
 from app.core.instruments import get_instrument
-from app.db.models import BacktestResult
+from app.db.models import BacktestResult, CapitalState
 from app.db.session import SessionLocal
 from app.api.principal import Principal, get_principal, owner_id_for
+from app.api.execution_access import local_execution_cell
 from app.backtest import repository
 
 
-def _budget(request: Request) -> float:
+def _budget(request: Request, principal: Principal) -> float:
     """The owner's real tradeable budget for affordability flags: the live Kite
     account's free funds when known (cached by the engine), else the configured
     initial_capital. Budget-relative flags are computed at THIS layer so they track
     the account without re-running the (budget-independent) backtest."""
-    runner = getattr(request.app.state, "runner", None)
-    funds = getattr(runner, "_account_funds", None) if runner else None
-    if funds and funds.get("available"):
-        return float(funds["available"])
-    return float(get_settings().initial_capital or 50_000.0)
+    try:
+        runner = local_execution_cell(request, principal)
+    except Exception:
+        return 0.0
+    with SessionLocal() as session:
+        cap = session.get(CapitalState, (runner.broker_account_id, runner.book))
+        return float(cap.cash) if cap is not None else 0.0
 
 
 def _with_affordability(d: dict, budget: float) -> dict:
@@ -186,7 +188,7 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             # H9: default raised 1 -> 10 so a 1-lucky-trade cell is never surfaced as
             # promotable by default (grid selection bias across the sweep). Overridable.
     owner_id = owner_id_for(principal)
-    budget = _budget(request)
+    budget = _budget(request, principal)
     with SessionLocal() as s:
         run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
                else repository.latest_run(s, owner_id=owner_id))
@@ -249,7 +251,7 @@ def result_detail(key: str, interval: str, request: Request, run_id: int | None 
                                      strategy_key=strategy)
         if not r:
             return {"error": "no such result"}
-        d = _with_affordability(r.summary(), _budget(request))
+        d = _with_affordability(r.summary(), _budget(request, principal))
         d["equity_curve"] = json.loads(r.curve_json or "[]")
         d["bh_curve"] = json.loads(r.bh_curve_json or "[]")
         d["trades"] = json.loads(r.trades_json or "[]")

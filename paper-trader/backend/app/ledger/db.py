@@ -37,6 +37,12 @@ def _columns(conn, table: str) -> set[str]:
     return {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
 
 
+def _table_exists(conn, table: str) -> bool:
+    return conn.execute(text(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"),
+        {"name": table}).scalar() is not None
+
+
 def init_ledger_db(engine: Engine) -> None:
     """Create tables, then bring a pre-existing file up to date.
 
@@ -44,7 +50,6 @@ def init_ledger_db(engine: Engine) -> None:
     so any change to an EXISTING table must go through migrate_ledger_db."""
     from app.ledger import models  # noqa: F401  (registers the mapped classes)
 
-    LedgerBase.metadata.create_all(engine)
     migrate_ledger_db(engine)
 
 
@@ -57,14 +62,28 @@ def migrate_ledger_db(engine: Engine) -> None:
     needs an explicit ADD COLUMN here, guarded by a PRAGMA table_info check."""
     from app.ledger import models  # noqa: F401  (registers the mapped classes)
 
-    # create_all handles NEW tables and is safe to re-run — it creates what is
-    # missing and skips what exists. That is exactly what a ledger.db written by
-    # an older build needs when a new table (e.g. ledger_manual_fill) ships.
-    LedgerBase.metadata.create_all(engine)
-
     with engine.begin() as conn:
-        _ = _columns(conn, "ledger_snapshot")
-        _ = _columns(conn, "ledger_manual_fill")
+        legacy = []
+        for table in ("ledger_snapshot", "ledger_artifact", "ledger_manual_fill"):
+            old = f"{table}_legacy_scope"
+            if _table_exists(conn, old):
+                legacy.append((table, old))
+            elif _columns(conn, table) and "owner_id" not in _columns(conn, table):
+                conn.execute(text(f"ALTER TABLE {table} RENAME TO {old}"))
+                legacy.append((table, old))
+    LedgerBase.metadata.create_all(engine)
+    with engine.begin() as conn:
+        for table, old in legacy:
+            if conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar():
+                raise RuntimeError(
+                    f"refusing ambiguous ledger scope migration for {table}: target already has rows")
+            if table == "ledger_snapshot":
+                conn.execute(text("INSERT INTO ledger_snapshot (owner_id, broker_account_id, id, version, payload, updated_at) SELECT 'owner', 'account.default', id, version, payload, updated_at FROM " + old))
+            elif table == "ledger_artifact":
+                conn.execute(text("INSERT INTO ledger_artifact (owner_id, broker_account_id, id, mime, bytes, created_at) SELECT 'owner', 'account.default', id, mime, bytes, created_at FROM " + old))
+            else:
+                conn.execute(text("INSERT INTO ledger_manual_fill (owner_id, broker_account_id, order_id, tradingsymbol, exchange, product, side, qty, avg_price, order_ts, fill_ts, verdict, raw, claimed_trade, seen_at) SELECT 'owner', 'account.default', order_id, tradingsymbol, exchange, product, side, qty, avg_price, order_ts, fill_ts, verdict, raw, claimed_trade, seen_at FROM " + old))
+            conn.execute(text(f"DROP TABLE {old}"))
 
 
 _sessionmaker: sessionmaker | None = None

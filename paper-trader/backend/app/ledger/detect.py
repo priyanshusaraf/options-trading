@@ -90,15 +90,17 @@ def detect_manual_fills(provider, exec_session, ledger_sm, now: datetime,
             continue
         keep.append((o, verdict))
 
-    return _upsert(ledger_sm, keep, now) if keep else 0
+    return _upsert(ledger_sm, keep, now, owner_id=owner_id,
+                   broker_account_id=broker_account_id) if keep else 0
 
 
-def _upsert(sm, rows: list[tuple[dict, str]], now: datetime) -> int:
+def _upsert(sm, rows: list[tuple[dict, str]], now: datetime, *, owner_id: str,
+            broker_account_id: str) -> int:
     written = 0
     with sm() as s, s.begin():
         for o, verdict in rows:
             oid = str(o.get("order_id"))
-            existing = s.get(LedgerManualFill, oid)
+            existing = s.get(LedgerManualFill, (owner_id, broker_account_id, oid))
             if existing is not None:
                 # Never clobber a row the owner has already reasoned about.
                 if existing.claimed_trade:
@@ -108,7 +110,7 @@ def _upsert(sm, rows: list[tuple[dict, str]], now: datetime) -> int:
                 existing.avg_price = float(o.get("average_price") or 0.0) or None
                 continue
             s.add(LedgerManualFill(
-                order_id=oid,
+                owner_id=owner_id, broker_account_id=broker_account_id, order_id=oid,
                 tradingsymbol=str(o.get("tradingsymbol") or ""),
                 exchange=o.get("exchange"),
                 product=o.get("product"),

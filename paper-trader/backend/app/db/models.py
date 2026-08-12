@@ -175,6 +175,40 @@ class UserSession(Base):
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class OAuthCallbackState(Base):
+    """One short-lived, digest-only authorization redirect binding.
+
+    The opaque browser value is never stored.  It is an anti-CSRF capability for
+    exactly one connection and one durable user session, consumed atomically
+    before a provider receives the request token.
+    """
+    __tablename__ = "oauth_callback_states"
+    __table_args__ = (
+        CheckConstraint("length(state_digest) = 64 AND state_digest = lower(state_digest) "
+                        "AND state_digest NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_oauth_callback_states_digest"),
+        ForeignKeyConstraint(("organization_id", "user_id"),
+                             ("memberships.organization_id", "memberships.user_id"),
+                             name="fk_oauth_callback_states_membership", ondelete="RESTRICT"),
+        ForeignKeyConstraint(("session_id",), ("user_sessions.session_id",),
+                             name="fk_oauth_callback_states_session", ondelete="RESTRICT"),
+        ForeignKeyConstraint(("connection_id",), ("broker_connections.id",),
+                             name="fk_oauth_callback_states_connection", ondelete="RESTRICT"),
+        Index("ix_oauth_callback_states_expiry", "expires_at"),
+    )
+
+    state_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    connection_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                     default=dt.datetime.now)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class BrokerAccount(Base):
     __tablename__ = "broker_accounts"
     __table_args__ = (

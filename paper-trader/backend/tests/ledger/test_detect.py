@@ -53,7 +53,7 @@ def test_a_manual_order_is_persisted(tmp_path):
                             bot_ids=set(), bot_symbols=set())
     assert n == 1
     with sm() as s:
-        assert s.get(LedgerManualFill, "o1").verdict == "MANUAL"
+        assert s.get(LedgerManualFill, ("owner", "account.default", "o1")).verdict == "MANUAL"
 
 
 def test_a_bot_order_is_not_persisted(tmp_path):
@@ -62,7 +62,7 @@ def test_a_bot_order_is_not_persisted(tmp_path):
                             bot_ids=set(), bot_symbols=set())
     assert n == 0
     with sm() as s:
-        assert s.get(LedgerManualFill, "o1") is None
+        assert s.get(LedgerManualFill, ("owner", "account.default", "o1")) is None
 
 
 def test_needs_review_is_persisted_and_labelled(tmp_path):
@@ -70,7 +70,7 @@ def test_needs_review_is_persisted_and_labelled(tmp_path):
     detect_manual_fills(_Provider([order(tradingsymbol="RELIANCE")]), None, sm,
                         NOW, bot_ids=set(), bot_symbols={"RELIANCE"})
     with sm() as s:
-        assert s.get(LedgerManualFill, "o1").verdict == "NEEDS_REVIEW"
+        assert s.get(LedgerManualFill, ("owner", "account.default", "o1")).verdict == "NEEDS_REVIEW"
 
 
 def test_repolling_the_same_order_does_not_duplicate(tmp_path):
@@ -87,10 +87,10 @@ def test_a_claimed_row_is_never_overwritten_by_a_repoll(tmp_path):
     p = _Provider([order()])
     detect_manual_fills(p, None, sm, NOW, bot_ids=set(), bot_symbols=set())
     with sm() as s, s.begin():
-        s.get(LedgerManualFill, "o1").claimed_trade = "tr_1"
+        s.get(LedgerManualFill, ("owner", "account.default", "o1")).claimed_trade = "tr_1"
     detect_manual_fills(p, None, sm, NOW, bot_ids=set(), bot_symbols=set())
     with sm() as s:
-        assert s.get(LedgerManualFill, "o1").claimed_trade == "tr_1"
+        assert s.get(LedgerManualFill, ("owner", "account.default", "o1")).claimed_trade == "tr_1"
 
 
 def test_a_failed_read_persists_nothing_and_does_not_raise(tmp_path):
@@ -123,7 +123,7 @@ def test_the_whole_kite_dict_is_kept_for_forensics(tmp_path):
     detect_manual_fills(_Provider([order()]), None, sm, NOW,
                         bot_ids=set(), bot_symbols=set())
     with sm() as s:
-        assert "NIFTY25000CE" in s.get(LedgerManualFill, "o1").raw
+        assert "NIFTY25000CE" in s.get(LedgerManualFill, ("owner", "account.default", "o1")).raw
 
 
 def test_broker_price_and_qty_are_recorded_so_the_owner_never_types_them(tmp_path):
@@ -131,7 +131,7 @@ def test_broker_price_and_qty_are_recorded_so_the_owner_never_types_them(tmp_pat
     detect_manual_fills(_Provider([order()]), None, sm, NOW,
                         bot_ids=set(), bot_symbols=set())
     with sm() as s:
-        row = s.get(LedgerManualFill, "o1")
+        row = s.get(LedgerManualFill, ("owner", "account.default", "o1"))
     assert row.avg_price == 120.5
     assert row.qty == 65
     assert row.side == "BUY"

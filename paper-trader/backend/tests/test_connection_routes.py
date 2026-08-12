@@ -16,7 +16,9 @@ the engine reads.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,6 +29,7 @@ from app.db.models import BrokerAccount, LEGACY_OWNER_ID, BrokerConnection
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.main import app
+from app.api.principal import Principal, get_principal, token_digest
 from app.providers.connection_store import ConnectionNotFound, OwnedConnectionStore
 
 KEY = base64.b64encode(b"r" * 32).decode()
@@ -73,7 +76,8 @@ def _rows(owner: str = OWNER) -> list[BrokerConnection]:
 
 
 def _create(client, **kw) -> dict:
-    body = {"broker": "kite", "scope": "kite:main", "label": "primary"} | kw
+    body = {"broker": "kite", "scope": "kite:main", "label": "primary",
+            "broker_account_id": f"account.{OWNER}"} | kw
     res = client.post("/api/connections", json=body)
     assert res.status_code == 201, res.text
     return res.json()
@@ -114,6 +118,39 @@ def test_a_created_connection_is_persisted_under_the_owner_the_engine_reads(clie
     assert [r.id for r in _rows()] == [created["id"]]
 
 
+def test_connection_creation_uses_the_explicit_owned_account_not_an_exact_one_heuristic(client):
+    """Adding a second owned account must not make the selected account ambiguous."""
+    second = f"account.{OWNER}.second"
+    with SessionLocal() as s:
+        s.add(BrokerAccount(broker_account_id=second, owner_id=OWNER, broker="kite",
+                            external_account_id="second", display_name="Second"))
+        s.commit()
+
+    created = _create(client, broker_account_id=second)
+    assert created["broker_account_id"] == second
+
+    # A caller cannot bind a connection to somebody else's account merely by
+    # knowing its durable account id.
+    with SessionLocal() as s:
+        s.add(BrokerAccount(broker_account_id="account.alice", owner_id="alice", broker="kite",
+                            external_account_id="alice", display_name="Alice"))
+        s.commit()
+    refused = client.post("/api/connections", json={
+        "broker": "kite", "scope": "kite:foreign", "broker_account_id": "account.alice"})
+    assert refused.status_code == 404
+
+
+def test_connection_creation_refuses_an_owned_account_for_a_different_broker(client):
+    """An account id is not sufficient: the connection adapter must match it."""
+    with SessionLocal() as s:
+        s.add(BrokerAccount(broker_account_id="account.dhan", owner_id=OWNER, broker="dhan",
+                            external_account_id="dhan", display_name="Dhan"))
+        s.commit()
+    response = client.post("/api/connections", json={
+        "broker": "kite", "scope": "kite:wrong-account", "broker_account_id": "account.dhan"})
+    assert response.status_code == 404
+
+
 def test_a_new_connection_holds_no_credential(client):
     assert _create(client)["has_credential"] is False
 
@@ -121,7 +158,8 @@ def test_a_new_connection_holds_no_credential(client):
 def test_a_planned_broker_is_refused_at_create_naming_its_documentation(client):
     """A row naming a broker with no adapter looks configured and can never work."""
     res = client.post("/api/connections",
-                      json={"broker": "angelone", "scope": "angel:main"})
+                      json={"broker": "angelone", "scope": "angel:main",
+                            "broker_account_id": f"account.{OWNER}"})
     assert res.status_code == 400
     assert "planned" in res.json()["detail"]
     assert _rows() == []
@@ -129,7 +167,8 @@ def test_a_planned_broker_is_refused_at_create_naming_its_documentation(client):
 
 def test_an_unknown_broker_is_refused_at_create(client):
     res = client.post("/api/connections",
-                      json={"broker": "not-a-broker", "scope": "x:main"})
+                      json={"broker": "not-a-broker", "scope": "x:main",
+                            "broker_account_id": f"account.{OWNER}"})
     assert res.status_code == 400
     assert _rows() == []
 
@@ -139,13 +178,15 @@ def test_a_duplicate_scope_for_one_owner_is_a_conflict_not_a_server_error(client
     that column is what restart recovery matches on."""
     _create(client)
     res = client.post("/api/connections",
-                      json={"broker": "kite", "scope": "kite:main"})
+                      json={"broker": "kite", "scope": "kite:main",
+                            "broker_account_id": f"account.{OWNER}"})
     assert res.status_code == 409
 
 
 def test_a_capability_outside_the_vocabulary_is_refused(client):
     res = client.post("/api/connections",
                       json={"broker": "kite", "scope": "kite:main",
+                            "broker_account_id": f"account.{OWNER}",
                             "capabilities": ["teleportation"]})
     assert res.status_code == 400
 
@@ -498,7 +539,12 @@ def test_a_long_lived_key_broker_refuses_a_login_url_instead_of_inventing_one(cl
     """Dhan issues its token in a dashboard. Returning a URL would send the user to a 404 with
     no way to distinguish that from a broker outage."""
     with SessionLocal() as s:
-        row = _store(s, OWNER).create(broker="dhan", scope="dhan:main")
+        account = "account.acct-7.dhan"
+        s.add(BrokerAccount(broker_account_id=account, owner_id=OWNER, broker="dhan",
+                            external_account_id="dhan", display_name="Dhan"))
+        s.flush()
+        row = OwnedConnectionStore(s, owner_id=OWNER, broker_account_id=account).create(
+            broker="dhan", scope="dhan:main")
         s.commit()
         dhan_id = row.id
     res = client.get(f"/api/connections/{dhan_id}/login")
@@ -507,8 +553,7 @@ def test_a_long_lived_key_broker_refuses_a_login_url_instead_of_inventing_one(cl
     assert "dashboard" in detail and "/credential" in detail
 
 
-def test_the_exchange_seals_the_token_and_carries_the_app_keys_through(client, vault_key,
-                                                                      monkeypatch):
+def test_the_legacy_connection_session_endpoint_is_retired(client, vault_key, monkeypatch):
     """Dropping the app keys would work until tomorrow morning, when the re-login has nothing to
     authenticate with — a failure that appears once a day and looks like an expired token."""
     import app.providers.broker_auth as ba
@@ -518,14 +563,7 @@ def test_the_exchange_seals_the_token_and_carries_the_app_keys_through(client, v
     created = _kite_with_app_keys(client, vault_key)
     res = client.post(f"/api/connections/{created['id']}/session",
                       json={"request_token": "one-time-rt"})
-    assert res.status_code == 200
-    assert res.json()["has_credential"] is True
-    assert "exchanged-access-token" not in res.text      # never echoed back
-
-    with SessionLocal() as s:
-        bundle = vault.unseal(s.get(BrokerConnection, created["id"]).credential_ciphertext)
-    assert bundle["access_token"] == "exchanged-access-token"
-    assert bundle["api_key"] == "ak-123" and bundle["api_secret"] == "as-456"
+    assert res.status_code == 404
 
 
 class _FakeKite:
@@ -540,7 +578,7 @@ class _FakeKite:
         return {"access_token": "exchanged-access-token", "user_id": "AB1234"}
 
 
-def test_a_refused_exchange_does_not_leak_the_brokers_message(client, vault_key, monkeypatch):
+def test_the_retired_exchange_endpoint_never_reaches_the_provider(client, vault_key, monkeypatch):
     """Kite's exception messages have been observed to echo request parameters, and this one
     reaches an API response and the /api/logs ring buffer. Only the type name crosses."""
     import app.providers.broker_auth as ba
@@ -555,12 +593,11 @@ def test_a_refused_exchange_does_not_leak_the_brokers_message(client, vault_key,
     created = _kite_with_app_keys(client, vault_key)
     res = client.post(f"/api/connections/{created['id']}/session",
                       json={"request_token": "one-time-rt"})
-    assert res.status_code == 400
+    assert res.status_code == 404
     assert "as-456" not in res.text and "one-time-rt" not in res.text
-    assert "ValueError" in res.json()["detail"]
 
 
-def test_the_session_exchange_is_authenticated_and_is_not_a_GET(client, monkeypatch):
+def test_the_legacy_session_exchange_route_is_absent(client, monkeypatch):
     """`/api/session` is an auth-exempt GET because Zerodha redirects to it directly. That is
     acceptable for one hard-coded account and not here, where the request names WHICH connection
     to write a credential into — an unauthenticated GET taking an id would let anyone who could
@@ -568,10 +605,8 @@ def test_the_session_exchange_is_authenticated_and_is_not_a_GET(client, monkeypa
     monkeypatch.setattr(get_settings(), "api_token", "secret-token")
     assert client.post("/api/connections/1/session",
                        json={"request_token": "x"}).status_code == 401
-    assert client.get("/api/connections/1/login").status_code == 401
-    # And there is no GET form of the exchange at all.
     assert client.get("/api/connections/1/session",
-                      headers={"Authorization": "Bearer secret-token"}).status_code == 405
+                      headers={"Authorization": "Bearer secret-token"}).status_code == 404
 
 
 def test_another_owners_connection_cannot_be_logged_in_or_exchanged(client, vault_key):
@@ -587,7 +622,12 @@ def test_a_broker_with_no_registered_login_flow_refuses_with_its_docs_url(client
     is how a flow that looks right fails at 06:00. It must refuse and name the documentation,
     not fall through to an AttributeError 500 that reads as a server fault."""
     with SessionLocal() as s:
-        row = _store(s, OWNER).create(broker="upstox", scope="upstox:data")
+        account = "account.acct-7.upstox"
+        s.add(BrokerAccount(broker_account_id=account, owner_id=OWNER, broker="upstox",
+                            external_account_id="upstox", display_name="Upstox"))
+        s.flush()
+        row = OwnedConnectionStore(s, owner_id=OWNER, broker_account_id=account).create(
+            broker="upstox", scope="upstox:data")
         s.commit()
         upstox_id = row.id
     res = client.get(f"/api/connections/{upstox_id}/login")
@@ -597,4 +637,84 @@ def test_a_broker_with_no_registered_login_flow_refuses_with_its_docs_url(client
 
     exchange = client.post(f"/api/connections/{upstox_id}/session",
                            json={"request_token": "x"})
-    assert exchange.status_code == 501
+    assert exchange.status_code == 404
+
+
+def test_oauth_callback_binds_one_durable_session_connection_and_is_single_use(
+        client, vault_key, monkeypatch):
+    """A callback needs opaque state, not a connection id or bearer header."""
+    from app.db.models import Membership, Organization, User, UserSession
+    import app.providers.broker_auth as ba
+
+    user_id, session_id = "oauth-user", "oauth-session"
+    with SessionLocal() as s:
+        if s.get(Organization, OWNER) is None:
+            s.add(Organization(organization_id=OWNER, name=OWNER))
+        s.add(User(user_id=user_id, email_normalized="oauth@example.test", display_name="OAuth"))
+        s.flush()
+        s.add_all([
+            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
+            UserSession(session_id=session_id, token_digest=token_digest("oauth-bearer"),
+                        user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
+                        expires_at=dt.datetime.now() + dt.timedelta(hours=1)),
+        ])
+        s.commit()
+    principal = Principal(id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
+                          organization_id=OWNER, role="owner", session_id=session_id)
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
+        created = _kite_with_app_keys(client, vault_key)
+        started = client.post(f"/api/connections/{created['id']}/oauth/initiate")
+        assert started.status_code == 200, started.text
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        callback = client.get("/api/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"})
+        assert callback.status_code == 200, callback.text
+        assert callback.json()["id"] == created["id"]
+        assert client.get("/api/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("disabled", ["user", "organization", "role"])
+def test_oauth_callback_refuses_when_its_durable_identity_is_disabled(
+        client, vault_key, monkeypatch, disabled):
+    """A prior browser redirect cannot outlive user or organization revocation."""
+    from app.db.models import Membership, Organization, User, UserSession
+    import app.providers.broker_auth as ba
+    user_id, session_id = f"oauth-{disabled}", f"session-{disabled}"
+    with SessionLocal() as s:
+        if s.get(Organization, OWNER) is None:
+            s.add(Organization(organization_id=OWNER, name=OWNER))
+        s.add(User(user_id=user_id, email_normalized=f"{user_id}@example.test", display_name=user_id))
+        s.flush()
+        s.add_all([
+            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
+            UserSession(session_id=session_id, token_digest=token_digest(f"bearer-{disabled}"),
+                        user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
+                        expires_at=dt.datetime.now() + dt.timedelta(hours=1)),
+        ])
+        s.commit()
+    principal = Principal(id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
+                          organization_id=OWNER, role="owner", session_id=session_id)
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
+        created = _kite_with_app_keys(client, vault_key)
+        state = parse_qs(urlsplit(client.post(
+            f"/api/connections/{created['id']}/oauth/initiate").json()["login_url"]).query)["state"][0]
+        with SessionLocal() as s:
+            if disabled == "user":
+                s.get(User, user_id).status = "disabled"
+            elif disabled == "organization":
+                s.get(Organization, OWNER).status = "disabled"
+            else:
+                s.get(Membership, (OWNER, user_id)).role = "viewer"
+            s.commit()
+        response = client.get("/api/oauth/callback", params={"state": state, "request_token": "x"})
+        assert response.status_code == 400
+        assert response.json() == {"detail": "invalid login callback"}
+    finally:
+        app.dependency_overrides.clear()

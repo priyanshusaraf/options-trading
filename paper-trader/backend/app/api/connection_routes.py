@@ -29,10 +29,15 @@ record they would write into, and it is the half that had no way in.
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
+import secrets
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.api.principal import (
     Principal,
@@ -43,7 +48,8 @@ from app.api.principal import (
 )
 from app.core.credential_vault import CredentialVaultUnavailable
 from app.providers.broker_auth import BrokerAuthError, NoInteractiveLogin
-from app.db.models import BrokerAccount
+from app.db.models import (BrokerAccount, BrokerConnection, OAuthCallbackState,
+                           Membership, Organization, User, UserSession)
 from app.db.session import SessionLocal
 from app.providers import brokers as registry
 from app.providers import capabilities as caps
@@ -61,6 +67,7 @@ class _ClosedModel(BaseModel):
 
 class ConnectionCreate(_ClosedModel):
     broker: str = Field(min_length=1, max_length=32)
+    broker_account_id: str = Field(min_length=1, max_length=64)
     #: Bounded to the column width. The value is written into every `ExecutionIntent` this
     #: connection authors, so a truncated one would silently break restart attribution.
     scope: str = Field(min_length=1, max_length=64)
@@ -89,6 +96,26 @@ _MAX_SECRET_LEN = 4096
 #: two-million-character key stored a 2.6 MB ciphertext — on a 1 GB droplet whose database is
 #: rsynced by `deploy.sh`. Found by an independent security review, 2026-08-11.
 _MAX_SECRET_KEY_LEN = 64
+_OAUTH_STATE_TTL = dt.timedelta(minutes=10)
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def _digest_state(raw: str | None) -> str | None:
+    if not isinstance(raw, str) or not raw or len(raw) > 512:
+        return None
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _with_state(url: str, state: str) -> str:
+    """Add OAuth state without serialising it anywhere but the broker redirect URL."""
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["state"] = state
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path,
+                       urlencode(query), parsed.fragment))
 
 #: These bounds are checked HERE and deliberately not expressed as `constr(max_length=...)` on
 #: the model. A pydantic length failure puts the rejected value into the 422 body's `input`
@@ -97,20 +124,36 @@ _MAX_SECRET_KEY_LEN = 64
 #: obvious-looking refactor and it reopens that hole.
 
 
-def _open(session, principal: Principal) -> OwnedConnectionStore:
+def _open(session, principal: Principal, broker_account_id: str, broker: str) -> OwnedConnectionStore:
     """One place that binds a session to an owner, so no route can resolve the owner its own
     slightly different way."""
     owner_id = owner_id_for(principal)
-    accounts = list(session.scalars(select(BrokerAccount).where(
+    account = session.scalar(select(BrokerAccount.broker_account_id).where(
         BrokerAccount.owner_id == owner_id,
-        BrokerAccount.status == "active").order_by(BrokerAccount.broker_account_id).limit(2)))
-    if len(accounts) != 1:
-        raise HTTPException(
-            status_code=409,
-            detail="owner must have exactly one active broker account for this endpoint")
+        BrokerAccount.broker_account_id == broker_account_id,
+        BrokerAccount.broker == broker,
+        BrokerAccount.status == "active"))
+    if account is None:
+        raise ConnectionNotFound("no broker account for this owner")
     return OwnedConnectionStore(
         session, owner_id=owner_id,
-        broker_account_id=accounts[0].broker_account_id)
+        broker_account_id=account)
+
+
+def _store_for_connection(session, principal: Principal, connection_id: int) -> OwnedConnectionStore:
+    """Bind an existing connection through owner + active-account SQL before use."""
+    owner_id = owner_id_for(principal)
+    account_id = session.scalar(select(BrokerConnection.broker_account_id).join(
+        BrokerAccount, BrokerAccount.broker_account_id == BrokerConnection.broker_account_id).where(
+            BrokerConnection.id == connection_id,
+            BrokerConnection.owner_id == owner_id,
+            BrokerConnection.broker == BrokerAccount.broker,
+            BrokerAccount.owner_id == owner_id,
+            BrokerAccount.status == "active",
+        ))
+    if account_id is None:
+        raise ConnectionNotFound(f"no connection {connection_id} for this owner")
+    return OwnedConnectionStore(session, owner_id=owner_id, broker_account_id=account_id)
 
 
 def _authorized(store: OwnedConnectionStore, principal: Principal,
@@ -172,7 +215,10 @@ def list_connections(
     rule that an unbounded list read is a memory path into the risk lane."""
     require(principal, "read:connections")
     with SessionLocal() as s:
-        rows = _open(s, principal).list(include_revoked=include_revoked)
+        q = select(BrokerConnection).where(BrokerConnection.owner_id == owner_id_for(principal))
+        if not include_revoked:
+            q = q.where(BrokerConnection.status == "active")
+        rows = s.scalars(q.order_by(BrokerConnection.id).limit(200)).all()
         return {"connections": [r.to_dict() for r in rows]}
 
 
@@ -182,7 +228,7 @@ def get_connection(connection_id: int,
     require(principal, "read:connections")
     with SessionLocal() as s:
         try:
-            store = _open(s, principal)
+            store = _store_for_connection(s, principal, connection_id)
             return _authorized(store, principal, "read:connection", connection_id).to_dict()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
@@ -217,8 +263,15 @@ def create_connection(body: ConnectionCreate,
                 if body.capabilities is not None else None)
     with SessionLocal() as s:
         try:
-            row = _open(s, principal).create(
-                broker=body.broker, scope=body.scope, label=body.label,
+            requested = registry.spec(body.broker)
+            if requested.load_data() is None and requested.load_venue() is None:
+                raise registry.BrokerNotSupported(
+                    f"broker {requested.key!r} ({requested.display_name}) is {requested.status.value} "
+                    f"— it has no adapter in this build, so a connection to it could never be "
+                    f"used. See {requested.docs_url}.")
+            normalized_broker = requested.key
+            row = _open(s, principal, body.broker_account_id, normalized_broker).create(
+                broker=normalized_broker, scope=body.scope, label=body.label,
                 capabilities=declared)
             s.commit()
         except registry.BrokerNotSupported as e:
@@ -232,6 +285,8 @@ def create_connection(body: ConnectionCreate,
                 detail=(f"a connection with scope {body.scope!r} already exists for this "
                         "broker account"),
             ) from e
+        except ConnectionNotFound as e:
+            raise HTTPException(status_code=404, detail="broker account unavailable") from e
         return row.to_dict()
 
 
@@ -262,7 +317,7 @@ def store_credential(connection_id: int, body: CredentialWrite,
                    f"and its value at most {_MAX_SECRET_LEN}")
     with SessionLocal() as s:
         try:
-            store = _open(s, principal)
+            store = _store_for_connection(s, principal, connection_id)
             _authorized(store, principal, "write:credential", connection_id)
             row = store.store_credential(connection_id, dict(body.secrets))
             s.commit()
@@ -285,7 +340,7 @@ def revoke_connection(connection_id: int,
     require(principal, "revoke:connection")
     with SessionLocal() as s:
         try:
-            store = _open(s, principal)
+            store = _store_for_connection(s, principal, connection_id)
             _authorized(store, principal, "revoke:connection", connection_id)
             row = store.revoke(connection_id)
             s.commit()
@@ -332,7 +387,7 @@ def connection_login_url(connection_id: int,
     require(principal, "read:connections")
     with SessionLocal() as s:
         try:
-            store = _open(s, principal)
+            store = _store_for_connection(s, principal, connection_id)
             row = _authorized(store, principal, "read:connection", connection_id)
             auth = _authenticator(row.broker)
             secrets = store.live_connection(connection_id).secrets_source()
@@ -348,32 +403,36 @@ def connection_login_url(connection_id: int,
             raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/connections/{connection_id}/session")
-def connection_complete_session(connection_id: int, body: SessionExchange,
-                                principal: Principal = Depends(get_principal)) -> dict:
-    """Exchange the broker's one-time token and seal the result.
-
-    A POST, and authenticated as the owner of this connection — deliberately not a GET the
-    broker can redirect to. `/api/session` is a GET on the auth-exempt list because it receives
-    Zerodha's redirect directly; that is acceptable for one hard-coded account and is not
-    acceptable here, where the request names WHICH connection to write a credential into. An
-    unauthenticated GET taking a connection id would let anyone who could reach the port bind a
-    credential of their choosing to another owner's connection.
-
-    The exchanged bundle carries the app keys through, so tomorrow's re-login still has
-    something to authenticate with.
-    """
+def _start_oauth(connection_id: int, principal: Principal) -> dict:
+    """Create a one-use browser binding for a connection owned by this session."""
     require(principal, "write:credential")
+    if not principal.session_id or not principal.user_id or not principal.organization_id:
+        raise HTTPException(status_code=403, detail="authenticated session required")
     with SessionLocal() as s:
         try:
-            store = _open(s, principal)
+            active = s.scalar(select(UserSession.session_id).where(
+                UserSession.session_id == principal.session_id,
+                UserSession.user_id == principal.user_id,
+                UserSession.organization_id == principal.organization_id,
+                UserSession.revoked_at.is_(None), UserSession.expires_at > _now()))
+            if active is None:
+                raise ConnectionNotFound("no active authenticated connection")
+            store = _store_for_connection(s, principal, connection_id)
             row = _authorized(store, principal, "write:credential", connection_id)
             auth = _authenticator(row.broker)
-            secrets = store.live_connection(connection_id).secrets_source()
-            bundle = auth.exchange(secrets, body.request_token)
-            saved = store.store_credential(connection_id, bundle)
+            credential_bundle = store.live_connection(connection_id).secrets_source()
+            login_url = auth.login_url(credential_bundle)
+            raw_state = secrets.token_urlsafe(32)
+            state_digest = _digest_state(raw_state)
+            assert state_digest is not None
+            s.add(OAuthCallbackState(
+                state_digest=state_digest, connection_id=row.id,
+                session_id=principal.session_id, user_id=principal.user_id,
+                organization_id=principal.organization_id, created_at=_now(),
+                expires_at=_now() + _OAUTH_STATE_TTL))
             s.commit()
-            return saved.to_dict()
+            return {"connection_id": row.id,
+                    "login_url": _with_state(login_url, raw_state)}
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         except NoInteractiveLogin as e:
@@ -382,3 +441,74 @@ def connection_complete_session(connection_id: int, body: SessionExchange,
             raise HTTPException(status_code=400, detail=str(e)) from e
         except CredentialVaultUnavailable as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@router.post("/connections/{connection_id}/oauth/initiate")
+def connection_oauth_initiate(connection_id: int,
+                              principal: Principal = Depends(get_principal)) -> dict:
+    return _start_oauth(connection_id, principal)
+
+
+@router.get("/oauth/callback")
+def oauth_callback(state: str | None = None, request_token: str | None = None) -> dict:
+    """Consume a durable state before exchanging a broker request token.
+
+    This is intentionally the sole callback surface that may be reached without
+    a bearer.  All invalid state shapes return the same response and never call
+    a provider, so state guessing cannot reveal a connection or cause an
+    exchange for someone else's account.
+    """
+    digest = _digest_state(state)
+    if digest is None or not request_token or len(request_token) > 512:
+        raise HTTPException(status_code=400, detail="invalid login callback")
+    now = _now()
+    with SessionLocal() as s:
+        callback = s.scalar(select(OAuthCallbackState).join(
+            UserSession, UserSession.session_id == OAuthCallbackState.session_id).join(
+            Membership, (Membership.organization_id == UserSession.organization_id) &
+                        (Membership.user_id == UserSession.user_id)).join(
+            User, User.user_id == UserSession.user_id).join(
+            Organization, Organization.organization_id == UserSession.organization_id).join(
+            BrokerConnection, BrokerConnection.id == OAuthCallbackState.connection_id).join(
+            BrokerAccount, BrokerAccount.broker_account_id == BrokerConnection.broker_account_id).where(
+                OAuthCallbackState.state_digest == digest,
+                OAuthCallbackState.expires_at > now,
+                OAuthCallbackState.revoked_at.is_(None),
+                OAuthCallbackState.consumed_at.is_(None),
+                UserSession.session_id == OAuthCallbackState.session_id,
+                UserSession.user_id == OAuthCallbackState.user_id,
+                UserSession.organization_id == OAuthCallbackState.organization_id,
+                UserSession.revoked_at.is_(None), UserSession.expires_at > now,
+                Membership.status == "active", Membership.role == "owner",
+                User.status == "active", Organization.status == "active",
+                BrokerConnection.owner_id == OAuthCallbackState.organization_id,
+                BrokerConnection.status == "active",
+                BrokerAccount.owner_id == OAuthCallbackState.organization_id,
+                BrokerAccount.status == "active",
+            ))
+        if callback is None:
+            raise HTTPException(status_code=400, detail="invalid login callback")
+        consumed = s.execute(update(OAuthCallbackState).where(
+            OAuthCallbackState.state_digest == digest,
+            OAuthCallbackState.expires_at > now,
+            OAuthCallbackState.revoked_at.is_(None),
+            OAuthCallbackState.consumed_at.is_(None),
+        ).values(consumed_at=now))
+        if consumed.rowcount != 1:
+            s.rollback()
+            raise HTTPException(status_code=400, detail="invalid login callback")
+        # The state is now spent before a provider sees the request token.
+        store = OwnedConnectionStore(s, owner_id=callback.organization_id,
+                                     broker_account_id=s.scalar(select(BrokerConnection.broker_account_id).where(
+                                         BrokerConnection.id == callback.connection_id)))
+        try:
+            row = store.get(callback.connection_id)
+            auth = _authenticator(row.broker)
+            bundle = auth.exchange(store.live_connection(row.id).secrets_source(), request_token)
+            saved = store.store_credential(row.id, bundle)
+            s.commit()
+            return saved.to_dict()
+        except (ConnectionNotFound, NoInteractiveLogin, BrokerAuthError,
+                CredentialVaultUnavailable):
+            s.commit()  # retain the consumed state after a failed exchange
+            raise HTTPException(status_code=400, detail="invalid login callback")
