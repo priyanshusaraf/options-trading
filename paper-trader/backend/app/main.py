@@ -33,8 +33,8 @@ from app.api import (
     research_review_routes,
     routes,
 )
-from app.api.principal import (auth_enabled, install_websocket_payload_redaction,
-                               resolve_http_principal)
+from app.api.principal import (action_for_request, auth_enabled, install_websocket_payload_redaction,
+                               is_request_allowed, resolve_http_principal)
 from app.api.versioning import VERSION_PREFIX, mount_versioned, unversioned_path
 from app.core.instruments import get_instrument
 from app.core.config import assert_boot_config, get_settings
@@ -303,6 +303,16 @@ async def auth_gate(request: Request, call_next):
     ):
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+    action = action_for_request(request.method, path)
+    # A durable user may only reach a resource family whose authorization and
+    # organization-scoped repository boundary have both been named.  Legacy
+    # runner endpoints remain callable only through the compatibility owner
+    # until Task 5C converts their process-global state.
+    if (action is None and path not in _AUTH_EXEMPT_PATHS and principal is not None
+            and principal.kind == "user" and path.startswith("/api")):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if action is not None and not is_request_allowed(principal, action):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
     request.state.principal = principal
     return await call_next(request)
 

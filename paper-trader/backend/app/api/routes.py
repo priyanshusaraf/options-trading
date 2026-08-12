@@ -950,9 +950,9 @@ async def manual_open(body: ManualOpenBody, request: Request):
 
 # ── runtime settings (manual-override mode) ──────────────────────────────────
 @router.get("/api/settings")
-def get_settings_route(request: Request):
+def get_settings_route(request: Request, principal: Principal = Depends(get_principal)):
     from app.core import runtime_config
-    return {"params": runtime_config.schema(owner_id=_runner(request).owner_id)}
+    return {"params": runtime_config.schema(owner_id=owner_id_for(principal))}
 
 
 class SettingBody(BaseModel):
@@ -961,11 +961,13 @@ class SettingBody(BaseModel):
 
 
 @router.post("/api/settings")
-def set_setting(body: SettingBody, request: Request):
+def set_setting(body: SettingBody, request: Request, principal: Principal = Depends(get_principal)):
     from app.core import runtime_config
     runner = _runner(request)
-    res = runtime_config.set_override(body.key, body.value, owner_id=runner.owner_id)
-    runner.refresh_params()
+    owner_id = owner_id_for(principal)
+    res = runtime_config.set_override(body.key, body.value, owner_id=owner_id)
+    if runner.owner_id == owner_id:
+        runner.refresh_params()
     return res
 
 
@@ -974,11 +976,13 @@ class SettingKey(BaseModel):
 
 
 @router.post("/api/settings/reset")
-def reset_setting(body: SettingKey, request: Request):
+def reset_setting(body: SettingKey, request: Request, principal: Principal = Depends(get_principal)):
     from app.core import runtime_config
     runner = _runner(request)
-    runtime_config.clear_override(body.key, owner_id=runner.owner_id)
-    runner.refresh_params()
+    owner_id = owner_id_for(principal)
+    runtime_config.clear_override(body.key, owner_id=owner_id)
+    if runner.owner_id == owner_id:
+        runner.refresh_params()
     return {"key": body.key, "reset": True}
 
 

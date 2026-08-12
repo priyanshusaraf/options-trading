@@ -551,6 +551,7 @@ def post_candidate_decision(
             expected_status=body.expected_status,
             decision=body.decision,
             reason=body.reason.strip(),
+            actor_id=(principal.user_id if principal.kind == "user" else "owner"),
         )
     except research_read.CandidateDecisionConflict as exc:
         raise _error(

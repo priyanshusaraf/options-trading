@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.principal import Principal, get_principal, owner_id_for, require
+from app.api.principal import Principal, get_principal, is_request_allowed, owner_id_for
 from app.core import review_snapshot_store, review_state
 from app.core.config import get_settings
 from app.core.review_aggregation import project_review_source
@@ -172,8 +172,23 @@ def get_project_review(
 
 
 def _owner(principal: Principal, action: str, project_id: str) -> str:
-    require(principal, action, project_id)
-    return "owner"
+    if not is_request_allowed(principal, action):
+        raise HTTPException(status_code=403, detail="forbidden")
+    # Compatibility owners retain the historical bytes.  Durable user sessions
+    # always attribute new artifacts to their resolved user id.
+    if principal.kind in ("owner", "anonymous_owner"):
+        return "owner"
+    if not principal.user_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return principal.user_id
+
+
+def _can_manage_review_artifacts(principal: Principal) -> bool:
+    # Durable users can revise only artifacts they created.  The membership
+    # role baseline deliberately adds candidate decisions to admin, not another
+    # user's review prose.  Legacy compatibility principals alone manage the
+    # historic literal `owner` artifacts.
+    return principal.kind in ("owner", "anonymous_owner")
 
 
 def _state_error(exc: Exception) -> JSONResponse:
@@ -379,7 +394,7 @@ def post_review_snapshot(
     body: SnapshotCapture,
     principal: Principal = Depends(get_principal),
 ):
-    actor = _owner(principal, "capture project review snapshot", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         snapshot = review_snapshot_store.capture_snapshot(
             project_id,
@@ -398,7 +413,7 @@ def get_review_snapshots(
     project_id: str,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "list project review snapshots", project_id)
+    _owner(principal, "read:review", project_id)
     try:
         snapshots = review_snapshot_store.list_snapshots(
             project_id, owner_id=owner_id_for(principal)
@@ -414,7 +429,7 @@ def get_review_snapshot(
     snapshot_id: str,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "read project review snapshot", project_id)
+    _owner(principal, "read:review", project_id)
     try:
         snapshot = review_snapshot_store.get_snapshot(
             project_id, snapshot_id, owner_id=owner_id_for(principal)
@@ -444,7 +459,7 @@ def search_project_review(
     principal: Principal = Depends(get_principal),
 ):
     """Search the closed project-summary and active-owner-note corpus."""
-    _owner(principal, "search project review", project_id)
+    _owner(principal, "read:review", project_id)
     unknown = sorted(set(request.query_params) - _SEARCH_QUERY_FIELDS)
     duplicate = next((
         key for key in _SEARCH_QUERY_FIELDS if len(request.query_params.getlist(key)) > 1
@@ -524,7 +539,7 @@ def search_project_review(
 def get_review_notes(
     project_id: str, principal: Principal = Depends(get_principal)
 ):
-    _owner(principal, "read review notes", project_id)
+    _owner(principal, "read:review", project_id)
     try:
         event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         notes = review_state.list_notes(project_id, owner_id=owner_id_for(principal))
@@ -542,7 +557,7 @@ def post_review_note(
     body: NoteCreate,
     principal: Principal = Depends(get_principal),
 ):
-    actor = _owner(principal, "create review note", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         event_type = event_types.get(body.event_id)
@@ -574,12 +589,13 @@ def patch_review_note(
     body: NoteUpdate,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "update review note", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         event_types = _event_types(project_id, owner_id=owner_id_for(principal))
         note = review_state.update_note(
             project_id, note_id, owner_id=owner_id_for(principal),
-            base_revision=body.base_revision, body=body.body,
+            base_revision=body.base_revision, body=body.body, actor_id=actor,
+            can_manage=_can_manage_review_artifacts(principal),
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -593,10 +609,11 @@ def delete_review_note(
     body: RevisionRequest,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "delete review note", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         review_state.delete_note(
-            project_id, note_id, owner_id=owner_id_for(principal), base_revision=body.base_revision
+            project_id, note_id, owner_id=owner_id_for(principal), base_revision=body.base_revision,
+            actor_id=actor, can_manage=_can_manage_review_artifacts(principal),
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -607,7 +624,7 @@ def delete_review_note(
 def get_review_views(
     project_id: str, principal: Principal = Depends(get_principal)
 ):
-    _owner(principal, "read saved review views", project_id)
+    _owner(principal, "read:review", project_id)
     try:
         views = review_state.list_saved_views(project_id, owner_id=owner_id_for(principal))
     except _STATE_EXCEPTIONS as exc:
@@ -624,7 +641,7 @@ def post_review_view(
     body: ViewCreate,
     principal: Principal = Depends(get_principal),
 ):
-    actor = _owner(principal, "create saved review view", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         view = review_state.create_saved_view(
             project_id,
@@ -645,7 +662,7 @@ def patch_review_view(
     body: ViewUpdate,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "update saved review view", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         view = review_state.update_saved_view(
             project_id,
@@ -654,6 +671,7 @@ def patch_review_view(
             base_revision=body.base_revision,
             name=body.name,
             filters=body.filters.model_dump(),
+            actor_id=actor, can_manage=_can_manage_review_artifacts(principal),
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)
@@ -667,10 +685,11 @@ def delete_review_view(
     body: RevisionRequest,
     principal: Principal = Depends(get_principal),
 ):
-    _owner(principal, "delete saved review view", project_id)
+    actor = _owner(principal, "write:review", project_id)
     try:
         review_state.delete_saved_view(
-            project_id, view_id, owner_id=owner_id_for(principal), base_revision=body.base_revision
+            project_id, view_id, owner_id=owner_id_for(principal), base_revision=body.base_revision,
+            actor_id=actor, can_manage=_can_manage_review_artifacts(principal),
         )
     except _STATE_EXCEPTIONS as exc:
         return _state_error(exc)

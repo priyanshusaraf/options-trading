@@ -1432,7 +1432,7 @@ class ProjectReviewNote(Base):
             name="ck_review_note_event_type",
         ),
         CheckConstraint("length(body) BETWEEN 1 AND 4000", name="ck_review_note_body"),
-        CheckConstraint("created_by = 'owner'", name="ck_review_note_owner"),
+        CheckConstraint("length(created_by) BETWEEN 1 AND 64", name="ck_review_note_owner"),
         CheckConstraint("revision >= 0", name="ck_review_note_revision"),
         Index("ix_project_review_notes_owner_project_event", "owner_id", "project_id", "event_id"),
     )
@@ -1462,7 +1462,7 @@ class ProjectReviewSavedView(Base):
         ),
         CheckConstraint("length(name) BETWEEN 1 AND 80", name="ck_review_view_name"),
         CheckConstraint("json_valid(filters_json)", name="ck_review_view_filters_json"),
-        CheckConstraint("created_by = 'owner'", name="ck_review_view_owner"),
+        CheckConstraint("length(created_by) BETWEEN 1 AND 64", name="ck_review_view_owner"),
         CheckConstraint("revision >= 0", name="ck_review_view_revision"),
         Index("ix_project_review_saved_views_owner_project", "owner_id", "project_id"),
         Index(
@@ -1496,7 +1496,7 @@ class ProjectReviewSnapshot(Base):
         ),
         CheckConstraint("length(label) BETWEEN 1 AND 80", name="ck_review_snapshot_label"),
         CheckConstraint("length(capture_key) = 36", name="ck_review_snapshot_capture_key"),
-        CheckConstraint("created_by = 'owner'", name="ck_review_snapshot_owner"),
+        CheckConstraint("length(created_by) BETWEEN 1 AND 64", name="ck_review_snapshot_owner"),
         CheckConstraint("json_valid(manifest_json)", name="ck_review_snapshot_manifest_json"),
         CheckConstraint(
             "json_extract(manifest_json, '$.schema_version') = 1",

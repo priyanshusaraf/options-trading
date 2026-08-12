@@ -34,7 +34,69 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0028"
+HEAD = "0029"
+
+
+def test_revision_0029_preserves_legacy_review_creator_bytes_and_allows_user_ids(tmp_path):
+    """The creator-envelope upgrade keeps historic evidence bytes and snapshot guards."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0029-review-creators.db", "0028")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0029")
+        for table in ("project_review_notes", "project_review_saved_views", "project_review_snapshots"):
+            sql = connection.execute(sa.text(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"),
+                {"table": table}).scalar_one().lower()
+            assert "length(created_by) between 1 and 64" in sql
+        triggers = {row[0] for row in connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='project_review_snapshots'"))}
+        assert triggers == {"project_review_snapshots_refuse_update", "project_review_snapshots_refuse_delete"}
+
+
+@pytest.mark.parametrize("needle", (
+    "DROP TABLE PROJECT_REVIEW_NOTES",
+    "ALTER TABLE _ALEMBIC_TMP_PROJECT_REVIEW_NOTES RENAME TO PROJECT_REVIEW_NOTES",
+))
+def test_revision_0029_retries_interrupted_sqlite_recreate_without_losing_review_rows(tmp_path, needle):
+    """A restart resumes both sides of Alembic's destructive SQLite boundary."""
+    engine = _build_from_baseline_at_revision(tmp_path, f"0029-retry-{abs(hash(needle))}.db", "0028")
+    with engine.begin() as connection:
+        connection.execute(sa.text("INSERT INTO organizations VALUES ('org.0029','O','active','2026-08-12','2026-08-12')"))
+        connection.execute(sa.text("INSERT INTO projects VALUES ('project.0029','org.0029','P','','active','2026-08-12','2026-08-12')"))
+        connection.execute(sa.text(
+            "INSERT INTO project_review_notes VALUES ('org.0029','note.0029','project.0029','event','experiment_run','legacy','owner',0,NULL,'2026-08-12','2026-08-12')"))
+    stopped = False
+
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and needle in " ".join(statement.upper().split()):
+            stopped = True
+            raise RuntimeError("0029 interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0029")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0029")
+        assert connection.execute(sa.text(
+            "SELECT created_by, body FROM project_review_notes WHERE note_id='note.0029'"
+        )).one() == ("owner", "legacy")
+
+
+def test_revision_0029_refuses_an_unproven_or_tampered_recreate_temp(tmp_path):
+    """A temp-table name alone never authorizes recovery after the source drop."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0029-tampered-temp.db", "0028")
+    with engine.begin() as connection:
+        connection.execute(sa.text("ALTER TABLE project_review_notes RENAME TO _alembic_tmp_project_review_notes"))
+        before = tuple(connection.execute(sa.text(
+            "SELECT * FROM _alembic_tmp_project_review_notes ORDER BY rowid")))
+        with pytest.raises(RuntimeError, match="unproven"):
+            command.upgrade(migrate.alembic_config(connection), "0029")
+        assert tuple(connection.execute(sa.text(
+            "SELECT * FROM _alembic_tmp_project_review_notes ORDER BY rowid"))) == before
 
 
 def test_revision_0028_adds_digest_only_user_sessions_and_empty_downgrade(tmp_path):

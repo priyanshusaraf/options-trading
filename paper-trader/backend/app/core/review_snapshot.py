@@ -188,7 +188,9 @@ def _notes(project_id: str, values: Iterable[Mapping[str, Any]]) -> list[dict[st
         if not isinstance(raw, Mapping) or set(raw) != _NOTE_FIELDS:
             raise SnapshotRejected("snapshot note shape is invalid")
         if (
-            raw["project_id"] != project_id or raw["created_by"] != "owner"
+            raw["project_id"] != project_id
+            or not isinstance(raw["created_by"], str) or not raw["created_by"]
+            or len(raw["created_by"]) > 64
             or not isinstance(raw["note_id"], str) or not raw["note_id"]
             or len(raw["note_id"]) > 64
             or not isinstance(raw["event_id"], str) or not raw["event_id"]

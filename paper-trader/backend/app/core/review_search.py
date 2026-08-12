@@ -100,7 +100,8 @@ def _note_document(raw: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(raw["event_type"], str) or not raw["event_type"]
         or not isinstance(raw["body"], str) or not raw["body"].strip()
         or len(raw["body"]) > 4_000
-        or raw["created_by"] != "owner"
+        or not isinstance(raw["created_by"], str) or not raw["created_by"]
+        or len(raw["created_by"]) > 64
         or raw["anchor_state"] not in {"available", "missing"}
     ):
         raise ReviewSearchRejected("review search note source is invalid")

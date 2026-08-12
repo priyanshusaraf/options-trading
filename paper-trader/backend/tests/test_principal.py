@@ -1,4 +1,4 @@
-"""H3 — there is a principal on every request, and one place that authorizes it.
+"""Principal resolution and the closed authorization boundary.
 
 The audit's finding was "there is no principal in the system", so permissions have
 nothing to attach to. These tests pin the seam's contract, not any policy: today
@@ -137,11 +137,17 @@ def test_to_dict_is_serialisable():
 # ── the authorization boundary ─────────────────────────────────────────────
 
 @pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
-def test_owner_is_allowed_everything(principal):
-    """Not a placeholder — the accurate policy of a single-user system."""
-    for action in ("read:status", "write:orders", "admin:settings"):
-        assert is_allowed(principal, action) is True
-        require(principal, action)            # must not raise
+def test_legacy_owner_is_allowed_every_registered_owner_action(principal):
+    """Compatibility owners retain only the explicit closed vocabulary."""
+    from app.api.principal import ACTION_VOCABULARY
+
+    class Owned:
+        owner_id = "owner"
+
+    for action in ACTION_VOCABULARY:
+        assert is_allowed(principal, action, Owned()) is True
+        require(principal, action, Owned())            # must not raise
+    assert is_allowed(principal, "invented:action") is False
 
 
 def test_require_refuses_a_null_principal():
@@ -154,8 +160,11 @@ def test_require_refuses_a_null_principal():
 def test_require_accepts_a_resource_argument():
     """C1 is about to re-key resources; taking the argument now means that phase
     changes policy, not every call site."""
-    require(OWNER, "close", {"position_id": 1})
-    assert is_allowed(None, "close", {"position_id": 1}) is False
+    class Owned:
+        owner_id = "owner"
+
+    require(OWNER, "read:project", Owned())
+    assert is_allowed(None, "read:project", Owned()) is False
 
 
 # ── the dependency ─────────────────────────────────────────────────────────
@@ -238,8 +247,8 @@ class _Owned:
 def test_a_resource_belonging_to_another_owner_is_refused(principal, monkeypatch):
     from app.api.principal import is_allowed
     monkeypatch.setattr(get_settings(), "owner_id", "acct-7")
-    assert is_allowed(principal, "read", _Owned("acct-7")) is True
-    assert is_allowed(principal, "read", _Owned("someone-else")) is False
+    assert is_allowed(principal, "read:project", _Owned("acct-7")) is True
+    assert is_allowed(principal, "read:project", _Owned("someone-else")) is False
 
 
 @pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
@@ -255,22 +264,20 @@ def test_the_check_is_structural_so_a_new_owned_table_cannot_opt_out_by_being_fo
     class NeverSeenBefore:
         owner_id = "someone-else"
 
-    assert is_allowed(principal, "read", NeverSeenBefore()) is False
+    assert is_allowed(principal, "read:project", NeverSeenBefore()) is False
 
 
 @pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
-def test_a_resource_with_no_owner_is_still_allowed(principal):
-    """The three singleton-keyed money tables have no `owner_id`, and neither do the user/market
-    planes. They pass by having nothing to check, which is honest — inventing a refusal here
-    would be a policy reading a field that does not exist."""
+def test_a_user_resource_with_no_owner_is_refused(principal):
+    """Owned USER resources cannot opt out of structural authorization."""
     from app.api.principal import is_allowed
 
     class Unowned:
         pass
 
-    assert is_allowed(principal, "read", Unowned()) is True
-    assert is_allowed(principal, "read", "a-project-id") is True
-    assert is_allowed(principal, "read", None) is True
+    assert is_allowed(principal, "read:project", Unowned()) is False
+    assert is_allowed(principal, "read:project", "a-project-id") is False
+    assert is_allowed(principal, "read:project", None) is False
 
 
 @pytest.mark.parametrize("principal", [OWNER, ANONYMOUS_OWNER])
@@ -284,5 +291,5 @@ def test_the_real_money_plane_models_are_actually_subject_to_the_check(principal
     for model in (Position, Trade):
         row = model()
         row.owner_id = "someone-else"
-        assert is_allowed(principal, "read", row) is False, (
+        assert is_allowed(principal, "read:project", row) is False, (
             f"{model.__name__} carries an owner_id that the policy does not enforce")

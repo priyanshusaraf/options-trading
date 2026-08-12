@@ -208,7 +208,7 @@ def _verified_candidate_decision(candidate: PromotionCandidate) -> dict | None:
         return None
     if not isinstance(envelope, dict) or set(envelope) != {
         "schema_version", "content_address", "evidence"
-    } or envelope.get("schema_version") != 1:
+    } or envelope.get("schema_version") not in {1, 2}:
         raise StoredEvidenceCorrupt(candidate.id)
     evidence = envelope.get("evidence")
     if not isinstance(evidence, dict) or set(evidence) != {
@@ -222,7 +222,8 @@ def _verified_candidate_decision(candidate: PromotionCandidate) -> dict | None:
         raise StoredEvidenceCorrupt(candidate.id) from exc
     if (
         envelope.get("content_address") != verified_address
-        or evidence.get("actor") != "owner"
+        or not isinstance(evidence.get("actor"), str) or not evidence["actor"]
+        or len(evidence["actor"]) > 64
         or evidence.get("candidate_id") != candidate.id
         or evidence.get("run_id") != candidate.run_id
         or evidence.get("expected_status") != "pending"
@@ -232,6 +233,9 @@ def _verified_candidate_decision(candidate: PromotionCandidate) -> dict | None:
         or not evidence["reason"].strip()
         or len(evidence["reason"]) > 400
     ):
+        raise StoredEvidenceCorrupt(candidate.id)
+    if ((envelope["schema_version"] == 1 and evidence["actor"] != "owner")
+            or (envelope["schema_version"] == 2 and evidence["actor"] == "owner")):
         raise StoredEvidenceCorrupt(candidate.id)
     try:
         dt.datetime.fromisoformat(evidence["decided_at"].replace("Z", "+00:00"))
@@ -700,6 +704,7 @@ def decide_project_candidate(
     expected_status: str,
     decision: str,
     reason: str,
+    actor_id: str = "owner",
 ) -> dict | None:
     """Record one canonical human decision without touching application state.
 
@@ -715,6 +720,7 @@ def decide_project_candidate(
             or not isinstance(reason, str)
             or not reason.strip()
             or len(reason) > 400
+            or not isinstance(actor_id, str) or not actor_id or len(actor_id) > 64
         ):
             raise CandidateDecisionConflict(candidate_id)
         candidate = (session.query(PromotionCandidate)
@@ -736,7 +742,7 @@ def decide_project_candidate(
             raise CandidateDecisionConflict(candidate_id)
         decided_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
         evidence = {
-            "actor": "owner",
+            "actor": actor_id,
             "candidate_id": candidate.id,
             "decision": decision,
             "decided_at": decided_at,
@@ -745,7 +751,7 @@ def decide_project_candidate(
             "run_id": candidate.run_id,
         }
         envelope = {
-            "schema_version": 1,
+            "schema_version": 1 if actor_id == "owner" else 2,
             "content_address": content_address(evidence),
             "evidence": evidence,
         }

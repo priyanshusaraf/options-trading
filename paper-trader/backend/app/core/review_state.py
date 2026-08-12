@@ -148,7 +148,7 @@ def create_note(
     if (
         not isinstance(event_id, str) or not event_id or len(event_id) > 200
         or event_type not in EVENT_TYPES
-        or created_by != "owner"
+        or not isinstance(created_by, str) or not created_by or len(created_by) > 64
     ):
         raise ReviewStateRejected("review note anchor or owner is invalid")
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
@@ -188,20 +188,24 @@ def list_notes(project_id: str, *, owner_id: str) -> tuple[ReviewNote, ...]:
         return tuple(_note(row) for row in rows)
 
 
-def _owned_note(session, project_id: str, note_id: str, *, owner_id: str) -> ProjectReviewNote:
+def _owned_note(session, project_id: str, note_id: str, *, owner_id: str,
+                actor_id: str | None = None, can_manage: bool = True) -> ProjectReviewNote:
     row = session.get(ProjectReviewNote, (owner_id, note_id))
-    if row is None or row.project_id != project_id or row.deleted_at is not None:
+    if (row is None or row.project_id != project_id or row.deleted_at is not None
+            or (not can_manage and row.created_by != actor_id)):
         raise ReviewStateNotFound()
     return row
 
 
 def update_note(
-    project_id: str, note_id: str, *, owner_id: str, base_revision: int, body: str
+    project_id: str, note_id: str, *, owner_id: str, base_revision: int, body: str,
+    actor_id: str | None = None, can_manage: bool = True,
 ) -> ReviewNote:
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
         _project(session, project_id, owner_id=owner_id, active=True)
-        row = _owned_note(session, project_id, note_id, owner_id=owner_id)
+        row = _owned_note(session, project_id, note_id, owner_id=owner_id,
+                          actor_id=actor_id, can_manage=can_manage)
         if row.revision != base_revision:
             raise ReviewStateConflict(row.revision)
         claimed = session.execute(
@@ -212,24 +216,28 @@ def update_note(
                 ProjectReviewNote.project_id == project_id,
                 ProjectReviewNote.revision == base_revision,
                 ProjectReviewNote.deleted_at.is_(None),
+                *(() if can_manage else (ProjectReviewNote.created_by == actor_id,)),
             )
             .values(body=_body(body), revision=base_revision + 1, updated_at=now)
             .execution_options(synchronize_session=False)
         )
         if claimed.rowcount != 1:
             session.expire_all()
-            current = _owned_note(session, project_id, note_id, owner_id=owner_id)
+            current = _owned_note(session, project_id, note_id, owner_id=owner_id,
+                                  actor_id=actor_id, can_manage=can_manage)
             raise ReviewStateConflict(current.revision)
         session.expire_all()
         result = _note(_owned_note(session, project_id, note_id, owner_id=owner_id))
     return result
 
 
-def delete_note(project_id: str, note_id: str, *, owner_id: str, base_revision: int) -> ReviewNote:
+def delete_note(project_id: str, note_id: str, *, owner_id: str, base_revision: int,
+                actor_id: str | None = None, can_manage: bool = True) -> ReviewNote:
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
         _project(session, project_id, owner_id=owner_id, active=True)
-        row = _owned_note(session, project_id, note_id, owner_id=owner_id)
+        row = _owned_note(session, project_id, note_id, owner_id=owner_id,
+                          actor_id=actor_id, can_manage=can_manage)
         if row.revision != base_revision:
             raise ReviewStateConflict(row.revision)
         claimed = session.execute(
@@ -240,6 +248,7 @@ def delete_note(project_id: str, note_id: str, *, owner_id: str, base_revision: 
                 ProjectReviewNote.project_id == project_id,
                 ProjectReviewNote.revision == base_revision,
                 ProjectReviewNote.deleted_at.is_(None),
+                *(() if can_manage else (ProjectReviewNote.created_by == actor_id,)),
             )
             .values(
                 deleted_at=now, revision=base_revision + 1, updated_at=now
@@ -248,7 +257,8 @@ def delete_note(project_id: str, note_id: str, *, owner_id: str, base_revision: 
         )
         if claimed.rowcount != 1:
             session.expire_all()
-            current = _owned_note(session, project_id, note_id, owner_id=owner_id)
+            current = _owned_note(session, project_id, note_id, owner_id=owner_id,
+                                  actor_id=actor_id, can_manage=can_manage)
             raise ReviewStateConflict(current.revision)
         session.expire_all()
         result = _note(session.get(ProjectReviewNote, (owner_id, note_id)))
@@ -263,7 +273,7 @@ def create_saved_view(
     filters: Mapping[str, Any],
     created_by: str,
 ) -> ReviewSavedView:
-    if created_by != "owner":
+    if not isinstance(created_by, str) or not created_by or len(created_by) > 64:
         raise ReviewStateRejected("saved review owner is invalid")
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
@@ -305,10 +315,12 @@ def list_saved_views(project_id: str, *, owner_id: str) -> tuple[ReviewSavedView
 
 
 def _owned_saved_view(
-    session, project_id: str, view_id: str, *, owner_id: str
+    session, project_id: str, view_id: str, *, owner_id: str,
+    actor_id: str | None = None, can_manage: bool = True,
 ) -> ProjectReviewSavedView:
     row = session.get(ProjectReviewSavedView, (owner_id, view_id))
-    if row is None or row.project_id != project_id or row.deleted_at is not None:
+    if (row is None or row.project_id != project_id or row.deleted_at is not None
+            or (not can_manage and row.created_by != actor_id)):
         raise ReviewStateNotFound()
     return row
 
@@ -321,11 +333,14 @@ def update_saved_view(
     base_revision: int,
     name: str,
     filters: Mapping[str, Any],
+    actor_id: str | None = None,
+    can_manage: bool = True,
 ) -> ReviewSavedView:
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
         _project(session, project_id, owner_id=owner_id, active=True)
-        row = _owned_saved_view(session, project_id, view_id, owner_id=owner_id)
+        row = _owned_saved_view(session, project_id, view_id, owner_id=owner_id,
+                                actor_id=actor_id, can_manage=can_manage)
         if row.revision != base_revision:
             raise ReviewStateConflict(row.revision)
         try:
@@ -337,6 +352,7 @@ def update_saved_view(
                     ProjectReviewSavedView.project_id == project_id,
                     ProjectReviewSavedView.revision == base_revision,
                     ProjectReviewSavedView.deleted_at.is_(None),
+                    *(() if can_manage else (ProjectReviewSavedView.created_by == actor_id,)),
                 )
                 .values(
                     name=_name(name),
@@ -351,7 +367,8 @@ def update_saved_view(
             raise ReviewViewNameConflict(name) from exc
         if claimed.rowcount != 1:
             session.expire_all()
-            current = _owned_saved_view(session, project_id, view_id, owner_id=owner_id)
+            current = _owned_saved_view(session, project_id, view_id, owner_id=owner_id,
+                                        actor_id=actor_id, can_manage=can_manage)
             raise ReviewStateConflict(current.revision)
         session.expire_all()
         result = _saved_view(_owned_saved_view(session, project_id, view_id, owner_id=owner_id))
@@ -359,12 +376,14 @@ def update_saved_view(
 
 
 def delete_saved_view(
-    project_id: str, view_id: str, *, owner_id: str, base_revision: int
+    project_id: str, view_id: str, *, owner_id: str, base_revision: int,
+    actor_id: str | None = None, can_manage: bool = True,
 ) -> ReviewSavedView:
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     with SessionLocal.begin() as session:
         _project(session, project_id, owner_id=owner_id, active=True)
-        row = _owned_saved_view(session, project_id, view_id, owner_id=owner_id)
+        row = _owned_saved_view(session, project_id, view_id, owner_id=owner_id,
+                                actor_id=actor_id, can_manage=can_manage)
         if row.revision != base_revision:
             raise ReviewStateConflict(row.revision)
         claimed = session.execute(
@@ -375,6 +394,7 @@ def delete_saved_view(
                 ProjectReviewSavedView.project_id == project_id,
                 ProjectReviewSavedView.revision == base_revision,
                 ProjectReviewSavedView.deleted_at.is_(None),
+                *(() if can_manage else (ProjectReviewSavedView.created_by == actor_id,)),
             )
             .values(
                 deleted_at=now, revision=base_revision + 1, updated_at=now
@@ -383,7 +403,8 @@ def delete_saved_view(
         )
         if claimed.rowcount != 1:
             session.expire_all()
-            current = _owned_saved_view(session, project_id, view_id, owner_id=owner_id)
+            current = _owned_saved_view(session, project_id, view_id, owner_id=owner_id,
+                                        actor_id=actor_id, can_manage=can_manage)
             raise ReviewStateConflict(current.revision)
         session.expire_all()
         result = _saved_view(session.get(ProjectReviewSavedView, (owner_id, view_id)))

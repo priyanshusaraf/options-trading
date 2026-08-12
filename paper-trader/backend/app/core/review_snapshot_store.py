@@ -106,7 +106,8 @@ def _snapshot(row: ProjectReviewSnapshot) -> ReviewSnapshot:
         canonical_json(manifest) != row.manifest_json
         or validated.content_address != row.content_address
         or manifest["project_id"] != row.project_id
-        or row.created_by != "owner"
+        or not isinstance(row.created_by, str) or not row.created_by
+        or len(row.created_by) > 64
         or row.capture_completed_at < row.capture_started_at
     ):
         raise SnapshotCorrupt(row.snapshot_id)
@@ -194,7 +195,7 @@ def capture_snapshot(
 ) -> ReviewSnapshot:
     normalized_label = _label(label)
     normalized_key = _capture_key(capture_key)
-    if created_by != "owner":
+    if not isinstance(created_by, str) or not created_by or len(created_by) > 64:
         raise SnapshotCaptureRejected("snapshot owner is invalid")
     if source_loader is None:
         loader = partial(project_review_source, owner_id=owner_id)
@@ -310,7 +311,8 @@ def list_snapshots(project_id: str, *, owner_id: str) -> tuple[SnapshotListing, 
                 "verified"
                 if (
                     manifest_address_of_bytes(row.manifest_json) == row.content_address
-                    and row.created_by == "owner"
+                    and isinstance(row.created_by, str) and row.created_by
+                    and len(row.created_by) <= 64
                     and row.capture_completed_at >= row.capture_started_at
                 )
                 else "corrupt"

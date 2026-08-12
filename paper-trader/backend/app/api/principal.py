@@ -37,6 +37,96 @@ from app.db.session import SessionLocal
 PrincipalKind = Literal["user", "development_anonymous", "owner", "anonymous_owner", "service"]
 SCOPE_ALL = "*"
 
+# Closed product authorization vocabulary.  Route handlers name one of these
+# capabilities and repositories bind the resource lookup to organization_id
+# before a row can be materialized.  Do not treat arbitrary strings as scopes:
+# a typo must deny rather than silently create a permission.
+READ_ACTIONS = frozenset({
+    "read:project", "read:graph", "read:layout", "read:review",
+    "read:research", "read:backtest", "read:watchlist", "read:archive",
+    "read:runtime-config", "read:portfolio",
+})
+MEMBER_ACTIONS = frozenset({
+    "write:project", "write:graph", "publish:graph", "write:layout",
+    "write:review", "start:research", "compare:research", "write:backtest",
+})
+ADMIN_ACTIONS = frozenset({
+    "archive:project", "write:runtime-config", "write:watchlist",
+    "archive:strategy", "decision:research",
+})
+OWNER_ACTIONS = frozenset({
+    "read:brokers", "read:connections", "read:connection", "create:connection", "write:credential",
+    "revoke:connection", "authoritative:execution",
+})
+ACTION_VOCABULARY = READ_ACTIONS | MEMBER_ACTIONS | ADMIN_ACTIONS | OWNER_ACTIONS
+ROLE_ACTIONS = {
+    "viewer": READ_ACTIONS,
+    "member": READ_ACTIONS | MEMBER_ACTIONS,
+    "admin": READ_ACTIONS | MEMBER_ACTIONS | ADMIN_ACTIONS,
+    "owner": ACTION_VOCABULARY,
+}
+
+
+def action_for_request(method: str, path: str) -> str | None:
+    """Return the one closed capability for a tenant-facing HTTP endpoint.
+
+    This deliberately classifies only the USER/research product surface.  The
+    money and credential planes keep their explicit Task 5C policy calls; an
+    unclassified path is never promoted into this vocabulary by accident.
+    """
+    method = method.upper()
+    if path.startswith("/api/backtest"):
+        return "read:backtest" if method == "GET" else "write:backtest"
+    if path == "/api/settings":
+        return "read:runtime-config" if method == "GET" else "write:runtime-config"
+    if path == "/api/settings/reset":
+        return "write:runtime-config"
+    if path.startswith("/api/research/operations"):
+        return "read:research"
+    if path.startswith("/api/ir/graphs/") and "/layout" in path:
+        return "read:layout" if method == "GET" else "write:layout"
+    if path.startswith("/api/portfolio"):
+        if path not in {
+            "/api/portfolio/promotions", "/api/portfolio/deploy",
+            "/api/portfolio/watchlists", "/api/portfolio/archive",
+        } and not path.startswith("/api/portfolio/promotions/") and not path.startswith("/api/portfolio/watchlists/") and not path.startswith("/api/portfolio/archive/"):
+            # Legacy runner endpoints are not organization-scoped repositories.
+            # Task 5C must replace them before durable user principals can use
+            # them; leave their action unclassified so the HTTP boundary denies.
+            return None
+        if method == "GET":
+            return "read:portfolio"
+        if "/watchlists/" in path:
+            return "write:watchlist"
+        if "/archive/" in path:
+            return "archive:strategy"
+        return "write:watchlist"
+    if not path.startswith("/api/ir/projects/") and path != "/api/ir/projects":
+        return None
+    if "/review" in path:
+        if method == "GET":
+            return "read:review"
+        return "write:review"
+    if "/candidates/" in path and path.endswith("/decisions"):
+        return "decision:research"
+    if "/experiments" in path or "/findings" in path or "/version-comparisons" in path:
+        if method == "GET":
+            return "read:research"
+        if "compar" in path:
+            return "compare:research"
+        return "start:research"
+    if "/layouts" in path or "/presentation-edits" in path:
+        return "read:layout" if method == "GET" else "write:layout"
+    if "/graphs" in path:
+        if method == "GET":
+            return "read:graph"
+        if path.endswith("/versions"):
+            return "publish:graph"
+        return "write:graph"
+    if path.endswith("/status"):
+        return "archive:project"
+    return "read:project" if method == "GET" else "write:project"
+
 
 class _WebSocketPayloadRedactionFilter(logging.Filter):
     """Keep WebSocket frame diagnostics without ever formatting frame payloads.
@@ -361,16 +451,48 @@ class Forbidden(HTTPException):
 
 
 def is_allowed(principal: Principal | None, action: str, resource: Any = None) -> bool:
-    """The sole authorization predicate; resource conversion remains Task 5B."""
-    if principal is None or not principal.has_scope(action):
+    """Fail-closed role/scope/owner policy for an owned product resource."""
+    if principal is None or action not in ACTION_VOCABULARY:
+        return False
+    role = "owner" if principal.kind in ("owner", "anonymous_owner") else principal.role
+    allowed_by_role = ROLE_ACTIONS.get(role or "", frozenset())
+    if action not in allowed_by_role or not principal.has_scope(action):
         return False
     resource_owner = getattr(resource, "owner_id", None)
+    # Connections are Task 5C.  Their collection routes have no existing row
+    # to bind, so preserve the owner-only collection contract without granting
+    # a resource-less capability to USER/research actions.
     if resource_owner is None:
-        return True
+        return role == "owner" and action in OWNER_ACTIONS
     try:
-        return str(resource_owner) == owner_id_for(principal)
+        owner_id = owner_id_for(principal)
     except Forbidden:
         return False
+    if str(resource_owner) != owner_id:
+        return False
+    return True
+
+
+def is_request_allowed(principal: Principal | None, action: str) -> bool:
+    """Apply the closed action policy before an owner-scoped repository lookup.
+
+    SQL repositories still bind every supplied identifier to the organization
+    before materializing an object.  At this boundary there is intentionally no
+    client-supplied resource to authorize, so use the principal's derived owner
+    only to exercise the same policy predicate.
+    """
+    if principal is None:
+        return False
+    try:
+        owner_id = owner_id_for(principal)
+    except Forbidden:
+        return False
+
+    class _RequestOwner:
+        def __init__(self, value: str):
+            self.owner_id = value
+
+    return is_allowed(principal, action, _RequestOwner(owner_id))
 
 
 def owner_id_for(principal: Principal | None) -> str:

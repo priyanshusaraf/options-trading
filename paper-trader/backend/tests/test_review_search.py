@@ -160,6 +160,6 @@ def test_search_bounds_and_closed_document_shapes_fail_closed():
         )
     with pytest.raises(ReviewSearchRejected, match="note source"):
         search_review_documents(
-            [], [_note("note.bad", "text") | {"created_by": "intruder"}],
+            [], [_note("note.bad", "text") | {"created_by": ""}],
             query="text", limit=1,
         )
