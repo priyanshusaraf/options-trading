@@ -85,8 +85,8 @@ def _canonical_json(value: Mapping) -> str:
 def canonical_public_payload(payload: Mapping) -> str:
     """Encode only the closed v1 pure-result representation.
 
-    A subset is allowed for test fixtures and forward-compatible result defaults,
-    but every supplied key must be in the exact checked-in v1 field set.
+    Every payload must match the exact checked-in v1 field set; missing and unknown
+    fields both fail closed.
     """
     if not isinstance(payload, Mapping):
         raise PublicComputationIntegrityError("public computation payload must be a mapping")
