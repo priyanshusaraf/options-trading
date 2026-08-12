@@ -12,8 +12,9 @@ evicts any executable loaded from older bytes instead of leaving stale code live
 
 Each rebuilt strategy is pinned to a content hash of its PERSISTED composition
 (`app/strategy/identity.py`), so `(key, version)` identifies the artifact. `key` alone
-cannot: the row is keyed by `key` and re-deploying an edited strategy overwrites it in
-place, which would otherwise re-attribute every past trade to logic that never ran.
+cannot: the owner-local row identity still permits re-deploying an edited strategy to
+overwrite that owner's key in place, which would otherwise re-attribute every past
+trade to logic that never ran.
 """
 from __future__ import annotations
 
@@ -27,9 +28,9 @@ from app.strategy.identity import composition_code, content_hash
 def save_generated(session, key: str, composition_json: str, *, owner_id: str, source: str = ""):
     """Upsert a generated strategy's composition. Idempotent on re-deploy.
 
-    The content `version` is recorded on every write (Phase D). `key` is still the
-    primary key, so re-deploying an EDITED strategy still overwrites in place — that
-    is the C4 defect and it is not fixed here. What the version does fix is
+    The content `version` is recorded on every write (Phase D). `(owner_id, key)` is the
+    primary key, but re-deploying an EDITED strategy for that owner still overwrites in
+    place. That is the C4 defect and it is not fixed here. What the version does fix is
     detectability: after this, an overwrite that changes behaviour changes the stored
     version, so trades attributed to the old version can be told apart from trades
     attributed to the new one instead of both silently pointing at whatever the row
@@ -135,11 +136,7 @@ def register_all(session, *, owner_id: str) -> int:
             log.warn(f"generated strategy {row.key!r} failed to load, skipping: {e}")
     # Replace, never merge: the database is the current owner partition. Removing or
     # corrupting a row must withdraw older executable bytes already held by this process.
-    for registered_owner, key in list(registry._GENERATED_REGISTRY):
-        if registered_owner == owner_id:
-            del registry._GENERATED_REGISTRY[(registered_owner, key)]
-    for strat in rebuilt.values():
-        registry.register(strat, owner_id=owner_id)
+    registry.replace_generated_partition(owner_id, rebuilt)
     count = len(rebuilt)
     if count:
         log.info(f"registered {count} deployed generated strateg"

@@ -77,8 +77,12 @@ fixes add these enforced boundaries:
   owner into strategy resolution. A missing or foreign `gen_*` key never enters the legacy
   default fallback.
 - Generated keys use the canonical `gen_` namespace and their composition key must equal the
-  persisted key. Hydration replaces an owner's registry partition atomically, so a corrupt or
-  removed current row evicts executable bytes loaded from an older row.
+  persisted key. Hydration builds an owner's partition off-side and publishes it through a
+  registry-owned copy-on-write snapshot swap. Concurrent resolution and metadata readers see
+  either the complete old partition or the complete new one; a corrupt or removed current row
+  evicts executable bytes loaded from an older row.
+- Startup hydrates the legacy execution owner's generated artifacts independently of the
+  research feature flag. The flag gates research UI and operations, not already-deployed code.
 - Watchlist ID lookup applies the owner predicate in SQL before ORM materialization. Composite
   membership and lifecycle foreign keys reject cross-owner links.
 - Backtest sweep ownership is a required keyword-only argument. The REST principal, background
@@ -104,3 +108,10 @@ owner predicate removal from guessed watchlist lookup, promoted-proof validation
 portfolio owner replacement with a constant, and worker owner replacement with a constant.
 An AST audit found no `start_sweep` call without `owner_id`. Focused `py_compile` and
 `git diff --check` passed.
+
+The final concurrency/startup re-review added a deterministic threaded publication test and a
+real lifespan test with research disabled. Before the fix they failed because the registry had
+no atomic partition-publication API, disabled startup made zero hydration calls, and a corrupt
+persisted row left stale executable bytes resolvable. After the fix the three regression tests,
+the 42-test migration/parallel/pinned gate, the 90-test generated/research/identity/binding gate,
+the 236-test ownership/runtime gate, and the 44-test affected backtest gate passed.

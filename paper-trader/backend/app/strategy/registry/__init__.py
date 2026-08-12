@@ -46,6 +46,8 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import re
+import threading
+from collections.abc import Mapping
 
 from app.core.logging import log
 
@@ -61,6 +63,7 @@ _GENERATED_KEY = re.compile(r"^gen_[A-Za-z0-9][A-Za-z0-9_]*$")
 
 _REGISTRY: dict[str, Strategy] = {}
 _GENERATED_REGISTRY: dict[tuple[str, str], Strategy] = {}
+_GENERATED_WRITE_LOCK = threading.Lock()
 _SKIP = {"base"}
 
 
@@ -109,7 +112,40 @@ def register(strat: Strategy, *, owner_id: str | None = None) -> None:
                 raise ValueError(
                     f"generated strategy key {strat.key!r} must match "
                     "'gen_' followed by letters, digits, or underscores")
-            _GENERATED_REGISTRY[(owner_id, strat.key)] = strat
+            global _GENERATED_REGISTRY
+            with _GENERATED_WRITE_LOCK:
+                snapshot = dict(_GENERATED_REGISTRY)
+                snapshot[(owner_id, strat.key)] = strat
+                _GENERATED_REGISTRY = snapshot
+
+
+def replace_generated_partition(
+    owner_id: str, strategies: Mapping[str, Strategy]
+) -> None:
+    """Publish one owner's complete generated partition with one snapshot swap.
+
+    Validation and copying happen before the write lock. Readers continue to use the
+    previous immutable-by-convention snapshot until the complete replacement is ready.
+    """
+    replacement: dict[tuple[str, str], Strategy] = {}
+    for key, strat in strategies.items():
+        if not isinstance(strat, Strategy) or not strat.key or strat.key != key:
+            raise ValueError(f"invalid generated strategy entry for key {key!r}")
+        if not is_generated_key(key):
+            raise ValueError(
+                f"generated strategy key {key!r} must match "
+                "'gen_' followed by letters, digits, or underscores")
+        replacement[(owner_id, key)] = strat
+
+    global _GENERATED_REGISTRY
+    with _GENERATED_WRITE_LOCK:
+        next_snapshot = {
+            identity: strategy
+            for identity, strategy in _GENERATED_REGISTRY.items()
+            if identity[0] != owner_id
+        }
+        next_snapshot.update(replacement)
+        _GENERATED_REGISTRY = next_snapshot
 
 
 def is_generated_key(key: str | None) -> bool:
@@ -141,7 +177,8 @@ def resolve_strategy(key: str | None, *, allow_fallback: bool = False,
     """
     _discover()
     if key and key.startswith(GENERATED_NAMESPACE):
-        strategy = _GENERATED_REGISTRY.get((owner_id or "", key))
+        generated_snapshot = _GENERATED_REGISTRY
+        strategy = generated_snapshot.get((owner_id or "", key))
         if strategy is not None:
             return strategy
         if not allow_fallback:
@@ -204,8 +241,9 @@ def strategy_meta(*, owner_id: str | None = None) -> list[dict]:
     out = []
     strategies = list(all_strategies())
     if owner_id is not None:
+        generated_snapshot = _GENERATED_REGISTRY
         strategies.extend(
-            strategy for (registered_owner, _), strategy in _GENERATED_REGISTRY.items()
+            strategy for (registered_owner, _), strategy in generated_snapshot.items()
             if registered_owner == owner_id)
     for s in sorted(strategies, key=lambda strategy: strategy.key):
         entry = {"key": s.key, "version": s.version, "display_name": s.display_name,
@@ -221,4 +259,5 @@ def strategy_meta(*, owner_id: str | None = None) -> list[dict]:
 
 __all__ = ["Strategy", "CANONICAL_COLUMNS", "DEFAULT_STRATEGY_KEY", "StrategyNotFound",
            "register", "all_strategies", "strategy_keys", "get_strategy",
-           "resolve_strategy", "strategy_meta", "GENERATED_NAMESPACE", "is_generated_key"]
+           "resolve_strategy", "strategy_meta", "replace_generated_partition",
+           "GENERATED_NAMESPACE", "is_generated_key"]

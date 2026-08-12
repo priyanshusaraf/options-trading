@@ -76,21 +76,20 @@ async def lifespan(app: FastAPI):
             log.info("SAFETY: order placement DISABLED — paper trades only, no real capital")
     # Reconstruct any deployed generated strategies from the DB and register them BEFORE
     # the runner loads per-instrument config, so a gen_* watchlist assignment resolves to
-    # the real strategy instead of the default fallback. Non-fatal: a bad row is skipped.
-    # Frozen behind PT_RESEARCH_ENABLED: with the research plane off nothing registers,
-    # and a stale gen_* assignment fail-safes to the default strategy (registry fallback).
-    if settings.research_enabled:
-        try:
-            from app.core.generated_strategies import register_all
-            from app.db.session import SessionLocal
-            with SessionLocal() as s:
-                register_all(s, owner_id="owner")
-        except Exception as e:
-            log.error(f"generated-strategy registration failed at startup: {e}")
-    else:
-        log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — generated strategies "
-                 "not registered; portfolio/research API is gated off")
+    # the real strategy instead of the default fallback. Execution hydration is not a
+    # research operation: deployed assignments must keep resolving when the research UI
+    # is disabled, and corrupt current rows must evict stale executable bytes.
     from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+    try:
+        from app.core.generated_strategies import register_all
+        from app.db.session import SessionLocal
+        with SessionLocal() as s:
+            register_all(s, owner_id=LEGACY_OWNER_ID)
+    except Exception as e:
+        log.error(f"generated-strategy registration failed at startup: {e}")
+    if not settings.research_enabled:
+        log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — portfolio/research "
+                 "API is gated off; deployed execution artifacts remain hydrated")
     runner = EngineRunner(owner_id=LEGACY_OWNER_ID,
                           broker_account_id=LEGACY_BROKER_ACCOUNT_ID)  # factory logs the chosen provider
     app.state.runner = runner

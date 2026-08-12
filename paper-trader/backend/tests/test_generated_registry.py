@@ -6,6 +6,7 @@ strategy would run the wrong strategy."""
 import json
 
 import datetime as dt
+import threading
 
 import pandas as pd
 import pytest
@@ -121,6 +122,67 @@ def test_rehydrating_a_corrupt_current_row_evicts_the_previously_loaded_executab
             resolve_strategy("gen_exec_test_v1", owner_id="owner")
     finally:
         registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
+
+
+def test_owner_partition_publication_is_atomic_for_resolution_and_metadata():
+    """A concurrent reader sees the complete old partition until one snapshot swap."""
+    from app.strategy import registry
+
+    class MarkerStrategy(registry.Strategy):
+        def __init__(self, key, marker):
+            self.key = key
+            self.display_name = marker
+
+    old = {
+        "gen_atomic_a": MarkerStrategy("gen_atomic_a", "old-a"),
+        "gen_atomic_b": MarkerStrategy("gen_atomic_b", "old-b"),
+    }
+    new = {
+        "gen_atomic_a": MarkerStrategy("gen_atomic_a", "new-a"),
+        "gen_atomic_b": MarkerStrategy("gen_atomic_b", "new-b"),
+    }
+    copy_started = threading.Event()
+    allow_publication = threading.Event()
+
+    class BlockingCompletePartition(dict):
+        def items(self):
+            copy_started.set()
+            assert allow_publication.wait(timeout=5)
+            return super().items()
+
+    try:
+        registry.replace_generated_partition("owner.atomic", old)
+        publisher = threading.Thread(
+            target=registry.replace_generated_partition,
+            args=("owner.atomic", BlockingCompletePartition(new)),
+            daemon=True,
+        )
+        publisher.start()
+        assert copy_started.wait(timeout=5)
+
+        resolved_during_copy = {
+            key: registry.resolve_strategy(key, owner_id="owner.atomic").display_name
+            for key in old
+        }
+        metadata_during_copy = {
+            row["key"]: row["display_name"]
+            for row in registry.strategy_meta(owner_id="owner.atomic")
+            if row["key"] in old
+        }
+        assert resolved_during_copy == {"gen_atomic_a": "old-a", "gen_atomic_b": "old-b"}
+        assert metadata_during_copy == resolved_during_copy
+
+        allow_publication.set()
+        publisher.join(timeout=5)
+        assert not publisher.is_alive()
+        resolved_after_swap = {
+            key: registry.resolve_strategy(key, owner_id="owner.atomic").display_name
+            for key in new
+        }
+        assert resolved_after_swap == {"gen_atomic_a": "new-a", "gen_atomic_b": "new-b"}
+    finally:
+        allow_publication.set()
+        registry.replace_generated_partition("owner.atomic", {})
 
 
 @pytest.mark.parametrize("key", ("trend_impulse_v3", "generated.bad", "gen_"))

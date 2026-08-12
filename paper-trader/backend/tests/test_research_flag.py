@@ -1,14 +1,16 @@
 """Research-plane freeze (PT_RESEARCH_ENABLED, default OFF).
 
 The autonomous research plane — the /api/portfolio promotions/deploy surface and
-the startup registration of generated strategies — is frozen behind one Settings
-flag so it cannot interfere with the live engine. Off (the default): the portfolio
-routes answer 403, startup registers nothing, and /api/status reports the flag so
-the cockpit hides the Portfolio tab. On: everything works as before. The core
+the research UI and operations — is frozen behind one Settings flag so it cannot
+interfere with the live engine. Generated execution artifacts always hydrate because
+the engine may already be assigned one. Off (the default): the portfolio routes answer
+403 and /api/status reports the flag so the cockpit hides the Portfolio tab. On: the
+research surfaces work as before. The core
 universe endpoints in routes.py (/api/portfolio/add|remove|add-bulk|home) are NOT
 part of the plane and must stay open either way.
 """
 from fastapi.testclient import TestClient
+import pytest
 
 from app.core.config import get_settings
 from app.db.session import init_db
@@ -76,21 +78,70 @@ def _spy_register_all(monkeypatch):
     from app.core import generated_strategies
     calls = []
     monkeypatch.setattr(generated_strategies, "register_all",
-                        lambda s: calls.append(s))
+                        lambda s, *, owner_id: calls.append((s, owner_id)))
     return calls
 
 
-def test_lifespan_skips_generated_registration_when_disabled(monkeypatch):
+def test_lifespan_hydrates_legacy_owner_generated_artifacts_when_research_disabled(monkeypatch):
+    from app.db.models import LEGACY_OWNER_ID
+
     monkeypatch.setattr(get_settings(), "research_enabled", False)
     calls = _spy_register_all(monkeypatch)
     with TestClient(app):   # context manager runs the real lifespan (mock provider)
         pass
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0][1] == LEGACY_OWNER_ID
 
 
 def test_lifespan_registers_generated_strategies_when_enabled(monkeypatch):
+    from app.db.models import LEGACY_OWNER_ID
+
     monkeypatch.setattr(get_settings(), "research_enabled", True)
     calls = _spy_register_all(monkeypatch)
     with TestClient(app):
         pass
     assert len(calls) == 1
+    assert calls[0][1] == LEGACY_OWNER_ID
+
+
+def test_disabled_research_startup_evicts_a_corrupt_legacy_generated_artifact(monkeypatch):
+    import json
+
+    from app.core import generated_strategies
+    from app.db.models import LEGACY_OWNER_ID
+    from app.db.session import SessionLocal
+    from app.strategy import registry
+    from app.strategy.registry import StrategyNotFound
+    import app.main as main_module
+
+    composition = {
+        "key": "gen_startup_corrupt",
+        "longEntry": {"all": ["ema_slope_up(50,5)"]},
+        "shortEntry": {"all": ["ema_slope_down(50,5)"]},
+        "longExit": {"any": ["ema_slope_down(50,5)"]},
+        "shortExit": {"any": ["ema_slope_up(50,5)"]},
+    }
+    init_db(reset=True)
+    try:
+        with SessionLocal() as session:
+            generated_strategies.save_generated(
+                session, composition["key"], json.dumps(composition),
+                owner_id=LEGACY_OWNER_ID)
+            session.commit()
+            assert generated_strategies.register_all(
+                session, owner_id=LEGACY_OWNER_ID) == 1
+            session.get(
+                generated_strategies.GeneratedStrategyRow,
+                (LEGACY_OWNER_ID, composition["key"]),
+            ).composition_json = "{}"
+            session.commit()
+
+        monkeypatch.setattr(get_settings(), "research_enabled", False)
+        # Preserve the deliberately corrupt persistent row across the mock-provider boot.
+        monkeypatch.setattr(main_module, "init_db", lambda *, reset: None)
+        with TestClient(app):
+            with pytest.raises(StrategyNotFound):
+                registry.resolve_strategy(composition["key"], owner_id=LEGACY_OWNER_ID)
+    finally:
+        registry._GENERATED_REGISTRY.pop(
+            (LEGACY_OWNER_ID, composition["key"]), None)
