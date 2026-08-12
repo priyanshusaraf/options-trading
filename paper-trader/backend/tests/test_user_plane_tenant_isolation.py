@@ -247,6 +247,12 @@ def test_review_repository_selects_start_with_owner_scope() -> None:
             project.project_id, view.view_id, owner_id="owner.a", base_revision=0,
             name="Owner first", filters={"limit": 25},
         )
+        review_state.delete_note(
+            project.project_id, note.note_id, owner_id="owner.a", base_revision=1,
+        )
+        review_state.delete_saved_view(
+            project.project_id, view.view_id, owner_id="owner.a", base_revision=1,
+        )
         assert review_snapshot_store.capture_snapshot(
             project.project_id, owner_id="owner.a", label="Owner first", capture_key=capture_key,
             created_by="owner", source_loader=lambda _project: pytest.fail("retry must be owner scoped"),

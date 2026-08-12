@@ -335,6 +335,7 @@ def test_revision_0022_legacy_round_trip_and_downgrade_refusal_are_lossless(tmp_
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0021")
     legacy_rows = _populated_review_0021(engine)
+    legacy_contract = {table: _revision_0020_contract(engine, table) for table in REVIEW_0022_TABLES}
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0022")
     with engine.connect() as connection:
@@ -347,10 +348,12 @@ def test_revision_0022_legacy_round_trip_and_downgrade_refusal_are_lossless(tmp_
         command.downgrade(migrate.alembic_config(connection), "0021")
     with engine.connect() as connection:
         assert migrate.schema_version(engine) == "0021"
+        assert "_review_0022_rebuild_proofs" not in sa.inspect(connection).get_table_names()
         assert {
             table: tuple(connection.execute(sa.text(f"SELECT * FROM {table}")).all())
             for table in REVIEW_0022_TABLES
         } == legacy_rows
+    assert {table: _revision_0020_contract(engine, table) for table in REVIEW_0022_TABLES} == legacy_contract
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0022")
     with engine.connect() as connection:

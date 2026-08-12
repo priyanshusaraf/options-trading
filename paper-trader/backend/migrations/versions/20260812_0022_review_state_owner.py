@@ -551,5 +551,6 @@ def downgrade() -> None:
         _rebuild_downgrade("project_review_saved_views", "view_id,project_id,name,filters_json,created_by,revision,deleted_at,created_at,updated_at")
         _rebuild_downgrade("project_review_snapshots", "snapshot_id,project_id,label,capture_key,manifest_json,content_address,created_by,capture_started_at,capture_completed_at")
         _legacy_indexes_and_triggers()
+        _clear_proofs()
     finally:
         _foreign_keys(enabled)
