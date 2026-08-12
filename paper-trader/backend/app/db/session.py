@@ -1,45 +1,19 @@
 """Engine + session factory + one-time schema/seed init."""
 from __future__ import annotations
 
-from sqlalchemy import create_engine, event, select, text
+from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import get_settings
 from app.core import instruments as inst_registry
+from app.db.engine import create_execution_engine
 from app.db.models import (Base, BrokerAccount, CapitalState, InstrumentState,
                            LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, LEGACY_USER_ID,
                            Membership, Organization, Position, UniverseInstrument, UniversePreference, User)
 from app.engine.charges import compute_charges
 
 _settings = get_settings()
-engine = create_engine(
-    f"sqlite:///{_settings.db_path}",
-    future=True,
-    connect_args={"check_same_thread": False},  # engine task + API threads
-    # A pooled connection can outlive the file it points at: deploy.sh restores a
-    # `.db.predeploy-*`, prune_db.py VACUUMs, a restore swaps the file. Without a
-    # pre-ping the stale handle is handed to whichever request draws it next, and
-    # the error surfaces far from its cause. The ping is one `SELECT 1` on a local
-    # SQLite file — cheaper than the debugging it prevents.
-    pool_pre_ping=True,
-    # Default is 30s. A request that cannot get a connection for 10s is not going
-    # to be saved by waiting 20 more — it is going to hold a worker thread while
-    # the pool is already exhausted, which is how a slow lane becomes an outage.
-    # Fail fast and let it surface (the readiness probe now reports it).
-    pool_timeout=10,
-)
-
-
-@event.listens_for(engine, "connect")
-def _set_sqlite_pragma(dbapi_conn, _rec):
-    cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA foreign_keys=ON")
-    cur.execute("PRAGMA journal_mode=WAL")   # concurrent reads while engine writes
-    cur.execute("PRAGMA synchronous=NORMAL")
-    cur.execute("PRAGMA busy_timeout=10000") # P2: wait out a contended write (engine +
-                                             # API threadpool + backtest thread) instead
-                                             # of failing 'database is locked'
-    cur.close()
+engine = create_execution_engine(_settings)
 
 
 SessionLocal = sessionmaker(bind=engine, future=True, expire_on_commit=False)
@@ -290,6 +264,11 @@ def init_db(reset: bool = False) -> None:
             "init_db(reset=True) refused: destructive reset is only allowed in mock "
             "mode (provider='mock'). Refusing to DROP tables on a non-mock database."
         )
+    if reset and engine.dialect.name != "sqlite":
+        raise RuntimeError(
+            "init_db(reset=True) is supported only for a throwaway SQLite database. "
+            "Refusing to DROP a PostgreSQL execution database."
+        )
     if reset:
         # Release every idle pooled connection before dropping. `DROP TABLE`
         # needs an exclusive lock, and in WAL mode a pooled connection that
@@ -317,7 +296,8 @@ def init_db(reset: bool = False) -> None:
     from app.db.migrate import init_schema
     init_schema(engine,
                 create_all=lambda: Base.metadata.create_all(engine),
-                legacy_migrate=_migrate_schema)
+                legacy_migrate=_migrate_schema,
+                expected_tables=Base.metadata.tables)
     s = get_settings()
     with SessionLocal() as sess:
         _ensure_legacy_tenancy_roots(sess)

@@ -1,0 +1,361 @@
+"""PostgreSQL schema-adoption contracts.
+
+The optional ``PT_TEST_POSTGRES_URL`` integration test runs only where a PostgreSQL
+service is supplied. The fast tests pin the branch decisions without pretending a
+mock engine proves server behaviour.
+"""
+from __future__ import annotations
+
+import os
+import re
+from copy import deepcopy
+
+import pytest
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.schema import CreateIndex, CreateTable
+
+from app.db import migrate
+from app.db.models import Base, UniversePreference
+
+
+class _Dialect:
+    name = "postgresql"
+
+
+class _Engine:
+    dialect = _Dialect()
+
+
+def test_postgresql_unmanaged_populated_database_is_refused(monkeypatch):
+    engine = _Engine()
+    monkeypatch.setattr(migrate, "schema_version", lambda _engine: None)
+    monkeypatch.setattr(migrate, "_has_tables", lambda _engine: True)
+
+    with pytest.raises(RuntimeError, match="populated unmanaged PostgreSQL"):
+        migrate.init_schema(engine, create_all=lambda: None,
+                            legacy_migrate=lambda: pytest.fail("legacy migration ran"))
+
+
+def test_postgresql_empty_database_creates_current_schema_then_stamps_head(monkeypatch):
+    engine = _Engine()
+    calls = []
+    versions = iter((None, "head-42"))
+    monkeypatch.setattr(migrate, "schema_version", lambda _engine: next(versions))
+    monkeypatch.setattr(migrate, "_has_tables", lambda _engine: False)
+    monkeypatch.setattr(migrate, "head_revision", lambda: "head-42")
+    monkeypatch.setattr(migrate, "stamp", lambda _engine, revision: calls.append(("stamp", revision)))
+    monkeypatch.setattr(migrate, "_validate_postgresql_immutable_triggers",
+                        lambda _engine: calls.append(("triggers",)))
+
+    result = migrate.init_schema(engine, create_all=lambda: calls.append(("create_all",)),
+                                 legacy_migrate=lambda: pytest.fail("legacy migration ran"))
+
+    assert result == "head-42"
+    assert calls == [("create_all",), ("triggers",), ("stamp", "head-42")]
+
+
+def test_postgresql_head_startup_is_read_only(monkeypatch):
+    engine = _Engine()
+    monkeypatch.setattr(migrate, "schema_version", lambda _engine: "head-42")
+    monkeypatch.setattr(migrate, "head_revision", lambda: "head-42")
+    monkeypatch.setattr(migrate, "upgrade_to_head",
+                        lambda _engine: pytest.fail("upgrade attempted on head"))
+    monkeypatch.setattr(migrate, "_validate_postgresql_immutable_triggers", lambda _engine: None)
+
+    assert migrate.init_schema(engine, create_all=lambda: pytest.fail("create_all ran"),
+                               legacy_migrate=lambda: pytest.fail("legacy migration ran")) == "head-42"
+
+
+def test_postgresql_head_startup_validates_immutable_fact_triggers(monkeypatch):
+    engine = _Engine()
+    calls = []
+    monkeypatch.setattr(migrate, "schema_version", lambda _engine: "head-42")
+    monkeypatch.setattr(migrate, "head_revision", lambda: "head-42")
+    monkeypatch.setattr(migrate, "_validate_current_schema",
+                        lambda _engine, _tables: calls.append("schema"))
+    monkeypatch.setattr(migrate, "_validate_postgresql_immutable_triggers",
+                        lambda _engine: calls.append("triggers"))
+
+    assert migrate.init_schema(engine, create_all=lambda: pytest.fail("create_all ran"),
+                               legacy_migrate=lambda: pytest.fail("legacy migration ran"),
+                               expected_tables={"execution_order_events": object()}) == "head-42"
+    assert calls == ["schema", "triggers"]
+
+
+def test_postgresql_boolean_defaults_compile_as_boolean_literals():
+    ddl = str(CreateTable(UniversePreference.__table__).compile(dialect=postgresql.dialect()))
+
+    assert "active BOOLEAN DEFAULT true NOT NULL" in ddl
+    assert "on_home BOOLEAN DEFAULT false NOT NULL" in ddl
+
+
+def test_postgresql_ddl_has_native_json_guards_and_all_partial_index_predicates():
+    tables = "\n".join(
+        str(CreateTable(table).compile(dialect=postgresql.dialect()))
+        for table in Base.metadata.sorted_tables
+    )
+    indexes = "\n".join(
+        str(CreateIndex(index).compile(dialect=postgresql.dialect()))
+        for table in Base.metadata.sorted_tables
+        for index in table.indexes
+    )
+
+    forbidden = ("json_valid", "json_extract", "GLOB", "PRAGMA", "sqlite_master", "rowid")
+    assert all(token.lower() not in tables.lower() for token in forbidden)
+    assert "CAST(artifact_json AS JSONB) IS NOT NULL" in tables
+    assert "CAST(filters_json AS JSONB) IS NOT NULL" in tables
+    assert "CAST(manifest_json AS JSONB) IS NOT NULL" in tables
+    assert "CAST(artifact_json AS JSONB) -> 'identifier' IS NOT NULL" in tables
+    assert "CAST(manifest_json AS JSONB) -> 'project_id' IS NOT NULL" in tables
+    assert "CAST(artifact_json AS JSONB) ->> 'identifier' = graph_identifier" in tables
+    assert "CAST(manifest_json AS JSONB) ->> 'project_id' = project_id" in tables
+    assert "jsonb_typeof(CAST(artifact_json AS JSONB) -> 'identifier') = 'string'" in tables
+    assert "jsonb_typeof(CAST(manifest_json AS JSONB) -> 'project_id') = 'string'" in tables
+    assert "CAST(artifact_json AS JSONB) -> 'version' IS NOT NULL" in tables
+    assert "CAST(manifest_json AS JSONB) -> 'schema_version' IS NOT NULL" in tables
+    assert "jsonb_typeof(CAST(artifact_json AS JSONB) -> 'version') = 'number'" in tables
+    assert "jsonb_typeof(CAST(manifest_json AS JSONB) -> 'schema_version') = 'number'" in tables
+    assert "WHERE deleted_at IS NULL" in indexes
+    assert "WHERE state IN ('staged','paper_active','paused')" in indexes
+    assert "WHERE state IN ('staged','shadow_active','paused')" in indexes
+
+
+def test_sqlite_json_guards_and_partial_index_predicates_are_unchanged():
+    tables = "\n".join(
+        str(CreateTable(table).compile(dialect=sqlite.dialect()))
+        for table in Base.metadata.sorted_tables
+    )
+    indexes = "\n".join(
+        str(CreateIndex(index).compile(dialect=sqlite.dialect()))
+        for table in Base.metadata.sorted_tables
+        for index in table.indexes
+    )
+
+    assert "json_valid(artifact_json)" in tables
+    assert "json_extract(artifact_json, '$.identifier') IS graph_identifier" in tables
+    assert "json_valid(filters_json)" in tables
+    assert "json_extract(manifest_json, '$.schema_version') IS 1" in tables
+    assert "WHERE deleted_at IS NULL" in indexes
+    assert "WHERE state IN ('staged','paper_active','paused')" in indexes
+    assert "WHERE state IN ('staged','shadow_active','paused')" in indexes
+
+
+def test_postgresql_create_profile_installs_immutable_fact_triggers():
+    statements: list[str] = []
+
+    def record(statement, *_args, **_kwargs):
+        statements.append(str(statement.compile(dialect=engine.dialect)))
+
+    engine = sa.create_mock_engine("postgresql+psycopg://app:secret@db/strategy", record)
+    Base.metadata.create_all(engine)
+    ddl = "\n".join(statements)
+
+    for table in ("execution_order_events", "graph_versions", "project_review_snapshots"):
+        assert f"CREATE OR REPLACE FUNCTION {table}_refuse_mutation()" in ddl
+        assert f"BEFORE UPDATE OR DELETE ON {table}" in ddl
+
+
+def test_postgresql_immutable_trigger_validator_rejects_one_missing_trigger(monkeypatch):
+    seen = []
+
+    class Connection:
+        def execute(self, _statement, _params):
+            class Result:
+                @staticmethod
+                def scalars():
+                    return ["execution_order_events_refuse_mutation",
+                            "graph_versions_refuse_mutation"]
+            return Result()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class Engine:
+        def connect(self):
+            seen.append("connect")
+            return Connection()
+
+    with pytest.raises(RuntimeError, match="project_review_snapshots_refuse_mutation"):
+        migrate._validate_postgresql_immutable_triggers(Engine())
+    assert seen == ["connect"]
+
+
+def test_current_schema_validation_rejects_missing_execution_index(tmp_path):
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'schema-check.db'}")
+    try:
+        Base.metadata.create_all(engine)
+        with engine.begin() as connection:
+            connection.execute(sa.text("DROP INDEX ix_execution_intents_owner_account"))
+
+        with pytest.raises(RuntimeError, match="indexes"):
+            migrate._validate_current_schema(engine, Base.metadata.tables)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("tamper", [
+    "type", "column", "default", "unique", "check", "foreign_key_action", "partial_index",
+])
+def test_current_schema_validation_rejects_load_bearing_metadata_drift(tmp_path, monkeypatch, tamper):
+    """A head stamp cannot make a changed relational contract acceptable."""
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'schema-contract.db'}")
+    try:
+        Base.metadata.create_all(engine)
+        real = sa.inspect(engine)
+
+        class TamperedInspector:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def get_columns(self, table_name):
+                rows = deepcopy(real.get_columns(table_name))
+                if tamper == "type" and table_name == "graph_versions":
+                    next(row for row in rows if row["name"] == "content_address")["type"] = sa.String(70)
+                if tamper == "column" and table_name == "graph_versions":
+                    next(row for row in rows if row["name"] == "content_address")["nullable"] = True
+                if tamper == "default" and table_name == "graph_versions":
+                    next(row for row in rows if row["name"] == "visibility")["default"] = "'PUBLIC'"
+                return rows
+
+            def get_unique_constraints(self, table_name):
+                rows = deepcopy(real.get_unique_constraints(table_name))
+                if tamper == "unique" and table_name == "user_sessions":
+                    return []
+                return rows
+
+            def get_check_constraints(self, table_name):
+                rows = deepcopy(real.get_check_constraints(table_name))
+                if tamper == "check" and table_name == "graph_versions":
+                    next(row for row in rows
+                         if row["name"] == "ck_graph_versions_valid_json")["sqltext"] = "TRUE"
+                return rows
+
+            def get_foreign_keys(self, table_name):
+                rows = deepcopy(real.get_foreign_keys(table_name))
+                if tamper == "foreign_key_action" and table_name == "graph_versions":
+                    rows[0]["options"] = {"ondelete": "CASCADE"}
+                return rows
+
+            def get_indexes(self, table_name):
+                rows = deepcopy(real.get_indexes(table_name))
+                if tamper == "partial_index" and table_name == "project_review_saved_views":
+                    row = next(item for item in rows
+                               if item["name"] == "uq_project_review_saved_views_active_name")
+                    row["dialect_options"] = {"sqlite_where": sa.text("deleted_at IS NOT NULL")}
+                return rows
+
+        monkeypatch.setattr(migrate, "inspect", lambda _engine: TamperedInspector())
+        with pytest.raises(RuntimeError):
+            migrate._validate_current_schema(engine, Base.metadata.tables)
+    finally:
+        engine.dispose()
+
+
+def test_current_schema_validation_accepts_postgresql_jsonb_check_deparse(monkeypatch):
+    """PostgreSQL reflects our ``CAST(... AS JSONB)`` checks as ``::jsonb``."""
+    dialect = postgresql.dialect()
+
+    class Inspector:
+        def get_table_names(self):
+            return list(Base.metadata.tables)
+
+        def get_columns(self, table_name):
+            table = Base.metadata.tables[table_name]
+            return [{
+                "name": column.name,
+                "type": column.type.compile(dialect=dialect),
+                "nullable": column.nullable,
+                "default": migrate._compiled_sql(
+                    column.server_default.arg if column.server_default is not None else None,
+                    dialect),
+            } for column in table.columns]
+
+        def get_pk_constraint(self, table_name):
+            return {"constrained_columns": [column.name for column in
+                                             Base.metadata.tables[table_name].primary_key.columns]}
+
+        def get_foreign_keys(self, table_name):
+            return [{
+                "constrained_columns": [element.parent.name for element in constraint.elements],
+                "referred_table": constraint.elements[0].column.table.name,
+                "referred_columns": [element.column.name for element in constraint.elements],
+                "options": {"ondelete": constraint.ondelete, "onupdate": constraint.onupdate},
+            } for constraint in Base.metadata.tables[table_name].foreign_key_constraints]
+
+        def get_unique_constraints(self, table_name):
+            return [{"name": constraint.name,
+                     "column_names": [column.name for column in constraint.columns]}
+                    for constraint in Base.metadata.tables[table_name].constraints
+                    if isinstance(constraint, sa.UniqueConstraint) and constraint.name is not None]
+
+        def get_check_constraints(self, table_name):
+            rows = []
+            for constraint in Base.metadata.tables[table_name].constraints:
+                if not isinstance(constraint, sa.CheckConstraint) or constraint.name is None:
+                    continue
+                sqltext = migrate._compiled_sql(constraint.sqltext, dialect)
+                # This mirrors PostgreSQL's normal deparse of JSONB casts, including
+                # its extra parentheses around the operand.
+                sqltext = re.sub(
+                    r"CAST\(([a-z_][a-z0-9_]*) AS JSONB\)", r"(\1)::jsonb", sqltext,
+                    flags=re.IGNORECASE)
+                rows.append({"name": constraint.name, "sqltext": sqltext})
+            return rows
+
+        def get_indexes(self, table_name):
+            rows = []
+            for index in Base.metadata.tables[table_name].indexes:
+                where = index.dialect_options["postgresql"].get("where")
+                rows.append({
+                    "name": index.name,
+                    "column_names": [column.name for column in index.columns],
+                    "unique": index.unique,
+                    "dialect_options": {"postgresql_where": where} if where is not None else {},
+                })
+            return rows
+
+    monkeypatch.setattr(migrate, "inspect", lambda _engine: Inspector())
+    engine = type("Engine", (), {"dialect": dialect})()
+    migrate._validate_current_schema(engine, Base.metadata.tables)
+
+
+def test_mock_mode_cannot_reset_a_postgresql_execution_database(monkeypatch):
+    from app.db import session as session_module
+
+    class _MockSettings:
+        provider = "mock"
+
+    monkeypatch.setattr(session_module, "engine", _Engine())
+    monkeypatch.setattr(session_module, "get_settings", lambda: _MockSettings())
+
+    with pytest.raises(RuntimeError, match="SQLite"):
+        session_module.init_db(reset=True)
+
+
+@pytest.mark.skipif(not os.environ.get("PT_TEST_POSTGRES_URL"),
+                    reason="PT_TEST_POSTGRES_URL is not configured")
+def test_optional_postgres_fresh_schema_is_complete_and_idempotent():
+    """Live PostgreSQL proof, intentionally opt-in for developer and CI services."""
+    from app.db.models import Base
+
+    url = os.environ["PT_TEST_POSTGRES_URL"]
+    engine = sa.create_engine(url, future=True)
+    try:
+        with engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(sa.text(f'DROP TABLE IF EXISTS "{table.name}" CASCADE'))
+            conn.execute(sa.text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine),
+                            legacy_migrate=lambda: pytest.fail("legacy migration ran"),
+                            expected_tables=Base.metadata.tables)
+        assert migrate.schema_version(engine) == migrate.head_revision()
+        assert set(sa.inspect(engine).get_table_names()) >= set(Base.metadata.tables)
+        assert migrate.init_schema(engine, create_all=lambda: pytest.fail("second create_all"),
+                                   legacy_migrate=lambda: pytest.fail("legacy migration ran"),
+                                   expected_tables=Base.metadata.tables) == migrate.head_revision()
+    finally:
+        engine.dispose()

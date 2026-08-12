@@ -133,6 +133,7 @@ def test_init_db_no_reset_never_guarded(monkeypatch):
     class _Live:
         provider = "kite"
         initial_capital = 50000
+        api_token = ""
 
     monkeypatch.setattr(sess_mod, "get_settings", lambda: _Live())
     sess_mod.init_db(reset=False)  # must not raise

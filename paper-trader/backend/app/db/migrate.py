@@ -31,12 +31,13 @@ versa), that test fails.
 from __future__ import annotations
 
 import os
+import re
 
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, inspect
+from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect
 from sqlalchemy import text as _sa_text
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,6 +45,9 @@ ALEMBIC_INI = os.path.join(_BACKEND_DIR, "alembic.ini")
 MIGRATIONS_DIR = os.path.join(_BACKEND_DIR, "migrations")
 BASELINE_REVISION = "0001"
 BASELINE_SCHEMA_SQL = os.path.join(MIGRATIONS_DIR, "baseline_schema.ddl")
+POSTGRESQL_IMMUTABLE_TABLES = (
+    "execution_order_events", "graph_versions", "project_review_snapshots",
+)
 
 # The tables that existed at revision 0001 — the documented inventory of the
 # baseline. Adoption does not read this (it executes baseline_schema.ddl directly);
@@ -148,7 +152,177 @@ def _create_baseline_tables(engine: Engine) -> None:
             conn.execute(_sa_text(stmt))
 
 
-def init_schema(engine: Engine, *, create_all, legacy_migrate) -> str | None:
+def _is_postgresql(engine: Engine) -> bool:
+    return engine.dialect.name == "postgresql"
+
+
+def _normalize_sql(value) -> str | None:
+    """Compare reflected DDL while ignoring harmless quote/whitespace differences."""
+    if value is None:
+        return None
+    value = "".join(str(value).split())
+    while value.startswith("(") and value.endswith(")"):
+        value = value[1:-1]
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        value = value[1:-1]
+    value = value.lower()
+    # PostgreSQL deparses ``CAST(column AS JSONB)`` as ``(column)::jsonb``.
+    # These are the only casts emitted by the current model's portable JSON
+    # constraints. Canonicalize that bounded equivalence rather than accepting
+    # arbitrary changed CHECK expressions.
+    value = re.sub(r"cast\(([a-z_][a-z0-9_]*)asjsonb\)", r"\1::jsonb", value)
+    value = re.sub(r"\(([a-z_][a-z0-9_]*)\)::jsonb", r"\1::jsonb", value)
+    return value
+
+
+def _compiled_sql(value, dialect) -> str | None:
+    if value is None:
+        return None
+    return str(value.compile(dialect=dialect)) if hasattr(value, "compile") else str(value)
+
+
+def _validate_postgresql_immutable_triggers(engine: Engine) -> None:
+    """Require the append-only fact triggers on every PostgreSQL startup."""
+    expected = {f"{table}_refuse_mutation" for table in POSTGRESQL_IMMUTABLE_TABLES}
+    with engine.connect() as connection:
+        actual = set(connection.execute(_sa_text("""
+            SELECT trigger.tgname
+            FROM pg_trigger AS trigger
+            JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+            WHERE NOT trigger.tgisinternal
+              AND relation.relname = ANY(:tables)
+        """), {"tables": list(POSTGRESQL_IMMUTABLE_TABLES)}).scalars())
+    missing = expected - actual
+    if missing:
+        raise RuntimeError(
+            "PostgreSQL immutable-fact triggers are missing: "
+            f"{sorted(missing)}"
+        )
+
+
+def _validate_current_schema(engine: Engine, expected_tables) -> None:
+    """Reject a partial current-schema PostgreSQL database before it handles work."""
+    if expected_tables is None:
+        return
+    inspector = inspect(engine)
+    actual_tables = set(inspector.get_table_names())
+    missing_tables = set(expected_tables) - actual_tables
+    defects: dict[str, dict] = {}
+    for table_name, table in expected_tables.items():
+        if table_name not in actual_tables:
+            continue
+        reflected_columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+        actual_columns = set(reflected_columns)
+        expected_columns = set(table.columns.keys())
+        actual_pk = set(inspector.get_pk_constraint(table_name).get("constrained_columns") or ())
+        expected_pk = {column.name for column in table.primary_key.columns}
+        actual_fks = {
+            (tuple(fk["constrained_columns"]), fk["referred_table"],
+             tuple(fk["referred_columns"]),
+             (fk.get("options") or {}).get("ondelete"),
+             (fk.get("options") or {}).get("onupdate"))
+            for fk in inspector.get_foreign_keys(table_name)
+        }
+        expected_fks = {
+            (tuple(element.parent.name for element in constraint.elements),
+             constraint.elements[0].column.table.name,
+             tuple(element.column.name for element in constraint.elements),
+             constraint.ondelete, constraint.onupdate)
+            for constraint in table.foreign_key_constraints
+        }
+        actual_uniques = {
+            unique["name"]: tuple(unique["column_names"])
+            for unique in inspector.get_unique_constraints(table_name)
+            if unique["name"] is not None
+        }
+        expected_uniques = {
+            constraint.name: tuple(column.name for column in constraint.columns)
+            for constraint in table.constraints
+            if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+        }
+        actual_checks = {
+            check["name"]: _normalize_sql(check.get("sqltext"))
+            for check in inspector.get_check_constraints(table_name)
+            if check["name"] is not None
+        }
+        expected_checks = {
+            constraint.name: _normalize_sql(_compiled_sql(constraint.sqltext, engine.dialect))
+            for constraint in table.constraints
+            if isinstance(constraint, CheckConstraint)
+            and constraint.name is not None
+        }
+        actual_indexes = {
+            index["name"]: (
+                tuple(index["column_names"]), bool(index.get("unique")),
+                _normalize_sql((index.get("dialect_options") or {}).get(
+                    f"{engine.dialect.name}_where")),
+            )
+            for index in inspector.get_indexes(table_name)
+        }
+        expected_indexes = {
+            index.name: (
+                tuple(column.name for column in index.columns), bool(index.unique),
+                _normalize_sql(_compiled_sql(
+                    index.dialect_options[engine.dialect.name].get("where"), engine.dialect)),
+            )
+            for index in table.indexes
+        }
+        table_defects = {}
+        if expected_columns - actual_columns:
+            table_defects["missing_columns"] = sorted(expected_columns - actual_columns)
+        column_defects = {}
+        for column in table.columns:
+            reflected = reflected_columns.get(column.name)
+            if reflected is None:
+                continue
+            expected = {
+                "type": _normalize_sql(column.type.compile(dialect=engine.dialect)),
+                "nullable": bool(column.nullable),
+                "default": _normalize_sql(_compiled_sql(
+                    column.server_default.arg if column.server_default is not None else None,
+                    engine.dialect)),
+            }
+            actual = {
+                "type": _normalize_sql(reflected["type"]),
+                "nullable": bool(reflected["nullable"]),
+                "default": _normalize_sql(reflected.get("default")),
+            }
+            if actual != expected:
+                column_defects[column.name] = {"expected": expected, "actual": actual}
+        if column_defects:
+            table_defects["columns"] = column_defects
+        if actual_pk != expected_pk:
+            table_defects["primary_key"] = {"expected": sorted(expected_pk),
+                                             "actual": sorted(actual_pk)}
+        if not expected_fks.issubset(actual_fks):
+            table_defects["missing_foreign_keys"] = sorted(expected_fks - actual_fks)
+        if expected_uniques != actual_uniques:
+            table_defects["unique_constraints"] = {"expected": expected_uniques,
+                                                    "actual": actual_uniques}
+        check_defects = {
+            name: {"expected": expected, "actual": actual_checks.get(name)}
+            for name, expected in expected_checks.items()
+            if actual_checks.get(name) != expected
+        }
+        if check_defects:
+            table_defects["check_constraints"] = check_defects
+        mismatched_indexes = {
+            name: {"expected": expected, "actual": actual_indexes.get(name)}
+            for name, expected in expected_indexes.items()
+            if actual_indexes.get(name) != expected
+        }
+        if mismatched_indexes:
+            table_defects["indexes"] = mismatched_indexes
+        if table_defects:
+            defects[table_name] = table_defects
+    if missing_tables or defects:
+        raise RuntimeError(
+            "PostgreSQL schema is not the current execution relational model: "
+            f"missing_tables={sorted(missing_tables)} defects={defects}"
+        )
+
+
+def init_schema(engine: Engine, *, create_all, legacy_migrate, expected_tables=None) -> str | None:
     """Bring `engine`'s database to head from any of the three states above.
 
     `create_all` and `legacy_migrate` are injected rather than imported so this
@@ -156,6 +330,29 @@ def init_schema(engine: Engine, *, create_all, legacy_migrate) -> str | None:
     direction stays one-way.
     """
     current = schema_version(engine)
+    if _is_postgresql(engine):
+        # Historical revisions use SQLite table rebuilds and PRAGMAs. PostgreSQL
+        # starts from the current ORM model and is adopted only while empty.
+        if current is not None:
+            if current != head_revision():
+                raise RuntimeError(
+                    "PostgreSQL schema is not at head; historical SQLite migrations "
+                    "are not replayed against PostgreSQL"
+                )
+            _validate_current_schema(engine, expected_tables)
+            _validate_postgresql_immutable_triggers(engine)
+            return current
+        if _has_tables(engine):
+            raise RuntimeError(
+                "Refusing populated unmanaged PostgreSQL database: use the verified "
+                "SQLite-to-PostgreSQL cutover path instead of adopting or replaying it"
+            )
+        create_all()
+        _validate_current_schema(engine, expected_tables)
+        _validate_postgresql_immutable_triggers(engine)
+        stamp(engine, head_revision())
+        return schema_version(engine)
+
     if current is not None:                     # state 3 — already managed
         if current == head_revision():
             # Nothing to do. Returning early is not just a speed optimisation: it

@@ -68,6 +68,11 @@ SAFE_TEST_ENV = {
     "PT_PROVIDER": "mock",     # never the live Kite data client
     "PT_EXECUTION": "paper",   # live_execution_enabled() needs exactly "live"
     "PT_LIVE_ACK": "",         # empty, NOT deleted — see the module docstring
+    # A developer shell can carry the future production authority even though
+    # pytest detaches .env. Tests must still bind only to their throwaway SQLite
+    # file unless a specific opt-in integration test builds its own engine.
+    "PT_DATABASE_URL": "",
+    "PT_PRODUCTION": "0",
     "PT_DB_PATH": os.path.join(_TMP_DIR, "paper_trader.db"),
     "PT_LEDGER_DB_PATH": os.path.join(_TMP_DIR, "ledger.db"),
     "PT_RESEARCH_DB_PATH": os.path.join(_TMP_DIR, "research.db"),

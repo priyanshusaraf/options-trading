@@ -481,7 +481,8 @@ def health():
     db_ok, _ = _probe_db()
     return JSONResponse({"ok": db_ok, "ready": db_ok,
                          "status": "ok" if db_ok else "unready",
-                         "build": get_build_info()},
+                         "build": get_build_info(),
+                         "schema": _schema_info()},
                         status_code=200 if db_ok else 503)
 
 

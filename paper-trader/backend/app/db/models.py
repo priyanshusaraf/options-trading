@@ -30,9 +30,127 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
     text,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.elements import ColumnElement
+
+
+class _LowerHexDigest(ColumnElement):
+    """Dialect-specific SQL for the same 64-character lowercase digest invariant."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_LowerHexDigest, "sqlite")
+def _compile_lower_hex_digest_sqlite(element, _compiler, **_kw):
+    name = element.column_name
+    return f"length({name}) = 64 AND {name} = lower({name}) AND {name} NOT GLOB '*[^0-9a-f]*'"
+
+
+@compiles(_LowerHexDigest, "postgresql")
+def _compile_lower_hex_digest_postgresql(element, _compiler, **_kw):
+    name = element.column_name
+    return f"char_length({name}) = 64 AND {name} ~ '^[0-9a-f]{{64}}$'"
+
+
+class _JsonIsValid(ColumnElement):
+    """Portable validation for JSON stored as legacy TEXT columns."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_JsonIsValid, "sqlite")
+def _compile_json_is_valid_sqlite(element, _compiler, **_kw):
+    return f"json_valid({element.column_name})"
+
+
+@compiles(_JsonIsValid, "postgresql")
+def _compile_json_is_valid_postgresql(element, _compiler, **_kw):
+    return f"CAST({element.column_name} AS JSONB) IS NOT NULL"
+
+
+class _JsonTextMatchesColumn(ColumnElement):
+    """Require one JSON string property to equal a scalar sibling column."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, json_column: str, json_key: str, column_name: str):
+        self.json_column = json_column
+        self.json_key = json_key
+        self.column_name = column_name
+
+
+@compiles(_JsonTextMatchesColumn, "sqlite")
+def _compile_json_text_matches_column_sqlite(element, _compiler, **_kw):
+    return (f"json_extract({element.json_column}, '$.{element.json_key}') "
+            f"IS {element.column_name}")
+
+
+@compiles(_JsonTextMatchesColumn, "postgresql")
+def _compile_json_text_matches_column_postgresql(element, _compiler, **_kw):
+    field = f"CAST({element.json_column} AS JSONB) -> '{element.json_key}'"
+    return (f"{field} IS NOT NULL AND jsonb_typeof({field}) = 'string' AND "
+            f"CAST({element.json_column} AS JSONB) ->> '{element.json_key}' "
+            f"= {element.column_name}")
+
+
+class _JsonNumberEquals(ColumnElement):
+    """Require one JSON numeric property to equal a scalar sibling value."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, json_column: str, json_key: str, expected: str):
+        self.json_column = json_column
+        self.json_key = json_key
+        self.expected = expected
+
+
+@compiles(_JsonNumberEquals, "sqlite")
+def _compile_json_number_equals_sqlite(element, _compiler, **_kw):
+    return (f"json_extract({element.json_column}, '$.{element.json_key}') "
+            f"IS {element.expected}")
+
+
+@compiles(_JsonNumberEquals, "postgresql")
+def _compile_json_number_equals_postgresql(element, _compiler, **_kw):
+    field = f"CAST({element.json_column} AS JSONB) -> '{element.json_key}'"
+    return (f"{field} IS NOT NULL AND jsonb_typeof({field}) = 'number' AND "
+            f"({field} #>> '{{}}')::numeric = {element.expected}")
+
+
+def _install_postgresql_immutable_trigger(table, message: str) -> None:
+    """Make append-only facts immutable on PostgreSQL as well as SQLite."""
+    function_name = f"{table.name}_refuse_mutation"
+    event.listen(
+        table,
+        "after_create",
+        DDL(
+            f"CREATE OR REPLACE FUNCTION {function_name}() RETURNS trigger AS $$ "
+            f"BEGIN RAISE EXCEPTION '{message}'; END; $$ LANGUAGE plpgsql"
+        ).execute_if(dialect="postgresql"),
+    )
+    event.listen(
+        table,
+        "after_create",
+        DDL(
+            f"CREATE TRIGGER {function_name} BEFORE UPDATE OR DELETE ON {table.name} "
+            f"FOR EACH ROW EXECUTE FUNCTION {function_name}()"
+        ).execute_if(dialect="postgresql"),
+    )
 
 
 # Segments whose positions are MARGINED rather than fully paid for: only the
@@ -152,8 +270,7 @@ class UserSession(Base):
     """
     __tablename__ = "user_sessions"
     __table_args__ = (
-        CheckConstraint("length(token_digest) = 64 AND token_digest = lower(token_digest) "
-                        "AND token_digest NOT GLOB '*[^0-9a-f]*'",
+        CheckConstraint(_LowerHexDigest("token_digest"),
                         name="ck_user_sessions_token_digest"),
         ForeignKeyConstraint(
             ("organization_id", "user_id"),
@@ -184,8 +301,7 @@ class OAuthCallbackState(Base):
     """
     __tablename__ = "oauth_callback_states"
     __table_args__ = (
-        CheckConstraint("length(state_digest) = 64 AND state_digest = lower(state_digest) "
-                        "AND state_digest NOT GLOB '*[^0-9a-f]*'",
+        CheckConstraint(_LowerHexDigest("state_digest"),
                         name="ck_oauth_callback_states_digest"),
         ForeignKeyConstraint(("organization_id", "user_id"),
                              ("memberships.organization_id", "memberships.user_id"),
@@ -414,6 +530,9 @@ for _trigger_name, _operation in (
             "SELECT RAISE(ABORT, 'execution_order_events are immutable'); END"
         ).execute_if(dialect="sqlite"),
     )
+
+_install_postgresql_immutable_trigger(
+    ExecutionOrderEvent.__table__, "execution_order_events are immutable")
 
 
 class CapitalState(Base):
@@ -834,9 +953,9 @@ class UniversePreference(Base):
     owner_id: Mapped[str] = mapped_column(
         ForeignKey("organizations.organization_id", ondelete="RESTRICT"), primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(48), primary_key=True)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    on_home: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    source: Mapped[str] = mapped_column(String(8), default="seed", nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), nullable=False)
+    on_home: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    source: Mapped[str] = mapped_column(String(8), default="seed", server_default=text("'seed'"), nullable=False)
 
 
 class Watchlist(Base):
@@ -1283,17 +1402,11 @@ class GraphVersion(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint("version >= 1", name="ck_graph_versions_version"),
-        CheckConstraint(
-            "json_valid(artifact_json)", name="ck_graph_versions_valid_json"
-        ),
-        CheckConstraint(
-            "json_extract(artifact_json, '$.identifier') IS graph_identifier",
-            name="ck_graph_versions_identifier_matches_json",
-        ),
-        CheckConstraint(
-            "json_extract(artifact_json, '$.version') IS version",
-            name="ck_graph_versions_version_matches_json",
-        ),
+        CheckConstraint(_JsonIsValid("artifact_json"), name="ck_graph_versions_valid_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "identifier", "graph_identifier"),
+                        name="ck_graph_versions_identifier_matches_json"),
+        CheckConstraint(_JsonNumberEquals("artifact_json", "version", "version"),
+                        name="ck_graph_versions_version_matches_json"),
         CheckConstraint("visibility = 'PRIVATE'", name="ck_graph_versions_private_visibility"),
         Index("ix_graph_versions_content_address", "content_address"),
     )
@@ -1332,6 +1445,7 @@ event.listen(
         "SELECT RAISE(ABORT, 'graph versions are immutable'); END"
     ).execute_if(dialect="sqlite"),
 )
+_install_postgresql_immutable_trigger(GraphVersion.__table__, "graph versions are immutable")
 event.listen(
     GraphVersion.__table__,
     "after_create",
@@ -1511,7 +1625,7 @@ class ProjectReviewSavedView(Base):
             name="fk_project_review_saved_views_owner_project",
         ),
         CheckConstraint("length(name) BETWEEN 1 AND 80", name="ck_review_view_name"),
-        CheckConstraint("json_valid(filters_json)", name="ck_review_view_filters_json"),
+        CheckConstraint(_JsonIsValid("filters_json"), name="ck_review_view_filters_json"),
         CheckConstraint("length(created_by) BETWEEN 1 AND 64", name="ck_review_view_owner"),
         CheckConstraint("revision >= 0", name="ck_review_view_revision"),
         Index("ix_project_review_saved_views_owner_project", "owner_id", "project_id"),
@@ -1519,6 +1633,7 @@ class ProjectReviewSavedView(Base):
             "uq_project_review_saved_views_active_name",
             "owner_id", "project_id", "name", unique=True,
             sqlite_where=text("deleted_at IS NULL"),
+            postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
@@ -1547,15 +1662,11 @@ class ProjectReviewSnapshot(Base):
         CheckConstraint("length(label) BETWEEN 1 AND 80", name="ck_review_snapshot_label"),
         CheckConstraint("length(capture_key) = 36", name="ck_review_snapshot_capture_key"),
         CheckConstraint("length(created_by) BETWEEN 1 AND 64", name="ck_review_snapshot_owner"),
-        CheckConstraint("json_valid(manifest_json)", name="ck_review_snapshot_manifest_json"),
-        CheckConstraint(
-            "json_extract(manifest_json, '$.schema_version') = 1",
-            name="ck_review_snapshot_schema_version",
-        ),
-        CheckConstraint(
-            "json_extract(manifest_json, '$.project_id') IS project_id",
-            name="ck_review_snapshot_project_matches_json",
-        ),
+        CheckConstraint(_JsonIsValid("manifest_json"), name="ck_review_snapshot_manifest_json"),
+        CheckConstraint(_JsonNumberEquals("manifest_json", "schema_version", "1"),
+                        name="ck_review_snapshot_schema_version"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "project_id", "project_id"),
+                        name="ck_review_snapshot_project_matches_json"),
         CheckConstraint(
             "capture_completed_at >= capture_started_at",
             name="ck_review_snapshot_capture_window",
@@ -1607,6 +1718,9 @@ for trigger_name, operation in (
             "SELECT RAISE(ABORT, 'review snapshots are immutable'); END"
         ).execute_if(dialect="sqlite"),
     )
+
+_install_postgresql_immutable_trigger(
+    ProjectReviewSnapshot.__table__, "review snapshots are immutable")
 
 
 class OptionData(Base):
@@ -1815,7 +1929,8 @@ class IrPaperDeployment(Base):
         # excluded so superseding frees the slot without deleting what once traded there.
         Index("uq_ir_paper_deployment_active", "deployment_id", "instrument_key",
               "interval", unique=True,
-              sqlite_where=text("state IN ('staged','paper_active','paused')")),
+              sqlite_where=text("state IN ('staged','paper_active','paused')"),
+              postgresql_where=text("state IN ('staged','paper_active','paused')")),
         Index("ix_ir_paper_deployments_state", "state"),
         Index("ix_ir_paper_deployments_owner_account", "owner_id", "broker_account_id"),
         CheckConstraint("runtime_source = 'ir_graph'",
@@ -1959,7 +2074,8 @@ class IrShadowDeployment(Base):
         # history that says what once ran there.
         Index("uq_ir_shadow_deployment_active", "deployment_id", "instrument_key",
               "interval", unique=True,
-              sqlite_where=text("state IN ('staged','shadow_active','paused')")),
+              sqlite_where=text("state IN ('staged','shadow_active','paused')"),
+              postgresql_where=text("state IN ('staged','shadow_active','paused')")),
         Index("ix_ir_shadow_deployments_state", "state"),
         Index("ix_ir_shadow_deployments_owner_account", "owner_id", "broker_account_id"),
         CheckConstraint("runtime_source = 'ir_graph'",
