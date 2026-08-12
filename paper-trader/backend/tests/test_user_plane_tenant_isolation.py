@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 from dataclasses import asdict
 
 import pytest
@@ -9,7 +10,10 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core import review_snapshot_store, review_state
-from app.db.models import Organization
+from app.core.review_snapshot import build_snapshot_manifest
+from app.db.models import (
+    Organization, ProjectReviewNote, ProjectReviewSavedView, ProjectReviewSnapshot,
+)
 from app.db.session import SessionLocal, engine, init_db
 from app.editor import graph_artifacts as store
 from app.editor import layouts
@@ -70,6 +74,57 @@ def test_review_composite_project_foreign_keys_reject_cross_owner_rows() -> None
                 "VALUES ('owner.a','note.cross-owner',:project,'run:1','experiment_run',"
                 "'cross-owner write','owner',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
             ), {"project": project.project_id})
+    with SessionLocal.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "INSERT INTO project_review_saved_views "
+                "(owner_id,view_id,project_id,name,filters_json,created_by,revision,created_at,updated_at) "
+                "VALUES ('owner.a','view.cross-owner',:project,'Cross',:filters,"
+                "'owner',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            ), {"project": project.project_id, "filters": '{"limit":25}'})
+    with SessionLocal.begin() as session:
+        with pytest.raises(IntegrityError):
+            session.execute(text(
+                "INSERT INTO project_review_snapshots "
+                "(owner_id,snapshot_id,project_id,label,capture_key,manifest_json,content_address,created_by,"
+                "capture_started_at,capture_completed_at) "
+                "VALUES ('owner.a','snapshot.cross-owner',:project,'Cross',"
+                "'00000000-0000-4000-8000-000000000001',"
+                "json_object('schema_version',1,'project_id',:project),'sha256:' || printf('%064d', 0),"
+                "'owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+            ), {"project": project.project_id})
+
+
+def test_review_rows_allow_real_shared_tenant_local_identities() -> None:
+    """Every review key and uniqueness rule includes the owner, not just generated IDs."""
+    project_a = store.create_project("Shared review A", owner_id="owner.a")
+    project_b = store.create_project("Shared review B", owner_id="owner.b")
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    with SessionLocal.begin() as session:
+        for owner_id, project in (("owner.a", project_a), ("owner.b", project_b)):
+            manifest = build_snapshot_manifest(project.project_id, _empty_review_source(), [])
+            session.add_all((
+                ProjectReviewNote(
+                    owner_id=owner_id, note_id="note.shared", project_id=project.project_id,
+                    event_id="run:shared", event_type="experiment_run", body="Shared ID", created_by="owner",
+                    revision=0, created_at=now, updated_at=now,
+                ),
+                ProjectReviewSavedView(
+                    owner_id=owner_id, view_id="view.shared", project_id=project.project_id,
+                    name="Shared active name", filters_json=canonical_json({"limit": 25}),
+                    created_by="owner", revision=0, created_at=now, updated_at=now,
+                ),
+                ProjectReviewSnapshot(
+                    owner_id=owner_id, snapshot_id="snapshot.shared", project_id=project.project_id,
+                    label="Shared", capture_key="00000000-0000-4000-8000-000000000009",
+                    manifest_json=canonical_json(manifest.manifest), content_address=manifest.content_address,
+                    created_by="owner", capture_started_at=now, capture_completed_at=now,
+                ),
+            ))
+    with SessionLocal() as session:
+        assert session.query(ProjectReviewNote).filter_by(note_id="note.shared").count() == 2
+        assert session.query(ProjectReviewSavedView).filter_by(view_id="view.shared").count() == 2
+        assert session.query(ProjectReviewSnapshot).filter_by(snapshot_id="snapshot.shared").count() == 2
 
 
 def _empty_review_source() -> dict:
@@ -157,25 +212,56 @@ def test_review_repositories_isolate_two_owners_with_shared_view_name_and_captur
 
 def test_review_repository_selects_start_with_owner_scope() -> None:
     project = store.create_project("Owner-first review", owner_id="owner.a")
-    review_state.create_note(
+    note = review_state.create_note(
         project.project_id, owner_id="owner.a", event_id="run:scope", event_type="experiment_run",
         body="The first predicate owns the row.", created_by="owner",
+    )
+    view = review_state.create_saved_view(
+        project.project_id, owner_id="owner.a", name="Owner first", filters={"limit": 25},
+        created_by="owner",
+    )
+    capture_key = "00000000-0000-4000-8000-000000000007"
+    snapshot = review_snapshot_store.capture_snapshot(
+        project.project_id, owner_id="owner.a", label="Owner first", capture_key=capture_key,
+        created_by="owner", source_loader=lambda _project: _empty_review_source(),
     )
     statements: list[str] = []
 
     def capture(_conn, _cursor, statement, _parameters, _context, _executemany):
-        if "project_review_notes" in statement:
+        if "project_review_" in statement:
             statements.append(statement.lower())
 
     event.listen(engine, "before_cursor_execute", capture)
     try:
         assert review_state.list_notes(project.project_id, owner_id="owner.a")
+        assert review_state.list_saved_views(project.project_id, owner_id="owner.a")
+        assert review_snapshot_store.list_snapshots(project.project_id, owner_id="owner.a")
+        assert review_snapshot_store.get_snapshot(
+            project.project_id, snapshot.snapshot_id, owner_id="owner.a"
+        ) == snapshot
+        review_state.update_note(
+            project.project_id, note.note_id, owner_id="owner.a", base_revision=0,
+            body="Owner predicate remains first.",
+        )
+        review_state.update_saved_view(
+            project.project_id, view.view_id, owner_id="owner.a", base_revision=0,
+            name="Owner first", filters={"limit": 25},
+        )
+        assert review_snapshot_store.capture_snapshot(
+            project.project_id, owner_id="owner.a", label="Owner first", capture_key=capture_key,
+            created_by="owner", source_loader=lambda _project: pytest.fail("retry must be owner scoped"),
+        ) == snapshot
     finally:
         event.remove(engine, "before_cursor_execute", capture)
-    query = next(statement for statement in statements if "where" in statement)
-    assert query.index("project_review_notes.owner_id") < query.index(
-        "project_review_notes.project_id"
-    )
+    for table in (
+        "project_review_notes", "project_review_saved_views", "project_review_snapshots",
+    ):
+        scoped = [statement for statement in statements if table in statement and "where" in statement]
+        assert scoped, f"{table} had no owner-scoped query"
+        for statement in scoped:
+            assert statement.index(f"{table}.owner_id") < statement.index(
+                f"{table}.", statement.index(f"{table}.owner_id") + 1
+            )
 
 
 def test_project_and_graph_loads_require_owner_and_hide_other_owner() -> None:

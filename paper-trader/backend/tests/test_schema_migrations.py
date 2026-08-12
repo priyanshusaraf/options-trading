@@ -16,6 +16,8 @@ two things stay true forever, and neither is checked by any other test:
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 
 import sqlalchemy as sa
 import pytest
@@ -144,6 +146,31 @@ REVIEW_0022_TABLES = (
 )
 
 
+def _write_0022_completed_proof(connection, table: str) -> None:
+    """Model the durable point after 0022 dropped its source but before rename."""
+    rows = connection.execute(sa.text(f"SELECT * FROM {table}__0022 ORDER BY rowid")).all()
+    row_digest = hashlib.sha256(json.dumps(
+        [list(row) for row in rows], default=str, separators=(",", ":")
+    ).encode()).hexdigest()
+    table_sql = connection.execute(sa.text(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"
+    ), {"table": f"{table}__0022"}).scalar_one()
+    schema_digest = hashlib.sha256(" ".join(
+        table_sql.replace(f"{table}__0022", "__TABLE__").replace("\n", " ").replace('"', "").replace("`", "").split()
+    ).lower().encode()).hexdigest()
+    connection.execute(sa.text(
+        "CREATE TABLE IF NOT EXISTS _review_0022_rebuild_proofs ("
+        "table_name VARCHAR(64) NOT NULL PRIMARY KEY, row_count INTEGER NOT NULL, "
+        "row_digest VARCHAR(64) NOT NULL, schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
+    ))
+    connection.execute(sa.text(
+        "INSERT INTO _review_0022_rebuild_proofs VALUES (:table,:count,:row_digest,:schema_digest,'built')"
+    ), {
+        "table": table, "count": len(rows), "row_digest": row_digest,
+        "schema_digest": schema_digest,
+    })
+
+
 def _populated_review_0021(engine) -> dict[str, tuple[tuple[object, ...], ...]]:
     """Literal legacy bytes prove 0022 copies review payloads without rewriting them."""
     manifest = (
@@ -214,11 +241,92 @@ def test_revision_0022_upgrade_recovers_stale_and_completed_temp_tables(tmp_path
         # This is the durable post-DROP shape: the finished table is only waiting
         # for its rename. Re-running 0022 must promote it, not discard it.
         connection.execute(sa.text(f"ALTER TABLE {table} RENAME TO {table}__0022"))
+        _write_0022_completed_proof(connection, table)
         connection.execute(sa.text("UPDATE alembic_version SET version_num='0021'"))
         command.upgrade(migrate.alembic_config(connection), "0022")
     inspector = sa.inspect(engine)
     assert table in inspector.get_table_names()
     assert f"{table}__0022" not in inspector.get_table_names()
+
+
+def test_revision_0022_refuses_an_unproven_completed_review_temp_without_mutation(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-unproven-completed-temp.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+        connection.execute(sa.text(
+            "ALTER TABLE project_review_notes RENAME TO project_review_notes__0022"
+        ))
+    before_names = tuple(sa.inspect(engine).get_table_names())
+    with pytest.raises(RuntimeError, match="unproven completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0022")
+    assert migrate.schema_version(engine) == "0021"
+    assert tuple(sa.inspect(engine).get_table_names()) == before_names
+
+
+def test_revision_0022_refuses_a_proven_payload_with_a_malformed_temp_contract_without_ddl(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-malformed-proven-temp.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        source_sql = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='project_review_notes'"
+        )).scalar_one()
+        expected_schema_digest = hashlib.sha256(" ".join(
+            source_sql.replace("CREATE TABLE project_review_notes (", "CREATE TABLE __TABLE__ (", 1)
+            .replace("\n", " ").replace('"', "").replace("`", "").split()
+        ).lower().encode()).hexdigest()
+        connection.execute(sa.text(
+            "CREATE TABLE project_review_notes__0022 AS SELECT * FROM project_review_notes"
+        ))
+        rows = connection.execute(sa.text(
+            "SELECT * FROM project_review_notes__0022 ORDER BY rowid"
+        )).all()
+        row_digest = hashlib.sha256(json.dumps(
+            [list(row) for row in rows], default=str, separators=(",", ":")
+        ).encode()).hexdigest()
+        connection.execute(sa.text("DROP TABLE project_review_notes"))
+        connection.execute(sa.text(
+            "CREATE TABLE _review_0022_rebuild_proofs (table_name VARCHAR(64) NOT NULL PRIMARY KEY, "
+            "row_count INTEGER NOT NULL, row_digest VARCHAR(64) NOT NULL, "
+            "schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO _review_0022_rebuild_proofs VALUES "
+            "('project_review_notes',:count,:row_digest,:schema_digest,'built')"
+        ), {"count": len(rows), "row_digest": row_digest, "schema_digest": expected_schema_digest})
+        connection.execute(sa.text("UPDATE alembic_version SET version_num='0021'"))
+    before = tuple(engine.connect().execute(sa.text(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+    )).all())
+    with pytest.raises(RuntimeError, match="malformed completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0022")
+    with engine.connect() as connection:
+        after = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        )).all())
+    assert migrate.schema_version(engine) == "0021"
+    assert after == before
+
+
+@pytest.mark.parametrize("table", REVIEW_0022_TABLES)
+@pytest.mark.parametrize("state", ("stale", "completed"))
+def test_revision_0022_downgrade_recovers_each_review_temp_before_legacy_rebuild(
+    tmp_path, table, state,
+):
+    engine = _at_revision_0020(tmp_path, f"0022-downgrade-{table}-{state}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        if state == "stale":
+            connection.execute(sa.text(f"CREATE TABLE {table}__0022 (stale INTEGER)"))
+        else:
+            connection.execute(sa.text(f"ALTER TABLE {table} RENAME TO {table}__0022"))
+            _write_0022_completed_proof(connection, table)
+        command.downgrade(migrate.alembic_config(connection), "0021")
+    inspector = sa.inspect(engine)
+    assert migrate.schema_version(engine) == "0021"
+    assert f"{table}__0022" not in inspector.get_table_names()
+    assert "owner_id" not in {column["name"] for column in inspector.get_columns(table)}
 
 
 def test_revision_0022_legacy_round_trip_and_downgrade_refusal_are_lossless(tmp_path):
@@ -278,6 +386,43 @@ def test_revision_0022_legacy_round_trip_and_downgrade_refusal_are_lossless(tmp_
     assert {table: _revision_0020_contract(engine, table) for table in REVIEW_0022_TABLES} == before
 
 
+def test_revision_0022_downgrade_refusal_preflight_does_not_recover_a_stale_temp(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-downgrade-read-only-preflight.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES ('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        connection.execute(sa.text(
+            "INSERT INTO projects (project_id,owner_id,name,description,status,created_at,updated_at) "
+            "VALUES ('project.review.other','owner.other','Other','','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(sa.text(
+            "INSERT INTO project_review_notes VALUES "
+            "('owner','note.preflight','project.review.other','run:1','experiment_run','cannot downgrade',"
+            "'owner',0,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+        ))
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=ON")
+        connection.execute(sa.text("CREATE TABLE project_review_notes__0022 (stale INTEGER)"))
+    before = tuple(engine.connect().execute(sa.text(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+    )).all())
+    with pytest.raises(RuntimeError, match="cannot be represented by 0021"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0021")
+    with engine.connect() as connection:
+        after = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
+        )).all())
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 1
+    assert migrate.schema_version(engine) == "0022"
+    assert after == before
+
+
 def test_revision_0022_upgrade_failure_restores_the_callers_foreign_key_state(tmp_path):
     engine = _at_revision_0020(tmp_path, "0022-fk-state.db")
     with engine.begin() as connection:
@@ -304,6 +449,43 @@ def test_revision_0022_upgrade_failure_restores_the_callers_foreign_key_state(tm
     with engine.connect() as connection:
         assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 0
         assert migrate.schema_version(engine) == "0021"
+
+
+@pytest.mark.parametrize(("direction", "start", "target"), (
+    ("upgrade", "0021", "0022"),
+    ("downgrade", "0022", "0021"),
+))
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0022_rebuild_failures_restore_foreign_key_mode_in_both_directions(
+    tmp_path, direction, start, target, foreign_keys,
+):
+    engine = _at_revision_0020(tmp_path, f"0022-{direction}-fk-{foreign_keys}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), start)
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    failed = False
+
+    def interrupt(_conn, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal failed
+        if not failed and "CREATE TABLE project_review_notes__0022" in statement:
+            failed = True
+            raise RuntimeError(f"injected 0022 {direction} interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match=f"injected 0022 {direction} interruption"):
+            with engine.begin() as connection:
+                if direction == "upgrade":
+                    command.upgrade(migrate.alembic_config(connection), target)
+                else:
+                    command.downgrade(migrate.alembic_config(connection), target)
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+    assert migrate.schema_version(engine) == start
 
 
 def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):

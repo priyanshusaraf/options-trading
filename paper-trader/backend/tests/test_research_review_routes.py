@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api import research_review_routes as review_routes
 from app.core.config import get_settings
 from app.db.session import init_db
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
@@ -73,6 +74,46 @@ def test_review_keeps_project_timeline_separate_from_global_operations(client):
     assert body["source_errors"] == []
     assert all(event["type"] != "research_operation" for event in body["timeline"]["events"])
     assert client.get(URL.replace("/api/", "/api/v1/", 1)).json()["timeline"] == body["timeline"]
+
+
+@pytest.mark.parametrize("prefix", ("/api/ir", "/api/v1/ir"))
+def test_every_review_read_route_propagates_the_resolved_owner(prefix, client, monkeypatch):
+    """Versioned aliases must not silently fall back to the legacy owner scope."""
+    seen: list[tuple[str, str]] = []
+
+    def source(project_id: str, *, owner_id: str):
+        seen.append(("timeline", owner_id))
+        return {
+            "events": [],
+            "queues": {"review_needed_runs": [], "pending_candidates": [], "active_findings": []},
+            "source_errors": [],
+        }
+
+    def notes(project_id: str, *, owner_id: str):
+        seen.append(("notes", owner_id))
+        return ()
+
+    def views(project_id: str, *, owner_id: str):
+        seen.append(("views", owner_id))
+        return ()
+
+    def snapshots(project_id: str, *, owner_id: str):
+        seen.append(("snapshots", owner_id))
+        return ()
+
+    monkeypatch.setattr(review_routes, "owner_id_for", lambda _principal: "owner.spy")
+    monkeypatch.setattr(review_routes, "project_review_source", source)
+    monkeypatch.setattr(review_routes.review_state, "list_notes", notes)
+    monkeypatch.setattr(review_routes.review_state, "list_saved_views", views)
+    monkeypatch.setattr(review_routes.review_snapshot_store, "list_snapshots", snapshots)
+
+    base = f"{prefix}/projects/project.spy/review"
+    for suffix, expected in (("", "timeline"), ("/notes", "notes"), ("/views", "views"),
+                             ("/snapshots", "snapshots"), ("/search?q=needle", "notes")):
+        response = client.get(f"{base}{suffix}")
+        assert response.status_code == 200
+        assert any(scope == expected and owner_id == "owner.spy" for scope, owner_id in seen)
+    assert {owner_id for _, owner_id in seen} == {"owner.spy"}
 
 
 def test_review_filters_and_query_contract_fail_closed(client):
