@@ -69,17 +69,30 @@ class SweepRequest(BaseModel):
 
 @router.post("/sweep")
 def start(body: SweepRequest, principal: Principal = Depends(get_principal)):
-    if sweep.is_running():
-        return {"error": "a sweep is already running"}
     try:
         run_id = sweep.start_sweep(
             scope=body.scope, intervals=body.intervals, capital=body.capital,
             instruments=body.instruments, lookback_days=body.lookback_days,
             start_date=body.start_date, end_date=body.end_date,
             strategies=body.strategies, owner_id=owner_id_for(principal))
+    except sweep.WorkloadAdmissionError as e:
+        return {"error": "backtest workload unavailable", "reason": e.reason}
     except Exception as e:
         return {"error": str(e)}
     return {"run_id": run_id, "running": True}
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel(run_id: int, principal: Principal = Depends(get_principal)):
+    """Request cancellation for the principal's own pending/running work only."""
+    owner_id = owner_id_for(principal)
+    with SessionLocal() as session:
+        accepted = repository.request_cancel(session, owner_id=owner_id, run_id=run_id)
+        if accepted:
+            session.commit()
+    # Foreign and absent ids collapse to the same response. No global queue state
+    # or worker identifiers are disclosed.
+    return {"accepted": accepted}
 
 
 @router.get("/instruments")

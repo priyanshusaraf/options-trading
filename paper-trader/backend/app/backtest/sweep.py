@@ -15,6 +15,7 @@ database session, with output gated bit-identical against the serial path.
 from __future__ import annotations
 
 import datetime as dt
+from sqlalchemy import func, select, text
 import json
 import threading
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.backtest import repository
+from app.db.models import BacktestRun
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
 
@@ -208,9 +210,12 @@ def resolve_pinned_datasets(provider, instruments, intervals, *,
     return resolved
 
 
+# Local threads are observability/cleanup only.  Durable run claims are the
+# write/admission authority, so another process may safely run unrelated work.
 _state_lock = threading.Lock()
-_running = False
-_worker: "threading.Thread | None" = None
+_workers: dict[int, threading.Thread] = {}
+_running = False  # legacy observability only; never use for admission.
+_worker: "threading.Thread | None" = None  # legacy _join helper compatibility.
 
 
 @dataclass(frozen=True)
@@ -242,14 +247,63 @@ class _PreparedDataset:
 
 
 def is_running() -> bool:
-    return _running
+    # Compatibility/diagnostic helper: reports a local thread, never an
+    # admission decision and never a remote worker's durable lease.
+    with _state_lock:
+        return any(thread.is_alive() for thread in _workers.values())
 
 
 def _join() -> None:
     """Test helper: block until the running sweep thread completes."""
-    t = _worker
-    if t is not None:
-        t.join()
+    with _state_lock:
+        threads = list(_workers.values())
+    for thread in threads:
+        thread.join()
+
+
+class WorkloadAdmissionError(RuntimeError):
+    """Explicit, non-topology-leaking refusal before provider/worker resources."""
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(f"backtest workload rejected: {reason}")
+
+
+def _admit_workload(*, owner_id: str, total: int, workers: int, session=None) -> None:
+    """Check host and tenant pressure from durable rows before any data read.
+
+    Limits are deployment configuration, not customer count. SQLite gets simple
+    aggregate reads; Phase 2 can retain this interface while using PostgreSQL
+    locks/metrics without rewriting callers.
+    """
+    settings = get_settings()
+    owns_session = session is None
+    if owns_session:
+        session = SessionLocal()
+    try:
+        active = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
+            BacktestRun.status == "running")) or 0)
+        owner_active = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
+            BacktestRun.owner_id == owner_id, BacktestRun.status == "running")) or 0)
+        owner_queued = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
+            BacktestRun.owner_id == owner_id, BacktestRun.status == "pending")) or 0)
+        reserved_cells = int(session.scalar(select(func.coalesce(func.sum(BacktestRun.total), 0)).where(
+            BacktestRun.status.in_(("pending", "running")))) or 0)
+        reserved_workers = int(session.scalar(select(func.coalesce(func.sum(
+            BacktestRun.requested_workers), 0)).where(
+                BacktestRun.status.in_(("pending", "running")))) or 0)
+    finally:
+        if owns_session:
+            session.close()
+    if active >= max(0, settings.backtest_host_active_jobs):
+        raise WorkloadAdmissionError("host_active_jobs")
+    if owner_active >= max(0, settings.backtest_owner_active_jobs):
+        raise WorkloadAdmissionError("owner_active_jobs")
+    if owner_queued >= max(0, settings.backtest_owner_queued_jobs):
+        raise WorkloadAdmissionError("owner_queued_jobs")
+    if reserved_cells + total > max(0, settings.backtest_host_requested_cells):
+        raise WorkloadAdmissionError("host_requested_cells")
+    if reserved_workers + workers > max(0, settings.backtest_host_worker_slots):
+        raise WorkloadAdmissionError("host_worker_slots")
 
 
 def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | None = None,
@@ -280,19 +334,10 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                      `MAX_SWEEP_WORKERS` and the CPU count. Output is gated
                      bit-identical against serial."""
     from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
-    global _running, _worker
+    global _worker
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
     worker_count = _worker_count(workers)
-    # A run left `running` by a dead process is a phantom nothing is driving.
-    # Repair it before adding another, so the status endpoint never shows two.
-    # Deliberately BEFORE `_running` is set: the guard inside protects a live
-    # sweep's own row, and this must not be skipped by the flag we are about to
-    # raise ourselves.
     reconcile_stale_runs(owner_id=owner_id)
-    with _state_lock:
-        if _running:
-            raise RuntimeError("a sweep is already running")
-        _running = True
     try:
         intervals = [i for i in (intervals or DEFAULT_INTERVALS) if i in MAX_DAYS]
         # resolve + de-dupe strategy keys (preserve request order); default = v3
@@ -316,11 +361,19 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         win = {"lookback_days": lookback_days, "start": start_date, "end": end_date,
                "label": window_label(lookback_days, start_date, end_date)}
         total = len(specs) * len(intervals) * len(strat_objs)
+        # Must happen before a provider candle read or thread/pool creation. The
+        # run is then enqueued/claimed inside the same short admission session.
+        # SQLite's single-writer reservation makes the aggregate budget check
+        # and pending-row creation one admission decision.  A concurrent caller
+        # observes this row before it can pass the same host budget.
         strat_label = "×".join(st.key for st in strat_objs)
         with SessionLocal() as s:
-            run = repository.create_run(
-                s, owner_id=owner_id, status="running", scope=scope,
+            s.execute(text("BEGIN IMMEDIATE"))
+            _admit_workload(owner_id=owner_id, total=total, workers=worker_count, session=s)
+            run = repository.enqueue_run(
+                s, owner_id=owner_id, scope=scope,
                 intervals=",".join(intervals), capital=capital, total=total, done=0,
+                requested_workers=worker_count,
                 window=win["label"],
                 instruments=",".join(i.key for i in specs) if instruments else "",
                 strategies=",".join(st.key for st in strat_objs),
@@ -328,6 +381,12 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                      f"× {len(strat_objs)} strategies · {win['label']}"
                      + (" · pinned" if pinned else "")
                      + (f" · {worker_count} workers" if worker_count > 1 else ""))
+            claim = repository.claim_run(
+                s, owner_id=owner_id, run_id=run.id,
+                claimed_by=f"local:{threading.get_ident()}",
+                lease_seconds=get_settings().backtest_claim_lease_seconds)
+            if claim is None:
+                raise WorkloadAdmissionError("claim_conflict")
             s.commit()
             run_id = run.id
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
@@ -337,19 +396,33 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
                                    strat_objs, pinned, worker_count),
-                             kwargs={"owner_id": owner_id},
+                             kwargs={"owner_id": owner_id, "claim_token": claim.claim_token},
                              daemon=True)
-        _worker = t
-        t.start()
+        with _state_lock:
+            _workers[run_id] = t
+            _worker = t
+        try:
+            t.start()
+        except Exception as exc:
+            # The durable claim was reserved before launch. If launch itself
+            # fails, close *that exact token* so capacity is released without
+            # ever touching a worker that subsequently reclaimed the run.
+            with _state_lock:
+                _workers.pop(run_id, None)
+            with SessionLocal() as failed:
+                repository.complete_claim(
+                    failed, owner_id=owner_id, run_id=run_id,
+                    claim_token=claim.claim_token, status="error",
+                    note=f"worker launch failed: {exc}")
+                failed.commit()
+            raise
         return run_id
     except Exception:
-        _running = False
         raise
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None, workers=None, *, owner_id: str) -> None:
-    global _running
+         pinned=None, workers=None, *, owner_id: str, claim_token: str | None = None) -> None:
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
         from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
@@ -360,20 +433,33 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
                                    win, strategies, pinned, workers, owner_id=owner_id):
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
-                _commit_batch(run_id, batch, owner_id=owner_id)
+                if claim_token is None:
+                    _commit_batch(run_id, batch, owner_id=owner_id)
+                else:
+                    _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                          claim_token=claim_token)
                 batch = []
         # The terminal status rides the final batch: results, progress and the
         # run's completion are one transaction, so a run can never be `done`
         # while its last ten rows are missing.
-        _commit_batch(run_id, batch, owner_id=owner_id, status="done")
+        if claim_token is None:
+            _commit_batch(run_id, batch, owner_id=owner_id, status="done")
+        else:
+            _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                  claim_token=claim_token, status="done")
         log.info(f"backtest sweep #{run_id} complete")
     except Exception as e:  # never let the thread die silently
         # `batch` is deliberately dropped: those cells were never durable, and
         # progress is derived from what IS durable, so nothing over-reports.
-        _commit_batch(run_id, [], owner_id=owner_id, status="error", note=str(e))
+        if claim_token is None:
+            _commit_batch(run_id, [], owner_id=owner_id, status="error", note=str(e))
+        else:
+            _commit_claimed_batch(run_id, [], owner_id=owner_id,
+                                  claim_token=claim_token, status="error", note=str(e))
         log.error(f"backtest sweep #{run_id} failed: {e}")
     finally:
-        _running = False
+        with _state_lock:
+            _workers.pop(run_id, None)
 
 
 def _cell_values(provider, specs, intervals, capital, win, strategies,
@@ -1106,23 +1192,47 @@ def _commit_batch(run_id, values: list[dict], *, owner_id: str, status: str = ""
         s.commit()
 
 
-def reconcile_stale_runs(*, owner_id: str) -> int:
-    """Repair runs left `running` by a process that died mid-sweep.
+def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
+                          claim_token: str, status: str = "", note: str = "") -> bool:
+    """Commit only while this worker owns the durable lease.
 
-    Nothing in-process is driving them: `_running` is a module global and does not
-    survive a restart, so the row is a phantom the status endpoint reports forever
-    and `start_sweep` would contradict. `done` is reset from the durable row count
-    rather than trusted, because a run written by the pre-batch incrementing
-    counter can be arbitrarily ahead of its rows. Returns how many were repaired.
+    Cancellation is observed before every batch; already-computed work is simply
+    discarded after a cancellation request, never committed under an old token.
     """
-    if _running:            # a live sweep owns its own row; never touch it
-        return 0
-    repaired = 0
+    if len(values) > BATCH_SIZE:
+        raise RuntimeError(f"batch of {len(values)} exceeds BATCH_SIZE={BATCH_SIZE}")
+    with SessionLocal() as session:
+        if repository.is_cancel_requested(session, owner_id=owner_id, run_id=run_id,
+                                          claim_token=claim_token):
+            repository.complete_claim(session, owner_id=owner_id, run_id=run_id,
+                                      claim_token=claim_token, status="cancelled")
+            session.commit()
+            return False
+        if values and not repository.append_claimed_result_batch(
+                session, owner_id=owner_id, run_id=run_id, claim_token=claim_token,
+                values=values, lease_seconds=get_settings().backtest_claim_lease_seconds):
+            session.rollback()
+            return False
+        if status:
+            if repository.is_cancel_requested(session, owner_id=owner_id, run_id=run_id,
+                                              claim_token=claim_token):
+                status = "cancelled"
+            if not repository.complete_claim(session, owner_id=owner_id, run_id=run_id,
+                                             claim_token=claim_token, status=status, note=note):
+                session.rollback()
+                return False
+        session.commit()
+        return True
+
+
+def reconcile_stale_runs(*, owner_id: str) -> int:
+    """Requeue only expired durable leases and retire claimless legacy phantoms.
+
+    A non-expired token can belong to another process, so restart never changes
+    it. Progress remains derived from durable result rows for legacy records.
+    """
     with SessionLocal() as s:
-        repaired = repository.reconcile_stale_runs(
-            s, owner_id=owner_id,
-            note="interrupted: the process ended before this sweep finished; "
-                 "progress reset to its durable results")
+        repaired = repository.reconcile_expired_claims(s, owner_id=owner_id)
         if repaired:
             s.commit()
     return repaired

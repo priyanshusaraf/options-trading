@@ -1,9 +1,31 @@
 """Required-owner persistence boundary for durable backtest evidence."""
 from __future__ import annotations
 
-from sqlalchemy import func, select
+import datetime as dt
+import uuid
+
+from sqlalchemy import and_, func, or_, select, update
 
 from app.db.models import BacktestResult, BacktestRun
+
+
+def _clock(now: dt.datetime | None = None) -> dt.datetime:
+    """SQLite stores naive UTC timestamps; normalize injected clocks likewise."""
+    value = now or dt.datetime.now(dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def enqueue_run(session, *, owner_id: str, scope: str, intervals: str,
+                capital: float, total: int, now: dt.datetime | None = None,
+                **values) -> BacktestRun:
+    """Create durable pending work before any provider read or worker launch."""
+    queued_at = _clock(now)
+    run = BacktestRun(owner_id=owner_id, scope=scope, intervals=intervals,
+                      capital=capital, total=total, status="pending",
+                      queued_at=queued_at, **values)
+    session.add(run)
+    session.flush()
+    return run
 
 
 def create_run(session, *, owner_id: str, scope: str, intervals: str,
@@ -13,6 +35,63 @@ def create_run(session, *, owner_id: str, scope: str, intervals: str,
     session.add(run)
     session.flush()
     return run
+
+
+def _claimable(now: dt.datetime):
+    return or_(BacktestRun.status == "pending", and_(
+        BacktestRun.status == "running", BacktestRun.claim_expires_at.is_not(None),
+        BacktestRun.claim_expires_at <= now))
+
+
+def claim_run(session, *, owner_id: str, run_id: int, claimed_by: str,
+              now: dt.datetime | None = None, lease_seconds: int = 30) -> BacktestRun | None:
+    """Atomically take pending/expired work and fence its former writer."""
+    moment = _clock(now)
+    token = uuid.uuid4().hex
+    expires = moment + dt.timedelta(seconds=max(1, int(lease_seconds)))
+    result = session.execute(update(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
+        BacktestRun.cancel_requested_at.is_(None), _claimable(moment)).values(
+            status="running", claim_token=token, claimed_by=claimed_by,
+            claim_expires_at=expires, heartbeat_at=moment,
+            started_at=func.coalesce(BacktestRun.started_at, moment),
+            attempt_count=BacktestRun.attempt_count + 1))
+    if result.rowcount != 1:
+        return None
+    return get_run(session, owner_id=owner_id, run_id=run_id)
+
+
+def claim_next_run(session, *, owner_id: str, claimed_by: str,
+                   now: dt.datetime | None = None, lease_seconds: int = 30) -> BacktestRun | None:
+    """Find a candidate then use ``claim_run`` as the sole race authority."""
+    moment = _clock(now)
+    candidate = session.scalar(select(BacktestRun.id).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.cancel_requested_at.is_(None),
+        _claimable(moment)).order_by(BacktestRun.queued_at, BacktestRun.id).limit(1))
+    if candidate is None:
+        return None
+    return claim_run(session, owner_id=owner_id, run_id=int(candidate),
+                     claimed_by=claimed_by, now=moment, lease_seconds=lease_seconds)
+
+
+def _active_claim(owner_id: str, run_id: int, token: str, now: dt.datetime,
+                  *, allow_cancel: bool = False):
+    clauses = [BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
+               BacktestRun.status == "running", BacktestRun.claim_token == token,
+               BacktestRun.claim_expires_at.is_not(None), BacktestRun.claim_expires_at > now]
+    if not allow_cancel:
+        clauses.append(BacktestRun.cancel_requested_at.is_(None))
+    return and_(*clauses)
+
+
+def heartbeat_claim(session, *, owner_id: str, run_id: int, claim_token: str,
+                    now: dt.datetime | None = None, lease_seconds: int = 30) -> bool:
+    moment = _clock(now)
+    result = session.execute(update(BacktestRun).where(
+        _active_claim(owner_id, run_id, claim_token, moment)).values(
+            heartbeat_at=moment,
+            claim_expires_at=moment + dt.timedelta(seconds=max(1, int(lease_seconds)))))
+    return result.rowcount == 1
 
 
 def get_run(session, *, owner_id: str, run_id: int) -> BacktestRun | None:
@@ -138,6 +217,35 @@ def append_result_batch(session, *, owner_id: str, run_id: int,
         session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
 
 
+def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
+                                claim_token: str, values: list[dict],
+                                now: dt.datetime | None = None,
+                                lease_seconds: int = 30) -> bool:
+    """Insert a bounded result batch and its progress under one fenced savepoint.
+
+    A false result has no side effect, including no pending ORM rows that a caller
+    might accidentally commit after a lost lease.
+    """
+    moment = _clock(now)
+    with session.begin_nested():
+        # Check before inserting so a cancellation/replacement cannot make a
+        # stale process create rows. The same predicate is repeated after flush
+        # to fence a takeover that wins while this worker computes its count.
+        if session.execute(update(BacktestRun).where(
+            _active_claim(owner_id, run_id, claim_token, moment)).values(
+                heartbeat_at=moment,
+                claim_expires_at=moment + dt.timedelta(seconds=max(1, int(lease_seconds))))).rowcount != 1:
+            return False
+        for value in values:
+            session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
+        session.flush()
+        done = durable_result_count(session, owner_id=owner_id, run_id=run_id)
+        if session.execute(update(BacktestRun).where(
+            _active_claim(owner_id, run_id, claim_token, moment)).values(done=done)).rowcount != 1:
+            raise RuntimeError("backtest claim changed while persisting batch")
+    return True
+
+
 def durable_result_count(session, *, owner_id: str, run_id: int) -> int:
     return int(session.scalar(select(func.count()).select_from(BacktestResult).where(
         BacktestResult.owner_id == owner_id, BacktestResult.run_id == run_id)) or 0)
@@ -154,6 +262,70 @@ def update_run(session, *, owner_id: str, run_id: int, status: str = "",
     if note:
         run.note = note[:400]
     return run
+
+
+def complete_claim(session, *, owner_id: str, run_id: int, claim_token: str,
+                   status: str, note: str = "", now: dt.datetime | None = None) -> bool:
+    """Only the current, unexpired claimant can make a run terminal."""
+    if status not in {"done", "error", "cancelled"}:
+        raise ValueError("invalid terminal backtest status")
+    moment = _clock(now)
+    predicate = _active_claim(owner_id, run_id, claim_token, moment,
+                              allow_cancel=status == "cancelled")
+    if status == "cancelled":
+        predicate = and_(predicate, BacktestRun.cancel_requested_at.is_not(None))
+    with session.begin_nested():
+        done = durable_result_count(session, owner_id=owner_id, run_id=run_id)
+        result = session.execute(update(BacktestRun).where(predicate).values(
+            status=status, done=done, note=note[:400] if note else BacktestRun.note,
+            completed_at=moment, heartbeat_at=moment))
+        if result.rowcount != 1:
+            return False
+    return True
+
+
+def request_cancel(session, *, owner_id: str, run_id: int,
+                   now: dt.datetime | None = None) -> bool:
+    """An owner requests cancellation; only its existing worker may finalise it."""
+    moment = _clock(now)
+    result = session.execute(update(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
+        BacktestRun.status.in_(("pending", "running")),
+        BacktestRun.cancel_requested_at.is_(None)).values(cancel_requested_at=moment))
+    return result.rowcount == 1
+
+
+def is_cancel_requested(session, *, owner_id: str, run_id: int,
+                        claim_token: str, now: dt.datetime | None = None) -> bool:
+    moment = _clock(now)
+    return session.scalar(select(BacktestRun.id).where(
+        _active_claim(owner_id, run_id, claim_token, moment, allow_cancel=True),
+        BacktestRun.cancel_requested_at.is_not(None)).limit(1)) is not None
+
+
+def reconcile_expired_claims(session, *, owner_id: str,
+                             now: dt.datetime | None = None) -> int:
+    """Requeue only expired leases; a live process is never inferred dead."""
+    moment = _clock(now)
+    result = session.execute(update(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.status == "running",
+        BacktestRun.claim_expires_at.is_not(None), BacktestRun.claim_expires_at <= moment).values(
+            status="pending", claim_token=None, claimed_by=None,
+            claim_expires_at=None, heartbeat_at=None,
+            note="interrupted: expired worker claim; durable progress retained"))
+    reclaimed = int(result.rowcount or 0)
+    # A pre-0025 row cannot name any worker or lease. It is historical phantom
+    # state, not an expired live claim; preserve its results but make its outcome
+    # explicit once so legacy status APIs do not report an immortal worker.
+    legacy = session.execute(update(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.status == "running",
+        BacktestRun.claim_token.is_(None), BacktestRun.claim_expires_at.is_(None)).values(
+            status="error", completed_at=moment,
+            done=select(func.count()).select_from(BacktestResult).where(
+                BacktestResult.owner_id == BacktestRun.owner_id,
+                BacktestResult.run_id == BacktestRun.id).scalar_subquery(),
+            note="interrupted legacy run without a durable worker claim"))
+    return reclaimed + int(legacy.rowcount or 0)
 
 
 def reconcile_stale_runs(session, *, owner_id: str, note: str) -> int:

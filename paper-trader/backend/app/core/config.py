@@ -463,6 +463,15 @@ class Settings(BaseSettings):
     # taking the money path down with it. Raise it where the sweep has a box of
     # its own. Bounded by `sweep.MAX_SWEEP_WORKERS` and the CPU count.
     backtest_sweep_workers: int = 1
+    # Durable research admission. These are host/workload limits, deliberately
+    # not a product user-count limit. Operators choose them from measured memory,
+    # CPU, database lock wait and provider capacity for the deployment tier.
+    backtest_host_active_jobs: int = 2
+    backtest_owner_active_jobs: int = 1
+    backtest_owner_queued_jobs: int = 4
+    backtest_host_requested_cells: int = 100_000
+    backtest_host_worker_slots: int = 8
+    backtest_claim_lease_seconds: int = 30
 
     @property
     def cors_origins_list(self) -> list[str]:

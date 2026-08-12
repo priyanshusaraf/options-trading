@@ -32,7 +32,192 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0024"
+HEAD = "0025"
+
+
+def test_revision_0025_preserves_0024_rows_and_adds_portable_job_fields(tmp_path):
+    """0025 must preserve evidence while giving every legacy run a queue timestamp."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0025-populated.db", "0024")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (id,owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies) "
+            "VALUES (812,'owner','2026-08-12 01:02:03','done','liquid','day',12.5,4,4,'exact','max','NIFTY','s')"))
+        before = connection.execute(sa.text("SELECT * FROM backtest_runs WHERE id=812")).one()
+        command.upgrade(migrate.alembic_config(connection), "0025")
+        after = connection.execute(sa.text("SELECT * FROM backtest_runs WHERE id=812")).one()
+        assert after.id == before.id and after.owner_id == before.owner_id
+        assert after.status == before.status and after.note == before.note
+        assert str(after.queued_at).startswith("2026-08-12 01:02:03")
+        assert after.claim_token is None and after.attempt_count == 0
+        command.downgrade(migrate.alembic_config(connection), "0024")
+        assert connection.execute(sa.text("SELECT * FROM backtest_runs WHERE id=812")).one() == before
+
+
+def test_revision_0025_downgrade_refuses_persisted_claim_state_without_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0025-downgrade-refusal.db", "0025")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies,queued_at,claim_token,attempt_count) "
+            "VALUES ('owner','2026-08-12','running','liquid','day',1,1,0,'','max','','','2026-08-12','fence',1)"))
+        schema = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+        with pytest.raises(RuntimeError, match="durable claim state"):
+            command.downgrade(migrate.alembic_config(connection), "0024")
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == schema
+
+
+def test_revision_0025_recovers_only_a_proven_promoted_run_rebuild(tmp_path):
+    """A restart may clean a proved promoted table, never an unauthenticated temp."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0025-recovery.db", "0024")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (id,owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies) "
+            "VALUES (71,'owner','2026-08-12','done','liquid','day',1,1,1,'keep','max','','')"))
+    interrupted = False
+    def stop_after_promotion(_conn, _cursor, statement, params, _context, _many):
+        nonlocal interrupted
+        normalized = " ".join(statement.upper().split())
+        values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        if (not interrupted and normalized.startswith("DELETE FROM _BACKTEST_0025_REBUILD_PROOFS")
+                and ("backtest_runs" in values or "TABLE_NAME='BACKTEST_RUNS'" in normalized)):
+            interrupted = True
+            raise RuntimeError("interrupt after proved promotion")
+    sa.event.listen(engine, "before_cursor_execute", stop_after_promotion)
+    try:
+        with pytest.raises(RuntimeError, match="interrupt after proved promotion"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0025")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_after_promotion)
+    with engine.begin() as connection:
+        assert interrupted and "_backtest_0025_rebuild_proofs" in sa.inspect(connection).get_table_names()
+        command.upgrade(migrate.alembic_config(connection), "0025")
+        row = connection.execute(sa.text("SELECT id,note,queued_at FROM backtest_runs WHERE id=71")).one()
+        assert row.id == 71 and row.note == "keep" and row.queued_at is not None
+
+
+def test_revision_0025_refuses_unproven_or_forged_source_absent_temp_without_mutation(tmp_path):
+    """A temp table never authenticates its own schema or payload proof."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0025-forged-temp.db", "0024")
+    with engine.begin() as connection:
+        connection.execute(sa.text("ALTER TABLE backtest_runs RENAME TO backtest_runs__good"))
+        connection.execute(sa.text(
+            "CREATE TABLE backtest_runs__0025 AS SELECT * FROM backtest_runs__good"))
+        connection.execute(sa.text("DROP TABLE backtest_runs__good"))
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+    with pytest.raises(RuntimeError, match="unproven completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0025")
+    with engine.connect() as connection:
+        assert migrate.schema_version(engine) == "0024"
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0025_preserves_fk_mode_on_success_and_recovery_failure(tmp_path, foreign_keys):
+    engine = _build_from_baseline_at_revision(tmp_path, f"0025-fk-{foreign_keys}.db", "0024")
+    with engine.begin() as connection:
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0025")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+    # Downgrade has no claim state, then an injected rebuild failure must restore
+    # the caller's SQLite enforcement mode and leave the prior revision stamped.
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0024")
+    injected = False
+    def stop_before_temp(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal injected
+        if not injected and statement.lstrip().upper().startswith("CREATE TABLE BACKTEST_RUNS__0025"):
+            injected = True
+            raise RuntimeError("0025 injected rebuild failure")
+    sa.event.listen(engine, "before_cursor_execute", stop_before_temp)
+    try:
+        with pytest.raises(RuntimeError, match="0025 injected rebuild failure"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0025")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_before_temp)
+    with engine.connect() as connection:
+        assert injected and migrate.schema_version(engine) == "0024"
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+@pytest.mark.parametrize("phase,needle", (
+    ("after-copy", "INSERT INTO BACKTEST_RUNS__0025"),
+    ("after-proof", "INSERT OR REPLACE INTO _BACKTEST_0025_REBUILD_PROOFS"),
+    ("after-drop", "DROP TABLE BACKTEST_RUNS"),
+    ("after-rename", "ALTER TABLE BACKTEST_RUNS__0025 RENAME TO BACKTEST_RUNS"),
+))
+def test_revision_0025_restart_matrix_recovers_each_durable_rebuild_phase(tmp_path, phase, needle):
+    """Every interruption boundary must retry through the target-bound proof path."""
+    engine = _build_from_baseline_at_revision(tmp_path, f"0025-{phase}.db", "0024")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, params, _context, _many):
+        nonlocal stopped
+        normalized = " ".join(statement.upper().split())
+        values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        matches = needle in normalized
+        if phase == "after-proof":
+            matches = needle in normalized and "backtest_runs" in values
+        if not stopped and matches:
+            stopped = True
+            raise RuntimeError(f"stop {phase}")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match=f"stop {phase}"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0025")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        assert stopped
+        command.upgrade(migrate.alembic_config(connection), "0025")
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert "queued_at" in {c["name"] for c in sa.inspect(connection).get_columns("backtest_runs")}
+    assert migrate.schema_version(engine) == "0025"
+
+
+@pytest.mark.parametrize("mutation", (
+    "UPDATE backtest_runs__0025 SET note='tampered'",
+    "ALTER TABLE backtest_runs__0025 ADD COLUMN attacker TEXT",
+))
+def test_revision_0025_refuses_row_or_schema_tampered_proven_temp_without_mutation(tmp_path, mutation):
+    """A proof records both payload and canonical target schema, not a hint."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0025-temp-tamper.db", "0024")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (id,owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies) "
+            "VALUES (97,'owner','2026-08-12','done','liquid','day',1,1,1,'original','max','','')"))
+    stopped = False
+    def stop_before_rename(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and statement.upper().startswith("ALTER TABLE BACKTEST_RUNS__0025 RENAME"):
+            stopped = True
+            raise RuntimeError("leave proven temp")
+    sa.event.listen(engine, "before_cursor_execute", stop_before_rename)
+    try:
+        with pytest.raises(RuntimeError, match="leave proven temp"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0025")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_before_rename)
+    with engine.begin() as connection:
+        connection.execute(sa.text(mutation))
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+    with pytest.raises(RuntimeError, match="malformed completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0025")
+    with engine.connect() as connection:
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+        assert migrate.schema_version(engine) == "0024"
 
 
 def _schema(engine) -> dict:
@@ -144,9 +329,8 @@ def test_models_and_migrations_agree(tmp_path):
 
 def test_revision_0024_owns_backtest_evidence_and_preserves_fk_mode(tmp_path):
     """Legacy run/result bytes upgrade to the same owner without losing relation safety."""
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0024-fk-mode.db", "0023")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), "0023")
         connection.execute(sa.text(
             "INSERT INTO backtest_runs (id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies) "
             "VALUES (991,'2026-08-12 10:00:00','done','liquid','day',123.0,1,1,'exact','max','NIFTY','trend_impulse_v3')"))
@@ -184,8 +368,10 @@ def _backtest_0024_contract(engine, table: str) -> dict:
 
 def test_revision_0024_fresh_and_upgraded_contract_match_pk_unique_fk_actions_defaults_indexes(tmp_path):
     """Parity includes the relational contract, not just column names and index tuples."""
-    fresh = _build_from_models(tmp_path)
-    upgraded = _build_from_baseline(tmp_path)
+    # This is a historical 0024 contract test; do not accidentally compare it
+    # against later job-coordinate fields now present at head.
+    fresh = _build_from_baseline_at_revision(tmp_path, "0024-fresh-contract.db", "0024")
+    upgraded = _build_from_baseline_at_revision(tmp_path, "0024-upgraded-contract.db", "0024")
     for table in ("backtest_runs", "backtest_results"):
         assert _backtest_0024_contract(upgraded, table) == _backtest_0024_contract(fresh, table)
 
@@ -336,7 +522,7 @@ def test_revision_0024_legacy_only_downgrade_is_lossless_and_reupgradeable(tmp_p
 
 
 def test_revision_0024_downgrade_refuses_nonlegacy_owner_before_mutation(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0024-owner-refusal.db", "0024")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES ('other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
@@ -550,7 +736,7 @@ def test_revision_0024_downgrade_recovers_after_rename_before_proof_delete(tmp_p
 
 
 def test_revision_0024_downgrade_refuses_cross_owner_before_stale_temp_cleanup(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0024-stale-owner-refusal.db", "0024")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES ('other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))

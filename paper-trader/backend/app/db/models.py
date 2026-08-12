@@ -859,6 +859,8 @@ class BacktestRun(Base):
         UniqueConstraint("owner_id", "id", name="uq_backtest_runs_owner_id"),
         Index("ix_backtest_runs_owner_created", "owner_id", "created_at"),
         Index("ix_backtest_runs_owner_status", "owner_id", "status"),
+        Index("ix_backtest_runs_owner_status_queued", "owner_id", "status", "queued_at"),
+        Index("ix_backtest_runs_claim_expires", "claim_expires_at"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[str] = mapped_column(
@@ -866,7 +868,21 @@ class BacktestRun(Base):
         nullable=False, default=LEGACY_OWNER_ID, server_default=LEGACY_OWNER_ID,
         index=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
-    status: Mapped[str] = mapped_column(String(16), default="running")  # running|done|error
+    # pending|running|done|error|cancelled.  A worker receives write authority
+    # only through the short-lived token below; process-local state is advisory.
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    queued_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                                server_default="0")
+    requested_workers: Mapped[int] = mapped_column(Integer, nullable=False, default=1,
+                                                    server_default="1")
+    cancel_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     scope: Mapped[str] = mapped_column(String(16), default="liquid")    # liquid|full
     intervals: Mapped[str] = mapped_column(String(128), default="")     # csv
     capital: Mapped[float] = mapped_column(Float, default=50_000.0)
@@ -888,6 +904,15 @@ class BacktestRun(Base):
             "window": self.window or "max",
             "instruments": [i for i in self.instruments.split(",") if i],
             "strategies": [s for s in self.strategies.split(",") if s] or ["trend_impulse_v3"],
+            # Claim tokens and worker IDs deliberately do not leave the server:
+            # they are write capability/topology details, not user-facing state.
+            "queued_at": self.queued_at.isoformat() if self.queued_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "heartbeat_at": self.heartbeat_at.isoformat() if self.heartbeat_at else None,
+            "cancel_requested_at": (self.cancel_requested_at.isoformat()
+                                    if self.cancel_requested_at else None),
+            "attempt_count": self.attempt_count,
         }
 
 
