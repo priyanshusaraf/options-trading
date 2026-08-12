@@ -34,7 +34,24 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0030"
+HEAD = "0031"
+
+
+def test_revision_0031_downgrade_refuses_changed_legacy_preference(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0031-preference-refusal.db", "0030")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0031")
+        connection.execute(sa.text("INSERT INTO universe_instruments "
+            "(key,name,segment,spot_exchange,spot_symbol,option_name,lot_size,strike_step,priority,has_options,source,on_home,active,mock_spot,mock_vol) "
+            "VALUES ('TASK6','Task 6','NSE','NSE','TASK6','TASK6',1,1,1,1,'seed',1,1,100,0.2)"))
+        connection.execute(sa.text("INSERT INTO universe_preferences "
+            "(owner_id,instrument_key,active,on_home,source) VALUES ('owner','TASK6',1,1,'seed')"))
+        connection.execute(sa.text("UPDATE universe_preferences SET on_home = 0 "
+                                 "WHERE owner_id = 'owner' AND instrument_key = 'TASK6'"))
+        with pytest.raises(RuntimeError, match="refuses"):
+            command.downgrade(migrate.alembic_config(connection), "0030")
+        assert connection.execute(sa.text("SELECT on_home FROM universe_preferences "
+                                          "WHERE owner_id = 'owner' AND instrument_key = 'TASK6'")).scalar() == 0
 
 
 def test_revision_0030_adds_digest_only_oauth_callback_state_and_refuses_lossy_downgrade(tmp_path):

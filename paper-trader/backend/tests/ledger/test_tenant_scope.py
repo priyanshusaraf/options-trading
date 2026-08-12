@@ -40,6 +40,20 @@ def test_snapshot_and_artifact_ids_are_reusable_across_accounts_without_visibili
                                 broker_account_id=ACCOUNT_A) == ("text/plain", b"A")
 
 
+def test_artifact_route_returns_the_callers_bytes_for_identical_ids(tmp_path, monkeypatch):
+    """Route scope must reach the service, not merely exist in a repository test."""
+    from app.ledger import routes
+    sm = _sm(tmp_path)
+    service.put_artifact(sm, "same", "text/plain", b"A", owner_id=OWNER_A,
+                         broker_account_id=ACCOUNT_A)
+    service.put_artifact(sm, "same", "text/plain", b"B", owner_id=OWNER_B,
+                         broker_account_id=ACCOUNT_B)
+    monkeypatch.setattr(routes, "get_sessionmaker", lambda: sm)
+    monkeypatch.setattr(routes, "_scope", lambda *_a, **_k: (OWNER_B, ACCOUNT_B))
+    response = routes.fetch_artifact("same", request=object(), principal=object())
+    assert response.body == b"B"
+
+
 def test_snapshot_keeps_id_one_invariant_inside_each_owner_account_scope(tmp_path):
     """Removing the id check would admit a second mutable snapshot per account."""
     from sqlalchemy import text

@@ -1,7 +1,7 @@
 """
-Broadcast hub for the main live channel (/ws): engine state snapshots each tick
-plus every log line. Per-instrument tick streams (/ws/instrument/{key}) are
-handled directly in the route since they're 1:1 and on-demand.
+Broadcast hub for scoped live channels. Private execution delivery is keyed by
+the server-derived ``(organization_id, broker_account_id)`` pair. Canonical
+market frames use the distinct explicit ``PUBLIC_MARKET`` channel.
 
 Rewritten after the 2026-07-23 outage: the old hub awaited each client's send
 inline (one slow client stalled the engine callbacks) and spawned a coroutine
@@ -30,11 +30,16 @@ import asyncio
 import json
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Final, TypeAlias
 
 from fastapi import WebSocket
 
 # message types where only the newest matters — stale ones are dropped
 _COALESCE = ("state", "position_ticks")
+
+TenantChannel: TypeAlias = tuple[str, str]
+Channel: TypeAlias = TenantChannel | str
+PUBLIC_MARKET: Final = "MARKET_PUBLIC"
 
 
 class _Frame:
@@ -75,6 +80,7 @@ class WSManager:
 
     def __init__(self) -> None:
         self.clients: dict[WebSocket, _Client] = {}
+        self.channels: dict[Channel, set[WebSocket]] = {}
         self.loop: asyncio.AbstractEventLoop | None = None
 
     def bind(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -89,40 +95,50 @@ class WSManager:
         return len(c.latest) + len(c.logs) if c else 0
 
     # ── connection lifecycle ────────────────────────────────────────────────
-    async def connect(self, ws: WebSocket, *, accepted: bool = False) -> None:
+    async def connect(self, ws: WebSocket, *, channel: Channel,
+                      accepted: bool = False) -> None:
+        """Register an already-authorized socket in one server-derived channel."""
         if not accepted:
             await ws.accept()
         client = _Client(logs=deque(maxlen=self.LOG_BUFFER))
         self.clients[ws] = client
+        self.channels.setdefault(channel, set()).add(ws)
         client.task = asyncio.get_running_loop().create_task(self._sender(ws, client))
 
     def disconnect(self, ws: WebSocket) -> None:
         client = self.clients.pop(ws, None)
+        for channel, members in list(self.channels.items()):
+            members.discard(ws)
+            if not members:
+                self.channels.pop(channel, None)
         if client and client.task and client.task is not asyncio.current_task():
             client.task.cancel()
 
     # ── producers: enqueue only, never block on client I/O ──────────────────
-    def _enqueue(self, msg: dict) -> None:
+    def _enqueue(self, channel: Channel, msg: dict) -> None:
         # one envelope for all clients → one encode for all clients (lazy, so
         # nothing here can raise on a message the JSON encoder dislikes)
         frame = _Frame(msg)
         mtype = msg.get("type")
-        for client in self.clients.values():
+        for ws in tuple(self.channels.get(channel, ())):
+            client = self.clients.get(ws)
+            if client is None:
+                continue
             if mtype in _COALESCE:
                 client.latest[mtype] = frame
             else:
                 client.logs.append(frame)  # bounded: oldest silently dropped
             client.wake.set()
 
-    async def broadcast(self, msg: dict) -> None:
+    async def broadcast(self, channel: Channel, msg: dict) -> None:
         """Async for call-site compatibility; returns without touching sockets."""
-        self._enqueue(msg)
+        self._enqueue(channel, msg)
 
-    def push(self, msg: dict) -> None:
+    def push(self, channel: Channel, msg: dict) -> None:
         """Thread/loop-safe fire-and-forget broadcast (used by the log bus).
         One cheap callback per message — no coroutine, no unbounded futures."""
         if self.loop and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self._enqueue, msg)
+            self.loop.call_soon_threadsafe(self._enqueue, channel, msg)
 
     # ── per-client sender ───────────────────────────────────────────────────
     async def _sender(self, ws: WebSocket, client: _Client) -> None:
@@ -145,7 +161,7 @@ class WSManager:
             raise
         except Exception:
             # timeout, closed socket, serialization error — evict this client
-            self.clients.pop(ws, None)
+            self.disconnect(ws)
             try:
                 await ws.close()
             except Exception:

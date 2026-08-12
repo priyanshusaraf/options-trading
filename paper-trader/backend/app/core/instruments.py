@@ -84,14 +84,16 @@ def seed_instruments() -> list[Instrument]:
     return list(SEED_INSTRUMENTS.values())
 
 
-def _row_to_instrument(row) -> Instrument:
+def _row_to_instrument(row, preference=None) -> Instrument:
     return Instrument(
         key=row.key, name=row.name, segment=row.segment,
         spot_exchange=row.spot_exchange, spot_symbol=row.spot_symbol,
         option_name=row.option_name or row.key, lot_size=row.lot_size,
         strike_step=row.strike_step, priority=row.priority,
         mock_spot=row.mock_spot, mock_vol=row.mock_vol,
-        has_options=row.has_options, on_home=row.on_home, source=row.source)
+        has_options=row.has_options,
+        on_home=preference.on_home if preference is not None else row.on_home,
+        source=preference.source if preference is not None else row.source)
 
 
 def load_universe() -> None:
@@ -106,18 +108,30 @@ def load_universe() -> None:
         from app.db.session import SessionLocal
         with SessionLocal() as s:
             for row in s.scalars(select(UniverseInstrument)):
-                if row.active:
-                    reg[row.key] = _row_to_instrument(row)
-                else:
-                    reg.pop(row.key, None)
+                reg[row.key] = _row_to_instrument(row)
     except Exception:
         pass  # DB not initialised yet (e.g. unit tests) — SEED is enough
     _registry = reg
 
 
-def all_instruments() -> list[Instrument]:
-    """Active universe, in priority order."""
-    return sorted(_registry.values(), key=lambda i: (i.priority, i.key))
+def all_instruments(owner_id: str | None = None) -> list[Instrument]:
+    """Canonical public facts, or an owner's active composed portfolio view."""
+    if owner_id is None:
+        return sorted(_registry.values(), key=lambda i: (i.priority, i.key))
+    try:
+        from sqlalchemy import select
+        from app.db.models import UniverseInstrument, UniversePreference
+        from app.db.session import SessionLocal
+        with SessionLocal() as s:
+            rows = s.execute(select(UniverseInstrument, UniversePreference).join(
+                UniversePreference,
+                (UniversePreference.instrument_key == UniverseInstrument.key)
+                & (UniversePreference.owner_id == owner_id),
+            ).where(UniversePreference.active.is_(True))).all()
+        return sorted((_row_to_instrument(fact, preference) for fact, preference in rows),
+                      key=lambda i: (i.priority, i.key))
+    except Exception:
+        return []
 
 
 def get_instrument(key: str) -> Instrument:
@@ -135,6 +149,6 @@ def by_priority(keys: list[str]) -> list[str]:
     return sorted(keys, key=lambda k: _registry[k].priority if k in _registry else 999)
 
 
-def home_instruments() -> list[Instrument]:
-    """Instruments pinned to the customizable homepage."""
-    return [i for i in all_instruments() if i.on_home]
+def home_instruments(owner_id: str | None = None) -> list[Instrument]:
+    """One owner's pins, or the canonical public seed presentation when omitted."""
+    return [i for i in all_instruments(owner_id) if i.on_home]

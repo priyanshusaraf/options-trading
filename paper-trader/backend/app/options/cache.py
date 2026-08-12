@@ -12,16 +12,27 @@ import datetime as dt
 from app.db.models import OptionData
 from app.db.session import SessionLocal
 
-_last_snapshot: dict[str, dt.datetime] = {}
+_last_snapshot: dict[tuple[str, str], dt.datetime] = {}
 
 
-def persist_chain(chain, inst, now: dt.datetime, snapshot_minutes: float) -> int:
+def _provider_source(provider) -> str:
+    """Return public market source identity for snapshot throttle keys."""
+    if provider is None:
+        return "unknown"
+    identity = getattr(provider, "source_id", None)
+    if callable(identity):
+        identity = identity()
+    return str(identity or getattr(provider, "name", provider.__class__.__name__))
+
+
+def persist_chain(chain, inst, now: dt.datetime, snapshot_minutes: float, *, provider=None) -> int:
     """Append `chain`'s quotes to OptionData, at most once per `snapshot_minutes`
     per instrument. Returns the number of rows written (0 if throttled)."""
-    last = _last_snapshot.get(inst.key)
+    cache_key = (_provider_source(provider), inst.key)
+    last = _last_snapshot.get(cache_key)
     if last is not None and (now - last).total_seconds() < snapshot_minutes * 60:
         return 0
-    _last_snapshot[inst.key] = now
+    _last_snapshot[cache_key] = now
     rows = 0
     with SessionLocal() as s:
         for q in chain.quotes:

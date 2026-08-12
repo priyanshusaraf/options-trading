@@ -120,14 +120,17 @@ async def lifespan(app: FastAPI):
     manager.bind(asyncio.get_running_loop())
 
     async def on_update(state: dict) -> None:
-        await manager.broadcast({"type": "state", "data": state})
+        await manager.broadcast((runner.owner_id, runner.broker_account_id),
+                                {"type": "state", "data": state})
 
     async def on_position_ticks(ticks: dict) -> None:
-        await manager.broadcast({"type": "position_ticks", "data": ticks})
+        await manager.broadcast((runner.owner_id, runner.broker_account_id),
+                                {"type": "position_ticks", "data": ticks})
 
     runner.on_update = on_update
     runner.on_position_ticks = on_position_ticks
-    log.subscribe(lambda entry: manager.push({"type": "log", "data": entry}))
+    # Process-global LogBus entries lack tenant scope. Keep them on the
+    # privileged operator surface until producers can supply one.
 
     # Two cooperative lanes: the fast risk loop marks open positions + ratchets
     # the trailing stop (and feeds position_ticks); the signal loop scans for

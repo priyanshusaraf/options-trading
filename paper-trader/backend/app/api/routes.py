@@ -174,7 +174,7 @@ def session():
 def instruments(request: Request):
     r = _runner(request)
     out = []
-    for inst in all_instruments():
+    for inst in all_instruments(r.owner_id):
         st = r.state.get(inst.key, {})
         out.append({
             "key": inst.key, "name": inst.name, "segment": inst.segment,
@@ -193,7 +193,7 @@ class Toggle(BaseModel):
 
 @router.post("/api/instruments/{key}/toggle")
 def toggle(key: str, body: Toggle, request: Request):
-    if key not in {i.key for i in all_instruments()}:
+    if key not in {i.key for i in all_instruments(_runner(request).owner_id)}:
         return {"error": "unknown instrument"}
     _runner(request).set_enabled(key, body.enabled)
     return {"key": key, "enabled": body.enabled}
@@ -274,7 +274,7 @@ def portfolio_home(request: Request):
     from app.core.instruments import home_instruments
     r = _runner(request)
     out = []
-    for inst in home_instruments():
+    for inst in home_instruments(r.owner_id):
         st = r.state.get(inst.key, {})
         out.append({
             "key": inst.key, "name": inst.name, "segment": inst.segment,
@@ -477,7 +477,7 @@ def signals(request: Request):
             broker_account_id=r.broker_account_id, rolling_days=roll_days)
     out = []
     any_market_open = False
-    for inst in all_instruments():
+    for inst in all_instruments(r.owner_id):
         st = r.state.get(inst.key, {})
         pos = st.get("position")
         budget = _INTERVAL_MINUTES.get(r._interval_for(inst.key), 15) * 60 + _STALE_GRACE_SECONDS
@@ -715,10 +715,11 @@ class ProductBody(BaseModel):
 
 @router.post("/api/instruments/{key}/product")
 def set_product(key: str, body: ProductBody, request: Request):
-    if key not in {i.key for i in all_instruments()}:
+    r = _runner(request)
+    if key not in {i.key for i in all_instruments(r.owner_id)}:
         return {"error": "unknown instrument"}
     try:
-        p = _runner(request).set_product(key, body.product)
+        p = r.set_product(key, body.product)
     except ValueError as e:           # #5: not MIS-eligible -> refuse the intraday assignment
         return {"error": str(e)}
     return {"key": key, "product": p}
@@ -730,9 +731,10 @@ class PriorityBody(BaseModel):
 
 @router.post("/api/instruments/{key}/priority")
 def set_priority(key: str, body: PriorityBody, request: Request):
-    if key not in {i.key for i in all_instruments()}:
+    r = _runner(request)
+    if key not in {i.key for i in all_instruments(r.owner_id)}:
         return {"error": "unknown instrument"}
-    _runner(request).set_priority_flag(key, body.priority_flag)
+    r.set_priority_flag(key, body.priority_flag)
     return {"key": key, "priority_flag": body.priority_flag}
 
 
@@ -742,9 +744,10 @@ class OvertradeBody(BaseModel):
 
 @router.post("/api/instruments/{key}/overtrade")
 def set_overtrade(key: str, body: OvertradeBody, request: Request):
-    if key not in {i.key for i in all_instruments()}:
+    r = _runner(request)
+    if key not in {i.key for i in all_instruments(r.owner_id)}:
         return {"error": "unknown instrument"}
-    _runner(request).set_overtrade_flag(key, body.flag)
+    r.set_overtrade_flag(key, body.flag)
     return {"key": key, "overtrade_flag": body.flag}
 
 
@@ -754,10 +757,11 @@ class StrategyBody(BaseModel):
 
 @router.post("/api/instruments/{key}/strategy")
 def set_strategy(key: str, body: StrategyBody, request: Request):
-    if key not in {i.key for i in all_instruments()}:
+    r = _runner(request)
+    if key not in {i.key for i in all_instruments(r.owner_id)}:
         return {"error": "unknown instrument"}
     try:
-        sk = _runner(request).set_strategy(key, body.strategy_key)
+        sk = r.set_strategy(key, body.strategy_key)
     except AuthorityNotGranted as e:
         # The gate's verdict is consumed here, not re-derived: no namespace test lives in
         # this route. 409 rather than 500 — the assignment is well-formed and the platform
@@ -1067,18 +1071,23 @@ def analytics_split(request: Request, segment: str | None = None):
 # ── websockets ──────────────────────────────────────────────────────────────
 @router.websocket("/ws")
 async def ws_main(ws: WebSocket):
-    from app.api.principal import authenticate_websocket
+    from app.api.principal import authenticate_websocket, is_request_allowed
     principal = await authenticate_websocket(ws)
-    if principal is None:
+    # WS routes bypass HTTP middleware. Close before resolving the local runner,
+    # registering a delivery channel, querying state, or priming a payload.
+    if principal is None or not is_request_allowed(principal, "read:execution"):
+        if principal is not None:
+            await ws.close(code=1008)
         return
     ws.state.principal = principal
-    await manager.connect(ws, accepted=True)
     try:
-        # prime the new client with the current state + recent logs
-        r = _runner(ws)
-        from app.core.logging import log
+        r = local_execution_cell(ws, principal)
+    except HTTPException:
+        await ws.close(code=1008)
+        return
+    await manager.connect(ws, channel=(r.owner_id, r.broker_account_id), accepted=True)
+    try:
         await ws.send_json({"type": "state", "data": r.snapshot_state()})
-        await ws.send_json({"type": "logs", "data": log.recent(120)})
         while True:
             await ws.receive_text()  # keepalive; we only push
     except WebSocketDisconnect:
@@ -1117,12 +1126,19 @@ def _instrument_payload(provider, key: str, book: str, *, owner_id: str,
 
 @router.websocket("/ws/instrument/{key}")
 async def ws_instrument(ws: WebSocket, key: str):
-    from app.api.principal import authenticate_websocket
+    from app.api.principal import authenticate_websocket, is_request_allowed
     principal = await authenticate_websocket(ws)
-    if principal is None:
+    if principal is None or not is_request_allowed(principal, "read:execution"):
+        if principal is not None:
+            await ws.close(code=1008)
         return
     ws.state.principal = principal
-    r = _runner(ws)
+    try:
+        # This precedes get_instrument, position lookup, and price work.
+        r = local_execution_cell(ws, principal)
+    except HTTPException:
+        await ws.close(code=1008)
+        return
     try:
         while True:
             payload = await asyncio.to_thread(

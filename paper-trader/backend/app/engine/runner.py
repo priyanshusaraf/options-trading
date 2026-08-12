@@ -269,7 +269,7 @@ class EngineRunner:
             rows = list(s.scalars(select(InstrumentState).where(
                 InstrumentState.owner_id == self.owner_id)))
             en = {r.instrument_key for r in rows if r.enabled}
-        return en or {i.key for i in all_instruments()}
+        return en or {i.key for i in all_instruments(self.owner_id)}
 
     def set_enabled(self, key: str, enabled: bool) -> None:
         with SessionLocal() as s:
@@ -1707,7 +1707,8 @@ class EngineRunner:
             if self.params.get("option_cache_enabled", True):
                 try:
                     from app.options.cache import persist_chain
-                    persist_chain(chain, inst, now, self.params["option_cache_snapshot_minutes"])
+                    persist_chain(chain, inst, now, self.params["option_cache_snapshot_minutes"],
+                                  provider=self.provider)
                 except Exception as e:
                     log.error(f"option cache persist failed: {e}")
             self.last_pick[key] = {
@@ -2826,7 +2827,7 @@ class EngineRunner:
             try:
                 chain = self.provider.get_option_chain(inst)
                 if chain:
-                    written += persist_chain(chain, inst, now, snap_min)
+                    written += persist_chain(chain, inst, now, snap_min, provider=self.provider)
             except Exception as e:
                 if self.health.should_log_failure("quote"):
                     log.error(f"option cache sweep failed: {e}", instrument=key)

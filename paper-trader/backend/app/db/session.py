@@ -8,7 +8,7 @@ from app.core.config import get_settings
 from app.core import instruments as inst_registry
 from app.db.models import (Base, BrokerAccount, CapitalState, InstrumentState,
                            LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, LEGACY_USER_ID,
-                           Membership, Organization, Position, UniverseInstrument, User)
+                           Membership, Organization, Position, UniverseInstrument, UniversePreference, User)
 from app.engine.charges import compute_charges
 
 _settings = get_settings()
@@ -76,6 +76,14 @@ def _sync_seed_universe(sess) -> None:
         row.has_options = inst.has_options
         row.mock_spot = inst.mock_spot
         row.mock_vol = inst.mock_vol
+
+
+def _ensure_legacy_universe_preferences(sess) -> None:
+    """Preserve legacy choices once; later tenant views are independently scoped."""
+    for row in sess.scalars(select(UniverseInstrument)):
+        if sess.get(UniversePreference, (LEGACY_OWNER_ID, row.key)) is None:
+            sess.add(UniversePreference(owner_id=LEGACY_OWNER_ID, instrument_key=row.key,
+                                        active=row.active, on_home=row.on_home, source=row.source))
 
 
 def _ensure_legacy_tenancy_roots(sess) -> None:
@@ -335,6 +343,7 @@ def init_db(reset: bool = False) -> None:
                                   initial_capital=s.initial_capital,
                                   cash=s.initial_capital, realized_pnl=0.0))
         _sync_seed_universe(sess)
+        _ensure_legacy_universe_preferences(sess)
         sess.commit()
         # enable each active universe instrument for trading by default
         for row in sess.scalars(select(UniverseInstrument)):

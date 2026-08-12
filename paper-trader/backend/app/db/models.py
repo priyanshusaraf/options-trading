@@ -823,6 +823,22 @@ class UniverseInstrument(Base):
     mock_vol: Mapped[float] = mapped_column(Float, default=0.2)
 
 
+class UniversePreference(Base):
+    """One organization's portfolio choices over canonical market instruments."""
+    __tablename__ = "universe_preferences"
+    __table_args__ = (
+        ForeignKeyConstraint(("instrument_key",), ("universe_instruments.key",),
+                             ondelete="RESTRICT", name="fk_universe_preferences_instrument"),
+        Index("ix_universe_preferences_owner", "owner_id"),
+    )
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), primary_key=True)
+    instrument_key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    on_home: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source: Mapped[str] = mapped_column(String(8), default="seed", nullable=False)
+
+
 class Watchlist(Base):
     """A named list bound to exactly ONE strategy. Instruments assigned to an *active*
     watchlist are run by the engine on that watchlist's strategy (overriding the

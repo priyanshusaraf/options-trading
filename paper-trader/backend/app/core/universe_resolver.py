@@ -14,27 +14,36 @@ from app.core.instruments import Instrument
 from app.core.logging import log
 from sqlalchemy import select
 
-from app.db.models import InstrumentState, Position, UniverseInstrument
+from app.db.models import InstrumentState, Position, UniverseInstrument, UniversePreference
 from app.db.session import SessionLocal
 
-# cache of {key: Instrument} resolved from the Kite-built universe, per day
-_catalog: dict[str, Instrument] = {}
-_catalog_day: str | None = None
+# Canonical market catalog cache.  Provider/source identity is part of the key:
+# two feeds can legitimately answer differently for the same calendar day.
+_catalog: dict[tuple[str, str], dict[str, Instrument]] = {}
+
+
+def _provider_source(provider) -> str:
+    """Stable public-data source identity for answer-changing cache keys."""
+    identity = getattr(provider, "source_id", None)
+    if callable(identity):
+        identity = identity()
+    return str(identity or getattr(provider, "name", provider.__class__.__name__))
 
 
 def _build_catalog(provider) -> dict[str, Instrument]:
-    global _catalog, _catalog_day
     import datetime as dt
     today = str(dt.date.today())
-    if _catalog_day == today and _catalog:
-        return _catalog
+    cache_key = (_provider_source(provider), today)
+    cached = _catalog.get(cache_key)
+    if cached is not None:
+        return cached
     from app.backtest.universe import liquid_universe
     try:
         specs = {i.key: i for i in liquid_universe(provider)}
     except Exception as e:
         log.warn(f"universe catalog build failed: {e}")
         specs = {}
-    _catalog, _catalog_day = specs, today
+    _catalog[cache_key] = specs
     return specs
 
 
@@ -81,11 +90,15 @@ def add_instrument(key: str, provider, on_home: bool = True,
                 spot_exchange=spec.spot_exchange, spot_symbol=spec.spot_symbol,
                 option_name=spec.option_name, lot_size=spec.lot_size,
                 strike_step=spec.strike_step, priority=spec.priority,
-                has_options=spec.has_options, source="user", on_home=on_home,
+                has_options=spec.has_options, source="market", on_home=False,
                 active=True, mock_spot=spec.mock_spot, mock_vol=spec.mock_vol))
+        pref = s.get(UniversePreference, (owner_id, key))
+        if pref is None:
+            s.add(UniversePreference(owner_id=owner_id, instrument_key=key,
+                                     active=True, on_home=on_home, source="user"))
         else:
-            row.active = True
-            row.on_home = on_home
+            pref.active = True
+            pref.on_home = on_home
         st = s.get(InstrumentState, (owner_id, key))
         if st is None:
             st = InstrumentState(owner_id=owner_id, instrument_key=key, enabled=True)
@@ -140,14 +153,27 @@ def remove_instrument(key: str, *, owner_id: str, broker_account_id: str) -> dic
                 Position.broker_account_id == broker_account_id,
                 Position.instrument_key == key).limit(1)):
             return {"error": f"'{key}' has an open position — close it before removing"}
-        row.on_home = False
-        if row.source == "user":
-            row.active = False
+        pref = s.get(UniversePreference, (owner_id, key))
+        if pref is None:
+            return {"error": f"'{key}' is not in this portfolio"}
+        pref.on_home = False
+        if pref.source == "user":
+            pref.active = False
         st = s.get(InstrumentState, (owner_id, key))
         if st is not None:
             st.enabled = False
         s.commit()
-        was_user = row.source == "user"
+        was_user = pref.source == "user"
     reg.load_universe()
     log.info(f"removed {key} from portfolio universe (user={was_user})")
     return {"key": key, "removed": True}
+
+
+def composed_universe(owner_id: str) -> list[tuple[UniverseInstrument, UniversePreference]]:
+    """Return canonical facts composed with only this owner's preference rows."""
+    with SessionLocal() as s:
+        return list(s.execute(select(UniverseInstrument, UniversePreference).join(
+            UniversePreference,
+            (UniversePreference.instrument_key == UniverseInstrument.key)
+            & (UniversePreference.owner_id == owner_id),
+        )).all())

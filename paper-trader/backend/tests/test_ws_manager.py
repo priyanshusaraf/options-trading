@@ -26,6 +26,9 @@ from starlette.websockets import WebSocket
 from app.ws.manager import WSManager
 
 
+CHANNEL = ("test-org", "test-account")
+
+
 class FakeWS:
     """Stand-in for a starlette WebSocket. block=True simulates a dead-slow
     client whose TCP window is full: the send never completes.
@@ -94,8 +97,8 @@ def test_wire_bytes_match_starlette_send_json():
         via_manager: list[dict] = []
         m = _mgr()
         ws = _real_ws(via_manager)
-        await m.connect(ws)
-        await m.broadcast(msg)
+        await m.connect(ws, channel=CHANNEL)
+        await m.broadcast(CHANNEL, msg)
         await asyncio.sleep(0.05)
 
         via_starlette: list[dict] = []
@@ -131,11 +134,11 @@ def test_message_is_encoded_once_regardless_of_client_count():
     async def run():
         m = _mgr()
         for _ in range(n_clients):
-            await m.connect(_real_ws([]))
+            await m.connect(_real_ws([]), channel=CHANNEL)
         assert m.client_count() == n_clients
         json.dumps = counting_dumps
         try:
-            await m.broadcast({"type": "state", "data": {"i": 1}})
+            await m.broadcast(CHANNEL, {"type": "state", "data": {"i": 1}})
             await asyncio.sleep(0.1)
         finally:
             json.dumps = real_dumps
@@ -164,9 +167,9 @@ def test_unserialisable_message_evicts_clients_and_never_reaches_producer():
     async def run():
         m = _mgr()
         a, b = FakeWS(), FakeWS()
-        await m.connect(a)
-        await m.connect(b)
-        await m.broadcast(bad)  # must not raise here
+        await m.connect(a, channel=CHANNEL)
+        await m.connect(b, channel=CHANNEL)
+        await m.broadcast(CHANNEL, bad)  # must not raise here
         await asyncio.sleep(0.1)
         clients_after_broadcast = m.client_count()
 
@@ -175,8 +178,8 @@ def test_unserialisable_message_evicts_clients_and_never_reaches_producer():
         asyncio.get_running_loop().set_exception_handler(
             lambda loop, ctx: errors.append(ctx.get("exception") or RuntimeError(ctx["message"]))
         )
-        await m2.connect(FakeWS())
-        threading.Thread(target=lambda: m2.push(bad)).start()
+        await m2.connect(FakeWS(), channel=CHANNEL)
+        threading.Thread(target=lambda: m2.push(CHANNEL, bad)).start()
         await asyncio.sleep(0.2)
         return clients_after_broadcast, errors
 
@@ -191,10 +194,10 @@ def test_broadcast_does_not_block_on_slow_client():
     async def run():
         m = _mgr()
         stuck = FakeWS(block=True)
-        await m.connect(stuck)
+        await m.connect(stuck, channel=CHANNEL)
         t0 = time.monotonic()
         for i in range(50):
-            await m.broadcast({"type": "state", "data": {"i": i}})
+            await m.broadcast(CHANNEL, {"type": "state", "data": {"i": i}})
         return time.monotonic() - t0
 
     elapsed = asyncio.run(run())
@@ -205,11 +208,11 @@ def test_state_snapshots_coalesce_latest_wins():
     async def run():
         m = _mgr()
         ws = FakeWS()
-        await m.connect(ws)
+        await m.connect(ws, channel=CHANNEL)
         # 100 snapshots enqueued back-to-back with no yield between them:
         # the sender must deliver the newest, not the whole backlog.
         for i in range(100):
-            await m.broadcast({"type": "state", "data": {"i": i}})
+            await m.broadcast(CHANNEL, {"type": "state", "data": {"i": i}})
         await asyncio.sleep(0.1)
         return ws.sent
 
@@ -223,9 +226,9 @@ def test_log_buffer_is_bounded_for_stuck_client():
     async def run():
         m = _mgr()
         stuck = FakeWS(block=True)
-        await m.connect(stuck)
+        await m.connect(stuck, channel=CHANNEL)
         for i in range(5000):
-            await m.broadcast({"type": "log", "data": {"i": i}})
+            await m.broadcast(CHANNEL, {"type": "log", "data": {"i": i}})
         # whatever the internal representation, total buffered messages for the
         # client must be bounded well below what was enqueued
         return m.pending_count(stuck)
@@ -241,11 +244,11 @@ def test_slow_client_is_evicted_and_others_keep_receiving():
         m = _mgr()
         m.SEND_TIMEOUT = 0.1
         stuck, healthy = FakeWS(block=True), FakeWS()
-        await m.connect(stuck)
-        await m.connect(healthy)
-        await m.broadcast({"type": "state", "data": {"i": 0}})
+        await m.connect(stuck, channel=CHANNEL)
+        await m.connect(healthy, channel=CHANNEL)
+        await m.broadcast(CHANNEL, {"type": "state", "data": {"i": 0}})
         await asyncio.sleep(0.5)  # > SEND_TIMEOUT — stuck client must be gone
-        await m.broadcast({"type": "state", "data": {"i": 1}})
+        await m.broadcast(CHANNEL, {"type": "state", "data": {"i": 1}})
         await asyncio.sleep(0.1)
         return m.client_count(), healthy.sent
 
@@ -260,11 +263,11 @@ def test_push_from_thread_does_not_flood_the_loop_with_tasks():
     async def run():
         m = _mgr()
         stuck = FakeWS(block=True)
-        await m.connect(stuck)
+        await m.connect(stuck, channel=CHANNEL)
 
         def hammer():
             for i in range(1000):
-                m.push({"type": "log", "data": {"i": i}})
+                m.push(CHANNEL, {"type": "log", "data": {"i": i}})
 
         t = threading.Thread(target=hammer)
         t.start()
@@ -282,9 +285,9 @@ def test_disconnect_stops_sender_and_forgets_client():
     async def run():
         m = _mgr()
         ws = FakeWS()
-        await m.connect(ws)
+        await m.connect(ws, channel=CHANNEL)
         m.disconnect(ws)
-        await m.broadcast({"type": "state", "data": {"i": 0}})
+        await m.broadcast(CHANNEL, {"type": "state", "data": {"i": 0}})
         await asyncio.sleep(0.05)
         return m.client_count(), ws.sent
 
