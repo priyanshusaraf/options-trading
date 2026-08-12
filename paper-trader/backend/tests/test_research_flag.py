@@ -104,6 +104,23 @@ def test_lifespan_registers_generated_strategies_when_enabled(monkeypatch):
     assert calls[0][1] == LEGACY_OWNER_ID
 
 
+def test_lifespan_hydrates_every_execution_owner_before_restart_dispatch(monkeypatch):
+    """A non-legacy tenant's generated deployment must resolve after a process restart."""
+    from app.db.models import Organization, BacktestRun
+    from app.db.session import SessionLocal
+    import app.main as main_module
+
+    init_db(reset=True)
+    with SessionLocal() as session:
+        session.add(Organization(organization_id="tenant", name="Tenant")); session.flush()
+        session.add(BacktestRun(owner_id="tenant", status="pending", scope="liquid")); session.commit()
+    calls = _spy_register_all(monkeypatch)
+    monkeypatch.setattr(main_module, "init_db", lambda *, reset: None)
+    with TestClient(app):
+        pass
+    assert {owner for _, owner in calls} >= {"owner", "tenant"}
+
+
 def test_disabled_research_startup_evicts_a_corrupt_legacy_generated_artifact(monkeypatch):
     import json
 

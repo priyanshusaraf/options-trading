@@ -58,6 +58,8 @@ def claim_run(session, *, owner_id: str, run_id: int, claimed_by: str,
             attempt_count=BacktestRun.attempt_count + 1))
     if result.rowcount != 1:
         return None
+    # An expired running row is a genuine takeover; a pending row is its first
+    # admission.  This durable counter is derived from attempt_count in metrics.
     return get_run(session, owner_id=owner_id, run_id=run_id)
 
 
@@ -91,6 +93,23 @@ def heartbeat_claim(session, *, owner_id: str, run_id: int, claim_token: str,
         _active_claim(owner_id, run_id, claim_token, moment)).values(
             heartbeat_at=moment,
             claim_expires_at=moment + dt.timedelta(seconds=max(1, int(lease_seconds)))))
+    return result.rowcount == 1
+
+
+def release_claim(session, *, owner_id: str, run_id: int, claim_token: str,
+                  note: str, now: dt.datetime | None = None) -> bool:
+    """Return a current claim to the queue without pretending the run failed.
+
+    Used when a restart cannot obtain the immutable execution artifact named by a
+    descriptor.  The same fence as all writers prevents an old dispatcher from
+    releasing a newer worker's claim.
+    """
+    moment = _clock(now)
+    result = session.execute(update(BacktestRun).where(
+        _active_claim(owner_id, run_id, claim_token, moment)).values(
+            status="pending", claim_token=None, claimed_by=None,
+            claim_expires_at=None, heartbeat_at=None, queued_at=moment,
+            note=note[:400]))
     return result.rowcount == 1
 
 

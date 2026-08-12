@@ -17,6 +17,7 @@ from app.backtest import repository
 from app.backtest import sweep
 from app.db.models import BacktestResult, BacktestRun, Organization
 from app.db.session import SessionLocal, init_db
+from app.strategy.registry import resolve_strategy
 
 
 def _run(owner_id: str, *, total: int = 2) -> int:
@@ -191,7 +192,9 @@ def test_restart_dispatch_claims_pending_descriptor_without_provider_object(monk
         "scope": "liquid", "intervals": ["day"], "capital": 1.0,
         "instruments": ["NIFTY"], "lookback_days": None,
         "start_date": None, "end_date": None,
-        "strategies": ["trend_impulse_v3"], "pinned_datasets": {}, "workers": 1,
+        "strategies": [sweep._strategy_descriptor(
+            resolve_strategy("trend_impulse_v3", owner_id="owner"))],
+        "pinned_datasets": {}, "workers": 1,
     }
     with SessionLocal() as session:
         run = repository.enqueue_run(session, owner_id="owner", scope="liquid",
@@ -210,6 +213,62 @@ def test_restart_dispatch_claims_pending_descriptor_without_provider_object(monk
     assert claimed.status == "running" and claimed.claim_token is not None
 
 
+def test_descriptor_strategy_identity_refuses_a_republished_key_without_terminalizing():
+    """Restart must never reinterpret a persisted key as its newer executable bytes."""
+    init_db(reset=True)
+    descriptor = {"strategies": [{"key": "trend_impulse_v3", "version": "not-current"}]}
+    try:
+        sweep._resolve_descriptor_strategies(owner_id="owner", descriptor=descriptor)
+    except sweep.ReplayUnavailable as exc:
+        assert "version" in str(exc)
+    else:
+        raise AssertionError("a descriptor must pin executable strategy version")
+
+
+def test_unavailable_replay_artifact_releases_only_its_current_claim():
+    """An unavailable artifact is pending work, not a fabricated terminal failure."""
+    init_db(reset=True)
+    run_id = _run("owner")
+    with SessionLocal() as session:
+        claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
+                                     claimed_by="dispatcher")
+        session.commit()
+    assert claim is not None
+    with SessionLocal() as session:
+        assert repository.release_claim(session, owner_id="owner", run_id=run_id,
+                                        claim_token=claim.claim_token,
+                                        note="waiting for pinned strategy artifact")
+        session.commit()
+    with SessionLocal() as session:
+        run = repository.get_run(session, owner_id="owner", run_id=run_id)
+    assert run.status == "pending" and run.claim_token is None
+
+
+def test_exact_total_must_pass_admission_again_after_universe_resolution(monkeypatch):
+    """A conservative reservation is not permission to exceed the real cell budget."""
+    init_db(reset=True)
+    settings = type("Settings", (), {
+        "backtest_host_active_jobs": 2, "backtest_owner_active_jobs": 2,
+        "backtest_owner_queued_jobs": 2, "backtest_host_requested_cells": 1,
+        "backtest_host_worker_slots": 2, "backtest_claim_lease_seconds": 30,
+        "backtest_sweep_workers": 1, "backtest_slippage_pct": 0.0,
+    })()
+    monkeypatch.setattr(sweep, "get_settings", lambda: settings)
+    monkeypatch.setattr(sweep, "_conservative_cell_estimate", lambda **_kw: 1)
+    class _Provider: pass
+    monkeypatch.setattr(sweep, "liquid_universe", lambda _p: [object(), object()])
+    try:
+        sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=None,
+                          provider=_Provider())
+    except sweep.WorkloadAdmissionError as exc:
+        assert exc.reason == "host_requested_cells"
+    else:
+        raise AssertionError("expanded exact workload must be rejected before launch")
+    with SessionLocal() as session:
+        run = repository.latest_run(session, owner_id="owner")
+    assert run.status == "error" and run.total == 1
+
+
 def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch):
     """A startup dispatcher restricted to the legacy owner strands tenant work."""
     init_db(reset=True)
@@ -219,7 +278,8 @@ def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch):
                                      intervals="day", capital=1.0, total=1,
                                      request_json=__import__("json").dumps({
                                          "scope": "liquid", "intervals": ["day"], "capital": 1.0,
-                                         "instruments": ["NIFTY"], "strategies": ["trend_impulse_v3"],
+                                         "instruments": ["NIFTY"], "strategies": [sweep._strategy_descriptor(
+                                             resolve_strategy("trend_impulse_v3", owner_id="tenant"))],
                                          "pinned_datasets": {}, "workers": 1}))
         session.commit()
     class _Thread:
@@ -240,6 +300,17 @@ def test_measurement_snapshot_reports_state_without_product_user_limit():
     assert snapshot["queued_jobs"] == 1
     assert snapshot["reserved_cells"] == 37
     assert snapshot["active_jobs"] == 0
+
+
+def test_measurement_snapshot_records_bounded_scheduler_measurements(monkeypatch):
+    """The scheduler exposes observed counters, never an invented capacity claim."""
+    init_db(reset=True)
+    before = sweep.measurement_snapshot(owner_id="owner")
+    sweep._measure("provider_reads")
+    sweep._measure_set("inflight_datasets", 0)
+    after = sweep.measurement_snapshot(owner_id="owner")
+    assert after["provider_reads"] == before["provider_reads"] + 1
+    assert after["inflight_datasets"] == 0
 
 
 def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):

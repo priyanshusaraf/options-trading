@@ -69,11 +69,6 @@ async def lifespan(app: FastAPI):
     init_db(reset=settings.provider == "mock")
     # Backtest workers are intentionally replaceable. Reclaim only expired/pending
     # durable claims; a non-expired remote lease is never inferred dead.
-    try:
-        from app.backtest.sweep import dispatch_all_reclaimable
-        dispatch_all_reclaimable()
-    except Exception as e:
-        log.error(f"backtest restart dispatch failed: {e}")
     if settings.provider == "kite":
         from app.engine.broker_factory import live_execution_enabled
         if live_execution_enabled():
@@ -86,14 +81,29 @@ async def lifespan(app: FastAPI):
     # the real strategy instead of halting as unresolvable. Execution hydration is not a
     # research operation: deployed assignments must keep resolving when the research UI
     # is disabled, and corrupt current rows must evict stale executable bytes.
-    from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
+    from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID, BacktestRun
     try:
         from app.core.generated_strategies import register_all
         from app.db.session import SessionLocal
+        from sqlalchemy import select
         with SessionLocal() as s:
-            register_all(s, owner_id=LEGACY_OWNER_ID)
+            # Backtest restart dispatch may need any tenant's generated artifact.
+            # Hydrate all execution-plane owners before dispatcher claims work.
+            # Bound startup work to owners with durable work to reconstruct;
+            # loading every tenant partition into one process is neither needed
+            # nor safe at scale. Live runners hydrate their own owner separately.
+            owners = set(s.scalars(select(BacktestRun.owner_id).where(
+                BacktestRun.status.in_(("pending", "running"))).distinct()))
+            owners.add(LEGACY_OWNER_ID)
+            for owner_id in sorted(owners):
+                register_all(s, owner_id=owner_id)
     except Exception as e:
         log.error(f"generated-strategy registration failed at startup: {e}")
+    try:
+        from app.backtest.sweep import dispatch_all_reclaimable
+        dispatch_all_reclaimable()
+    except Exception as e:
+        log.error(f"backtest restart dispatch failed: {e}")
     if not settings.research_enabled:
         log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — portfolio/research "
                  "API is gated off; deployed execution artifacts remain hydrated")

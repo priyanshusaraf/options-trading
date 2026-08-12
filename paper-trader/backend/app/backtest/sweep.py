@@ -55,6 +55,8 @@ MAX_DAYS = {
 }
 DEFAULT_INTERVALS = ["minute", "5minute", "15minute", "30minute", "60minute", "day"]
 MIN_BARS = 60
+MAX_REPLAY_DESCRIPTOR_BYTES = 256 * 1024
+MAX_REPLAY_ARTIFACT_BYTES = 128 * 1024
 
 # Preset lookback windows (days) the UI offers; None = "entire available history".
 PRESET_DAYS = {"1w": 7, "2w": 14, "1m": 30, "3m": 90, "6m": 180,
@@ -218,6 +220,23 @@ _LeaseThread = threading.Thread  # tests may replace launch threads; lease safet
 _workers: dict[int, threading.Thread] = {}
 _running = False  # legacy observability only; never use for admission.
 _worker: "threading.Thread | None" = None  # legacy _join helper compatibility.
+_measure_lock = threading.Lock()
+_measurements: dict[str, int | float] = {
+    "provider_reads": 0, "dataset_store_reads": 0, "batch_persists": 0,
+    "claim_takeovers": 0, "rejections": 0, "inflight_datasets": 0,
+    "active_process_pools": 0, "db_lock_wait_seconds": 0.0,
+    "claim_latency_seconds": 0.0, "takeover_age_seconds": 0.0,
+}
+
+
+def _measure(name: str, value: int | float = 1) -> None:
+    with _measure_lock:
+        _measurements[name] = _measurements.get(name, 0) + value
+
+
+def _measure_set(name: str, value: int | float) -> None:
+    with _measure_lock:
+        _measurements[name] = value
 
 
 @dataclass(frozen=True)
@@ -274,6 +293,15 @@ class ClaimLost(RuntimeError):
     """The durable token was cancelled, replaced, or allowed to expire."""
 
 
+class ReplayUnavailable(RuntimeError):
+    """A durable descriptor cannot be reconstructed without changing its meaning.
+
+    This is deliberately distinct from a malformed request.  A missing immutable
+    artifact is a recoverable availability state: the dispatcher returns the claim
+    to the queue instead of writing an "error" result for a strategy it did not run.
+    """
+
+
 class _ClaimGuard:
     """Own lease liveness without ever sharing a SQLAlchemy Session across threads."""
     def __init__(self, *, owner_id: str, run_id: int, claim_token: str):
@@ -323,7 +351,8 @@ class _ClaimGuard:
             self._thread.join(timeout=max(1.0, float(get_settings().backtest_claim_lease_seconds)))
 
 
-def _admit_workload(*, owner_id: str, total: int, workers: int, session=None) -> None:
+def _admit_workload(*, owner_id: str, total: int, workers: int, session=None,
+                    excluding_run_id: int | None = None) -> None:
     """Check host and tenant pressure from durable rows before any data read.
 
     Limits are deployment configuration, not customer count. SQLite gets simple
@@ -335,29 +364,35 @@ def _admit_workload(*, owner_id: str, total: int, workers: int, session=None) ->
     if owns_session:
         session = SessionLocal()
     try:
+        scope = [] if excluding_run_id is None else [BacktestRun.id != excluding_run_id]
         active = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
-            BacktestRun.status == "running")) or 0)
+            *scope, BacktestRun.status == "running")) or 0)
         owner_active = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
-            BacktestRun.owner_id == owner_id, BacktestRun.status == "running")) or 0)
+            *scope, BacktestRun.owner_id == owner_id, BacktestRun.status == "running")) or 0)
         owner_queued = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
-            BacktestRun.owner_id == owner_id, BacktestRun.status == "pending")) or 0)
+            *scope, BacktestRun.owner_id == owner_id, BacktestRun.status == "pending")) or 0)
         reserved_cells = int(session.scalar(select(func.coalesce(func.sum(BacktestRun.total), 0)).where(
-            BacktestRun.status.in_(("pending", "running")))) or 0)
+            *scope, BacktestRun.status.in_(("pending", "running")))) or 0)
         reserved_workers = int(session.scalar(select(func.coalesce(func.sum(
             BacktestRun.requested_workers), 0)).where(
-                BacktestRun.status.in_(("pending", "running")))) or 0)
+            *scope, BacktestRun.status.in_(("pending", "running")))) or 0)
     finally:
         if owns_session:
             session.close()
     if active >= max(0, settings.backtest_host_active_jobs):
+        _measure("rejections")
         raise WorkloadAdmissionError("host_active_jobs")
     if owner_active >= max(0, settings.backtest_owner_active_jobs):
+        _measure("rejections")
         raise WorkloadAdmissionError("owner_active_jobs")
     if owner_queued >= max(0, settings.backtest_owner_queued_jobs):
+        _measure("rejections")
         raise WorkloadAdmissionError("owner_queued_jobs")
     if reserved_cells + total > max(0, settings.backtest_host_requested_cells):
+        _measure("rejections")
         raise WorkloadAdmissionError("host_requested_cells")
     if reserved_workers + workers > max(0, settings.backtest_host_worker_slots):
+        _measure("rejections")
         raise WorkloadAdmissionError("host_worker_slots")
 
 
@@ -387,7 +422,8 @@ def measurement_snapshot(*, owner_id: str | None = None, session=None) -> dict[s
                 "reserved_worker_slots": workers,
                 "queue_age_seconds": max(0.0, (now - oldest).total_seconds()) if oldest else 0.0,
                 "heartbeat_age_seconds": max(0.0, (now - heartbeat).total_seconds()) if heartbeat else 0.0,
-                "local_worker_threads": sum(thread.is_alive() for thread in _workers.values())}
+                "local_worker_threads": sum(thread.is_alive() for thread in _workers.values()),
+                **dict(_measurements)}
     finally:
         if owns_session:
             session.close()
@@ -403,6 +439,77 @@ def _conservative_cell_estimate(*, scope: str, instruments: list[str] | None,
         universe = (settings.backtest_full_universe_upper_bound if scope == "full"
                     else settings.backtest_liquid_universe_upper_bound)
     return max(0, universe) * len(intervals) * max(1, strategies)
+
+
+def _strategy_descriptor(strategy, *, owner_id: str | None = None) -> dict[str, str]:
+    """Persist the execution identity, never just a mutable registry key."""
+    descriptor = {"key": strategy.key, "version": strategy.version}
+    # Generated keys are mutable database names. Persist the reviewed composition
+    # itself with the run so a later republish cannot make recovery execute newer
+    # bytes under the previous run's identity.  The payload is validated again at
+    # dispatch; it contains neither credentials nor a provider object.
+    if owner_id is not None:
+        from app.strategy.registry import is_generated_key
+        if is_generated_key(strategy.key):
+            from app.core.generated_strategies import list_generated
+            with SessionLocal() as session:
+                rows = {row.key: row for row in list_generated(session, owner_id=owner_id)}
+            row = rows.get(strategy.key)
+            if row is None or row.version != strategy.version:
+                raise ReplayUnavailable(
+                    f"generated strategy artifact disappeared during admission: {strategy.key}")
+            descriptor["composition_json"] = row.composition_json
+    return descriptor
+
+
+def _resolve_descriptor_strategies(*, owner_id: str, descriptor: dict):
+    """Resolve only strategies whose immutable identity still matches the run.
+
+    A key may be republished between an interrupted run and its replacement.  A
+    replacement worker must fail closed rather than generate results under the old
+    label from the new bytes.  Generated artifacts are hydrated by the caller before
+    this check; future historical artifact storage can extend the descriptor with an
+    explicit immutable payload without weakening this invariant.
+    """
+    from app.strategy.registry import StrategyNotFound, resolve_strategy
+    requested = descriptor.get("strategies", [])
+    if not isinstance(requested, list) or not requested:
+        raise ValueError("descriptor lacks strategy artifacts")
+    resolved = []
+    for artifact in requested:
+        if not isinstance(artifact, dict):
+            raise ReplayUnavailable("unversioned legacy strategy descriptor")
+        key, version = artifact.get("key"), artifact.get("version")
+        if not isinstance(key, str) or not key or not isinstance(version, str) or not version:
+            raise ValueError("descriptor strategy artifact lacks key or version")
+        composition_json = artifact.get("composition_json")
+        if composition_json is not None:
+            if not isinstance(composition_json, str) or len(composition_json.encode()) > MAX_REPLAY_ARTIFACT_BYTES:
+                raise ValueError("descriptor generated artifact is not text")
+            try:
+                from app.core.generated_strategies import generated_version
+                from research.strategy.builder.grammar import Composition
+                from research.strategy.builder.load import build_strategy
+                composition = Composition.from_dict(json.loads(composition_json))
+                strategy = build_strategy(composition)
+                strategy.pin_version(generated_version(
+                    composition, default_params=getattr(strategy, "default_params", None),
+                    risk_model=getattr(strategy, "risk_model", None)))
+            except Exception as exc:
+                raise ReplayUnavailable(f"strategy artifact unavailable: {key}") from exc
+            if strategy.key != key:
+                raise ReplayUnavailable(f"strategy artifact key changed: {key}")
+        else:
+            try:
+                strategy = resolve_strategy(key, owner_id=owner_id)
+            except StrategyNotFound as exc:
+                raise ReplayUnavailable(f"strategy artifact unavailable: {key}") from exc
+        if strategy.version != version:
+            raise ReplayUnavailable(
+                f"strategy artifact version unavailable: {key} requested {version}, "
+                f"available {strategy.version}")
+        resolved.append(strategy)
+    return resolved
 
 
 def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | None = None,
@@ -453,6 +560,12 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 strat_objs.append(strat)
         if not strat_objs:
             strat_objs = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
+        # A historical generated composition is reconstructed in this process for
+        # an exact replay.  Do not hand it to spawned workers through their mutable
+        # owner registry; serial replay is slower but preserves the recorded bytes.
+        from app.strategy.registry import is_generated_key
+        if any(is_generated_key(strategy.key) for strategy in strat_objs):
+            worker_count = 1
         win = {"lookback_days": lookback_days, "start": start_date, "end": end_date,
                "label": window_label(lookback_days, start_date, end_date)}
         # Must happen before provider/universe I/O or thread/pool creation.  The
@@ -466,7 +579,9 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         # observes this row before it can pass the same host budget.
         strat_label = "×".join(st.key for st in strat_objs)
         with SessionLocal() as s:
+            lock_started = time.monotonic()
             s.execute(text("BEGIN IMMEDIATE"))
+            _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
             _admit_workload(owner_id=owner_id, total=total, workers=worker_count, session=s)
             run = repository.enqueue_run(
                 s, owner_id=owner_id, scope=scope,
@@ -479,7 +594,8 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                     "scope": scope, "intervals": intervals, "capital": capital,
                     "instruments": sorted({i.strip() for i in (instruments or []) if i.strip()}),
                     "lookback_days": lookback_days, "start_date": start_date,
-                    "end_date": end_date, "strategies": [st.key for st in strat_objs],
+                    "end_date": end_date,
+                    "strategies": [_strategy_descriptor(st, owner_id=owner_id) for st in strat_objs],
                     # A pin is a content address, not provider state or a credential.
                     "pinned_datasets": pinned or {}, "workers": worker_count,
                 }, sort_keys=True, separators=(",", ":")),
@@ -509,10 +625,19 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                     raise RuntimeError(f"none of the requested instruments exist: {sorted(want)}")
             exact_total = len(specs) * len(intervals) * len(strat_objs)
             with SessionLocal() as resolved:
+                # Resolution can expand beyond the conservative configured bound.
+                # Re-check the exact reservation inside the same writer decision
+                # that publishes it, excluding this run's old reservation.
+                lock_started = time.monotonic()
+                resolved.execute(text("BEGIN IMMEDIATE"))
+                _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
                 active = repository.get_run(resolved, owner_id=owner_id, run_id=run_id)
                 if (active is None or active.claim_token != claim.claim_token
                         or active.status != "running"):
                     raise ClaimLost("admitted run lost its claim during resolution")
+                _admit_workload(owner_id=owner_id, total=exact_total,
+                                workers=worker_count, session=resolved,
+                                excluding_run_id=run_id)
                 active.total = exact_total
                 active.instruments = ",".join(i.key for i in specs) if instruments else ""
                 active.note = (f"{len(specs)} instruments × {len(intervals)} intervals "
@@ -637,21 +762,51 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
     launched: list[int] = []
     for _ in range(limit):
         with SessionLocal() as session:
+            lock_started = time.monotonic()
+            session.execute(text("BEGIN IMMEDIATE"))
+            _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
+            claim_started = time.monotonic()
             claim = repository.claim_next_run(
                 session, owner_id=owner_id,
                 claimed_by=f"dispatcher:{threading.get_ident()}",
                 lease_seconds=get_settings().backtest_claim_lease_seconds)
             if claim is None:
                 break
+            # Replacement consumes the same budget as a fresh run.  This must be
+            # decided before provider reconstruction, pool creation, or any I/O.
+            try:
+                _admit_workload(owner_id=owner_id, total=claim.total,
+                                workers=claim.requested_workers, session=session,
+                                excluding_run_id=claim.id)
+            except WorkloadAdmissionError as exc:
+                repository.release_claim(session, owner_id=owner_id, run_id=claim.id,
+                                         claim_token=claim.claim_token,
+                                         note=f"waiting for scheduler capacity: {exc.reason}")
+                session.commit()
+                break
             session.commit()
+        _measure("claim_latency_seconds", time.monotonic() - claim_started)
+        if claim.attempt_count > 1:
+            _measure("claim_takeovers")
+            if claim.queued_at:
+                _measure("takeover_age_seconds", max(0.0, (
+                    dt.datetime.now() - claim.queued_at).total_seconds()))
         try:
+            if len((claim.request_json or "").encode()) > MAX_REPLAY_DESCRIPTOR_BYTES:
+                raise ValueError("descriptor exceeds durable replay size limit")
             descriptor = json.loads(claim.request_json or "")
             if not isinstance(descriptor, dict):
                 raise ValueError("descriptor is not an object")
             intervals = [value for value in descriptor.get("intervals", []) if value in MAX_DAYS]
-            strategy_keys = [value for value in descriptor.get("strategies", []) if isinstance(value, str)]
-            if not intervals or not strategy_keys:
+            if not intervals or not descriptor.get("strategies"):
                 raise ValueError("descriptor lacks intervals or strategies")
+            # Do this before provider I/O. A generated owner partition is rebuilt
+            # from execution-plane rows; no research DB is consulted at replay.
+            from app.core.generated_strategies import register_all
+            with SessionLocal() as hydrate:
+                register_all(hydrate, owner_id=owner_id)
+            strategies = _resolve_descriptor_strategies(owner_id=owner_id,
+                                                        descriptor=descriptor)
             provider = get_provider()
             scope = descriptor.get("scope", "liquid")
             specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
@@ -660,13 +815,15 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 specs = [instrument for instrument in specs if instrument.key in requested]
             if not specs:
                 raise ValueError("descriptor resolves no instruments")
-            strategies = [resolve_strategy(key, owner_id=owner_id) for key in strategy_keys]
             win = {"lookback_days": descriptor.get("lookback_days"),
                    "start": descriptor.get("start_date"), "end": descriptor.get("end_date"),
                    "label": window_label(descriptor.get("lookback_days"),
                                          descriptor.get("start_date"), descriptor.get("end_date"))}
             pinned = normalize_pinned_datasets(descriptor.get("pinned_datasets") or {}) or None
             workers = _worker_count(descriptor.get("workers"))
+            if any(isinstance(item, dict) and item.get("composition_json") is not None
+                   for item in descriptor["strategies"]):
+                workers = 1
             thread = threading.Thread(
                 target=_run,
                 args=(claim.id, provider, specs, intervals, float(descriptor.get("capital", claim.capital)),
@@ -676,6 +833,17 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 _workers[claim.id] = thread
             thread.start()
             launched.append(claim.id)
+        except ReplayUnavailable as exc:
+            with _state_lock:
+                _workers.pop(claim.id, None)
+            with SessionLocal() as session:
+                repository.release_claim(session, owner_id=owner_id, run_id=claim.id,
+                                         claim_token=claim.claim_token,
+                                         note=f"waiting for pinned strategy artifact: {exc}")
+                session.commit()
+            # The next queued job may still be runnable; do not let one unavailable
+            # artifact monopolize this bounded dispatch pass.
+            continue
         except Exception as exc:
             with _state_lock:
                 _workers.pop(claim.id, None)
@@ -968,6 +1136,7 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
     pending: deque = deque()
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+        _measure_set("active_process_pools", 1)
         for inst in specs:
             if guard is not None:
                 guard.ensure_active()
@@ -993,6 +1162,7 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     guard.ensure_active()
                 future = pool.submit(task, payload) if payload else None
                 pending.append((future, slots))
+                _measure_set("inflight_datasets", len(pending))
                 # `prepared` (and its lazily-built frame) is dropped here: the
                 # parent never holds a dataset past its submission.
                 del prepared, payload
@@ -1000,12 +1170,16 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     if guard is not None:
                         guard.ensure_active()
                     future, slots = pending.popleft()
+                    _measure_set("inflight_datasets", len(pending))
                     yield from _drain(slots, future)
         while pending:
             if guard is not None:
                 guard.ensure_active()
             future, slots = pending.popleft()
+            _measure_set("inflight_datasets", len(pending))
             yield from _drain(slots, future)
+    _measure_set("active_process_pools", 0)
+    _measure_set("inflight_datasets", 0)
 
 
 def _prepare_dataset(provider, inst, interval, win, *,
@@ -1030,6 +1204,7 @@ def _prepare_dataset(provider, inst, interval, win, *,
     requested_window = _requested_window(interval, win)
     days = _fetch_days(interval, win.get("lookback_days"), start, end)
     try:
+        _measure("provider_reads")
         candles = provider.get_candles(inst, interval, days, end=end) \
             if _supports_end(provider) else provider.get_candles(inst, interval, days)
     except Exception as e:
@@ -1113,8 +1288,11 @@ def _pinned_dataset(provider, inst, interval, win, pinned, *,
         return _PreparedDataset(
             clamped=clamped,
             error=f"pinned run: no dataset address pinned for {key}")
+    def read_store(address):
+        _measure("dataset_store_reads")
+        return dataset_store.get_store().get(address)
     return _pinned_dataset_from_store(
-        lambda a: dataset_store.get_store().get(a),
+        read_store,
         address=address, key=key,
         provider_identity=source_identity(provider,
                                           fields=PROVIDER_IDENTITY_FIELDS),
@@ -1478,6 +1656,8 @@ def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
                 values=values, lease_seconds=get_settings().backtest_claim_lease_seconds):
             session.rollback()
             return False
+        if values:
+            _measure("batch_persists")
         if status:
             if repository.is_cancel_requested(session, owner_id=owner_id, run_id=run_id,
                                               claim_token=claim_token):
