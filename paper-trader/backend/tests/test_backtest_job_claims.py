@@ -476,6 +476,61 @@ def test_reconciliation_only_requeues_expired_claims():
         assert live.status == "running" and live.claimed_by == "live"
 
 
+def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeypatch):
+    """Requeueing an expired cancellation strands an unclaimable queue row."""
+    init_db(reset=True)
+    cancelled_id, retry_id = _run("owner", total=2), _run("owner")
+    now = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
+    with SessionLocal() as session:
+        cancelled = repository.claim_run(
+            session, owner_id="owner", run_id=cancelled_id, claimed_by="cancelled",
+            now=now, lease_seconds=1)
+        retry = repository.claim_run(
+            session, owner_id="owner", run_id=retry_id, claimed_by="retry",
+            now=now, lease_seconds=1)
+        assert cancelled is not None and retry is not None
+        assert repository.append_claimed_result_batch(
+            session, owner_id="owner", run_id=cancelled_id,
+            claim_token=cancelled.claim_token, values=[_value("NIFTY")],
+            now=now + dt.timedelta(milliseconds=100), lease_seconds=1)
+        assert repository.request_cancel(
+            session, owner_id="owner", run_id=cancelled_id,
+            now=now + dt.timedelta(milliseconds=200))
+        session.commit()
+
+    recovered_at = now + dt.timedelta(seconds=2)
+    with SessionLocal() as session:
+        assert repository.reconcile_expired_claims(
+            session, owner_id="owner", now=recovered_at) == 2
+        session.commit()
+
+    with SessionLocal() as session:
+        cancelled = repository.get_run(session, owner_id="owner", run_id=cancelled_id)
+        retry = repository.get_run(session, owner_id="owner", run_id=retry_id)
+        assert (cancelled.status, cancelled.done) == ("cancelled", 1)
+        assert cancelled.completed_at == recovered_at.replace(tzinfo=None)
+        assert (cancelled.claim_token, cancelled.claimed_by,
+                cancelled.claim_expires_at, cancelled.heartbeat_at) == (None, None, None, None)
+        assert cancelled.cancel_requested_at is not None
+        assert (retry.status, retry.claim_token, retry.cancel_requested_at) == ("pending", None, None)
+
+    settings = type("Settings", (), {
+        "backtest_host_active_jobs": 1, "backtest_owner_active_jobs": 1,
+        "backtest_owner_queued_jobs": 2, "backtest_host_requested_cells": 3,
+        "backtest_host_worker_slots": 2,
+    })()
+    monkeypatch.setattr(sweep, "get_settings", lambda: settings)
+    with SessionLocal() as session:
+        sweep._admit_workload(owner_id="owner", total=1, workers=1, session=session)
+        replacement = repository.claim_next_run(
+            session, owner_id="owner", claimed_by="replacement", now=recovered_at)
+        session.commit()
+    assert replacement is not None and replacement.id == retry_id
+    with SessionLocal() as session:
+        assert repository.claim_next_run(
+            session, owner_id="owner", claimed_by="another", now=recovered_at) is None
+
+
 def test_repository_does_not_export_an_unfenced_running_run_reconciler():
     """A live lease must be recoverable only through expiry or its own token."""
     assert not hasattr(repository, "reconcile_stale_runs")

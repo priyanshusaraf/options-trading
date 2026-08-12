@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 
 from app.db.models import BacktestResult, BacktestRun
 
@@ -357,14 +357,25 @@ def is_cancel_requested(session, *, owner_id: str, run_id: int,
 
 def reconcile_expired_claims(session, *, owner_id: str,
                              now: dt.datetime | None = None) -> int:
-    """Requeue only expired leases; a live process is never inferred dead."""
+    """Resolve only expired leases; a live process is never inferred dead."""
     moment = _clock(now)
     result = session.execute(update(BacktestRun).where(
         BacktestRun.owner_id == owner_id, BacktestRun.status == "running",
-        BacktestRun.claim_expires_at.is_not(None), BacktestRun.claim_expires_at <= moment).values(
-            status="pending", claim_token=None, claimed_by=None,
+        BacktestRun.claim_token.is_not(None), BacktestRun.claim_expires_at.is_not(None),
+        BacktestRun.claim_expires_at <= moment).values(
+            status=case((BacktestRun.cancel_requested_at.is_not(None), "cancelled"),
+                        else_="pending"),
+            completed_at=case((BacktestRun.cancel_requested_at.is_not(None), moment),
+                              else_=BacktestRun.completed_at),
+            claim_token=None, claimed_by=None,
             claim_expires_at=None, heartbeat_at=None,
-            note="interrupted: expired worker claim; durable progress retained"))
+            cancel_requested_at=case(
+                (BacktestRun.cancel_requested_at.is_not(None),
+                 BacktestRun.cancel_requested_at), else_=None),
+            note=case(
+                (BacktestRun.cancel_requested_at.is_not(None),
+                 "cancelled: worker claim expired after cancellation request; durable progress retained"),
+                else_="interrupted: expired worker claim; durable progress retained")))
     reclaimed = int(result.rowcount or 0)
     # A pre-0025 row cannot name any worker or lease. It is historical phantom
     # state, not an expired live claim; preserve its results but make its outcome

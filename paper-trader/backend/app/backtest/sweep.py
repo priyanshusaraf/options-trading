@@ -565,8 +565,9 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 start_date: str | None = None, end_date: str | None = None,
                 strategies: list[str] | None = None,
                 pinned_datasets=None, workers: int | None = None) -> int:
-    """Create a run row, resolve the universe, launch the background thread.
-    Returns the new run id. Raises if a sweep is already in flight.
+    """Create a run row, resolve the universe, launch its background thread.
+    Returns the new durable run id. Independent sweeps may run concurrently,
+    subject to the configured host and owner workload limits.
 
     `instruments`  — restrict the sweep to these instrument keys (e.g. just
                      GOLD/SILVER/COPPER); None/empty = the whole scope.
