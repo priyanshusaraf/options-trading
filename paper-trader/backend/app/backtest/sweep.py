@@ -18,6 +18,7 @@ import datetime as dt
 from sqlalchemy import func, select, text
 import json
 import threading
+import time
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -213,6 +214,7 @@ def resolve_pinned_datasets(provider, instruments, intervals, *,
 # Local threads are observability/cleanup only.  Durable run claims are the
 # write/admission authority, so another process may safely run unrelated work.
 _state_lock = threading.Lock()
+_LeaseThread = threading.Thread  # tests may replace launch threads; lease safety must remain real.
 _workers: dict[int, threading.Thread] = {}
 _running = False  # legacy observability only; never use for admission.
 _worker: "threading.Thread | None" = None  # legacy _join helper compatibility.
@@ -268,6 +270,59 @@ class WorkloadAdmissionError(RuntimeError):
         super().__init__(f"backtest workload rejected: {reason}")
 
 
+class ClaimLost(RuntimeError):
+    """The durable token was cancelled, replaced, or allowed to expire."""
+
+
+class _ClaimGuard:
+    """Own lease liveness without ever sharing a SQLAlchemy Session across threads."""
+    def __init__(self, *, owner_id: str, run_id: int, claim_token: str):
+        self.owner_id, self.run_id, self.claim_token = owner_id, run_id, claim_token
+        self._lost = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def ensure_active(self) -> None:
+        if self._lost.is_set():
+            raise ClaimLost("backtest claim is no longer active")
+
+    def _beat(self) -> bool:
+        # One short-lived session per beat is deliberate: SQLAlchemy sessions are
+        # thread-confined, and provider/simulation may be blocked for seconds.
+        with SessionLocal() as session:
+            alive = repository.heartbeat_claim(
+                session, owner_id=self.owner_id, run_id=self.run_id,
+                claim_token=self.claim_token,
+                lease_seconds=get_settings().backtest_claim_lease_seconds)
+            if alive:
+                session.commit()
+            else:
+                session.rollback()
+            return alive
+
+    def start(self) -> None:
+        lease = max(1, int(get_settings().backtest_claim_lease_seconds))
+        interval = max(0.05, min(float(lease) / 3.0, 5.0))
+        def loop() -> None:
+            while not self._stop.wait(interval):
+                try:
+                    if not self._beat():
+                        self._lost.set()
+                        return
+                except Exception:
+                    # An unavailable database cannot prove this worker still has
+                    # authority. Stop scheduling rather than risking a stale write.
+                    self._lost.set()
+                    return
+        self._thread = _LeaseThread(target=loop, name=f"backtest-lease-{self.run_id}", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, float(get_settings().backtest_claim_lease_seconds)))
+
+
 def _admit_workload(*, owner_id: str, total: int, workers: int, session=None) -> None:
     """Check host and tenant pressure from durable rows before any data read.
 
@@ -306,6 +361,50 @@ def _admit_workload(*, owner_id: str, total: int, workers: int, session=None) ->
         raise WorkloadAdmissionError("host_worker_slots")
 
 
+def measurement_snapshot(*, owner_id: str | None = None, session=None) -> dict[str, int | float]:
+    """Measured scheduler state, deliberately without an invented performance SLO."""
+    owns_session = session is None
+    if owns_session:
+        session = SessionLocal()
+    try:
+        statuses = [BacktestRun.status.in_(("pending", "running"))]
+        if owner_id is not None:
+            statuses.append(BacktestRun.owner_id == owner_id)
+        queued = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
+            *statuses, BacktestRun.status == "pending")) or 0)
+        active = int(session.scalar(select(func.count()).select_from(BacktestRun).where(
+            *statuses, BacktestRun.status == "running")) or 0)
+        cells = int(session.scalar(select(func.coalesce(func.sum(BacktestRun.total), 0)).where(
+            *statuses)) or 0)
+        workers = int(session.scalar(select(func.coalesce(func.sum(BacktestRun.requested_workers), 0)).where(
+            *statuses)) or 0)
+        now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        oldest = session.scalar(select(func.min(BacktestRun.queued_at)).where(
+            *statuses, BacktestRun.status == "pending"))
+        heartbeat = session.scalar(select(func.max(BacktestRun.heartbeat_at)).where(
+            *statuses, BacktestRun.status == "running"))
+        return {"queued_jobs": queued, "active_jobs": active, "reserved_cells": cells,
+                "reserved_worker_slots": workers,
+                "queue_age_seconds": max(0.0, (now - oldest).total_seconds()) if oldest else 0.0,
+                "heartbeat_age_seconds": max(0.0, (now - heartbeat).total_seconds()) if heartbeat else 0.0,
+                "local_worker_threads": sum(thread.is_alive() for thread in _workers.values())}
+    finally:
+        if owns_session:
+            session.close()
+
+
+def _conservative_cell_estimate(*, scope: str, instruments: list[str] | None,
+                                intervals: list[str], strategies: int) -> int:
+    """Bound admission without reading a provider/universe or launching work."""
+    if instruments:
+        universe = len({key.strip() for key in instruments if key.strip()})
+    else:
+        settings = get_settings()
+        universe = (settings.backtest_full_universe_upper_bound if scope == "full"
+                    else settings.backtest_liquid_universe_upper_bound)
+    return max(0, universe) * len(intervals) * max(1, strategies)
+
+
 def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | None = None,
                 capital: float = 50_000.0, provider=None,
                 instruments: list[str] | None = None,
@@ -337,7 +436,10 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
     global _worker
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
     worker_count = _worker_count(workers)
-    reconcile_stale_runs(owner_id=owner_id)
+    # A caller for any tenant, not only the boot owner, gives expired work a
+    # production reclaim path before admitting another request.
+    if reconcile_stale_runs(owner_id=owner_id):
+        dispatch_reclaimable(owner_id=owner_id)
     try:
         intervals = [i for i in (intervals or DEFAULT_INTERVALS) if i in MAX_DAYS]
         # resolve + de-dupe strategy keys (preserve request order); default = v3
@@ -351,18 +453,14 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 strat_objs.append(strat)
         if not strat_objs:
             strat_objs = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
-        provider = provider or get_provider()
-        specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
-        if instruments:
-            want = {k.strip() for k in instruments if k.strip()}
-            specs = [i for i in specs if i.key in want]
-            if not specs:
-                raise RuntimeError(f"none of the requested instruments exist: {sorted(want)}")
         win = {"lookback_days": lookback_days, "start": start_date, "end": end_date,
                "label": window_label(lookback_days, start_date, end_date)}
-        total = len(specs) * len(intervals) * len(strat_objs)
-        # Must happen before a provider candle read or thread/pool creation. The
-        # run is then enqueued/claimed inside the same short admission session.
+        # Must happen before provider/universe I/O or thread/pool creation.  The
+        # durable reservation uses a conservative configured upper bound; after
+        # resolution we replace it with the exact manifest total.
+        total = _conservative_cell_estimate(
+            scope=scope, instruments=instruments, intervals=intervals,
+            strategies=len(strat_objs))
         # SQLite's single-writer reservation makes the aggregate budget check
         # and pending-row creation one admission decision.  A concurrent caller
         # observes this row before it can pass the same host budget.
@@ -375,9 +473,17 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 intervals=",".join(intervals), capital=capital, total=total, done=0,
                 requested_workers=worker_count,
                 window=win["label"],
-                instruments=",".join(i.key for i in specs) if instruments else "",
+                instruments=",".join(sorted({i.strip() for i in (instruments or []) if i.strip()})),
                 strategies=",".join(st.key for st in strat_objs),
-                note=f"{len(specs)} instruments × {len(intervals)} intervals "
+                request_json=json.dumps({
+                    "scope": scope, "intervals": intervals, "capital": capital,
+                    "instruments": sorted({i.strip() for i in (instruments or []) if i.strip()}),
+                    "lookback_days": lookback_days, "start_date": start_date,
+                    "end_date": end_date, "strategies": [st.key for st in strat_objs],
+                    # A pin is a content address, not provider state or a credential.
+                    "pinned_datasets": pinned or {}, "workers": worker_count,
+                }, sort_keys=True, separators=(",", ":")),
+                note=f"reserved ≤{total} cells × {len(intervals)} intervals "
                      f"× {len(strat_objs)} strategies · {win['label']}"
                      + (" · pinned" if pinned else "")
                      + (f" · {worker_count} workers" if worker_count > 1 else ""))
@@ -389,6 +495,42 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 raise WorkloadAdmissionError("claim_conflict")
             s.commit()
             run_id = run.id
+        resolving_guard = _ClaimGuard(owner_id=owner_id, run_id=run_id,
+                                      claim_token=claim.claim_token)
+        resolving_guard.start()
+        try:
+            resolving_guard.ensure_active()
+            provider = provider or get_provider()
+            specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
+            if instruments:
+                want = {k.strip() for k in instruments if k.strip()}
+                specs = [i for i in specs if i.key in want]
+                if not specs:
+                    raise RuntimeError(f"none of the requested instruments exist: {sorted(want)}")
+            exact_total = len(specs) * len(intervals) * len(strat_objs)
+            with SessionLocal() as resolved:
+                active = repository.get_run(resolved, owner_id=owner_id, run_id=run_id)
+                if (active is None or active.claim_token != claim.claim_token
+                        or active.status != "running"):
+                    raise ClaimLost("admitted run lost its claim during resolution")
+                active.total = exact_total
+                active.instruments = ",".join(i.key for i in specs) if instruments else ""
+                active.note = (f"{len(specs)} instruments × {len(intervals)} intervals "
+                               f"× {len(strat_objs)} strategies · {win['label']}"
+                               + (" · pinned" if pinned else "")
+                               + (f" · {worker_count} workers" if worker_count > 1 else ""))
+                resolved.commit()
+            resolving_guard.ensure_active()
+            total = exact_total
+        except Exception as exc:
+            with SessionLocal() as failed:
+                repository.complete_claim(failed, owner_id=owner_id, run_id=run_id,
+                                          claim_token=claim.claim_token, status="error",
+                                          note=f"universe resolution failed: {exc}")
+                failed.commit()
+            raise
+        finally:
+            resolving_guard.close()
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
                  f"window={win['label']}, strategies={strat_label}"
                  + (f", PINNED to {len(pinned)} stored datasets" if pinned else "")
@@ -428,16 +570,24 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
         from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
         strategies = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
     batch: list[dict] = []
+    guard = (_ClaimGuard(owner_id=owner_id, run_id=run_id, claim_token=claim_token)
+             if claim_token is not None else None)
+    if guard is not None:
+        guard.start()
     try:
         for values in _cell_values(provider, specs, intervals, capital,
-                                   win, strategies, pinned, workers, owner_id=owner_id):
+                                   win, strategies, pinned, workers, owner_id=owner_id,
+                                   guard=guard):
+            if guard is not None:
+                guard.ensure_active()
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
                 if claim_token is None:
                     _commit_batch(run_id, batch, owner_id=owner_id)
                 else:
-                    _commit_claimed_batch(run_id, batch, owner_id=owner_id,
-                                          claim_token=claim_token)
+                    if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                                 claim_token=claim_token):
+                        raise ClaimLost("claimed batch was rejected")
                 batch = []
         # The terminal status rides the final batch: results, progress and the
         # run's completion are one transaction, so a run can never be `done`
@@ -445,9 +595,17 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
         if claim_token is None:
             _commit_batch(run_id, batch, owner_id=owner_id, status="done")
         else:
-            _commit_claimed_batch(run_id, batch, owner_id=owner_id,
-                                  claim_token=claim_token, status="done")
-        log.info(f"backtest sweep #{run_id} complete")
+            if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                         claim_token=claim_token, status="done"):
+                raise ClaimLost("claimed terminal write was rejected")
+        if guard is None or not guard._lost.is_set():
+            log.info(f"backtest sweep #{run_id} complete")
+    except ClaimLost:
+        # A requested cancellation owns its terminal transition. A replaced
+        # worker owns nothing further: it cannot overwrite the replacement.
+        if claim_token is not None:
+            _commit_claimed_batch(run_id, [], owner_id=owner_id,
+                                  claim_token=claim_token, status="cancelled")
     except Exception as e:  # never let the thread die silently
         # `batch` is deliberately dropped: those cells were never durable, and
         # progress is derived from what IS durable, so nothing over-reports.
@@ -458,12 +616,94 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
                                   claim_token=claim_token, status="error", note=str(e))
         log.error(f"backtest sweep #{run_id} failed: {e}")
     finally:
+        if guard is not None:
+            guard.close()
         with _state_lock:
             _workers.pop(run_id, None)
 
 
+def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[int]:
+    """Claim and launch owner-local pending/expired durable work after restart.
+
+    The descriptor is validated data from `start_sweep`; it deliberately names
+    only request values and content addresses.  The provider is rebuilt by the
+    configured factory at dispatch time, so no provider object or credentials can
+    enter the database.  Invalid/stale descriptors are terminalized under the
+    fresh token rather than silently retried forever.
+    """
+    from app.providers.factory import get_provider
+    from app.strategy.registry import resolve_strategy
+    limit = maximum if maximum is not None else max(0, int(get_settings().backtest_host_active_jobs))
+    launched: list[int] = []
+    for _ in range(limit):
+        with SessionLocal() as session:
+            claim = repository.claim_next_run(
+                session, owner_id=owner_id,
+                claimed_by=f"dispatcher:{threading.get_ident()}",
+                lease_seconds=get_settings().backtest_claim_lease_seconds)
+            if claim is None:
+                break
+            session.commit()
+        try:
+            descriptor = json.loads(claim.request_json or "")
+            if not isinstance(descriptor, dict):
+                raise ValueError("descriptor is not an object")
+            intervals = [value for value in descriptor.get("intervals", []) if value in MAX_DAYS]
+            strategy_keys = [value for value in descriptor.get("strategies", []) if isinstance(value, str)]
+            if not intervals or not strategy_keys:
+                raise ValueError("descriptor lacks intervals or strategies")
+            provider = get_provider()
+            scope = descriptor.get("scope", "liquid")
+            specs = full_universe(provider) if scope == "full" else liquid_universe(provider)
+            requested = set(descriptor.get("instruments") or ())
+            if requested:
+                specs = [instrument for instrument in specs if instrument.key in requested]
+            if not specs:
+                raise ValueError("descriptor resolves no instruments")
+            strategies = [resolve_strategy(key, owner_id=owner_id) for key in strategy_keys]
+            win = {"lookback_days": descriptor.get("lookback_days"),
+                   "start": descriptor.get("start_date"), "end": descriptor.get("end_date"),
+                   "label": window_label(descriptor.get("lookback_days"),
+                                         descriptor.get("start_date"), descriptor.get("end_date"))}
+            pinned = normalize_pinned_datasets(descriptor.get("pinned_datasets") or {}) or None
+            workers = _worker_count(descriptor.get("workers"))
+            thread = threading.Thread(
+                target=_run,
+                args=(claim.id, provider, specs, intervals, float(descriptor.get("capital", claim.capital)),
+                      win, strategies, pinned, workers),
+                kwargs={"owner_id": owner_id, "claim_token": claim.claim_token}, daemon=True)
+            with _state_lock:
+                _workers[claim.id] = thread
+            thread.start()
+            launched.append(claim.id)
+        except Exception as exc:
+            with _state_lock:
+                _workers.pop(claim.id, None)
+            with SessionLocal() as session:
+                repository.complete_claim(session, owner_id=owner_id, run_id=claim.id,
+                                          claim_token=claim.claim_token, status="error",
+                                          note=f"restart dispatch failed: {exc}")
+                session.commit()
+    return launched
+
+
+def dispatch_all_reclaimable() -> list[int]:
+    """Boot-time bounded dispatcher for every tenant with pending/expired work."""
+    with SessionLocal() as session:
+        owners = list(session.scalars(select(BacktestRun.owner_id).where(
+            BacktestRun.status.in_(("pending", "running"))).distinct()))
+    launched: list[int] = []
+    for owner_id in owners:
+        reconcile_stale_runs(owner_id=owner_id)
+        remaining = max(0, int(get_settings().backtest_host_active_jobs) - len(launched))
+        if not remaining:
+            break
+        launched.extend(dispatch_reclaimable(owner_id=owner_id, maximum=remaining))
+    return launched
+
+
 def _cell_values(provider, specs, intervals, capital, win, strategies,
-                 pinned, workers, *, owner_id: str):
+                 pinned, workers, *, owner_id: str, guard: _ClaimGuard | None = None):
     """Yield one serialized result payload per cell, in request order.
 
     Serial by default and by reference: `workers <= 1` walks the cells in this
@@ -474,13 +714,19 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
     if count > 1:
         yield from _parallel_cell_values(
             provider, specs, intervals, capital, win, strategies, pinned, count,
-            owner_id=owner_id)
+            owner_id=owner_id, guard=guard)
         return
     for inst in specs:
+        if guard is not None:
+            guard.ensure_active()
         for interval in intervals:
+            if guard is not None:
+                guard.ensure_active()
             prepared = _prepare_dataset(provider, inst, interval, win,
                                         pinned=pinned)
             for strat in strategies:
+                if guard is not None:
+                    guard.ensure_active()
                 yield _one(provider, inst, interval, capital, win, strat,
                            prepared=prepared, owner_id=owner_id)
 
@@ -564,6 +810,7 @@ def _worker_task(payload: dict) -> list[dict]:
             out.append(_result_values(
                 inst, interval, None, [], meta["bars"],
                 clamped=meta["clamped"], strategy_key=cell["strategy_key"],
+                strategy_version=cell["strategy_version"],
                 error=f"parallel worker: {exc}"))
             continue
         if frame is None:
@@ -618,6 +865,8 @@ def _pinned_worker_task(payload: dict) -> dict:
         return {"refused": True, "rows": [
             _result_values(inst, interval, None, [], prepared.bars,
                            clamped=prepared.clamped, strategy_key=key,
+                           strategy_version=next((cell["strategy_version"] for cell in payload["cells"]
+                                                  if cell["strategy_key"] == key), "unknown"),
                            error=prepared.error)
             for key in payload["strategy_keys"]]}
     return {"refused": False, "rows": _worker_task(dict(
@@ -644,6 +893,7 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
             slots.append(("ready", _result_values(
                 inst, interval, None, [], prepared.bars,
                 clamped=prepared.clamped, strategy_key=strat.key,
+                strategy_version=strat.version,
                 error=prepared.error)))
             continue
         phash = _execution_address(prepared, inst, interval, capital, win, strat,
@@ -701,7 +951,8 @@ def _drain(slots, future) -> list[dict]:
 
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
-                          pinned, workers, *, owner_id: str):
+                          pinned, workers, *, owner_id: str,
+                          guard: _ClaimGuard | None = None):
     """Yield the same values as the serial path, in the same order, computed in
     `workers` processes.
 
@@ -718,7 +969,11 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         for inst in specs:
+            if guard is not None:
+                guard.ensure_active()
             for interval in intervals:
+                if guard is not None:
+                    guard.ensure_active()
                 if pinned is not None:
                     # Pinned: the parent reads the manifest, never the bars. The
                     # store read — and every refusal it can raise — belongs to
@@ -734,15 +989,21 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                 slots, payload = _plan_dataset(
                     provider, inst, interval, capital, win, strategies, prepared,
                     pinned_address=address, owner_id=owner_id)
+                if guard is not None:
+                    guard.ensure_active()
                 future = pool.submit(task, payload) if payload else None
                 pending.append((future, slots))
                 # `prepared` (and its lazily-built frame) is dropped here: the
                 # parent never holds a dataset past its submission.
                 del prepared, payload
                 while len(pending) >= max_inflight:
+                    if guard is not None:
+                        guard.ensure_active()
                     future, slots = pending.popleft()
                     yield from _drain(slots, future)
         while pending:
+            if guard is not None:
+                guard.ensure_active()
             future, slots = pending.popleft()
             yield from _drain(slots, future)
 
@@ -997,6 +1258,7 @@ def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
         return _result_values(
             inst, interval, None, [], prepared.bars,
             clamped=prepared.clamped, strategy_key=strat.key,
+            strategy_version=strat.version,
             error=prepared.error)
     slippage_pct = float(get_settings().backtest_slippage_pct)
     phash = _execution_address(prepared, inst, interval, capital, win, strat,
@@ -1085,6 +1347,7 @@ def _compute_values(candles, inst, interval, capital, strat, params,
             p_trades, p_metrics, premium_error = [], BTMetrics(), str(e)
     return _result_values(
         inst, interval, m, trades, bars, strategy_key=strat.key,
+        strategy_version=strat.version,
         params_hash=phash, last_candle_ts=last_ts,
         first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
         clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
@@ -1105,6 +1368,7 @@ def _supports_end(provider) -> bool:
 def _result_values(inst, interval, m, trades, bars, error="",
                    params_hash="", last_candle_ts=0, first_ts=0, last_ts_span=0,
                    effective_days=0, clamped=False, strategy_key="trend_impulse_v3",
+                   strategy_version="",
                    premium_trades=None, premium_metrics=None,
                    premium_error="") -> dict:
     """Every stored column for one cell, already serialized. Writes nothing.
@@ -1122,7 +1386,8 @@ def _result_values(inst, interval, m, trades, bars, error="",
     # `_commit_batch` at insert time. A payload that carried it could not be
     # computed in a worker before the run existed, nor compared across runs.
     common = dict(instrument_key=inst.key, name=inst.name,
-                  segment=seg, strategy_key=strategy_key, interval=interval, bars=bars,
+                  segment=seg, strategy_key=strategy_key, strategy_version=strategy_version,
+                  interval=interval, bars=bars,
                   params_hash=params_hash, last_candle_ts=last_candle_ts,
                   first_ts=first_ts, last_ts=last_ts_span,
                   effective_days=effective_days, clamped=clamped,

@@ -883,6 +883,9 @@ class BacktestRun(Base):
     requested_workers: Mapped[int] = mapped_column(Integer, nullable=False, default=1,
                                                     server_default="1")
     cancel_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Validated request manifest used only to reconstruct abandoned work.  It
+    # contains no provider object, credential, worker id, or secret.
+    request_json: Mapped[str] = mapped_column(Text, default="", server_default="")
     scope: Mapped[str] = mapped_column(String(16), default="liquid")    # liquid|full
     intervals: Mapped[str] = mapped_column(String(128), default="")     # csv
     capital: Mapped[float] = mapped_column(Float, default=50_000.0)
@@ -921,6 +924,11 @@ class BacktestResult(Base):
     __tablename__ = "backtest_results"
     __table_args__ = (
         UniqueConstraint("owner_id", "id", name="uq_backtest_results_owner_id"),
+        # A durable sweep cell is an execution fact, not an append-only event.
+        # Modern fenced writers always set this deterministic identity; nullable
+        # preserves pre-0026/manual historical fixtures that predate resumability.
+        Index("uq_backtest_results_owner_run_cell", "owner_id", "run_id", "cell_key",
+              unique=True),
         ForeignKeyConstraint(("owner_id", "run_id"),
                              ("backtest_runs.owner_id", "backtest_runs.id"),
                              ondelete="RESTRICT", name="fk_backtest_results_owner_run"),
@@ -933,11 +941,16 @@ class BacktestResult(Base):
         nullable=False, default=LEGACY_OWNER_ID, server_default=LEGACY_OWNER_ID,
         index=True)
     run_id: Mapped[int] = mapped_column(Integer, index=True)
+    cell_key: Mapped[str | None] = mapped_column(String(192), nullable=True)
     instrument_key: Mapped[str] = mapped_column(String(48), index=True)
     name: Mapped[str] = mapped_column(String(64), default="")
     segment: Mapped[str] = mapped_column(String(12), default="")   # backtest charge segment
     strategy_key: Mapped[str] = mapped_column(String(64), default="trend_impulse_v3", index=True)
     interval: Mapped[str] = mapped_column(String(12), index=True)
+    # Immutable strategy artifact used by the run-cell identity.  A key alone is
+    # not enough: a generated key can be republished with different executable
+    # bytes while an expired worker is being replaced.
+    strategy_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trades: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
     win_rate: Mapped[float] = mapped_column(Float, default=0.0)

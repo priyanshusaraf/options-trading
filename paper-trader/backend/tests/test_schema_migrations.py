@@ -32,7 +32,20 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0025"
+HEAD = "0026"
+
+
+def test_revision_0026_backfills_legacy_cells_and_refuses_duplicate_new_identity(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0026-resume-cells.db", "0025")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (id,owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies,queued_at) "
+            "VALUES (941,'owner','2026-08-12','done','liquid','day',1,1,1,'','max','','','2026-08-12')"))
+        connection.execute(sa.text(
+            "INSERT INTO backtest_results (id,owner_id,run_id,instrument_key,name,segment,strategy_key,interval,trades,wins,win_rate,profit_factor,max_drawdown_pct,return_pct,net_pnl,gross_pnl,charges,expectancy,cagr,calmar,consistency,sharpe,max_consec_losses,time_underwater_pct,worst_trade_pnl,worst_mae_pct,notional,lots,affordable,option_cost,open_at_end,win_rate_realised,return_pct_realised,bh_return_pct,first_ts,last_ts,effective_days,clamped,bars,curve_json,bh_curve_json,trades_json,error,premium_trades,premium_win_rate,premium_net_pnl,premium_return_pct,premium_profit_factor,premium_max_drawdown_pct,premium_expectancy,premium_charges,premium_trades_json,premium_error,params_hash,last_candle_ts,schema_version,from_cache) "
+            "VALUES (942,'owner',941,'NIFTY','NIFTY','NSE','s','day',0,0,0,NULL,0,0,0,0,0,0,NULL,NULL,NULL,NULL,0,0,0,0,0,0,1,0,0,0,0,NULL,0,0,0,0,0,'[]','[]','[]','',0,0,0,0,NULL,0,0,0,'[]','', '',0,1,0)"))
+        command.upgrade(migrate.alembic_config(connection), "0026")
+        assert connection.execute(sa.text("SELECT cell_key FROM backtest_results WHERE id=942")).scalar_one() == "legacy:942"
 
 
 def test_revision_0025_preserves_0024_rows_and_adds_portable_job_fields(tmp_path):

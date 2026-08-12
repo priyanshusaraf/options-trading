@@ -67,6 +67,13 @@ async def lifespan(app: FastAPI):
         from app.core.instance_lock import acquire_db_lock
         app.state.db_lock = acquire_db_lock(settings.db_path)
     init_db(reset=settings.provider == "mock")
+    # Backtest workers are intentionally replaceable. Reclaim only expired/pending
+    # durable claims; a non-expired remote lease is never inferred dead.
+    try:
+        from app.backtest.sweep import dispatch_all_reclaimable
+        dispatch_all_reclaimable()
+    except Exception as e:
+        log.error(f"backtest restart dispatch failed: {e}")
     if settings.provider == "kite":
         from app.engine.broker_factory import live_execution_enabled
         if live_execution_enabled():

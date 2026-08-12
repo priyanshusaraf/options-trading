@@ -217,6 +217,21 @@ def append_result_batch(session, *, owner_id: str, run_id: int,
         session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
 
 
+def _cell_key(value: dict) -> str:
+    """Stable within-run identity for a simulated strategy cell.
+
+    Run ids are already owner-scoped by the composite FK.  Include strategy
+    identity here so adding a second strategy never aliases its result with the
+    same instrument/interval pair.  Values originate from internal simulation,
+    but reject malformed ones rather than silently creating an unresumable row.
+    """
+    parts = (value.get("instrument_key"), value.get("interval"),
+             value.get("strategy_key"), value.get("strategy_version"))
+    if not all(isinstance(part, str) and part for part in parts):
+        raise ValueError("backtest result lacks a stable cell identity")
+    return "\x1f".join(parts)
+
+
 def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
                                 claim_token: str, values: list[dict],
                                 now: dt.datetime | None = None,
@@ -236,8 +251,22 @@ def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
                 heartbeat_at=moment,
                 claim_expires_at=moment + dt.timedelta(seconds=max(1, int(lease_seconds))))).rowcount != 1:
             return False
+        # Resume/replacement re-computes cells after a process death.  The first
+        # claimant may already have committed part of a batch, so append only
+        # identities not yet durable.  The DB constraint makes this invariant
+        # survive mistakes in future callers as well.
+        unique: dict[str, dict] = {}
         for value in values:
-            session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
+            payload = dict(value)
+            key = _cell_key(payload)
+            payload["cell_key"] = key
+            unique.setdefault(key, payload)
+        existing = set(session.scalars(select(BacktestResult.cell_key).where(
+            BacktestResult.owner_id == owner_id, BacktestResult.run_id == run_id,
+            BacktestResult.cell_key.in_(tuple(unique))))) if unique else set()
+        for key, value in unique.items():
+            if key not in existing:
+                session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
         session.flush()
         done = durable_result_count(session, owner_id=owner_id, run_id=run_id)
         if session.execute(update(BacktestRun).where(
@@ -286,11 +315,20 @@ def complete_claim(session, *, owner_id: str, run_id: int, claim_token: str,
 
 def request_cancel(session, *, owner_id: str, run_id: int,
                    now: dt.datetime | None = None) -> bool:
-    """An owner requests cancellation; only its existing worker may finalise it."""
+    """Cancel pending work immediately; ask an active claimant to stop safely."""
     moment = _clock(now)
+    pending = session.execute(update(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
+        BacktestRun.status == "pending", BacktestRun.cancel_requested_at.is_(None)).values(
+            status="cancelled", cancel_requested_at=moment, completed_at=moment,
+            done=select(func.count()).select_from(BacktestResult).where(
+                BacktestResult.owner_id == BacktestRun.owner_id,
+                BacktestResult.run_id == BacktestRun.id).scalar_subquery()))
+    if pending.rowcount == 1:
+        return True
     result = session.execute(update(BacktestRun).where(
         BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
-        BacktestRun.status.in_(("pending", "running")),
+        BacktestRun.status == "running",
         BacktestRun.cancel_requested_at.is_(None)).values(cancel_requested_at=moment))
     return result.rowcount == 1
 

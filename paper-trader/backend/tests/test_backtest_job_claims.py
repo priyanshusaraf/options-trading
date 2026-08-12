@@ -7,6 +7,8 @@ fences every mutating operation.
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 
 from sqlalchemy import select
 from fastapi.testclient import TestClient
@@ -29,7 +31,7 @@ def _run(owner_id: str, *, total: int = 2) -> int:
 def _value(key: str) -> dict:
     return {"instrument_key": key, "name": key, "segment": "nse_delivery",
             "strategy_key": "trend_impulse_v3", "interval": "day", "bars": 1,
-            "error": ""}
+            "strategy_version": "strategy-version-v1", "params_hash": "strategy-version-and-params-v1", "error": ""}
 
 
 def test_claim_race_allows_exactly_one_token_and_never_blocks_another_owner():
@@ -94,6 +96,150 @@ def test_replaced_or_cancelled_claim_cannot_append_or_finish_a_run():
         run = repository.get_run(session, owner_id="a", run_id=run_id)
         assert run.status == "cancelled" and run.done == 0
         assert session.scalars(select(BacktestResult).where(BacktestResult.run_id == run_id)).all() == []
+
+
+def test_replacement_resumes_only_cells_not_already_durable():
+    """A new claimant must not duplicate a cell completed by the old claimant."""
+    init_db(reset=True)
+    run_id = _run("owner", total=2)
+    started = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
+    with SessionLocal() as session:
+        first = repository.claim_run(session, owner_id="owner", run_id=run_id,
+                                     claimed_by="first", now=started, lease_seconds=1)
+        session.commit()
+    assert first is not None
+    with SessionLocal() as session:
+        assert repository.append_claimed_result_batch(
+            session, owner_id="owner", run_id=run_id, claim_token=first.claim_token,
+            values=[_value("NIFTY")], now=started + dt.timedelta(milliseconds=100),
+            lease_seconds=1)
+        session.commit()
+    with SessionLocal() as session:
+        second = repository.claim_run(session, owner_id="owner", run_id=run_id,
+                                      claimed_by="second", now=started + dt.timedelta(seconds=2),
+                                      lease_seconds=30)
+        session.commit()
+    assert second is not None
+    with SessionLocal() as session:
+        assert repository.append_claimed_result_batch(
+            session, owner_id="owner", run_id=run_id, claim_token=second.claim_token,
+            values=[_value("NIFTY"), _value("BANKNIFTY")],
+            now=started + dt.timedelta(seconds=3))
+        session.commit()
+    with SessionLocal() as session:
+        rows = list(session.scalars(select(BacktestResult).where(
+            BacktestResult.run_id == run_id).order_by(BacktestResult.instrument_key)))
+        run = repository.get_run(session, owner_id="owner", run_id=run_id)
+    assert [row.instrument_key for row in rows] == ["BANKNIFTY", "NIFTY"]
+    assert run.done == run.total == 2
+
+
+def test_cancelling_pending_run_is_terminal_and_releases_admission_capacity():
+    """A job with no claimant cannot wait forever for a worker to cancel it."""
+    init_db(reset=True)
+    run_id = _run("owner")
+    with SessionLocal() as session:
+        assert repository.request_cancel(session, owner_id="owner", run_id=run_id)
+        session.commit()
+    with SessionLocal() as session:
+        run = repository.get_run(session, owner_id="owner", run_id=run_id)
+    assert run.status == "cancelled"
+    assert run.completed_at is not None
+    assert run.claim_token is None
+
+
+def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(monkeypatch):
+    """Lease liveness must not depend on reaching a persistence batch boundary."""
+    init_db(reset=True)
+    run_id = _run("owner", total=2)
+    with SessionLocal() as session:
+        claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
+                                     claimed_by="worker", lease_seconds=1)
+        session.commit()
+    assert claim is not None
+    settings = sweep.get_settings().model_copy(update={"backtest_claim_lease_seconds": 1})
+    monkeypatch.setattr(sweep, "get_settings", lambda: settings)
+    entered = threading.Event()
+    calls = {"datasets": 0}
+    def slow_dataset(*_args, **_kwargs):
+        calls["datasets"] += 1
+        entered.set()
+        time.sleep(0.55)
+        return sweep._PreparedDataset(error="stub")
+    monkeypatch.setattr(sweep, "_prepare_dataset", slow_dataset)
+    thread = threading.Thread(target=sweep._run, args=(
+        run_id, object(), [object(), object()], ["day"], 1.0,
+        {"lookback_days": None, "start": None, "end": None, "label": "max"}, []),
+        kwargs={"owner_id": "owner", "claim_token": claim.claim_token})
+    thread.start()
+    assert entered.wait(timeout=1)
+    with SessionLocal() as session:
+        assert repository.request_cancel(session, owner_id="owner", run_id=run_id)
+        session.commit()
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    with SessionLocal() as session:
+        run = repository.get_run(session, owner_id="owner", run_id=run_id)
+    assert calls["datasets"] == 1
+    assert run.status == "cancelled" and run.done == 0
+
+
+def test_restart_dispatch_claims_pending_descriptor_without_provider_object(monkeypatch):
+    """Recovery must launch durable request data, never a pickled provider/session."""
+    init_db(reset=True)
+    descriptor = {
+        "scope": "liquid", "intervals": ["day"], "capital": 1.0,
+        "instruments": ["NIFTY"], "lookback_days": None,
+        "start_date": None, "end_date": None,
+        "strategies": ["trend_impulse_v3"], "pinned_datasets": {}, "workers": 1,
+    }
+    with SessionLocal() as session:
+        run = repository.enqueue_run(session, owner_id="owner", scope="liquid",
+                                     intervals="day", capital=1.0, total=1,
+                                     request_json=__import__("json").dumps(descriptor))
+        session.commit()
+    class _Thread:
+        def __init__(self, *args, **kwargs): pass
+        def start(self): pass
+        def is_alive(self): return False
+    monkeypatch.setattr(sweep.threading, "Thread", _Thread)
+    launched = sweep.dispatch_reclaimable(owner_id="owner", maximum=1)
+    assert launched == [run.id]
+    with SessionLocal() as session:
+        claimed = repository.get_run(session, owner_id="owner", run_id=run.id)
+    assert claimed.status == "running" and claimed.claim_token is not None
+
+
+def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch):
+    """A startup dispatcher restricted to the legacy owner strands tenant work."""
+    init_db(reset=True)
+    with SessionLocal() as session:
+        session.add(Organization(organization_id="tenant", name="Tenant")); session.flush()
+        run = repository.enqueue_run(session, owner_id="tenant", scope="liquid",
+                                     intervals="day", capital=1.0, total=1,
+                                     request_json=__import__("json").dumps({
+                                         "scope": "liquid", "intervals": ["day"], "capital": 1.0,
+                                         "instruments": ["NIFTY"], "strategies": ["trend_impulse_v3"],
+                                         "pinned_datasets": {}, "workers": 1}))
+        session.commit()
+    class _Thread:
+        def __init__(self, *args, **kwargs): pass
+        def start(self): pass
+        def is_alive(self): return False
+    monkeypatch.setattr(sweep.threading, "Thread", _Thread)
+    assert sweep.dispatch_all_reclaimable() == [run.id]
+    with SessionLocal() as session:
+        assert repository.get_run(session, owner_id="tenant", run_id=run.id).status == "running"
+
+
+def test_measurement_snapshot_reports_state_without_product_user_limit():
+    init_db(reset=True)
+    run_id = _run("owner", total=37)
+    with SessionLocal() as session:
+        snapshot = sweep.measurement_snapshot(owner_id="owner", session=session)
+    assert snapshot["queued_jobs"] == 1
+    assert snapshot["reserved_cells"] == 37
+    assert snapshot["active_jobs"] == 0
 
 
 def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):

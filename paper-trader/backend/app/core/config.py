@@ -472,6 +472,10 @@ class Settings(BaseSettings):
     backtest_host_requested_cells: int = 100_000
     backtest_host_worker_slots: int = 8
     backtest_claim_lease_seconds: int = 30
+    # Conservative no-I/O admission estimate for a request whose broker universe
+    # has not been resolved yet.  This bounds work before a provider dump/read.
+    backtest_full_universe_upper_bound: int = 20_000
+    backtest_liquid_universe_upper_bound: int = 1_000
 
     @property
     def cors_origins_list(self) -> list[str]:
