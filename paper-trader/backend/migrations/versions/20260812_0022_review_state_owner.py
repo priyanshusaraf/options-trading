@@ -55,6 +55,21 @@ OWNER_COLUMNS = {
     ),
 }
 
+LEGACY_COLUMNS = {
+    "project_review_notes": (
+        "note_id", "project_id", "event_id", "event_type", "body", "created_by",
+        "revision", "deleted_at", "created_at", "updated_at",
+    ),
+    "project_review_saved_views": (
+        "view_id", "project_id", "name", "filters_json", "created_by", "revision",
+        "deleted_at", "created_at", "updated_at",
+    ),
+    "project_review_snapshots": (
+        "snapshot_id", "project_id", "label", "capture_key", "manifest_json",
+        "content_address", "created_by", "capture_started_at", "capture_completed_at",
+    ),
+}
+
 
 UPGRADE_DDL = {
     "project_review_notes": """CREATE TABLE __TABLE__ (
@@ -180,29 +195,46 @@ def _ensure_proofs() -> None:
     op.get_bind().execute(sa.text(
         f"CREATE TABLE IF NOT EXISTS {PROOF_TABLE} ("
         "table_name VARCHAR(64) NOT NULL PRIMARY KEY, row_count INTEGER NOT NULL, "
-        "row_digest VARCHAR(64) NOT NULL, schema_digest VARCHAR(64) NOT NULL, "
+        "row_digest VARCHAR(64) NOT NULL, direction VARCHAR(8) NOT NULL, schema_digest VARCHAR(64) NOT NULL, "
         "phase VARCHAR(16) NOT NULL)"
     ))
 
 
 def _row_proof(table: str) -> tuple[int, str]:
     rows = op.get_bind().execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()
+    return _rows_proof(rows)
+
+
+def _rows_proof(rows) -> tuple[int, str]:
     canonical = json.dumps([list(row) for row in rows], default=str, separators=(",", ":"))
     return len(rows), hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _write_proof(table: str) -> None:
+def _upgrade_source_proof(table: str, columns: str) -> tuple[int, str]:
+    """Bind the rebuilt bytes to the authoritative 0021 rows before DROP."""
+    source_columns = ",".join(f"review.{column}" for column in columns.split(","))
+    rows = op.get_bind().execute(sa.text(
+        f"SELECT project.owner_id,{source_columns} FROM {table} AS review "
+        "JOIN projects AS project ON project.project_id=review.project_id "
+        "ORDER BY review.rowid"
+    )).all()
+    return _rows_proof(rows)
+
+
+def _write_proof(table: str, *, direction: str, expected: tuple[int, str]) -> None:
     _ensure_proofs()
-    count, digest = _row_proof(table)
+    count, digest = expected
+    logical_table = table.removesuffix("__0022")
     op.get_bind().execute(sa.text(
         f"INSERT OR REPLACE INTO {PROOF_TABLE} "
-        "(table_name,row_count,row_digest,schema_digest,phase) "
-        "VALUES (:table,:count,:row_digest,:schema_digest,'built')"
+        "(table_name,row_count,row_digest,direction,schema_digest,phase) "
+        "VALUES (:table,:count,:row_digest,:direction,:schema_digest,'built')"
     ), {
-        "table": table.removesuffix("__0022"),
+        "table": logical_table,
         "count": count,
         "row_digest": digest,
-        "schema_digest": _target_schema_digest(table.removesuffix("__0022")),
+        "direction": direction,
+        "schema_digest": _digest((UPGRADE_DDL if direction == "up" else DOWNGRADE_DDL)[logical_table]),
     })
 
 
@@ -219,40 +251,48 @@ def _clear_proofs() -> None:
         op.execute(sa.text(f"DROP TABLE {PROOF_TABLE}"))
 
 
-def _prove_temp(table: str, temporary: str) -> None:
+def _prove_temp(table: str, temporary: str, *, direction: str) -> None:
     if PROOF_TABLE not in _names():
         raise RuntimeError(f"0022 upgrade refused: unproven completed rebuild for {table}")
     proof = op.get_bind().execute(sa.text(
-        f"SELECT row_count,row_digest,schema_digest,phase FROM {PROOF_TABLE} WHERE table_name=:table"
+        f"SELECT row_count,row_digest,direction,schema_digest,phase FROM {PROOF_TABLE} WHERE table_name=:table"
     ), {"table": table}).one_or_none()
     if proof is None:
         raise RuntimeError(f"0022 upgrade refused: unproven completed rebuild for {table}")
-    if proof.phase != "built" or proof.schema_digest != _digest(UPGRADE_DDL[table]):
+    ddl = UPGRADE_DDL if direction == "up" else DOWNGRADE_DDL
+    if proof.phase != "built" or proof.direction != direction or proof.schema_digest != _digest(ddl[table]):
         raise RuntimeError(f"0022 upgrade refused: malformed completed rebuild proof for {table}")
-    if tuple(item["name"] for item in sa.inspect(op.get_bind()).get_columns(temporary)) != OWNER_COLUMNS[table]:
+    expected_columns = OWNER_COLUMNS if direction == "up" else LEGACY_COLUMNS
+    if tuple(item["name"] for item in sa.inspect(op.get_bind()).get_columns(temporary)) != expected_columns[table]:
         raise RuntimeError(f"0022 upgrade refused: malformed completed rebuild for {table}")
     if _row_proof(temporary) != (proof.row_count, proof.row_digest):
         raise RuntimeError(f"0022 upgrade refused: completed rebuild payload proof failed for {table}")
 
 
-def _recover(table: str) -> None:
+def _recover(table: str, *, direction: str) -> None:
     temporary = f"{table}__0022"
     names = _names()
     if table in names and temporary in names:
         op.execute(sa.text(f"DROP TABLE {temporary}"))
         _discard_proof(table)
     elif table not in names and temporary in names:
-        _prove_temp(table, temporary)
-        _validate_rebuild_temp(table, temporary)
-        _finalize_temp(table, temporary)
-        _validate_final_temp(table, temporary)
+        temp_direction = "up" if "owner_id" in {
+            item["name"] for item in sa.inspect(op.get_bind()).get_columns(temporary)
+        } else "down"
+        _prove_temp(table, temporary, direction=temp_direction)
+        if temp_direction == "up":
+            _validate_rebuild_temp(table, temporary)
+            _finalize_temp(table, temporary)
+            _validate_final_temp(table, temporary)
+        else:
+            _validate_legacy_temp(table, temporary)
         op.execute(sa.text(f"ALTER TABLE {temporary} RENAME TO {table}"))
         _discard_proof(table)
 
 
-def _recover_all() -> None:
+def _recover_all(*, direction: str) -> None:
     for table in TABLES:
-        _recover(table)
+        _recover(table, direction=direction)
 
 
 def _indexes_and_triggers() -> None:
@@ -358,6 +398,27 @@ def _validate_final_temp(table: str, temporary: str) -> None:
         raise RuntimeError(f"0022 upgrade refused: malformed completed rebuild for {table}")
 
 
+def _validate_legacy_temp(table: str, temporary: str) -> None:
+    actual_table_sql = op.get_bind().execute(sa.text(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"
+    ), {"table": temporary}).scalar_one_or_none()
+    if actual_table_sql is None or _canonical_sql(actual_table_sql) != _canonical_sql(
+        DOWNGRADE_DDL[table].replace("__TABLE__", temporary)
+    ):
+        raise RuntimeError(f"0022 downgrade refused: malformed completed rebuild for {table}")
+    inspector = sa.inspect(op.get_bind())
+    identity = {"project_review_notes": "note_id", "project_review_saved_views": "view_id", "project_review_snapshots": "snapshot_id"}[table]
+    if tuple(inspector.get_pk_constraint(temporary)["constrained_columns"]) != (identity,):
+        raise RuntimeError(f"0022 downgrade refused: malformed completed rebuild for {table}")
+    if not any(tuple(fk["constrained_columns"]) == ("project_id",) and
+               tuple(fk["referred_columns"]) == ("project_id",) and
+               fk["options"].get("ondelete") == "RESTRICT"
+               for fk in inspector.get_foreign_keys(temporary)):
+        raise RuntimeError(f"0022 downgrade refused: malformed completed rebuild for {table}")
+    if op.get_bind().execute(sa.text("PRAGMA foreign_key_check")).first() is not None:
+        raise RuntimeError(f"0022 downgrade refused: completed rebuild foreign-key check failed for {table}")
+
+
 def _legacy_indexes_and_triggers() -> None:
     op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_project_review_notes_project_event ON project_review_notes (project_id, event_id)"))
     op.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_project_review_saved_views_project ON project_review_saved_views (project_id)"))
@@ -386,7 +447,7 @@ def _rebuild_upgrade(table: str, columns: str) -> None:
     if "owner_id" in {item["name"] for item in sa.inspect(op.get_bind()).get_columns(table)}:
         return
     _assert_no_dangling_source(table)
-    source_count = op.get_bind().execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+    expected_proof = _upgrade_source_proof(table, columns)
     temporary = f"{table}__0022"
     op.execute(sa.text(UPGRADE_DDL[table].replace("__TABLE__", temporary)))
     op.execute(sa.text(
@@ -394,10 +455,10 @@ def _rebuild_upgrade(table: str, columns: str) -> None:
         f"SELECT project.owner_id,review.{columns.replace(',', ',review.')} "
         f"FROM {table} AS review JOIN projects AS project ON project.project_id=review.project_id"
     ))
-    if op.get_bind().execute(sa.text(f"SELECT COUNT(*) FROM {temporary}")).scalar_one() != source_count:
-        raise RuntimeError(f"0022 upgrade refused: {table} row preservation failed")
+    if _row_proof(temporary) != expected_proof:
+        raise RuntimeError(f"0022 upgrade refused: {table} source payload proof failed")
     _validate_rebuild_temp(table, temporary)
-    _write_proof(temporary)
+    _write_proof(temporary, direction="up", expected=expected_proof)
     op.execute(sa.text(f"DROP TABLE {table}"))
     _finalize_temp(table, temporary)
     _validate_final_temp(table, temporary)
@@ -424,8 +485,14 @@ def _downgrade_preflight() -> None:
         if authoritative is None:
             continue
         if authoritative == temporary:
-            _prove_temp(table, temporary)
-            _validate_rebuild_temp(table, temporary)
+            temp_direction = "up" if "owner_id" in {
+                item["name"] for item in sa.inspect(op.get_bind()).get_columns(temporary)
+            } else "down"
+            _prove_temp(table, temporary, direction=temp_direction)
+            if temp_direction == "up":
+                _validate_rebuild_temp(table, temporary)
+            else:
+                _validate_legacy_temp(table, temporary)
         if "owner_id" not in {
             item["name"] for item in sa.inspect(op.get_bind()).get_columns(authoritative)
         }:
@@ -444,17 +511,25 @@ def _rebuild_downgrade(table: str, columns: str) -> None:
     }:
         return
     temporary = f"{table}__0022"
+    expected_proof = _rows_proof(op.get_bind().execute(sa.text(
+        f"SELECT {columns} FROM {table} ORDER BY rowid"
+    )).all())
     op.execute(sa.text(DOWNGRADE_DDL[table].replace("__TABLE__", temporary)))
     op.execute(sa.text(f"INSERT INTO {temporary} ({columns}) SELECT {columns} FROM {table}"))
+    if _row_proof(temporary) != expected_proof:
+        raise RuntimeError(f"0022 downgrade refused: {table} source payload proof failed")
+    _validate_legacy_temp(table, temporary)
+    _write_proof(temporary, direction="down", expected=expected_proof)
     op.execute(sa.text(f"DROP TABLE {table}"))
     op.execute(sa.text(f"ALTER TABLE {temporary} RENAME TO {table}"))
+    _discard_proof(table)
 
 
 def upgrade() -> None:
     enabled = _foreign_keys_enabled()
     _foreign_keys(False)
     try:
-        _recover_all()
+        _recover_all(direction="up")
         _rebuild_upgrade("project_review_notes", "note_id,project_id,event_id,event_type,body,created_by,revision,deleted_at,created_at,updated_at")
         _rebuild_upgrade("project_review_saved_views", "view_id,project_id,name,filters_json,created_by,revision,deleted_at,created_at,updated_at")
         _rebuild_upgrade("project_review_snapshots", "snapshot_id,project_id,label,capture_key,manifest_json,content_address,created_by,capture_started_at,capture_completed_at")
@@ -471,7 +546,7 @@ def downgrade() -> None:
     enabled = _foreign_keys_enabled()
     _foreign_keys(False)
     try:
-        _recover_all()
+        _recover_all(direction="down")
         _rebuild_downgrade("project_review_notes", "note_id,project_id,event_id,event_type,body,created_by,revision,deleted_at,created_at,updated_at")
         _rebuild_downgrade("project_review_saved_views", "view_id,project_id,name,filters_json,created_by,revision,deleted_at,created_at,updated_at")
         _rebuild_downgrade("project_review_snapshots", "snapshot_id,project_id,label,capture_key,manifest_json,content_address,created_by,capture_started_at,capture_completed_at")

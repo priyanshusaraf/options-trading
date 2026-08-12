@@ -161,10 +161,11 @@ def _write_0022_completed_proof(connection, table: str) -> None:
     connection.execute(sa.text(
         "CREATE TABLE IF NOT EXISTS _review_0022_rebuild_proofs ("
         "table_name VARCHAR(64) NOT NULL PRIMARY KEY, row_count INTEGER NOT NULL, "
-        "row_digest VARCHAR(64) NOT NULL, schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
+        "row_digest VARCHAR(64) NOT NULL, direction VARCHAR(8) NOT NULL, "
+        "schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
     ))
     connection.execute(sa.text(
-        "INSERT INTO _review_0022_rebuild_proofs VALUES (:table,:count,:row_digest,:schema_digest,'built')"
+        "INSERT INTO _review_0022_rebuild_proofs VALUES (:table,:count,:row_digest,'up',:schema_digest,'built')"
     ), {
         "table": table, "count": len(rows), "row_digest": row_digest,
         "schema_digest": schema_digest,
@@ -288,11 +289,11 @@ def test_revision_0022_refuses_a_proven_payload_with_a_malformed_temp_contract_w
         connection.execute(sa.text(
             "CREATE TABLE _review_0022_rebuild_proofs (table_name VARCHAR(64) NOT NULL PRIMARY KEY, "
             "row_count INTEGER NOT NULL, row_digest VARCHAR(64) NOT NULL, "
-            "schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
+            "direction VARCHAR(8) NOT NULL, schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"
         ))
         connection.execute(sa.text(
             "INSERT INTO _review_0022_rebuild_proofs VALUES "
-            "('project_review_notes',:count,:row_digest,:schema_digest,'built')"
+            "('project_review_notes',:count,:row_digest,'up',:schema_digest,'built')"
         ), {"count": len(rows), "row_digest": row_digest, "schema_digest": expected_schema_digest})
         connection.execute(sa.text("UPDATE alembic_version SET version_num='0021'"))
     before = tuple(engine.connect().execute(sa.text(
@@ -449,6 +450,65 @@ def test_revision_0022_upgrade_failure_restores_the_callers_foreign_key_state(tm
     with engine.connect() as connection:
         assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 0
         assert migrate.schema_version(engine) == "0021"
+
+
+def test_revision_0022_upgrade_refuses_temp_payload_changed_after_copy_before_proof(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-source-bound-proof.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0021")
+    _populated_review_0021(engine)
+    corrupted = False
+
+    def corrupt(_conn, cursor, statement, _parameters, _context, _executemany):
+        nonlocal corrupted
+        if not corrupted and "project_review_notes__0022" in statement and statement.lstrip().upper().startswith("INSERT"):
+            corrupted = True
+            cursor.connection.execute(
+                "UPDATE project_review_notes__0022 SET body='tampered after copy' WHERE rowid=1"
+            )
+
+    sa.event.listen(engine, "after_cursor_execute", corrupt)
+    try:
+        with pytest.raises(RuntimeError, match="source payload proof failed"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0022")
+    finally:
+        sa.event.remove(engine, "after_cursor_execute", corrupt)
+    assert corrupted
+    assert migrate.schema_version(engine) == "0021"
+
+
+def test_revision_0022_downgrade_retry_promotes_a_proven_legacy_temp_after_source_drop(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0022-down-proof-retry.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0022")
+    interrupted = False
+
+    def interrupt(_conn, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal interrupted
+        if not interrupted and statement.strip() == "DROP TABLE project_review_notes":
+            interrupted = True
+            raise RuntimeError("injected 0022 downgrade after source drop")
+
+    sa.event.listen(engine, "after_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected 0022 downgrade after source drop"):
+            with engine.begin() as connection:
+                command.downgrade(migrate.alembic_config(connection), "0021")
+    finally:
+        sa.event.remove(engine, "after_cursor_execute", interrupt)
+    with engine.connect() as connection:
+        assert "project_review_notes" not in sa.inspect(connection).get_table_names()
+        assert "project_review_notes__0022" in sa.inspect(connection).get_table_names()
+        proof = connection.execute(sa.text(
+            "SELECT direction FROM _review_0022_rebuild_proofs WHERE table_name='project_review_notes'"
+        )).scalar_one()
+        assert proof == "down"
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0021")
+    with engine.connect() as connection:
+        assert "owner_id" not in {column["name"] for column in sa.inspect(connection).get_columns("project_review_notes")}
+    assert migrate.schema_version(engine) == "0021"
 
 
 @pytest.mark.parametrize(("direction", "start", "target"), (
