@@ -94,6 +94,7 @@ def action_for_request(method: str, path: str) -> str | None:
         "/api/trades", "/api/signals",
         "/api/account-pnl", "/api/dashboard", "/api/positions", "/api/provider-health",
         "/api/execution/state", "/api/execution/arm", "/api/execution/kill",
+        "/api/execution/events",
         "/api/execution/cockpit", "/api/execution/cockpit/deployments",
         "/api/ir-shadow/deployments", "/api/ir-paper/deployments",
     }

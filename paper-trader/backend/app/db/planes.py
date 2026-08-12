@@ -60,6 +60,11 @@ TABLE_PLANES: dict[str, Plane] = {
     "account_execution_leases": Plane.MONEY,
     "account_execution_lease_history": Plane.MONEY,
     "account_execution_commands": Plane.MONEY,
+    "execution_outbox_stream_head": Plane.MONEY,
+    "execution_outbox_event": Plane.MONEY,
+    "execution_outbox_consumer_cursor": Plane.MONEY,
+    "execution_outbox_consumer_receipt": Plane.MONEY,
+    "execution_outbox_retention_watermark": Plane.MONEY,
     # ADR 0015 §2: a connection is money-plane on BLAST RADIUS, not on recovery cost. A row
     # here is the authority to place real orders on a real account. The encryption key is not
     # in any plane — it comes from the environment, so a database compromise alone is not a

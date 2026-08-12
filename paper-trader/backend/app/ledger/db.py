@@ -15,7 +15,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.ledger.config import ledger_database_url
 
 VERSION_TABLE = "ledger_schema_version"
-HEAD_VERSION = "0001"
+HEAD_VERSION = "0002"
 
 
 class LedgerBase(DeclarativeBase):
@@ -131,6 +131,30 @@ def _migrate_postgresql(engine: Engine) -> None:
         rows = connection.execute(text(
             f'SELECT version FROM "{VERSION_TABLE}"'
         )).scalars().all()
+        if rows == ["0001"]:
+            from app.ledger.models import LEDGER_OUTBOX_MODELS
+
+            outbox_names = {
+                model.__table__.name for model in (
+                    LEDGER_OUTBOX_MODELS.StreamHead, LEDGER_OUTBOX_MODELS.Event,
+                    LEDGER_OUTBOX_MODELS.ConsumerCursor,
+                    LEDGER_OUTBOX_MODELS.ConsumerReceipt,
+                    LEDGER_OUTBOX_MODELS.RetentionWatermark,
+                )
+            }
+            if outbox_names & names:
+                raise RuntimeError("partial ledger outbox migration")
+            for model in (
+                LEDGER_OUTBOX_MODELS.StreamHead, LEDGER_OUTBOX_MODELS.Event,
+                LEDGER_OUTBOX_MODELS.ConsumerCursor,
+                LEDGER_OUTBOX_MODELS.ConsumerReceipt,
+                LEDGER_OUTBOX_MODELS.RetentionWatermark,
+            ):
+                model.__table__.create(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": HEAD_VERSION})
+            rows = [HEAD_VERSION]
         if rows != [HEAD_VERSION]:
             raise RuntimeError(
                 f"unsupported ledger PostgreSQL schema version {rows!r}; expected head"

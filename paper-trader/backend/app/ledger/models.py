@@ -88,3 +88,8 @@ class LedgerManualFill(LedgerBase):
     raw: Mapped[str] = mapped_column(Text, nullable=False)
     claimed_trade: Mapped[str | None] = mapped_column(String(64), nullable=True)
     seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+from app.events.outbox import define_outbox_models as _define_outbox_models
+
+LEDGER_OUTBOX_MODELS = _define_outbox_models(LedgerBase, "ledger")

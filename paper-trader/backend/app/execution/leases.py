@@ -82,6 +82,20 @@ def _token(lease: AccountExecutionLease) -> LeaseToken:
                       lease.cell_id or "", lease.worker_id or "")
 
 
+def _append_execution_change(session: Session, *, owner_id: str, broker_account_id: str,
+                             aggregate_type: str, aggregate_id: str, event_type: str,
+                             producer_key: str, payload: dict[str, Any]) -> None:
+    from app.events.planes import execution_outbox
+
+    outbox = execution_outbox()
+    with outbox.writer(session):
+        outbox.append(
+            session, classification="private", owner_id=owner_id,
+            broker_account_id=broker_account_id, aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id, event_type=event_type, schema_version=1,
+            payload=payload, producer_key=producer_key)
+
+
 class LeaseRepository:
     def __init__(self, sessions: sessionmaker):
         self.sessions = sessions
@@ -157,6 +171,13 @@ class LeaseRepository:
                 ).values(state="prepared", fence_epoch=lease.fence_epoch, cell_id=cell_id,
                          worker_id=worker_id, updated_at=now))
             _history(session, lease, transition, now)
+            _append_execution_change(
+                session, owner_id=owner_id, broker_account_id=broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{owner_id}:{broker_account_id}:{lease.fence_epoch}:{transition}",
+                payload={"projection": "execution_status", "state": lease.state,
+                         "fence_epoch": lease.fence_epoch})
             session.commit()
             return _token(lease)
 
@@ -223,6 +244,14 @@ class LeaseRepository:
             lease.block_reason = ""
             lease.updated_at = now
             _history(session, lease, "activate", now, reconciliation_evidence)
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=token.broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{token.owner_id}:{token.broker_account_id}:{token.fence_epoch}:activate",
+                payload={"projection": "execution_status", "state": "active",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def block(self, token: LeaseToken, reason: str) -> None:
@@ -237,6 +266,14 @@ class LeaseRepository:
             lease.desired_state = lease.effective_state = "disabled"
             lease.updated_at = now
             _history(session, lease, "block", now, reason)
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=token.broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{token.owner_id}:{token.broker_account_id}:{token.fence_epoch}:block",
+                payload={"projection": "execution_status", "state": "blocked",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def release(self, token: LeaseToken, reason: str = "normal shutdown") -> None:
@@ -252,6 +289,14 @@ class LeaseRepository:
             lease.desired_state = lease.effective_state = "disabled"
             lease.updated_at = now
             _history(session, lease, "release", now, reason)
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=token.broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{token.owner_id}:{token.broker_account_id}:{token.fence_epoch}:release",
+                payload={"projection": "execution_status", "state": "idle",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def status(self, *, owner_id: str, broker_account_id: str) -> dict[str, Any] | None:
@@ -360,6 +405,13 @@ class LeaseRepository:
                 request_digest=digest, state="prepared", actor_user_id=actor_user_id[:64],
                 expected_revision=lease.control_revision, created_at=now, updated_at=now)
             session.add(command)
+            _append_execution_change(
+                session, owner_id=owner_id, broker_account_id=broker_account_id,
+                aggregate_type="execution_control", aggregate_id=command.command_id,
+                event_type="execution.control.changed",
+                producer_key=f"control:{command.command_id}:accepted",
+                payload={"projection": "execution_status", "state": "accepted",
+                         "revision": lease.control_revision})
             session.commit()
             return {"request_id": command.command_id, "status": "accepted",
                     "revision": lease.control_revision, "desired_state": lease.desired_state,
@@ -441,6 +493,14 @@ class LeaseRepository:
             elif command.kind == "control_arm":
                 lease.desired_state = lease.effective_state = "disabled"
             lease.updated_at = now
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_control", aggregate_id=command.command_id,
+                event_type="execution.control.changed",
+                producer_key=f"control:{command.command_id}:complete",
+                payload={"projection": "execution_status", "state": command.state,
+                         "revision": lease.control_revision})
             session.commit()
 
     def complete_control_with_projection(self, token: LeaseToken, command_id: str, *,
@@ -471,6 +531,14 @@ class LeaseRepository:
             command.resolved_at = command.updated_at = now
             lease.effective_state = expected_desired
             lease.updated_at = now
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_control", aggregate_id=command.command_id,
+                event_type="execution.control.changed",
+                producer_key=f"control:{command.command_id}:projection",
+                payload={"projection": "execution_status", "state": command.state,
+                         "revision": lease.control_revision, "armed": armed})
             session.commit()
 
     def prepare_command(self, token: LeaseToken, *, kind: str, target_id: str,
@@ -517,6 +585,14 @@ class LeaseRepository:
                 state="prepared", actor_user_id=actor_user_id,
                 created_at=now, updated_at=now)
             session.add(command)
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_command", aggregate_id=command.command_id,
+                event_type="execution.lifecycle.changed",
+                producer_key=f"command:{command.command_id}:prepared",
+                payload={"projection": "execution_status", "state": "prepared",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
             return command
 
@@ -548,6 +624,15 @@ class LeaseRepository:
             if result.rowcount != 1:
                 session.rollback()
                 raise StaleLease("command transition lost its exact fence predicate")
+            if to_state in {"sent_unknown", "resolved", "failed", "blocked"}:
+                _append_execution_change(
+                    session, owner_id=token.owner_id,
+                    broker_account_id=token.broker_account_id,
+                    aggregate_type="execution_command", aggregate_id=command_id,
+                    event_type="execution.lifecycle.changed",
+                    producer_key=f"command:{command_id}:{to_state}",
+                    payload={"projection": "execution_status", "state": to_state,
+                             "fence_epoch": token.fence_epoch})
             session.commit()
 
     def resolve_acknowledged_evidence(self, token: LeaseToken, broker_identity: str,
@@ -570,6 +655,14 @@ class LeaseRepository:
             command.resolved_by_epoch = token.fence_epoch
             command.resolution_digest = evidence_digest
             command.updated_at = now
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_command", aggregate_id=command.command_id,
+                event_type="execution.lifecycle.changed",
+                producer_key=f"command:{command.command_id}:evidence-resolved",
+                payload={"projection": "execution_status", "state": "resolved",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def mark_ambiguous(self, token: LeaseToken, command_id: str, error_code: str) -> None:
@@ -595,6 +688,22 @@ class LeaseRepository:
             lease.block_reason = "ambiguous broker outcome"
             lease.updated_at = now
             _history(session, lease, "block", now, "ambiguous broker outcome")
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_command", aggregate_id=command.command_id,
+                event_type="execution.lifecycle.changed",
+                producer_key=f"command:{command.command_id}:sent-unknown",
+                payload={"projection": "execution_status", "state": "sent_unknown",
+                         "fence_epoch": token.fence_epoch})
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=token.broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{token.owner_id}:{token.broker_account_id}:{token.fence_epoch}:ambiguous-block",
+                payload={"projection": "execution_status", "state": "blocked",
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def reconcile_prior_command(self, token: LeaseToken, command_id: str, *,
@@ -626,6 +735,14 @@ class LeaseRepository:
                 lease.block_reason = "reconciliation discrepancy"
                 lease.blocked_at = now
                 _history(session, lease, "block", now, "reconciliation discrepancy")
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="execution_command", aggregate_id=command.command_id,
+                event_type="execution.lifecycle.changed",
+                producer_key=f"command:{command.command_id}:reconcile:{token.fence_epoch}",
+                payload={"projection": "execution_status", "state": outcome,
+                         "fence_epoch": token.fence_epoch})
             session.commit()
 
     def reconcile_prior_commands_from_snapshot(self, token: LeaseToken, *,

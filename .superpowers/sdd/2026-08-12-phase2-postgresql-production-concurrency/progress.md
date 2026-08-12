@@ -53,5 +53,8 @@
   command/control, closed LiveBroker mutation perimeter, stale-write fencing, API-only replicas,
   holder control execution, strict recovery activation and SQLite/live-PostgreSQL races are in the
   uncommitted tree. See `task-5-report.md`.
-- Task 6: shared event delivery and transactional outbox.
+- Task 6: implementation complete and frozen for independent review. Plane-local transactional
+  outboxes, fenced at-least-once consumers, PostgreSQL LISTEN wakeups with polling authority,
+  boot-unique replica delivery for all three planes, scoped cache/WS refresh and signed resume
+  cursors are in the uncommitted tree. See `task-6-report.md`.
 - Task 7: backup/restore, failure recovery, and production concurrency/load proof.

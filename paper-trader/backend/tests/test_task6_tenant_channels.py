@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from app.api import principal as principal_api
 from app.api import routes
 from app.api.principal import Principal
+from app.events.delivery import ResumeCursorCodec
+from app.events.outbox import PrincipalScope
 from fastapi import HTTPException
 from app.ws.manager import PUBLIC_MARKET, WSManager
 
@@ -160,4 +162,30 @@ def test_foreign_instrument_socket_closes_before_position_or_price_work(monkeypa
     monkeypatch.setattr(routes, "_instrument_payload",
                         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("price/position work")))
     asyncio.run(routes.ws_instrument(ws, "NIFTY"))
+    assert ws.close_codes == [1008]
+
+
+def test_main_socket_rejects_foreign_cursor_before_outbox_read_or_registration(monkeypatch):
+    codec = ResumeCursorCodec(b"w" * 32)
+    foreign = codec.encode(
+        plane="execution", scope=PrincipalScope("other-owner", "account-1"), offset=4)
+    ws = SimpleNamespace(
+        state=SimpleNamespace(), close_codes=[], query_params={"cursor": foreign},
+        app=SimpleNamespace(state=SimpleNamespace(event_cursor_codec=codec)))
+
+    async def close(code=1000): ws.close_codes.append(code)
+    async def authenticate(_):
+        return Principal(id="owner", kind="owner", scopes=frozenset({"*"}),
+                         user_id="owner-user", organization_id="owner", role="owner")
+    ws.close = close
+    monkeypatch.setattr(principal_api, "authenticate_websocket", authenticate)
+    monkeypatch.setattr(routes, "local_execution_cell", lambda *_: SimpleNamespace(
+        owner_id="owner", broker_account_id="account-1",
+        snapshot_state=lambda: (_ for _ in ()).throw(AssertionError("snapshot read"))))
+    monkeypatch.setattr("app.events.planes.execution_outbox", lambda: (
+        _ for _ in ()).throw(AssertionError("invalid cursor reached outbox read")))
+    monkeypatch.setattr(routes.manager, "connect",
+                        lambda *_a, **_k: (_ for _ in ()).throw(
+                            AssertionError("invalid socket registered")))
+    asyncio.run(routes.ws_main(ws))
     assert ws.close_codes == [1008]

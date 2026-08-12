@@ -2436,3 +2436,10 @@ class BrokerConnection(Base):
                                       if self.last_authenticated_at else None),
             "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
         }
+
+
+# Plane-local delivery tables are registered last so they cannot accidentally
+# acquire relationships to execution-domain tables. Scope references are values.
+from app.events.outbox import define_outbox_models as _define_outbox_models
+
+EXECUTION_OUTBOX_MODELS = _define_outbox_models(Base, "execution")

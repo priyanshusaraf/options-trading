@@ -13,8 +13,10 @@ from sqlalchemy.schema import CreateIndex, CreateTable, Table
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
 
 VERSION_TABLE = "research_schema_version"
-_INTERNAL_MIGRATION_TABLES = frozenset({"_research_0002_operation_rebuild_proof"})
-HEAD_VERSION = "0003"
+_INTERNAL_MIGRATION_TABLES = frozenset({
+    "_research_0002_operation_rebuild_proof", "sqlite_sequence",
+})
+HEAD_VERSION = "0004"
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
 _CURRENT_MARKER_SHAPE = (
@@ -235,7 +237,8 @@ def _root_tables() -> tuple[Table, ...]:
     """The historical 0001 tables, frozen before scheduler tables existed."""
     return tuple(table for table in ResearchBase.metadata.sorted_tables
                  if table.name not in {"research_operation", "research_operation_item",
-                                       "research_operation_event"})
+                                       "research_operation_event"}
+                 and not table.name.startswith("research_outbox_"))
 
 
 def _operation_table() -> Table:
@@ -252,7 +255,21 @@ def _operation_event_table() -> Table:
 
 def _tables_through_0002() -> tuple[Table, ...]:
     return tuple(table for table in ResearchBase.metadata.sorted_tables
-                 if table.name not in {"research_operation_item", "research_operation_event"})
+                 if table.name not in {"research_operation_item", "research_operation_event"}
+                 and not table.name.startswith("research_outbox_"))
+
+
+def _tables_through_0003() -> tuple[Table, ...]:
+    return tuple(table for table in ResearchBase.metadata.sorted_tables
+                 if not table.name.startswith("research_outbox_"))
+
+
+def _upgrade_outbox(connection) -> None:
+    from research.domain.models import RESEARCH_OUTBOX_MODELS
+
+    migration = importlib.import_module(
+        "research.domain.migrations.0004_transactional_outbox")
+    migration.upgrade(connection, RESEARCH_OUTBOX_MODELS)
 
 
 def _create_indexes_and_triggers(connection, *, tables=None) -> None:
@@ -501,7 +518,9 @@ def _recover_interrupted_swaps(connection) -> None:
             migration.upgrade(connection, table)
             names = _table_names(connection)
             continue
-        if source not in names and target in names and _has_owner_column(connection, target):
+        if (source not in names and target in names
+                and (_has_owner_column(connection, target)
+                     or source.startswith("research_outbox_"))):
             connection.exec_driver_sql(
                 f"ALTER TABLE {_quoted(target)} RENAME TO {_quoted(source)}"
             )
@@ -563,6 +582,7 @@ def migrate_research_db(engine: Engine) -> None:
             migration.upgrade(connection, _operation_table())
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _upgrade_outbox(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -572,6 +592,15 @@ def migrate_research_db(engine: Engine) -> None:
             _validate_schema(connection, tables=_tables_through_0002(), include_marker=False)
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _upgrade_outbox(connection)
+            _validate_schema(connection, include_marker=False)
+            _stamp(connection)
+            connection.commit()
+            _validate_schema(connection)
+            return
+        if version == "0003":
+            _validate_schema(connection, tables=_tables_through_0003(), include_marker=False)
+            _upgrade_outbox(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -605,6 +634,7 @@ def migrate_research_db(engine: Engine) -> None:
             migration.upgrade(connection, _operation_table())
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _upgrade_outbox(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -699,6 +729,18 @@ def _migrate_postgresql(engine: Engine) -> None:
         rows = connection.execute(text(
             f'SELECT version FROM "{VERSION_TABLE}"'
         )).scalars().all()
+        if rows == ["0003"]:
+            outbox_names = {
+                table.name for table in ResearchBase.metadata.sorted_tables
+                if table.name.startswith("research_outbox_")
+            }
+            if outbox_names & names:
+                raise ResearchMigrationError("partial research outbox migration")
+            _upgrade_outbox(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": HEAD_VERSION})
+            rows = [HEAD_VERSION]
         if rows != [HEAD_VERSION]:
             raise ResearchMigrationError(
                 f"unsupported research PostgreSQL schema version {rows!r}; expected head"

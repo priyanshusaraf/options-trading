@@ -407,3 +407,8 @@ class ShadowSession(ResearchBase):
         ForeignKeyConstraint(("owner_id", "candidate_id"), ("research_promotion_candidate.owner_id", "research_promotion_candidate.id")),
         Index("ix_research_shadow_session_owner_candidate", "owner_id", "candidate_id"),
     )
+
+
+from app.events.outbox import define_outbox_models as _define_outbox_models
+
+RESEARCH_OUTBOX_MODELS = _define_outbox_models(ResearchBase, "research")

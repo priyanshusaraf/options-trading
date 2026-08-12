@@ -6,11 +6,13 @@ concurrency rule.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import uuid
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.ledger.models import LedgerArtifact, LedgerManualFill, LedgerSnapshot
+from app.events.planes import ledger_outbox
 
 
 class VersionConflict(Exception):
@@ -38,7 +40,8 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
 
     Returns the new version. Raises VersionConflict on a mismatch, leaving the
     stored payload untouched."""
-    with sm() as s, s.begin():
+    outbox = ledger_outbox()
+    with sm() as s, outbox.writer(s):
         key = (LedgerSnapshot.owner_id == owner_id,
                LedgerSnapshot.broker_account_id == broker_account_id,
                LedgerSnapshot.id == 1)
@@ -49,6 +52,12 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
                         owner_id=owner_id, broker_account_id=broker_account_id,
                         id=1, version=1, payload=payload, updated_at=_now()))
                     s.flush()
+                    outbox.append(
+                        s, classification="private", owner_id=owner_id,
+                        broker_account_id=broker_account_id, aggregate_type="snapshot",
+                        aggregate_id="1", event_type="ledger.snapshot.changed",
+                        schema_version=1, payload={"projection": "ledger_snapshot", "version": 1},
+                        producer_key=f"snapshot:{owner_id}:{broker_account_id}:1")
                 return 1
             except IntegrityError:
                 current = s.scalar(select(LedgerSnapshot.version).where(*key))
@@ -60,6 +69,13 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
             *key, LedgerSnapshot.version == base_version).values(
                 version=base_version + 1, payload=payload, updated_at=_now()))
         if changed.rowcount == 1:
+            outbox.append(
+                s, classification="private", owner_id=owner_id,
+                broker_account_id=broker_account_id, aggregate_type="snapshot",
+                aggregate_id="1", event_type="ledger.snapshot.changed",
+                schema_version=1,
+                payload={"projection": "ledger_snapshot", "version": base_version + 1},
+                producer_key=f"snapshot:{owner_id}:{broker_account_id}:{base_version + 1}")
             return base_version + 1
         current = s.scalar(select(LedgerSnapshot.version).where(*key))
         raise VersionConflict(int(current or 0))
@@ -67,7 +83,8 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
 
 def put_artifact(sm, artifact_id: str, mime: str, data: bytes, *, owner_id: str,
                  broker_account_id: str) -> str:
-    with sm() as s, s.begin():
+    outbox = ledger_outbox()
+    with sm() as s, outbox.writer(s):
         row = s.get(LedgerArtifact, (owner_id, broker_account_id, artifact_id))
         if row is None:
             s.add(LedgerArtifact(owner_id=owner_id, broker_account_id=broker_account_id,
@@ -75,6 +92,15 @@ def put_artifact(sm, artifact_id: str, mime: str, data: bytes, *, owner_id: str,
                                  created_at=_now()))
         else:
             row.mime, row.bytes = mime, data
+        content = "sha256:" + __import__("hashlib").sha256(data).hexdigest()
+        outbox.append(
+            s, classification="private", owner_id=owner_id,
+            broker_account_id=broker_account_id, aggregate_type="artifact",
+            aggregate_id=artifact_id, event_type="ledger.artifact.changed",
+            schema_version=1,
+            payload={"projection": "ledger_artifact", "content_address": content,
+                     "mime": mime[:64]},
+            producer_key=f"artifact:{artifact_id}:{uuid.uuid4().hex}")
     return artifact_id
 
 
@@ -86,11 +112,18 @@ def get_artifact(sm, artifact_id: str, *, owner_id: str,
 
 
 def delete_artifact(sm, artifact_id: str, *, owner_id: str, broker_account_id: str) -> bool:
-    with sm() as s, s.begin():
+    outbox = ledger_outbox()
+    with sm() as s, outbox.writer(s):
         row = s.get(LedgerArtifact, (owner_id, broker_account_id, artifact_id))
         if row is None:
             return False
         s.delete(row)
+        outbox.append(
+            s, classification="private", owner_id=owner_id,
+            broker_account_id=broker_account_id, aggregate_type="artifact",
+            aggregate_id=artifact_id, event_type="ledger.artifact.changed",
+            schema_version=1, payload={"projection": "ledger_artifact", "state": "deleted"},
+            producer_key=f"artifact-delete:{artifact_id}:{uuid.uuid4().hex}")
         return True
 
 
@@ -131,7 +164,8 @@ def claim_manual_fill(sm, order_id: str, trade_id: str, *, owner_id: str,
                       broker_account_id: str, trade_exists) -> bool:
     """Returns False if there is no such fill. Raises AlreadyClaimed if the
     owner has already supplied reasoning for it."""
-    with sm() as s, s.begin():
+    outbox = ledger_outbox()
+    with sm() as s, outbox.writer(s):
         if not trade_exists(trade_id, owner_id, broker_account_id):
             return False
         claimed = s.execute(update(LedgerManualFill).where(
@@ -141,6 +175,13 @@ def claim_manual_fill(sm, order_id: str, trade_id: str, *, owner_id: str,
             LedgerManualFill.claimed_trade.is_(None),
         ).values(claimed_trade=trade_id))
         if claimed.rowcount == 1:
+            outbox.append(
+                s, classification="private", owner_id=owner_id,
+                broker_account_id=broker_account_id, aggregate_type="manual_fill",
+                aggregate_id=order_id, event_type="ledger.manual_fill.changed",
+                schema_version=1,
+                payload={"projection": "manual_fill", "state": "claimed"},
+                producer_key=f"manual-fill:{owner_id}:{broker_account_id}:{order_id}:claimed")
             return True
         existing = s.scalar(select(LedgerManualFill.claimed_trade).where(
             LedgerManualFill.owner_id == owner_id,

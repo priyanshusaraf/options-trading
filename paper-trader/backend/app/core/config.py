@@ -445,6 +445,10 @@ class Settings(BaseSettings):
     # hashed into a legacy UserSession at boot and never acts as runtime auth
     # authority after that bridge.
     api_token: str = ""
+    # Shared by every API replica to sign tenant-bound durable resume cursors.
+    # Production may reuse the legacy API token during migration; tokenless
+    # durable-session deployments must configure this explicitly.
+    event_cursor_secret: str = ""
     # The explicit service posture.  Empty authentication is only valid for a
     # development or test process; production-like roles refuse to boot instead
     # of accidentally exposing the shared execution API.
@@ -578,6 +582,11 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
             "REFUSING TO START: authentication is disabled for a production-like service role. "
             "Enable durable authentication or use an explicit development/test PT_SERVICE_ROLE."
         )
+    if (settings.service_role not in {"development", "test"}
+            and len(settings.event_cursor_secret.strip()) < 32):
+        raise BootConfigError(
+            "PT_EVENT_CURSOR_SECRET must contain at least 32 characters for a production "
+            "deployment so every API replica verifies the same resume cursor")
     role = settings.execution_worker.strip().lower()
     if role not in {"auto", "api", "worker"}:
         raise BootConfigError("PT_EXECUTION_WORKER must be exactly auto, api, or worker")

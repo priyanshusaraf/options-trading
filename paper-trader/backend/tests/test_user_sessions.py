@@ -301,9 +301,11 @@ def test_disabled_auth_refuses_production_boot_and_yields_explicit_development_p
 
 def test_production_accepts_legacy_bootstrap_or_explicit_durable_auth_mode():
     """Legacy upgrade and tokenless durable production are both valid enabled postures."""
-    assert_boot_config(Settings(service_role="production", api_token="legacy-token"),
+    assert_boot_config(Settings(service_role="production", api_token="legacy-token",
+                                event_cursor_secret="s" * 32),
                        env_file=".env", under_test=False, warn=lambda _message: None)
-    assert_boot_config(Settings(service_role="production", api_token="", auth_disabled=False),
+    assert_boot_config(Settings(service_role="production", api_token="", auth_disabled=False,
+                                event_cursor_secret="s" * 32),
                        env_file=".env", under_test=False, warn=lambda _message: None)
 
 

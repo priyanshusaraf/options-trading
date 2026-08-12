@@ -8,6 +8,7 @@ loop as a background task. The owner just runs this and watches.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import socket
@@ -110,6 +111,88 @@ async def lifespan(app: FastAPI):
         from app.core.instance_lock import acquire_db_lock
         app.state.db_lock = acquire_db_lock(settings.db_path)
     init_db(reset=settings.provider == "mock")
+    manager.bind(asyncio.get_running_loop())
+
+    # Every replica consumes the execution projection outbox. LISTEN only wakes
+    # PostgreSQL replicas early; the managed service always polls the durable cursor.
+    from app.db.session import SessionLocal
+    from app.events.delivery import (CacheInvalidator, DurableReplicaGateway,
+                                     ManagedOutboxDelivery, OutboxDispatcher,
+                                     ResumeCursorCodec)
+    from app.events.outbox import PrincipalScope
+    from app.events.planes import execution_outbox, ledger_outbox, research_outbox
+    from app.execution.leases import LeaseRepository
+
+    def reload_projection(scope: PrincipalScope, projection: str) -> dict:
+        if scope is None:
+            return {"projection": projection, "resync": True}
+        if projection.startswith("ledger_") and scope.broker_account_id:
+            from app.ledger import service as ledger_service
+            got = ledger_service.read_snapshot(
+                ledger_sm, owner_id=scope.owner_id,
+                broker_account_id=scope.broker_account_id)
+            return ({"projection": projection, "version": got[0]} if got
+                    else {"projection": projection, "resync": True})
+        if projection == "research_operation" and settings.research_enabled:
+            from research.domain.models import ResearchOperation
+            with research_sm() as session:
+                rows = list(session.execute(select(
+                    ResearchOperation.operation_id, ResearchOperation.status,
+                    ResearchOperation.stage).where(
+                        ResearchOperation.owner_id == scope.owner_id
+                    ).order_by(ResearchOperation.created_at.desc()).limit(32)))
+            return {"projection": projection, "operations": [
+                {"operation_id": row[0], "status": row[1], "stage": row[2]}
+                for row in rows]}
+        if scope is None or scope.broker_account_id is None:
+            return {"projection": projection, "resync": True}
+        return LeaseRepository(SessionLocal).status(
+            owner_id=scope.owner_id, broker_account_id=scope.broker_account_id,
+        ) or {"projection": projection, "resync": True}
+
+    app.state.event_cache_invalidator = CacheInvalidator()
+    event_gateway = DurableReplicaGateway(
+        manager, reload_projection=reload_projection,
+        cache_invalidator=app.state.event_cache_invalidator)
+    replica_boot = uuid.uuid4().hex
+    app.state.event_cursor_codec = ResumeCursorCodec(hashlib.sha256(
+        (settings.event_cursor_secret or "strategy-os-development-resume-cursor").encode()
+    ).digest())
+    deliveries = [ManagedOutboxDelivery(
+        OutboxDispatcher(
+            SessionLocal, execution_outbox(),
+            consumer_id=f"api-{socket.gethostname()}-{replica_boot}",
+            lease_owner=replica_boot, effect=event_gateway.apply,
+        ), engine=execution_engine, plane="execution")]
+
+    ledger_sm = ledger_sessionmaker(ledger_authority)
+    ledger_engine = ledger_sm.kw.get("bind")
+    deliveries.append(ManagedOutboxDelivery(
+        OutboxDispatcher(
+            ledger_sm, ledger_outbox(),
+            consumer_id=f"ledger-{socket.gethostname()}-{replica_boot}",
+            lease_owner=replica_boot, effect=event_gateway.apply,
+        ), engine=ledger_engine, plane="ledger"))
+    if settings.research_enabled:
+        from research.domain.base import make_engine as make_research_engine, make_sessionmaker
+        research_delivery_engine = make_research_engine(research_authority)
+        research_sm = make_sessionmaker(research_delivery_engine)
+        deliveries.append(ManagedOutboxDelivery(
+            OutboxDispatcher(
+                research_sm, research_outbox(),
+                consumer_id=f"research-{socket.gethostname()}-{replica_boot}",
+                lease_owner=replica_boot, effect=event_gateway.apply,
+            ), engine=research_delivery_engine, plane="research"))
+    delivery_tasks = [asyncio.create_task(delivery.run()) for delivery in deliveries]
+
+    async def stop_deliveries() -> None:
+        for delivery in deliveries:
+            await delivery.stop()
+        for task in delivery_tasks:
+            task.cancel()
+        await asyncio.gather(*delivery_tasks, return_exceptions=True)
+        if settings.research_enabled:
+            research_delivery_engine.dispose()
     # Backtest workers are intentionally replaceable. Reclaim only expired/pending
     # durable claims; a non-expired remote lease is never inferred dead.
     if settings.provider == "kite":
@@ -160,7 +243,10 @@ async def lifespan(app: FastAPI):
     if not hosts_execution:
         app.state.runner = None
         log.info("API-only replica ready — durable execution status/control enabled; no broker cell")
-        yield
+        try:
+            yield
+        finally:
+            await stop_deliveries()
         return
 
     assigned_owner = settings.execution_owner_id.strip()
@@ -189,8 +275,6 @@ async def lifespan(app: FastAPI):
                    broker_account_id=assigned_account)
         disarm_session.commit()
     app.state.runner = runner
-
-    manager.bind(asyncio.get_running_loop())
 
     async def on_update(state: dict) -> None:
         await manager.broadcast((runner.owner_id, runner.broker_account_id),
@@ -303,6 +387,7 @@ async def lifespan(app: FastAPI):
             lease_repository.release(lease_token)
         except Exception as e:
             log.warn(f"execution lease release failed at shutdown: {e}")
+        await stop_deliveries()
 
 
 class _PollingRouteFilter(logging.Filter):

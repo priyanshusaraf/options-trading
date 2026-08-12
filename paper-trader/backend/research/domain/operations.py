@@ -301,11 +301,23 @@ class ResearchOperationRepository:
             ResearchOperationEvent.owner_id == owner_id,
             ResearchOperationEvent.operation_id == operation_id,
         ))
+        sequence = int(latest or 0) + 1
         self.session.add(ResearchOperationEvent(
             owner_id=owner_id, operation_id=operation_id,
-            sequence=int(latest or 0) + 1, event_type=event_type, stage=stage,
+            sequence=sequence, event_type=event_type, stage=stage,
             payload_json="{}", created_at=now,
         ))
+        from app.events.planes import research_outbox
+        outbox = research_outbox()
+        with outbox.writer(self.session):
+            outbox.append(
+                self.session, classification="private", owner_id=owner_id,
+                broker_account_id=None, aggregate_type="research_operation",
+                aggregate_id=operation_id, event_type="research.operation.changed",
+                schema_version=1,
+                payload={"projection": "research_operation", "state": event_type,
+                         "stage": stage or "", "audit_sequence": sequence},
+                producer_key=f"operation:{owner_id}:{operation_id}:{sequence}")
 
     def enqueue(self, *, owner_id: str, trigger: str, plan: dict[str, Any], build: str,
                 provider_mode: str, operation_id: str | None = None,
@@ -358,6 +370,17 @@ class ResearchOperationRepository:
                 self.session.add(ResearchOperationItem(
                     owner_id=owner_id, operation_id=value, item_key=item_key,
                     ordinal=ordinal, status="pending"))
+            from app.events.planes import research_outbox
+            outbox = research_outbox()
+            with outbox.writer(self.session):
+                outbox.append(
+                    self.session, classification="private", owner_id=owner_id,
+                    broker_account_id=None, aggregate_type="research_operation",
+                    aggregate_id=value, event_type="research.operation.changed",
+                    schema_version=1,
+                    payload={"projection": "research_operation", "state": "queued",
+                             "stage": "startup", "audit_sequence": 0},
+                    producer_key=f"operation:{owner_id}:{value}:queued")
             self.session.commit()
         except Exception:
             self.session.rollback()
@@ -932,8 +955,20 @@ class ResearchOperationRepository:
 
     def reconcile_expired(self, *, owner_id: str, now: dt.datetime | None = None) -> int:
         instant = _instant(now)
+        candidates = list(self.session.scalars(select(ResearchOperation.operation_id).where(
+            ResearchOperation.owner_id == owner_id,
+            or_(
+                and_(ResearchOperation.status == "pending",
+                     ResearchOperation.cancel_requested_at.is_not(None)),
+                and_(ResearchOperation.status == "running",
+                     ResearchOperation.cancel_requested_at.is_not(None),
+                     ResearchOperation.claim_expires_at < instant),
+            ))))
         pending = self.session.execute(update(ResearchOperation).where(ResearchOperation.owner_id == owner_id, ResearchOperation.status == "pending", ResearchOperation.cancel_requested_at.is_not(None)).values(status="cancelled", completed_at=instant))
         active = self.session.execute(update(ResearchOperation).where(ResearchOperation.owner_id == owner_id, ResearchOperation.status == "running", ResearchOperation.cancel_requested_at.is_not(None), ResearchOperation.claim_expires_at < instant).values(status="cancelled", completed_at=instant, claim_token=None, claimed_by=None, claim_expires_at=None))
+        for operation_id in candidates:
+            self._append_event(operation_id, owner_id=owner_id, event_type="cancelled",
+                               stage=None, now=instant)
         self.session.commit(); return (pending.rowcount or 0) + (active.rowcount or 0)
 
 

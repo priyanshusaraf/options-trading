@@ -915,6 +915,42 @@ def execution_state(request: Request, account_id: str | None = None,
             "running": status["state"] == "active"}
 
 
+@router.get("/api/execution/events")
+def execution_events(request: Request, cursor: str | None = None,
+                     account_id: str | None = None, limit: int = 100,
+                     principal: Principal = Depends(get_principal)):
+    """Return only scoped change identities and a scope-bound resume cursor."""
+    account = durable_execution_account(principal, account_id)
+    owner = owner_id_for(principal)
+    from app.events.outbox import PrincipalScope
+    from app.events.planes import execution_outbox
+
+    scope = PrincipalScope(owner, account)
+    codec = getattr(request.app.state, "event_cursor_codec", None)
+    if codec is None:
+        raise HTTPException(status_code=503, detail="resume service unavailable")
+    offset = codec.decode(cursor, plane="execution", scope=scope) if cursor is not None else 0
+    if cursor is not None and offset is None:
+        raise HTTPException(status_code=400, detail="invalid resume cursor")
+    repo = execution_outbox()
+    with SessionLocal() as session:
+        result = repo.read_scoped_after(
+            session, scope, offset=offset, limit=max(1, min(limit, 500)),
+            resume_cursor_present=cursor is not None)
+        events = [{
+            "event_id": event.event_id, "offset": event.plane_offset,
+            "type": event.event_type,
+            "aggregate_sequence": event.aggregate_sequence,
+            "content_address": event.content_address,
+        } for event in result.events]
+    high_water = max(offset, result.high_water)
+    return {
+        "events": events, "resync_required": result.resync_required,
+        "cursor": codec.encode(plane="execution", scope=scope, offset=high_water)
+        if codec else None,
+    }
+
+
 @router.post("/api/execution/arm", status_code=202)
 def execution_arm(body: ArmBody, request: Request,
                   account_id: str | None = None,
@@ -1112,14 +1148,70 @@ async def ws_main(ws: WebSocket):
             await ws.close(code=1008)
         return
     ws.state.principal = principal
+    from app.api.principal import owner_id_for
+    from app.events.outbox import PrincipalScope
+
+    def resume_state(owner_id: str, account_id: str):
+        codec = getattr(ws.app.state, "event_cursor_codec", None)
+        if codec is None:
+            return None, False
+        supplied = ws.query_params.get("cursor")
+        scope = PrincipalScope(owner_id, account_id)
+        offset = codec.decode(supplied, plane="execution", scope=scope) if supplied is not None else 0
+        if supplied is not None and offset is None:
+            raise ValueError("invalid resume cursor")
+        from app.events.planes import execution_outbox
+        with SessionLocal() as session:
+            result = execution_outbox().read_scoped_after(
+                session, scope, offset=offset, limit=1,
+                resume_cursor_present=supplied is not None)
+        return codec.encode(
+            plane="execution", scope=scope,
+            offset=max(offset, result.high_water)), result.resync_required
     try:
         r = local_execution_cell(ws, principal)
     except HTTPException:
+        # API-only replicas serve the durable projection and subscribe to the
+        # same server-resolved private channel. They never gain broker authority.
+        if getattr(getattr(ws, "app", None), "state", None) is None or not getattr(
+                ws.app.state, "event_cursor_codec", None):
+            await ws.close(code=1008)
+            return
+        from app.api.execution_access import durable_execution_account, durable_execution_status
+        try:
+            account_id = durable_execution_account(principal)
+            owner_id = owner_id_for(principal)
+            snapshot = durable_execution_status(principal, account_id)
+        except HTTPException:
+            await ws.close(code=1008)
+            return
+        try:
+            cursor, resync = resume_state(owner_id, account_id)
+        except ValueError:
+            await ws.close(code=1008)
+            return
+        await manager.connect(ws, channel=(owner_id, account_id), accepted=True)
+        try:
+            if resync:
+                await ws.send_json({"type": "resync", "data": {"required": True}})
+            await ws.send_json({"type": "state", "data": snapshot, "cursor": cursor})
+            while True:
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            manager.disconnect(ws)
+        except Exception:
+            manager.disconnect(ws)
+        return
+    try:
+        cursor, resync = resume_state(r.owner_id, r.broker_account_id)
+    except ValueError:
         await ws.close(code=1008)
         return
     await manager.connect(ws, channel=(r.owner_id, r.broker_account_id), accepted=True)
     try:
-        await ws.send_json({"type": "state", "data": r.snapshot_state()})
+        if resync:
+            await ws.send_json({"type": "resync", "data": {"required": True}})
+        await ws.send_json({"type": "state", "data": r.snapshot_state(), "cursor": cursor})
         while True:
             await ws.receive_text()  # keepalive; we only push
     except WebSocketDisconnect:
