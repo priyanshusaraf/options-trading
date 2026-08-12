@@ -13,14 +13,16 @@ Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](e
 > SQLite remains the current single-node persistence profile. Phase 2 Task 1 has built the
 > PostgreSQL execution-plane profile: URL authority, fresh-current-schema creation and validation,
 > stamp, PostgreSQL-native guards and refusal of populated unmanaged targets. The live PostgreSQL
-> gate is still unrun on this host (`PT_TEST_POSTGRES_URL` absent; no Docker or `psql`), and
+> 16 gate now passes against an isolated `PT_TEST_POSTGRES_URL`; distributed execution ownership,
+> replicated APIs and shared event delivery remain unbuilt and
 > distributed execution ownership, replicated APIs and shared event delivery remain unbuilt and
 > horizontally unproven.
 > `500 users` is a workload-validation tier, never a product ceiling.
 
 > **Task 1 evidence (2026-08-12):** from `backend/`, focused database-profile, PostgreSQL-schema,
-> SQLite migration/profile and health-schema gates reported **36 passed, 1 skipped**. The skipped
-> test requires an explicit `PT_TEST_POSTGRES_URL`; it was not treated as a PostgreSQL service pass.
+> SQLite migration/profile and health-schema gates reported **37 passed** with the opt-in live
+> PostgreSQL gate enabled. It proves fresh create, structural validation, stamp and idempotent
+> second startup, plus the repaired Boolean default and named paper-authority CHECK.
 
 **The L1 band is closed through L1.4 and is no longer the resume point.** IR paper authority
 (`ir_graph, paper, authoritative`) is granted, bound, hardened and proven recoverable;

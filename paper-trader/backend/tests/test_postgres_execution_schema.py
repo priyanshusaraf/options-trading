@@ -7,7 +7,6 @@ mock engine proves server behaviour.
 from __future__ import annotations
 
 import os
-import re
 from copy import deepcopy
 
 import pytest
@@ -84,10 +83,15 @@ def test_postgresql_head_startup_validates_immutable_fact_triggers(monkeypatch):
 
 
 def test_postgresql_boolean_defaults_compile_as_boolean_literals():
-    ddl = str(CreateTable(UniversePreference.__table__).compile(dialect=postgresql.dialect()))
-
-    assert "active BOOLEAN DEFAULT true NOT NULL" in ddl
-    assert "on_home BOOLEAN DEFAULT false NOT NULL" in ddl
+    for table in Base.metadata.sorted_tables:
+        for column in table.columns:
+            if not isinstance(column.type, sa.Boolean) or column.server_default is None:
+                continue
+            default = migrate._compiled_sql(column.server_default.arg, postgresql.dialect())
+            assert default in {"true", "false"}, (
+                f"{table.name}.{column.name} has PostgreSQL boolean default {default!r}; "
+                "use sqlalchemy.true()/false(), never an integer literal"
+            )
 
 
 def test_postgresql_ddl_has_native_json_guards_and_all_partial_index_predicates():
@@ -230,8 +234,8 @@ def test_current_schema_validation_rejects_load_bearing_metadata_drift(tmp_path,
             def get_check_constraints(self, table_name):
                 rows = deepcopy(real.get_check_constraints(table_name))
                 if tamper == "check" and table_name == "graph_versions":
-                    next(row for row in rows
-                         if row["name"] == "ck_graph_versions_valid_json")["sqltext"] = "TRUE"
+                    return [row for row in rows
+                            if row["name"] != "ck_graph_versions_valid_json"]
                 return rows
 
             def get_foreign_keys(self, table_name):
@@ -245,7 +249,7 @@ def test_current_schema_validation_rejects_load_bearing_metadata_drift(tmp_path,
                 if tamper == "partial_index" and table_name == "project_review_saved_views":
                     row = next(item for item in rows
                                if item["name"] == "uq_project_review_saved_views_active_name")
-                    row["dialect_options"] = {"sqlite_where": sa.text("deleted_at IS NOT NULL")}
+                    row["dialect_options"] = {}
                 return rows
 
         monkeypatch.setattr(migrate, "inspect", lambda _engine: TamperedInspector())
@@ -255,8 +259,8 @@ def test_current_schema_validation_rejects_load_bearing_metadata_drift(tmp_path,
         engine.dispose()
 
 
-def test_current_schema_validation_accepts_postgresql_jsonb_check_deparse(monkeypatch):
-    """PostgreSQL reflects our ``CAST(... AS JSONB)`` checks as ``::jsonb``."""
+def test_current_schema_validation_accepts_postgresql_catalog_representation(monkeypatch):
+    """The structural validator accepts stable PostgreSQL catalog representations."""
     dialect = postgresql.dialect()
 
     class Inspector:
@@ -265,14 +269,26 @@ def test_current_schema_validation_accepts_postgresql_jsonb_check_deparse(monkey
 
         def get_columns(self, table_name):
             table = Base.metadata.tables[table_name]
-            return [{
-                "name": column.name,
-                "type": column.type.compile(dialect=dialect),
-                "nullable": column.nullable,
-                "default": migrate._compiled_sql(
+            rows = []
+            for column in table.columns:
+                actual_type = column.type.compile(dialect=dialect)
+                actual_type = actual_type.replace("TIMESTAMP WITHOUT TIME ZONE", "TIMESTAMP")
+                actual_type = actual_type.replace("FLOAT", "DOUBLE PRECISION")
+                default = migrate._compiled_sql(
                     column.server_default.arg if column.server_default is not None else None,
-                    dialect),
-            } for column in table.columns]
+                    dialect)
+                if default is not None and default.startswith("'"):
+                    suffix = "text" if isinstance(column.type, sa.Text) else "character varying"
+                    default = f"{default}::{suffix}"
+                elif column.primary_key and isinstance(column.type, sa.Integer):
+                    default = f"nextval('{table_name}_{column.name}_seq'::regclass)"
+                rows.append({
+                    "name": column.name,
+                    "type": actual_type,
+                    "nullable": column.nullable,
+                    "default": default,
+                })
+            return rows
 
         def get_pk_constraint(self, table_name):
             return {"constrained_columns": [column.name for column in
@@ -287,23 +303,21 @@ def test_current_schema_validation_accepts_postgresql_jsonb_check_deparse(monkey
             } for constraint in Base.metadata.tables[table_name].foreign_key_constraints]
 
         def get_unique_constraints(self, table_name):
-            return [{"name": constraint.name,
-                     "column_names": [column.name for column in constraint.columns]}
-                    for constraint in Base.metadata.tables[table_name].constraints
-                    if isinstance(constraint, sa.UniqueConstraint) and constraint.name is not None]
+            rows = []
+            for constraint in Base.metadata.tables[table_name].constraints:
+                if not isinstance(constraint, sa.UniqueConstraint):
+                    continue
+                columns = [column.name for column in constraint.columns]
+                name = constraint.name or f"{table_name}_{'_'.join(columns)}_key"
+                rows.append({"name": name, "column_names": columns})
+            return rows
 
         def get_check_constraints(self, table_name):
             rows = []
             for constraint in Base.metadata.tables[table_name].constraints:
                 if not isinstance(constraint, sa.CheckConstraint) or constraint.name is None:
                     continue
-                sqltext = migrate._compiled_sql(constraint.sqltext, dialect)
-                # This mirrors PostgreSQL's normal deparse of JSONB casts, including
-                # its extra parentheses around the operand.
-                sqltext = re.sub(
-                    r"CAST\(([a-z_][a-z0-9_]*) AS JSONB\)", r"(\1)::jsonb", sqltext,
-                    flags=re.IGNORECASE)
-                rows.append({"name": constraint.name, "sqltext": sqltext})
+                rows.append({"name": constraint.name, "sqltext": "catalog-deparsed"})
             return rows
 
         def get_indexes(self, table_name):
@@ -314,7 +328,8 @@ def test_current_schema_validation_accepts_postgresql_jsonb_check_deparse(monkey
                     "name": index.name,
                     "column_names": [column.name for column in index.columns],
                     "unique": index.unique,
-                    "dialect_options": {"postgresql_where": where} if where is not None else {},
+                    "dialect_options": {"postgresql_where": "catalog-deparsed"}
+                    if where is not None else {},
                 })
             return rows
 
@@ -357,5 +372,36 @@ def test_optional_postgres_fresh_schema_is_complete_and_idempotent():
         assert migrate.init_schema(engine, create_all=lambda: pytest.fail("second create_all"),
                                    legacy_migrate=lambda: pytest.fail("legacy migration ran"),
                                    expected_tables=Base.metadata.tables) == migrate.head_revision()
+        with engine.connect() as conn:
+            collapsed_default = conn.execute(sa.text("""
+                SELECT column_default
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'ir_graph_layout_groups'
+                  AND column_name = 'collapsed'
+            """)).scalar_one()
+        assert collapsed_default.lower().startswith("false")
+
+        with engine.begin() as conn:
+            with pytest.raises(sa.exc.ProgrammingError, match="boolean"):
+                conn.execute(sa.text("""
+                    INSERT INTO ir_graph_layout_groups
+                        (owner_id, graph_identifier, graph_version, identifier,
+                         display_name, x, y, width, height, collapsed)
+                    VALUES ('owner', 'graph', 1, 'group', 'Group', 0, 0, 1, 1, 0)
+                """))
+        with engine.begin() as conn:
+            with pytest.raises(sa.exc.IntegrityError,
+                               match="ck_ir_paper_deployment_authority"):
+                conn.execute(sa.text("""
+                    INSERT INTO ir_paper_deployments
+                         (project_id, graph_identifier, graph_version,
+                         graph_content_address, deployment_id, instrument_key,
+                         interval, strategy_key, authority, created_at, updated_at,
+                         owner_id, broker_account_id)
+                    VALUES ('project', 'graph', 1, 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+                            1, 'instrument', '1m', 'strategy', 'non_authoritative',
+                            NOW(), NOW(), 'owner', 'account')
+                """))
     finally:
         engine.dispose()

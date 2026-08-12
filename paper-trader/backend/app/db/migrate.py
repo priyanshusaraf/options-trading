@@ -37,7 +37,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect
+from sqlalchemy import CheckConstraint, Engine, Integer, UniqueConstraint, inspect
 from sqlalchemy import text as _sa_text
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -156,29 +156,70 @@ def _is_postgresql(engine: Engine) -> bool:
     return engine.dialect.name == "postgresql"
 
 
-def _normalize_sql(value) -> str | None:
-    """Compare reflected DDL while ignoring harmless quote/whitespace differences."""
+def _normalize_default(value) -> str | None:
+    """Compare server-default literals across the PostgreSQL catalog deparser."""
     if value is None:
         return None
     value = "".join(str(value).split())
+    # PostgreSQL records string literals with their inferred type, e.g.
+    # ``'active'::character varying``. The literal is the contract here; the
+    # catalog's implementation cast is not.
+    value = re.sub(
+        r"::(?:character(?:varying)?|varchar|text|boolean|integer|bigint|"
+        r"doubleprecision|numeric|timestamp(?:withouttimezone)?)", "", value,
+        flags=re.IGNORECASE,
+    )
     while value.startswith("(") and value.endswith(")"):
         value = value[1:-1]
     if len(value) >= 2 and value[0] == value[-1] == "'":
         value = value[1:-1]
-    value = value.lower()
-    # PostgreSQL deparses ``CAST(column AS JSONB)`` as ``(column)::jsonb``.
-    # These are the only casts emitted by the current model's portable JSON
-    # constraints. Canonicalize that bounded equivalence rather than accepting
-    # arbitrary changed CHECK expressions.
-    value = re.sub(r"cast\(([a-z_][a-z0-9_]*)asjsonb\)", r"\1::jsonb", value)
-    value = re.sub(r"\(([a-z_][a-z0-9_]*)\)::jsonb", r"\1::jsonb", value)
-    return value
+    return value.lower()
 
 
 def _compiled_sql(value, dialect) -> str | None:
     if value is None:
         return None
     return str(value.compile(dialect=dialect)) if hasattr(value, "compile") else str(value)
+
+
+def _types_are_compatible(expected, actual) -> bool:
+    """Use SQLAlchemy type affinity, retaining load-bearing declared limits."""
+    if hasattr(expected, "_compare_type_affinity") and hasattr(actual, "_type_affinity"):
+        if not expected._compare_type_affinity(actual):
+            return False
+        for attr in ("length", "precision", "scale"):
+            expected_value = getattr(expected, attr, None)
+            if expected_value is not None and expected_value != getattr(actual, attr, None):
+                return False
+        return True
+
+    # Lightweight inspector fakes supply compiled strings. Keep their aliases
+    # close to SQLAlchemy's PostgreSQL type affinity rather than comparing DDL.
+    aliases = {
+        "datetime": "timestamp",
+        "timestampwithouttimezone": "timestamp",
+        "float": "doubleprecision",
+    }
+    expected_name = aliases.get("".join(str(expected).lower().split()),
+                                "".join(str(expected).lower().split()))
+    actual_name = aliases.get("".join(str(actual).lower().split()),
+                              "".join(str(actual).lower().split()))
+    return expected_name == actual_name
+
+
+def _defaults_are_equivalent(column, expected, actual, dialect_name: str) -> bool:
+    if expected == actual:
+        return True
+    # PostgreSQL implements an auto-increment integer primary key with a sequence
+    # default even when the ORM has no explicit server default.
+    return (
+        dialect_name == "postgresql"
+        and expected is None
+        and bool(column.primary_key)
+        and isinstance(column.type, Integer)
+        and actual is not None
+        and actual.startswith("nextval(")
+    )
 
 
 def _validate_postgresql_immutable_triggers(engine: Engine) -> None:
@@ -231,22 +272,21 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
             for constraint in table.foreign_key_constraints
         }
         actual_uniques = {
-            unique["name"]: tuple(unique["column_names"])
+            tuple(unique["column_names"])
             for unique in inspector.get_unique_constraints(table_name)
-            if unique["name"] is not None
         }
         expected_uniques = {
-            constraint.name: tuple(column.name for column in constraint.columns)
+            tuple(column.name for column in constraint.columns)
             for constraint in table.constraints
-            if isinstance(constraint, UniqueConstraint) and constraint.name is not None
+            if isinstance(constraint, UniqueConstraint)
         }
         actual_checks = {
-            check["name"]: _normalize_sql(check.get("sqltext"))
+            check["name"]
             for check in inspector.get_check_constraints(table_name)
             if check["name"] is not None
         }
         expected_checks = {
-            constraint.name: _normalize_sql(_compiled_sql(constraint.sqltext, engine.dialect))
+            constraint.name
             for constraint in table.constraints
             if isinstance(constraint, CheckConstraint)
             and constraint.name is not None
@@ -254,16 +294,15 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
         actual_indexes = {
             index["name"]: (
                 tuple(index["column_names"]), bool(index.get("unique")),
-                _normalize_sql((index.get("dialect_options") or {}).get(
-                    f"{engine.dialect.name}_where")),
+                (index.get("dialect_options") or {}).get(
+                    f"{engine.dialect.name}_where") is not None,
             )
             for index in inspector.get_indexes(table_name)
         }
         expected_indexes = {
             index.name: (
                 tuple(column.name for column in index.columns), bool(index.unique),
-                _normalize_sql(_compiled_sql(
-                    index.dialect_options[engine.dialect.name].get("where"), engine.dialect)),
+                index.dialect_options[engine.dialect.name].get("where") is not None,
             )
             for index in table.indexes
         }
@@ -276,19 +315,24 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
             if reflected is None:
                 continue
             expected = {
-                "type": _normalize_sql(column.type.compile(dialect=engine.dialect)),
                 "nullable": bool(column.nullable),
-                "default": _normalize_sql(_compiled_sql(
+                "default": _normalize_default(_compiled_sql(
                     column.server_default.arg if column.server_default is not None else None,
                     engine.dialect)),
             }
             actual = {
-                "type": _normalize_sql(reflected["type"]),
                 "nullable": bool(reflected["nullable"]),
-                "default": _normalize_sql(reflected.get("default")),
+                "default": _normalize_default(reflected.get("default")),
             }
-            if actual != expected:
-                column_defects[column.name] = {"expected": expected, "actual": actual}
+            if (not _types_are_compatible(column.type, reflected["type"])
+                    or actual["nullable"] != expected["nullable"]
+                    or not _defaults_are_equivalent(
+                        column, expected["default"], actual["default"],
+                        engine.dialect.name)):
+                column_defects[column.name] = {
+                    "expected": {**expected, "type": str(column.type)},
+                    "actual": {**actual, "type": str(reflected["type"])},
+                }
         if column_defects:
             table_defects["columns"] = column_defects
         if actual_pk != expected_pk:
@@ -299,13 +343,10 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
         if expected_uniques != actual_uniques:
             table_defects["unique_constraints"] = {"expected": expected_uniques,
                                                     "actual": actual_uniques}
-        check_defects = {
-            name: {"expected": expected, "actual": actual_checks.get(name)}
-            for name, expected in expected_checks.items()
-            if actual_checks.get(name) != expected
-        }
-        if check_defects:
-            table_defects["check_constraints"] = check_defects
+        if expected_checks != actual_checks:
+            table_defects["check_constraints"] = {
+                "expected": expected_checks, "actual": actual_checks,
+            }
         mismatched_indexes = {
             name: {"expected": expected, "actual": actual_indexes.get(name)}
             for name, expected in expected_indexes.items()

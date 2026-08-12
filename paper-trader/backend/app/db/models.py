@@ -61,6 +61,23 @@ def _compile_lower_hex_digest_postgresql(element, _compiler, **_kw):
     return f"char_length({name}) = 64 AND {name} ~ '^[0-9a-f]{{64}}$'"
 
 
+class _LegacyFalseDefault(ColumnElement):
+    """A false default that preserves SQLite's already-migrated quoted `0`."""
+
+    type = Boolean()
+    inherit_cache = True
+
+
+@compiles(_LegacyFalseDefault, "sqlite")
+def _compile_legacy_false_default_sqlite(_element, _compiler, **_kw):
+    return "'0'"
+
+
+@compiles(_LegacyFalseDefault, "postgresql")
+def _compile_legacy_false_default_postgresql(_element, _compiler, **_kw):
+    return "false"
+
+
 class _JsonIsValid(ColumnElement):
     """Portable validation for JSON stored as legacy TEXT columns."""
 
@@ -417,7 +434,8 @@ class Deployment(Base):
     # Per-deployment arm, alongside (never instead of) the global master switch.
     # False on creation and reset on every process start — same invariant the global
     # flag has, for the same reason.
-    armed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    armed: Mapped[bool] = mapped_column(Boolean, default=False,
+                                        server_default=_LegacyFalseDefault())
     # Set when this deployment's own daily-loss halt trips; cleared next session.
     halted_on: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
@@ -1527,7 +1545,7 @@ class IrGraphLayoutGroup(Base):
     width: Mapped[float] = mapped_column(Float, nullable=False)
     height: Mapped[float] = mapped_column(Float, nullable=False)
     collapsed: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=text("0")
+        Boolean, nullable=False, default=False, server_default=false()
     )
 
 
@@ -1987,7 +2005,7 @@ class IrPaperDeployment(Base):
                                            default="authoritative",
                                            server_default="authoritative")
     admission_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
-                                               server_default="0")
+                                               server_default=_LegacyFalseDefault())
     admission_reason: Mapped[str] = mapped_column(String(400), nullable=False,
                                                   default="", server_default="")
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="staged",
@@ -2124,7 +2142,7 @@ class IrShadowDeployment(Base):
     #: The warmup/history verdict from the Stage 1 admission contract, decided before
     #: activation so an impossible pairing is refused rather than discovered per-scan.
     admission_ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
-                                               server_default="0")
+                                               server_default=_LegacyFalseDefault())
     admission_reason: Mapped[str] = mapped_column(String(400), nullable=False,
                                                   default="", server_default="")
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="staged",
