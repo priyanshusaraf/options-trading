@@ -678,6 +678,129 @@ def test_oauth_callback_binds_one_durable_session_connection_and_is_single_use(
         app.dependency_overrides.clear()
 
 
+def test_oauth_callback_spends_state_before_blocking_broker_exchange(
+        client, vault_key, monkeypatch):
+    """External broker I/O must hold no DB writer lane or reusable callback state."""
+    import threading
+
+    import app.api.connection_routes as routes
+    from app.db.models import Membership, Organization, User, UserSession
+
+    user_id, session_id = "oauth-slow-user", "oauth-slow-session"
+    with SessionLocal() as s:
+        if s.get(Organization, OWNER) is None:
+            s.add(Organization(organization_id=OWNER, name=OWNER))
+        s.add(User(user_id=user_id, email_normalized="oauth-slow@example.test",
+                   display_name="OAuth slow"))
+        s.flush()
+        s.add_all([
+            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
+            UserSession(session_id=session_id, token_digest=token_digest("oauth-slow-bearer"),
+                        user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
+                        expires_at=dt.datetime.now() + dt.timedelta(hours=1)),
+        ])
+        s.commit()
+    principal = Principal(id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
+                          organization_id=OWNER, role="owner", session_id=session_id)
+    app.dependency_overrides[get_principal] = lambda: principal
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowAuthenticator:
+        def initiate(self, *_args, **_kwargs):
+            return "https://example.test/login"
+
+        def exchange(self, _secrets, _request_token):
+            entered.set()
+            assert release.wait(timeout=5)
+            return {"access_token": "slow-token"}
+
+    try:
+        created = _kite_with_app_keys(client, vault_key)
+        started = client.post(f"/api/connections/{created['id']}/oauth/initiate")
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        monkeypatch.setattr(routes, "_authenticator", lambda _broker: SlowAuthenticator())
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault("response", client.get(
+            "/api/oauth/callback", params={"state": state, "request_token": "one-time-rt"})))
+        worker.start()
+        assert entered.wait(timeout=3)
+        duplicate = client.get("/api/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"})
+        assert duplicate.status_code == 400
+        with SessionLocal() as s:
+            organization = s.get(Organization, OWNER)
+            organization.name = "writer-proceeded-during-exchange"
+            s.commit()
+        release.set()
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert result["response"].status_code == 200
+    finally:
+        release.set()
+        app.dependency_overrides.clear()
+
+
+def test_oauth_callback_revalidates_identity_after_blocking_exchange(
+        client, vault_key, monkeypatch):
+    """Revocation during provider I/O must prevent the fresh credential write."""
+    import threading
+
+    import app.api.connection_routes as routes
+    from app.db.models import Membership, Organization, User, UserSession
+    from app.providers.connection_store import OwnedConnectionStore
+
+    user_id, session_id = "oauth-revoke-user", "oauth-revoke-session"
+    with SessionLocal() as s:
+        if s.get(Organization, OWNER) is None:
+            s.add(Organization(organization_id=OWNER, name=OWNER))
+        s.add(User(user_id=user_id, email_normalized="oauth-revoke@example.test",
+                   display_name="OAuth revoke"))
+        s.flush()
+        s.add_all([
+            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
+            UserSession(session_id=session_id, token_digest=token_digest("oauth-revoke-bearer"),
+                        user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
+                        expires_at=dt.datetime.now() + dt.timedelta(hours=1)),
+        ])
+        s.commit()
+    principal = Principal(id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
+                          organization_id=OWNER, role="owner", session_id=session_id)
+    app.dependency_overrides[get_principal] = lambda: principal
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowAuthenticator:
+        def exchange(self, _secrets, _request_token):
+            entered.set()
+            assert release.wait(timeout=5)
+            return {"access_token": "must-not-persist"}
+
+    try:
+        created = _kite_with_app_keys(client, vault_key)
+        started = client.post(f"/api/connections/{created['id']}/oauth/initiate")
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        monkeypatch.setattr(routes, "_authenticator", lambda _broker: SlowAuthenticator())
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault("response", client.get(
+            "/api/oauth/callback", params={"state": state, "request_token": "one-time-rt"})))
+        worker.start()
+        assert entered.wait(timeout=3)
+        with SessionLocal() as s:
+            s.get(Membership, (OWNER, user_id)).role = "viewer"
+            s.commit()
+        release.set()
+        worker.join(timeout=5)
+        assert result["response"].status_code == 400
+        with SessionLocal() as s:
+            secrets = OwnedConnectionStore(
+                s, owner_id=OWNER,
+                broker_account_id=created["broker_account_id"]).live_connection(
+                    created["id"]).secrets_source()
+        assert secrets == {"api_key": "ak-123", "api_secret": "as-456"}
+    finally:
+        release.set()
+        app.dependency_overrides.clear()
+
+
 @pytest.mark.parametrize("disabled", ["user", "organization", "role"])
 def test_oauth_callback_refuses_when_its_durable_identity_is_disabled(
         client, vault_key, monkeypatch, disabled):

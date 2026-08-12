@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy import and_, case, func, or_, select, update
 
+from app.db.concurrency import locked_rows
 from app.db.models import BacktestResult, BacktestRun
 
 
@@ -67,9 +68,10 @@ def claim_next_run(session, *, owner_id: str, claimed_by: str,
                    now: dt.datetime | None = None, lease_seconds: int = 30) -> BacktestRun | None:
     """Find a candidate then use ``claim_run`` as the sole race authority."""
     moment = _clock(now)
-    candidate = session.scalar(select(BacktestRun.id).where(
+    statement = select(BacktestRun.id).where(
         BacktestRun.owner_id == owner_id, BacktestRun.cancel_requested_at.is_(None),
-        _claimable(moment)).order_by(BacktestRun.queued_at, BacktestRun.id).limit(1))
+        _claimable(moment)).order_by(BacktestRun.queued_at, BacktestRun.id).limit(1)
+    candidate = session.scalar(locked_rows(statement, session, skip_locked=True))
     if candidate is None:
         return None
     return claim_run(session, owner_id=owner_id, run_id=int(candidate),

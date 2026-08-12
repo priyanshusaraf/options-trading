@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.db.concurrency import locked_mutation
 from app.db.models import (
     BrokerAccount, Deployment, GraphVersion, InstrumentState, IrPaperDeployment)
 from app.ir.hashing import canonical_json, content_address
@@ -432,10 +433,12 @@ def listing(session, *, owner_id: str, broker_account_id: str,
 
 def _for_update(session, row_id: int, revision: int, *, owner_id: str,
                 broker_account_id: str) -> IrPaperDeployment:
-    row = session.scalar(select(IrPaperDeployment).where(
+    statement = select(IrPaperDeployment).where(
         IrPaperDeployment.id == row_id,
         IrPaperDeployment.owner_id == owner_id,
-        IrPaperDeployment.broker_account_id == broker_account_id))
+        IrPaperDeployment.broker_account_id == broker_account_id)
+    row = session.scalar(locked_mutation(
+        statement, session, scope=f"paper-authority:{owner_id}:{broker_account_id}:{row_id}"))
     if row is None:
         raise BindingUnverifiable(f"no paper deployment with id {row_id}")
     if row.revision != revision:

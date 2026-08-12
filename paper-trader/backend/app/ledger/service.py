@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.ledger.models import LedgerArtifact, LedgerManualFill, LedgerSnapshot
 
@@ -38,19 +39,30 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
     Returns the new version. Raises VersionConflict on a mismatch, leaving the
     stored payload untouched."""
     with sm() as s, s.begin():
-        row = s.get(LedgerSnapshot, (owner_id, broker_account_id, 1))
-        if row is None:
-            if base_version is not None:
-                raise VersionConflict(0)
-            s.add(LedgerSnapshot(owner_id=owner_id, broker_account_id=broker_account_id,
-                                 id=1, version=1, payload=payload, updated_at=_now()))
-            return 1
-        if base_version != row.version:
-            raise VersionConflict(row.version)
-        row.version += 1
-        row.payload = payload
-        row.updated_at = _now()
-        return row.version
+        key = (LedgerSnapshot.owner_id == owner_id,
+               LedgerSnapshot.broker_account_id == broker_account_id,
+               LedgerSnapshot.id == 1)
+        if base_version is None:
+            try:
+                with s.begin_nested():
+                    s.add(LedgerSnapshot(
+                        owner_id=owner_id, broker_account_id=broker_account_id,
+                        id=1, version=1, payload=payload, updated_at=_now()))
+                    s.flush()
+                return 1
+            except IntegrityError:
+                current = s.scalar(select(LedgerSnapshot.version).where(*key))
+                if current is None:
+                    raise
+                raise VersionConflict(int(current))
+
+        changed = s.execute(update(LedgerSnapshot).where(
+            *key, LedgerSnapshot.version == base_version).values(
+                version=base_version + 1, payload=payload, updated_at=_now()))
+        if changed.rowcount == 1:
+            return base_version + 1
+        current = s.scalar(select(LedgerSnapshot.version).where(*key))
+        raise VersionConflict(int(current or 0))
 
 
 def put_artifact(sm, artifact_id: str, mime: str, data: bytes, *, owner_id: str,
@@ -120,12 +132,20 @@ def claim_manual_fill(sm, order_id: str, trade_id: str, *, owner_id: str,
     """Returns False if there is no such fill. Raises AlreadyClaimed if the
     owner has already supplied reasoning for it."""
     with sm() as s, s.begin():
-        row = s.get(LedgerManualFill, (owner_id, broker_account_id, order_id))
-        if row is None:
-            return False
         if not trade_exists(trade_id, owner_id, broker_account_id):
             return False
-        if row.claimed_trade:
-            raise AlreadyClaimed(row.claimed_trade)
-        row.claimed_trade = trade_id
-        return True
+        claimed = s.execute(update(LedgerManualFill).where(
+            LedgerManualFill.owner_id == owner_id,
+            LedgerManualFill.broker_account_id == broker_account_id,
+            LedgerManualFill.order_id == order_id,
+            LedgerManualFill.claimed_trade.is_(None),
+        ).values(claimed_trade=trade_id))
+        if claimed.rowcount == 1:
+            return True
+        existing = s.scalar(select(LedgerManualFill.claimed_trade).where(
+            LedgerManualFill.owner_id == owner_id,
+            LedgerManualFill.broker_account_id == broker_account_id,
+            LedgerManualFill.order_id == order_id))
+        if existing:
+            raise AlreadyClaimed(existing)
+        return False

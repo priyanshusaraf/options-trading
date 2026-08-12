@@ -111,8 +111,6 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     """
     from sqlalchemy import select
 
-    from app.core.config import get_settings
-    from app.core.logging import log
     from app.db.models import BrokerAccount, CapitalState
 
     if book not in BOOKS:
@@ -121,41 +119,80 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     # A capital row is not proof of tenancy: pre-foreign-key rows can exist for an
     # account that was deleted or never provisioned. Refusing before either the named
     # row or bootstrap path prevents that orphan from becoming spendable money state.
-    if session.get(BrokerAccount, broker_account_id) is None:
-        raise ValueError(f"broker account {broker_account_id!r} does not exist")
-
-    row = session.get(CapitalState, (broker_account_id, book))
+    with session.no_autoflush:
+        if session.get(BrokerAccount, broker_account_id) is None:
+            raise ValueError(f"broker account {broker_account_id!r} does not exist")
+        row = session.get(CapitalState, (broker_account_id, book))
     if row is not None:
         return row
+
+    from app.db.concurrency import has_pending_writes
+
+    if has_pending_writes(session):
+        raise RuntimeError(
+            "capital bootstrap refused because the caller session has pending writes")
+    bind = session.get_bind()
+    # End only the clean read snapshot. SQLite readers otherwise may retain a
+    # view from before the independent bootstrap commit and miss the new row.
+    session.rollback()
+    _bootstrap_capital(bind, book=book,
+                       broker_account_id=broker_account_id)
+    with session.no_autoflush:
+        row = session.get(CapitalState, (broker_account_id, book))
+    if row is None:
+        raise RuntimeError("capital bootstrap committed without a readable money row")
+    return row
+
+
+def _bootstrap_capital(bind, *, book: str, broker_account_id: str) -> None:
+    """Claim or create missing money state in one short independent transaction."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from app.core.config import get_settings
+    from app.core.logging import log
+    from app.db.concurrency import begin_reservation
+    from app.db.models import BrokerAccount, CapitalState
+
+    with Session(bind=bind, future=True, expire_on_commit=False) as bootstrap:
+        begin_reservation(bootstrap, scope=f"capital:{broker_account_id}")
+        if bootstrap.get(BrokerAccount, broker_account_id) is None:
+            raise ValueError(f"broker account {broker_account_id!r} does not exist")
+
+        if bootstrap.get(CapitalState, (broker_account_id, book)) is not None:
+            bootstrap.commit()
+            return
 
     # 0018 must represent an old NULL primary-key component without assigning its
     # money to paper or live.  The migration stores it under this short, durable
     # sentinel; claim it only when historic fill evidence is unambiguous.
-    legacy = session.get(CapitalState, (broker_account_id, LEGACY_UNATTRIBUTED_BOOK))
-    if legacy is not None:
-        owners = _books_with_money_rows(session, broker_account_id=broker_account_id)
-        named_books = set(session.scalars(
-            select(CapitalState.book).where(
-                CapitalState.broker_account_id == broker_account_id,
-                CapitalState.book != LEGACY_UNATTRIBUTED_BOOK)))
-        if owners is None:
-            log.warn(f"capital_state row {legacy.id} cannot be claimed: broker account "
-                     f"{broker_account_id!r} has no tenancy root", event="LEDGER_UNATTRIBUTED")
-        elif len(owners) > 1:
-            log.warn(LEGACY_LEDGER_AMBIGUOUS.format(row_id=legacy.id,
-                                                    owners=sorted(owners), book=book),
-                     event="LEDGER_UNATTRIBUTED")
-        elif not named_books and (not owners or owners == {book}):
-            legacy.book = book
-            _commit_the_bootstrap(session)
-            return legacy
+        legacy = bootstrap.get(
+            CapitalState, (broker_account_id, LEGACY_UNATTRIBUTED_BOOK))
+        if legacy is not None:
+            owners = _books_with_money_rows(
+                bootstrap, broker_account_id=broker_account_id)
+            named_books = set(bootstrap.scalars(
+                select(CapitalState.book).where(
+                    CapitalState.broker_account_id == broker_account_id,
+                    CapitalState.book != LEGACY_UNATTRIBUTED_BOOK)))
+            if owners is None:
+                log.warn(f"capital_state row {legacy.id} cannot be claimed: broker account "
+                         f"{broker_account_id!r} has no tenancy root",
+                         event="LEDGER_UNATTRIBUTED")
+            elif len(owners) > 1:
+                log.warn(LEGACY_LEDGER_AMBIGUOUS.format(
+                    row_id=legacy.id, owners=sorted(owners), book=book),
+                    event="LEDGER_UNATTRIBUTED")
+            elif not named_books and (not owners or owners == {book}):
+                legacy.book = book
+                _commit_the_bootstrap(bootstrap)
+                return
 
-    seed = get_settings().initial_capital
-    row = CapitalState(broker_account_id=broker_account_id, book=book,
-                       initial_capital=seed, cash=seed, realized_pnl=0.0)
-    session.add(row)
-    _commit_the_bootstrap(session)
-    return row
+        seed = get_settings().initial_capital
+        bootstrap.add(CapitalState(
+            broker_account_id=broker_account_id, book=book,
+            initial_capital=seed, cash=seed, realized_pnl=0.0))
+        _commit_the_bootstrap(bootstrap)
 
 
 def _commit_the_bootstrap(session) -> None:

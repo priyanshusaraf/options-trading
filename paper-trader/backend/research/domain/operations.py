@@ -13,6 +13,8 @@ from typing import Any
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
+from app.db.concurrency import (append_unique_json_integer,
+                                begin_after_clean_reads, locked_rows)
 from app.ir.hashing import content_address
 from research.domain.models import (ExperimentRun, ResearchOperation,
                                     ResearchOperationEvent, ResearchOperationItem)
@@ -330,7 +332,7 @@ class ResearchOperationRepository:
         # SQLite serializes writers, so competing admissions cannot both observe
         # the same spare slot.
         try:
-            self.session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_after_clean_reads(self.session, scope="research:admission")
             pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
                 ResearchOperation.owner_id == owner_id, ResearchOperation.status == "pending")) or 0
             host_pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
@@ -444,7 +446,7 @@ class ResearchOperationRepository:
         restart workers.
         """
         try:
-            self.session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            begin_after_clean_reads(self.session, scope="research:active-admission")
             filters = [
                 ResearchOperation.owner_id == owner_id,
                 ResearchOperation.cancel_requested_at.is_(None),
@@ -456,8 +458,9 @@ class ResearchOperationRepository:
                 filters.append(ResearchOperation.operation_id == operation_id)
             if triggers is not None:
                 filters.append(ResearchOperation.trigger.in_(triggers))
-            row = self.session.scalar(select(ResearchOperation).where(*filters).order_by(
-                ResearchOperation.queued_at, ResearchOperation.operation_id).limit(1))
+            candidate = select(ResearchOperation).where(*filters).order_by(
+                ResearchOperation.queued_at, ResearchOperation.operation_id).limit(1)
+            row = self.session.scalar(locked_rows(candidate, self.session, skip_locked=True))
             if row is None:
                 self.session.rollback()
                 return None
@@ -638,8 +641,8 @@ class ResearchOperationRepository:
             raise ValueError("completed run id is invalid")
         instant = _instant(now)
         # One conditional write carries the same cancellation/fence predicate as
-        # every other worker mutation.  JSON1 is part of SQLite's supported
-        # runtime here; `json_each` makes repeat delivery idempotent.
+        # every other worker mutation. The centralized dialect expression makes
+        # repeat delivery idempotent on both SQLite and PostgreSQL.
         changed = self.session.execute(update(ResearchOperation).where(
             ResearchOperation.owner_id == owner_id,
             ResearchOperation.operation_id == operation_id,
@@ -648,13 +651,10 @@ class ResearchOperationRepository:
             ResearchOperation.claim_expires_at >= instant,
             ResearchOperation.cancel_requested_at.is_(None),
         ).values(
-            completed_run_ids_json=case(
-                (text("EXISTS (SELECT 1 FROM json_each(research_operation.completed_run_ids_json) WHERE value = :completed_run_id)"),
-                 ResearchOperation.completed_run_ids_json),
-                else_=func.json_insert(ResearchOperation.completed_run_ids_json, "$[#]", run_id),
-            ),
+            completed_run_ids_json=append_unique_json_integer(
+                ResearchOperation.completed_run_ids_json, run_id, self.session),
             heartbeat_at=instant,
-        ), {"completed_run_id": run_id})
+        ))
         if changed.rowcount == 1:
             self._append_event(operation_id, owner_id=owner_id, event_type="item_completed",
                                stage=None, now=instant)
@@ -864,11 +864,9 @@ class ResearchOperationRepository:
                          ResearchOperation.cancel_requested_at.is_(None))
         if self.session.execute(update(ResearchOperation).where(predicate).values(
             heartbeat_at=instant,
-            completed_run_ids_json=case(
-                (text("EXISTS (SELECT 1 FROM json_each(research_operation.completed_run_ids_json) WHERE value = :completed_run_id)"),
-                 ResearchOperation.completed_run_ids_json),
-                else_=func.json_insert(ResearchOperation.completed_run_ids_json, "$[#]", run_id),
-            )), {"completed_run_id": run_id}).rowcount != 1:
+            completed_run_ids_json=append_unique_json_integer(
+                ResearchOperation.completed_run_ids_json, run_id,
+                self.session))).rowcount != 1:
             return False
         completed = self.session.execute(update(ResearchOperationItem).where(
             ResearchOperationItem.owner_id == owner_id,

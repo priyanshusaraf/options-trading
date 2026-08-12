@@ -15,7 +15,7 @@ database session, with output gated bit-identical against the serial path.
 from __future__ import annotations
 
 import datetime as dt
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 import json
 import threading
 import time
@@ -37,6 +37,7 @@ from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.backtest import repository
 from app.db.models import BacktestRun
+from app.db.concurrency import begin_reservation
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
 
@@ -634,7 +635,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         strat_label = "×".join(st.key for st in strat_objs)
         with SessionLocal() as s:
             lock_started = time.monotonic()
-            s.execute(text("BEGIN IMMEDIATE"))
+            begin_reservation(s, scope="backtest:admission")
             _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
             _admit_workload(owner_id=owner_id, total=total, workers=worker_count, session=s)
             run = repository.enqueue_run(
@@ -687,7 +688,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 # Re-check the exact reservation inside the same writer decision
                 # that publishes it, excluding this run's old reservation.
                 lock_started = time.monotonic()
-                resolved.execute(text("BEGIN IMMEDIATE"))
+                begin_reservation(resolved, scope="backtest:admission")
                 _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
                 active = repository.get_run(resolved, owner_id=owner_id, run_id=run_id)
                 if (active is None or active.claim_token != claim.claim_token
@@ -828,7 +829,7 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
     for _ in range(limit):
         with SessionLocal() as session:
             lock_started = time.monotonic()
-            session.execute(text("BEGIN IMMEDIATE"))
+            begin_reservation(session, scope="backtest:admission")
             _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
             claim_started = time.monotonic()
             claim = repository.claim_next_run(

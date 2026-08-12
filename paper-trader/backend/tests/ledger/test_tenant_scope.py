@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import threading
 
 from app.ledger import service
 from app.ledger.db import init_ledger_db, make_engine
@@ -81,6 +82,43 @@ def test_cross_scope_fill_claim_refuses_without_mutating_the_fill(tmp_path):
     with sm() as session:
         row = session.get(LedgerManualFill, (OWNER_A, ACCOUNT_A, "same-order"))
         assert row.claimed_trade is None
+
+
+def test_two_sessions_cannot_both_claim_the_same_financial_evidence(tmp_path):
+    """The read-before-write implementation let both sessions observe unclaimed evidence."""
+    sm = _sm(tmp_path)
+    with sm() as session, session.begin():
+        session.add(LedgerManualFill(
+            owner_id=OWNER_A, broker_account_id=ACCOUNT_A, order_id="race-order",
+            tradingsymbol="A", exchange="NFO", product="NRML", side="BUY", qty=1,
+            avg_price=1.0, order_ts=datetime(2026, 8, 12), fill_ts=None, verdict="MANUAL",
+            raw="{}", seen_at=datetime(2026, 8, 12)))
+
+    both_read = threading.Barrier(2)
+    outcomes: list[tuple[str, object]] = []
+
+    def claimant(trade_id: str) -> None:
+        try:
+            won = service.claim_manual_fill(
+                sm, "race-order", trade_id, owner_id=OWNER_A,
+                broker_account_id=ACCOUNT_A,
+                trade_exists=lambda *_: both_read.wait(timeout=3) is not None)
+            outcomes.append(("won", won))
+        except service.AlreadyClaimed as exc:
+            outcomes.append(("lost", exc.trade_id))
+        except Exception as exc:  # surfaced below with its concrete type/message
+            outcomes.append(("error", exc))
+
+    threads = [threading.Thread(target=claimant, args=(trade_id,))
+               for trade_id in ("trade-a", "trade-b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(kind for kind, _ in outcomes) == ["lost", "won"]
+    assert [value for kind, value in outcomes if kind == "won"] == [True]
 
 
 def test_restart_after_legacy_rename_preserves_financial_evidence(tmp_path):

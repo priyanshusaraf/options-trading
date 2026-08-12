@@ -37,7 +37,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 
 from app.api.principal import (
     Principal,
@@ -46,7 +46,7 @@ from app.api.principal import (
     owner_id_for,
     require,
 )
-from app.core.credential_vault import CredentialVaultUnavailable
+from app.core.credential_vault import CredentialVaultUnavailable, seal
 from app.providers.broker_auth import BrokerAuthError, NoInteractiveLogin
 from app.db.models import (BrokerAccount, BrokerConnection, OAuthCallbackState,
                            Membership, Organization, User, UserSession)
@@ -449,6 +449,69 @@ def connection_oauth_initiate(connection_id: int,
     return _start_oauth(connection_id, principal)
 
 
+def _consume_callback_state(session, *, digest: str, now: dt.datetime) -> bool:
+    """Spend this unexpired OAuth capability once with one portable CAS."""
+    consumed = session.execute(update(OAuthCallbackState).where(
+        OAuthCallbackState.state_digest == digest,
+        OAuthCallbackState.expires_at > now,
+        OAuthCallbackState.revoked_at.is_(None),
+        OAuthCallbackState.consumed_at.is_(None),
+    ).values(consumed_at=now))
+    return consumed.rowcount == 1
+
+
+def _store_callback_credential(
+        session, *, connection_id: int, owner_id: str, broker_account_id: str,
+        user_id: str, session_id: str, secrets: dict, now: dt.datetime
+) -> BrokerConnection | None:
+    """Store only while the callback identity and connection are still active.
+
+    The connection status predicate is on the credential UPDATE itself. It is
+    therefore also the row-lock acquisition point: revoke-before-update makes
+    this return ``None``; update-before-revoke commits a credential which the
+    waiting revoke then destroys.
+    """
+    ciphertext, key_id = seal(secrets)
+    identity_is_active = exists(select(UserSession.session_id).join(
+        User, User.user_id == UserSession.user_id).join(
+        Organization,
+        Organization.organization_id == UserSession.organization_id).join(
+        Membership,
+        (Membership.organization_id == UserSession.organization_id) &
+        (Membership.user_id == UserSession.user_id)).where(
+            UserSession.session_id == session_id,
+            UserSession.user_id == user_id,
+            UserSession.organization_id == owner_id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > now,
+            User.status == "active",
+            Organization.status == "active",
+            Membership.status == "active",
+            Membership.role == "owner",
+    ))
+    account_is_active = exists(select(BrokerAccount.broker_account_id).where(
+        BrokerAccount.broker_account_id == broker_account_id,
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.status == "active",
+    ))
+    changed = session.execute(update(BrokerConnection).where(
+        BrokerConnection.id == connection_id,
+        BrokerConnection.owner_id == owner_id,
+        BrokerConnection.broker_account_id == broker_account_id,
+        BrokerConnection.status == "active",
+        identity_is_active,
+        account_is_active,
+    ).values(
+        credential_ciphertext=ciphertext,
+        credential_key_id=key_id,
+        last_authenticated_at=now,
+        updated_at=now,
+    ))
+    if changed.rowcount != 1:
+        return None
+    return session.get(BrokerConnection, connection_id)
+
+
 @router.get("/oauth/callback")
 def oauth_callback(state: str | None = None, request_token: str | None = None) -> dict:
     """Consume a durable state before exchanging a broker request token.
@@ -488,27 +551,41 @@ def oauth_callback(state: str | None = None, request_token: str | None = None) -
             ))
         if callback is None:
             raise HTTPException(status_code=400, detail="invalid login callback")
-        consumed = s.execute(update(OAuthCallbackState).where(
-            OAuthCallbackState.state_digest == digest,
-            OAuthCallbackState.expires_at > now,
-            OAuthCallbackState.revoked_at.is_(None),
-            OAuthCallbackState.consumed_at.is_(None),
-        ).values(consumed_at=now))
-        if consumed.rowcount != 1:
+        if not _consume_callback_state(s, digest=digest, now=now):
             s.rollback()
             raise HTTPException(status_code=400, detail="invalid login callback")
-        # The state is now spent before a provider sees the request token.
-        store = OwnedConnectionStore(s, owner_id=callback.organization_id,
-                                     broker_account_id=s.scalar(select(BrokerConnection.broker_account_id).where(
-                                         BrokerConnection.id == callback.connection_id)))
+        owner_id = callback.organization_id
+        connection_id = callback.connection_id
+        broker_account_id = s.scalar(select(BrokerConnection.broker_account_id).where(
+            BrokerConnection.id == connection_id))
+        store = OwnedConnectionStore(
+            s, owner_id=owner_id, broker_account_id=broker_account_id)
         try:
-            row = store.get(callback.connection_id)
-            auth = _authenticator(row.broker)
-            bundle = auth.exchange(store.live_connection(row.id).secrets_source(), request_token)
-            saved = store.store_credential(row.id, bundle)
+            row = store.get(connection_id)
+            broker = row.broker
+            secrets_source = store.live_connection(row.id).secrets_source
+        except (ConnectionNotFound, CredentialVaultUnavailable):
+            s.commit()  # retain the consumed state after a failed lookup
+            raise HTTPException(status_code=400, detail="invalid login callback")
+        # Commit the spent capability before external broker I/O. A slow exchange
+        # must not retain SQLite's writer lane or a PostgreSQL row lock, and a
+        # duplicate callback must already fail while the provider is blocked.
+        s.commit()
+    try:
+        bundle = _authenticator(broker).exchange(secrets_source(), request_token)
+    except (NoInteractiveLogin, BrokerAuthError, CredentialVaultUnavailable):
+        raise HTTPException(status_code=400, detail="invalid login callback")
+    with SessionLocal() as s:
+        try:
+            saved = _store_callback_credential(
+                s, connection_id=connection_id, owner_id=owner_id,
+                broker_account_id=broker_account_id, user_id=callback.user_id,
+                session_id=callback.session_id, secrets=bundle, now=_now())
+            if saved is None:
+                raise ConnectionNotFound("OAuth callback identity is no longer active")
+            result = saved.to_dict()
             s.commit()
-            return saved.to_dict()
-        except (ConnectionNotFound, NoInteractiveLogin, BrokerAuthError,
-                CredentialVaultUnavailable):
-            s.commit()  # retain the consumed state after a failed exchange
+            return result
+        except (ConnectionNotFound, CredentialVaultUnavailable):
+            s.rollback()
             raise HTTPException(status_code=400, detail="invalid login callback")
