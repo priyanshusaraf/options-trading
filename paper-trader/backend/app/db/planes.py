@@ -55,6 +55,7 @@ TABLE_PLANES: dict[str, Plane] = {
     "ir_shadow_deployments": Plane.MONEY,
     "ir_paper_deployments": Plane.MONEY,
     "broker_connections": Plane.MONEY,
+    "oauth_callback_states": Plane.MONEY,
     "broker_accounts": Plane.MONEY,
     # ADR 0015 §2: a connection is money-plane on BLAST RADIUS, not on recovery cost. A row
     # here is the authority to place real orders on a real account. The encryption key is not
@@ -87,6 +88,7 @@ TABLE_PLANES: dict[str, Plane] = {
     "organizations": Plane.USER,
     "users": Plane.USER,
     "memberships": Plane.USER,
+    "user_sessions": Plane.USER,
     # `runtime_config` is a genuinely awkward one and is called out rather than smoothed over:
     # its rows are the owner's hand-set trading decisions, so they *behave* like money, but
     # losing one restores a documented code default rather than corrupting a ledger. It is
@@ -94,6 +96,7 @@ TABLE_PLANES: dict[str, Plane] = {
 
     # ── market: re-fetchable, and never on the money plane's failure domain ──
     "universe_instruments": Plane.MARKET,
+    "universe_preferences": Plane.USER,
     "option_data": Plane.MARKET,
     "earnings_events": Plane.MARKET,
     # Raw candles are MARKET. A durable run/result records private strategy work and is USER.
@@ -105,27 +108,26 @@ TABLE_PLANES: dict[str, Plane] = {
 
 #: Foreign keys that ALREADY cross a plane boundary, enumerated as of 2026-08-10.
 #:
-#: ADR 0015 §3 states "no foreign key crosses a plane boundary". Writing the check revealed that
-#: the schema already violated it seven times — which is the finding, not a reason to weaken the
-#: rule. All seven are the same shape: a money-plane deployment referencing the user-plane
-#: artefact it runs. That is the "results bind to the versions that produced them" invariant
-#: expressed as a foreign key, so the relationships are correct; only their *enforcement
-#: mechanism* is the problem.
+#: ADR 0015 §3 states "no foreign key crosses a plane boundary". Writing the check revealed
+#: existing crossings — which is the finding, not a reason to weaken the rule. They include the
+#: money-plane deployment provenance links, the short-lived OAuth capability's membership/session
+#: links, and an owner preference's reference to canonical market data. The relationships are
+#: correct; only their *enforcement mechanism* blocks a physical split.
 #:
-#: So this is a **ratchet, not an exemption**: these seven are grandfathered and every new one
-#: fails the build. The list is the honest price of the physical split — seven constraints to
+#: So this is a **ratchet, not an exemption**: these six are grandfathered and every new one
+#: fails the build. The list is the honest price of the physical split — six constraints to
 #: convert from foreign keys to by-value references — and it is countable here rather than
 #: discovered during the migration.
 #:
 #: Removing an entry when its FK is converted is the intended direction. Adding one requires
 #: saying why in the ADR.
 GRANDFATHERED_CROSS_PLANE_FKS: frozenset[tuple[str, str]] = frozenset({
-    ("ir_paper_deployments", "graph_version"),
-    ("ir_paper_deployments", "graph_identifier"),
     ("ir_paper_deployments", "project_id"),
-    ("ir_shadow_deployments", "graph_identifier"),
-    ("ir_shadow_deployments", "graph_version"),
     ("ir_shadow_deployments", "project_id"),
+    ("oauth_callback_states", "organization_id"),
+    ("oauth_callback_states", "user_id"),
+    ("oauth_callback_states", "session_id"),
+    ("universe_preferences", "instrument_key"),
 })
 
 

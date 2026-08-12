@@ -46,10 +46,10 @@ def test_snapshot_table_permits_exactly_one_row(tmp_path):
     init_ledger_db(engine)
     with engine.begin() as conn:
         conn.execute(text(
-            "INSERT INTO ledger_snapshot (id, version, payload, updated_at)"
-            " VALUES (1, 1, '{}', '2026-07-31T00:00:00')"))
+            "INSERT INTO ledger_snapshot (owner_id, broker_account_id, id, version, payload, updated_at)"
+            " VALUES ('owner', 'account.default', 1, 1, '{}', '2026-07-31T00:00:00')"))
     with pytest.raises(IntegrityError):
         with engine.begin() as conn:
             conn.execute(text(
-                "INSERT INTO ledger_snapshot (id, version, payload, updated_at)"
-                " VALUES (2, 1, '{}', '2026-07-31T00:00:00')"))
+                "INSERT INTO ledger_snapshot (owner_id, broker_account_id, id, version, payload, updated_at)"
+                " VALUES ('owner', 'account.default', 2, 1, '{}', '2026-07-31T00:00:00')"))

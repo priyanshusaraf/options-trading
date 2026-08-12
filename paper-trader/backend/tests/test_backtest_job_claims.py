@@ -7,6 +7,7 @@ fences every mutating operation.
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import threading
 import time
 
@@ -531,9 +532,18 @@ def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeyp
             session, owner_id="owner", claimed_by="another", now=recovered_at) is None
 
 
-def test_repository_does_not_export_an_unfenced_running_run_reconciler():
-    """A live lease must be recoverable only through expiry or its own token."""
-    assert not hasattr(repository, "reconcile_stale_runs")
+def test_repository_reconciler_requires_owner_scope_and_only_delegates_to_expiry_recovery(
+        monkeypatch):
+    """A live lease remains recoverable only through its explicit owner and expiry contract."""
+    parameters = inspect.signature(repository.reconcile_stale_runs).parameters
+    assert parameters["owner_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["owner_id"].default is inspect.Parameter.empty
+    calls = []
+    monkeypatch.setattr(repository, "reconcile_expired_claims",
+                        lambda session, *, owner_id: calls.append((session, owner_id)) or 3)
+    marker = object()
+    assert repository.reconcile_stale_runs(marker, owner_id="owner.a") == 3
+    assert calls == [(marker, "owner.a")]
 
 
 def test_admission_is_per_workload_not_a_process_global(monkeypatch):

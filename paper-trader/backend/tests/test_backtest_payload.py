@@ -86,7 +86,7 @@ def test_results_reports_skipped_count():
     assert d["skipped_breakdown"]["errored"] == 2
 
 
-def test_option_unaffordable_rows_are_visible_and_badged_not_skipped():
+def test_option_unaffordable_rows_are_visible_and_badged_not_skipped(monkeypatch):
     """A name whose ATM OPTION costs more than the budget stays in the visible
     results (badged affordable_options=False) so a promising edge stays on the
     radar — it is NOT hidden, and the payload counts it under `unaffordable`. Both
@@ -107,6 +107,8 @@ def test_option_unaffordable_rows_are_visible_and_badged_not_skipped():
                              lots=1, notional=5_000_000.0, option_cost=10_000_000.0, error=""))
         s.commit()
     c = TestClient(app)
+    from app.api import backtest_routes
+    monkeypatch.setattr(backtest_routes, "_budget", lambda _request, _principal: 50_000.0)
     d = c.get(f"/api/backtest/results?run_id={rid}&min_trades=1").json()
     keys = {r["instrument_key"] for r in d["results"]}
     assert {"CHEAP", "PRICEY"} <= keys              # both surfaced, neither hidden

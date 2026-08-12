@@ -89,9 +89,11 @@ def fetch_artifact(artifact_id: str, request: Request,
     if got is None:
         raise HTTPException(status_code=404, detail="no such artifact")
     mime, data = got
-    # Artifact bytes are immutable for a given id, so this can cache hard.
+    # Artifact IDs are tenant-local, while the URL alone does not carry that
+    # identity.  A shared browser/proxy cache must therefore never retain bytes
+    # across a credential switch.
     return Response(content=data, media_type=mime,
-                    headers={"Cache-Control": "private, max-age=31536000, immutable"})
+                    headers={"Cache-Control": "private, no-store"})
 
 
 @router.delete("/artifacts/{artifact_id}")

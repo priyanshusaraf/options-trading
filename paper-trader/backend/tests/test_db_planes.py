@@ -118,9 +118,22 @@ def test_the_grandfathered_crossings_are_all_real():
         f"direction; leaving dead entries in it re-opens the gate.")
 
 
-def test_every_grandfathered_crossing_points_from_money_to_user():
-    """All seven are the same shape — a money-plane deployment referencing the user-plane
-    artefact it runs. If a NEW shape ever appears here (say, money -> market), that is a
-    different and more serious problem than the debt this set records."""
-    for table, column in GRANDFATHERED:
-        assert plane_of(table) is Plane.MONEY, (table, column)
+def test_every_grandfathered_crossing_has_an_explicitly_reviewed_plane_shape():
+    """The finite debt set names known provenance/auth/preference links, never a new mystery."""
+    expected = {
+        ("ir_paper_deployments", "project_id"): (Plane.MONEY, Plane.USER),
+        ("ir_shadow_deployments", "project_id"): (Plane.MONEY, Plane.USER),
+        ("oauth_callback_states", "organization_id"): (Plane.MONEY, Plane.USER),
+        ("oauth_callback_states", "user_id"): (Plane.MONEY, Plane.USER),
+        ("oauth_callback_states", "session_id"): (Plane.MONEY, Plane.USER),
+        ("universe_preferences", "instrument_key"): (Plane.USER, Plane.MARKET),
+    }
+    assert GRANDFATHERED == frozenset(expected)
+    for item, shape in expected.items():
+        table, _column = item
+        actual_target = next(
+            fk.column.table.name
+            for fk in Base.metadata.tables[table].foreign_keys
+            if fk.parent.name == _column
+        )
+        assert (plane_of(table), plane_of(actual_target)) == shape

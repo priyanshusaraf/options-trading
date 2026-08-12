@@ -10,14 +10,25 @@ from app.db.models import Base
 
 def _migrated_null_ledger(tmp_path):
     engine = _engine(tmp_path)
-    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    migrate._create_baseline_tables(engine)
+    migrate.stamp(engine, "0001")
     with engine.begin() as connection:
-        command.downgrade(migrate.alembic_config(connection), "0017")
+        command.upgrade(migrate.alembic_config(connection), "0017")
         connection.execute(sa.text(
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
             "VALUES (99, NULL, 100.25, 90.75, -9.5, 98.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00')"))
         command.upgrade(migrate.alembic_config(connection), "head")
+    return engine
+
+
+def _at_revision_0017(tmp_path):
+    """Build the historical fixture directly; 0023 deliberately cannot downgrade."""
+    engine = _engine(tmp_path)
+    migrate._create_baseline_tables(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0017")
     return engine
 
 
@@ -155,10 +166,8 @@ def test_calendar_snapshot_same_day_isolated_by_the_runners_broker_account():
 
 
 def test_revision_0018_preserves_legacy_money_rows_under_legacy_scope(tmp_path):
-    engine = _engine(tmp_path)
-    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    engine = _at_revision_0017(tmp_path)
     with engine.begin() as connection:
-        command.downgrade(migrate.alembic_config(connection), "0017")
         connection.execute(sa.text(
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
@@ -294,10 +303,8 @@ def test_revision_0018_downgrade_refuses_each_nonlegacy_tenancy_root(tmp_path, t
 
 
 def test_upgraded_0018_database_exposes_actual_composite_keys_and_membership_foreign_keys(tmp_path):
-    engine = _engine(tmp_path)
-    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    engine = _at_revision_0017(tmp_path)
     with engine.begin() as connection:
-        command.downgrade(migrate.alembic_config(connection), "0017")
         command.upgrade(migrate.alembic_config(connection), "0018")
     inspector = sa.inspect(engine)
     assert inspector.get_pk_constraint("capital_state")["constrained_columns"] == ["broker_account_id", "book"]
@@ -323,10 +330,8 @@ def test_init_db_does_not_collide_with_a_preserved_id_one_legacy_capital_row(
     """Bootstrap leaves a migrated id=1 ledger untouched until a book is requested."""
     import app.db.session as session_module
 
-    engine = _engine(tmp_path)
-    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    engine = _at_revision_0017(tmp_path)
     with engine.begin() as connection:
-        command.downgrade(migrate.alembic_config(connection), "0017")
         connection.execute(sa.text(
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, updated_at) "
@@ -349,10 +354,8 @@ def test_upgrade_preserves_null_and_live_ledgers_and_paper_request_creates_a_thi
     from app.core.execution_book import LEGACY_UNATTRIBUTED_BOOK, capital_for_book
     from app.db.models import CapitalState
 
-    engine = _engine(tmp_path)
-    migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine), legacy_migrate=lambda: None)
+    engine = _at_revision_0017(tmp_path)
     with engine.begin() as connection:
-        command.downgrade(migrate.alembic_config(connection), "0017")
         connection.execute(sa.text(
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
