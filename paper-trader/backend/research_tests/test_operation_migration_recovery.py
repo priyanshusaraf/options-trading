@@ -40,3 +40,50 @@ def test_0002_empty_cleanup_and_nonempty_refusal(tmp_path):
             assert connection.exec_driver_sql("SELECT COUNT(*) FROM research_operation").scalar_one() == 1
     finally:
         engine.dispose()
+
+
+def test_0002_refuses_source_absent_unproven_temp_without_mutating_it(tmp_path):
+    """A named temp is not proof that a prior migration safely copied its target."""
+    engine = make_engine(str(tmp_path / "research.db"))
+    try:
+        migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
+        table = ResearchBase.metadata.tables["research_operation"]
+        with engine.begin() as connection:
+            connection.exec_driver_sql("CREATE TABLE research_operation__owner_tmp (forged TEXT)")
+            with pytest.raises(RuntimeError, match="unproven"):
+                migration.upgrade(connection, table)
+            assert connection.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE name='research_operation__owner_tmp'"
+            ).scalar_one() == "CREATE TABLE research_operation__owner_tmp (forged TEXT)"
+    finally:
+        engine.dispose()
+
+
+def test_0002_recovers_only_a_proven_source_absent_temp(tmp_path):
+    """Recovery verifies the exact target schema and persisted proof before promotion."""
+    engine = make_engine(str(tmp_path / "research.db"))
+    try:
+        migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
+        table = ResearchBase.metadata.tables["research_operation"]
+        with engine.begin() as connection:
+            migration.upgrade(connection, table)
+            connection.exec_driver_sql("ALTER TABLE research_operation RENAME TO research_operation__owner_tmp")
+            migration.upgrade(connection, table)
+            assert connection.exec_driver_sql("SELECT COUNT(*) FROM research_operation").scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("foreign_keys", [0, 1])
+def test_0002_never_changes_caller_foreign_key_mode(tmp_path, foreign_keys):
+    engine = make_engine(str(tmp_path / "research.db"))
+    try:
+        migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
+        table = ResearchBase.metadata.tables["research_operation"]
+        with engine.connect() as connection:
+            connection.exec_driver_sql(f"PRAGMA foreign_keys={foreign_keys}")
+            migration.upgrade(connection, table)
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == foreign_keys
+            connection.commit()
+    finally:
+        engine.dispose()

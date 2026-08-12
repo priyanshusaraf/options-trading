@@ -197,6 +197,19 @@ def test_safe_plan_summary_contains_server_fields_not_objects_or_candles():
         safe_plan_summary([{}] * 65)
 
 
+@pytest.mark.parametrize("bad", [
+    {"program": "P", "hypothesis": "H", "strategy_key": "S", "instruments": [],
+     "interval": "day", "days": True},
+    {"program": "P", "hypothesis": "H", "strategy_key": "S", "instruments": [],
+     "interval": "day", "days": -1},
+    {"program": "P", "hypothesis": "H", "strategy_key": "S", "instruments": "not-a-list",
+     "interval": "day", "days": 1},
+])
+def test_safe_plan_summary_rejects_invalid_admission_fields_before_provider_work(bad):
+    with pytest.raises(OperationStateCorrupt):
+        safe_plan_summary([bad])
+
+
 def test_missing_receipt_is_explicit_never_run(tmp_path):
     path = tmp_path / "absent.json"
     assert not os.path.exists(path)

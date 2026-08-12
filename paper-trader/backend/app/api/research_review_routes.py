@@ -133,7 +133,7 @@ def get_project_review(
     try:
         init_research_db(engine)
         with make_sessionmaker(engine)() as session:
-            last = ResearchOperationRepository(session).latest(
+            last = ResearchOperationRepository(session).latest_terminal(
                 owner_id=owner_id_for(principal)
             )
         if last is not None and last.status == "failed":

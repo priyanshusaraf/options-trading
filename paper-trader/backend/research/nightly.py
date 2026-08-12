@@ -147,8 +147,10 @@ def _run_enabled_operation(research_db: str) -> list:
         Session = make_sessionmaker(engine)
         with Session() as session:
             from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
-            src = _make_source()
             plan = _load_plan(session, owner_id=owner_id)
+            # Admission (including the bounded, secret-free durable manifest)
+            # comes before the provider is even constructed.  An invalid plan
+            # must not consume an API call or create a live-data object.
             recorder = DurableOperationRecorder.start(
                 ResearchOperationRepository(session), owner_id=owner_id, trigger="nightly",
                 build=_git_commit(), provider_mode=get_settings().provider,
@@ -164,6 +166,7 @@ def _run_enabled_operation(research_db: str) -> list:
                     watchdog_engine.dispose()
             recorder.start_watchdog(_heartbeat)
             recorder.transition("planning")
+            src = _make_source()
             report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
             reports = run_nightly(session, source=src, plan=plan, owner_id=owner_id,
                 git_commit=_git_commit(), report_dir=report_dir,

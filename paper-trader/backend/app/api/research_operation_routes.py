@@ -44,9 +44,10 @@ def get_research_operation_status(principal: Principal = Depends(get_principal))
         init_research_db(engine)
         Session = make_sessionmaker(engine)
         with Session() as session:
-            rows = ResearchOperationRepository(session).list(owner_id=owner_id_for(principal), limit=2)
+            repository = ResearchOperationRepository(session)
+            owner_id = owner_id_for(principal)
+            active = repository.latest_active(owner_id=owner_id)
+            last = repository.latest_terminal(owner_id=owner_id)
     finally:
         engine.dispose()
-    active = next((row for row in rows if row.status in {"pending", "running"}), None)
-    last = next((row for row in rows if row.status in {"completed", "failed", "cancelled"}), None)
-    return {"state": "available" if rows else "never_run", "active": _public(active) if active else None, "last": _public(last) if last else None}
+    return {"state": "available" if active or last else "never_run", "active": _public(active) if active else None, "last": _public(last) if last else None}

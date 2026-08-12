@@ -236,21 +236,39 @@ def safe_plan_summary(plan: list[dict]) -> dict[str, Any]:
         raise OperationStateCorrupt("operation plan has too many items")
     items = []
     for item in plan:
+        if not isinstance(item, dict):
+            raise OperationStateCorrupt("operation plan item is invalid")
         instruments = item.get("instruments", [])
-        if isinstance(instruments, list) and len(instruments) > 64:
-            raise OperationStateCorrupt("operation plan has too many instruments")
+        if not isinstance(instruments, list) or len(instruments) > 64:
+            raise OperationStateCorrupt("operation plan instruments are invalid")
+        for field, limit in (("program", 80), ("hypothesis", 4000),
+                             ("strategy_key", 80), ("interval", 24)):
+            value = item.get(field, "")
+            if not isinstance(value, str) or not value or len(value) > limit:
+                raise OperationStateCorrupt(f"operation plan {field} is invalid")
+        days = item.get("days", 0)
+        if (not isinstance(days, int) or isinstance(days, bool)
+                or days < 0 or days > 100_000):
+            raise OperationStateCorrupt("operation plan days are invalid")
+        optimize_search = item.get("optimize_search", False)
+        if not isinstance(optimize_search, bool):
+            raise OperationStateCorrupt("operation plan optimize_search is invalid")
+        for instrument in instruments:
+            key = getattr(instrument, "key", instrument)
+            if not isinstance(key, str) or not key or len(key) > 48:
+                raise OperationStateCorrupt("operation plan instrument key is invalid")
         keys = [
             _text(getattr(instrument, "key", instrument), 48)
             for instrument in instruments[:64]
-        ] if isinstance(instruments, list) else []
+        ]
         items.append({
             "program": _text(item.get("program", ""), 80),
             "hypothesis": _text(item.get("hypothesis", ""), 4000),
             "strategy_key": _text(item.get("strategy_key", ""), 80),
             "instrument_keys": keys,
             "interval": _text(item.get("interval", ""), 24),
-            "days": int(item.get("days", 0)),
-            "optimize_search": bool(item.get("optimize_search", False)),
+            "days": days,
+            "optimize_search": optimize_search,
         })
     payload = {"experiment_count": len(items), "items": items}
     return {"content_address": content_address(payload), **payload}

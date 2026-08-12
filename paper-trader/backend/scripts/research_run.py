@@ -188,13 +188,8 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
             init_research_db(engine)
             Session = make_sessionmaker(engine)
 
-            # (3) live data source (SafePaperKite — data only, orders hard-disabled)
-            provider = get_provider()
-            source = KiteDataSource(provider=provider)
-            report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
-            os.makedirs(report_dir, exist_ok=True)
-
-            # (4) run the full server-owned plan and generated sandbox search.
+            # (3) admit the bounded server-owned plan before constructing a
+            # provider/source. Invalid work must fail without touching data I/O.
             with Session() as session:
                 plan = _plan(get_instrument)
                 recorder = DurableOperationRecorder.start(
@@ -212,6 +207,12 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                         watchdog_engine.dispose()
                 recorder.start_watchdog(_heartbeat)
                 recorder.transition("planning")
+                # (4) live data source (SafePaperKite — data only, orders
+                # hard-disabled) is created only after durable admission.
+                provider = get_provider()
+                source = KiteDataSource(provider=provider)
+                report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
+                os.makedirs(report_dir, exist_ok=True)
                 reports = run_nightly(
                     session,
                     source,

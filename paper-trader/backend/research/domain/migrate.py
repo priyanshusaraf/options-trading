@@ -13,6 +13,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable, Table
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
 
 VERSION_TABLE = "research_schema_version"
+_INTERNAL_MIGRATION_TABLES = frozenset({"_research_0002_operation_rebuild_proof"})
 HEAD_VERSION = "0002"
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
@@ -35,7 +36,7 @@ def _table_names(connection) -> set[str]:
         row[0] for row in connection.exec_driver_sql(
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )
-    }
+    } - _INTERNAL_MIGRATION_TABLES
 
 
 def _schema_cookie(connection) -> int:
