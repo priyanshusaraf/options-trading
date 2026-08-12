@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.principal import Principal, get_principal, owner_id_for
 from app.core.config import get_settings
-from research.config import research_db_path
+from research.config import research_database_url
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.domain.operations import OperationView, ResearchOperationRepository
 
@@ -45,7 +45,7 @@ def _public_event(event: dict) -> dict:
 @router.get("/api/research/operations/status")
 def get_research_operation_status(principal: Principal = Depends(get_principal)):
     """Owner-local durable status; a receipt file is never consulted here."""
-    engine = make_engine(research_db_path())
+    engine = make_engine(research_database_url())
     try:
         init_research_db(engine)
         Session = make_sessionmaker(engine)

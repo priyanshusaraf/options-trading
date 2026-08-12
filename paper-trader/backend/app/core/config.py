@@ -459,8 +459,12 @@ class Settings(BaseSettings):
     # PT_DATABASE_URL is the execution-plane authority. PT_DB_PATH remains only
     # for a local SQLite deployment that has not supplied a database URL.
     database_url: str = ""
+    research_database_url: str = ""
+    ledger_database_url: str = ""
     production: bool = False
     db_path: str = "paper_trader.db"
+    research_db_path: str = "research.db"
+    ledger_db_path: str = ""
     # Local content-addressed backtest dataset store (env PT_BACKTEST_DATASET_DIR).
     # A filesystem directory, NOT the ledger database: the 10,000 × 5 tier is
     # ~50,000 datasets and tens of GB of candle bytes, which must never enter

@@ -18,15 +18,15 @@ import contextlib
 import dataclasses
 import datetime as dt
 import json
-import os
 
 from sqlalchemy import update
 
 from app.core.research_review import ReviewQueryRejected, make_review_event
 from app.ir.hashing import canonical_json, content_address
 
-from research.config import research_db_path
-from research.domain.base import init_research_db, make_engine, make_sessionmaker
+from research.config import research_database_url
+from research.domain.base import (init_research_db, make_engine, make_sessionmaker,
+                                  research_database_exists)
 from research.domain.models import (
     ExperimentRun,
     ExperimentSpec,
@@ -47,11 +47,11 @@ from research.strategy.explain import explain
 def _research_session():
     """Yield a session on research.db, or None if it doesn't exist. Disposes the
     engine on exit so repeated API calls don't accumulate SQLite connections."""
-    path = research_db_path()
-    if not os.path.exists(path):
+    authority = _research_authority()
+    if not research_database_exists(authority):
         yield None
         return
-    engine = make_engine(path)
+    engine = make_engine(authority)
     init_research_db(engine)
     session = make_sessionmaker(engine)()
     try:
@@ -59,6 +59,11 @@ def _research_session():
     finally:
         session.close()
         engine.dispose()
+
+
+def _research_authority() -> str:
+    """Use the same Pydantic/.env-aware resolver as research startup and routes."""
+    return research_database_url()
 
 
 def _recipe_for(session, run_id: int, *, owner_id: str) -> dict:
@@ -845,7 +850,7 @@ def graph_decision_history(*, project_id: str, graph_identifier: str,
     A candidate whose stored decision fails verification is skipped rather than reported: an
     unverifiable envelope is not evidence of anything, in either direction.
     """
-    if not os.path.exists(research_db_path()):
+    if not research_database_exists(_research_authority()):
         return None
     try:
         views = list_graph_runs(project_id, owner_id=owner_id)

@@ -45,7 +45,24 @@ def _make_immutable(table: Table) -> None:
         event.listen(
             table, "after_create",
             DDL(f"CREATE TRIGGER IF NOT EXISTS {trg} BEFORE {op} ON {table.name} "
-                f"BEGIN SELECT RAISE(ABORT, '{table.name} is immutable'); END"))
+                f"BEGIN SELECT RAISE(ABORT, '{table.name} is immutable'); END")
+            .execute_if(dialect="sqlite"))
+    function = f"{table.name}_refuse_mutation"
+    event.listen(
+        table, "after_create",
+        DDL(
+            f"CREATE OR REPLACE FUNCTION {function}() RETURNS trigger AS $$ "
+            f"BEGIN RAISE EXCEPTION '{table.name} is immutable'; END; "
+            "$$ LANGUAGE plpgsql"
+        ).execute_if(dialect="postgresql"),
+    )
+    event.listen(
+        table, "after_create",
+        DDL(
+            f"CREATE TRIGGER {function} BEFORE UPDATE OR DELETE ON {table.name} "
+            f"FOR EACH ROW EXECUTE FUNCTION {function}()"
+        ).execute_if(dialect="postgresql"),
+    )
 
 
 class ResearchProgram(ResearchBase):

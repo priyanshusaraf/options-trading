@@ -147,16 +147,20 @@ def _enforce_isolation() -> str:
     os.environ.pop("PT_EXECUTION", None)
     os.environ.setdefault("PT_PROVIDER", "kite")
 
-    from research.config import research_db_path
+    from research.config import database_authority_label, research_database_url
     from research.guards import enforce
     from app.core.config import get_settings
+    from app.db.engine import database_url
+    from app.ledger.config import ledger_database_url
 
-    research_db = research_db_path()
-    exec_db = get_settings().db_path
-    print(f"research.db = {research_db}\nexec.db     = {exec_db}  (never opened)\n")
+    research_db = research_database_url()
+    exec_db = database_url(get_settings())
+    print(f"research.db = {database_authority_label(research_db)}\n"
+          f"exec.db     = {database_authority_label(exec_db)}  (never opened)\n")
 
     # (1) fail closed BEFORE any work
     enforce(research_db=research_db, exec_db=exec_db,
+            ledger_db=ledger_database_url(),
             loaded_modules=sys.modules, env=os.environ)
     print("guardrails: PASS (distinct DBs · no order/broker/runner imports · not live)\n")
     return research_db

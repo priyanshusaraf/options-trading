@@ -23,11 +23,27 @@
 - Final re-review: SPEC PASS / QUALITY PASS. The reviewer reproduced both race orders for OAuth revocation and verified write-provenance lifecycle through flush, savepoint, root commit, and rollback.
 - Retained evidence after review fixes: portable SQLite/PostgreSQL module `32` cases inside the affected regression gate; affected regression gate `267 passed`; earlier independent widened live gate `100 passed`; compileall and `git diff --check` passed.
 - Commit subject: `feat(db): make shared mutations portable`.
+- Commit: `c079001 feat(db): make shared mutations portable`.
 - A broad `tests research_tests` run reached 96%, but its final exit status was not retained. It is explicitly inconclusive and is not reported as passing.
+
+## Task 3: complete
+
+- Base commit: `c079001`.
+- Implementer: `/root/phase2_task3_impl2` (replacement after two disconnected streams made no Task 3 edits).
+- Added authoritative `PT_RESEARCH_DATABASE_URL` and `PT_LEDGER_DATABASE_URL` with separate local SQLite path fallbacks; production requires PostgreSQL for enabled planes.
+- Research and ledger PostgreSQL startup now branches before all historical SQLite migration/introspection. Empty schemas create current metadata, validate, stamp plane-owned markers, and restart idempotently. Managed current schemas validate read-only. Populated unmanaged, wrong-head, relationally tampered, or trigger-tampered schemas refuse without adoption.
+- Research immutability has dialect-scoped SQLite DDL and PostgreSQL functions/triggers. All three database authorities are checked pairwise; a shared PostgreSQL database requires explicit, non-overlapping search paths. Ledger sessionmaker caching follows authority changes and disposes replaced engines.
+- Independent review round 1: BLOCK — CHECK validation could accept CASE pass-through semantics; immutable-trigger validation checked names rather than enabled/event/link/function-body contracts; raw URLs leaked in research CLI output; repeated search-path/default-port and split `.env` authority paths could collapse plane isolation.
+- Fix round 1: exact bounded CHECK canonicalization; full PostgreSQL trigger catalog contract; credential-safe authority labels; effective-final single-schema parsing; default-port normalization; shared core/standalone Pydantic plane settings; and one resolver for research startup/routes/read APIs.
+- Re-review round 2: BLOCK — immutable-trigger catalog validation omitted `pg_trigger.tgqual`, so an otherwise exact `WHEN(FALSE)` trigger suppressed every refusal.
+- Fix round 2: catalog validation now requires `pg_get_expr(tgqual, tgrelid) IS NULL`; the live regression first proves the conditional trigger permits an UPDATE, then proves startup refuses it.
+- Retained final review-fix evidence: live PostgreSQL 16 focused schema/profile gate `38 passed, 13 skipped` across 51 collected tests. Affected SQLite/live concurrency gate `238 passed, 13 skipped` across 251 collected tests. Startup/guard/nightly gate `37 passed`. Changed modules compile and `git diff --check` passes.
+- Final re-review: SPEC PASS / QUALITY PASS. Fresh focused live PostgreSQL gate exited 0 with 38 passed and 13 deliberate skips.
+- No broad suite was attempted for Task 3. See `task-3-report.md`.
 
 ## Remaining tasks
 
-- Task 3: PostgreSQL research and ledger planes.
+- Task 3: PostgreSQL research and ledger planes — complete; commit subject `feat(db): add PostgreSQL private planes`.
 - Task 4: verified SQLite-to-PostgreSQL copy and cutover.
 - Task 5: account leases, fencing, and replicated API ownership.
 - Task 6: shared event delivery and transactional outbox.

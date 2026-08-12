@@ -22,7 +22,7 @@ from app.core.research_review import (
     paginate_review_events,
 )
 from app.editor import graph_artifacts as store
-from research.config import research_db_path
+from research.config import research_database_url
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.domain.operations import ResearchOperationRepository
 
@@ -129,7 +129,7 @@ def get_project_review(
     source_errors = list(project_source["source_errors"])
 
     failed_operation = None
-    engine = make_engine(research_db_path())
+    engine = make_engine(research_database_url())
     try:
         init_research_db(engine)
         with make_sessionmaker(engine)() as session:

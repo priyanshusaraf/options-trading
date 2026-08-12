@@ -66,6 +66,40 @@ async def lifespan(app: FastAPI):
     # with /api/health returning 200 the whole time. Raising here is the point —
     # a config-less boot must be a dead process, not a healthy-looking one.
     assert_boot_config(settings)
+    from app.db.engine import database_url
+    from app.ledger.config import ledger_database_url
+    from research.config import research_database_url
+    from research.guards import (assert_distinct_database_authorities,
+                                 assert_pairwise_database_authorities)
+
+    execution_authority = database_url(settings)
+    ledger_authority = ledger_database_url(
+        database_url=settings.ledger_database_url,
+        production=settings.production,
+        db_path=settings.ledger_db_path,
+    )
+    if settings.research_enabled:
+        research_authority = research_database_url(
+            database_url=settings.research_database_url,
+            production=settings.production,
+            db_path=settings.research_db_path,
+        )
+        assert_pairwise_database_authorities(
+            execution_authority, research_authority, ledger_authority,
+        )
+    else:
+        assert_distinct_database_authorities(execution_authority, ledger_authority)
+    from app.ledger.db import get_sessionmaker as ledger_sessionmaker
+
+    ledger_sessionmaker(ledger_authority)
+    if settings.research_enabled:
+        from research.domain.base import init_research_db, make_engine as make_research_engine
+
+        research_engine = make_research_engine(research_authority)
+        try:
+            init_research_db(research_engine)
+        finally:
+            research_engine.dispose()
     # C7: refuse to start a second backend against the same persistent (non-mock) DB
     # — two instances would trade the same real account with independent in-flight
     # state. Mock (tests, dry-run) skips this so multiple TestClients can coexist.
@@ -153,10 +187,9 @@ async def lifespan(app: FastAPI):
     # takes runner._lock (see the 2026-07-13 risk_loop_stalled incident). If it
     # dies, trading is entirely unaffected.
     from app.db.session import SessionLocal
-    from app.ledger.db import get_sessionmaker as ledger_sessionmaker
     from app.ledger.lane import run_manual_detect_loop
     detect_task = asyncio.create_task(run_manual_detect_loop(
-        runner.provider, SessionLocal, ledger_sessionmaker(),
+        runner.provider, SessionLocal, ledger_sessionmaker(ledger_authority),
         get_settings(), runner.provider.now, owner_id=runner.owner_id,
         broker_account_id=runner.broker_account_id))
     log.info("backend ready — open the dashboard")

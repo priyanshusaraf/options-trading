@@ -419,7 +419,8 @@ def test_project_read_boundaries_require_an_explicit_owner():
 def test_project_reads_hide_a_foreign_run_like_an_absent_run(tmp_path, monkeypatch):
     """The read bridge scopes the database predicate before project provenance."""
     path = tmp_path / "read-scope.db"
-    monkeypatch.setattr(research_read, "research_db_path", lambda: str(path))
+    monkeypatch.setattr(research_read, "research_database_url",
+                        lambda: f"sqlite:///{path}")
     engine = make_engine(str(path))
     try:
         init_research_db(engine)

@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Callable
 
-from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect
+from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect, text
 from sqlalchemy.schema import CreateIndex, CreateTable, Table
 
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
@@ -20,6 +20,10 @@ _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
 _CURRENT_MARKER_SHAPE = (
     ("version", "VARCHAR(16)", True, None, 1),
     ("schema_cookie", "INTEGER", True, None, 0),
+)
+POSTGRESQL_IMMUTABLE_TABLES = (
+    "research_experiment_spec",
+    "research_optimization_trial",
 )
 
 
@@ -509,6 +513,10 @@ def migrate_research_db(engine: Engine) -> None:
     """Migrate empty, unversioned legacy, or already-head research databases."""
     from research.domain import models  # noqa: F401 - register every mapped table
 
+    if engine.dialect.name == "postgresql":
+        _migrate_postgresql(engine)
+        return
+
     with engine.connect() as connection:
         _recover_interrupted_swaps(connection)
         connection.commit()
@@ -606,6 +614,96 @@ def migrate_research_db(engine: Engine) -> None:
         finally:
             connection.exec_driver_sql(f"PRAGMA foreign_keys={foreign_keys}")
         _validate_schema(connection)
+
+
+def _normalise_function_body(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def _postgresql_trigger_contracts(connection) -> dict[str, tuple]:
+    rows = connection.execute(text("""
+        SELECT trigger.tgname, relation.relname, trigger.tgenabled,
+               trigger.tgtype, procedure.proname, procedure.prosrc,
+               pg_get_expr(trigger.tgqual, trigger.tgrelid)
+        FROM pg_trigger AS trigger
+        JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        JOIN pg_proc AS procedure ON procedure.oid = trigger.tgfoid
+        JOIN pg_namespace AS procedure_namespace
+          ON procedure_namespace.oid = procedure.pronamespace
+        WHERE NOT trigger.tgisinternal
+          AND namespace.nspname = current_schema()
+          AND procedure_namespace.nspname = current_schema()
+          AND relation.relname = ANY(:tables)
+    """), {"tables": list(POSTGRESQL_IMMUTABLE_TABLES)}).all()
+    return {
+        row[0]: (
+            row[1], row[2], int(row[3]), row[4],
+            _normalise_function_body(row[5]), row[6],
+        )
+        for row in rows
+    }
+
+
+def _validate_postgresql(connection) -> None:
+    from app.db.plane_schema import validate_postgresql_plane
+
+    validate_postgresql_plane(
+        connection, ResearchBase.metadata,
+        marker_table=VERSION_TABLE, plane="research",
+    )
+    expected = {
+        f"{table}_refuse_mutation": (
+            table,
+            "O",  # enabled for the origin/normal replication role
+            27,   # ROW | BEFORE | DELETE | UPDATE
+            f"{table}_refuse_mutation",
+            _normalise_function_body(
+                f"BEGIN RAISE EXCEPTION '{table} is immutable'; END;"
+            ),
+            None,  # no WHEN predicate may suppress the refusal trigger
+        )
+        for table in POSTGRESQL_IMMUTABLE_TABLES
+    }
+    actual = _postgresql_trigger_contracts(connection)
+    if actual != expected:
+        raise ResearchMigrationError(
+            "research PostgreSQL immutable-trigger contract drift: "
+            f"actual={actual!r} expected={expected!r}"
+        )
+
+
+def _migrate_postgresql(engine: Engine) -> None:
+    """Adopt only an empty target; never replay SQLite rebuild migrations."""
+    with engine.begin() as connection:
+        names = set(inspect(connection).get_table_names())
+        if VERSION_TABLE not in names:
+            if names:
+                raise ResearchMigrationError(
+                    "Refusing populated unmanaged PostgreSQL research database"
+                )
+            ResearchBase.metadata.create_all(connection)
+            connection.execute(text(
+                f'CREATE TABLE "{VERSION_TABLE}" '
+                '(version VARCHAR(16) NOT NULL PRIMARY KEY)'
+            ))
+            connection.execute(text(
+                f'INSERT INTO "{VERSION_TABLE}" (version) VALUES (:version)'
+            ), {"version": HEAD_VERSION})
+            _validate_postgresql(connection)
+            return
+
+        marker_columns = inspect(connection).get_columns(VERSION_TABLE)
+        if (len(marker_columns) != 1 or marker_columns[0]["name"] != "version"):
+            raise ResearchMigrationError("research PostgreSQL schema marker contract drift")
+        rows = connection.execute(text(
+            f'SELECT version FROM "{VERSION_TABLE}"'
+        )).scalars().all()
+        if rows != [HEAD_VERSION]:
+            raise ResearchMigrationError(
+                f"unsupported research PostgreSQL schema version {rows!r}; expected head"
+            )
+        _validate_postgresql(connection)
 
 
 def downgrade_research_db(_engine: Engine) -> None:

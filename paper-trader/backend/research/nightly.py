@@ -17,7 +17,8 @@ import datetime as dt
 
 from research.config import (nightly_generate_limit, nightly_interval,
                              nightly_search_seed, nightly_strategy_key,
-                             research_db_path, watchlist_snapshot_path)
+                             database_authority_label, research_database_url,
+                             watchlist_snapshot_path)
 from research.plan import build_plan
 from research.universe import eligible_for_research, read_watchlist_snapshot
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
@@ -33,8 +34,9 @@ def _execution_db_path() -> str:
     """The execution DB path, read-only. Importing app.core.config binds no DB
     engine (unlike app.db.session), so this cannot open the money ledger."""
     from app.core.config import get_settings
+    from app.db.engine import database_url
 
-    return get_settings().db_path
+    return database_url(get_settings())
 
 
 def _git_commit() -> str:
@@ -257,10 +259,13 @@ def _run_enabled_operation(research_db: str) -> list:
 
 
 def main() -> int:
-    research_db = research_db_path()
+    from app.ledger.config import ledger_database_url
+
+    research_db = research_database_url()
     # Fail closed BEFORE any research work: distinct DB, no capital-moving imports,
     # not live. Any violation raises ResearchIsolationError and aborts the run.
     enforce(research_db=research_db, exec_db=_execution_db_path(),
+            ledger_db=ledger_database_url(),
             loaded_modules=sys.modules, env=os.environ)
     # Freeze gate (checked AFTER the guardrails so an isolation violation still
     # fails loudly even while frozen): with the research plane disabled the cron
@@ -270,7 +275,8 @@ def main() -> int:
         print("research plane disabled (PT_RESEARCH_ENABLED=0) — nightly run skipped")
         return 0
     reports = _run_enabled_operation(research_db)
-    print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
+    print(f"research.db ready at {database_authority_label(research_db)}; "
+          f"ran {len(reports)} experiment(s)")
     return 0
 
 

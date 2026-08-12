@@ -16,7 +16,7 @@ from app.api.execution_access import local_execution_cell
 from app.editor import graph_artifacts as store
 from app.editor.comparison import GraphComparisonRejected, compare_graph_versions
 from research.compare import compare_experiment_evidence
-from research.config import research_db_path
+from research.config import research_database_url
 from research.data.store import materialize
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.domain.models import ExperimentSpec
@@ -321,7 +321,7 @@ def post_graph_experiment(
             )
         datasets.append((instrument, dataset))
 
-    engine = make_engine(research_db_path())
+    engine = make_engine(research_database_url())
     try:
         init_research_db(engine)
         Session = make_sessionmaker(engine)
