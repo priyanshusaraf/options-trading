@@ -33,7 +33,8 @@ from app.api import (
     research_review_routes,
     routes,
 )
-from app.api.principal import resolve_http_principal
+from app.api.principal import (auth_enabled, install_websocket_payload_redaction,
+                               resolve_http_principal)
 from app.api.versioning import VERSION_PREFIX, mount_versioned, unversioned_path
 from app.core.instruments import get_instrument
 from app.core.config import assert_boot_config, get_settings
@@ -43,6 +44,11 @@ from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.ledger import routes as ledger_routes
 from app.ws.manager import manager
+
+# Must exist before Uvicorn starts accepting WebSocket handshakes.  The first
+# post-accept application frame carries a bearer, and websockets DEBUG would
+# otherwise format raw frame text into the protocol log.
+install_websocket_payload_redaction()
 
 
 @asynccontextmanager
@@ -290,7 +296,7 @@ async def auth_gate(request: Request, call_next):
     path = unversioned_path(request.url.path)
     principal = resolve_http_principal(request)
     if (
-        settings.api_token
+        auth_enabled()
         and path.startswith("/api")
         and path not in _AUTH_EXEMPT_PATHS
         and request.method != "OPTIONS"

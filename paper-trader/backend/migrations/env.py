@@ -46,6 +46,22 @@ def run_migrations_online() -> None:
     _configure(connection)
     with context.begin_transaction():
         context.run_migrations()
+        # Revision 0028 keeps its source-bound creation proof through the
+        # version-stamp boundary.  Clean it only after Alembic has recorded the
+        # revision, so an empty target table cannot masquerade as a completed
+        # authentication migration after an interruption.
+        version = connection.execute(
+            __import__("sqlalchemy").text("SELECT version_num FROM alembic_version")
+        ).scalar_one_or_none()
+        if version == "0028":
+            from importlib.util import module_from_spec, spec_from_file_location
+            from pathlib import Path
+            path = Path(__file__).parent / "versions" / "20260812_0028_user_sessions.py"
+            spec = spec_from_file_location("_revision_0028_finalize", path)
+            assert spec and spec.loader
+            module = module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.finalize_after_stamp(connection)
 
 
 if context.is_offline_mode():

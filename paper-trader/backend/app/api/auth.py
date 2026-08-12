@@ -1,11 +1,9 @@
-"""SEC-1: shared token-auth helpers for the REST middleware gate and the two
-WebSocket handlers. A single bearer token (PT_API_TOKEN) — empty disables auth
-entirely, which is the default for local dev/mock/tests."""
+"""Credential extraction helpers.
+
+Authentication authority lives only in ``app.api.principal.resolve_principal``.
+This module intentionally does not compare bearer plaintext with configuration.
+"""
 from __future__ import annotations
-
-import secrets
-
-from app.core.config import get_settings
 
 
 def extract_token(headers) -> str | None:
@@ -19,18 +17,3 @@ def extract_token(headers) -> str | None:
     if pt:
         return pt
     return None
-
-
-def token_ok(supplied: str | None) -> bool:
-    token = get_settings().api_token
-    if not token:
-        return True  # auth disabled
-    return supplied is not None and secrets.compare_digest(supplied, token)
-
-
-def ws_authorized(ws) -> bool:
-    token = get_settings().api_token
-    if not token:
-        return True  # auth disabled
-    supplied = ws.query_params.get("token")
-    return supplied is not None and secrets.compare_digest(supplied, token)

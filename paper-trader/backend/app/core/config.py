@@ -437,9 +437,20 @@ class Settings(BaseSettings):
     frontend_dist: str = ""               # env: PT_FRONTEND_DIST (abs path to dist/)
 
     # ── API auth + CORS ───────────────────────────────────────────────────────
-    # env PT_API_TOKEN; when non-empty every REST/WS call (except OAuth redirect
-    # endpoints and /api/health) must present it; empty = auth disabled (dev/mock/tests).
+    # Optional one-time bootstrap input for the legacy shared credential.  It is
+    # hashed into a legacy UserSession at boot and never acts as runtime auth
+    # authority after that bridge.
     api_token: str = ""
+    # The explicit service posture.  Empty authentication is only valid for a
+    # development or test process; production-like roles refuse to boot instead
+    # of accidentally exposing the shared execution API.
+    service_role: str = "development"
+    # Deliberately explicit.  Only development/test roles may set this; a
+    # production process resolves durable UserSessions even with no legacy token.
+    # None retains the legacy setting behaviour during migration: a configured
+    # PT_API_TOKEN enables auth and an empty one disables it in development.
+    # New production deployments must set this explicitly to false.
+    auth_disabled: bool | None = None
     # env PT_CORS_ORIGINS, comma-separated browser origins allowed with credentials.
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -510,6 +521,15 @@ class BootConfigError(RuntimeError):
 _UNSET = object()
 
 
+def effective_auth_enabled(settings: Settings) -> bool:
+    """Whether this deployment requires durable bearer-session authentication."""
+    if settings.auth_disabled is True:
+        return False
+    if settings.auth_disabled is False:
+        return True
+    return bool(settings.api_token)
+
+
 def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET,
                        warn=None) -> None:
     """Refuse to start on a configuration that only LOOKS healthy.
@@ -540,6 +560,12 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
     if warn is None:
         from app.core.logging import log
         warn = lambda m: log.warn(m, event="BOOT_CONFIG")  # noqa: E731
+
+    if settings.service_role not in {"development", "test"} and not effective_auth_enabled(settings):
+        raise BootConfigError(
+            "REFUSING TO START: authentication is disabled for a production-like service role. "
+            "Enable durable authentication or use an explicit development/test PT_SERVICE_ROLE."
+        )
 
     # 1. Config must be attached. An explicit PT_DISABLE_DOTENV=1 is an
     #    operator-typed opt-out and takes its own path; the heuristic misfiring

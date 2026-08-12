@@ -143,6 +143,38 @@ class Membership(Base):
                                                      nullable=False)
 
 
+class UserSession(Base):
+    """An opaque bearer credential bound to one active organization membership.
+
+    The bearer itself is never a model field.  Only its lowercase SHA-256 digest
+    reaches this table, which makes a database copy unable to authenticate a
+    caller by itself.
+    """
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        CheckConstraint("length(token_digest) = 64 AND token_digest = lower(token_digest) "
+                        "AND token_digest NOT GLOB '*[^0-9a-f]*'",
+                        name="ck_user_sessions_token_digest"),
+        ForeignKeyConstraint(
+            ("organization_id", "user_id"),
+            ("memberships.organization_id", "memberships.user_id"),
+            name="fk_user_sessions_active_membership", ondelete="RESTRICT"),
+        UniqueConstraint("token_digest", name="uq_user_sessions_token_digest"),
+        Index("ix_user_sessions_owner_active", "organization_id", "user_id",
+              "revoked_at", "expires_at"),
+    )
+
+    # Random, non-secret handle for revocation/audit operations.  It is never a
+    # bearer credential and cannot be exchanged for one.
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    organization_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class BrokerAccount(Base):
     __tablename__ = "broker_accounts"
     __table_args__ = (

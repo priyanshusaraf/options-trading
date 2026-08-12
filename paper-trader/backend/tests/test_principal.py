@@ -14,6 +14,8 @@ import dataclasses
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.api.principal import (
     ANONYMOUS_OWNER,
@@ -51,7 +53,9 @@ def _request(headers: dict[str, str] | None = None, principal=...) -> Request:
 
 class _FakeWs:
     def __init__(self, token: str | None = None):
-        self.query_params = {"token": token} if token is not None else {}
+        self.query_params = {}
+        self.headers = {}
+        self.cookies = {"pt_session": token} if token is not None else {}
 
 
 # ── resolution ─────────────────────────────────────────────────────────────
@@ -70,10 +74,22 @@ def test_auth_disabled_resolves_an_explicit_anonymous_owner(monkeypatch):
 
 def test_correct_token_resolves_the_owner(monkeypatch):
     monkeypatch.setattr(get_settings(), "api_token", "secret-token")
+    # Direct resolver tests still use the durable database contract.  App
+    # startup does this before accepting requests.
+    init_db(reset=True)
     p = resolve_principal("secret-token")
-    assert p is OWNER
-    assert p.id == "owner"
+    assert (p.user_id, p.organization_id, p.role) == ("owner-user", "owner", "owner")
     assert p.authenticated is True
+
+
+def test_missing_session_schema_fails_closed_instead_of_raising(monkeypatch):
+    """A request during failed startup never authenticates by exception."""
+    from app.api import principal as principal_api
+
+    monkeypatch.setattr(get_settings(), "api_token", "configured-token")
+    empty = create_engine("sqlite://", future=True)
+    monkeypatch.setattr(principal_api, "SessionLocal", sessionmaker(bind=empty, future=True))
+    assert resolve_principal("configured-token") is None
 
 
 @pytest.mark.parametrize("supplied", [None, "", "wrong-token"])
@@ -84,15 +100,16 @@ def test_rejected_credential_resolves_to_none(monkeypatch, supplied):
     assert resolve_principal(supplied) is None
 
 
-def test_ws_principal_uses_the_query_param(monkeypatch):
-    """Browsers cannot set headers on a WS handshake, so the token rides in the
-    query string — a different extraction, the same principals."""
+def test_ws_principal_uses_a_same_site_cookie_without_putting_a_bearer_in_the_url(monkeypatch):
+    """Handshake credentials are rejected; WS authenticates after a challenge."""
     monkeypatch.setattr(get_settings(), "api_token", "secret-token")
-    assert resolve_ws_principal(_FakeWs("secret-token")) is OWNER
+    assert resolve_ws_principal(_FakeWs("secret-token")) is None
     assert resolve_ws_principal(_FakeWs("nope")) is None
     assert resolve_ws_principal(_FakeWs()) is None
     monkeypatch.setattr(get_settings(), "api_token", "")
-    assert resolve_ws_principal(_FakeWs()) is ANONYMOUS_OWNER
+    # The route's post-accept challenge returns the development principal; this
+    # handshake-only helper deliberately never creates an identity.
+    assert resolve_ws_principal(_FakeWs()) is None
 
 
 # ── the principal object ───────────────────────────────────────────────────
@@ -197,7 +214,8 @@ def test_principal_is_owner_when_a_valid_token_is_presented(monkeypatch):
         res = c.get("/api/_test_principal_probe2",
                     headers={"Authorization": "Bearer secret-token"})
         assert res.status_code == 200
-        assert seen == [OWNER]
+        assert [(p.user_id, p.organization_id, p.role) for p in seen] == [
+            ("owner-user", "owner", "owner")]
     finally:
         app.router.routes[:] = [r for r in app.router.routes
                                 if getattr(r, "path", None) != "/api/_test_principal_probe2"]

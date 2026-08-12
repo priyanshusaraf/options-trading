@@ -18,6 +18,8 @@ from __future__ import annotations
 import re
 import hashlib
 import json
+import importlib.util
+from pathlib import Path
 
 import sqlalchemy as sa
 import pytest
@@ -32,7 +34,219 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0027"
+HEAD = "0028"
+
+
+def test_revision_0028_adds_digest_only_user_sessions_and_empty_downgrade(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-contract.db", "0027")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0028")
+        columns = {row[1] for row in connection.execute(sa.text(
+            "PRAGMA table_info(user_sessions)"))}
+        assert columns == {"session_id", "token_digest", "user_id", "organization_id",
+                           "issued_at", "expires_at", "revoked_at"}
+        sql = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_sessions'"
+        )).scalar_one().lower()
+        assert "token" not in sql.replace("token_digest", "")
+        assert ("organization_id", "user_id") == tuple(
+            row[3] for row in connection.execute(sa.text("PRAGMA foreign_key_list(user_sessions)"))
+            if row[2] == "memberships")
+        command.downgrade(migrate.alembic_config(connection), "0027")
+        assert "user_sessions" not in sa.inspect(connection).get_table_names()
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+@pytest.mark.parametrize("needle,recoverable", (
+    ("CREATE TABLE USER_SESSIONS__0028", True),
+    ("INSERT OR REPLACE INTO _USER_SESSIONS_0028_CREATION_PROOFS", False),
+    ("ALTER TABLE USER_SESSIONS__0028 RENAME TO USER_SESSIONS", True),
+    ("DELETE FROM _USER_SESSIONS_0028_CREATION_PROOFS", True),
+))
+def test_revision_0028_restart_matrix_is_target_bound_and_preserves_fk_mode(
+        tmp_path, foreign_keys, needle, recoverable):
+    engine = _build_from_baseline_at_revision(
+        tmp_path, f"0028-restart-{foreign_keys}-{abs(hash(needle))}.db", "0027")
+    stopped = False
+
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and needle in " ".join(statement.upper().split()):
+            stopped = True
+            raise RuntimeError("0028 boundary")
+
+    with engine.begin() as connection:
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="boundary"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0028")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        if not recoverable:
+            before = tuple(connection.execute(sa.text(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+            with pytest.raises(RuntimeError, match="(unproven|malformed)"):
+                command.upgrade(migrate.alembic_config(connection), "0028")
+            assert tuple(connection.execute(sa.text(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+            assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+            return
+        command.upgrade(migrate.alembic_config(connection), "0028")
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name='_user_sessions_0028_creation_proofs'"
+        )).first() is None
+
+
+def test_revision_0028_refuses_tampered_proven_temp_without_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-temp-tamper.db", "0027")
+    stopped = False
+
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and "ALTER TABLE USER_SESSIONS__0028 RENAME" in statement.upper():
+            stopped = True
+            raise RuntimeError("0028 interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0028")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        connection.execute(sa.text("ALTER TABLE user_sessions__0028 ADD COLUMN attacker TEXT"))
+        before = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE name='user_sessions__0028'")) .scalar_one()
+        with pytest.raises(RuntimeError, match="malformed"):
+            command.upgrade(migrate.alembic_config(connection), "0028")
+        assert connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE name='user_sessions__0028'")) .scalar_one() == before
+
+
+def test_revision_0028_populated_downgrade_refuses_without_mutating(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-down-refusal.db", "0028")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO user_sessions VALUES ('session','a' || printf('%063d', 0),"
+            "'owner-user','owner','2026-08-12','2099-08-12',NULL)"))
+        with pytest.raises(RuntimeError, match="refuses"):
+            command.downgrade(migrate.alembic_config(connection), "0027")
+        assert connection.execute(sa.text("SELECT count(*) FROM user_sessions")).scalar_one() == 1
+
+
+def test_revision_0028_refuses_exact_target_shaped_populated_session_table(tmp_path):
+    """An attacker table must not become authentication authority by matching DDL."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-forged-target.db", "0027")
+    migration_path = Path(__file__).parents[1] / "migrations" / "versions" / "20260812_0028_user_sessions.py"
+    spec = importlib.util.spec_from_file_location("revision_0028", migration_path)
+    revision_0028 = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(revision_0028)
+    with engine.begin() as connection:
+        connection.execute(sa.text(revision_0028.DDL.replace("__TABLE__", "user_sessions")))
+        connection.execute(sa.text(
+            f"CREATE INDEX {revision_0028.INDEX[0]} ON user_sessions ({revision_0028.INDEX[1]})"))
+        connection.execute(sa.text(
+            "INSERT INTO user_sessions VALUES ('attacker',:digest,'owner-user','owner',"
+            "'2026-08-12','2099-08-12',NULL)"), {"digest": "a" * 64})
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+        with pytest.raises(RuntimeError, match="unproved existing"):
+            command.upgrade(migrate.alembic_config(connection), "0028")
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+    assert migrate.schema_version(engine) == "0027"
+
+
+def test_revision_0028_refuses_exact_target_shaped_empty_session_table(tmp_path):
+    """Only a migration-local proof can promote even an otherwise exact empty target."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-forged-empty-target.db", "0027")
+    migration_path = Path(__file__).parents[1] / "migrations" / "versions" / "20260812_0028_user_sessions.py"
+    spec = importlib.util.spec_from_file_location("revision_0028_empty", migration_path)
+    revision_0028 = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(revision_0028)
+    with engine.begin() as connection:
+        connection.execute(sa.text(revision_0028.DDL.replace("__TABLE__", "user_sessions")))
+        connection.execute(sa.text(
+            f"CREATE INDEX {revision_0028.INDEX[0]} ON user_sessions ({revision_0028.INDEX[1]})"))
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+        with pytest.raises(RuntimeError, match="unproved existing"):
+            command.upgrade(migrate.alembic_config(connection), "0028")
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+    assert migrate.schema_version(engine) == "0027"
+
+
+def test_revision_0028_preserves_populated_0027_payloads_exactly(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0028-populated-preservation.db", "0027")
+    with engine.begin() as connection:
+        connection.execute(sa.text("INSERT INTO organizations VALUES ('tenant.0028','Tenant','active','2026-08-12','2026-08-12')"))
+        connection.execute(sa.text("INSERT INTO users VALUES ('user.0028','user.0028@example.test','User','active','2026-08-12','2026-08-12')"))
+        connection.execute(sa.text("INSERT INTO memberships VALUES ('tenant.0028','user.0028','admin','active','2026-08-12','2026-08-12')"))
+        connection.execute(sa.text("INSERT INTO broker_accounts VALUES ('account.0028','tenant.0028','kite','external','Account','active','2026-08-12','2026-08-12')"))
+        before = {table: connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()
+                  for table in ("organizations", "users", "memberships", "broker_accounts", "positions")}
+        command.upgrade(migrate.alembic_config(connection), "0028")
+        after = {table: connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()
+                 for table in before}
+        assert after == before
+
+
+def test_revision_0028_fresh_and_upgraded_user_session_relations_are_identical(tmp_path):
+    """Fresh and upgraded contracts match through every relational dimension."""
+    fresh = _build_from_models(tmp_path)
+    upgraded = _build_from_baseline(tmp_path)
+
+    def contract(engine):
+        inspector = sa.inspect(engine)
+        columns = [(row["name"], str(row["type"]), row["nullable"], row["default"])
+                   for row in inspector.get_columns("user_sessions")]
+        foreign = [(tuple(row["constrained_columns"]), row["referred_table"],
+                    tuple(row["referred_columns"]), row["options"].get("ondelete"))
+                   for row in inspector.get_foreign_keys("user_sessions")]
+        unique = [(row["name"], tuple(row["column_names"]))
+                  for row in inspector.get_unique_constraints("user_sessions")]
+        checks = [(row["name"], " ".join(row["sqltext"].split()))
+                  for row in inspector.get_check_constraints("user_sessions")]
+        primary = tuple(inspector.get_pk_constraint("user_sessions")["constrained_columns"])
+        with engine.connect() as connection:
+            indexes = connection.execute(sa.text(
+                "SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='user_sessions' "
+                "AND sql IS NOT NULL ORDER BY name")).all()
+        return {"columns": columns, "foreign": foreign, "unique": unique,
+                "checks": checks, "primary": primary, "indexes": indexes}
+
+    expected = {
+        "columns": [
+            ("session_id", "VARCHAR(64)", False, None),
+            ("token_digest", "VARCHAR(64)", False, None),
+            ("user_id", "VARCHAR(64)", False, None),
+            ("organization_id", "VARCHAR(64)", False, None),
+            ("issued_at", "DATETIME", False, None),
+            ("expires_at", "DATETIME", False, None),
+            ("revoked_at", "DATETIME", True, None),
+        ],
+        "foreign": [(("organization_id", "user_id"), "memberships",
+                     ("organization_id", "user_id"), "RESTRICT")],
+        "unique": [("uq_user_sessions_token_digest", ("token_digest",))],
+        "checks": [("ck_user_sessions_token_digest",
+                    "length(token_digest) = 64 AND token_digest = lower(token_digest) "
+                    "AND token_digest NOT GLOB '*[^0-9a-f]*'")],
+        "primary": ("session_id",),
+        "indexes": [("ix_user_sessions_owner_active",
+                     "CREATE INDEX ix_user_sessions_owner_active ON user_sessions "
+                     "(organization_id, user_id, revoked_at, expires_at)")],
+    }
+    assert contract(upgraded) == contract(fresh) == expected
 
 
 def test_revision_0027_adds_neutral_public_computation_contract_and_empty_downgrade(tmp_path):

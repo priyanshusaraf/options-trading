@@ -1,99 +1,311 @@
-"""H3 (Phase H) — who is asking, and the one place that decides if they may.
+"""Resolved request identity and the one authorization policy boundary.
 
-Today this system has exactly ONE user: the owner, holding one shared bearer
-token (`PT_API_TOKEN`). That is not going to change in this phase — no multi-user
-features are being built here. What IS being built is the seam: a `Principal`
-object that exists on every request, and a single `require()` call that
-authorization rules can later be written inside. The audit's H3 finding is not
-"auth is weak", it is "there is no principal in the system", so permissions and
-licensing have nothing to attach to.
-
-Two deliberate choices worth defending:
-
-**There is no null principal.** When `PT_API_TOKEN` is empty — the dev/mock/test
-default, and the current production posture on a tailnet-only box — auth is
-disabled, and resolution yields an explicit `ANONYMOUS_OWNER` rather than `None`.
-If it yielded `None`, every future caller would grow an `if principal is None`
-branch, and that branch would be the one nobody tests and everybody gets wrong.
-The identity is different (`anonymous-owner` vs `owner`) and `authenticated` says
-which, so a later phase can refuse to serve a sensitive route to an unauthenticated
-principal without inventing the distinction retroactively.
-
-**Rejection is not a principal.** A supplied-but-wrong token resolves to `None`
-from `resolve_*`, which the middleware turns into 401. `None` therefore means
-exactly one thing — "credential presented and refused" — and never reaches a route.
-
-Scopes are modelled now and unused now, on purpose: `{"*"}` today, real scope
-strings when there is a second kind of caller. The shape is the deliverable.
+HTTP and WebSocket adapters only extract a bearer credential.  This module
+hashes it, resolves the durable ``UserSession`` record, and then proves its
+user, organization and membership remain active before returning a principal.
 """
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
+import hashlib
+import json
+import logging
+import re
+import secrets
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from fastapi import HTTPException, Request, WebSocket
+from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
-from app.api.auth import extract_token, token_ok, ws_authorized
-from app.core.config import get_settings
-from app.db.models import LEGACY_OWNER_ID
+from app.api.auth import extract_token
+from app.core.config import effective_auth_enabled, get_settings
+from app.db.models import (
+    LEGACY_OWNER_ID,
+    LEGACY_USER_ID,
+    Membership,
+    Organization,
+    User,
+    UserSession,
+)
+from app.db.session import SessionLocal
 
-# `owner` holds the shared token; `anonymous_owner` is the same human on a box
-# with auth switched off. Both are the owner — the distinction is how we know it.
-PrincipalKind = Literal["owner", "anonymous_owner"]
 
-# The wildcard scope. A real scope vocabulary belongs to the phase that has a
-# second principal to write it for; inventing one now would be fiction.
+PrincipalKind = Literal["user", "development_anonymous", "owner", "anonymous_owner", "service"]
 SCOPE_ALL = "*"
+
+
+class _WebSocketPayloadRedactionFilter(logging.Filter):
+    """Keep WebSocket frame diagnostics without ever formatting frame payloads.
+
+    The ``websockets`` protocol logs incoming frames as ``"< %s"`` where the
+    ``Frame`` representation includes its complete text payload.  Our first
+    application message contains the bearer, so suppressing DEBUG wholesale is
+    not acceptable: it also hides unrelated production diagnostics.  This
+    filter replaces only inbound TEXT/BINARY frame records with opcode/length
+    metadata before they reach handlers or propagated loggers.
+    """
+
+    _TEXT_OR_BINARY = re.compile(r"^< (?:TEXT|BINARY)\b")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not record.name.startswith(("uvicorn", "websockets")):
+            return True
+        frame = record.args[0] if isinstance(record.args, tuple) and record.args else None
+        if (record.msg == "< %s" and hasattr(frame, "opcode") and hasattr(frame, "data")):
+            data = frame.data
+            length = len(data) if isinstance(data, (bytes, bytearray, str)) else 0
+            opcode = getattr(getattr(frame, "opcode", None), "name", "frame").lower()
+            record.msg = (
+                f"< [websocket inbound {opcode} payload redacted; {length} bytes]"
+            )
+            record.args = ()
+            return True
+        # Some protocol versions pre-format frames before forwarding records.
+        try:
+            formatted = record.getMessage()
+        except Exception:
+            return True
+        if self._TEXT_OR_BINARY.match(formatted):
+            record.msg = "< [websocket inbound payload redacted]"
+            record.args = ()
+        return True
+
+
+def install_websocket_payload_redaction() -> None:
+    """Install one idempotent filter before any ASGI WebSocket handshake.
+
+    Uvicorn passes ``uvicorn.error`` into its ``websockets`` protocol, while
+    direct protocol deployments use the ``websockets.*`` loggers.  Attach to
+    those exact producers; other application and access logs are unchanged.
+    """
+    for name in ("uvicorn.error", "uvicorn.protocols.websockets",
+                 "websockets.protocol", "websockets.server", "websockets.legacy.server"):
+        logger = logging.getLogger(name)
+        if not any(isinstance(item, _WebSocketPayloadRedactionFilter) for item in logger.filters):
+            logger.addFilter(_WebSocketPayloadRedactionFilter())
+
+
+def _now() -> dt.datetime:
+    """SQLite stores the project's datetime values without timezone metadata."""
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+
+
+def _db_time(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def token_digest(credential: str | None) -> str | None:
+    """Return the canonical digest without retaining or comparing bearer plaintext."""
+    if not isinstance(credential, str) or not credential or credential != credential.strip():
+        return None
+    return hashlib.sha256(credential.encode("utf-8")).hexdigest()
+
+
 
 
 @dataclass(frozen=True)
 class Principal:
-    """Immutable identity of the caller. Frozen because a request handler that
-    can mutate its own principal is an authorization bug waiting to happen."""
+    """Immutable resolved identity.  ``id`` remains a compatibility alias for user id."""
 
     id: str
     kind: PrincipalKind
     scopes: frozenset[str]
+    user_id: str | None = None
+    organization_id: str | None = None
+    role: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.user_id is None and self.kind == "user":
+            object.__setattr__(self, "user_id", self.id)
 
     @property
     def is_owner(self) -> bool:
-        return self.kind in ("owner", "anonymous_owner")
+        return self.role == "owner" or self.kind in ("owner", "anonymous_owner")
 
     @property
     def authenticated(self) -> bool:
-        """Did this principal actually present a credential? False when auth is
-        disabled — which is a configuration statement, not a security claim."""
-        return self.kind == "owner"
+        return self.kind not in ("development_anonymous", "anonymous_owner")
 
     def has_scope(self, scope: str) -> bool:
         return SCOPE_ALL in self.scopes or scope in self.scopes
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "kind": self.kind, "scopes": sorted(self.scopes),
-                "authenticated": self.authenticated}
+        if self.kind in ("owner", "anonymous_owner"):
+            return {"id": self.id, "kind": self.kind, "scopes": sorted(self.scopes),
+                    "authenticated": self.authenticated}
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "organization_id": self.organization_id,
+            "role": self.role,
+            "kind": self.kind,
+            "scopes": sorted(self.scopes),
+            "authenticated": self.authenticated,
+        }
 
 
-# The single-owner world, stated explicitly rather than implied by the absence of
-# any other value. Module-level singletons: identity comparison is meaningful.
-OWNER = Principal(id="owner", kind="owner", scopes=frozenset({SCOPE_ALL}))
-ANONYMOUS_OWNER = Principal(
+# Compatibility names remain available to dependency overrides and legacy
+# single-owner callers. Real authentication never returns OWNER directly; it
+# returns a durable-session principal.  The named development principal stays
+# deliberately distinct from OWNER while retaining its legacy owner capability.
+OWNER = Principal(id="owner", kind="owner", scopes=frozenset({SCOPE_ALL}),
+                  user_id=LEGACY_USER_ID, organization_id=LEGACY_OWNER_ID, role="owner")
+DEVELOPMENT_ANONYMOUS = Principal(
     id="anonymous-owner", kind="anonymous_owner", scopes=frozenset({SCOPE_ALL}))
+ANONYMOUS_OWNER = DEVELOPMENT_ANONYMOUS
+
+
+@dataclass(frozen=True)
+class IssuedBearerCredential:
+    """One-time issuance result; only this in-memory return carries the bearer value."""
+
+    session_id: str
+    token: str
+    expires_at: dt.datetime
 
 
 def auth_enabled() -> bool:
-    return bool(get_settings().api_token)
+    return effective_auth_enabled(get_settings())
+
+
+def _active_membership(session: Session, *, user_id: str, organization_id: str) -> Membership | None:
+    return session.scalar(
+        select(Membership).join(User, User.user_id == Membership.user_id).join(
+            Organization, Organization.organization_id == Membership.organization_id).where(
+            Membership.user_id == user_id,
+            Membership.organization_id == organization_id,
+            Membership.status == "active",
+            User.status == "active",
+            Organization.status == "active",
+        ))
+
+
+def issue_user_session(session: Session, *, user_id: str, organization_id: str,
+                       expires_at: dt.datetime,
+                       session_id: str | None = None) -> IssuedBearerCredential:
+    """Create a session for an existing active membership.
+
+    Tokens generated here contain 32 random bytes (256 random bits) before URL
+    encoding.  The issuance interface never accepts caller-chosen bearer
+    material, so a weak test/demo value cannot accidentally enter production.
+    """
+    membership = _active_membership(session, user_id=user_id, organization_id=organization_id)
+    if membership is None:
+        raise ValueError("cannot issue a session for an inactive membership")
+    raw = secrets.token_urlsafe(32)
+    digest = token_digest(raw)
+    if digest is None:
+        raise ValueError("bearer credential is malformed")
+    expiry = _db_time(expires_at)
+    handle = session_id or secrets.token_urlsafe(18)
+    session.add(UserSession(session_id=handle, token_digest=digest, user_id=user_id,
+                            organization_id=organization_id, issued_at=_now(),
+                            expires_at=expiry))
+    return IssuedBearerCredential(session_id=handle, token=raw, expires_at=expiry)
+
+
+def revoke_user_session(session: Session, session_id: str,
+                        *, revoked_at: dt.datetime | None = None) -> bool:
+    """Atomically revoke at most one still-active session without reading its bearer."""
+    result = session.execute(update(UserSession).where(
+        UserSession.session_id == session_id,
+        UserSession.revoked_at.is_(None),
+    ).values(revoked_at=_db_time(revoked_at or _now())))
+    return result.rowcount == 1
+
+
+def bootstrap_legacy_session(session: Session, legacy_token: str | None) -> UserSession | None:
+    """Bind an old configured token to the seeded identity without plaintext comparison.
+
+    A digest already bound to another identity is left untouched.  That makes an
+    accidental or hostile foreign binding visible to callers without silently
+    reassigning a credential that belongs to someone else.
+    """
+    digest = token_digest(legacy_token)
+    if digest is None:
+        return None
+    existing = session.scalar(select(UserSession).where(UserSession.token_digest == digest))
+    if existing is not None:
+        if (existing.user_id != LEGACY_USER_ID
+                or existing.organization_id != LEGACY_OWNER_ID):
+            raise RuntimeError("legacy token digest is already bound to a foreign user session")
+        return existing
+    row = UserSession(session_id=secrets.token_urlsafe(18), token_digest=digest,
+                      user_id=LEGACY_USER_ID, organization_id=LEGACY_OWNER_ID,
+                      issued_at=_now(), expires_at=dt.datetime(9999, 12, 31))
+    session.add(row)
+    return row
 
 
 def resolve_principal(supplied_token: str | None) -> Principal | None:
-    """Core resolution, framework-free so it is unit-testable without a request.
+    """Resolve one credential or fail closed without leaking why it failed.
 
-    Returns `None` ONLY for a rejected credential. Note the ordering: auth-disabled
-    is checked first, so an unset token can never be "matched" by a caller sending
-    an empty string — `token_ok` already guards that, and this keeps the two in step.
+    The first query is against ``user_sessions.token_digest`` alone.  Unknown
+    credentials therefore do not materialize a user or membership and all
+    unknown, malformed, expired and revoked credentials return the same ``None``.
     """
     if not auth_enabled():
-        return ANONYMOUS_OWNER
-    return OWNER if token_ok(supplied_token) else None
+        return DEVELOPMENT_ANONYMOUS
+    digest = token_digest(supplied_token)
+    if digest is None:
+        return None
+    now = _now()
+    try:
+        with SessionLocal() as session:
+            user_session = session.scalar(select(UserSession).where(
+                UserSession.token_digest == digest,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > now,
+            ))
+            # Normal bootstraps create this row in ``init_db``.  This small
+            # compatibility fallback covers an already-running process whose
+            # configured legacy token was rotated without a restart; it compares
+            # only digests and never persists or compares bearer plaintext.
+            if user_session is None and secrets.compare_digest(
+                    digest, token_digest(get_settings().api_token) or ""):
+                bootstrap_legacy_session(session, get_settings().api_token)
+                session.commit()
+                user_session = session.scalar(select(UserSession).where(
+                    UserSession.token_digest == digest,
+                    UserSession.revoked_at.is_(None),
+                    UserSession.expires_at > now,
+                ))
+            if user_session is None:
+                return None
+            return _principal_for_active_session(session, user_session)
+    except OperationalError:
+        # Startup performs init_db before the app accepts requests.  A direct
+        # caller racing a failed/incomplete startup must fail closed rather than
+        # turn a missing migration into an exception or anonymous access.
+        return None
+
+
+def _principal_for_active_session(session: Session, user_session: UserSession) -> Principal | None:
+    """The one membership-aware conversion used by HTTP and WS proof boundaries."""
+    membership = _active_membership(session, user_id=user_session.user_id,
+                                    organization_id=user_session.organization_id)
+    if membership is None:
+        return None
+    # Preserve the established public principal contract for the one legacy
+    # bootstrap credential.  Its backing identity is nevertheless a durable
+    # UserSession linked to ``owner-user`` / ``owner``; this singleton only
+    # maintains the old API shape for dependency overrides and callers.
+    if (user_session.user_id == LEGACY_USER_ID
+            and user_session.organization_id == LEGACY_OWNER_ID):
+        return OWNER
+    # Roles are persisted independently of scopes.  Task 5B introduces
+    # resource-family permissions; active memberships retain the existing broad
+    # route capability until that conversion is complete.
+    return Principal(id=user_session.user_id, kind="user", scopes=frozenset({SCOPE_ALL}),
+                     user_id=user_session.user_id,
+                     organization_id=user_session.organization_id,
+                     role=membership.role)
 
 
 def resolve_http_principal(request: Request) -> Principal | None:
@@ -101,23 +313,40 @@ def resolve_http_principal(request: Request) -> Principal | None:
 
 
 def resolve_ws_principal(ws: WebSocket) -> Principal | None:
-    """WebSockets carry the token as a query param (browsers cannot set headers
-    on a WS handshake), so it goes through `ws_authorized` rather than the header
-    extractor — one function, so the two paths cannot drift apart."""
+    """WebSockets never accept a bearer during the logged handshake.
+
+    ``authenticate_websocket`` below performs first-frame authentication after
+    accept, before joining a delivery channel.  This function exists only as a
+    rejection boundary for callers that previously tried query/header/cookie
+    token resolution.
+    """
+    return None
+
+
+def resolve_ws_proof(_session_id: str | None, _nonce: str, bearer: str | None) -> Principal | None:
+    """Resolve the quarantined first application frame through the HTTP service."""
+    return resolve_principal(bearer)
+
+
+async def authenticate_websocket(ws: WebSocket) -> Principal | None:
+    """Quarantine a socket until it proves possession of its session bearer."""
+    await ws.accept()
     if not auth_enabled():
-        return ANONYMOUS_OWNER
-    return OWNER if ws_authorized(ws) else None
+        return DEVELOPMENT_ANONYMOUS
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=5)
+        payload = json.loads(raw)
+    except Exception:
+        await ws.close(code=1008)
+        return None
+    principal = resolve_ws_proof(None, "", payload.get("bearer")) \
+        if isinstance(payload, dict) and payload.get("type") == "authenticate" else None
+    if principal is None:
+        await ws.close(code=1008)
+    return principal
 
 
 def get_principal(request: Request) -> Principal:
-    """FastAPI dependency: `principal: Principal = Depends(get_principal)`.
-
-    Reads what the middleware already resolved (one resolution per request), and
-    falls back to resolving inline for the cases where the middleware did not run
-    — a route called through a bare ASGI harness, or a future sub-application.
-    The fallback re-checks the credential rather than assuming anonymity; a
-    fallback that defaulted to `ANONYMOUS_OWNER` would be a bypass.
-    """
     principal = getattr(request.state, "principal", None)
     if principal is None:
         principal = resolve_http_principal(request)
@@ -126,47 +355,14 @@ def get_principal(request: Request) -> Principal:
     return principal
 
 
-# ── the authorization boundary ─────────────────────────────────────────────
-# ONE function. Every future rule goes inside it, and reviewing authorization
-# means reading this file. The moment a check appears anywhere else, the property
-# that makes this seam worth having is gone.
-
 class Forbidden(HTTPException):
     def __init__(self, detail: str = "forbidden") -> None:
         super().__init__(status_code=403, detail=detail)
 
 
 def is_allowed(principal: Principal | None, action: str, resource: Any = None) -> bool:
-    """The policy, as a pure predicate.
-
-    Two rules, in order.
-
-    **1. The caller must be an owner.** Until a second principal kind exists that is the whole
-    of admission, and it is the accurate statement of a single-user system rather than a
-    placeholder somebody forgot to fill in.
-
-    **2. If the resource says whose it is, it must be this caller's.** `resource` was accepted
-    and ignored from H3 until 2026-08-11, because per-resource authorization needs a resource
-    identity to hang off and no table had one. Migrations 0015–0017 gave the money plane an
-    `owner_id`, so the identity now exists and the rule is real.
-
-    The check is deliberately **structural, not a table list**: any object exposing an `owner_id`
-    is enforced. A list of table names would have to be updated in lockstep with every migration,
-    and the failure mode of forgetting is silent — a new owned table that nobody enforces looks
-    exactly like one that is enforced. Asking the object means a table cannot opt out by being
-    forgotten; it can only opt out by genuinely having no owner, which is a visible property of
-    its schema.
-
-    The three singleton-keyed money tables (`capital_state`, `instrument_state`,
-    `daily_account_snapshot`) therefore pass rule 2 by having no `owner_id` to check — which is
-    honest. They are single-owner, their keys say so, and migration 0017 declined to give them a
-    column that could not express two owners. This function does not pretend otherwise.
-
-    A resource that is not an owned object — a project id string, `None` — is allowed by rule 2.
-    That is not a hole today: those planes have no ownership dimension yet, and inventing a
-    refusal for them here would be a policy reading a field that does not exist.
-    """
-    if principal is None or not principal.is_owner:
+    """The sole authorization predicate; resource conversion remains Task 5B."""
+    if principal is None or not principal.has_scope(action):
         return False
     resource_owner = getattr(resource, "owner_id", None)
     if resource_owner is None:
@@ -174,33 +370,21 @@ def is_allowed(principal: Principal | None, action: str, resource: Any = None) -
     try:
         return str(resource_owner) == owner_id_for(principal)
     except Forbidden:
-        # `owner_id_for` refuses a non-owner principal. Rule 1 already excluded that, so this is
-        # unreachable today; it is here because a predicate that raises where callers expect a
-        # bool is how an `if is_allowed(...)` somewhere turns into a 500 instead of a refusal.
         return False
 
 
 def owner_id_for(principal: Principal | None) -> str:
-    """The `owner_id` column value this principal's rows belong to.
-
-    Deliberately NOT `principal.id`. `ANONYMOUS_OWNER.id` is `"anonymous-owner"`, and auth
-    disabled is the shipped default and the current production posture on the tailnet-only box —
-    so keying rows on the principal id would file every connection created with auth off under an
-    owner the engine never reads. `LiveBroker` and `configured_execution_connection` both resolve
-    the owner from `settings.owner_id`, and this returns the same value so the API writes the rows
-    the engine reads. The two identities are the same human; `kind` is how we know which.
-
-    Raises for anything that is not an owner, so a future non-owner principal cannot silently
-    acquire the owner's connections by falling through a default.
-    """
-    if principal is None or not principal.is_owner:
+    if principal is None:
         raise Forbidden("no owner identity for this principal")
-    configured = (get_settings().owner_id or "").strip()
-    return configured or LEGACY_OWNER_ID
+    # Existing dependency overrides use the original owner-shaped principal.
+    if principal.kind in ("owner", "anonymous_owner"):
+        configured = (get_settings().owner_id or "").strip()
+        return configured or LEGACY_OWNER_ID
+    if principal.organization_id:
+        return principal.organization_id
+    raise Forbidden("no owner identity for this principal")
 
 
 def require(principal: Principal | None, action: str, resource: Any = None) -> None:
-    """Assert authorization or raise. `require`, not `check`, because a boolean
-    returned into an `if` is a check somebody eventually forgets to write."""
     if not is_allowed(principal, action, resource):
         raise Forbidden(f"principal is not permitted to {action}")

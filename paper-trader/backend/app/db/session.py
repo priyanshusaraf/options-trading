@@ -313,6 +313,12 @@ def init_db(reset: bool = False) -> None:
     s = get_settings()
     with SessionLocal() as sess:
         _ensure_legacy_tenancy_roots(sess)
+        # Compatibility bridge for the pre-session PT_API_TOKEN deployment.
+        # The helper hashes it immediately and only binds an absent digest; it
+        # never compares raw token material or rewrites a foreign binding.
+        if s.api_token:
+            from app.api.principal import bootstrap_legacy_session
+            bootstrap_legacy_session(sess, s.api_token)
         # The legacy deployment must exist before anything can write a row: every
         # executed-row table carries a NOT NULL deployment_id defaulting to it.
         # Seeded here for databases built by create_all (which runs no revision) and

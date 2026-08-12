@@ -89,8 +89,9 @@ class WSManager:
         return len(c.latest) + len(c.logs) if c else 0
 
     # ── connection lifecycle ────────────────────────────────────────────────
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
+    async def connect(self, ws: WebSocket, *, accepted: bool = False) -> None:
+        if not accepted:
+            await ws.accept()
         client = _Client(logs=deque(maxlen=self.LOG_BUFFER))
         self.clients[ws] = client
         client.task = asyncio.get_running_loop().create_task(self._sender(ws, client))

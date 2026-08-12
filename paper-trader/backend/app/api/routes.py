@@ -1065,11 +1065,12 @@ def analytics_split(request: Request, segment: str | None = None):
 # ── websockets ──────────────────────────────────────────────────────────────
 @router.websocket("/ws")
 async def ws_main(ws: WebSocket):
-    from app.api.auth import ws_authorized
-    if not ws_authorized(ws):
-        await ws.close(code=1008)
+    from app.api.principal import authenticate_websocket
+    principal = await authenticate_websocket(ws)
+    if principal is None:
         return
-    await manager.connect(ws)
+    ws.state.principal = principal
+    await manager.connect(ws, accepted=True)
     try:
         # prime the new client with the current state + recent logs
         r = _runner(ws)
@@ -1114,11 +1115,11 @@ def _instrument_payload(provider, key: str, book: str, *, owner_id: str,
 
 @router.websocket("/ws/instrument/{key}")
 async def ws_instrument(ws: WebSocket, key: str):
-    from app.api.auth import ws_authorized
-    if not ws_authorized(ws):
-        await ws.close(code=1008)
+    from app.api.principal import authenticate_websocket
+    principal = await authenticate_websocket(ws)
+    if principal is None:
         return
-    await ws.accept()
+    ws.state.principal = principal
     r = _runner(ws)
     try:
         while True:
