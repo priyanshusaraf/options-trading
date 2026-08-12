@@ -446,8 +446,7 @@ class Settings(BaseSettings):
     # authority after that bridge.
     api_token: str = ""
     # Shared by every API replica to sign tenant-bound durable resume cursors.
-    # Production may reuse the legacy API token during migration; tokenless
-    # durable-session deployments must configure this explicitly.
+    # Production requires a dedicated value stable across replicas/restarts.
     event_cursor_secret: str = ""
     # The explicit service posture.  Empty authentication is only valid for a
     # development or test process; production-like roles refuse to boot instead

@@ -943,7 +943,11 @@ def execution_events(request: Request, cursor: str | None = None,
             "aggregate_sequence": event.aggregate_sequence,
             "content_address": event.content_address,
         } for event in result.events]
-    high_water = max(offset, result.high_water)
+    # A normal page advances only through identities actually returned. A
+    # retained-away resync reloads the whole durable snapshot, so it may advance
+    # through the applicable scope watermark/high-water in one response.
+    high_water = (max(offset, result.high_water) if result.resync_required
+                  else max([offset, *[event["offset"] for event in events]]))
     return {
         "events": events, "resync_required": result.resync_required,
         "cursor": codec.encode(plane="execution", scope=scope, offset=high_water)

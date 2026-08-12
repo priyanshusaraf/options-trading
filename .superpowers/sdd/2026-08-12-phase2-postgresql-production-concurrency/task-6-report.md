@@ -75,7 +75,7 @@ concurrent first stream allocation, concurrent producer retry, and concurrent fi
 Latest retained focused evidence before review:
 
 - SQLite contract/model/delivery/product seam and affected auth/tenant/research/ledger/WS gate:
-  `299 passed, 5 deliberate skips` across 304 collected tests.
+  `300 passed, 5 deliberate skips` across 305 collected tests.
 - Live PostgreSQL outbox/lease/money/schema/profile gate: `57 passed, 12 deliberate skips` across
   69 collected tests, including notification timing/rollback, listener wake under the five-second
   fallback, first-stream concurrency, producer retry/conflict, and initial cursor claim.
