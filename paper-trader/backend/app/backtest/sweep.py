@@ -225,6 +225,8 @@ _measurements: dict[str, int | float] = {
     "claim_takeovers": 0, "rejections": 0, "inflight_datasets": 0,
     "active_process_pools": 0, "db_lock_wait_seconds": 0.0,
     "claim_latency_seconds": 0.0, "takeover_age_seconds": 0.0,
+    # Origin is deliberately a bounded category, never an owner or cache key.
+    "cache_owner_local": 0, "cache_public_shared": 0, "cache_cold": 0,
 }
 _owner_measurements: dict[tuple[str, str], int | float] = {}
 _measurement_gauges: dict[tuple[str, str | None, int | None], int | float] = {}
@@ -275,6 +277,10 @@ class _PreparedDataset:
     clamped: bool = False
     dataset_address: str = ""
     error: str = ""
+    dataset_classification: str = dataset_store.MARKET_PUBLIC
+    # True only after this process recomputed the ordered address from candles
+    # or the public storage adapter decoded and verified its blob.
+    dataset_verified: bool = False
 
     @cached_property
     def frame(self):
@@ -1355,7 +1361,7 @@ def _prepare_dataset(provider, inst, interval, win, *,
     return _PreparedDataset(
         candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
         effective_days=effective_days, clamped=clamped,
-        dataset_address=dataset_address)
+        dataset_address=dataset_address, dataset_verified=bool(dataset_address))
 
 
 def _pinned_address(inst, interval, pinned) -> str:
@@ -1480,7 +1486,8 @@ def _pinned_dataset_from_store(read, *, address: str, key: str,
         candles=candles, bars=len(candles), first_ts=first_ts, last_ts=last_ts,
         effective_days=max(0, round((last_ts - first_ts) / 86400)),
         clamped=bool(effective.get("clamped", clamped)),
-        dataset_address=stored.address)
+        dataset_address=stored.address, dataset_classification=stored.classification,
+        dataset_verified=True)
 
 
 def _pin_mismatch(stored, *, provider_identity, instrument_identity, interval,
@@ -1533,13 +1540,21 @@ def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
                                slippage_pct)
     cached = _reusable_values(inst, interval, phash, prepared.last_ts, owner_id=owner_id)
     if cached is not None:
+        _measure("cache_owner_local", owner_id=owner_id)
         return cached
-    return _compute_values(
+    public = _public_reusable_values(prepared, strat, phash)
+    if public is not None:
+        _measure("cache_public_shared", owner_id=owner_id)
+        return public
+    values = _compute_values(
         prepared.candles, inst, interval, capital, strat,
         dict(strat.default_params), slippage_pct, phash,
         bars=prepared.bars, first_ts=prepared.first_ts, last_ts=prepared.last_ts,
         effective_days=prepared.effective_days, clamped=prepared.clamped,
         frame=prepared.frame)
+    _measure("cache_cold", owner_id=owner_id)
+    _publish_public_computation(prepared, strat, phash, values)
+    return values
 
 
 def _execution_address(prepared, inst, interval, capital, win, strat,
@@ -1583,6 +1598,59 @@ def _reusable_values(inst, interval, phash: str, last_ts: int, *, owner_id: str)
             return None
         from app.backtest.cache import cached_result_values
         return dict(cached_result_values(hit), from_cache=True)
+
+
+def _public_manifest(prepared: _PreparedDataset) -> dict:
+    """The public proof held by this caller before it can even query shared state."""
+    return {"dataset_address": prepared.dataset_address,
+            "dataset_verified": prepared.dataset_verified}
+
+
+def _public_reusable_values(prepared: _PreparedDataset, strat, phash: str) -> dict | None:
+    """Shared lookup after explicit eligibility; private inputs never probe it."""
+    if not phash or not prepared.dataset_address:
+        return None
+    from app.backtest import public_computation
+    manifest = _public_manifest(prepared)
+    if not (public_computation.strategy_is_platform_public(strat)
+            and public_computation.is_eligible(
+                dataset_classification=prepared.dataset_classification,
+                strategy_key=strat.key, strategy_module=type(strat).__module__,
+                execution_manifest=manifest)):
+        return None
+    with SessionLocal() as session:
+        return public_computation.maybe_materialize(
+            session, execution_address=phash,
+            dataset_classification=prepared.dataset_classification,
+            strategy_key=strat.key, strategy_module=type(strat).__module__,
+            execution_manifest=manifest)
+
+
+def _publish_public_computation(prepared: _PreparedDataset, strat, phash: str,
+                                values: dict) -> None:
+    """Publish immutable pure bytes opportunistically after a cold public result."""
+    if not phash or values.get("error"):
+        return
+    from app.backtest import public_computation
+    manifest = _public_manifest(prepared)
+    if not (public_computation.strategy_is_platform_public(strat)
+            and public_computation.is_eligible(
+                dataset_classification=prepared.dataset_classification,
+                strategy_key=strat.key, strategy_module=type(strat).__module__,
+                execution_manifest=manifest)):
+        return
+    try:
+        with SessionLocal() as session:
+            public_computation.put_immutable(
+                session, execution_address=phash, dataset_address=prepared.dataset_address,
+                strategy_key=strat.key, strategy_version=strat.version,
+                # phash binds every public policy/input that can change this payload.
+                policy_address=phash, payload=values)
+            session.commit()
+    except public_computation.PublicComputationIntegrityError as exc:
+        # Never overwrite or read a competing result. The caller still has a
+        # fresh owner-local cold result, which is safer than suppressing evidence.
+        log.error(f"public backtest computation integrity refusal: {exc}")
 
 
 def _compute_values(candles, inst, interval, capital, strat, params,

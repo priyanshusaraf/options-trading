@@ -853,6 +853,23 @@ class GeneratedStrategyRow(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 
+class BacktestComputation(Base):
+    """Immutable, ownerless numerical result of a public platform computation."""
+    __tablename__ = "backtest_computations"
+    execution_address: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dataset_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_address: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    __table_args__ = (
+        Index("ix_backtest_computations_dataset", "dataset_address"),
+        Index("ix_backtest_computations_strategy", "strategy_key", "strategy_version"),
+    )
+
+
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     __table_args__ = (

@@ -76,7 +76,7 @@ import uuid
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from app.backtest.identity import (INSTRUMENT_IDENTITY_FIELDS,
                                    PROVIDER_IDENTITY_FIELDS,
@@ -86,6 +86,7 @@ from app.core.config import get_settings
 BLOB_SUFFIX = ".ptds"
 MANIFEST_SUFFIX = ".json"
 STORE_SCHEME = "backtest-dataset-store/1"
+MARKET_PUBLIC = "MARKET_PUBLIC"
 _MAGIC = b"PTDS1\0"
 _HEADER = len(_MAGIC) + 8
 _RECORD = struct.calcsize(">q5d")            # 48 bytes: int64 + five binary64
@@ -120,6 +121,7 @@ class StoredDataset:
     bars: int
     first_ts_us: int
     last_ts_us: int
+    classification: str = MARKET_PUBLIC
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,27 @@ class IndexEntry:
 
 class DatasetStoreError(RuntimeError):
     """A dataset could not be stored. Never fatal to a sweep."""
+
+
+@runtime_checkable
+class PublicDatasetStorage(Protocol):
+    """Port used by sweeps for verified public data, not filesystem internals.
+
+    The local adapter is deliberately the only implementation in this phase. A
+    future object store implements this protocol without gaining an owner/BYOD
+    namespace by accident.
+    """
+    def put(self, candles, *, provider: Any, instrument: Any, interval: str,
+            requested_window: Any, effective_window: Any, address: str | None = None,
+            classification: str = MARKET_PUBLIC) -> str: ...
+    def get(self, address: str, *, classification: str = MARKET_PUBLIC) -> StoredDataset | None: ...
+    def lookup(self, *, provider: Any, instrument: Any, interval: str,
+               requested_window: Any, classification: str = MARKET_PUBLIC) -> IndexEntry | None: ...
+
+
+def _require_public(classification: str) -> None:
+    if classification != MARKET_PUBLIC:
+        raise DatasetStoreError("public dataset storage refuses non-public classification")
 
 
 # ── packed binary form ───────────────────────────────────────────────────────
@@ -201,6 +224,8 @@ class DatasetStore:
             " interval TEXT NOT NULL, requested_window TEXT NOT NULL,"
             " address TEXT NOT NULL, fetched_at TEXT NOT NULL)")
         self._conn.commit()
+        self._measurements = {"put": 0, "get": 0, "lookup": 0,
+                              "corruption_refusals": 0, "read_seconds": 0.0}
 
     # paths -------------------------------------------------------------
     def _shard(self, address: str) -> Path:
@@ -230,13 +255,15 @@ class DatasetStore:
     # write -------------------------------------------------------------
     def put(self, candles, *, provider: Any, instrument: Any, interval: str,
             requested_window: Any, effective_window: Any,
-            address: str | None = None) -> str:
+            address: str | None = None,
+            classification: str = MARKET_PUBLIC) -> str:
         """Store one dataset; return its address.
 
         Revised history is a NEW address, never an overwrite: the address binds
         the ordered bytes, so a corrected candle produces a different file and
         the previous dataset stays retrievable. Only the request index moves.
         """
+        _require_public(classification)
         provider_identity = source_identity(provider,
                                             fields=PROVIDER_IDENTITY_FIELDS)
         instrument_identity = source_identity(instrument,
@@ -263,6 +290,7 @@ class DatasetStore:
             "bars": len(decoded),
             "first_ts_us": _timestamp_us(decoded[0].ts) if decoded else 0,
             "last_ts_us": _timestamp_us(decoded[-1].ts) if decoded else 0,
+            "classification": MARKET_PUBLIC,
         })
 
         blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
@@ -283,6 +311,7 @@ class DatasetStore:
                      interval=interval, requested_window=requested_window,
                      provider_identity=provider_identity,
                      instrument_identity=instrument_identity)
+        self._measurements["put"] += 1
         return address
 
     @staticmethod
@@ -323,20 +352,30 @@ class DatasetStore:
             self._conn.commit()
 
     # read --------------------------------------------------------------
-    def get(self, address: str) -> StoredDataset | None:
+    def get(self, address: str, *, classification: str = MARKET_PUBLIC) -> StoredDataset | None:
         """Return the dataset at `address`, or None if it cannot be PROVEN to be
         that dataset. Every failure mode is a refusal, never a partial answer."""
+        _require_public(classification)
+        started = dt.datetime.now().timestamp()
+        self._measurements["get"] += 1
         blob_path, manifest_path = self.blob_path(address), self.manifest_path(address)
         if not (blob_path.is_file() and manifest_path.is_file()):
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
         try:
             manifest = json.loads(manifest_path.read_text())
             candles = decode_candles(blob_path.read_bytes())
         except (OSError, ValueError, zlib.error, struct.error):
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
         if not isinstance(manifest, dict) or manifest.get("scheme") != STORE_SCHEME:
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
         if manifest.get("bars") != len(candles):
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
         try:
             recomputed = ordered_dataset_address(
@@ -346,19 +385,28 @@ class DatasetStore:
                 requested_window=manifest["requested_window"],
                 effective_window=manifest["effective_window"])
         except (KeyError, ValueError, TypeError):
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
         if recomputed != address:
             # THE containment guard: the bytes on disk are not the bytes this
             # address names. Serving them would put a silently wrong dataset
             # into a backtest, which is worse than any read failure.
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
             return None
+        if manifest.get("classification", MARKET_PUBLIC) != MARKET_PUBLIC:
+            self._measurements["corruption_refusals"] += 1
+            self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
+            return None
+        self._measurements["read_seconds"] += dt.datetime.now().timestamp() - started
         return StoredDataset(
             address=address, candles=candles, provider=manifest["provider"],
             instrument=manifest["instrument"], interval=manifest["interval"],
             requested_window=manifest["requested_window"],
             effective_window=manifest["effective_window"], bars=len(candles),
             first_ts_us=int(manifest.get("first_ts_us", 0)),
-            last_ts_us=int(manifest.get("last_ts_us", 0)))
+            last_ts_us=int(manifest.get("last_ts_us", 0)), classification=MARKET_PUBLIC)
 
     def manifest(self, address: str) -> dict | None:
         """The sidecar manifest alone, without decoding the blob.
@@ -387,13 +435,16 @@ class DatasetStore:
         return manifest
 
     def lookup(self, *, provider: Any, instrument: Any, interval: str,
-               requested_window: Any) -> IndexEntry | None:
+               requested_window: Any,
+               classification: str = MARKET_PUBLIC) -> IndexEntry | None:
         """The newest address stored for this request, and when it was fetched.
 
         A record of what was fetched, never a permission: it does not authorise
         skipping a provider read. C13 forbids executor paths from branching on
         where data came from, and this store is on that side of the line.
         """
+        _require_public(classification)
+        self._measurements["lookup"] += 1
         key = self.request_key(provider=provider, instrument=instrument,
                                interval=interval,
                                requested_window=requested_window)
@@ -406,6 +457,10 @@ class DatasetStore:
     def stored_addresses(self) -> list[str]:
         return sorted(path.name[:-len(BLOB_SUFFIX)]
                       for path in self.root.glob(f"blobs/*/*{BLOB_SUFFIX}"))
+
+    def measurements(self) -> dict[str, int | float]:
+        """Bounded operational counters, deliberately without tenant labels."""
+        return dict(self._measurements)
 
     def close(self) -> None:
         self._conn.close()
@@ -444,7 +499,8 @@ def reset_default_store() -> None:
         _default_root = None
 
 
-__all__ = ["BLOB_SUFFIX", "MANIFEST_SUFFIX", "STORE_SCHEME", "DatasetStore",
+__all__ = ["BLOB_SUFFIX", "MANIFEST_SUFFIX", "STORE_SCHEME", "MARKET_PUBLIC", "DatasetStore",
            "DatasetStoreError", "IndexEntry", "StoredCandle", "StoredDataset",
+           "PublicDatasetStorage",
            "decode_candles", "encode_candles", "get_store",
            "reset_default_store", "store_root"]

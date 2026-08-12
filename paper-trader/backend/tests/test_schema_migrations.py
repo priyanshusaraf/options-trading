@@ -32,7 +32,125 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0026"
+HEAD = "0027"
+
+
+def test_revision_0027_adds_neutral_public_computation_contract_and_empty_downgrade(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-contract.db", "0026")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0027")
+        columns = {row[1] for row in connection.execute(sa.text(
+            "PRAGMA table_info(backtest_computations)"))}
+        assert columns == {"execution_address", "dataset_address", "strategy_key",
+                           "strategy_version", "policy_address", "schema_version",
+                           "payload_json", "payload_digest"}
+        assert connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE name='_backtest_0027_creation_proofs'")) .first() is None
+        command.downgrade(migrate.alembic_config(connection), "0026")
+        assert "backtest_computations" not in sa.inspect(connection).get_table_names()
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0027_recovers_a_proven_source_absent_creation_without_fk_mode_drift(tmp_path, foreign_keys):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-recovery.db", "0026")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and "ALTER TABLE BACKTEST_COMPUTATIONS__0027 RENAME" in statement.upper():
+            stopped = True
+            raise RuntimeError("0027 injected interruption")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            with engine.begin() as connection:
+                raw = connection.connection.driver_connection
+                raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+                command.upgrade(migrate.alembic_config(connection), "0027")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0027")
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+        assert "backtest_computations" in sa.inspect(connection).get_table_names()
+
+
+def test_revision_0027_refuses_unproven_source_absent_temp_without_schema_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-forged.db", "0026")
+    with engine.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE backtest_computations__0027 (attacker TEXT)"))
+        before = connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE name='backtest_computations__0027'")) .scalar_one()
+        with pytest.raises(RuntimeError, match="unproven"):
+            command.upgrade(migrate.alembic_config(connection), "0027")
+        assert connection.execute(sa.text(
+            "SELECT sql FROM sqlite_master WHERE name='backtest_computations__0027'")) .scalar_one() == before
+        assert "backtest_computations" not in sa.inspect(connection).get_table_names()
+
+
+def test_revision_0027_recovers_after_table_rename_before_index_promotion(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-after-rename.db", "0026")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and "DROP INDEX IF EXISTS IX_BACKTEST_COMPUTATIONS_DATASET__0027" in statement.upper():
+            stopped = True
+            raise RuntimeError("0027 post-rename interruption")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="post-rename"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0027")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0027")
+        names = {row[0] for row in connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='backtest_computations'"))}
+        assert names == {"sqlite_autoindex_backtest_computations_1",
+                         "ix_backtest_computations_dataset", "ix_backtest_computations_strategy"}
+
+
+def test_revision_0027_refuses_schema_tampered_proven_temp_without_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-temp-tamper.db", "0026")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and "ALTER TABLE BACKTEST_COMPUTATIONS__0027 RENAME" in statement.upper():
+            stopped = True
+            raise RuntimeError("0027 proof interruption")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="proof interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0027")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        connection.execute(sa.text("ALTER TABLE backtest_computations__0027 ADD COLUMN attacker TEXT"))
+        with pytest.raises(RuntimeError, match="malformed"):
+            command.upgrade(migrate.alembic_config(connection), "0027")
+        assert "backtest_computations" not in sa.inspect(connection).get_table_names()
+        assert "backtest_computations__0027" in sa.inspect(connection).get_table_names()
+
+
+def test_revision_0027_refuses_forged_existing_target_schema_without_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-forged-target.db", "0026")
+    with engine.begin() as connection:
+        connection.execute(sa.text("CREATE TABLE backtest_computations (attacker TEXT)"))
+        with pytest.raises(RuntimeError, match="non-target schema"):
+            command.upgrade(migrate.alembic_config(connection), "0027")
+        assert connection.execute(sa.text("PRAGMA table_info(backtest_computations)")).all() == [(0, "attacker", "TEXT", 0, None, 0)]
+
+
+def test_revision_0027_downgrade_refuses_nonempty_artifact_without_mutation(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0027-down-refusal.db", "0027")
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO backtest_computations VALUES (:e,:d,'s','v',:p,8,'{}',:h)"),
+            {"e": "a" * 64, "d": "b" * 64, "p": "c" * 64, "h": "d" * 64})
+        with pytest.raises(RuntimeError, match="refuses"):
+            command.downgrade(migrate.alembic_config(connection), "0026")
+        assert connection.execute(sa.text("SELECT count(*) FROM backtest_computations")).scalar_one() == 1
 
 
 def test_revision_0026_backfills_legacy_cells_and_refuses_duplicate_new_identity(tmp_path):

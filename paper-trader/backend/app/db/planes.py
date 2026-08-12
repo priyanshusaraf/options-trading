@@ -99,6 +99,7 @@ TABLE_PLANES: dict[str, Plane] = {
     # Raw candles are MARKET. A durable run/result records private strategy work and is USER.
     "backtest_runs": Plane.USER,
     "backtest_results": Plane.USER,
+    "backtest_computations": Plane.MARKET,
 }
 
 
