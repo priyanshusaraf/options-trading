@@ -293,7 +293,29 @@ class ResearchOperationRepository:
                     "claimed_by": None, "claim_expires_at": None})
 
     def request_cancel(self, operation_id: str, *, owner_id: str, now: dt.datetime | None = None) -> bool:
-        changed = self.session.execute(update(ResearchOperation).where(ResearchOperation.owner_id == owner_id, ResearchOperation.operation_id == operation_id, ResearchOperation.status.in_(_ACTIVE)).values(cancel_requested_at=_instant(now)))
+        instant = _instant(now)
+        # Pending work has no worker to observe a cooperative cancellation, so
+        # make it terminal in this same conditional write. A running worker
+        # retains its lease only long enough to observe the barrier; every
+        # subsequent fenced mutation rejects the request.
+        changed = self.session.execute(update(ResearchOperation).where(
+            ResearchOperation.owner_id == owner_id,
+            ResearchOperation.operation_id == operation_id,
+            ResearchOperation.status.in_(_ACTIVE),
+            ResearchOperation.cancel_requested_at.is_(None),
+        ).values(
+            cancel_requested_at=instant,
+            status=case((ResearchOperation.status == "pending", "cancelled"),
+                        else_=ResearchOperation.status),
+            completed_at=case((ResearchOperation.status == "pending", instant),
+                              else_=ResearchOperation.completed_at),
+            claim_token=case((ResearchOperation.status == "pending", None),
+                             else_=ResearchOperation.claim_token),
+            claimed_by=case((ResearchOperation.status == "pending", None),
+                            else_=ResearchOperation.claimed_by),
+            claim_expires_at=case((ResearchOperation.status == "pending", None),
+                                  else_=ResearchOperation.claim_expires_at),
+        ))
         self.session.commit(); return changed.rowcount == 1
 
     def reconcile_expired(self, *, owner_id: str, now: dt.datetime | None = None) -> int:

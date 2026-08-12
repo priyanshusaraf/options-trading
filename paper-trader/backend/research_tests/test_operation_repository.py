@@ -35,8 +35,8 @@ def test_repository_cancels_pending_and_requires_owner_keywords(repo):
     now = dt.datetime(2026, 8, 12, tzinfo=dt.UTC)
     repo.enqueue(owner_id="owner-a", trigger="manual", plan={"items": []}, build="b", provider_mode="mock", operation_id="cancel", now=now)
     assert repo.request_cancel("cancel", owner_id="owner-a", now=now)
-    assert repo.reconcile_expired(owner_id="owner-a", now=now) == 1
     assert repo.get("cancel", owner_id="owner-a").status == "cancelled"
+    assert repo.reconcile_expired(owner_id="owner-a", now=now) == 0
     with pytest.raises(TypeError):
         repo.get("cancel")
 
