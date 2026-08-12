@@ -36,6 +36,12 @@ def _public(operation: OperationView) -> dict:
     }
 
 
+def _public_event(event: dict) -> dict:
+    return {"sequence": event["sequence"], "type": event["type"],
+            "stage": event["stage"], "created_at": event["created_at"].isoformat(),
+            "payload": event["payload"]}
+
+
 @router.get("/api/research/operations/status")
 def get_research_operation_status(principal: Principal = Depends(get_principal)):
     """Owner-local durable status; a receipt file is never consulted here."""
@@ -48,6 +54,12 @@ def get_research_operation_status(principal: Principal = Depends(get_principal))
             owner_id = owner_id_for(principal)
             active = repository.latest_active(owner_id=owner_id)
             last = repository.latest_terminal(owner_id=owner_id)
+            event_operation = active or last
+            events = (repository.events(event_operation.operation_id, owner_id=owner_id)
+                      if event_operation else [])
     finally:
         engine.dispose()
-    return {"state": "available" if active or last else "never_run", "active": _public(active) if active else None, "last": _public(last) if last else None}
+    return {"state": "available" if active or last else "never_run",
+            "active": _public(active) if active else None,
+            "last": _public(last) if last else None,
+            "events": [_public_event(event) for event in events]}

@@ -26,7 +26,7 @@ def client():
 
 
 def test_never_run_status_is_explicit_and_versioned(client):
-    expected = {"state": "never_run", "active": None, "last": None}
+    expected = {"state": "never_run", "active": None, "last": None, "events": []}
 
     assert client.get("/api/research/operations/status").json() == expected
     assert client.get("/api/v1/research/operations/status").json() == expected
@@ -67,7 +67,7 @@ def test_global_receipt_cannot_authorize_or_supply_operation_status(client):
 
     body = client.get("/api/research/operations/status").json()
 
-    assert body == {"state": "never_run", "active": None, "last": None}
+    assert body == {"state": "never_run", "active": None, "last": None, "events": []}
 
 
 def test_status_read_never_calls_research_execution(monkeypatch, client):
@@ -89,7 +89,7 @@ def test_corrupt_global_receipt_does_not_change_durable_status(client, monkeypat
     response = client.get("/api/research/operations/status")
 
     assert response.status_code == 200
-    assert response.json() == {"state": "never_run", "active": None, "last": None}
+    assert response.json() == {"state": "never_run", "active": None, "last": None, "events": []}
 
 
 def test_status_surface_is_read_only_and_research_gated(client, monkeypatch):

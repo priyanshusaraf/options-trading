@@ -25,6 +25,8 @@ from research.guards import enforce
 from research.orchestrator.report import write_report
 from research.orchestrator.run import run_nightly
 from research.operations import safe_plan_summary
+from research.domain.operations import operation_item_keys, reconstruct_plan
+from app.ir.hashing import content_address
 
 
 def _execution_db_path() -> str:
@@ -99,7 +101,10 @@ def _make_source():
     return KiteDataSource(get_provider())
 
 
-def _run_generation(session, source, plan, report_dir) -> list:
+def _run_generation(session, source, plan, report_dir, *, claim_guard=None,
+                    descriptors=None, item_keys=None, completed_item_run=None,
+                    bound_item_run=None, reclaim_bound_item=None,
+                    bind_item_run=None, finalize_item=None) -> list:
     """Explore generated COMPOSITIONS, not just the handwritten strategy.
 
     This is what makes the loop actually search rather than re-measure one idea
@@ -114,6 +119,8 @@ def _run_generation(session, source, plan, report_dir) -> list:
     intended trade and the reason the limit is bounded and configurable.
     """
     limit = nightly_generate_limit()
+    if descriptors is not None:
+        limit = len(descriptors)
     if not limit or not plan:
         return []
     from research.orchestrator.generate import run_generated
@@ -126,7 +133,12 @@ def _run_generation(session, source, plan, report_dir) -> list:
     seed = nightly_search_seed()
     owner_id = os.environ["PT_RESEARCH_OWNER_ID"]
     reports = run_generated(session, source, instruments, interval, owner_id=owner_id, limit=limit,
-                            git_commit=_git_commit(), seed=seed)
+                            git_commit=_git_commit(), seed=seed, claim_guard=claim_guard,
+                            durable_descriptors=descriptors, durable_item_keys=item_keys,
+                            completed_item_run=completed_item_run,
+                            bound_item_run=bound_item_run,
+                            reclaim_bound_item=reclaim_bound_item,
+                            bind_item_run=bind_item_run, finalize_item=finalize_item)
     for i, report in enumerate(reports, 1):
         path = os.path.join(report_dir, f"report_generated_{report.get('run_id', i)}.md")
         write_report(report, path)
@@ -147,15 +159,58 @@ def _run_enabled_operation(research_db: str) -> list:
         Session = make_sessionmaker(engine)
         with Session() as session:
             from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
-            plan = _load_plan(session, owner_id=owner_id)
+            repository = ResearchOperationRepository(session)
+            # A scheduler invocation first drains one pre-existing pending or
+            # expired operation.  Its stored descriptor, not a newly generated
+            # plan, is authoritative on recovery.
+            repository.reconcile_expired(owner_id=owner_id)
+            recorder = DurableOperationRecorder.claim_next(
+                repository, owner_id=owner_id, worker_id=f"nightly:{os.getpid()}",
+                triggers=("nightly",))
+            if recorder is not None:
+                claimed = repository.get(recorder.operation_id, owner_id=owner_id)
+                if claimed is None:
+                    raise RuntimeError("claimed research operation disappeared")
+                if (claimed.build != _git_commit()
+                        or claimed.provider_mode != get_settings().provider):
+                    recorder.fail({
+                        "code": "RESEARCH_OPERATION_PROVENANCE_MISMATCH",
+                        "message": "research operation replay requires its admitted build and provider mode",
+                    })
+                    raise RuntimeError("research operation replay provenance mismatch")
+                from app.core.instruments import get_instrument
+                plan_summary = claimed.plan
+                plan = reconstruct_plan(plan_summary, instrument_for_key=get_instrument)
+            else:
+                plan = _load_plan(session, owner_id=owner_id)
+                plan_summary = safe_plan_summary(plan)
+                # Generation is admitted alongside the handwritten plan.  Its
+                # manifest freezes exact compositions before a provider exists;
+                # an expired claim therefore replays the same search rather than
+                # querying newly changed knowledge weights.
+                if plan and nightly_generate_limit():
+                    from research.orchestrator.generate import generated_descriptors
+                    descriptors = generated_descriptors(
+                        session, plan[0]["instruments"], plan[0]["interval"],
+                        owner_id=owner_id, limit=nightly_generate_limit(),
+                        seed=nightly_search_seed(), git_commit=_git_commit(),
+                        provider_mode=get_settings().provider)
+                    payload = {
+                        "experiment_count": plan_summary["experiment_count"] + len(descriptors),
+                        "items": plan_summary["items"], "generated": descriptors,
+                    }
+                    plan_summary = {"content_address": content_address(payload), **payload}
+                recorder = DurableOperationRecorder.start(
+                    repository, owner_id=owner_id, trigger="nightly",
+                    build=_git_commit(), provider_mode=get_settings().provider,
+                    worker_id=f"nightly:{os.getpid()}", plan=plan_summary,
+                )
             # Admission (including the bounded, secret-free durable manifest)
             # comes before the provider is even constructed.  An invalid plan
             # must not consume an API call or create a live-data object.
-            recorder = DurableOperationRecorder.start(
-                ResearchOperationRepository(session), owner_id=owner_id, trigger="nightly",
-                build=_git_commit(), provider_mode=get_settings().provider,
-                worker_id=f"nightly:{os.getpid()}", plan=safe_plan_summary(plan),
-            )
+            item_keys = operation_item_keys(plan_summary, trigger="nightly")
+            handwritten_keys = item_keys[:len(plan)]
+            generated_keys = item_keys[len(plan):]
             def _heartbeat(operation_id: str, scoped_owner: str, token: str) -> bool:
                 watchdog_engine = make_engine(research_db)
                 try:
@@ -170,12 +225,23 @@ def _run_enabled_operation(research_db: str) -> list:
             report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
             reports = run_nightly(session, source=src, plan=plan, owner_id=owner_id,
                 git_commit=_git_commit(), report_dir=report_dir,
-                progress=recorder.add_completed_run, stage=recorder.transition)
+                progress=recorder.add_completed_run, stage=recorder.transition,
+                item_keys=handwritten_keys,
+                completed_item_run=recorder.completed_item_run,
+                bound_item_run=recorder.bound_item_run,
+                reclaim_bound_item=recorder.reclaim_bound_item,
+                bind_item_run=recorder.bind_item_run_in_transaction,
+                finalize_item=recorder.finalize_item_in_transaction)
             recorder.transition("generation")
-            generated = _run_generation(session, src, plan, report_dir)
-            for report in generated:
-                if isinstance(report.get("run_id"), int):
-                    recorder.add_completed_run(report["run_id"])
+            generated = _run_generation(session, src, plan, report_dir,
+                                        claim_guard=recorder.assert_claim,
+                                        descriptors=plan_summary.get("generated", []),
+                                        item_keys=generated_keys,
+                                        completed_item_run=recorder.completed_item_run,
+                                        bound_item_run=recorder.bound_item_run,
+                                        reclaim_bound_item=recorder.reclaim_bound_item,
+                                        bind_item_run=recorder.bind_item_run_in_transaction,
+                                        finalize_item=recorder.finalize_item_in_transaction)
             reports += generated
             recorder.complete()
             return reports

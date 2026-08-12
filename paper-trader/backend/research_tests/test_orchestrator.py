@@ -320,6 +320,116 @@ def test_run_nightly_empty_plan_is_noop(research_session):
     assert run_nightly(research_session, source=None, plan=[], owner_id=OWNER_ID) == []
 
 
+def test_run_nightly_skips_a_durably_checkpointed_item_before_provider_io(
+        research_session, inst_factory):
+    """Restart resumes after a receipt; it never repeats a completed plan item."""
+    from research.orchestrator.run import run_nightly
+
+    class PoisonSource:
+        def candles(self, *_args, **_kwargs):
+            raise AssertionError("checkpointed work must not fetch provider data")
+
+    plan = [{"program": "Trend Following", "hypothesis": "already done",
+             "strategy_key": "trend_impulse_v3", "instruments": [inst_factory("AAA")],
+             "interval": "day"}]
+    assert run_nightly(research_session, PoisonSource(), plan, owner_id=OWNER_ID,
+                       item_keys=["manual:000:done"],
+                       completed_item_run=lambda key: 99 if key == "manual:000:done" else None,
+                       checkpoint_item=lambda *_args: (_ for _ in ()).throw(
+                           AssertionError("already-completed item must not checkpoint"))) == []
+
+
+def test_terminal_evidence_and_item_receipt_rollback_together_on_crash(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    """A crash between evidence assembly and commit cannot leave a replay gap."""
+    from research.orchestrator.run import run_nightly
+    from research.domain.models import ExperimentRun
+
+    source = StaticDataSource({("AAA", "day"): candles_factory(400)})
+    plan = [{"program": "Trend Following", "hypothesis": "atomic receipt",
+             "strategy_key": "trend_impulse_v3", "instruments": [inst_factory("AAA")],
+             "interval": "day", "min_trades": 1, "n_folds": 4,
+             "min_positive_fold_frac": 0.0}]
+    events = []
+
+    def bind(_key, run_id):
+        events.append(("bind", run_id))
+        return True
+
+    def crash_after_evidence(_key, run_id):
+        events.append(("finalize", run_id))
+        raise RuntimeError("injected crash after evidence before receipt")
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        run_nightly(research_session, source, plan, owner_id=OWNER_ID,
+                    item_keys=["manual:000:atomic"], bind_item_run=bind,
+                    finalize_item=crash_after_evidence)
+    research_session.expire_all()
+    # The run was opened/bound in its own short transaction, but terminal
+    # evidence was rolled back together with the receipt transaction.
+    run = research_session.query(ExperimentRun).one()
+    assert run.status == "failed"  # decorator records only safe failure evidence
+    assert events[0][0] == "bind" and events[1][0] == "finalize"
+
+
+def test_run_nightly_refuses_false_item_binding_before_provider_io(
+        research_session, inst_factory, candles_factory):
+    from research.orchestrator.run import run_nightly
+
+    source = StaticDataSource({("AAA", "day"): candles_factory(400)})
+    plan = [{"program": "Trend", "hypothesis": "fence", "strategy_key": "trend_impulse_v3",
+             "instruments": [inst_factory("AAA")], "interval": "day"}]
+    with pytest.raises(RuntimeError, match="claim was lost before run binding"):
+        run_nightly(research_session, source, plan, owner_id=OWNER_ID,
+                    item_keys=["manual:000:fence"], bind_item_run=lambda *_args: False)
+
+
+def test_real_durable_receipt_rolls_back_when_terminal_commit_crashes(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    """The operation mirror/receipt cannot outlive a failed terminal commit."""
+    from app.ir.hashing import content_address
+    from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository, operation_item_keys
+    from research.domain.models import ResearchOperationItem
+    from research.orchestrator.run import run_nightly
+
+    item = {
+        "program": "Trend", "hypothesis": "terminal crash", "strategy_key": "trend_impulse_v3",
+        "instrument_keys": ["AAA"], "interval": "day", "days": 2000,
+        "optimize_search": False, "params": {}, "seed": 0, "min_trades": 1,
+        "n_folds": 4, "min_positive_fold_frac": 0.0, "capital": 50_000.0,
+    }
+    payload = {"experiment_count": 1, "items": [item]}
+    plan_summary = {"content_address": content_address(payload), **payload}
+    repository = ResearchOperationRepository(research_session)
+    recorder = DurableOperationRecorder.start(
+        repository, owner_id=OWNER_ID, trigger="manual", plan=plan_summary,
+        build="b", provider_mode="mock", worker_id="test", operation_id="terminal-crash",
+    )
+    plan = [{**item, "instruments": [inst_factory("AAA")]}]
+    source = StaticDataSource({("AAA", "day"): candles_factory(400)})
+    real_commit = research_session.commit
+    commits = 0
+
+    def crash_terminal_commit():
+        nonlocal commits
+        commits += 1
+        if commits == 2:
+            raise RuntimeError("injected terminal transaction crash")
+        return real_commit()
+
+    monkeypatch.setattr(research_session, "commit", crash_terminal_commit)
+    with pytest.raises(RuntimeError, match="injected terminal transaction crash"):
+        run_nightly(research_session, source, plan, owner_id=OWNER_ID,
+                    item_keys=operation_item_keys(plan_summary, trigger="manual"),
+                    bind_item_run=recorder.bind_item_run_in_transaction,
+                    finalize_item=recorder.finalize_item_in_transaction)
+    research_session.expire_all()
+    receipt = research_session.query(ResearchOperationItem).one()
+    operation = repository.get("terminal-crash", owner_id=OWNER_ID)
+    assert receipt.status == "running" and receipt.completed_at is None
+    assert operation.completed_run_ids == []
+
+
 def _validating_run(session, inst_factory, uptrend_factory, keys=("UPA", "UPB")):
     strat = kernels.get_strategy("trend_impulse_v3")
     src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})

@@ -109,6 +109,10 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
 
     class Recorder:
         @staticmethod
+        def claim_next(*_args, **_kwargs):
+            return None
+
+        @staticmethod
         def start(*_args, **_kwargs):
             return Recorder()
 
@@ -124,10 +128,25 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
         def add_completed_run(self, *_args):
             pass
 
+        def completed_item_run(self, *_args):
+            return None
+
+        def bound_item_run(self, *_args):
+            return None
+
+        def reclaim_bound_item(self, *_args):
+            return None
+
+        def bind_item_run_in_transaction(self, *_args):
+            return True
+
+        def finalize_item_in_transaction(self, *_args):
+            return True
+
         def complete(self, **_kwargs):
             pass
 
-        def fail(self, **_kwargs):
+        def fail(self, *_args, **_kwargs):
             pass
 
     import app.core.config as config
@@ -141,6 +160,10 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
     import research.orchestrator.run as run
     import research.universe as universe
 
+    class Repository:
+        def reconcile_expired(self, **_kwargs):
+            return 0
+
     monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(provider="mock"))
     monkeypatch.setattr(instruments, "get_instrument", lambda key: SimpleNamespace(key=key))
     monkeypatch.setattr(providers, "get_provider", lambda: SimpleNamespace(name="mock"))
@@ -149,10 +172,16 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
     monkeypatch.setattr(domain_base, "init_research_db", lambda _engine: None)
     monkeypatch.setattr(domain_base, "make_sessionmaker", lambda _engine: Session)
     monkeypatch.setattr(domain_operations, "DurableOperationRecorder", Recorder)
-    monkeypatch.setattr(domain_operations, "ResearchOperationRepository", lambda session: session)
-    monkeypatch.setattr(operations, "safe_plan_summary", lambda plan: plan)
+    monkeypatch.setattr(domain_operations, "ResearchOperationRepository", lambda _session: Repository())
+    monkeypatch.setattr(domain_operations, "operation_item_keys", lambda _plan, **_kwargs: ["generated:0"])
+    monkeypatch.setattr(operations, "safe_plan_summary", lambda _plan: {
+        "content_address": "sha256:plan", "experiment_count": 0, "items": [],
+    })
     monkeypatch.setattr(universe, "ALWAYS_ALLOWED", frozenset({"NIFTY"}))
     monkeypatch.setattr(run, "run_nightly", lambda *_args, **kwargs: seen.append(("nightly", kwargs["owner_id"])) or [])
+    monkeypatch.setattr(generate, "generated_descriptors", lambda *_args, **_kwargs: [{
+        "interval": "day", "owner_universe": ["NIFTY"],
+    }])
     monkeypatch.setattr(generate, "run_generated", lambda *_args, **kwargs: seen.append(("generated", kwargs["owner_id"])) or [])
 
     reports, provider = rr._run_enabled_operation("research.db")

@@ -26,6 +26,8 @@ import subprocess
 import sys
 import datetime as dt
 
+from app.ir.hashing import content_address
+
 # make `app` and `research` importable when this file is run directly as a script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -173,8 +175,9 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
     from research.data.store import KiteDataSource
     from research.domain.base import init_research_db, make_engine, make_sessionmaker
     from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
+    from research.domain.operations import operation_item_keys, reconstruct_plan
     from research.operations import safe_plan_summary
-    from research.orchestrator.generate import run_generated
+    from research.orchestrator.generate import generated_descriptors, run_generated
     from research.orchestrator.run import run_nightly
     from research.universe import ALWAYS_ALLOWED
 
@@ -191,12 +194,42 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
             # (3) admit the bounded server-owned plan before constructing a
             # provider/source. Invalid work must fail without touching data I/O.
             with Session() as session:
-                plan = _plan(get_instrument)
-                recorder = DurableOperationRecorder.start(
-                    ResearchOperationRepository(session), owner_id=owner_id, trigger="manual",
-                    build=_git_commit(), provider_mode=get_settings().provider,
-                    worker_id=f"manual:{os.getpid()}", plan=safe_plan_summary(plan),
-                )
+                repository = ResearchOperationRepository(session)
+                repository.reconcile_expired(owner_id=owner_id)
+                recorder = DurableOperationRecorder.claim_next(
+                    repository, owner_id=owner_id, worker_id=f"manual:{os.getpid()}",
+                    triggers=("manual",))
+                if recorder is not None:
+                    claimed = repository.get(recorder.operation_id, owner_id=owner_id)
+                    if claimed is None:
+                        raise RuntimeError("claimed research operation disappeared")
+                    if (claimed.build != _git_commit()
+                            or claimed.provider_mode != get_settings().provider):
+                        recorder.fail({"code": "RESEARCH_OPERATION_PROVENANCE_MISMATCH",
+                                       "message": "research operation replay requires its admitted build and provider mode"})
+                        raise RuntimeError("research operation replay provenance mismatch")
+                    plan_summary = claimed.plan
+                    plan = reconstruct_plan(plan_summary, instrument_for_key=get_instrument)
+                else:
+                    plan = _plan(get_instrument)
+                    plan_summary = safe_plan_summary(plan)
+                    sandbox = [get_instrument(k) for k in UNIVERSE if k in ALWAYS_ALLOWED]
+                    descriptors = []
+                    if sandbox:
+                        for interval in INTERVALS:
+                            descriptors.extend(generated_descriptors(
+                                session, sandbox, interval, owner_id=owner_id, limit=8,
+                                seed=None, git_commit=_git_commit(),
+                                provider_mode=get_settings().provider, min_trades=30,
+                                n_folds=4, min_positive_fold_frac=0.5))
+                    payload = {"experiment_count": plan_summary["experiment_count"] + len(descriptors),
+                               "items": plan_summary["items"], "generated": descriptors}
+                    plan_summary = {"content_address": content_address(payload), **payload}
+                    recorder = DurableOperationRecorder.start(
+                        repository, owner_id=owner_id, trigger="manual",
+                        build=_git_commit(), provider_mode=get_settings().provider,
+                        worker_id=f"manual:{os.getpid()}", plan=plan_summary,
+                    )
                 def _heartbeat(operation_id: str, scoped_owner: str, token: str) -> bool:
                     watchdog_engine = make_engine(research_db)
                     try:
@@ -213,6 +246,9 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                 source = KiteDataSource(provider=provider)
                 report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
                 os.makedirs(report_dir, exist_ok=True)
+                item_keys = operation_item_keys(plan_summary, trigger="manual")
+                handwritten_keys = item_keys[:len(plan)]
+                generated_keys = item_keys[len(plan):]
                 reports = run_nightly(
                     session,
                     source,
@@ -222,21 +258,41 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                     report_dir=report_dir,
                     progress=recorder.add_completed_run,
                     stage=recorder.transition,
+                        item_keys=handwritten_keys,
+                        completed_item_run=getattr(recorder, "completed_item_run", None),
+                        bound_item_run=getattr(recorder, "bound_item_run", None),
+                        bind_item_run=getattr(recorder, "bind_item_run_in_transaction", None),
+                        finalize_item=getattr(recorder, "finalize_item_in_transaction", None),
                 )
                 recorder.transition("generation")
-                sandbox = [get_instrument(k) for k in UNIVERSE if k in ALWAYS_ALLOWED]
-                if sandbox:
+                descriptors = plan_summary.get("generated", [])
+                by_interval = {}
+                for descriptor, item_key in zip(descriptors, generated_keys):
+                    by_interval.setdefault(descriptor["interval"], []).append((descriptor, item_key))
+                if by_interval:
                     print(f"\n── code-gen: composing strategies on the sandbox "
-                          f"{[i.key for i in sandbox]} ──")
-                    for interval in INTERVALS:
+                          "from admitted durable descriptors ──")
+                    for interval, entries in by_interval.items():
+                        descriptors_for_interval, keys_for_interval = zip(*entries)
+                        sandbox = [get_instrument(key) for key in descriptors_for_interval[0]["owner_universe"]]
                         generated = run_generated(
-                            session, source, sandbox, interval, owner_id=owner_id, limit=8,
+                            session, source, sandbox, interval, owner_id=owner_id,
+                            limit=len(descriptors_for_interval),
                             git_commit=_git_commit(), min_trades=30, n_folds=4,
                             min_positive_fold_frac=0.5,
+                            claim_guard=getattr(recorder, "assert_claim", None),
+                            durable_descriptors=list(descriptors_for_interval),
+                            durable_item_keys=list(keys_for_interval),
+                            completed_item_run=recorder.completed_item_run,
+                            bound_item_run=recorder.bound_item_run,
+                            reclaim_bound_item=recorder.reclaim_bound_item,
+                            bind_item_run=recorder.bind_item_run_in_transaction,
+                            finalize_item=recorder.finalize_item_in_transaction,
                         )
                         for report in generated:
                             if isinstance(report.get("run_id"), int):
                                 recorder.add_completed_run(report["run_id"])
+                        reports += generated
                 _dump_db(session)
             recorder.complete()
             return reports, provider.name

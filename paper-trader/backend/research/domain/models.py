@@ -19,6 +19,7 @@ import datetime as dt
 from sqlalchemy import (
     DDL,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -90,6 +91,83 @@ class ResearchOperation(ResearchBase):
         Index("ix_research_operation_owner_latest", "owner_id", "created_at", "operation_id"),
         Index("ix_research_operation_owner_status", "owner_id", "status", "queued_at"),
         Index("ix_research_operation_claim_expiry", "claim_expires_at"),
+    )
+
+
+class ResearchOperationItem(ResearchBase):
+    """One replay boundary in a durable research operation.
+
+    Experiment execution is not assumed to be interruptible mid-call.  A worker
+    checkpoints only *between* items, under the operation's lease fence, so a
+    reclaimed operation can skip an already recorded run without inventing a
+    second completion receipt.
+    """
+    __tablename__ = "research_operation_item"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "operation_id"),
+            ("research_operation.owner_id", "research_operation.operation_id"),
+        ),
+        # A durable receipt may only name an ExperimentRun owned by the same
+        # tenant.  The unique pair makes a run belong to exactly one operation
+        # item; a replay can therefore resume/refuse the already-bound run
+        # without inventing a second run for the same work item.
+        ForeignKeyConstraint(
+            ("owner_id", "run_id"),
+            ("research_experiment_run.owner_id", "research_experiment_run.id"),
+        ),
+        UniqueConstraint("owner_id", "operation_id", "ordinal",
+                         name="uq_research_operation_item_ordinal"),
+        UniqueConstraint("owner_id", "run_id",
+                         name="uq_research_operation_item_run"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'completed')",
+            name="ck_research_operation_item_status",
+        ),
+        CheckConstraint(
+            "(status = 'pending' AND run_id IS NULL AND completed_at IS NULL) OR "
+            "(status = 'running' AND run_id IS NOT NULL AND completed_at IS NULL) OR "
+            "(status = 'completed' AND run_id IS NOT NULL AND completed_at IS NOT NULL)",
+            name="ck_research_operation_item_receipt_state",
+        ),
+        Index("ix_research_operation_item_cursor", "owner_id", "operation_id", "ordinal"),
+    )
+
+
+class ResearchOperationEvent(ResearchBase):
+    """Bounded, owner-local evidence of scheduler authority and progress."""
+    __tablename__ = "research_operation_event"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "operation_id"),
+            ("research_operation.owner_id", "research_operation.operation_id"),
+        ),
+        CheckConstraint(
+            "event_type IN ('claimed', 'heartbeat', 'stage', 'item_completed', "
+            "'takeover', 'completed', 'failed', 'cancelled')",
+            name="ck_research_operation_event_type",
+        ),
+        CheckConstraint(
+            "stage IS NULL OR stage IN ('startup', 'planning', 'collection', "
+            "'experiments', 'reports', 'generation', 'completed')",
+            name="ck_research_operation_event_stage",
+        ),
+        Index("ix_research_operation_event_owner_operation_latest",
+              "owner_id", "operation_id", "sequence"),
     )
 
 

@@ -176,6 +176,12 @@ def test_safe_plan_summary_contains_server_fields_not_objects_or_candles():
         "interval": "30minute",
         "days": 180,
         "optimize_search": True,
+        "params": {},
+        "seed": 0,
+        "min_trades": 20,
+        "n_folds": 4,
+        "min_positive_fold_frac": 0.6,
+        "capital": 100000.0,
         "candles": ["provider payload"],
     }])
 
@@ -188,6 +194,12 @@ def test_safe_plan_summary_contains_server_fields_not_objects_or_candles():
         "interval": "30minute",
         "days": 180,
         "optimize_search": True,
+        "params": {},
+        "seed": 0,
+        "min_trades": 20,
+        "n_folds": 4,
+        "min_positive_fold_frac": 0.6,
+        "capital": 100000.0,
     }]
     assert summary["content_address"].startswith("sha256:")
     assert "secret" not in json.dumps(summary)

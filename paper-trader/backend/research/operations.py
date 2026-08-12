@@ -63,7 +63,8 @@ def _validate_plan(value: Any) -> None:
         raise OperationStateCorrupt("operation plan has too many items")
     item_fields = {
         "program", "hypothesis", "strategy_key", "instrument_keys",
-        "interval", "days", "optimize_search",
+        "interval", "days", "optimize_search", "params", "seed",
+        "min_trades", "n_folds", "min_positive_fold_frac", "capital",
     }
     for item in value["items"]:
         if not isinstance(item, dict) or set(item) != item_fields:
@@ -86,6 +87,18 @@ def _validate_plan(value: Any) -> None:
             or not isinstance(item["optimize_search"], bool)
         ):
             raise OperationStateCorrupt("operation plan item options are invalid")
+        if (not isinstance(item["params"], dict) or len(item["params"]) > 64
+                or any(not isinstance(k, str) or len(k) > 64
+                       or not isinstance(v, (str, int, float, bool, type(None)))
+                       for k, v in item["params"].items())
+                or not isinstance(item["seed"], int) or isinstance(item["seed"], bool)
+                or not isinstance(item["min_trades"], int) or isinstance(item["min_trades"], bool)
+                or not isinstance(item["n_folds"], int) or isinstance(item["n_folds"], bool)
+                or not isinstance(item["min_positive_fold_frac"], (int, float))
+                or isinstance(item["min_positive_fold_frac"], bool)
+                or not isinstance(item["capital"], (int, float))
+                or isinstance(item["capital"], bool)):
+            raise OperationStateCorrupt("operation plan execution options are invalid")
     payload = {
         "experiment_count": value["experiment_count"],
         "items": value["items"],
@@ -269,6 +282,12 @@ def safe_plan_summary(plan: list[dict]) -> dict[str, Any]:
             "interval": _text(item.get("interval", ""), 24),
             "days": days,
             "optimize_search": optimize_search,
+            "params": dict(item.get("params") or {}),
+            "seed": int(item.get("seed", 0)),
+            "min_trades": int(item.get("min_trades", 20)),
+            "n_folds": int(item.get("n_folds", 4)),
+            "min_positive_fold_frac": float(item.get("min_positive_fold_frac", 0.6)),
+            "capital": float(item.get("capital", 50_000.0)),
         })
     payload = {"experiment_count": len(items), "items": items}
     return {"content_address": content_address(payload), **payload}

@@ -7,14 +7,14 @@ import json
 import re
 from collections.abc import Callable
 
-from sqlalchemy import Engine, UniqueConstraint, inspect
+from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect
 from sqlalchemy.schema import CreateIndex, CreateTable, Table
 
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
 
 VERSION_TABLE = "research_schema_version"
 _INTERNAL_MIGRATION_TABLES = frozenset({"_research_0002_operation_rebuild_proof"})
-HEAD_VERSION = "0002"
+HEAD_VERSION = "0003"
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
 _CURRENT_MARKER_SHAPE = (
@@ -45,6 +45,46 @@ def _schema_cookie(connection) -> int:
 
 def _normalise_sql(sql: str) -> str:
     return re.sub(r"\s+", " ", sql.replace("IF NOT EXISTS ", "").replace('"', "").strip()).upper()
+
+
+def _check_names(table: Table) -> set[str]:
+    return {
+        constraint.name for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+
+
+def _check_contracts(table: Table) -> dict[str, str]:
+    return {
+        constraint.name: _normalise_sql(str(constraint.sqltext))
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name
+    }
+
+
+def _actual_check_contracts(connection, table: Table) -> dict[str, str]:
+    """Extract named SQLite CHECK expressions without trusting their names alone."""
+    sql = _normalise_sql(connection.exec_driver_sql(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table.name,)
+    ).scalar_one())
+    actual = {}
+    for name in _check_names(table):
+        marker = f"CONSTRAINT {name.upper()} CHECK ("
+        start = sql.find(marker)
+        if start < 0:
+            continue
+        index = start + len(marker)
+        depth = 1
+        end = index
+        while end < len(sql) and depth:
+            if sql[end] == "(":
+                depth += 1
+            elif sql[end] == ")":
+                depth -= 1
+            end += 1
+        if depth == 0:
+            actual[name] = sql[index:end - 1].strip()
+    return actual
 
 
 def _marker_shape(connection) -> tuple[tuple[str, str, bool, object, int], ...]:
@@ -188,11 +228,27 @@ def _after_table_rebuilt(_table_name: str) -> None:
 
 
 def _root_tables() -> tuple[Table, ...]:
-    return tuple(table for table in ResearchBase.metadata.sorted_tables if table.name != "research_operation")
+    """The historical 0001 tables, frozen before scheduler tables existed."""
+    return tuple(table for table in ResearchBase.metadata.sorted_tables
+                 if table.name not in {"research_operation", "research_operation_item",
+                                       "research_operation_event"})
 
 
 def _operation_table() -> Table:
     return ResearchBase.metadata.tables["research_operation"]
+
+
+def _operation_item_table() -> Table:
+    return ResearchBase.metadata.tables["research_operation_item"]
+
+
+def _operation_event_table() -> Table:
+    return ResearchBase.metadata.tables["research_operation_event"]
+
+
+def _tables_through_0002() -> tuple[Table, ...]:
+    return tuple(table for table in ResearchBase.metadata.sorted_tables
+                 if table.name not in {"research_operation_item", "research_operation_event"})
 
 
 def _create_indexes_and_triggers(connection, *, tables=None) -> None:
@@ -312,6 +368,11 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
         expected_primary_key = tuple(column.name for column in table.primary_key.columns)
         if actual_primary_key != expected_primary_key:
             raise ResearchMigrationError(f"{table.name} primary-key drift")
+        # SQLite's inspector intentionally omits CHECK constraints.  Validate
+        # their normalized bodies before secondary metadata so a relaxed state
+        # machine cannot hide behind missing recreated indexes.
+        if _actual_check_contracts(connection, table) != _check_contracts(table):
+            raise ResearchMigrationError(f"{table.name} check-constraint drift")
         expected_uniques = {
             tuple(column.name for column in constraint.columns)
             for constraint in table.constraints if isinstance(constraint, UniqueConstraint)
@@ -408,6 +469,7 @@ def _migration_schema_digest(connection, *, tables=None) -> str:
                  ))
                 for fk in table.foreign_key_constraints
             ),
+            "checks": _check_contracts(table),
         }
     contract["triggers"] = sorted(
         (name, _normalise_sql(sql)) for name, sql in _expected_triggers().items()
@@ -423,6 +485,18 @@ def _recover_interrupted_swaps(connection) -> None:
     for table in ResearchBase.metadata.sorted_tables:
         source = table.name
         target = _temporary_name(table)
+        if source == "research_operation" and target in names:
+            # 0002's deterministic temporary name is deliberately *not* proof
+            # that it contains a valid operation table.  Its migration owns the
+            # source-bound proof record and is the only code allowed to promote
+            # or reject an interrupted operation rebuild.  Generic recovery
+            # must never turn a forged temp table into durable scheduler state.
+            migration = importlib.import_module(
+                "research.domain.migrations.0002_owner_operations"
+            )
+            migration.upgrade(connection, table)
+            names = _table_names(connection)
+            continue
         if source not in names and target in names and _has_owner_column(connection, target):
             connection.exec_driver_sql(
                 f"ALTER TABLE {_quoted(target)} RENAME TO {_quoted(source)}"
@@ -479,6 +553,18 @@ def migrate_research_db(engine: Engine) -> None:
             _validate_schema(connection, tables=roots, include_marker=False)
             migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
             migration.upgrade(connection, _operation_table())
+            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
+            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _validate_schema(connection, include_marker=False)
+            _stamp(connection)
+            connection.commit()
+            _validate_schema(connection)
+            return
+        if version == "0002":
+            _validate_schema(connection, tables=_tables_through_0002(), include_marker=False)
+            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
+            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
             _validate_schema(connection)
@@ -509,6 +595,9 @@ def migrate_research_db(engine: Engine) -> None:
             )
             migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
             migration.upgrade(connection, _operation_table())
+            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
+            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
+            _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
         except Exception:

@@ -80,6 +80,11 @@ def nightly_interval(env: Mapping | None = None) -> str:
 # the plan, and because the composition count now inflates the DSR deflation
 # (sibling_trials): a wider search genuinely raises the bar it must clear.
 DEFAULT_GENERATE_LIMIT = 8
+# Generated descriptors are admitted as durable operation items.  Keep the
+# configuration boundary inside the descriptor grammar's hard maximum so an
+# oversized environment value cannot make the search enumerate work that the
+# scheduler must reject afterward.
+MAX_GENERATED_OPERATION_ITEMS = 64
 
 
 def nightly_generate_limit(env: Mapping | None = None) -> int:
@@ -87,7 +92,8 @@ def nightly_generate_limit(env: Mapping | None = None) -> int:
     0 disables generation — the nightly then only runs the handwritten strategy."""
     e = os.environ if env is None else env
     try:
-        return max(0, int(e.get("PT_RESEARCH_GENERATE_LIMIT", DEFAULT_GENERATE_LIMIT)))
+        return min(MAX_GENERATED_OPERATION_ITEMS,
+                   max(0, int(e.get("PT_RESEARCH_GENERATE_LIMIT", DEFAULT_GENERATE_LIMIT))))
     except (TypeError, ValueError):
         return DEFAULT_GENERATE_LIMIT
 

@@ -220,6 +220,13 @@ def test_a_bad_generate_limit_falls_back_rather_than_crashing_the_cron():
     assert nightly_generate_limit({"PT_RESEARCH_GENERATE_LIMIT": "-5"}) == 0
 
 
+def test_generate_limit_is_capped_before_any_composition_enumeration():
+    from research.config import MAX_GENERATED_OPERATION_ITEMS, nightly_generate_limit
+
+    assert nightly_generate_limit({"PT_RESEARCH_GENERATE_LIMIT": "999999"}) == \
+        MAX_GENERATED_OPERATION_ITEMS
+
+
 def test_the_nightly_test_harness_never_writes_reports_into_the_repo():
     """Regression guard for a self-inflicted deploy outage.
 

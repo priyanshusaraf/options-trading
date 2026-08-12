@@ -48,6 +48,7 @@ from research.strategy.builder.describe import explanation_for
 logger = logging.getLogger("research.orchestrator")
 
 _ACTIVE_RUN_KEY = "research_active_terminal_run"
+_EDGE_DELTA_KEY = "research_staged_edge_deltas"
 
 
 def _failure_contract(stage: str) -> dict[str, str]:
@@ -169,14 +170,28 @@ def _record_edge(session, strategy, instrument_key: str, validated: bool,
     comp = getattr(strategy, "composition", None)
     if comp is None:
         return
+    # Do not flush while validation is still computing: SQLite's single writer
+    # would otherwise block the independent lease watchdog for an entire
+    # experiment.  The terminal transaction applies these compact deltas beside
+    # evidence and its operation receipt.
+    payload = comp.to_dict() if hasattr(comp, "to_dict") else comp
+    session.info.setdefault(_EDGE_DELTA_KEY, []).append(
+        (payload, instrument_key, owner_id, validated, run_id))
+
+
+def _flush_staged_edges(session) -> None:
+    deltas = session.info.pop(_EDGE_DELTA_KEY, [])
+    if not deltas:
+        return
     try:
         from research.knowledge import record_outcome
-        payload = comp.to_dict() if hasattr(comp, "to_dict") else comp
-        record_outcome(session, payload, instrument_key, owner_id=owner_id,
-                       validated=validated, run_id=run_id)
-    except Exception as e:            # noqa: BLE001
-        logger.warning("edge-map update failed for %s/%s: %s",
-                       getattr(strategy, "key", "?"), instrument_key, e)
+        for payload, instrument_key, owner_id, validated, run_id in deltas:
+            record_outcome(session, payload, instrument_key, owner_id=owner_id,
+                           validated=validated, run_id=run_id)
+    except Exception as exc:  # noqa: BLE001
+        # This is terminal evidence territory now: accepting an experiment while
+        # silently losing a scheduled knowledge delta would make replay lie.
+        raise RuntimeError("research edge delta persistence failed") from exc
 
 
 @_persist_failed_run
@@ -188,7 +203,8 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
                    sibling_trials: int = 1, pbo_threshold: float = 0.30,
                    slippage_bps: float = 5.0,
                    slippage_multiplier: float = 2.0,
-                   graph_provenance: dict | None = None) -> dict:
+                   graph_provenance: dict | None = None,
+                   bind_run=None, finalize_run=None) -> dict:
     """`datasets` = list of (instrument, Dataset). Returns a report dict.
 
     `sibling_trials` — how many OTHER candidates were searched alongside this one in
@@ -257,15 +273,23 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
     session.add(run)
     session.flush()
     run_id = run.id
-    session.commit()
     session.info[_ACTIVE_RUN_KEY] = {
         "run_id": run_id,
         "recipe": recipe,
         "stage": "qualification",
         "spent_bar_seconds": 0,
     }
+    session.info[_EDGE_DELTA_KEY] = []
+    if bind_run is not None:
+        # The item receives this run identity before any provider-backed work.
+        # A caller that cannot fence the binding refuses before fetching data.
+        if bind_run(run_id) is not True:
+            raise RuntimeError("research operation claim was lost before run binding")
+    # The durable item binding and newly opened ExperimentRun become visible in
+    # one short commit.  A crash before it leaves neither row accepted.
+    session.commit()
     logger.info("[run] opened run #%d on %d instrument(s), strategy=%s%s",
-                run.id, len(datasets), strategy.key,
+                run_id, len(datasets), strategy.key,
                 " (optimize)" if optimize_search else " (fixed params)")
 
     qualified: list[str] = []
@@ -510,6 +534,7 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
         "breadth": breadth,
     }
     session.info[_ACTIVE_RUN_KEY]["stage"] = "evidence_persistence"
+    _flush_staged_edges(session)
     run.checkpoint_json = encode_terminal_evidence({
         "spec_id": sid,
         "run": {
@@ -530,6 +555,8 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
             "explanation": explanation,
         },
     })
+    if finalize_run is not None and not finalize_run(run.id):
+        raise RuntimeError("research operation claim was lost before terminal receipt")
     session.commit()
     logger.info("[run] #%d completed: decision=%s · %d qualified · %d validated · %d bars",
                 run.id, run.decision, len(qualified), len(validated), total_bars)
@@ -565,7 +592,9 @@ def _regime_context(datasets) -> dict:
 
 def run_nightly(
     session, source, plan, *, owner_id: str, git_commit="unknown", report_dir=".",
-    progress=None, stage=None,
+    progress=None, stage=None, item_keys=None, completed_item_run=None,
+    checkpoint_item=None, bind_item_run=None, bound_item_run=None, reclaim_bound_item=None,
+    finalize_item=None,
 ) -> list:
     """Run every experiment in `plan` and write a report per run. Each plan item:
     {program, hypothesis, strategy_key, instruments:[inst], interval, ...gate knobs}.
@@ -574,7 +603,22 @@ def run_nightly(
     empty plan is a valid no-op. Returns the report dicts (with `report_path`)."""
     logger.info("nightly: %d experiment(s) queued", len(plan))
     reports = []
+    if item_keys is not None and len(item_keys) != len(plan):
+        raise ValueError("research operation item keys must match the bounded plan")
     for i, item in enumerate(plan, 1):
+        item_key = item_keys[i - 1] if item_keys is not None else None
+        if item_key is not None and completed_item_run is not None:
+            run_id = completed_item_run(item_key)
+            if run_id is not None:
+                logger.info("[resume] skipping checkpointed item %s (run #%d)", item_key, run_id)
+                continue
+        if item_key is not None and bound_item_run is not None:
+            run_id = bound_item_run(item_key)
+            if run_id is not None:
+                if reclaim_bound_item is None or reclaim_bound_item(item_key) != run_id:
+                    raise RuntimeError(
+                        f"research operation item {item_key} is bound to interrupted run #{run_id}; "
+                        "automatic duplicate replay is refused")
         logger.info("═══ experiment %d/%d · program=%r · hypothesis=%r",
                     i, len(plan), item["program"], item["hypothesis"])
         strat = kernels.get_strategy(item["strategy_key"])
@@ -596,7 +640,16 @@ def run_nightly(
             params=item.get("params"), git_commit=git_commit, seed=item.get("seed", 0),
             min_trades=item.get("min_trades", 20), n_folds=item.get("n_folds", 4),
             min_positive_fold_frac=item.get("min_positive_fold_frac", 0.6),
-            optimize_search=item.get("optimize_search", False))
+            capital=item.get("capital", 50_000.0),
+            optimize_search=item.get("optimize_search", False),
+            bind_run=(lambda run_id, key=item_key: bind_item_run(key, run_id))
+            if item_key is not None and bind_item_run is not None else None,
+            finalize_run=(lambda run_id, key=item_key: finalize_item(key, run_id))
+            if item_key is not None and finalize_item is not None else None)
+        if item_key is not None and checkpoint_item is not None and finalize_item is None:
+            # The completion receipt is the replay fence.  If it cannot be
+            # written, stop before the next item rather than duplicate work.
+            checkpoint_item(item_key, report["run_id"])
         if progress is not None:
             progress(report["run_id"])
         if stage is not None:

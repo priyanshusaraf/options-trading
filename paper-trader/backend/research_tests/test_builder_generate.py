@@ -6,6 +6,8 @@ import datetime as dt
 import json
 import math
 
+import pytest
+
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import (
     ExperimentRun,
@@ -72,3 +74,130 @@ def test_run_generated_respects_the_limit(research_session, inst_factory, candle
                             min_positive_fold_frac=0.0)
     assert len(reports) == 2
     assert research_session.query(GeneratedStrategyRecord).count() == 2
+
+
+def test_run_generated_checks_claim_before_each_generated_item(
+        research_session, inst_factory, candles_factory):
+    Candle = type(candles_factory(1)[0])
+    src = StaticDataSource({("GOLDM", "day"): _osc_candles(Candle)})
+    instruments = [inst_factory("GOLDM")]
+    from research.orchestrator.generate import generated_descriptors
+    descriptors = generated_descriptors(research_session, instruments, "day", owner_id=OWNER_ID,
+                                        limit=1, seed=None, git_commit="unknown",
+                                        provider_mode="mock")
+    with pytest.raises(RuntimeError, match="claim lost"):
+        run_generated(research_session, src, instruments, "day",
+                      owner_id=OWNER_ID, limit=1, durable_item_keys=["generated:000:test"],
+                      durable_descriptors=descriptors,
+                      claim_guard=lambda: (_ for _ in ()).throw(
+                          RuntimeError("claim lost")))
+    assert research_session.query(GeneratedStrategyRecord).count() == 0
+
+
+def test_generated_durable_worker_refuses_unadmitted_enumeration_before_provider_io(
+        research_session, inst_factory):
+    class PoisonSource:
+        def candles(self, *_args, **_kwargs):
+            raise AssertionError("unadmitted generated work must not fetch data")
+
+    with pytest.raises(RuntimeError, match="admitted durable item descriptors"):
+        run_generated(research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
+                      owner_id=OWNER_ID, limit=1, claim_guard=lambda: None)
+
+
+def test_completed_generated_operation_items_need_no_provider_read(
+        research_session, inst_factory):
+    """A reclaimed generated operation may finish from receipts without data I/O."""
+    from research.orchestrator.generate import generated_descriptors
+
+    class PoisonSource:
+        def candles(self, *_args, **_kwargs):
+            raise AssertionError("completed generated work must not fetch data")
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=1, seed=7, git_commit="build-a", provider_mode="mock",
+    )
+    assert run_generated(
+        research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
+        owner_id=OWNER_ID, limit=1, git_commit="build-a", claim_guard=lambda: None,
+        durable_descriptors=descriptors, durable_item_keys=["generated:0"],
+        completed_item_run=lambda key: 101,
+    ) == []
+
+
+def test_cancelled_generated_operation_needs_no_provider_read(
+        research_session, inst_factory):
+    """A lost claim stops before a generated item can materialize its dataset."""
+    from research.orchestrator.generate import generated_descriptors
+
+    class PoisonSource:
+        def candles(self, *_args, **_kwargs):
+            raise AssertionError("cancelled generated work must not fetch data")
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=1, seed=7, git_commit="build-a", provider_mode="mock",
+    )
+    with pytest.raises(RuntimeError, match="claim lost"):
+        run_generated(
+            research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
+            owner_id=OWNER_ID, limit=1, git_commit="build-a",
+            claim_guard=lambda: (_ for _ in ()).throw(RuntimeError("claim lost")),
+            durable_descriptors=descriptors, durable_item_keys=["generated:0"],
+        )
+
+
+def test_mixed_generated_descriptor_universes_are_refused_before_provider_read(
+        research_session, inst_factory):
+    from research.orchestrator.generate import generated_descriptors
+
+    class PoisonSource:
+        def get_candles(self, *_args, **_kwargs):
+            raise AssertionError("mixed durable descriptor must not fetch data")
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=2, seed=7, git_commit="build-a", provider_mode="mock",
+    )
+    descriptors[1] = {**descriptors[1], "owner_universe": ["SILVERM"]}
+    with pytest.raises(RuntimeError, match="provenance drift"):
+        run_generated(
+            research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
+            owner_id=OWNER_ID, limit=2, git_commit="build-a", claim_guard=lambda: None,
+            durable_descriptors=descriptors, durable_item_keys=["generated:0", "generated:1"],
+        )
+
+
+def test_generated_manifest_is_secret_free_and_replays_exact_compositions(
+        research_session, inst_factory):
+    """A durable replay uses its admitted compositions, not today's search weights."""
+    from research.orchestrator.generate import (generated_descriptors,
+                                                compositions_from_descriptors)
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=2, seed=17, git_commit="build-a", provider_mode="mock",
+    )
+    assert len(descriptors) == 2
+    assert all(set(item) == {
+        "build", "composition", "composition_identity", "interval", "limit",
+        "min_positive_fold_frac", "min_trades", "n_folds", "owner_universe",
+        "program", "provider_mode", "seed",
+    } for item in descriptors)
+    assert all("secret" not in str(item).lower() for item in descriptors)
+    replayed = compositions_from_descriptors(descriptors)
+    assert [item.to_dict() for item in replayed] == [item["composition"] for item in descriptors]
+
+
+def test_generated_descriptor_rejects_oversized_work_before_enumeration(
+        research_session, inst_factory, monkeypatch):
+    import research.orchestrator.generate as generate
+
+    monkeypatch.setattr(generate, "_enumerate_for_owner", lambda *_args, **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("search must not run")))
+    with pytest.raises(ValueError, match="generated descriptor limit"):
+        generate.generated_descriptors(
+            research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+            limit=65, seed=7, git_commit="build-a", provider_mode="mock",
+        )
