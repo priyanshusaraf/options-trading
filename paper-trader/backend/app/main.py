@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
             log.info("SAFETY: order placement DISABLED — paper trades only, no real capital")
     # Reconstruct any deployed generated strategies from the DB and register them BEFORE
     # the runner loads per-instrument config, so a gen_* watchlist assignment resolves to
-    # the real strategy instead of the default fallback. Execution hydration is not a
+    # the real strategy instead of halting as unresolvable. Execution hydration is not a
     # research operation: deployed assignments must keep resolving when the research UI
     # is disabled, and corrupt current rows must evict stale executable bytes.
     from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
