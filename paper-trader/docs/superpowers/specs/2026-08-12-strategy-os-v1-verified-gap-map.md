@@ -84,6 +84,27 @@ contracts below pass their acceptance gates.
 - Global deduplication or hash lookup of private content that can reveal another tenant's
   strategy, dataset or artifact existence.
 
+## Capacity and elasticity contract
+
+No roadmap user count is a product ceiling. `500 users` is one launch-validation workload and
+cost checkpoint, not a sizing constant. Capacity is defined by a workload vector: connected
+sessions, active broker accounts, subscribed instruments, live evaluations and order submissions
+per second, concurrent research jobs and sweep cells, database reads/writes and lock waits, cache
+hit rate, and WebSocket bytes per second.
+
+After the single-node development profile, capacity must increase by adding stateless control-plane
+replicas, research workers, market-data fan-out capacity, or bounded execution cells. Scaling must
+not require tenant-data migration, schema redesign, one VPS per customer, or disabling execution
+safety invariants. Exactly one fenced actor may submit orders for a broker account; replicas must
+preserve that authority through durable leases, fencing tokens, reconciliation and replay.
+
+Research, exports, WebSockets, or one saturated execution cell must not consume the money path's
+latency and recovery budget. Bounded queues, backpressure, admission control, quotas, or explicit
+rejection must act before overload reaches execution. Load tests run at increasing workload tiers
+until saturation and publish throughput, p50/p95/p99 latency, memory per active account/job,
+database-pool and lock wait, WebSocket bandwidth, error and recovery behaviour, and cost per active
+account. Passing a tier proves that workload only; it never declares a platform maximum.
+
 ## Dependency order from here
 
 1. Finish USER/research ownership and private strategy provenance (Phase 1 Task 3).

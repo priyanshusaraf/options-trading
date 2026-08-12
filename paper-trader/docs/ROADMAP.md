@@ -73,8 +73,8 @@ Nothing below can be resolved by implementation. Everything else can proceed tod
 
 ### Deployment direction, not deployment truth
 
-**Owner correction 2026-08-09: the initial target is 500 users, not 100, and hosting cost is a
-first-class constraint.** The full analysis is
+**Owner correction 2026-08-12: 500 users is a launch-validation tier, not a product ceiling, and
+hosting cost is a first-class constraint.** The full analysis is
 [`superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md`](superpowers/specs/2026-08-09-scale-and-cost-corrections-design.md).
 Its load-bearing conclusion: market data must be fanned in **once per distinct instrument set**
 and broadcast, never once per user — per-account credentials are needed for orders, not for
@@ -85,16 +85,18 @@ line item is sustained payload volume (~2.6 TB/month at 2 KB/s/user), so fan-out
 deltas rather than full state. The 2026-07-23 outage is the precedent — a fanout bug, not a
 bandwidth bill.
 
-For 500 users, the target is one shared control plane plus account-isolated execution
+For the 500-user launch tier, the target is one shared control plane plus account-isolated execution
 workers spread across at least two hosts. The per-worker account cap is a **measurement, not a
 guess**. The gate is a 50-account soak plus crash-after-submit, token-expiry, throttling,
 restore, failover, and duplicate-worker fencing drills — and a stated monthly cost.
 
-At roughly 1,000 users, bounded execution cells add versioned placement, resource limits,
-primary/standby assignment, shared PostgreSQL authority, leases, and fencing. Per-user VPSs stay
-an optional premium isolation mode, not the default. These are architectural targets only. The
-current application is one process, one SQLite authority, and one single-owner VPS; it is not
-ready for either target.
+Bounded execution cells add versioned placement, resource limits, primary/standby assignment,
+shared PostgreSQL authority, leases, and fencing when measured workload demands them; they are not
+deferred until a particular user count. Per-user VPSs stay an optional premium isolation mode, not
+the default. Capacity should grow by adding stateless control-plane replicas, research workers,
+market-data fan-out capacity, and bounded execution cells without moving tenant data or redesigning
+the schema. The current application is one process, one SQLite authority, and one single-owner VPS;
+the relevant deployment gates remain unpassed.
 
 ## 3. Parked deliberately
 
