@@ -45,7 +45,17 @@
 ## Remaining tasks
 
 - Task 3: PostgreSQL research and ledger planes — complete at `b5c71c1`.
-- Task 4: verified SQLite-to-PostgreSQL copy and cutover — in progress from `b5c71c1`.
+- Task 4: verified SQLite-to-PostgreSQL copy and cutover — implementation complete and
+  uncommitted for independent re-review. Review round 1 blocked on SQL Date canonicalization,
+  FK-valid cross-tenant semantic links, and the all-plane source-freeze boundary; all three have
+  behavioral RED/GREEN coverage. Credential/query-independent destination redaction was also fixed.
+  Review round 2 blocked on post-copy cross-plane source stability, intent external-account scope,
+  and same-account cross-deployment intent links; each now has an exact RED/GREEN regression.
+  Review round 3 added cross-plane ledger-account/research-owner authority, exact IR-deployment
+  graph-version authority, and same-owner deployment/lifecycle watchlist links. Both copy and
+  independent verification run the cross-plane check before readiness can pass. Live PostgreSQL 16
+  focused copy gate: 19 passed. Bounded schema/profile/tenant gate: 149 passed, 13 deliberate
+  skips. See `task-4-report.md`.
 - Task 5: account leases, fencing, and replicated API ownership.
 - Task 6: shared event delivery and transactional outbox.
 - Task 7: backup/restore, failure recovery, and production concurrency/load proof.
