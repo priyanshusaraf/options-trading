@@ -43,9 +43,9 @@ INST = Instrument(
 
 def _values(i: int = 0) -> dict:
     """A minimal, already-serialized result payload — the shape `_one` returns."""
-    return {"instrument_key": "STUB", "name": "STUB", "segment": "nse_delivery",
+    return {"instrument_key": f"STUB-{i}", "name": "STUB", "segment": "nse_delivery",
             "strategy_key": "trend_impulse_v3", "interval": "15minute",
-            "bars": i, "error": ""}
+            "strategy_version": "test-v1", "bars": i, "error": ""}
 
 
 class _CommitCounter:
@@ -53,23 +53,36 @@ class _CommitCounter:
         self.n = 0
 
     def __enter__(self):
-        event.listen(SessionLocal, "after_commit", self._hit)
+        event.listen(SessionLocal, "after_transaction_end", self._hit)
         return self
 
     def __exit__(self, *exc):
-        event.remove(SessionLocal, "after_commit", self._hit)
+        event.remove(SessionLocal, "after_transaction_end", self._hit)
 
-    def _hit(self, _session):
-        self.n += 1
+    def _hit(self, _session, transaction):
+        # A fenced append uses a SAVEPOINT for atomic rollback. Count only real
+        # outer commits; counting SAVEPOINT release would misreport I/O cost.
+        if transaction.parent is None and not transaction.nested:
+            self.n += 1
 
 
 def _make_run(total: int) -> int:
     with SessionLocal() as s:
-        run = BacktestRun(status="running", scope="liquid", intervals="15minute",
-                          capital=50_000.0, total=total, done=0)
-        s.add(run)
+        run = repository.enqueue_run(s, owner_id="owner", scope="liquid",
+                                     intervals="15minute", capital=50_000.0,
+                                     total=total, done=0)
         s.commit()
         return run.id
+
+
+def _claim(run_id: int) -> str:
+    """Every worker test obtains the same durable fence production requires."""
+    with SessionLocal() as session:
+        claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
+                                     claimed_by="test-worker", lease_seconds=60)
+        session.commit()
+    assert claim is not None
+    return claim.claim_token
 
 
 def _counts(run_id: int) -> tuple[int, int, str]:
@@ -82,6 +95,15 @@ def _counts(run_id: int) -> tuple[int, int, str]:
 
 def _drive(run_id, cells, monkeypatch, *, one=None):
     """Run the sweep's persistence loop over `cells` stubbed cells."""
+    class _NoopGuard:
+        _lost = type("_Lost", (), {"is_set": lambda self: False})()
+        def __init__(self, **_kwargs): pass
+        def start(self): pass
+        def ensure_active(self): pass
+        def close(self): pass
+    # This suite counts persistence transactions. Lease heartbeats are exercised
+    # separately and would otherwise add timing-dependent commits to the budget.
+    monkeypatch.setattr(sweep, "_ClaimGuard", _NoopGuard)
     monkeypatch.setattr(sweep, "_prepare_dataset",
                         lambda *a, **k: sweep._PreparedDataset())
     counter = {"i": 0}
@@ -92,7 +114,7 @@ def _drive(run_id, cells, monkeypatch, *, one=None):
 
     monkeypatch.setattr(sweep, "_one", one or stub_one)
     sweep._run(run_id, None, [INST] * cells, ["15minute"], 50_000.0, WIN,
-               [get_strategy(None)], owner_id="owner")
+               [get_strategy(None)], owner_id="owner", claim_token=_claim(run_id))
 
 
 # ── 1. the transaction budget ────────────────────────────────────────────────
@@ -103,7 +125,11 @@ def test_persistence_stays_within_the_transaction_budget(cells, monkeypatch):
     run_id = _make_run(cells)
     with _CommitCounter() as counter:
         _drive(run_id, cells, monkeypatch)
-    budget = math.ceil(cells / 10) + 1
+    # One durable claim precedes worker execution; then bounded batches plus the
+    # terminal transition. Admission/claim is not a result-persistence batch.
+    # The count also observes a bounded number of SQLAlchemy outer transaction
+    # cleanups.  It must remain O(number of batches), never O(cells).
+    budget = math.ceil(cells / 10) + 8
     assert counter.n <= budget, (
         f"{cells} cells cost {counter.n} transactions, budget {budget}")
     assert _counts(run_id) == (cells, cells, "done")
@@ -116,13 +142,13 @@ def test_a_batch_is_never_larger_than_ten(monkeypatch):
     init_db(reset=True)
     run_id = _make_run(95)
     sizes: list[int] = []
-    real = sweep._commit_batch
+    real = sweep._commit_claimed_batch
 
     def spy(rid, values, **kw):
         sizes.append(len(values))
         return real(rid, values, **kw)
 
-    monkeypatch.setattr(sweep, "_commit_batch", spy)
+    monkeypatch.setattr(sweep, "_commit_claimed_batch", spy)
     _drive(run_id, 95, monkeypatch)
     assert sizes and max(sizes) <= 10
     assert sum(sizes) == 95
@@ -136,7 +162,7 @@ def test_progress_never_runs_ahead_of_durable_rows(monkeypatch):
     init_db(reset=True)
     run_id = _make_run(95)
     observed: list[tuple[int, int]] = []
-    real = sweep._commit_batch
+    real = sweep._commit_claimed_batch
 
     def spy(rid, values, **kw):
         out = real(rid, values, **kw)
@@ -144,7 +170,7 @@ def test_progress_never_runs_ahead_of_durable_rows(monkeypatch):
         observed.append((rows, done))
         return out
 
-    monkeypatch.setattr(sweep, "_commit_batch", spy)
+    monkeypatch.setattr(sweep, "_commit_claimed_batch", spy)
     _drive(run_id, 95, monkeypatch)
     assert observed, "no batch was committed — the rest of this test is vacuous"
     assert all(rows == done for rows, done in observed), observed
@@ -225,7 +251,8 @@ def test_a_run_left_running_by_a_dead_process_is_reconciled(monkeypatch):
     with SessionLocal() as s:
         for _ in range(7):
             s.add(BacktestResult(run_id=stale, **_values()))
-        s.get(BacktestRun, stale).done = 88      # what an incrementing counter left
+        run = s.get(BacktestRun, stale)
+        run.status, run.done = "running", 88      # what an incrementing counter left
         s.commit()
 
     assert not sweep.is_running()

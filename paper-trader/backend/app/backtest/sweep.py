@@ -219,7 +219,6 @@ _state_lock = threading.Lock()
 _LeaseThread = threading.Thread  # tests may replace launch threads; lease safety must remain real.
 _workers: dict[int, threading.Thread] = {}
 _running = False  # legacy observability only; never use for admission.
-_worker: "threading.Thread | None" = None  # legacy _join helper compatibility.
 _measure_lock = threading.Lock()
 _measurements: dict[str, int | float] = {
     "provider_reads": 0, "dataset_store_reads": 0, "batch_persists": 0,
@@ -227,16 +226,33 @@ _measurements: dict[str, int | float] = {
     "active_process_pools": 0, "db_lock_wait_seconds": 0.0,
     "claim_latency_seconds": 0.0, "takeover_age_seconds": 0.0,
 }
+_owner_measurements: dict[tuple[str, str], int | float] = {}
+_measurement_gauges: dict[tuple[str, str | None, int | None], int | float] = {}
+_REJECTION_REASONS = frozenset({"host_active_jobs", "owner_active_jobs",
+                                "owner_queued_jobs", "host_requested_cells",
+                                "host_worker_slots", "claim_conflict"})
 
 
-def _measure(name: str, value: int | float = 1) -> None:
+def _measure(name: str, value: int | float = 1, *, owner_id: str | None = None,
+             run_id: int | None = None) -> None:
     with _measure_lock:
         _measurements[name] = _measurements.get(name, 0) + value
+        if owner_id is not None:
+            key = (owner_id, name)
+            _owner_measurements[key] = _owner_measurements.get(key, 0) + value
 
 
-def _measure_set(name: str, value: int | float) -> None:
+def _measure_set(name: str, value: int | float, *, owner_id: str | None = None,
+                 run_id: int | None = None) -> None:
     with _measure_lock:
-        _measurements[name] = value
+        _measurement_gauges[(name, owner_id, run_id)] = value
+
+
+def _measure_rejection(reason: str, *, owner_id: str | None = None) -> None:
+    """Track a bounded reason label set so hostile input cannot grow metrics."""
+    bounded = reason if reason in _REJECTION_REASONS else "other"
+    _measure("rejections", owner_id=owner_id)
+    _measure(f"rejections_{bounded}", owner_id=owner_id)
 
 
 @dataclass(frozen=True)
@@ -380,19 +396,19 @@ def _admit_workload(*, owner_id: str, total: int, workers: int, session=None,
         if owns_session:
             session.close()
     if active >= max(0, settings.backtest_host_active_jobs):
-        _measure("rejections")
+        _measure_rejection("host_active_jobs", owner_id=owner_id)
         raise WorkloadAdmissionError("host_active_jobs")
     if owner_active >= max(0, settings.backtest_owner_active_jobs):
-        _measure("rejections")
+        _measure_rejection("owner_active_jobs", owner_id=owner_id)
         raise WorkloadAdmissionError("owner_active_jobs")
     if owner_queued >= max(0, settings.backtest_owner_queued_jobs):
-        _measure("rejections")
+        _measure_rejection("owner_queued_jobs", owner_id=owner_id)
         raise WorkloadAdmissionError("owner_queued_jobs")
     if reserved_cells + total > max(0, settings.backtest_host_requested_cells):
-        _measure("rejections")
+        _measure_rejection("host_requested_cells", owner_id=owner_id)
         raise WorkloadAdmissionError("host_requested_cells")
     if reserved_workers + workers > max(0, settings.backtest_host_worker_slots):
-        _measure("rejections")
+        _measure_rejection("host_worker_slots", owner_id=owner_id)
         raise WorkloadAdmissionError("host_worker_slots")
 
 
@@ -418,12 +434,24 @@ def measurement_snapshot(*, owner_id: str | None = None, session=None) -> dict[s
             *statuses, BacktestRun.status == "pending"))
         heartbeat = session.scalar(select(func.max(BacktestRun.heartbeat_at)).where(
             *statuses, BacktestRun.status == "running"))
+        with _measure_lock:
+            counters = (dict(_measurements) if owner_id is None else {
+                name: 0 for name in _measurements
+            })
+            if owner_id is not None:
+                counters.update({name: value for (owner, name), value in _owner_measurements.items()
+                                 if owner == owner_id})
+            gauges: dict[str, int | float] = {}
+            for (name, owner, _run), value in _measurement_gauges.items():
+                if owner_id is None or owner == owner_id:
+                    gauges[name] = gauges.get(name, 0) + value
+        with _state_lock:
+            local_threads = sum(thread.is_alive() for thread in _workers.values())
         return {"queued_jobs": queued, "active_jobs": active, "reserved_cells": cells,
                 "reserved_worker_slots": workers,
                 "queue_age_seconds": max(0.0, (now - oldest).total_seconds()) if oldest else 0.0,
                 "heartbeat_age_seconds": max(0.0, (now - heartbeat).total_seconds()) if heartbeat else 0.0,
-                "local_worker_threads": sum(thread.is_alive() for thread in _workers.values()),
-                **dict(_measurements)}
+                "local_worker_threads": local_threads, **counters, **gauges}
     finally:
         if owns_session:
             session.close()
@@ -540,7 +568,6 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                      `MAX_SWEEP_WORKERS` and the CPU count. Output is gated
                      bit-identical against serial."""
     from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
-    global _worker
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
     worker_count = _worker_count(workers)
     # A caller for any tenant, not only the boot owner, gives expired work a
@@ -581,7 +608,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         with SessionLocal() as s:
             lock_started = time.monotonic()
             s.execute(text("BEGIN IMMEDIATE"))
-            _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
+            _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
             _admit_workload(owner_id=owner_id, total=total, workers=worker_count, session=s)
             run = repository.enqueue_run(
                 s, owner_id=owner_id, scope=scope,
@@ -630,7 +657,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 # that publishes it, excluding this run's old reservation.
                 lock_started = time.monotonic()
                 resolved.execute(text("BEGIN IMMEDIATE"))
-                _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
+                _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
                 active = repository.get_run(resolved, owner_id=owner_id, run_id=run_id)
                 if (active is None or active.claim_token != claim.claim_token
                         or active.status != "running"):
@@ -648,14 +675,13 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
             resolving_guard.ensure_active()
             total = exact_total
         except Exception as exc:
+            resolving_guard.close()
             with SessionLocal() as failed:
                 repository.complete_claim(failed, owner_id=owner_id, run_id=run_id,
                                           claim_token=claim.claim_token, status="error",
                                           note=f"universe resolution failed: {exc}")
                 failed.commit()
             raise
-        finally:
-            resolving_guard.close()
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
                  f"window={win['label']}, strategies={strat_label}"
                  + (f", PINNED to {len(pinned)} stored datasets" if pinned else "")
@@ -663,19 +689,23 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
                                    strat_objs, pinned, worker_count),
-                             kwargs={"owner_id": owner_id, "claim_token": claim.claim_token},
+                             kwargs={"owner_id": owner_id, "claim_token": claim.claim_token,
+                                     "guard": resolving_guard},
                              daemon=True)
         with _state_lock:
             _workers[run_id] = t
-            _worker = t
         try:
             t.start()
+            # Ownership of the already-running lease loop moves to `_run`; it
+            # closes it exactly once on every terminal path.
+            resolving_guard = None
         except Exception as exc:
             # The durable claim was reserved before launch. If launch itself
             # fails, close *that exact token* so capacity is released without
             # ever touching a worker that subsequently reclaimed the run.
             with _state_lock:
                 _workers.pop(run_id, None)
+            resolving_guard.close()
             with SessionLocal() as failed:
                 repository.complete_claim(
                     failed, owner_id=owner_id, run_id=run_id,
@@ -689,60 +719,57 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None, workers=None, *, owner_id: str, claim_token: str | None = None) -> None:
+         pinned=None, workers=None, *, owner_id: str, claim_token: str,
+         guard: _ClaimGuard | None = None) -> None:
+    if not isinstance(claim_token, str) or not claim_token:
+        raise ValueError("backtest worker requires a durable claim token")
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
         from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
         strategies = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
     batch: list[dict] = []
-    guard = (_ClaimGuard(owner_id=owner_id, run_id=run_id, claim_token=claim_token)
-             if claim_token is not None else None)
-    if guard is not None:
+    # A dispatcher may already be beating this claim while it resolves the
+    # descriptor/provider. Transfer that exact guard to the worker: never leave
+    # a resolution-to-worker gap and never run two heartbeat loops for one token.
+    if guard is None:
+        guard = _ClaimGuard(owner_id=owner_id, run_id=run_id, claim_token=claim_token)
         guard.start()
+    else:
+        if (guard.owner_id, guard.run_id, guard.claim_token) != (owner_id, run_id, claim_token):
+            raise ValueError("claim guard does not match worker token")
+        guard.ensure_active()
     try:
         for values in _cell_values(provider, specs, intervals, capital,
                                    win, strategies, pinned, workers, owner_id=owner_id,
                                    guard=guard):
-            if guard is not None:
-                guard.ensure_active()
+            guard.ensure_active()
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
-                if claim_token is None:
-                    _commit_batch(run_id, batch, owner_id=owner_id)
-                else:
-                    if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
-                                                 claim_token=claim_token):
-                        raise ClaimLost("claimed batch was rejected")
+                if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                             claim_token=claim_token):
+                    raise ClaimLost("claimed batch was rejected")
                 batch = []
         # The terminal status rides the final batch: results, progress and the
         # run's completion are one transaction, so a run can never be `done`
         # while its last ten rows are missing.
-        if claim_token is None:
-            _commit_batch(run_id, batch, owner_id=owner_id, status="done")
-        else:
-            if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
-                                         claim_token=claim_token, status="done"):
-                raise ClaimLost("claimed terminal write was rejected")
-        if guard is None or not guard._lost.is_set():
+        if not _commit_claimed_batch(run_id, batch, owner_id=owner_id,
+                                     claim_token=claim_token, status="done"):
+            raise ClaimLost("claimed terminal write was rejected")
+        if not guard._lost.is_set():
             log.info(f"backtest sweep #{run_id} complete")
     except ClaimLost:
         # A requested cancellation owns its terminal transition. A replaced
         # worker owns nothing further: it cannot overwrite the replacement.
-        if claim_token is not None:
-            _commit_claimed_batch(run_id, [], owner_id=owner_id,
-                                  claim_token=claim_token, status="cancelled")
+        _commit_claimed_batch(run_id, [], owner_id=owner_id,
+                              claim_token=claim_token, status="cancelled")
     except Exception as e:  # never let the thread die silently
         # `batch` is deliberately dropped: those cells were never durable, and
         # progress is derived from what IS durable, so nothing over-reports.
-        if claim_token is None:
-            _commit_batch(run_id, [], owner_id=owner_id, status="error", note=str(e))
-        else:
-            _commit_claimed_batch(run_id, [], owner_id=owner_id,
-                                  claim_token=claim_token, status="error", note=str(e))
+        _commit_claimed_batch(run_id, [], owner_id=owner_id,
+                              claim_token=claim_token, status="error", note=str(e))
         log.error(f"backtest sweep #{run_id} failed: {e}")
     finally:
-        if guard is not None:
-            guard.close()
+        guard.close()
         with _state_lock:
             _workers.pop(run_id, None)
 
@@ -764,7 +791,7 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
         with SessionLocal() as session:
             lock_started = time.monotonic()
             session.execute(text("BEGIN IMMEDIATE"))
-            _measure("db_lock_wait_seconds", time.monotonic() - lock_started)
+            _measure("db_lock_wait_seconds", time.monotonic() - lock_started, owner_id=owner_id)
             claim_started = time.monotonic()
             claim = repository.claim_next_run(
                 session, owner_id=owner_id,
@@ -785,13 +812,19 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 session.commit()
                 break
             session.commit()
-        _measure("claim_latency_seconds", time.monotonic() - claim_started)
+        _measure("claim_latency_seconds", time.monotonic() - claim_started, owner_id=owner_id)
         if claim.attempt_count > 1:
-            _measure("claim_takeovers")
+            _measure("claim_takeovers", owner_id=owner_id)
             if claim.queued_at:
                 _measure("takeover_age_seconds", max(0.0, (
-                    dt.datetime.now() - claim.queued_at).total_seconds()))
+                    dt.datetime.now() - claim.queued_at).total_seconds()), owner_id=owner_id)
+        # Begin liveness immediately after the atomic claim commits, before any
+        # descriptor, registry, provider, universe or process-pool resolution.
+        resolving_guard = _ClaimGuard(owner_id=owner_id, run_id=claim.id,
+                                      claim_token=claim.claim_token)
+        resolving_guard.start()
         try:
+            resolving_guard.ensure_active()
             if len((claim.request_json or "").encode()) > MAX_REPLAY_DESCRIPTOR_BYTES:
                 raise ValueError("descriptor exceeds durable replay size limit")
             descriptor = json.loads(claim.request_json or "")
@@ -828,12 +861,18 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
                 target=_run,
                 args=(claim.id, provider, specs, intervals, float(descriptor.get("capital", claim.capital)),
                       win, strategies, pinned, workers),
-                kwargs={"owner_id": owner_id, "claim_token": claim.claim_token}, daemon=True)
+                kwargs={"owner_id": owner_id, "claim_token": claim.claim_token,
+                        "guard": resolving_guard}, daemon=True)
             with _state_lock:
                 _workers[claim.id] = thread
             thread.start()
+            # The worker owns and closes the same guard; no second heartbeat
+            # thread is created after descriptor resolution.
+            resolving_guard = None
             launched.append(claim.id)
         except ReplayUnavailable as exc:
+            if resolving_guard is not None:
+                resolving_guard.close()
             with _state_lock:
                 _workers.pop(claim.id, None)
             with SessionLocal() as session:
@@ -845,6 +884,8 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
             # artifact monopolize this bounded dispatch pass.
             continue
         except Exception as exc:
+            if resolving_guard is not None:
+                resolving_guard.close()
             with _state_lock:
                 _workers.pop(claim.id, None)
             with SessionLocal() as session:
@@ -1136,7 +1177,7 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
     pending: deque = deque()
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-        _measure_set("active_process_pools", 1)
+        _measure_set("active_process_pools", 1, owner_id=owner_id)
         for inst in specs:
             if guard is not None:
                 guard.ensure_active()
@@ -1162,7 +1203,7 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     guard.ensure_active()
                 future = pool.submit(task, payload) if payload else None
                 pending.append((future, slots))
-                _measure_set("inflight_datasets", len(pending))
+                _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
                 # `prepared` (and its lazily-built frame) is dropped here: the
                 # parent never holds a dataset past its submission.
                 del prepared, payload
@@ -1170,16 +1211,16 @@ def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
                     if guard is not None:
                         guard.ensure_active()
                     future, slots = pending.popleft()
-                    _measure_set("inflight_datasets", len(pending))
+                    _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
                     yield from _drain(slots, future)
         while pending:
             if guard is not None:
                 guard.ensure_active()
             future, slots = pending.popleft()
-            _measure_set("inflight_datasets", len(pending))
+            _measure_set("inflight_datasets", len(pending), owner_id=owner_id)
             yield from _drain(slots, future)
-    _measure_set("active_process_pools", 0)
-    _measure_set("inflight_datasets", 0)
+    _measure_set("active_process_pools", 0, owner_id=owner_id)
+    _measure_set("inflight_datasets", 0, owner_id=owner_id)
 
 
 def _prepare_dataset(provider, inst, interval, win, *,
@@ -1622,17 +1663,8 @@ def _durable_result_count(session, run_id, *, owner_id: str) -> int:
 
 def _commit_batch(run_id, values: list[dict], *, owner_id: str, status: str = "",
                   note: str = "") -> None:
-    """Persist up to `BATCH_SIZE` results, their progress, and any terminal
-    status as ONE transaction. It changes all of them or none of them."""
-    if len(values) > BATCH_SIZE:
-        raise RuntimeError(
-            f"batch of {len(values)} exceeds BATCH_SIZE={BATCH_SIZE}")
-    with SessionLocal() as s:
-        repository.append_result_batch(s, owner_id=owner_id, run_id=run_id, values=values)
-        s.flush()          # rows are visible to the count below, still uncommitted
-        repository.update_run(s, owner_id=owner_id, run_id=run_id,
-                              status=status, note=note)
-        s.commit()
+    """Compatibility refusal: every production write requires a lease token."""
+    raise ValueError("backtest batch persistence requires a durable claim token")
 
 
 def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
@@ -1644,6 +1676,7 @@ def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
     """
     if len(values) > BATCH_SIZE:
         raise RuntimeError(f"batch of {len(values)} exceeds BATCH_SIZE={BATCH_SIZE}")
+    started = time.monotonic()
     with SessionLocal() as session:
         if repository.is_cancel_requested(session, owner_id=owner_id, run_id=run_id,
                                           claim_token=claim_token):
@@ -1657,7 +1690,7 @@ def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
             session.rollback()
             return False
         if values:
-            _measure("batch_persists")
+            _measure("batch_persists", owner_id=owner_id, run_id=run_id)
         if status:
             if repository.is_cancel_requested(session, owner_id=owner_id, run_id=run_id,
                                               claim_token=claim_token):
@@ -1667,6 +1700,8 @@ def _commit_claimed_batch(run_id, values: list[dict], *, owner_id: str,
                 session.rollback()
                 return False
         session.commit()
+        _measure("batch_persist_seconds", time.monotonic() - started,
+                 owner_id=owner_id, run_id=run_id)
         return True
 
 

@@ -26,6 +26,7 @@ PREVIOUS = importlib.import_module("migrations.versions.20260812_0025_backtest_j
 TABLES = ("backtest_runs", "backtest_results")
 PROOF_TABLE = "_backtest_0026_rebuild_proofs"
 SUFFIX = "__0026"
+DOWN_SUFFIX = "__0026_down"
 
 # These are target manifests derived solely from 0025's checked-in immutable DDL,
 # not from a live source table.  Editing an existing database cannot choose what a
@@ -68,10 +69,10 @@ def _schema_digest(rows):
         typ, name, sql = (row.type, row.name, row.sql) if hasattr(row, "type") else row
         name, sql = name or "", sql or ""
         for table in TABLES:
-            name = re.sub(re.escape(table) + r"(?:__0026)?", f"__{table}__", name)
-            sql = re.sub(re.escape(table) + r"(?:__0026)?", f"__{table}__", sql)
-        name = name.removesuffix(SUFFIX)
-        sql = sql.replace(SUFFIX, "")
+            name = re.sub(re.escape(table) + r"(?:__0026(?:_down)?)?", f"__{table}__", name)
+            sql = re.sub(re.escape(table) + r"(?:__0026(?:_down)?)?", f"__{table}__", sql)
+        name = name.removesuffix(DOWN_SUFFIX).removesuffix(SUFFIX)
+        sql = sql.replace(DOWN_SUFFIX, "").replace(SUFFIX, "")
         body.append(f"{typ}:{name}:" + " ".join(sql.replace('"', '').replace('`', '').split()).lower())
     return hashlib.sha256("\n".join(body).encode()).hexdigest()
 
@@ -171,31 +172,145 @@ def upgrade():
         raw.commit(); raw.execute(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
 
 
+def _down_target_schema(table, *, temporary):
+    """Digest the immutable 0025 target, never a mutable source table."""
+    raw = sqlite3.connect(":memory:")
+    try:
+        suffix = DOWN_SUFFIX if temporary else ""
+        physical = table + suffix
+        ddl = PREVIOUS.RUN_DDL if table == "backtest_runs" else PREVIOUS.RESULT_DDL
+        raw.execute(ddl.replace("__TABLE__", physical))
+        for name, columns in DOWN_INDEXES[table]:
+            raw.execute(f"CREATE {'UNIQUE ' if name.startswith('uq_') else ''}INDEX "
+                        f"{name}{suffix} ON {physical}({columns})")
+        return _schema_digest(raw.execute(
+            "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=? "
+            "AND type IN ('table','index','trigger') ORDER BY type,name", (physical,)).fetchall())
+    finally:
+        raw.close()
+
+
+def _down_indexes(table, physical, *, temporary):
+    suffix = DOWN_SUFFIX if temporary else ""
+    for name, columns in DOWN_INDEXES[table]:
+        op.execute(sa.text(f"CREATE {'UNIQUE ' if name.startswith('uq_') else ''}INDEX "
+                           f"{name}{suffix} ON {physical}({columns})"))
+
+
+def _down_proof(table, temp):
+    expected = _down_target_schema(table, temporary=True)
+    if _schema(temp) != expected:
+        raise RuntimeError(f"0026 downgrade target contract proof failed for {table}")
+    count, digest = _rows(f"SELECT * FROM {temp} ORDER BY rowid")
+    op.execute(sa.text(f"CREATE TABLE IF NOT EXISTS {PROOF_TABLE} "
+                       "(table_name TEXT PRIMARY KEY,row_count INTEGER NOT NULL,"
+                       "row_digest TEXT NOT NULL,schema_digest TEXT NOT NULL,phase TEXT NOT NULL)"))
+    op.get_bind().execute(sa.text(
+        f"INSERT OR REPLACE INTO {PROOF_TABLE} VALUES (:t,:c,:d,:s,'down-built')"),
+        {"t": table, "c": count, "d": digest, "s": expected})
+
+
+def _validate_down(table, physical):
+    row = op.get_bind().execute(sa.text(
+        f"SELECT row_count,row_digest,schema_digest,phase FROM {PROOF_TABLE} "
+        "WHERE table_name=:t"), {"t": table}).one_or_none()
+    actual_rows = _rows(f"SELECT * FROM {physical} ORDER BY rowid")
+    target = _down_target_schema(table, temporary=physical.endswith(DOWN_SUFFIX))
+    actual_schema = _schema(physical)
+    if (row is None or row.phase != "down-built"
+            or actual_rows != (row.row_count, row.row_digest)
+            or row.schema_digest != target or actual_schema != row.schema_digest):
+        raise RuntimeError(f"0026 downgrade refuses malformed completed rebuild for {table}: "
+                           f"proof={getattr(row, 'schema_digest', None)} target={target} actual={actual_schema}")
+
+
+def _recover_down():
+    """Restart-safe preflight for every durable downgrade interruption point.
+
+    Validation happens before any DDL.  A source-present temporary is discarded
+    only after its manifest verifies; a source-absent temporary is promoted only
+    after the same verification.  A forged/unproven candidate leaves the schema
+    untouched for investigation.
+    """
+    names = _names()
+    for table in TABLES:
+        temp = table + DOWN_SUFFIX
+        if temp in names:
+            # Create/copy may commit in SQLite before a proof table row exists.
+            # The original source is still authoritative, so this is the sole
+            # unproved state safe to discard and rebuild from source.
+            proof_row = (op.get_bind().execute(sa.text(
+                f"SELECT 1 FROM {PROOF_TABLE} WHERE table_name=:t"), {"t": table}).first()
+                if PROOF_TABLE in names else None)
+            if table not in names or proof_row:
+                _validate_down(table, temp)
+        elif table in names and PROOF_TABLE in names:
+            row = op.get_bind().execute(sa.text(
+                f"SELECT 1 FROM {PROOF_TABLE} WHERE table_name=:t"), {"t": table}).first()
+            if row:
+                _validate_down(table, table)
+    for table in TABLES:
+        temp = table + DOWN_SUFFIX
+        if table in _names() and temp in _names():
+            op.execute(sa.text(f"DROP TABLE {temp}"))
+        elif table not in _names() and temp in _names():
+            op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
+            for name, _ in DOWN_INDEXES[table]:
+                op.execute(sa.text(f"DROP INDEX IF EXISTS {name}{DOWN_SUFFIX}"))
+            _down_indexes(table, table, temporary=False)
+            _validate_down(table, table)
+        if PROOF_TABLE in _names():
+            op.get_bind().execute(sa.text(
+                f"DELETE FROM {PROOF_TABLE} WHERE table_name=:t"), {"t": table})
+
+
+def _down_rebuild(table, columns):
+    temp = table + DOWN_SUFFIX
+    source = f"SELECT {columns} FROM {table} ORDER BY rowid"
+    expected = _rows(source)
+    ddl = PREVIOUS.RUN_DDL if table == "backtest_runs" else PREVIOUS.RESULT_DDL
+    op.execute(sa.text(ddl.replace("__TABLE__", temp)))
+    op.execute(sa.text(f"INSERT INTO {temp} ({columns}) SELECT {columns} FROM {table}"))
+    if _rows(f"SELECT {columns} FROM {temp} ORDER BY rowid") != expected:
+        raise RuntimeError(f"0026 downgrade source-bound payload proof failed for {table}")
+    _down_indexes(table, temp, temporary=True)
+    _down_proof(table, temp)
+    op.execute(sa.text(f"DROP TABLE {table}"))
+    op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
+    for name, _ in DOWN_INDEXES[table]:
+        op.execute(sa.text(f"DROP INDEX IF EXISTS {name}{DOWN_SUFFIX}"))
+    _down_indexes(table, table, temporary=False)
+    _validate_down(table, table)
+    op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:t"), {"t": table})
+
+
 def downgrade():
-    # Request descriptors and replay cell identities are durable execution evidence;
-    # silently deleting them would make a formerly reproducible run unreproducible.
-    if op.get_bind().execute(sa.text("SELECT 1 FROM backtest_runs WHERE request_json != '' LIMIT 1")).first() or op.get_bind().execute(sa.text("SELECT 1 FROM backtest_results WHERE cell_key NOT LIKE 'legacy:%' LIMIT 1")).first():
-        raise RuntimeError("0026 downgrade refused: durable replay evidence would be lost")
     raw = op.get_bind().connection.driver_connection; enabled = bool(raw.execute("PRAGMA foreign_keys").fetchone()[0])
     try:
         raw.commit(); raw.execute("PRAGMA foreign_keys=OFF")
+        _recover_down()
+        # A prior interrupted invocation may already have recovered both target
+        # tables.  It is now safe for Alembic to stamp 0025 without issuing DDL.
+        run_columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("backtest_runs")}
+        result_columns = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("backtest_results")}
+        if "request_json" not in run_columns and "cell_key" not in result_columns:
+            return
+        # Request descriptors and replay cell identities are durable execution
+        # evidence; silently deleting them would make a formerly reproducible
+        # run unreproducible.  This follows recovery preflight so a source-absent
+        # completed target is never queried as though it were still 0026.
+        if (("request_json" in run_columns and op.get_bind().execute(sa.text(
+                    "SELECT 1 FROM backtest_runs WHERE request_json != '' LIMIT 1")).first())
+                or ("cell_key" in result_columns and op.get_bind().execute(sa.text(
+                    "SELECT 1 FROM backtest_results WHERE cell_key NOT LIKE 'legacy:%' LIMIT 1")).first())):
+            raise RuntimeError("0026 downgrade refused: durable replay evidence would be lost")
         # Only legacy backfills are reversible. Their new values are synthetic
         # (`legacy:<id>` and an empty descriptor), so removing them changes no
-        # historical execution fact. Use a fresh source-derived rebuild rather
-        # than SQLite's lossy ALTER/DROP COLUMN shorthand.
-        for table, ddl, columns in (
-            ("backtest_results", PREVIOUS.RESULT_DDL, PREVIOUS.RESULT_COLUMNS),
-            ("backtest_runs", PREVIOUS.RUN_DDL, PREVIOUS.RUN_COLUMNS),
-        ):
-            temp = table + "__0026_down"
-            expected = _rows(f"SELECT {columns} FROM {table} ORDER BY rowid")
-            op.execute(sa.text(ddl.replace("__TABLE__", temp)))
-            op.execute(sa.text(f"INSERT INTO {temp} ({columns}) SELECT {columns} FROM {table}"))
-            if _rows(f"SELECT {columns} FROM {temp} ORDER BY rowid") != expected:
-                raise RuntimeError(f"0026 downgrade source proof failed for {table}")
-            op.execute(sa.text(f"DROP TABLE {table}")); op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
-            for name, columns_spec in PREVIOUS.UP_INDEXES[table]:
-                op.execute(sa.text(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({columns_spec})"))
+        # historical execution fact.
+        if "cell_key" in result_columns:
+            _down_rebuild("backtest_results", PREVIOUS.RESULT_COLUMNS)
+        if "request_json" in run_columns:
+            _down_rebuild("backtest_runs", PREVIOUS.RUN_COLUMNS)
         if op.get_bind().execute(sa.text("PRAGMA foreign_key_check")).all():
             raise RuntimeError("0026 downgrade foreign-key validation failed")
     finally:

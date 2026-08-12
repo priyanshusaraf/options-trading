@@ -4,7 +4,7 @@ import datetime as dt
 from sqlalchemy import select
 
 from app.db.session import init_db, SessionLocal
-from app.backtest import cache, sweep
+from app.backtest import cache, repository, sweep
 from app.db.models import BacktestResult, BacktestRun
 from app.providers.mock import MockProvider
 
@@ -93,6 +93,7 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
             name="Cache sentinel",
             segment="NFO_FUT",
             strategy_key="sentinel_strategy",
+            strategy_version="sentinel-version-v1",
             interval="15minute",
             trades=11,
             wins=7,
@@ -148,20 +149,26 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
         s.add(source)
         s.commit()
 
-        rebound = {"id", "run_id", "from_cache"}
+        rebound = {"id", "run_id", "cell_key", "from_cache"}
         exact_columns = {
             column.name for column in BacktestResult.__table__.columns
             if column.name not in rebound
         }
         expected = {name: getattr(source, name) for name in exact_columns}
         source_id = source.id
+        payload = dict(cache.cached_result_values(source), from_cache=True)
 
         # The warm copy is now a two-step: the reusable row becomes a values
         # payload (which a worker could equally have produced), and the batch
         # transaction binds it to a run. The guarantee is unchanged — every
         # mapped value verbatim, only row/run identity rebound.
-        sweep._commit_batch(202, [dict(cache.cached_result_values(source),
-                                       from_cache=True)], owner_id="owner")
+        claim = repository.claim_run(s, owner_id="owner", run_id=202,
+                                     claimed_by="cache-test", lease_seconds=60)
+        s.commit()
+        assert claim is not None
+        assert sweep._commit_claimed_batch(
+            202, [payload],
+            owner_id="owner", claim_token=claim.claim_token)
     with SessionLocal() as s:
         copied = s.scalar(select(BacktestResult).where(BacktestResult.run_id == 202))
 
@@ -169,6 +176,7 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
         assert {name: getattr(copied, name) for name in exact_columns} == expected
         assert copied.id != source_id
         assert copied.run_id == 202
+        assert copied.cell_key == "CACHE_SENTINEL\x1f15minute\x1fsentinel_strategy\x1fsentinel-version-v1"
         assert copied.from_cache is True
 
 

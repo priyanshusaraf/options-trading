@@ -48,6 +48,54 @@ def test_revision_0026_backfills_legacy_cells_and_refuses_duplicate_new_identity
         assert connection.execute(sa.text("SELECT cell_key FROM backtest_results WHERE id=942")).scalar_one() == "legacy:942"
 
 
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+@pytest.mark.parametrize("needle", (
+    "INSERT INTO BACKTEST_RESULTS__0026_DOWN",
+    "INSERT OR REPLACE INTO _BACKTEST_0026_REBUILD_PROOFS",
+    "DROP TABLE BACKTEST_RESULTS",
+    "ALTER TABLE BACKTEST_RESULTS__0026_DOWN RENAME TO BACKTEST_RESULTS",
+    "DELETE FROM _BACKTEST_0026_REBUILD_PROOFS",
+))
+def test_revision_0026_downgrade_restart_matrix_preserves_legacy_parity_and_fk_mode(
+        tmp_path, foreign_keys, needle):
+    """Every durable downgrade boundary restarts from a source-bound manifest."""
+    engine = _build_from_baseline_at_revision(
+        tmp_path, f"0026-down-{foreign_keys}-{abs(hash(needle))}.db", "0026")
+    with engine.begin() as connection:
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+        before_runs = connection.execute(sa.text(
+            "SELECT id,owner_id,status,scope,intervals,capital,total,done,note "
+            "FROM backtest_runs ORDER BY id")).all()
+        before_results = connection.execute(sa.text(
+            "SELECT id,owner_id,run_id,instrument_key,strategy_key,interval,error "
+            "FROM backtest_results ORDER BY id")).all()
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and needle in " ".join(statement.upper().split()):
+            stopped = True
+            raise RuntimeError("0026 downgrade injected interruption")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected interruption"):
+            with engine.begin() as connection:
+                command.downgrade(migrate.alembic_config(connection), "0025")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        assert stopped
+        command.downgrade(migrate.alembic_config(connection), "0025")
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+        assert connection.execute(sa.text(
+            "SELECT id,owner_id,status,scope,intervals,capital,total,done,note "
+            "FROM backtest_runs ORDER BY id")).all() == before_runs
+        assert connection.execute(sa.text(
+            "SELECT id,owner_id,run_id,instrument_key,strategy_key,interval,error "
+            "FROM backtest_results ORDER BY id")).all() == before_results
+
+
 def test_revision_0025_preserves_0024_rows_and_adds_portable_job_fields(tmp_path):
     """0025 must preserve evidence while giving every legacy run a queue timestamp."""
     engine = _build_from_baseline_at_revision(tmp_path, "0025-populated.db", "0024")

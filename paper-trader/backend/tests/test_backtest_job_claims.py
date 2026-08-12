@@ -10,6 +10,7 @@ import datetime as dt
 import threading
 import time
 
+import pytest
 from sqlalchemy import select
 from fastapi.testclient import TestClient
 
@@ -306,11 +307,47 @@ def test_measurement_snapshot_records_bounded_scheduler_measurements(monkeypatch
     """The scheduler exposes observed counters, never an invented capacity claim."""
     init_db(reset=True)
     before = sweep.measurement_snapshot(owner_id="owner")
-    sweep._measure("provider_reads")
-    sweep._measure_set("inflight_datasets", 0)
+    sweep._measure("provider_reads", owner_id="owner")
+    sweep._measure_set("inflight_datasets", 0, owner_id="owner")
     after = sweep.measurement_snapshot(owner_id="owner")
     assert after["provider_reads"] == before["provider_reads"] + 1
     assert after["inflight_datasets"] == 0
+
+
+def test_worker_entry_and_persistence_refuse_an_unfenced_writer(monkeypatch):
+    """A direct helper call must never regain the pre-0025 write authority."""
+    init_db(reset=True)
+    run_id = _run("owner")
+    with pytest.raises(TypeError, match="claim_token"):
+        sweep._run(run_id, None, [], ["day"], 1.0, owner_id="owner")
+    with pytest.raises(ValueError, match="claim token"):
+        sweep._commit_batch(run_id, [], owner_id="owner")
+    with SessionLocal() as session:
+        with pytest.raises(RuntimeError, match="fenced"):
+            repository.append_result_batch(session, owner_id="owner", run_id=run_id,
+                                           values=[])
+        with pytest.raises(RuntimeError, match="fenced"):
+            repository.update_run(session, owner_id="owner", run_id=run_id)
+
+
+def test_measurements_are_owner_partitioned_and_snapshot_is_lock_safe(monkeypatch):
+    """Two concurrent tenants must not overwrite each other's current gauges."""
+    init_db(reset=True)
+    with SessionLocal() as session:
+        session.add_all([Organization(organization_id="a", name="A"),
+                         Organization(organization_id="b", name="B")])
+        session.commit()
+    a, b = _run("a", total=3), _run("b", total=7)
+    sweep._measure_set("inflight_datasets", 2, owner_id="a", run_id=a)
+    sweep._measure_set("inflight_datasets", 5, owner_id="b", run_id=b)
+    sweep._measure("batch_persists", owner_id="a", run_id=a)
+    sweep._measure("batch_persists", owner_id="b", run_id=b)
+    a_snapshot = sweep.measurement_snapshot(owner_id="a")
+    b_snapshot = sweep.measurement_snapshot(owner_id="b")
+    assert a_snapshot["inflight_datasets"] == 2
+    assert b_snapshot["inflight_datasets"] == 5
+    assert a_snapshot["batch_persists"] >= 1
+    assert b_snapshot["batch_persists"] >= 1
 
 
 def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):

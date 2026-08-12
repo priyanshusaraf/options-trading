@@ -230,10 +230,12 @@ def iter_successful_results(*, owner_id: str, run_id: int, batch_size: int):
 
 def append_result_batch(session, *, owner_id: str, run_id: int,
                         values: list[dict]) -> None:
-    if get_run(session, owner_id=owner_id, run_id=run_id) is None:
-        raise ValueError("no such backtest run")
-    for value in values:
-        session.add(BacktestResult(owner_id=owner_id, run_id=run_id, **value))
+    """Removed unfenced write seam retained only as an explicit refusal.
+
+    Results can be durable only through ``append_claimed_result_batch``.  Keeping
+    a callable non-fenced writer would let a future worker bypass the lease.
+    """
+    raise RuntimeError("backtest result persistence requires a fenced claim token")
 
 
 def _cell_key(value: dict) -> str:
@@ -301,15 +303,8 @@ def durable_result_count(session, *, owner_id: str, run_id: int) -> int:
 
 def update_run(session, *, owner_id: str, run_id: int, status: str = "",
                note: str = "") -> BacktestRun | None:
-    run = get_run(session, owner_id=owner_id, run_id=run_id)
-    if run is None:
-        return None
-    run.done = durable_result_count(session, owner_id=owner_id, run_id=run_id)
-    if status:
-        run.status = status
-    if note:
-        run.note = note[:400]
-    return run
+    """Removed unfenced run mutation seam retained only as a refusal."""
+    raise RuntimeError("backtest run mutation requires a fenced claim token")
 
 
 def complete_claim(session, *, owner_id: str, run_id: int, claim_token: str,
