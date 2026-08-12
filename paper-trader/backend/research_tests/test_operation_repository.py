@@ -103,8 +103,11 @@ def test_active_and_terminal_reads_are_separate_bounded_owner_local_queries(repo
 
 def test_operation_payloads_reject_nonfinite_and_unbounded_error_details(repo):
     now = dt.datetime(2026, 8, 12, tzinfo=dt.UTC)
-    with pytest.raises(ValueError, match="JSON"):
+    with pytest.raises(ValueError, match="plan payload"):
         repo.enqueue(owner_id="owner-a", trigger="manual", plan={"x": float("nan")},
+                     build="b", provider_mode="mock", now=now)
+    with pytest.raises(ValueError, match="plan payload"):
+        repo.enqueue(owner_id="owner-a", trigger="manual", plan={"secret": "never persist"},
                      build="b", provider_mode="mock", now=now)
     repo.enqueue(owner_id="owner-a", trigger="manual", plan={}, build="b",
                  provider_mode="mock", operation_id="error", now=now)

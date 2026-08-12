@@ -54,6 +54,46 @@ def _error_payload(value: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _plan_payload(value: dict[str, Any]) -> dict[str, Any]:
+    """Accept only the durable, secret-free plan descriptor contract.
+
+    `{}` and `{\"items\": []}` remain intentional compatibility descriptors for
+    historical/no-op work, but arbitrary caller-supplied maps never enter the
+    status API or restart record.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("operation plan payload is invalid")
+    if value == {} or value == {"items": []}:
+        return value
+    expected = {"content_address", "experiment_count", "items"}
+    if set(value) != expected or not isinstance(value["content_address"], str):
+        raise ValueError("operation plan payload is invalid")
+    if (not isinstance(value["experiment_count"], int)
+            or isinstance(value["experiment_count"], bool)
+            or value["experiment_count"] < 0 or value["experiment_count"] > 64
+            or not isinstance(value["items"], list)
+            or len(value["items"]) != value["experiment_count"]):
+        raise ValueError("operation plan payload is invalid")
+    fields = {"program", "hypothesis", "strategy_key", "instrument_keys", "interval",
+              "days", "optimize_search"}
+    for item in value["items"]:
+        if not isinstance(item, dict) or set(item) != fields:
+            raise ValueError("operation plan payload is invalid")
+        if any(not isinstance(item[name], str) or not item[name] or len(item[name]) > limit
+               for name, limit in (("program", 80), ("hypothesis", 4000),
+                                   ("strategy_key", 80), ("interval", 24))):
+            raise ValueError("operation plan payload is invalid")
+        if (not isinstance(item["instrument_keys"], list)
+                or len(item["instrument_keys"]) > 64
+                or any(not isinstance(key, str) or not key or len(key) > 48
+                       for key in item["instrument_keys"])
+                or not isinstance(item["days"], int) or isinstance(item["days"], bool)
+                or not 0 <= item["days"] <= 100_000
+                or not isinstance(item["optimize_search"], bool)):
+            raise ValueError("operation plan payload is invalid")
+    return value
+
+
 def _load(value: str | None, expected, default):
     try:
         decoded = json.loads(value or "null")
@@ -106,6 +146,7 @@ class ResearchOperationRepository:
         value = operation_id or uuid.uuid4().hex
         if not isinstance(value, str) or not value or len(value) > 64:
             raise ValueError("operation_id is invalid")
+        plan = _plan_payload(plan)
         instant = _instant(now)
         pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
             ResearchOperation.owner_id == owner_id,
