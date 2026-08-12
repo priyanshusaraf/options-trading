@@ -178,7 +178,10 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
         run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
                else repository.latest_run(s, owner_id=owner_id))
         if run is None:
-            return {"run_id": run_id, "count": 0, "total": 0, "offset": offset,
+            # A foreign opaque id and an absent id deliberately collapse to the
+            # same public payload.  Echoing either id would make the probe
+            # distinguishable despite the owner-scoped lookup above.
+            return {"run_id": None, "count": 0, "total": 0, "offset": offset,
                     "limit": limit, "results": [], "budget": round(budget, 0),
                     "skipped": 0, "unaffordable": 0,
                     "skipped_breakdown": {"errored": 0, "low_trades": 0, "filtered": 0}}

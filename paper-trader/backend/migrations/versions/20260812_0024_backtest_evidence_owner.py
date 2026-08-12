@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 
 import sqlalchemy as sa
 from alembic import op
@@ -54,8 +55,7 @@ RESULT_DDL = """CREATE TABLE __TABLE__ (
  params_hash VARCHAR(64) NOT NULL, last_candle_ts INTEGER NOT NULL,
  schema_version INTEGER NOT NULL, from_cache BOOLEAN NOT NULL, computed_at DATETIME,
  PRIMARY KEY (id), CONSTRAINT uq_backtest_results_owner_id UNIQUE (owner_id, id),
- CONSTRAINT fk_backtest_results_owner_run FOREIGN KEY(owner_id, run_id)
-   REFERENCES backtest_runs (owner_id, id) ON DELETE RESTRICT,
+ CONSTRAINT fk_backtest_results_owner_run FOREIGN KEY(owner_id, run_id) REFERENCES backtest_runs (owner_id, id) ON DELETE RESTRICT,
  FOREIGN KEY(owner_id) REFERENCES organizations (organization_id) ON DELETE RESTRICT)"""
 
 RUN_COLUMNS = "id,owner_id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies"
@@ -70,11 +70,39 @@ LEGACY_RESULT_DDL = (RESULT_DDL
     .replace(" id INTEGER NOT NULL, owner_id VARCHAR(64) DEFAULT 'owner' NOT NULL, run_id INTEGER NOT NULL,\n",
              " id INTEGER NOT NULL, run_id INTEGER NOT NULL,\n")
     .replace(", CONSTRAINT uq_backtest_results_owner_id UNIQUE (owner_id, id),\n"
-             " CONSTRAINT fk_backtest_results_owner_run FOREIGN KEY(owner_id, run_id)\n"
-             "   REFERENCES backtest_runs (owner_id, id) ON DELETE RESTRICT,\n"
+             " CONSTRAINT fk_backtest_results_owner_run FOREIGN KEY(owner_id, run_id) REFERENCES backtest_runs (owner_id, id) ON DELETE RESTRICT,\n"
              " FOREIGN KEY(owner_id) REFERENCES organizations (organization_id) ON DELETE RESTRICT", ""))
 LEGACY_RUN_COLUMNS = RUN_COLUMNS.replace("owner_id,", "")
 LEGACY_RESULT_COLUMNS = RESULT_COLUMNS.replace("owner_id,", "")
+
+# The proof must be tied to this revision's intended table *and* physical access
+# contract.  Temp indexes use a private suffix while the source is still present;
+# they are replaced with these canonical final names immediately after promotion.
+UP_INDEXES = {
+    "backtest_runs": (
+        ("ix_backtest_runs_owner_id", "owner_id"),
+        ("ix_backtest_runs_owner_created", "owner_id,created_at"),
+        ("ix_backtest_runs_owner_status", "owner_id,status"),
+    ),
+    "backtest_results": (
+        ("ix_backtest_results_owner_id", "owner_id"),
+        ("ix_backtest_results_owner_run", "owner_id,run_id"),
+        ("ix_backtest_results_owner_cache", "owner_id,params_hash,last_candle_ts"),
+        ("ix_backtest_results_run_id", "run_id"),
+        ("ix_backtest_results_instrument_key", "instrument_key"),
+        ("ix_backtest_results_interval", "interval"),
+        ("ix_backtest_results_strategy_key", "strategy_key"),
+    ),
+}
+DOWN_INDEXES = {
+    "backtest_runs": (),
+    "backtest_results": (
+        ("ix_backtest_results_run_id", "run_id"),
+        ("ix_backtest_results_instrument_key", "instrument_key"),
+        ("ix_backtest_results_interval", "interval"),
+        ("ix_backtest_results_strategy_key", "strategy_key"),
+    ),
+}
 
 
 def _names() -> set[str]:
@@ -87,27 +115,88 @@ def _rows(query: str) -> tuple[int, str]:
     return len(value), hashlib.sha256(body.encode()).hexdigest()
 
 
-def _schema(table: str) -> str:
-    rows = op.get_bind().execute(sa.text(
+def _schema_rows(connection, table: str):
+    return connection.execute(sa.text(
         "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=:table "
         "AND type IN ('table','index','trigger') ORDER BY type,name"), {"table": table}).all()
+
+
+def _schema_digest(rows) -> str:
     # A result table names its run parent. During recovery that parent may already
     # have been promoted, so normalize every migration-local physical name rather
     # than falsely treating a SQLite rename rewrite as a different contract.
     normalized_parts = []
     for row in rows:
-        normalized_sql = row.sql or ""
-        normalized_name = row.name
+        # SQLAlchemy rows expose named attributes; sqlite3's target-manifest
+        # connection returns plain tuples.
+        row_type, normalized_name, normalized_sql = (
+            (row.type, row.name, row.sql)
+            if hasattr(row, "type") else (row[0], row[1], row[2])
+        )
+        normalized_sql = normalized_sql or ""
         for logical in TABLES:
             normalized_sql = re.sub(re.escape(logical) + r"(?:__0024)?",
                                     f"__{logical}__", normalized_sql)
             normalized_name = re.sub(re.escape(logical) + r"(?:__0024)?",
                                      f"__{logical}__", normalized_name)
         normalized_parts.append(
-            f"{row.type}:{normalized_name}:" +
+            f"{row_type}:{normalized_name}:" +
             " ".join(normalized_sql.replace('"', '').replace('`', '').split()).lower())
     normalized = "\n".join(normalized_parts)
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _schema(table: str) -> str:
+    return _schema_digest(_schema_rows(op.get_bind(), table))
+
+
+def _index_specs(table: str, direction: str):
+    return (UP_INDEXES if direction == "up" else DOWN_INDEXES)[table]
+
+
+def _target_schema(table: str, *, direction: str, temporary: bool) -> str:
+    """Digest the revision-owned target manifest, never a recoverable temp table.
+
+    This uses the immutable DDL/index declarations above in a private SQLite
+    connection.  The live temp can therefore not choose the contract authenticated
+    by its own proof.  Triggers are included by `_schema_rows` (there are none in
+    0024) so adding one later changes the digest deliberately.
+    """
+    raw = sqlite3.connect(":memory:")
+    try:
+        suffix = "__0024" if temporary else ""
+        run_name = "backtest_runs" + suffix
+        result_name = "backtest_results" + suffix
+        if direction == "up":
+            run_ddl, result_ddl = RUN_DDL, RESULT_DDL
+        else:
+            run_ddl, result_ddl = LEGACY_RUN_DDL, LEGACY_RESULT_DDL
+        raw.execute(run_ddl.replace("__TABLE__", run_name))
+        raw.execute(result_ddl.replace("__TABLE__", result_name))
+        for logical, physical in (("backtest_runs", run_name),
+                                  ("backtest_results", result_name)):
+            for name, columns in _index_specs(logical, direction):
+                index_name = name + ("__0024" if temporary else "")
+                raw.execute(f"CREATE INDEX {index_name} ON {physical}({columns})")
+        rows = raw.execute(
+            "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=? "
+            "AND type IN ('table','index','trigger') ORDER BY type,name", (table + suffix,)
+        ).fetchall()
+        return _schema_digest(rows)
+    finally:
+        raw.close()
+
+
+def _create_indexes(table: str, physical: str, *, direction: str, temporary: bool) -> None:
+    for name, columns in _index_specs(table, direction):
+        index_name = name + ("__0024" if temporary else "")
+        clause = "" if temporary else " IF NOT EXISTS"
+        op.execute(sa.text(f"CREATE INDEX{clause} {index_name} ON {physical}({columns})"))
+
+
+def _drop_temp_indexes(table: str, *, direction: str) -> None:
+    for name, _ in _index_specs(table, direction):
+        op.execute(sa.text(f"DROP INDEX IF EXISTS {name}__0024"))
 
 
 def _ensure_proofs() -> None:
@@ -119,12 +208,15 @@ def _ensure_proofs() -> None:
 
 def _write_proof(table: str, temp: str, *, direction: str) -> None:
     _ensure_proofs()
+    expected_schema = _target_schema(table, direction=direction, temporary=True)
+    if _schema(temp) != expected_schema:
+        raise RuntimeError(f"0024 source-bound target contract proof failed for {table}")
     count, digest = _rows(f"SELECT * FROM {temp} ORDER BY rowid")
     op.get_bind().execute(sa.text(
         f"INSERT OR REPLACE INTO {PROOF_TABLE} VALUES "
         "(:table,:count,:digest,:direction,:schema,'built')"), {
         "table": table, "count": count, "digest": digest,
-        "direction": direction, "schema": _schema(temp)})
+        "direction": direction, "schema": expected_schema})
 
 
 def _prove_temp(table: str, temp: str, *, direction: str) -> None:
@@ -134,10 +226,31 @@ def _prove_temp(table: str, temp: str, *, direction: str) -> None:
         f"SELECT row_count,row_digest,direction,schema_digest,phase FROM {PROOF_TABLE} "
         "WHERE table_name=:table"),
         {"table": table}).one_or_none()
-    if proof is None or proof.direction != direction or proof.phase != "built" \
-            or _rows(f"SELECT * FROM {temp} ORDER BY rowid") != (proof.row_count, proof.row_digest) \
-            or _schema(temp) != proof.schema_digest:
+    if (proof is None or proof.direction != direction or proof.phase != "built"
+            or _rows(f"SELECT * FROM {temp} ORDER BY rowid") != (proof.row_count, proof.row_digest)
+            or _schema(temp) != proof.schema_digest
+            or proof.schema_digest != _target_schema(table, direction=direction, temporary=True)):
         raise RuntimeError(f"0024 refuses malformed completed rebuild for {table}")
+
+
+def _prove_promoted(table: str, *, direction: str) -> None:
+    """Validate the renamed live table against the proof and final target manifest."""
+    if PROOF_TABLE not in _names():
+        raise RuntimeError(f"0024 refuses unproven promoted rebuild for {table}")
+    proof = op.get_bind().execute(sa.text(
+        f"SELECT row_count,row_digest,direction,schema_digest,phase FROM {PROOF_TABLE} "
+        "WHERE table_name=:table"), {"table": table}).one_or_none()
+    if proof is None or proof.direction != direction or proof.phase != "built" \
+            or proof.schema_digest != _target_schema(table, direction=direction, temporary=True) \
+            or _rows(f"SELECT * FROM {table} ORDER BY rowid") != (proof.row_count, proof.row_digest) \
+            or _schema(table) != _target_schema(table, direction=direction, temporary=False):
+        raise RuntimeError(f"0024 refuses malformed promoted rebuild for {table}")
+
+
+def _promote_contract(table: str, *, direction: str) -> None:
+    _drop_temp_indexes(table, direction=direction)
+    _create_indexes(table, table, direction=direction, temporary=False)
+    _prove_promoted(table, direction=direction)
 
 
 def _recover(*, direction: str) -> None:
@@ -154,7 +267,7 @@ def _recover(*, direction: str) -> None:
                 f"SELECT 1 FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table}
             ).scalar_one_or_none()
             if proof is not None:
-                _prove_temp(table, table, direction=direction)
+                _prove_promoted(table, direction=direction)
     for table in TABLES:
         temp = f"{table}__0024"
         if table in names and temp in names:
@@ -163,6 +276,7 @@ def _recover(*, direction: str) -> None:
                 op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
         elif table not in names and temp in names:
             op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
+            _promote_contract(table, direction=direction)
             op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
         elif table in names and temp not in names and PROOF_TABLE in _names():
             op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
@@ -175,26 +289,17 @@ def _rebuild(table: str, ddl: str, columns: str, source: str, *, direction: str 
     op.execute(sa.text(f"INSERT INTO {temp} ({columns}) SELECT {source} FROM {table}"))
     if _rows(f"SELECT * FROM {temp} ORDER BY rowid") != expected:
         raise RuntimeError(f"0024 source-bound payload proof failed for {table}")
+    _create_indexes(table, temp, direction=direction, temporary=True)
     _write_proof(table, temp, direction=direction)
     op.execute(sa.text(f"DROP TABLE {table}"))
     op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
+    _promote_contract(table, direction=direction)
     op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
 
 
 def _indexes() -> None:
-    for sql in (
-        "CREATE INDEX IF NOT EXISTS ix_backtest_runs_owner_id ON backtest_runs(owner_id)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_runs_owner_created ON backtest_runs(owner_id,created_at)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_runs_owner_status ON backtest_runs(owner_id,status)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_owner_id ON backtest_results(owner_id)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_owner_run ON backtest_results(owner_id,run_id)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_owner_cache ON backtest_results(owner_id,params_hash,last_candle_ts)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_run_id ON backtest_results(run_id)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_instrument_key ON backtest_results(instrument_key)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_interval ON backtest_results(interval)",
-        "CREATE INDEX IF NOT EXISTS ix_backtest_results_strategy_key ON backtest_results(strategy_key)",
-    ):
-        op.execute(sa.text(sql))
+    for table in TABLES:
+        _create_indexes(table, table, direction="up", temporary=False)
 
 
 def upgrade() -> None:
@@ -261,13 +366,8 @@ def downgrade() -> None:
         if "owner_id" in {c["name"] for c in sa.inspect(bind).get_columns("backtest_runs")}:
             _rebuild("backtest_runs", LEGACY_RUN_DDL, LEGACY_RUN_COLUMNS,
                      LEGACY_RUN_COLUMNS, direction="down")
-        for sql in (
-            "CREATE INDEX IF NOT EXISTS ix_backtest_results_run_id ON backtest_results(run_id)",
-            "CREATE INDEX IF NOT EXISTS ix_backtest_results_instrument_key ON backtest_results(instrument_key)",
-            "CREATE INDEX IF NOT EXISTS ix_backtest_results_interval ON backtest_results(interval)",
-            "CREATE INDEX IF NOT EXISTS ix_backtest_results_strategy_key ON backtest_results(strategy_key)",
-        ):
-            op.execute(sa.text(sql))
+        for table in TABLES:
+            _create_indexes(table, table, direction="down", temporary=False)
         if PROOF_TABLE in _names():
             op.execute(sa.text(f"DROP TABLE {PROOF_TABLE}"))
     finally:
