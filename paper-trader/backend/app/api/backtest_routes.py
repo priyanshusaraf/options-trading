@@ -15,18 +15,18 @@ import io
 import json
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from app.api.paging import MAX_PAGE
 from pydantic import BaseModel
-from sqlalchemy import func, select
 
 from app.backtest import sweep
 from app.core.config import get_settings
 from app.core.instruments import get_instrument
-from app.db.models import BacktestResult, BacktestRun
+from app.db.models import BacktestResult
 from app.db.session import SessionLocal
 from app.api.principal import Principal, get_principal, owner_id_for
+from app.backtest import repository
 
 
 def _budget(request: Request) -> float:
@@ -100,38 +100,39 @@ def instruments(scope: str = "liquid", principal: Principal = Depends(get_princi
 
 
 @router.get("/status")
-def status(run_id: int | None = None):
+def status(run_id: int | None = None, principal: Principal = Depends(get_principal)):
+    owner_id = owner_id_for(principal)
     with SessionLocal() as s:
-        run = (s.get(BacktestRun, run_id) if run_id else
-               s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first())
+        run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id else
+               repository.latest_run(s, owner_id=owner_id))
         if not run:
             return {"run": None, "running": sweep.is_running()}
         return {"run": run.to_dict(), "running": sweep.is_running()}
 
 
 @router.get("/runs")
-def runs(limit: int = Query(default=100, ge=1, le=MAX_PAGE)):
+def runs(limit: int = Query(default=100, ge=1, le=MAX_PAGE),
+         principal: Principal = Depends(get_principal)):
     """Every past sweep, newest first — so no completed run is ever lost or
     silently overwritten. Each row carries a result count so the UI can show
     'NIFTY×6 · 312 cells · done · 19 Jun'."""
+    owner_id = owner_id_for(principal)
     with SessionLocal() as s:
-        rows = list(s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc()).limit(limit)))
-        counts = dict(s.execute(
-            select(BacktestResult.run_id, func.count())
-            .where(BacktestResult.error == "")
-            .group_by(BacktestResult.run_id)).all())
+        rows = repository.list_runs(s, owner_id=owner_id, limit=limit)
     out = []
     for r in rows:
         d = r.to_dict()
-        d["result_count"] = int(counts.get(r.id, 0))
+        d["result_count"] = repository.result_count(
+            s, owner_id=owner_id, run_id=r.id, successful_only=True)
         out.append(d)
     return {"runs": out}
 
 
 @router.get("/export")
-def export(run_id: int | None = None):
+def export(run_id: int | None = None, principal: Principal = Depends(get_principal)):
     """Download a run's results as CSV (so a sweep's output survives outside the
     app). Defaults to the latest run."""
+    owner_id = owner_id_for(principal)
     cols = ["instrument_key", "name", "segment", "strategy_key", "interval", "trades", "wins",
             "win_rate", "win_rate_realised", "open_at_end", "profit_factor",
             "max_drawdown_pct", "worst_mae_pct", "return_pct", "return_pct_realised",
@@ -142,19 +143,22 @@ def export(run_id: int | None = None):
             "first_ts", "last_ts", "effective_days", "clamped",
             "bars", "from_cache"]
     with SessionLocal() as s:
-        if run_id is None:
-            run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
-            run_id = run.id if run else -1
-        rows = list(s.scalars(select(BacktestResult)
-                              .where(BacktestResult.run_id == run_id,
-                                     BacktestResult.error == "")))
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
-    w.writeheader()
-    for r in rows:
-        w.writerow(r.summary())
-    return Response(
-        content=buf.getvalue(), media_type="text/csv",
+        run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
+               else repository.latest_run(s, owner_id=owner_id))
+        if run is None:
+            return Response(status_code=404, content="not found")
+        run_id = run.id
+    def stream():
+        header = io.StringIO()
+        csv.DictWriter(header, fieldnames=cols, extrasaction="ignore").writeheader()
+        yield header.getvalue()
+        for row in repository.iter_successful_results(
+                owner_id=owner_id, run_id=run_id, batch_size=250):
+            body = io.StringIO()
+            csv.DictWriter(body, fieldnames=cols, extrasaction="ignore").writerow(row.summary())
+            yield body.getvalue()
+    return StreamingResponse(
+        stream(), media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="backtest_run_{run_id}.csv"'})
 
 
@@ -164,44 +168,39 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             min_win_rate: float = 0.0, min_profit_factor: float = 0.0,
             max_drawdown: float = 100.0, min_return: float = -1e9,
             min_trades: int = 10, sort: str = "return_pct",
-            limit: int = Query(default=500, ge=1, le=MAX_PAGE)):
+            limit: int = Query(default=500, ge=1, le=MAX_PAGE),
+            principal: Principal = Depends(get_principal)):
             # H9: default raised 1 -> 10 so a 1-lucky-trade cell is never surfaced as
             # promotable by default (grid selection bias across the sweep). Overridable.
+    owner_id = owner_id_for(principal)
     budget = _budget(request)
     with SessionLocal() as s:
-        if run_id is None:
-            run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
-            run_id = run.id if run else -1
-        q = select(BacktestResult).where(BacktestResult.run_id == run_id)
-        if strategy:
-            q = q.where(BacktestResult.strategy_key == strategy)
-        rows = list(s.scalars(q))
+        run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
+               else repository.latest_run(s, owner_id=owner_id))
+        if run is None:
+            return {"run_id": run_id, "count": 0, "results": [], "budget": round(budget, 0),
+                    "skipped": 0, "unaffordable": 0,
+                    "skipped_breakdown": {"errored": 0, "low_trades": 0, "filtered": 0}}
+        run_id = run.id
+        column = getattr(BacktestResult, sort, BacktestResult.return_pct)
+        reverse = sort not in ("max_drawdown_pct", "charges", "max_consec_losses",
+                               "time_underwater_pct", "worst_mae_pct")
+        rows = repository.filtered_results(
+            s, owner_id=owner_id, run_id=run_id, interval=interval, strategy_key=strategy,
+            min_win_rate=min_win_rate, min_profit_factor=min_profit_factor,
+            max_drawdown=max_drawdown, min_return=min_return, min_trades=min_trades,
+            sort_column=column, descending=reverse, limit=limit)
+        skipped_errored, skipped_low_trades, skipped_filtered = repository.filtered_breakdown(
+            s, owner_id=owner_id, run_id=run_id, interval=interval, strategy_key=strategy,
+            min_win_rate=min_win_rate, min_profit_factor=min_profit_factor,
+            max_drawdown=max_drawdown, min_return=min_return, min_trades=min_trades)
 
     out = []
     # survivorship disclosure (DV-1): cells excluded from the visible set, by reason,
     # so the visible list is never mistaken for the whole universe.
-    skipped = 0
-    skipped_errored = 0          # candle/window/out-of-range errors (silently dropped before)
-    skipped_low_trades = 0       # too few trades to be meaningful
-    skipped_filtered = 0         # failed the user's win%/PF/DD/return filters
+    skipped = skipped_errored + skipped_low_trades + skipped_filtered
     unaffordable = 0             # can't afford 1 lot of the ATM OPTION at the current budget — badged, NOT hidden
     for r in rows:
-        if interval and r.interval != interval:
-            continue
-        if r.error:
-            skipped += 1
-            skipped_errored += 1
-            continue
-        if r.trades < min_trades:
-            skipped += 1
-            skipped_low_trades += 1
-            continue
-        pf = r.profit_factor if r.profit_factor is not None else 1e9
-        if (r.win_rate < min_win_rate or pf < min_profit_factor
-                or r.max_drawdown_pct > max_drawdown or r.return_pct < min_return):
-            skipped += 1
-            skipped_filtered += 1
-            continue
         d = _with_affordability(r.summary(), budget)
         try:
             d["has_options"] = bool(get_instrument(r.instrument_key).has_options)
@@ -211,11 +210,7 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             unaffordable += 1
         out.append(d)
 
-    # lower-is-better metrics sort ascending; everything else descending
-    reverse = sort not in ("max_drawdown_pct", "charges", "max_consec_losses",
-                           "time_underwater_pct", "worst_mae_pct")
-    out.sort(key=lambda d: (d.get(sort) if d.get(sort) is not None else -1e18), reverse=reverse)
-    return {"run_id": run_id, "count": len(out), "results": out[:limit],
+    return {"run_id": run_id, "count": len(out), "results": out,
             "budget": round(budget, 0), "skipped": skipped, "unaffordable": unaffordable,
             "skipped_breakdown": {
                 "errored": skipped_errored, "low_trades": skipped_low_trades,
@@ -224,18 +219,16 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
 
 @router.get("/result/{key}/{interval}")
 def result_detail(key: str, interval: str, request: Request, run_id: int | None = None,
-                  strategy: str | None = None):
+                  strategy: str | None = None,
+                  principal: Principal = Depends(get_principal)):
+    owner_id = owner_id_for(principal)
     with SessionLocal() as s:
-        if run_id is None:
-            run = s.scalars(select(BacktestRun).order_by(BacktestRun.id.desc())).first()
-            run_id = run.id if run else -1
-        q = select(BacktestResult).where(
-            BacktestResult.run_id == run_id,
-            BacktestResult.instrument_key == key,
-            BacktestResult.interval == interval)
-        if strategy:   # disambiguate when a run swept several strategies
-            q = q.where(BacktestResult.strategy_key == strategy)
-        r = s.scalar(q)
+        run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
+               else repository.latest_run(s, owner_id=owner_id))
+        run_id = run.id if run else -1
+        r = repository.result_detail(s, owner_id=owner_id, run_id=run_id,
+                                     instrument_key=key, interval=interval,
+                                     strategy_key=strategy)
         if not r:
             return {"error": "no such result"}
         d = _with_affordability(r.summary(), _budget(request))
@@ -243,3 +236,4 @@ def result_detail(key: str, interval: str, request: Request, run_id: int | None 
         d["bh_curve"] = json.loads(r.bh_curve_json or "[]")
         d["trades"] = json.loads(r.trades_json or "[]")
         return d
+    owner_id = owner_id_for(principal)

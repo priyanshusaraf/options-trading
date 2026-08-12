@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.db.session import init_db, SessionLocal
 from app.backtest import cache, sweep
-from app.db.models import BacktestResult
+from app.db.models import BacktestResult, BacktestRun
 from app.providers.mock import MockProvider
 
 
@@ -82,6 +82,11 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
     init_db(reset=True)
     computed_at = dt.datetime(2025, 1, 2, 3, 4, 5)
     with SessionLocal() as s:
+        s.add_all([BacktestRun(id=101, owner_id="owner", scope="liquid", intervals="day",
+                               capital=1, total=1),
+                   BacktestRun(id=202, owner_id="owner", scope="liquid", intervals="day",
+                               capital=1, total=1)])
+        s.flush()
         source = BacktestResult(
             run_id=101,
             instrument_key="CACHE_SENTINEL",
@@ -156,7 +161,7 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
         # transaction binds it to a run. The guarantee is unchanged — every
         # mapped value verbatim, only row/run identity rebound.
         sweep._commit_batch(202, [dict(cache.cached_result_values(source),
-                                       from_cache=True)])
+                                       from_cache=True)], owner_id="owner")
     with SessionLocal() as s:
         copied = s.scalar(select(BacktestResult).where(BacktestResult.run_id == 202))
 
@@ -177,6 +182,9 @@ def test_reuse_rejects_transient_premium_error_but_accepts_exact_permanent_statu
         last_candle_ts=1234, schema_version=cache.SCHEMA_VERSION, error="",
     )
     with SessionLocal() as session:
+        session.add(BacktestRun(id=1, owner_id="owner", scope="liquid", intervals="day",
+                                capital=1, total=1))
+        session.flush()
         session.add(BacktestResult(
             premium_error="provider timed out", **common))
         session.add(BacktestResult(
@@ -185,10 +193,10 @@ def test_reuse_rejects_transient_premium_error_but_accepts_exact_permanent_statu
         session.commit()
 
         assert cache.find_reusable(
-            session, "CACHE_ERROR", "15minute", "a" * 64, 1234) is None
+            session, "CACHE_ERROR", "15minute", "a" * 64, 1234, owner_id="owner") is None
         assert cache.find_reusable(
             session, "NO_OPTIONS", "15minute", "a" * 64, 1234,
-            expected_premium_error=NO_OPTIONS_PREMIUM_ERROR) is not None
+            owner_id="owner", expected_premium_error=NO_OPTIONS_PREMIUM_ERROR) is not None
 
 
 def test_cache_key_uses_ist_epoch_not_local_timestamp():

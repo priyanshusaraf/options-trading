@@ -210,7 +210,8 @@ def measure_sweep(n_instruments: int, intervals: list[str], workers: int) -> dic
 
     with SessionLocal() as session:
         rows = list(session.scalars(
-            select(BacktestResult).where(BacktestResult.run_id == run_id)))
+            select(BacktestResult).where(BacktestResult.owner_id == "owner",
+                                         BacktestResult.run_id == run_id)))
     cells = len(rows)
     return {
         "cells": cells, "wall_s": round(wall, 3),

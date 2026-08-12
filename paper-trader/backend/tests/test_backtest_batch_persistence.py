@@ -92,7 +92,7 @@ def _drive(run_id, cells, monkeypatch, *, one=None):
 
     monkeypatch.setattr(sweep, "_one", one or stub_one)
     sweep._run(run_id, None, [INST] * cells, ["15minute"], 50_000.0, WIN,
-               [get_strategy(None)])
+               [get_strategy(None)], owner_id="owner")
 
 
 # ── 1. the transaction budget ────────────────────────────────────────────────
@@ -171,11 +171,11 @@ def test_a_failed_batch_persists_neither_rows_nor_progress(monkeypatch):
     real_count = sweep._durable_result_count
     state = {"calls": 0}
 
-    def exploding_count(session, rid):
+    def exploding_count(session, rid, *, owner_id):
         state["calls"] += 1
         if state["calls"] == 2:          # second batch only
             raise RuntimeError("disk went away")
-        return real_count(session, rid)
+        return real_count(session, rid, owner_id=owner_id)
 
     monkeypatch.setattr(sweep, "_durable_result_count", exploding_count)
     _drive(run_id, 30, monkeypatch)
@@ -229,7 +229,7 @@ def test_a_run_left_running_by_a_dead_process_is_reconciled(monkeypatch):
         s.commit()
 
     assert not sweep.is_running()
-    sweep.reconcile_stale_runs()
+    sweep.reconcile_stale_runs(owner_id="owner")
 
     rows, done, status = _counts(stale)
     assert (rows, done) == (7, 7)
@@ -243,7 +243,7 @@ def test_reconciliation_never_touches_a_finished_run():
         run = s.get(BacktestRun, finished)
         run.status, run.done, run.note = "done", 3, "keep me"
         s.commit()
-    sweep.reconcile_stale_runs()
+    sweep.reconcile_stale_runs(owner_id="owner")
     with SessionLocal() as s:
         run = s.get(BacktestRun, finished)
         assert (run.status, run.done, run.note) == ("done", 3, "keep me")

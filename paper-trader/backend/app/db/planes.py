@@ -96,11 +96,9 @@ TABLE_PLANES: dict[str, Plane] = {
     "universe_instruments": Plane.MARKET,
     "option_data": Plane.MARKET,
     "earnings_events": Plane.MARKET,
-    "backtest_runs": Plane.MARKET,
-    "backtest_results": Plane.MARKET,
-    # Backtests are market-plane because they are *derived* — reproducible from the graph
-    # version and the dataset, both of which live elsewhere. They are also by far the largest
-    # table set, which is exactly why they must not share a failure domain with the ledger.
+    # Raw candles are MARKET. A durable run/result records private strategy work and is USER.
+    "backtest_runs": Plane.USER,
+    "backtest_results": Plane.USER,
 }
 
 

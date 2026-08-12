@@ -32,7 +32,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0023"
+HEAD = "0024"
 
 
 def _schema(engine) -> dict:
@@ -120,6 +120,110 @@ def test_models_and_migrations_agree(tmp_path):
         )
         assert migrated[table]["indexes"] == fresh[table]["indexes"], \
             f"index mismatch in {table!r}"
+
+
+def test_revision_0024_owns_backtest_evidence_and_preserves_fk_mode(tmp_path):
+    """Legacy run/result bytes upgrade to the same owner without losing relation safety."""
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (id,created_at,status,scope,intervals,capital,total,done,note,window,instruments,strategies) "
+            "VALUES (991,'2026-08-12 10:00:00','done','liquid','day',123.0,1,1,'exact','max','NIFTY','trend_impulse_v3')"))
+        connection.execute(sa.text(
+            "INSERT INTO backtest_results (id,run_id,instrument_key,name,segment,strategy_key,interval,trades,wins,win_rate,profit_factor,max_drawdown_pct,return_pct,net_pnl,gross_pnl,charges,expectancy,cagr,calmar,consistency,sharpe,max_consec_losses,time_underwater_pct,worst_trade_pnl,worst_mae_pct,notional,lots,affordable,option_cost,open_at_end,win_rate_realised,return_pct_realised,bh_return_pct,first_ts,last_ts,effective_days,clamped,bars,curve_json,bh_curve_json,trades_json,error,premium_trades,premium_win_rate,premium_net_pnl,premium_return_pct,premium_profit_factor,premium_max_drawdown_pct,premium_expectancy,premium_charges,premium_trades_json,premium_error,params_hash,last_candle_ts,schema_version,from_cache,computed_at) "
+            "VALUES (991,991,'NIFTY','exact','nse','trend_impulse_v3','day',1,1,100,NULL,0,1,1,1,0,1,NULL,NULL,NULL,NULL,0,0,0,0,1,1,1,1,0,100,1,NULL,1,2,1,0,2,'[]','[]','[]','',0,0,0,0,NULL,0,0,0,'[]','', 'hash',2,8,0,NULL)"))
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute("PRAGMA foreign_keys=1")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0024")
+        assert connection.execute(sa.text("SELECT owner_id FROM backtest_runs WHERE id=991")).scalar_one() == "owner"
+        assert connection.execute(sa.text("SELECT owner_id FROM backtest_results WHERE id=991")).scalar_one() == "owner"
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == 1
+    assert migrate.schema_version(engine) == "0024"
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0024_restores_callers_fk_mode_on_success_and_failure(tmp_path, foreign_keys):
+    engine = _at_revision_0020(tmp_path, f"0024-fk-{foreign_keys}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0024")
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+@pytest.mark.parametrize("table", ("backtest_runs", "backtest_results"))
+def test_revision_0024_refuses_unproven_completed_temp_without_mutation(tmp_path, table):
+    engine = _at_revision_0020(tmp_path, f"0024-unproven-{table}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        connection.execute(sa.text(f"ALTER TABLE {table} RENAME TO {table}__0024"))
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+    with pytest.raises(RuntimeError, match="unproven completed rebuild"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0024")
+    with engine.connect() as connection:
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+        assert migrate.schema_version(engine) == "0023"
+
+
+@pytest.mark.parametrize("table", ("backtest_runs", "backtest_results"))
+def test_revision_0024_discards_source_present_stale_temp(tmp_path, table):
+    engine = _at_revision_0020(tmp_path, f"0024-stale-{table}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        connection.execute(sa.text(f"CREATE TABLE {table}__0024 (attacker TEXT)"))
+        command.upgrade(migrate.alembic_config(connection), "0024")
+        assert f"{table}__0024" not in sa.inspect(connection).get_table_names()
+
+
+def test_revision_0024_downgrade_refuses_before_schema_mutation(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.connect() as connection:
+        before = tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
+    with pytest.raises(RuntimeError, match="downgrade refused"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0023")
+    with engine.connect() as connection:
+        assert tuple(connection.execute(sa.text(
+            "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all()) == before
+        assert migrate.schema_version(engine) == "0024"
+
+
+@pytest.mark.parametrize("table", ("backtest_runs", "backtest_results"))
+def test_revision_0024_post_rename_proof_retries_only_if_promoted_table_is_intact(tmp_path, table):
+    engine = _at_revision_0020(tmp_path, f"0024-post-rename-{table}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+    stopped = False
+
+    def interrupt(_conn, _cursor, statement, params, _context, _many):
+        nonlocal stopped
+        values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        if (not stopped and "DELETE FROM _BACKTEST_0024_REBUILD_PROOFS" in statement.upper()
+                and table in values):
+            stopped = True
+            raise RuntimeError("interrupt after rename")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="interrupt after rename"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0024")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        assert stopped and table in sa.inspect(connection).get_table_names()
+        command.upgrade(migrate.alembic_config(connection), "0024")
+        assert "_backtest_0024_rebuild_proofs" not in sa.inspect(connection).get_table_names()
 
 
 def test_revision_0022_makes_every_review_table_owner_owned(tmp_path):

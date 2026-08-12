@@ -34,6 +34,7 @@ from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.db.models import BacktestResult, BacktestRun
+from app.backtest import repository
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
 from sqlalchemy import func, select
@@ -289,7 +290,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
     # Deliberately BEFORE `_running` is set: the guard inside protects a live
     # sweep's own row, and this must not be skipped by the flag we are about to
     # raise ourselves.
-    reconcile_stale_runs()
+    reconcile_stale_runs(owner_id=owner_id)
     with _state_lock:
         if _running:
             raise RuntimeError("a sweep is already running")
@@ -319,17 +320,16 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         total = len(specs) * len(intervals) * len(strat_objs)
         strat_label = "×".join(st.key for st in strat_objs)
         with SessionLocal() as s:
-            run = BacktestRun(status="running", scope=scope,
-                              intervals=",".join(intervals), capital=capital,
-                              total=total, done=0, window=win["label"],
-                              instruments=",".join(i.key for i in specs) if instruments else "",
-                              strategies=",".join(st.key for st in strat_objs),
-                              note=f"{len(specs)} instruments × {len(intervals)} intervals "
-                                   f"× {len(strat_objs)} strategies · {win['label']}"
-                                   + (" · pinned" if pinned else "")
-                                   + (f" · {worker_count} workers"
-                                      if worker_count > 1 else ""))
-            s.add(run)
+            run = repository.create_run(
+                s, owner_id=owner_id, status="running", scope=scope,
+                intervals=",".join(intervals), capital=capital, total=total, done=0,
+                window=win["label"],
+                instruments=",".join(i.key for i in specs) if instruments else "",
+                strategies=",".join(st.key for st in strat_objs),
+                note=f"{len(specs)} instruments × {len(intervals)} intervals "
+                     f"× {len(strat_objs)} strategies · {win['label']}"
+                     + (" · pinned" if pinned else "")
+                     + (f" · {worker_count} workers" if worker_count > 1 else ""))
             s.commit()
             run_id = run.id
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
@@ -338,7 +338,8 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                  + (f", {worker_count} worker processes" if worker_count > 1 else ""))
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
-                                   strat_objs, pinned, worker_count, owner_id),
+                                   strat_objs, pinned, worker_count),
+                             kwargs={"owner_id": owner_id},
                              daemon=True)
         _worker = t
         t.start()
@@ -349,7 +350,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None, workers=None, owner_id: str = "owner") -> None:
+         pinned=None, workers=None, *, owner_id: str) -> None:
     global _running
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
     if not strategies:
@@ -361,24 +362,24 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
                                    win, strategies, pinned, workers, owner_id=owner_id):
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
-                _commit_batch(run_id, batch)
+                _commit_batch(run_id, batch, owner_id=owner_id)
                 batch = []
         # The terminal status rides the final batch: results, progress and the
         # run's completion are one transaction, so a run can never be `done`
         # while its last ten rows are missing.
-        _commit_batch(run_id, batch, status="done")
+        _commit_batch(run_id, batch, owner_id=owner_id, status="done")
         log.info(f"backtest sweep #{run_id} complete")
     except Exception as e:  # never let the thread die silently
         # `batch` is deliberately dropped: those cells were never durable, and
         # progress is derived from what IS durable, so nothing over-reports.
-        _commit_batch(run_id, [], status="error", note=str(e))
+        _commit_batch(run_id, [], owner_id=owner_id, status="error", note=str(e))
         log.error(f"backtest sweep #{run_id} failed: {e}")
     finally:
         _running = False
 
 
 def _cell_values(provider, specs, intervals, capital, win, strategies,
-                 pinned, workers, *, owner_id: str = "owner"):
+                 pinned, workers, *, owner_id: str):
     """Yield one serialized result payload per cell, in request order.
 
     Serial by default and by reference: `workers <= 1` walks the cells in this
@@ -397,7 +398,7 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
                                         pinned=pinned)
             for strat in strategies:
                 yield _one(provider, inst, interval, capital, win, strat,
-                           prepared=prepared)
+                           prepared=prepared, owner_id=owner_id)
 
 
 # ── multiprocess fan-out (Task 6) ────────────────────────────────────────────
@@ -459,7 +460,7 @@ def _worker_task(payload: dict) -> list[dict]:
     out: list[dict] = []
     for cell in payload["cells"]:
         try:
-            owner_id = payload.get("owner_id", "owner")
+            owner_id = payload["owner_id"]
             try:
                 strat = resolve_strategy(cell["strategy_key"], owner_id=owner_id)
             except StrategyNotFound:
@@ -542,7 +543,7 @@ def _pinned_worker_task(payload: dict) -> dict:
 
 
 def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
-                  *, pinned_address: str = "", owner_id: str = "owner"):
+                  *, pinned_address: str = "", owner_id: str):
     """Split one dataset's cells into values this process already has and cells a
     worker must compute — keeping the ORDER the serial path would produce.
 
@@ -563,7 +564,7 @@ def _plan_dataset(provider, inst, interval, capital, win, strategies, prepared,
             continue
         phash = _execution_address(prepared, inst, interval, capital, win, strat,
                                    slippage_pct)
-        cached = _reusable_values(inst, interval, phash, prepared.last_ts)
+        cached = _reusable_values(inst, interval, phash, prepared.last_ts, owner_id=owner_id)
         if cached is not None:
             slots.append(("ready", cached))
             continue
@@ -616,7 +617,7 @@ def _drain(slots, future) -> list[dict]:
 
 
 def _parallel_cell_values(provider, specs, intervals, capital, win, strategies,
-                          pinned, workers, *, owner_id: str = "owner"):
+                          pinned, workers, *, owner_id: str):
     """Yield the same values as the serial path, in the same order, computed in
     `workers` processes.
 
@@ -894,8 +895,8 @@ def _pin_mismatch(stored, *, provider_identity, instrument_identity, interval,
     return ""
 
 
-def _one(provider, inst, interval, capital, win, strat=None,
-         *, prepared: _PreparedDataset | None = None) -> dict:
+def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
+         prepared: _PreparedDataset | None = None) -> dict:
     """Resolve one cell to a serialized result payload. Writes nothing.
 
     Returning values instead of writing them is what makes both Task 5 and Task 6
@@ -916,7 +917,7 @@ def _one(provider, inst, interval, capital, win, strat=None,
     slippage_pct = float(get_settings().backtest_slippage_pct)
     phash = _execution_address(prepared, inst, interval, capital, win, strat,
                                slippage_pct)
-    cached = _reusable_values(inst, interval, phash, prepared.last_ts)
+    cached = _reusable_values(inst, interval, phash, prepared.last_ts, owner_id=owner_id)
     if cached is not None:
         return cached
     return _compute_values(
@@ -948,7 +949,7 @@ def _execution_address(prepared, inst, interval, capital, win, strat,
         return ""
 
 
-def _reusable_values(inst, interval, phash: str, last_ts: int) -> dict | None:
+def _reusable_values(inst, interval, phash: str, last_ts: int, *, owner_id: str) -> dict | None:
     """The refresh-warm hit: an identical execution address already has a row.
 
     This is the ONLY database read in the per-cell path, and it stays in the
@@ -962,7 +963,7 @@ def _reusable_values(inst, interval, phash: str, last_ts: int) -> dict | None:
                               else NO_OPTIONS_PREMIUM_ERROR)
     with SessionLocal() as s:
         hit = cache.find_reusable(
-            s, inst.key, interval, phash, last_ts,
+            s, inst.key, interval, phash, last_ts, owner_id=owner_id,
             expected_premium_error=expected_premium_error)
         if hit is None:
             return None
@@ -1082,7 +1083,7 @@ def _result_values(inst, interval, m, trades, bars, error="",
 
 # ── persistence ──────────────────────────────────────────────────────────────
 
-def _durable_result_count(session, run_id) -> int:
+def _durable_result_count(session, run_id, *, owner_id: str) -> int:
     """How many result rows this run has, counted inside the caller's transaction.
 
     This — not a counter — is progress. An incrementing counter is written by a
@@ -1091,10 +1092,11 @@ def _durable_result_count(session, run_id) -> int:
     """
     return int(session.scalar(
         select(func.count()).select_from(BacktestResult)
-        .where(BacktestResult.run_id == run_id)) or 0)
+        .where(BacktestResult.owner_id == owner_id,
+               BacktestResult.run_id == run_id)) or 0)
 
 
-def _commit_batch(run_id, values: list[dict], *, status: str = "",
+def _commit_batch(run_id, values: list[dict], *, owner_id: str, status: str = "",
                   note: str = "") -> None:
     """Persist up to `BATCH_SIZE` results, their progress, and any terminal
     status as ONE transaction. It changes all of them or none of them."""
@@ -1102,12 +1104,11 @@ def _commit_batch(run_id, values: list[dict], *, status: str = "",
         raise RuntimeError(
             f"batch of {len(values)} exceeds BATCH_SIZE={BATCH_SIZE}")
     with SessionLocal() as s:
-        for v in values:
-            s.add(BacktestResult(run_id=run_id, **v))
+        repository.append_result_batch(s, owner_id=owner_id, run_id=run_id, values=values)
         s.flush()          # rows are visible to the count below, still uncommitted
-        run = s.get(BacktestRun, run_id)
+        run = repository.get_run(s, owner_id=owner_id, run_id=run_id)
         if run is not None:
-            run.done = _durable_result_count(s, run_id)
+            run.done = _durable_result_count(s, run_id, owner_id=owner_id)
             if status:
                 run.status = status
             if note:
@@ -1115,7 +1116,7 @@ def _commit_batch(run_id, values: list[dict], *, status: str = "",
         s.commit()
 
 
-def reconcile_stale_runs() -> int:
+def reconcile_stale_runs(*, owner_id: str) -> int:
     """Repair runs left `running` by a process that died mid-sweep.
 
     Nothing in-process is driving them: `_running` is a module global and does not
@@ -1128,10 +1129,10 @@ def reconcile_stale_runs() -> int:
         return 0
     repaired = 0
     with SessionLocal() as s:
-        for run in s.scalars(select(BacktestRun)
-                             .where(BacktestRun.status == "running")):
+        for run in s.scalars(select(BacktestRun).where(
+                BacktestRun.owner_id == owner_id, BacktestRun.status == "running")):
             run.status = "error"
-            run.done = _durable_result_count(s, run.id)
+            run.done = _durable_result_count(s, run.id, owner_id=owner_id)
             run.note = ("interrupted: the process ended before this sweep "
                         "finished; progress reset to its durable results")
             repaired += 1

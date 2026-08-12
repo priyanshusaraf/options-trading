@@ -30,7 +30,7 @@ from app.db.models import BacktestResult
 #     SHA-256 addresses replace the old timestamp-plus-truncated-params key.
 SCHEMA_VERSION = 8
 
-RUN_LOCAL_FIELDS = frozenset({"id", "run_id", "from_cache"})
+RUN_LOCAL_FIELDS = frozenset({"id", "owner_id", "run_id", "from_cache"})
 CACHED_RESULT_FIELDS = tuple(
     column.name for column in BacktestResult.__table__.columns
     if column.name not in RUN_LOCAL_FIELDS
@@ -80,13 +80,15 @@ def params_signature(capital: float, *, ema_length: int = 50, z_length: int = 50
 
 
 def find_reusable(session, key: str, interval: str, params_hash: str,
-                  last_candle_ts: int, *, expected_premium_error: str = "") \
+                  last_candle_ts: int, *, owner_id: str,
+                  expected_premium_error: str = "") \
         -> BacktestResult | None:
     """Most recent successful result with an identical content key, or None."""
     if last_candle_ts <= 0:
         return None
     q = (select(BacktestResult)
-         .where(BacktestResult.instrument_key == key,
+         .where(BacktestResult.owner_id == owner_id,
+                BacktestResult.instrument_key == key,
                 BacktestResult.interval == interval,
                 BacktestResult.params_hash == params_hash,
                 BacktestResult.last_candle_ts == last_candle_ts,

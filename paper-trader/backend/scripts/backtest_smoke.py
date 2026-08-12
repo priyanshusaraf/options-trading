@@ -19,7 +19,7 @@ os.environ.setdefault("PT_DB_PATH", "backtest_smoke.db")
 from sqlalchemy import select  # noqa: E402
 
 from app.backtest.sweep import start_sweep  # noqa: E402
-from app.db.models import BacktestResult, BacktestRun  # noqa: E402
+from app.db.models import BacktestResult, BacktestRun, LEGACY_OWNER_ID  # noqa: E402
 from app.db.session import SessionLocal, init_db  # noqa: E402
 
 
@@ -30,14 +30,17 @@ def main() -> int:
     # poll until the background thread finishes
     for _ in range(120):
         with SessionLocal() as s:
-            run = s.get(BacktestRun, run_id)
+            run = s.scalar(select(BacktestRun).where(BacktestRun.owner_id == LEGACY_OWNER_ID,
+                                                     BacktestRun.id == run_id))
             if run and run.status != "running":
                 break
         time.sleep(0.25)
 
     with SessionLocal() as s:
-        run = s.get(BacktestRun, run_id)
-        results = list(s.scalars(select(BacktestResult).where(BacktestResult.run_id == run_id)))
+        run = s.scalar(select(BacktestRun).where(BacktestRun.owner_id == LEGACY_OWNER_ID,
+                                                 BacktestRun.id == run_id))
+        results = list(s.scalars(select(BacktestResult).where(
+            BacktestResult.owner_id == LEGACY_OWNER_ID, BacktestResult.run_id == run_id)))
 
     ok = run.status == "done" and run.done == run.total and len(results) == run.total
     print("=" * 60)

@@ -855,7 +855,16 @@ class GeneratedStrategyRow(Base):
 
 class BacktestRun(Base):
     __tablename__ = "backtest_runs"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_backtest_runs_owner_id"),
+        Index("ix_backtest_runs_owner_created", "owner_id", "created_at"),
+        Index("ix_backtest_runs_owner_status", "owner_id", "status"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False, default=LEGACY_OWNER_ID, server_default=LEGACY_OWNER_ID,
+        index=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
     status: Mapped[str] = mapped_column(String(16), default="running")  # running|done|error
     scope: Mapped[str] = mapped_column(String(16), default="liquid")    # liquid|full
@@ -885,7 +894,19 @@ class BacktestRun(Base):
 class BacktestResult(Base):
     """One (instrument × interval) backtest result. Cached so reruns are instant."""
     __tablename__ = "backtest_results"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "id", name="uq_backtest_results_owner_id"),
+        ForeignKeyConstraint(("owner_id", "run_id"),
+                             ("backtest_runs.owner_id", "backtest_runs.id"),
+                             ondelete="RESTRICT", name="fk_backtest_results_owner_run"),
+        Index("ix_backtest_results_owner_run", "owner_id", "run_id"),
+        Index("ix_backtest_results_owner_cache", "owner_id", "params_hash", "last_candle_ts"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"),
+        nullable=False, default=LEGACY_OWNER_ID, server_default=LEGACY_OWNER_ID,
+        index=True)
     run_id: Mapped[int] = mapped_column(Integer, index=True)
     instrument_key: Mapped[str] = mapped_column(String(48), index=True)
     name: Mapped[str] = mapped_column(String(64), default="")
