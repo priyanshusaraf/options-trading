@@ -39,12 +39,13 @@
 - Fix round 2: catalog validation now requires `pg_get_expr(tgqual, tgrelid) IS NULL`; the live regression first proves the conditional trigger permits an UPDATE, then proves startup refuses it.
 - Retained final review-fix evidence: live PostgreSQL 16 focused schema/profile gate `38 passed, 13 skipped` across 51 collected tests. Affected SQLite/live concurrency gate `238 passed, 13 skipped` across 251 collected tests. Startup/guard/nightly gate `37 passed`. Changed modules compile and `git diff --check` passes.
 - Final re-review: SPEC PASS / QUALITY PASS. Fresh focused live PostgreSQL gate exited 0 with 38 passed and 13 deliberate skips.
+- Commit: `b5c71c1 feat(db): add PostgreSQL private planes`.
 - No broad suite was attempted for Task 3. See `task-3-report.md`.
 
 ## Remaining tasks
 
-- Task 3: PostgreSQL research and ledger planes — complete; commit subject `feat(db): add PostgreSQL private planes`.
-- Task 4: verified SQLite-to-PostgreSQL copy and cutover.
+- Task 3: PostgreSQL research and ledger planes — complete at `b5c71c1`.
+- Task 4: verified SQLite-to-PostgreSQL copy and cutover — in progress from `b5c71c1`.
 - Task 5: account leases, fencing, and replicated API ownership.
 - Task 6: shared event delivery and transactional outbox.
 - Task 7: backup/restore, failure recovery, and production concurrency/load proof.
