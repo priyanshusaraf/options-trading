@@ -137,6 +137,187 @@ def _empty_review_source() -> dict:
     }
 
 
+def _owned_review_rows(owner_id: str) -> dict[str, tuple[tuple[object, ...], ...]]:
+    """All persisted columns make a foreign-row mutation visible to the test."""
+    with SessionLocal() as session:
+        return {
+            table: tuple(session.execute(text(
+                f"SELECT * FROM {table} WHERE owner_id=:owner_id ORDER BY 1,2"
+            ), {"owner_id": owner_id}).all())
+            for table in (
+                "project_review_notes", "project_review_saved_views", "project_review_snapshots",
+            )
+        }
+
+
+def test_explicit_shared_review_ids_exercise_real_repositories_without_cross_owner_changes() -> None:
+    """Removing the owner key would merge same-ID rows or mutate the other tenant's bytes."""
+    project_a = store.create_project("Explicit review A", owner_id="owner.a")
+    project_b = store.create_project("Explicit review B", owner_id="owner.b")
+    now = dt.datetime(2026, 8, 12, 10, 0, 0)
+    note_id = "note.explicit.shared"
+    view_id = "view.explicit.shared"
+    snapshot_id = "snapshot.explicit.shared"
+    capture_key = "00000000-0000-4000-8000-000000000009"
+    filters = {
+        "after": None, "before": None, "event_type": None, "limit": 25, "status": None,
+    }
+    with SessionLocal.begin() as session:
+        for owner_id, project, body in (
+            ("owner.a", project_a, "Owner A exact note"),
+            ("owner.b", project_b, "Owner B exact note"),
+        ):
+            manifest = build_snapshot_manifest(project.project_id, _empty_review_source(), [])
+            session.add_all((
+                ProjectReviewNote(
+                    owner_id=owner_id, note_id=note_id, project_id=project.project_id,
+                    event_id="run:shared", event_type="experiment_run", body=body,
+                    created_by="owner", revision=0, deleted_at=None,
+                    created_at=now, updated_at=now,
+                ),
+                ProjectReviewSavedView(
+                    owner_id=owner_id, view_id=view_id, project_id=project.project_id,
+                    name="Shared explicit view", filters_json=canonical_json(filters),
+                    created_by="owner", revision=0, deleted_at=None,
+                    created_at=now, updated_at=now,
+                ),
+                ProjectReviewSnapshot(
+                    owner_id=owner_id, snapshot_id=snapshot_id, project_id=project.project_id,
+                    label="Shared explicit snapshot", capture_key=capture_key,
+                    manifest_json=canonical_json(manifest.manifest),
+                    content_address=manifest.content_address, created_by="owner",
+                    capture_started_at=now, capture_completed_at=now,
+                ),
+            ))
+
+    for owner_id, project, body in (
+        ("owner.a", project_a, "Owner A exact note"),
+        ("owner.b", project_b, "Owner B exact note"),
+    ):
+        assert review_state.list_notes(project.project_id, owner_id=owner_id)[0].body == body
+        assert review_state.list_saved_views(project.project_id, owner_id=owner_id)[0].view_id == view_id
+        assert tuple(snapshot.snapshot_id for snapshot in review_snapshot_store.list_snapshots(
+            project.project_id, owner_id=owner_id,
+        )) == (snapshot_id,)
+        loaded = review_snapshot_store.get_snapshot(
+            project.project_id, snapshot_id, owner_id=owner_id,
+        )
+        assert loaded.snapshot_id == snapshot_id
+        assert review_snapshot_store.capture_snapshot(
+            project.project_id, owner_id=owner_id, label=loaded.label,
+            capture_key=capture_key, created_by="owner",
+            source_loader=lambda _project: pytest.fail("an idempotent retry must not load sources"),
+        ) == loaded
+
+    owner_b_before = _owned_review_rows("owner.b")
+    updated_a_note = review_state.update_note(
+        project_a.project_id, note_id, owner_id="owner.a", base_revision=0,
+        body="Owner A changed only its row",
+    )
+    updated_a_view = review_state.update_saved_view(
+        project_a.project_id, view_id, owner_id="owner.a", base_revision=0,
+        name="Owner A changed view", filters={"limit": 50},
+    )
+    assert (updated_a_note.revision, updated_a_view.revision) == (1, 1)
+    assert _owned_review_rows("owner.b") == owner_b_before
+    review_state.delete_note(
+        project_a.project_id, note_id, owner_id="owner.a", base_revision=1,
+    )
+    review_state.delete_saved_view(
+        project_a.project_id, view_id, owner_id="owner.a", base_revision=1,
+    )
+    owner_a_after_delete = _owned_review_rows("owner.a")
+    assert review_state.list_notes(project_a.project_id, owner_id="owner.a") == ()
+    assert review_state.list_saved_views(project_a.project_id, owner_id="owner.a") == ()
+
+    updated_b_note = review_state.update_note(
+        project_b.project_id, note_id, owner_id="owner.b", base_revision=0,
+        body="Owner B changed only its row",
+    )
+    updated_b_view = review_state.update_saved_view(
+        project_b.project_id, view_id, owner_id="owner.b", base_revision=0,
+        name="Owner B changed view", filters={"limit": 50},
+    )
+    assert (updated_b_note.revision, updated_b_view.revision) == (1, 1)
+    assert _owned_review_rows("owner.a") == owner_a_after_delete
+    review_state.delete_note(
+        project_b.project_id, note_id, owner_id="owner.b", base_revision=1,
+    )
+    review_state.delete_saved_view(
+        project_b.project_id, view_id, owner_id="owner.b", base_revision=1,
+    )
+    assert review_state.list_notes(project_b.project_id, owner_id="owner.b") == ()
+    assert review_state.list_saved_views(project_b.project_id, owner_id="owner.b") == ()
+
+
+def test_review_repository_foreign_misses_match_absence_without_mutating_any_row() -> None:
+    """Guessed cross-tenant IDs must not reveal a revision, payload, time, or conflict."""
+    project_a = store.create_project("Repository owner A", owner_id="owner.a")
+    project_b = store.create_project("Repository owner B", owner_id="owner.b")
+    note_a = review_state.create_note(
+        project_a.project_id, owner_id="owner.a", event_id="run:a",
+        event_type="experiment_run", body="Owner A private note", created_by="owner",
+    )
+    view_a = review_state.create_saved_view(
+        project_a.project_id, owner_id="owner.a", name="Owner A private view",
+        filters={"limit": 25}, created_by="owner",
+    )
+    capture_key = "00000000-0000-4000-8000-000000000010"
+    snapshot_a = review_snapshot_store.capture_snapshot(
+        project_a.project_id, owner_id="owner.a", label="Owner A private snapshot",
+        capture_key=capture_key, created_by="owner",
+        source_loader=lambda _project: _empty_review_source(),
+    )
+    owner_a_before = _owned_review_rows("owner.a")
+    owner_b_before = _owned_review_rows("owner.b")
+
+    def state_miss(action):
+        with pytest.raises(review_state.ReviewStateNotFound) as caught:
+            action()
+        return type(caught.value), caught.value.args
+
+    assert state_miss(lambda: review_state.delete_note(
+        project_b.project_id, note_a.note_id, owner_id="owner.b", base_revision=0,
+    )) == state_miss(lambda: review_state.delete_note(
+        project_b.project_id, "note.absent", owner_id="owner.b", base_revision=0,
+    ))
+    assert state_miss(lambda: review_state.update_saved_view(
+        project_b.project_id, view_a.view_id, owner_id="owner.b", base_revision=0,
+        name="No foreign revision", filters={"limit": 25},
+    )) == state_miss(lambda: review_state.update_saved_view(
+        project_b.project_id, "view.absent", owner_id="owner.b", base_revision=0,
+        name="No absent revision", filters={"limit": 25},
+    ))
+    assert state_miss(lambda: review_state.delete_saved_view(
+        project_b.project_id, view_a.view_id, owner_id="owner.b", base_revision=0,
+    )) == state_miss(lambda: review_state.delete_saved_view(
+        project_b.project_id, "view.absent", owner_id="owner.b", base_revision=0,
+    ))
+
+    def snapshot_miss(snapshot_id: str):
+        with pytest.raises(review_snapshot_store.SnapshotNotFound) as caught:
+            review_snapshot_store.get_snapshot(
+                project_b.project_id, snapshot_id, owner_id="owner.b",
+            )
+        return type(caught.value), caught.value.args
+
+    assert snapshot_miss(snapshot_a.snapshot_id) == snapshot_miss("snapshot.absent")
+
+    def project_miss(project_id: str, label: str):
+        with pytest.raises(store.ProjectNotFound) as caught:
+            review_snapshot_store.capture_snapshot(
+                project_id, owner_id="owner.b", label=label, capture_key=capture_key,
+                created_by="owner",
+                source_loader=lambda _project: pytest.fail("a rejected owner must not load sources"),
+            )
+        return type(caught.value), caught.value.args
+
+    assert project_miss(project_a.project_id, snapshot_a.label)[0] is store.ProjectNotFound
+    assert project_miss("project.absent", "Different potential conflict")[0] is store.ProjectNotFound
+    assert _owned_review_rows("owner.a") == owner_a_before
+    assert _owned_review_rows("owner.b") == owner_b_before
+
+
 def test_review_repositories_isolate_two_owners_with_shared_view_name_and_capture_key() -> None:
     """Tenant-local review identities never disclose or mutate the other owner's rows."""
     project_a = store.create_project("Review A", owner_id="owner.a")

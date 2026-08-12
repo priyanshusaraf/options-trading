@@ -551,6 +551,31 @@ def test_revision_0022_rebuild_failures_restore_foreign_key_mode_in_both_directi
     assert migrate.schema_version(engine) == start
 
 
+@pytest.mark.parametrize(("direction", "start", "target"), (
+    ("upgrade", "0021", "0022"),
+    ("downgrade", "0022", "0021"),
+))
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0022_successful_rebuild_preserves_foreign_key_mode_in_both_directions(
+    tmp_path, direction, start, target, foreign_keys,
+):
+    """A successful rebuild must return the caller's FK setting, not only failures."""
+    engine = _at_revision_0020(tmp_path, f"0022-{direction}-success-fk-{foreign_keys}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), start)
+        raw = connection.connection.driver_connection
+        raw.commit()
+        raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    with engine.begin() as connection:
+        if direction == "upgrade":
+            command.upgrade(migrate.alembic_config(connection), target)
+        else:
+            command.downgrade(migrate.alembic_config(connection), target)
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+    assert migrate.schema_version(engine) == target
+
+
 def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
     engine = _build_from_baseline(tmp_path)
     schema = _schema(engine)
