@@ -145,7 +145,7 @@ class PaperBroker:
         # Initial SL/TP honor live Settings overrides (runtime_config). The runner
         # passes its already-resolved snapshot; other callers (manual_open, tests)
         # fall back to the effective merge so an override is never silently ignored.
-        p = params if params is not None else effective(self.settings)
+        p = params if params is not None else effective(self.settings, owner_id=self.owner_id)
         stop_loss_pct = p.get("stop_loss_pct", self.settings.stop_loss_pct)
         target_pct = p.get("target_pct", self.settings.target_pct)
 
@@ -209,7 +209,7 @@ class PaperBroker:
         so a later flag toggle can never reshape this position; omitted (the legacy shape)
         falls back to the global intraday_stop_loss_pct/intraday_target_pct and leaves the
         columns NULL. Charges use the intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
-        p = params if params is not None else effective(self.settings)
+        p = params if params is not None else effective(self.settings, owner_id=self.owner_id)
         leverage = p.get("intraday_leverage", 2.5) or 2.5
         eff_sl_pct = sl_pct if sl_pct is not None else p.get("intraday_stop_loss_pct", 0.01)
         eff_tp_pct = tp_pct if tp_pct is not None else p.get("intraday_target_pct", 0.02)
@@ -409,7 +409,7 @@ class PaperBroker:
         if margin is None or margin <= 0:
             raise ValueError("open_futures_position requires a positive margin: "
                              "SPAN is instrument-specific and must never be guessed")
-        p = params if params is not None else effective(self.settings)
+        p = params if params is not None else effective(self.settings, owner_id=self.owner_id)
         sl_pct = p.get("index_futures_stop_loss_pct",
                        self.settings.index_futures_stop_loss_pct)
         tp_pct = p.get("index_futures_target_pct",

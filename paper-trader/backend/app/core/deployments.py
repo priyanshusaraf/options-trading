@@ -142,6 +142,11 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     if get_by_name(session, name, owner_id=owner_id,
                    broker_account_id=broker_account_id) is not None:
         raise ValueError(f"a deployment named {name!r} already exists")
+    if watchlist_id is not None:
+        from app.db.models import Watchlist
+        if session.scalar(select(Watchlist.id).where(
+                Watchlist.owner_id == owner_id, Watchlist.id == watchlist_id)) is None:
+            raise ValueError(f"no watchlist with id {watchlist_id}")
     row = Deployment(
         owner_id=owner_id, broker_account_id=broker_account_id,
         name=name, strategy_key=strategy_key, strategy_version=strategy_version,
@@ -247,7 +252,7 @@ def resolve_deployment_strategy(session, deployment_id: int, *, owner_id: str,
         raise ValueError(f"no deployment with id {deployment_id}")
     if row.strategy_key is None:
         return None
-    return resolve_strategy(row.strategy_key)          # raises StrategyNotFound
+    return resolve_strategy(row.strategy_key, owner_id=owner_id)  # raises StrategyNotFound
 
 
 def deployment_strategy_version(session, deployment_id: int, *, owner_id: str,

@@ -11,6 +11,21 @@ from app.core import watchlists as wl
 from app.core.deploy_bridge import DeployRequest, deploy, preview_deploy
 from app.db.models import Watchlist
 from app.db.session import SessionLocal, init_db
+from tests.legacy_money_scope import LegacyUserScope
+
+arch = LegacyUserScope(arch, "get", "record_strategy", "set_status", "by_status", "list_archive")
+wl = LegacyUserScope(wl, "create_watchlist", "get_watchlist", "assign_instrument",
+                     "unassign_instrument", "watchlist_of", "effective_strategy_map",
+                     "membership_map", "in_watchlist_keys", "write_research_snapshot",
+                     "list_watchlists", "apply_resolution")
+
+_deploy, _preview_deploy = deploy, preview_deploy
+def deploy(*args, **kwargs):
+    kwargs.setdefault("owner_id", "owner")
+    return _deploy(*args, **kwargs)
+def preview_deploy(*args, **kwargs):
+    kwargs.setdefault("owner_id", "owner")
+    return _preview_deploy(*args, **kwargs)
 
 
 def _fresh():

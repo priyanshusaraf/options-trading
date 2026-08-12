@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
             from app.core.generated_strategies import register_all
             from app.db.session import SessionLocal
             with SessionLocal() as s:
-                register_all(s)
+                register_all(s, owner_id="owner")
         except Exception as e:
             log.error(f"generated-strategy registration failed at startup: {e}")
     else:

@@ -25,6 +25,6 @@ def test_overtrade_thresholds_overridable_and_bounded():
     assert {"overtrade_today_threshold", "overtrade_rolling_threshold",
             "overtrade_rolling_days"} <= keys
     c.post("/api/settings", json={"key": "overtrade_today_threshold", "value": "3"})
-    assert runtime_config.effective()["overtrade_today_threshold"] == 3
+    assert runtime_config.effective(owner_id="owner")["overtrade_today_threshold"] == 3
     bad = c.post("/api/settings", json={"key": "overtrade_rolling_days", "value": "999"}).json()
     assert "error" in bad   # rolling_days capped at 90

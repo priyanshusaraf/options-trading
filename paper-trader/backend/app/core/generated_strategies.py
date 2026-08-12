@@ -31,7 +31,7 @@ from app.db.models import GeneratedStrategyRow
 from app.strategy.identity import composition_code, content_hash
 
 
-def save_generated(session, key: str, composition_json: str, source: str = ""):
+def save_generated(session, key: str, composition_json: str, *, owner_id: str, source: str = ""):
     """Upsert a generated strategy's composition. Idempotent on re-deploy.
 
     The content `version` is recorded on every write (Phase D). `key` is still the
@@ -50,9 +50,9 @@ def save_generated(session, key: str, composition_json: str, source: str = ""):
         # unidentifiable rather than failing the write, matching build_sha's
         # 'unknown' sentinel (distinct from NULL, which means "predates the column").
         version = "unknown"
-    row = session.get(GeneratedStrategyRow, key)
+    row = session.get(GeneratedStrategyRow, (owner_id, key))
     if row is None:
-        row = GeneratedStrategyRow(key=key, composition_json=composition_json,
+        row = GeneratedStrategyRow(owner_id=owner_id, key=key, composition_json=composition_json,
                                    source=source, version=version)
         session.add(row)
     else:
@@ -93,11 +93,11 @@ def generated_version(composition, default_params=None, risk_model=None) -> str:
                         risk_model=risk_model)
 
 
-def list_generated(session) -> list:
-    return session.query(GeneratedStrategyRow).all()
+def list_generated(session, *, owner_id: str) -> list:
+    return session.query(GeneratedStrategyRow).filter_by(owner_id=owner_id).all()
 
 
-def register_all(session) -> int:
+def register_all(session, *, owner_id: str) -> int:
     """Rebuild + register every persisted generated strategy. Returns the count
     registered. Never raises: a bad row is logged and skipped."""
     # imported lazily so the execution import graph doesn't pull the builder unless a
@@ -107,7 +107,7 @@ def register_all(session) -> int:
     from app.strategy import registry
 
     count = 0
-    for row in list_generated(session):
+    for row in list_generated(session, owner_id=owner_id):
         try:
             comp = Composition.from_dict(json.loads(row.composition_json))
             strat = build_strategy(comp)
@@ -117,7 +117,7 @@ def register_all(session) -> int:
             strat.pin_version(generated_version(
                 comp, default_params=getattr(strat, "default_params", None),
                 risk_model=getattr(strat, "risk_model", None)))
-            registry.register(strat)
+            registry.register(strat, owner_id=owner_id)
             count += 1
         except Exception as e:  # corrupt/incompatible row — skip, don't crash startup
             log.warn(f"generated strategy {row.key!r} failed to load, skipping: {e}")

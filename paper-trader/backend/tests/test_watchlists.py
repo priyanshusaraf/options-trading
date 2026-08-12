@@ -6,6 +6,12 @@ with no watchlists, today's per-instrument strategy resolution is unchanged.
 from app.core import watchlists as wl
 from app.db.models import InstrumentState, WatchlistMembership
 from app.db.session import SessionLocal, init_db
+from tests.legacy_money_scope import LegacyUserScope
+
+wl = LegacyUserScope(wl, "create_watchlist", "get_watchlist", "assign_instrument",
+                     "unassign_instrument", "watchlist_of", "effective_strategy_map",
+                     "membership_map", "in_watchlist_keys", "write_research_snapshot",
+                     "list_watchlists", "apply_resolution")
 
 
 def _fresh():

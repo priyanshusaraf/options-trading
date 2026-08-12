@@ -142,6 +142,7 @@ class ExecutionBinding:
     #: decision is auditable, and **never trusted** — the gate recomputes it. Defaulted
     #: so a hand-built binding that omits it is refused rather than accidentally allowed.
     execution_mode: str = ""
+    owner_id: str | None = None
 
 
 def source_of(strategy_key: str | None) -> str:
@@ -155,7 +156,7 @@ def source_of(strategy_key: str | None) -> str:
 def strategy_for(binding: ExecutionBinding):
     """The `Strategy` object a binding names. Fail-closed — the binding already resolved
     once, so anything unresolvable here is drift, not a config problem."""
-    return resolve_strategy(binding.strategy_key)
+    return resolve_strategy(binding.strategy_key, owner_id=binding.owner_id)
 
 
 def strategy_for_execution(binding: ExecutionBinding):
@@ -176,7 +177,7 @@ def strategy_for_execution(binding: ExecutionBinding):
             or (actual, mode, binding.authority) not in GRANTS \
             or binding.authority != AUTHORITATIVE:
         raise AuthorityNotGranted(binding.strategy_key, actual)
-    strategy = resolve_strategy(binding.strategy_key)
+    strategy = resolve_strategy(binding.strategy_key, owner_id=binding.owner_id)
     if actual == SOURCE_IR_GRAPH:
         _require_paper_authority(binding, strategy, mode)
     return strategy
@@ -230,7 +231,7 @@ def assert_may_execute(strategy_key: str | None) -> None:
 
 
 def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
-              enforce_authority=True) -> ExecutionBinding:
+              enforce_authority=True, owner_id: str | None = None) -> ExecutionBinding:
     source = source_of(strategy.key)
     authority = AUTHORITY_BY_SOURCE.get(source, SHADOW)
     if enforce_authority and authority != AUTHORITATIVE:
@@ -239,11 +240,11 @@ def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
         deployment_id=deployment_id, instrument_key=instrument_key,
         strategy_key=strategy.key, strategy_version=strategy.version, source=source,
         authority=authority, origin=origin, reason=reason,
-        execution_mode=configured_execution_mode())
+        execution_mode=configured_execution_mode(), owner_id=owner_id)
 
 
 def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
-         assigned_key: str | None, paper_authority=None) -> ExecutionBinding:
+         assigned_key: str | None, paper_authority=None, owner_id: str | None = None) -> ExecutionBinding:
     """The decision, with the reads already done — what executes, and on whose say-so.
 
     Split out from `resolve_binding` because the engine resolves a strategy per instrument
@@ -267,8 +268,8 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
                          strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
                          reason=(f"deployment {deployment_id} pins "
                                  f"{deployment_pin.key!r}, which overrides any "
-                                 f"per-instrument assignment"))
-    return _bind_assigned(deployment_id, instrument_key, assigned_key)
+                                 f"per-instrument assignment"), owner_id=owner_id)
+    return _bind_assigned(deployment_id, instrument_key, assigned_key, owner_id=owner_id)
 
 
 def _describe_paper_authority(deployment_id, instrument_key,
@@ -316,18 +317,19 @@ def resolve_binding(session, *, deployment_id: int, instrument_key: str,
                 deployment_pin=resolve_deployment_strategy(
                     session, deployment_id, owner_id=owner_id,
                     broker_account_id=broker_account_id),
-                assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id))
+                assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id),
+                owner_id=owner_id)
 
 
-def _bind_assigned(deployment_id, instrument_key, assigned) -> ExecutionBinding:
+def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | None = None) -> ExecutionBinding:
     if not assigned:
         return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                          strategy=resolve_strategy(DEFAULT_STRATEGY_KEY),
                          origin=ORIGIN_DEFAULT,
                          reason=(f"no deployment pin and no instrument assignment for "
-                                 f"{instrument_key}; the platform default applies"))
+                                 f"{instrument_key}; the platform default applies"), owner_id=owner_id)
     try:
-        strategy = resolve_strategy(assigned)
+        strategy = resolve_strategy(assigned, owner_id=owner_id)
     except StrategyNotFound:
         if source_of(assigned) == SOURCE_IR_GRAPH:
             # A graph-backed key never falls back: it would trade one logic while the
@@ -338,10 +340,10 @@ def _bind_assigned(deployment_id, instrument_key, assigned) -> ExecutionBinding:
                          strategy=strategy, origin=ORIGIN_FALLBACK,
                          reason=(f"instrument {instrument_key} is assigned {assigned!r}, "
                                  f"which is not registered; the legacy path substitutes "
-                                 f"{strategy.key!r} so one stale row cannot stop the book"))
+                                 f"{strategy.key!r} so one stale row cannot stop the book"), owner_id=owner_id)
     return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                      strategy=strategy, origin=ORIGIN_INSTRUMENT,
-                     reason=f"instrument {instrument_key} is assigned {strategy.key!r}")
+                     reason=f"instrument {instrument_key} is assigned {strategy.key!r}", owner_id=owner_id)
 
 
 def resolve_shadow_binding(strategy_key: str,

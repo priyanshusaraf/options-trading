@@ -558,7 +558,7 @@ def test_option_setting_selects_limit_without_an_explicit_runner_plan():
     chain = b.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    params = {**effective(b.settings), "entry_order_mode": "LIMIT"}
+    params = {**effective(b.settings, owner_id="owner"), "entry_order_mode": "LIMIT"}
 
     pos = b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot,
                           params=params)

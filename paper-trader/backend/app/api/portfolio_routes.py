@@ -92,7 +92,7 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn,
         source="research", interval=cand.get("interval"))
     with SessionLocal() as s:
         if body.dry_run:
-            prev = preview_deploy(s, req)
+            prev = preview_deploy(s, req, owner_id=owner_id_for(principal))
             return {"dry_run": True, "candidate_id": candidate_id,
                     "watchlist": prev.watchlist_name, "strategy_key": prev.strategy_key,
                     "accepted": prev.accepted, "rejected": prev.rejected}
@@ -109,19 +109,19 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn,
 
 
 @router.get("/api/portfolio/watchlists")
-def get_watchlists():
+def get_watchlists(principal: Principal = Depends(get_principal)):
     with SessionLocal() as s:
-        return {"watchlists": wl.list_watchlists(s)}
+        return {"watchlists": wl.list_watchlists(s, owner_id=owner_id_for(principal))}
 
 
 @router.get("/api/portfolio/archive")
-def get_archive():
+def get_archive(principal: Principal = Depends(get_principal)):
     with SessionLocal() as s:
-        return {"strategies": arch.list_archive(s)}
+        return {"strategies": arch.list_archive(s, owner_id=owner_id_for(principal))}
 
 
 @router.post("/api/portfolio/deploy")
-def portfolio_deploy(body: DeployIn):
+def portfolio_deploy(body: DeployIn, principal: Principal = Depends(get_principal)):
     """Preview (dry_run) or commit a deploy. On commit the assignment is STAGED — it
     loads on the next engine restart, then the owner ARMs."""
     req = DeployRequest(
@@ -130,11 +130,11 @@ def portfolio_deploy(body: DeployIn):
         source=body.source, interval=body.interval)
     with SessionLocal() as s:
         if body.dry_run:
-            prev = preview_deploy(s, req)
+            prev = preview_deploy(s, req, owner_id=owner_id_for(principal))
             return {"dry_run": True, "watchlist": prev.watchlist_name,
                     "strategy_key": prev.strategy_key, "accepted": prev.accepted,
                     "rejected": prev.rejected}
-        res = deploy(s, req)
+        res = deploy(s, req, owner_id=owner_id_for(principal))
         s.commit()
         return {"dry_run": False, "watchlist_id": res.watchlist_id,
                 "assigned": res.assigned, "rejected": res.rejected,
@@ -142,11 +142,11 @@ def portfolio_deploy(body: DeployIn):
 
 
 @router.post("/api/portfolio/watchlists/{name}/status")
-def set_watchlist_status(name: str, body: StatusIn):
+def set_watchlist_status(name: str, body: StatusIn, principal: Principal = Depends(get_principal)):
     if body.status not in ("active", "paused", "archived"):
         return {"error": f"bad status {body.status!r}"}
     with SessionLocal() as s:
-        w = wl.get_watchlist(s, name)
+        w = wl.get_watchlist(s, name, owner_id=owner_id_for(principal))
         if w is None:
             return {"error": f"no watchlist named {name!r}"}
         w.status = body.status
@@ -155,11 +155,11 @@ def set_watchlist_status(name: str, body: StatusIn):
 
 
 @router.post("/api/portfolio/archive/{strategy_key}/status")
-def set_archive_status(strategy_key: str, body: StatusIn):
+def set_archive_status(strategy_key: str, body: StatusIn, principal: Principal = Depends(get_principal)):
     """Move a strategy through its lifecycle (probation / on_hold / retired / revive)."""
     with SessionLocal() as s:
         try:
-            rec = arch.set_status(s, strategy_key, body.status)
+            rec = arch.set_status(s, strategy_key, body.status, owner_id=owner_id_for(principal))
             s.commit()
             return rec.to_dict()
         except ValueError as e:

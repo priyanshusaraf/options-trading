@@ -121,7 +121,6 @@ TABLE_PLANES: dict[str, Plane] = {
 #: Removing an entry when its FK is converted is the intended direction. Adding one requires
 #: saying why in the ADR.
 GRANDFATHERED_CROSS_PLANE_FKS: frozenset[tuple[str, str]] = frozenset({
-    ("deployments", "watchlist_id"),
     ("ir_paper_deployments", "graph_version"),
     ("ir_paper_deployments", "graph_identifier"),
     ("ir_paper_deployments", "project_id"),

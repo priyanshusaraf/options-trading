@@ -101,7 +101,8 @@ _INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 6
 
 
 class EngineRunner:
-    def __init__(self, *, owner_id: str, broker_account_id: str) -> None:
+    def __init__(self, *, owner_id: str, broker_account_id: str,
+                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
         self.settings = get_settings()
         self.provider = get_provider()
         self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
@@ -110,7 +111,7 @@ class EngineRunner:
         # already carries and nothing changes. It is an attribute rather than a
         # literal because the whole point of Phase B is that "which book" becomes a
         # parameter of execution instead of an assumption baked into every query.
-        self.deployment_id = LEGACY_DEPLOYMENT_ID
+        self.deployment_id = deployment_id
         self.owner_id = owner_id
         self.broker_account_id = broker_account_id
         # Disarm every deployment on process start — the same invariant the global
@@ -331,7 +332,7 @@ class EngineRunner:
                     overtrade[r.instrument_key] = True
             # An active watchlist's strategy overrides the per-instrument default for
             # its members. Empty when no watchlists exist -> resolution unchanged.
-            strategies.update(effective_strategy_map(s))
+            strategies.update(effective_strategy_map(s, owner_id=self.owner_id))
         return products, strategies, priority, overtrade
 
     # ── strategy selection: one path, through the binding contract ────────
@@ -367,7 +368,7 @@ class EngineRunner:
             deployment_id=self.deployment_id, instrument_key=key,
             deployment_pin=self._deployment_pin,
             assigned_key=self.strategy_keys.get(key),
-            paper_authority=self.paper_authority.get(key))
+            paper_authority=self.paper_authority.get(key), owner_id=self.owner_id)
 
     def _execution_for(self, key: str):
         """The binding and the `Strategy` it authorises, together.

@@ -81,9 +81,9 @@ def test_no_take_profit_refused_when_trailing_off():
     from app.core import runtime_config
     c, r = _client()
     c.post("/api/positions/manual-open", json={"key": "NIFTY", "direction": "LONG"})
-    runtime_config.set_override("trail_enabled", False)
+    runtime_config.set_override("trail_enabled", False, owner_id="owner")
     r.refresh_params()
     res = c.post("/api/positions/NIFTY/no-take-profit", json={"enabled": True}).json()
     assert "error" in res and "trailing" in res["error"].lower()
     assert r.broker.position_for("NIFTY").no_take_profit is False
-    runtime_config.clear_override("trail_enabled")
+    runtime_config.clear_override("trail_enabled", owner_id="owner")

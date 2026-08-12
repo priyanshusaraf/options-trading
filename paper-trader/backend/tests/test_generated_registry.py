@@ -8,6 +8,7 @@ import json
 import datetime as dt
 
 import pandas as pd
+import pytest
 
 from app.core import generated_strategies as gs
 from app.db.session import SessionLocal, init_db
@@ -32,19 +33,19 @@ def _df(n=120):
 def _cleanup():
     # keep the process-global registry from leaking the test strategy into other tests
     from app.strategy import registry
-    registry._REGISTRY.pop("gen_exec_test_v1", None)
+    registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
 
 
 def test_save_and_register_makes_generated_strategy_resolvable():
     init_db(reset=True)
     try:
         with SessionLocal() as s:
-            gs.save_generated(s, "gen_exec_test_v1", json.dumps(_COMP), source="def compute...")
+            gs.save_generated(s, "gen_exec_test_v1", json.dumps(_COMP), owner_id="owner", source="def compute...")
             s.commit()
         with SessionLocal() as s:
-            n = gs.register_all(s)
+            n = gs.register_all(s, owner_id="owner")
         assert n >= 1
-        strat = get_strategy("gen_exec_test_v1")
+        strat = get_strategy("gen_exec_test_v1", owner_id="owner")
         assert strat.key == "gen_exec_test_v1"
         out = strat.signals(_df())
         for col in ("longEntry", "shortEntry", "longExit", "shortExit"):
@@ -57,19 +58,46 @@ def test_register_all_is_resilient_to_a_bad_row():
     init_db(reset=True)
     try:
         with SessionLocal() as s:
-            gs.save_generated(s, "gen_bad", json.dumps({"key": "gen_bad"}))  # malformed comp
-            gs.save_generated(s, "gen_exec_test_v1", json.dumps(_COMP))
+            gs.save_generated(s, "gen_bad", json.dumps({"key": "gen_bad"}), owner_id="owner")
+            gs.save_generated(s, "gen_exec_test_v1", json.dumps(_COMP), owner_id="owner")
             s.commit()
         with SessionLocal() as s:
-            n = gs.register_all(s)                 # must not raise on the bad row
-        assert get_strategy("gen_exec_test_v1").key == "gen_exec_test_v1"
-        assert get_strategy("gen_bad").key == "trend_impulse_v3"   # bad row → not registered
+            n = gs.register_all(s, owner_id="owner")
+        assert get_strategy("gen_exec_test_v1", owner_id="owner").key == "gen_exec_test_v1"
+        from app.strategy.registry import StrategyNotFound
+        with pytest.raises(StrategyNotFound):
+            get_strategy("gen_bad", owner_id="owner")
     finally:
         _cleanup()
         from app.strategy import registry
-        registry._REGISTRY.pop("gen_bad", None)
+        registry._GENERATED_REGISTRY.pop(("owner", "gen_bad"), None)
 
 
 def test_unknown_key_still_falls_back_to_default():
     init_db(reset=True)
     assert get_strategy("never_generated").key == "trend_impulse_v3"
+
+
+def test_same_generated_key_is_registered_per_owner_and_foreign_resolution_fails_closed():
+    init_db(reset=True)
+    other = {**_COMP, "longExit": {"any": ["zscore_lt(50,0.5)"]}}
+    try:
+        with SessionLocal() as session:
+            session.execute(__import__("sqlalchemy").text(
+                "INSERT INTO organizations VALUES ('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+            gs.save_generated(session, "gen_exec_test_v1", json.dumps(_COMP), owner_id="owner")
+            gs.save_generated(session, "gen_exec_test_v1", json.dumps(other), owner_id="owner.other")
+            session.commit()
+        with SessionLocal() as session:
+            assert gs.register_all(session, owner_id="owner") == 1
+            assert gs.register_all(session, owner_id="owner.other") == 1
+        first = get_strategy("gen_exec_test_v1", owner_id="owner")
+        second = get_strategy("gen_exec_test_v1", owner_id="owner.other")
+        assert first is not second and first.version != second.version
+        from app.strategy.registry import StrategyNotFound
+        with pytest.raises(StrategyNotFound):
+            get_strategy("gen_exec_test_v1", owner_id="owner.missing")
+    finally:
+        from app.strategy import registry
+        registry._GENERATED_REGISTRY.pop(("owner", "gen_exec_test_v1"), None)
+        registry._GENERATED_REGISTRY.pop(("owner.other", "gen_exec_test_v1"), None)

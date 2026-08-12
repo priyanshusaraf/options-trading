@@ -122,7 +122,7 @@ def _json_params(raw: str | None) -> dict:
 def resolve(session=None, settings: Settings | None = None, *,
             deployment_id: int | None = None,
             instrument_key: str | None = None,
-            owner_id: str | None = None,
+            owner_id: str,
             broker_account_id: str | None = None) -> dict:
     """THE configuration resolution path. Returns the merged parameter dict.
 
@@ -133,14 +133,14 @@ def resolve(session=None, settings: Settings | None = None, *,
     backtester, anything with no deployment in hand) do not have to open one.
     """
     settings = settings or get_settings()
-    out = effective(settings)                      # platform: defaults + runtime_config
+    out = effective(settings, owner_id=owner_id)   # platform: defaults + runtime_config
 
     if session is None or (deployment_id is None and instrument_key is None):
         return out
 
     if deployment_id is not None:
-        if owner_id is None or broker_account_id is None:
-            raise TypeError("owner_id and broker_account_id are required for deployment config")
+        if broker_account_id is None:
+            raise TypeError("broker_account_id is required for deployment config")
         from app.core.deployments import get_deployment
         row = get_deployment(session, deployment_id, owner_id=owner_id,
                              broker_account_id=broker_account_id)
@@ -149,8 +149,6 @@ def resolve(session=None, settings: Settings | None = None, *,
                          f"#{deployment_id} ({row.name})", settings)
 
     if instrument_key is not None:
-        if owner_id is None:
-            raise TypeError("owner_id is required when resolving instrument-scoped config")
         from app.db.models import InstrumentState
         row = session.get(InstrumentState, (owner_id, instrument_key))
         if row is not None:
@@ -163,7 +161,7 @@ def resolve(session=None, settings: Settings | None = None, *,
 def explain(session, settings: Settings | None = None, *,
             deployment_id: int | None = None,
             instrument_key: str | None = None,
-            owner_id: str | None = None,
+            owner_id: str,
             broker_account_id: str | None = None) -> dict[str, dict]:
     """Per-key provenance: which scope decided each value.
 
@@ -172,15 +170,15 @@ def explain(session, settings: Settings | None = None, *,
     {key: {"value": ..., "scope": ..., "platform_default": ...}}.
     """
     settings = settings or get_settings()
-    platform = effective(settings)
+    platform = effective(settings, owner_id=owner_id)
     final = resolve(session, settings, deployment_id=deployment_id,
                     instrument_key=instrument_key, owner_id=owner_id,
                     broker_account_id=broker_account_id)
 
     scope_of = {k: PLATFORM for k in platform}
     if deployment_id is not None:
-        if owner_id is None or broker_account_id is None:
-            raise TypeError("owner_id and broker_account_id are required for deployment config")
+        if broker_account_id is None:
+            raise TypeError("broker_account_id is required for deployment config")
         from app.core.deployments import get_deployment
         row = (get_deployment(session, deployment_id, owner_id=owner_id,
                               broker_account_id=broker_account_id)
@@ -190,8 +188,6 @@ def explain(session, settings: Settings | None = None, *,
                 if k in scope_of and final.get(k) != platform.get(k):
                     scope_of[k] = DEPLOYMENT
     if instrument_key is not None:
-        if owner_id is None:
-            raise TypeError("owner_id is required when explaining instrument-scoped config")
         from app.db.models import InstrumentState
         row = session.get(InstrumentState, (owner_id, instrument_key)) if session else None
         if row is not None:

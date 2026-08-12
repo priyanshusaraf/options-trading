@@ -214,8 +214,9 @@ class Deployment(Base):
     # legacy | watchlist | explicit — how this deployment's instruments are decided.
     universe_mode: Mapped[str] = mapped_column(String(16), default="legacy",
                                                server_default="legacy")
-    watchlist_id: Mapped[int | None] = mapped_column(
-        ForeignKey("watchlists.id"), nullable=True)
+    # By value: deployments are MONEY plane while watchlists are USER plane. Repository
+    # composition verifies that a selected watchlist belongs to this deployment's owner.
+    watchlist_id: Mapped[int | None] = mapped_column(nullable=True)
 
     # ── how it is parameterised (Phase C reads this) ─────────────────────────
     # JSON object of deployment-scoped overrides over platform defaults. Empty
@@ -763,8 +764,14 @@ class Watchlist(Base):
     additively by `create_all`, so an existing live DB gains them with no ALTER on the
     instrument ledger — behaviour-preserving until a watchlist is actually populated."""
     __tablename__ = "watchlists"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_watchlists_owner_name"),
+        UniqueConstraint("owner_id", "id", name="uq_watchlists_owner_id"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(64), unique=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
     strategy_key: Mapped[str] = mapped_column(String(64), default="trend_impulse_v3")
     status: Mapped[str] = mapped_column(String(12), default="active")  # active|paused|archived
     interval: Mapped[str | None] = mapped_column(String(12), nullable=True)  # optional default TF
@@ -781,8 +788,14 @@ class WatchlistMembership(Base):
     so an instrument belongs to AT MOST ONE watchlist — the structural guarantee the
     dispute/incumbency rules rely on."""
     __tablename__ = "watchlist_membership"
+    __table_args__ = (
+        ForeignKeyConstraint(("owner_id", "watchlist_id"), ("watchlists.owner_id", "watchlists.id"),
+                             ondelete="RESTRICT", name="fk_watchlist_membership_owner_watchlist"),
+        Index("ix_watchlist_membership_owner_watchlist", "owner_id", "watchlist_id"),
+    )
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     instrument_key: Mapped[str] = mapped_column(String(48), primary_key=True)
-    watchlist_id: Mapped[int] = mapped_column(ForeignKey("watchlists.id"), index=True)
+    watchlist_id: Mapped[int] = mapped_column(nullable=False)
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
 
 
@@ -793,13 +806,21 @@ class StrategyLifecycle(Base):
     tried on a different universe. `last_dsr` carries the last validated performance so
     the archive is a browsable record of what worked, where, and how well."""
     __tablename__ = "strategy_lifecycle"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "strategy_key", name="uq_strategy_lifecycle_owner_key"),
+        UniqueConstraint("owner_id", "id", name="uq_strategy_lifecycle_owner_id"),
+        ForeignKeyConstraint(("owner_id", "deployed_watchlist_id"),
+                             ("watchlists.owner_id", "watchlists.id"), ondelete="RESTRICT",
+                             name="fk_strategy_lifecycle_owner_watchlist"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
-    strategy_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), nullable=False, index=True)
+    strategy_key: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(12), default="candidate")
     # candidate | running | probation | on_hold | retired
     source: Mapped[str] = mapped_column(String(12), default="builtin")  # builtin | generated
-    deployed_watchlist_id: Mapped[int | None] = mapped_column(
-        ForeignKey("watchlists.id"), nullable=True)
+    deployed_watchlist_id: Mapped[int | None] = mapped_column(nullable=True)
     last_dsr: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
@@ -819,6 +840,8 @@ class GeneratedStrategyRow(Base):
     to the real generated strategy instead of falling back to the default. Written only
     by the human Approve→Deploy bridge — never by the research process."""
     __tablename__ = "generated_strategies"
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     # Content hash of the composition (Phase D). `key` is still the PK, so a
     # redeploy of an edited strategy still overwrites in place — recording the
@@ -1025,6 +1048,8 @@ class RuntimeConfig(Base):
     Settings field by name; absent keys fall back to the code default. Lets the
     owner retune reinforcement / overnight / trailing knobs without code edits."""
     __tablename__ = "runtime_config"
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.organization_id", ondelete="RESTRICT"), primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(64))   # stringified; coerced to the field's type
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)

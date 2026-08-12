@@ -169,8 +169,8 @@ def test_a_watchlist_assignment_reaches_the_engine_through_the_same_contract():
 
     assign("NIFTY", DEFAULT_STRATEGY_KEY)
     with SessionLocal() as session:
-        w = wl.create_watchlist(session, "momentum", "expanding_z_v4")
-        wl.assign_instrument(session, "NIFTY", w.id)
+        w = wl.create_watchlist(session, "momentum", "expanding_z_v4", owner_id="owner")
+        wl.assign_instrument(session, "NIFTY", w.id, owner_id="owner")
         session.commit()
 
     result = EngineRunner(owner_id="owner", broker_account_id="account.default")._binding_for("NIFTY")
@@ -348,7 +348,7 @@ def test_creating_a_watchlist_on_a_graph_strategy_is_refused(monkeypatch):
     strategy = graph_strategy(monkeypatch)
     with SessionLocal() as session:
         with pytest.raises(binding.AuthorityNotGranted):
-            wl.create_watchlist(session, "graphs", strategy.key)
+            wl.create_watchlist(session, "graphs", strategy.key, owner_id="owner")
 
 
 def test_deploying_a_graph_strategy_onto_an_existing_watchlist_is_refused(monkeypatch):
@@ -359,13 +359,13 @@ def test_deploying_a_graph_strategy_onto_an_existing_watchlist_is_refused(monkey
 
     strategy = graph_strategy(monkeypatch)
     with SessionLocal() as session:
-        wl.create_watchlist(session, "momentum", "expanding_z_v4")
+        wl.create_watchlist(session, "momentum", "expanding_z_v4", owner_id="owner")
         session.commit()
         req = deploy_bridge.DeployRequest(watchlist_name="momentum",
                                           strategy_key=strategy.key,
                                           proposals=[("NIFTY", 1.0)])
         with pytest.raises(binding.AuthorityNotGranted):
-            deploy_bridge.deploy(session, req)
+            deploy_bridge.deploy(session, req, owner_id="owner")
 
 
 def test_the_strategy_route_reports_a_refusal_instead_of_crashing(monkeypatch):

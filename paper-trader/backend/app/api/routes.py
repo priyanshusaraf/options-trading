@@ -469,7 +469,7 @@ def signals(request: Request):
     feed_auth_error = bool(candle.get("auth_error")) or bool(h.get("quote", {}).get("auth_error"))
     now = r.provider.now()
     from app.core import runtime_config
-    eff = runtime_config.effective()
+    eff = runtime_config.effective(owner_id=r.owner_id)
     today_thr = int(eff.get("overtrade_today_threshold", 5))
     roll_thr = int(eff.get("overtrade_rolling_threshold", 15))
     roll_days = int(eff.get("overtrade_rolling_days", 7))
@@ -881,7 +881,7 @@ async def set_no_take_profit(key: str, body: NoTPBody, request: Request):
         pos = r.broker.position_for(key)
         if not pos:
             return {"error": "no open position for this instrument"}
-        if body.enabled and not effective(r.settings).get("trail_enabled", True):
+        if body.enabled and not effective(r.settings, owner_id=r.owner_id).get("trail_enabled", True):
             return {"error": "enable the trailing stop first — 'let it run' needs a "
                              "protective floor (otherwise there's no stop on the upside giveback)"}
         pos.no_take_profit = bool(body.enabled)
@@ -949,9 +949,9 @@ async def manual_open(body: ManualOpenBody, request: Request):
 
 # ── runtime settings (manual-override mode) ──────────────────────────────────
 @router.get("/api/settings")
-def get_settings_route():
+def get_settings_route(request: Request):
     from app.core import runtime_config
-    return {"params": runtime_config.schema()}
+    return {"params": runtime_config.schema(owner_id=_runner(request).owner_id)}
 
 
 class SettingBody(BaseModel):
@@ -962,8 +962,9 @@ class SettingBody(BaseModel):
 @router.post("/api/settings")
 def set_setting(body: SettingBody, request: Request):
     from app.core import runtime_config
-    res = runtime_config.set_override(body.key, body.value)
-    _runner(request).refresh_params()
+    runner = _runner(request)
+    res = runtime_config.set_override(body.key, body.value, owner_id=runner.owner_id)
+    runner.refresh_params()
     return res
 
 
@@ -974,8 +975,9 @@ class SettingKey(BaseModel):
 @router.post("/api/settings/reset")
 def reset_setting(body: SettingKey, request: Request):
     from app.core import runtime_config
-    runtime_config.clear_override(body.key)
-    _runner(request).refresh_params()
+    runner = _runner(request)
+    runtime_config.clear_override(body.key, owner_id=runner.owner_id)
+    runner.refresh_params()
     return {"key": body.key, "reset": True}
 
 

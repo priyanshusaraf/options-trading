@@ -371,7 +371,7 @@ def test_the_signal_iteration_reports_what_the_shadow_cost_it():
     database, so this also proves the flag reaches a *running* engine through the sanctioned
     channel rather than through a test's attribute poke."""
     init_db(reset=True)
-    runtime_config.set_override("ir_shadow_enabled", True)
+    runtime_config.set_override("ir_shadow_enabled", True, owner_id="owner")
     try:
         runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
         for key in list(runner.enabled):
@@ -386,7 +386,7 @@ def test_the_signal_iteration_reports_what_the_shadow_cost_it():
         assert loop["iteration_seconds"]["max"] >= loop["shadow_seconds"]["max"]
         assert loop["shadow_share_p95"] is not None
     finally:
-        runtime_config.clear_override("ir_shadow_enabled")
+        runtime_config.clear_override("ir_shadow_enabled", owner_id="owner")
 
 
 def test_the_iteration_reports_no_shadow_cost_when_the_lane_is_off():
@@ -426,11 +426,11 @@ def test_the_flag_is_live_editable_without_a_restart():
     runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     assert runner.params["ir_shadow_enabled"] is False
 
-    runtime_config.set_override("ir_shadow_enabled", True)
+    runtime_config.set_override("ir_shadow_enabled", True, owner_id="owner")
     runner.refresh_params()
     assert runner.params["ir_shadow_enabled"] is True
 
-    runtime_config.clear_override("ir_shadow_enabled")
+    runtime_config.clear_override("ir_shadow_enabled", owner_id="owner")
     runner.refresh_params()
     assert runner.params["ir_shadow_enabled"] is False
 
@@ -438,15 +438,15 @@ def test_the_flag_is_live_editable_without_a_restart():
 def test_an_uncoercible_flag_value_fails_closed():
     """Fail-closed means a value nobody can read is OFF, not ON."""
     init_db(reset=True)
-    runtime_config.set_override("ir_shadow_enabled", True)
+    runtime_config.set_override("ir_shadow_enabled", True, owner_id="owner")
     from app.db.models import RuntimeConfig
     from app.db.session import SessionLocal
     with SessionLocal() as session:
-        session.get(RuntimeConfig, "ir_shadow_enabled").value = "banana"
+        session.get(RuntimeConfig, ("owner", "ir_shadow_enabled")).value = "banana"
         session.commit()
 
     runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     try:
         assert runner.params["ir_shadow_enabled"] is False
     finally:
-        runtime_config.clear_override("ir_shadow_enabled")
+        runtime_config.clear_override("ir_shadow_enabled", owner_id="owner")

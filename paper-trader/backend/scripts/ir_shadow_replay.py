@@ -29,6 +29,7 @@ database are forced before any `app.*` import.
 from __future__ import annotations
 
 import json
+import argparse
 import os
 import pathlib
 import sys
@@ -123,7 +124,7 @@ def replay() -> dict:
             "unexplained_disagreements": disagreements}
 
 
-def loop_ab(settle_first: bool = False) -> dict:
+def loop_ab(*, owner_id: str, settle_first: bool = False) -> dict:
     """The real signal iteration, lane off then on, under the mock provider.
 
     `settle_first` matters more than it looks. The mock hands back a window bounded by its
@@ -138,6 +139,7 @@ def loop_ab(settle_first: bool = False) -> dict:
     from app.db.session import init_db
     from app.engine.runner import EngineRunner
     from app.providers.factory import get_provider
+    from app.db.models import LEGACY_BROKER_ACCOUNT_ID
 
     if settle_first:
         provider = get_provider()
@@ -151,9 +153,8 @@ def loop_ab(settle_first: bool = False) -> dict:
         # Through the sanctioned channel, not by poking `params`: the iteration begins
         # with `refresh_params()`, which would overwrite an attribute set by hand — and
         # silently measure the lane as OFF in both arms.
-        runtime_config.set_override("ir_shadow_enabled", enabled)
-        from app.db.models import LEGACY_BROKER_ACCOUNT_ID, LEGACY_OWNER_ID
-        runner = EngineRunner(owner_id=LEGACY_OWNER_ID,
+        runtime_config.set_override("ir_shadow_enabled", enabled, owner_id=owner_id)
+        runner = EngineRunner(owner_id=owner_id,
                               broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
         for key in list(runner.enabled):
             runner.strategy_keys[key] = "expanding_z_v4"
@@ -164,7 +165,7 @@ def loop_ab(settle_first: bool = False) -> dict:
             durations.append(time.perf_counter() - started)
             runner.provider.advance()
         snapshot = runner.shadow_metrics.snapshot()
-        runtime_config.clear_override("ir_shadow_enabled")
+        runtime_config.clear_override("ir_shadow_enabled", owner_id=owner_id)
         assert runner.params["ir_shadow_enabled"] is enabled, "the arm did not take"
         durations.sort()
         return {
@@ -191,13 +192,17 @@ def loop_ab(settle_first: bool = False) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--owner-id", required=True,
+                        help="organization whose shadow-lane runtime override is measured")
+    args = parser.parse_args()
     result = {
         "replay": replay(),
         # As shipped: 30 days of history, which the graph cannot settle.
-        "loop_short_frames": loop_ab(),
+        "loop_short_frames": loop_ab(owner_id=args.owner_id),
         # Enough history that the graph settles, so the cost measured is a real
         # evaluation rather than an immediate refusal.
-        "loop_settled": loop_ab(settle_first=True),
+        "loop_settled": loop_ab(owner_id=args.owner_id, settle_first=True),
     }
 
     print(json.dumps(result, indent=2, default=str))

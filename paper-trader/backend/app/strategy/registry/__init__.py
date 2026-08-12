@@ -57,6 +57,7 @@ DEFAULT_STRATEGY_KEY = "trend_impulse_v3"
 IR_NAMESPACE = "ir."
 
 _REGISTRY: dict[str, Strategy] = {}
+_GENERATED_REGISTRY: dict[tuple[str, str], Strategy] = {}
 _SKIP = {"base"}
 
 
@@ -90,7 +91,7 @@ def _discover() -> None:
             _REGISTRY[strat.key] = strat
 
 
-def register(strat: Strategy) -> None:
+def register(strat: Strategy, *, owner_id: str | None = None) -> None:
     """Register (or replace) a strategy at runtime — the seam for deployed generated
     strategies, which are reconstructed from the DB at engine startup rather than
     dropped in as a module. Committing a module with a `STRATEGY` remains the path for
@@ -98,7 +99,10 @@ def register(strat: Strategy) -> None:
     already emitted, AST-validated, and sandbox-loaded by the builder)."""
     _discover()
     if isinstance(strat, Strategy) and strat.key:
-        _REGISTRY[strat.key] = strat
+        if owner_id is None:
+            _REGISTRY[strat.key] = strat
+        else:
+            _GENERATED_REGISTRY[(owner_id, strat.key)] = strat
 
 
 def all_strategies() -> list[Strategy]:
@@ -111,7 +115,8 @@ def strategy_keys() -> list[str]:
     return [s.key for s in all_strategies()]
 
 
-def resolve_strategy(key: str | None, *, allow_fallback: bool = False) -> Strategy:
+def resolve_strategy(key: str | None, *, allow_fallback: bool = False,
+                     owner_id: str | None = None) -> Strategy:
     """FAIL-CLOSED resolution. Raises `StrategyNotFound` for an unknown key.
 
     `allow_fallback=True` reproduces the legacy fail-safe behaviour exactly (unknown or
@@ -124,6 +129,13 @@ def resolve_strategy(key: str | None, *, allow_fallback: bool = False) -> Strate
     default is precisely the failure this function exists to prevent.
     """
     _discover()
+    if key and key.startswith("gen_"):
+        strategy = _GENERATED_REGISTRY.get((owner_id or "", key))
+        if strategy is not None:
+            return strategy
+        if not allow_fallback:
+            raise StrategyNotFound(key, sorted(_REGISTRY))
+        raise StrategyNotFound(key, sorted(_REGISTRY))
     if key and key in _REGISTRY:
         return _REGISTRY[key]
     if not allow_fallback:
@@ -153,14 +165,14 @@ def resolve_strategy(key: str | None, *, allow_fallback: bool = False) -> Strate
     return _REGISTRY[DEFAULT_STRATEGY_KEY]
 
 
-def get_strategy(key: str | None) -> Strategy:
+def get_strategy(key: str | None, *, owner_id: str | None = None) -> Strategy:
     """Legacy fail-safe resolution: unknown/None → the default strategy.
 
     Behaviour is unchanged (an unknown key still returns the default) except that a
     substitution now logs an error. Only the callers listed in the module docstring may
     use this; everything deployment- or attribution-bound must use `resolve_strategy`.
     """
-    return resolve_strategy(key, allow_fallback=True)
+    return resolve_strategy(key, allow_fallback=True, owner_id=owner_id)
 
 
 def strategy_meta() -> list[dict]:

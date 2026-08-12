@@ -45,27 +45,27 @@ class DeployResult:
     rejected: list
 
 
-def _resolve(session, target_id: int, req: DeployRequest):
+def _resolve(session, target_id: int, req: DeployRequest, *, owner_id: str):
     """Run conflict resolution for `req` against the current incumbents, treating any
     instrument already in a DIFFERENT watchlist as an untouchable incumbent."""
-    incumbents = {k: wid for k, wid in wl.membership_map(session).items() if wid != target_id}
+    incumbents = {k: wid for k, wid in wl.membership_map(session, owner_id=owner_id).items() if wid != target_id}
     proposals = [wl.Proposal(watchlist_id=target_id, instrument_key=k, score=score)
                  for k, score in req.proposals]
     return wl.resolve_conflicts(incumbents, proposals)
 
 
-def preview_deploy(session, req: DeployRequest) -> DeployPreview:
+def preview_deploy(session, req: DeployRequest, *, owner_id: str) -> DeployPreview:
     """What deploying `req` would do — no writes. Uses the target watchlist's id if it
     already exists, else a sentinel (0); the id only affects dispute tie-breaks, which do
     not arise within a single watchlist's deploy."""
-    existing = wl.get_watchlist(session, req.watchlist_name)
+    existing = wl.get_watchlist(session, req.watchlist_name, owner_id=owner_id)
     target_id = existing.id if existing else 0
-    res = _resolve(session, target_id, req)
+    res = _resolve(session, target_id, req, owner_id=owner_id)
     return DeployPreview(req.watchlist_name, req.strategy_key,
                          accepted=sorted(res.assign.keys()), rejected=res.rejected)
 
 
-def deploy(session, req: DeployRequest) -> DeployResult:
+def deploy(session, req: DeployRequest, *, owner_id: str) -> DeployResult:
     """Commit the deploy: create/reuse the target watchlist, assign the instruments that
     clear conflict resolution, and record the strategy as `running` in the archive.
     Idempotent — re-deploying the same request reuses the watchlist and reassigns the same
@@ -75,19 +75,19 @@ def deploy(session, req: DeployRequest) -> DeployResult:
     # a gate on creation alone would let a redeploy install what a first deploy refused.
     from app.core.execution_binding import assert_may_execute
     assert_may_execute(req.strategy_key)
-    target = wl.get_watchlist(session, req.watchlist_name)
+    target = wl.get_watchlist(session, req.watchlist_name, owner_id=owner_id)
     if target is None:
-        target = wl.create_watchlist(session, req.watchlist_name, req.strategy_key,
+        target = wl.create_watchlist(session, req.watchlist_name, req.strategy_key, owner_id=owner_id,
                                      interval=req.interval)
     else:
         target.strategy_key = req.strategy_key       # keep the binding current
     session.flush()
 
-    res = _resolve(session, target.id, req)
-    wl.apply_resolution(session, res)
+    res = _resolve(session, target.id, req, owner_id=owner_id)
+    wl.apply_resolution(session, res, owner_id=owner_id)
 
-    archive.record_strategy(session, req.strategy_key, source=req.source)
-    archive.set_status(session, req.strategy_key, "running",
+    archive.record_strategy(session, req.strategy_key, owner_id=owner_id, source=req.source)
+    archive.set_status(session, req.strategy_key, "running", owner_id=owner_id,
                        deployed_watchlist_id=target.id)
     return DeployResult(watchlist_id=target.id, assigned=sorted(res.assign.keys()),
                         rejected=res.rejected)

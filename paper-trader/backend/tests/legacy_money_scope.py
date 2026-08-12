@@ -38,3 +38,22 @@ LEGACY_SCOPE = {
     "owner_id": LEGACY_OWNER_ID,
     "broker_account_id": LEGACY_BROKER_ACCOUNT_ID,
 }
+
+
+class LegacyUserScope:
+    """Test-only adapter for pre-tenancy USER-plane behavior fixtures."""
+
+    def __init__(self, module, *scoped_names: str):
+        object.__setattr__(self, "_module", module)
+        object.__setattr__(self, "_scoped_names", frozenset(scoped_names))
+
+    def __getattr__(self, name):
+        value = getattr(self._module, name)
+        if name not in self._scoped_names or not callable(value):
+            return value
+
+        def call(*args, **kwargs):
+            kwargs.setdefault("owner_id", LEGACY_OWNER_ID)
+            return value(*args, **kwargs)
+
+        return call

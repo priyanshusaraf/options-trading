@@ -8,28 +8,32 @@ import pytest
 
 from app.core import runtime_config as rc
 
+_schema = rc.schema
+def schema():
+    return _schema(owner_id="owner")
+
 
 @pytest.fixture(autouse=True)
 def no_stored_overrides(monkeypatch):
     """schema() reads the runtime_config table. These tests are about its
     SHAPE, not about DB state, so the store is stubbed empty by default and
     the tests that care patch it themselves."""
-    monkeypatch.setattr(rc, "get_overrides", lambda: {})
+    monkeypatch.setattr(rc, "get_overrides", lambda **_kwargs: {})
 
 
 def test_every_overridable_key_appears():
-    keys = {r["key"] for r in rc.schema()}
+    keys = {r["key"] for r in schema()}
     assert keys == set(rc.OVERRIDABLE)
 
 
 def test_rows_carry_the_overridden_flag():
-    for r in rc.schema():
+    for r in schema():
         assert "overridden" in r, f"{r['key']} has no overridden flag"
 
 
 def test_untouched_keys_are_not_marked_overridden(monkeypatch):
-    monkeypatch.setattr(rc, "get_overrides", lambda: {})
-    assert all(r["overridden"] is False for r in rc.schema())
+    monkeypatch.setattr(rc, "get_overrides", lambda **_kwargs: {})
+    assert all(r["overridden"] is False for r in schema())
 
 
 def test_a_stored_override_is_marked_even_when_it_equals_the_default(monkeypatch):
@@ -37,9 +41,9 @@ def test_a_stored_override_is_marked_even_when_it_equals_the_default(monkeypatch
     key = next(iter(rc.OVERRIDABLE))
     from app.core.config import get_settings
     default = getattr(get_settings(), key)
-    monkeypatch.setattr(rc, "get_overrides", lambda: {key: str(default)})
+    monkeypatch.setattr(rc, "get_overrides", lambda **_kwargs: {key: str(default)})
 
-    row = next(r for r in rc.schema() if r["key"] == key)
+    row = next(r for r in schema() if r["key"] == key)
     assert row["overridden"] is True
     # …and it is indistinguishable from the default by value alone, which is
     # exactly why inferring it was broken.
@@ -47,12 +51,12 @@ def test_a_stored_override_is_marked_even_when_it_equals_the_default(monkeypatch
 
 
 def test_a_differing_override_is_also_marked(monkeypatch):
-    monkeypatch.setattr(rc, "get_overrides", lambda: {"max_open_positions": "7"})
-    row = next(r for r in rc.schema() if r["key"] == "max_open_positions")
+    monkeypatch.setattr(rc, "get_overrides", lambda **_kwargs: {"max_open_positions": "7"})
+    row = next(r for r in schema() if r["key"] == "max_open_positions")
     assert row["overridden"] is True
     assert row["value"] == 7
 
 
 def test_closed_choice_setting_publishes_its_allowed_values_to_the_ui():
-    row = next(r for r in rc.schema() if r["key"] == "entry_order_mode")
+    row = next(r for r in schema() if r["key"] == "entry_order_mode")
     assert row["choices"] == ["AUTO", "MARKET", "LIMIT"]

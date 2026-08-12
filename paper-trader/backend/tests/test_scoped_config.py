@@ -22,6 +22,13 @@ from tests.legacy_money_scope import LEGACY_SCOPE, LegacyMoneyScope
 
 create_deployment = LegacyMoneyScope(_deployments, "create_deployment").create_deployment
 sc = LegacyMoneyScope(sc, "resolve", "explain")
+_effective, _set_override = effective, set_override
+def effective(*args, **kwargs):
+    kwargs.setdefault("owner_id", "owner")
+    return _effective(*args, **kwargs)
+def set_override(*args, **kwargs):
+    kwargs.setdefault("owner_id", "owner")
+    return _set_override(*args, **kwargs)
 
 
 @pytest.fixture(autouse=True)

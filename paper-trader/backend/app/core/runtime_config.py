@@ -189,12 +189,13 @@ def validate(key: str, value) -> str | None:
     return None
 
 
-def get_overrides() -> dict[str, str]:
+def get_overrides(*, owner_id: str) -> dict[str, str]:
     with SessionLocal() as s:
-        return {r.key: r.value for r in s.scalars(select(RuntimeConfig))}
+        return {r.key: r.value for r in s.scalars(select(RuntimeConfig).where(
+            RuntimeConfig.owner_id == owner_id))}
 
 
-def set_override(key: str, value) -> dict:
+def set_override(key: str, value, *, owner_id: str) -> dict:
     if key not in OVERRIDABLE:
         return {"error": f"'{key}' is not an overridable parameter"}
     err = validate(key, value)
@@ -202,9 +203,9 @@ def set_override(key: str, value) -> dict:
         return {"error": err}
     value = _coerce_for_key(key, getattr(get_settings(), key), value)
     with SessionLocal() as s:
-        row = s.get(RuntimeConfig, key)
+        row = s.get(RuntimeConfig, (owner_id, key))
         if row is None:
-            s.add(RuntimeConfig(key=key, value=str(value), updated_at=dt.datetime.now()))
+            s.add(RuntimeConfig(owner_id=owner_id, key=key, value=str(value), updated_at=dt.datetime.now()))
         else:
             row.value = str(value)
             row.updated_at = dt.datetime.now()
@@ -212,19 +213,19 @@ def set_override(key: str, value) -> dict:
     return {"key": key, "value": str(value)}
 
 
-def clear_override(key: str) -> None:
+def clear_override(key: str, *, owner_id: str) -> None:
     with SessionLocal() as s:
-        row = s.get(RuntimeConfig, key)
+        row = s.get(RuntimeConfig, (owner_id, key))
         if row is not None:
             s.delete(row)
             s.commit()
 
 
-def effective(settings: Settings | None = None) -> dict:
+def effective(settings: Settings | None = None, *, owner_id: str) -> dict:
     """Code defaults merged with runtime overrides; values type-coerced."""
     settings = settings or get_settings()
     out = {k: getattr(settings, k) for k in OVERRIDABLE}
-    for k, raw in get_overrides().items():
+    for k, raw in get_overrides(owner_id=owner_id).items():
         if k in out:
             try:
                 out[k] = _coerce_for_key(k, out[k], raw)
@@ -233,7 +234,7 @@ def effective(settings: Settings | None = None) -> dict:
     return out
 
 
-def schema() -> list[dict]:
+def schema(*, owner_id: str) -> list[dict]:
     """Per-field metadata for the Settings UI: key, type, default, current value.
 
     `overridden` reports whether a DB override row exists — it is NOT inferable
@@ -243,8 +244,8 @@ def schema() -> list[dict]:
     UI must be able to show it.
     """
     s = get_settings()
-    eff = effective(s)
-    stored = get_overrides()
+    eff = effective(s, owner_id=owner_id)
+    stored = get_overrides(owner_id=owner_id)
     rows = []
     for k in OVERRIDABLE:
         default = getattr(s, k)

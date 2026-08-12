@@ -1050,7 +1050,7 @@ class LiveBroker(PaperBroker):
         if not self._gtt_enabled() or price <= 0:
             return None
         from app.core.runtime_config import effective
-        resolved = params if params is not None else effective(self.settings)
+        resolved = params if params is not None else effective(self.settings, owner_id=self.owner_id)
         if kind == "options":
             stop_pct = float(resolved.get("stop_loss_pct", self.settings.stop_loss_pct))
             stop = price * (1 - stop_pct)
@@ -1219,7 +1219,7 @@ class LiveBroker(PaperBroker):
         # Callers historically pass partial dictionaries (including ``{}``) and expect
         # omitted controls to inherit the effective settings. Treat params as an overlay,
         # not as a complete routing configuration.
-        p = {**effective(self.settings), **(params or {})}
+        p = {**effective(self.settings, owner_id=self.owner_id), **(params or {})}
         if plan is None:
             plan = plan_order("ENTRY", "BUY", q.bid, q.ask, q.ltp, q.ask_qty,
                               q.lot_size, p)
@@ -1328,7 +1328,7 @@ class LiveBroker(PaperBroker):
         if not self._ensure_no_inflight(tsym):
             return None
         side = "BUY" if direction == "LONG" else "SELL"
-        p = {**effective(self.settings), **(params or {})}
+        p = {**effective(self.settings, owner_id=self.owner_id), **(params or {})}
         if plan is None:
             plan = plan_reference_entry(side, price, p)
         if plan.action == "SKIP":
@@ -1601,7 +1601,7 @@ class LiveBroker(PaperBroker):
     # ── GTT safety-net stop ───────────────────────────────────────────────
     def _gtt_enabled(self) -> bool:
         from app.core.runtime_config import effective
-        return bool(effective(self.settings).get("gtt_stop_enabled", True))
+        return bool(effective(self.settings, owner_id=self.owner_id).get("gtt_stop_enabled", True))
 
     def _place_gtt(self, pos, last_price, on_placed=None) -> str:
         if pos is None or not self._gtt_enabled() or pos.stop_price <= 0:

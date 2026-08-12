@@ -242,11 +242,11 @@ def _register_comp(comp: dict) -> str:
     from app.db.session import SessionLocal, init_db
     init_db(reset=True)
     with SessionLocal() as s:
-        gs.save_generated(s, comp["key"], json.dumps(comp))
+        gs.save_generated(s, comp["key"], json.dumps(comp), owner_id="owner")
         s.commit()
     with SessionLocal() as s:
-        assert gs.register_all(s) >= 1
-    return get_strategy(comp["key"]).version
+        assert gs.register_all(s, owner_id="owner") >= 1
+    return get_strategy(comp["key"], owner_id="owner").version
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ def test_generated_strategy_registers_with_its_content_hash(_clean_registry):
     assert v == generated_version(_COMP)
     # the pinned version must equal what the lazy derivation would give — one scheme,
     # not two that could disagree about which artifact traded.
-    assert v == identity.compute_version(get_strategy("gen_ident_test_v1"))
+    assert v == identity.compute_version(get_strategy("gen_ident_test_v1", owner_id="owner"))
 
 
 def test_editing_a_generated_strategy_changes_its_version(_clean_registry):
@@ -293,7 +293,7 @@ def test_two_generated_strategies_do_not_share_a_version(_clean_registry):
 
 def test_generated_strategy_resolves_fail_closed_after_registration(_clean_registry):
     _register_comp(_COMP)
-    assert resolve_strategy("gen_ident_test_v1").key == "gen_ident_test_v1"
+    assert resolve_strategy("gen_ident_test_v1", owner_id="owner").key == "gen_ident_test_v1"
 
 
 def test_unregistered_generated_key_fails_closed():

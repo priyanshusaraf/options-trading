@@ -44,15 +44,15 @@ def test_tie_breaks_to_lower_watchlist_id():
 def test_apply_resolution_writes_winners_and_leaves_incumbents_alone():
     _fresh()
     with SessionLocal() as s:
-        a = wl.create_watchlist(s, "A", "trend_impulse_v3")
-        b = wl.create_watchlist(s, "B", "expanding_z_v4")
+        a = wl.create_watchlist(s, "A", "trend_impulse_v3", owner_id="owner")
+        b = wl.create_watchlist(s, "B", "expanding_z_v4", owner_id="owner")
         s.commit()
-        wl.assign_instrument(s, "SILVERM", a.id)               # SILVERM is A's incumbent
+        wl.assign_instrument(s, "SILVERM", a.id, owner_id="owner")  # SILVERM is A's incumbent
         s.commit()
         current = {"SILVERM": a.id}
         props = [Proposal(b.id, "SILVERM", 0.9), Proposal(b.id, "GOLDM", 0.5)]
         res = resolve_conflicts(current, props)
-        apply_resolution(s, res)
+        apply_resolution(s, res, owner_id="owner")
         s.commit()
-        assert wl.watchlist_of(s, "SILVERM").id == a.id        # incumbent kept
-        assert wl.watchlist_of(s, "GOLDM").id == b.id          # winner assigned
+        assert wl.watchlist_of(s, "SILVERM", owner_id="owner").id == a.id
+        assert wl.watchlist_of(s, "GOLDM", owner_id="owner").id == b.id

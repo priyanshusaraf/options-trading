@@ -10,9 +10,12 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core import review_snapshot_store, review_state
+from app.core import generated_strategies, runtime_config, strategy_archive, watchlists
 from app.core.review_snapshot import build_snapshot_manifest
 from app.db.models import (
-    Organization, ProjectReviewNote, ProjectReviewSavedView, ProjectReviewSnapshot,
+    GeneratedStrategyRow, Organization, ProjectReviewNote, ProjectReviewSavedView,
+    ProjectReviewSnapshot, RuntimeConfig, StrategyLifecycle, Watchlist,
+    WatchlistMembership,
 )
 from app.db.session import SessionLocal, engine, init_db
 from app.editor import graph_artifacts as store
@@ -812,3 +815,185 @@ def test_layout_store_scopes_reads_and_refuses_other_owner_before_layout_sql() -
             )
 
     assert layout_rows() == before
+
+
+def test_strategy_configuration_repositories_keep_same_keys_private_to_each_owner() -> None:
+    """Dropping any owner predicate would merge this deliberate same-key fixture."""
+    composition_a = '{"key":"gen.shared","clauses":[]}'
+    composition_b = '{"key":"gen.shared","clauses":["owner-b"]}'
+    with SessionLocal() as session:
+        watchlist_a = watchlists.create_watchlist(
+            session, "default", "trend_impulse_v3", owner_id="owner.a",
+        )
+        watchlist_b = watchlists.create_watchlist(
+            session, "default", "expanding_z_v4", owner_id="owner.b",
+        )
+        watchlists.assign_instrument(
+            session, "NIFTY", watchlist_a.id, owner_id="owner.a",
+        )
+        watchlists.assign_instrument(
+            session, "NIFTY", watchlist_b.id, owner_id="owner.b",
+        )
+        strategy_archive.record_strategy(
+            session, "strategy.shared", owner_id="owner.a", note="A only",
+        )
+        strategy_archive.record_strategy(
+            session, "strategy.shared", owner_id="owner.b", note="B only",
+        )
+        generated_strategies.save_generated(
+            session, "gen.shared", composition_a, owner_id="owner.a",
+        )
+        generated_strategies.save_generated(
+            session, "gen.shared", composition_b, owner_id="owner.b",
+        )
+        session.commit()
+
+        assert watchlists.get_watchlist(session, "default", owner_id="owner.a").id == watchlist_a.id
+        assert watchlists.get_watchlist(session, "default", owner_id="owner.b").id == watchlist_b.id
+        assert watchlists.watchlist_of(session, "NIFTY", owner_id="owner.a").id == watchlist_a.id
+        assert watchlists.watchlist_of(session, "NIFTY", owner_id="owner.b").id == watchlist_b.id
+        assert watchlists.effective_strategy_map(session, owner_id="owner.a") == {
+            "NIFTY": "trend_impulse_v3",
+        }
+        assert watchlists.effective_strategy_map(session, owner_id="owner.b") == {
+            "NIFTY": "expanding_z_v4",
+        }
+        assert strategy_archive.get(session, "strategy.shared", owner_id="owner.a").note == "A only"
+        assert strategy_archive.get(session, "strategy.shared", owner_id="owner.b").note == "B only"
+        assert generated_strategies.list_generated(session, owner_id="owner.a")[0].composition_json == composition_a
+        assert generated_strategies.list_generated(session, owner_id="owner.b")[0].composition_json == composition_b
+
+    assert runtime_config.set_override("max_daily_loss", 111.0, owner_id="owner.a") == {
+        "key": "max_daily_loss", "value": "111.0",
+    }
+    assert runtime_config.set_override("max_daily_loss", 222.0, owner_id="owner.b") == {
+        "key": "max_daily_loss", "value": "222.0",
+    }
+    assert runtime_config.effective(owner_id="owner.a")["max_daily_loss"] == 111.0
+    assert runtime_config.effective(owner_id="owner.b")["max_daily_loss"] == 222.0
+
+    with SessionLocal() as session:
+        assert session.query(Watchlist).filter_by(name="default").count() == 2
+        assert session.query(WatchlistMembership).filter_by(instrument_key="NIFTY").count() == 2
+        assert session.query(StrategyLifecycle).filter_by(strategy_key="strategy.shared").count() == 2
+        assert session.query(GeneratedStrategyRow).filter_by(key="gen.shared").count() == 2
+        assert session.query(RuntimeConfig).filter_by(key="max_daily_loss").count() == 2
+        with pytest.raises(TypeError):
+            watchlists.get_watchlist(session, "default")
+        with pytest.raises(TypeError):
+            strategy_archive.get(session, "strategy.shared")
+        with pytest.raises(TypeError):
+            generated_strategies.list_generated(session)
+    with pytest.raises(TypeError):
+        runtime_config.effective()
+
+
+def test_owner_scoped_runtime_config_and_deploy_bridge_ignore_other_tenants() -> None:
+    """A foreign incumbent must not block this owner's deployment or settings refresh."""
+    from app.core.deploy_bridge import DeployRequest, deploy
+    request = DeployRequest("default", "trend_impulse_v3", [("NIFTY", 1.0)])
+    with SessionLocal() as session:
+        foreign = watchlists.create_watchlist(
+            session, "default", "expanding_z_v4", owner_id="owner.b",
+        )
+        watchlists.assign_instrument(session, "NIFTY", foreign.id, owner_id="owner.b")
+        session.commit()
+        result = deploy(session, request, owner_id="owner.a")
+        session.commit()
+        assert result.assigned == ["NIFTY"]
+        assert watchlists.watchlist_of(session, "NIFTY", owner_id="owner.a").id == result.watchlist_id
+        assert watchlists.watchlist_of(session, "NIFTY", owner_id="owner.b").id == foreign.id
+
+    runtime_config.set_override("max_daily_loss", 111.0, owner_id="owner.a")
+    runtime_config.set_override("max_daily_loss", 222.0, owner_id="owner.b")
+    assert runtime_config.schema(owner_id="owner.a")[
+        next(i for i, row in enumerate(runtime_config.schema(owner_id="owner.a"))
+             if row["key"] == "max_daily_loss")
+    ]["value"] == 111.0
+    runtime_config.clear_override("max_daily_loss", owner_id="owner.a")
+    assert runtime_config.effective(owner_id="owner.a")["max_daily_loss"] != 222.0
+    assert runtime_config.effective(owner_id="owner.b")["max_daily_loss"] == 222.0
+
+    from app.core import scoped_config
+    assert scoped_config.resolve(owner_id="owner.a")["max_daily_loss"] != 222.0
+    assert scoped_config.resolve(owner_id="owner.b")["max_daily_loss"] == 222.0
+
+
+def test_owner_scoped_generated_resolution_and_runner_assignments_never_cross() -> None:
+    """Two runners may name the same generated key without sharing executable bytes."""
+    from app.strategy.registry import StrategyNotFound, resolve_strategy
+    composition_a = '{"key":"gen_shared","longEntry":{"all":["ema_slope_up(50,5)"]},"shortEntry":{"all":["ema_slope_down(50,5)"]},"longExit":{"any":["zscore_lt(50,0.0)"]},"shortExit":{"any":["zscore_gt(50,0.0)"]}}'
+    composition_b = composition_a.replace("50,0.0", "50,0.5")
+    with SessionLocal() as session:
+        generated_strategies.save_generated(session, "gen_shared", composition_a, owner_id="owner.a")
+        generated_strategies.save_generated(session, "gen_shared", composition_b, owner_id="owner.b")
+        session.commit()
+        assert generated_strategies.register_all(session, owner_id="owner.a") == 1
+        assert generated_strategies.register_all(session, owner_id="owner.b") == 1
+    assert resolve_strategy("gen_shared", owner_id="owner.a").version != resolve_strategy(
+        "gen_shared", owner_id="owner.b").version
+    with pytest.raises(StrategyNotFound):
+        resolve_strategy("gen_shared", owner_id="owner.missing")
+
+
+def test_two_runners_apply_their_own_same_instrument_watchlist_strategy() -> None:
+    """The runner loads one owner map; another tenant's overlay is not a candidate."""
+    from app.core.deployments import create_deployment
+    from app.db.models import BrokerAccount
+    from app.engine.runner import EngineRunner
+    with SessionLocal() as session:
+        session.add(BrokerAccount(
+            broker_account_id="account.a", owner_id="owner.a", broker="mock",
+            external_account_id="a", display_name="Owner A",
+        ))
+        session.add(BrokerAccount(
+            broker_account_id="account.b", owner_id="owner.b", broker="mock",
+            external_account_id="b", display_name="Owner B",
+        ))
+        session.flush()
+        deployment_a = create_deployment(
+            session, "runner-a", owner_id="owner.a", broker_account_id="account.a",
+            status="active")
+        deployment_b = create_deployment(
+            session, "runner-b", owner_id="owner.b", broker_account_id="account.b",
+            status="active")
+        first = watchlists.create_watchlist(session, "default", "trend_impulse_v3", owner_id="owner.a")
+        second = watchlists.create_watchlist(session, "default", "expanding_z_v4", owner_id="owner.b")
+        watchlists.assign_instrument(session, "NIFTY", first.id, owner_id="owner.a")
+        watchlists.assign_instrument(session, "NIFTY", second.id, owner_id="owner.b")
+        session.commit()
+    runner_a = EngineRunner(owner_id="owner.a", broker_account_id="account.a",
+                            deployment_id=deployment_a.id)
+    runner_b = EngineRunner(owner_id="owner.b", broker_account_id="account.b",
+                            deployment_id=deployment_b.id)
+    try:
+        assert runner_a.strategy_keys["NIFTY"] == "trend_impulse_v3"
+        assert runner_b.strategy_keys["NIFTY"] == "expanding_z_v4"
+    finally:
+        runner_a.broker.close()
+        runner_b.broker.close()
+
+
+def test_deployment_keeps_watchlist_by_value_but_rejects_foreign_owner_value() -> None:
+    from sqlalchemy import inspect
+    from app.core import deployments
+    from app.db.models import BrokerAccount
+    with SessionLocal() as session:
+        session.add(BrokerAccount(broker_account_id="account.a", owner_id="owner.a", broker="mock",
+                                  external_account_id="a", display_name="A"))
+        foreign = watchlists.create_watchlist(session, "foreign", "trend_impulse_v3", owner_id="owner.b")
+        local = watchlists.create_watchlist(session, "local", "trend_impulse_v3", owner_id="owner.a")
+        session.commit()
+        for watchlist_id in (foreign.id, 999999):
+            with pytest.raises(ValueError, match="no watchlist"):
+                deployments.create_deployment(
+                    session, f"bad-{watchlist_id}", owner_id="owner.a", broker_account_id="account.a",
+                    watchlist_id=watchlist_id,
+                )
+        row = deployments.create_deployment(
+            session, "local", owner_id="owner.a", broker_account_id="account.a", watchlist_id=local.id,
+        )
+        session.commit()
+        assert row.watchlist_id == local.id
+        assert not any(foreign_key["constrained_columns"] == ["watchlist_id"]
+                       for foreign_key in inspect(session.bind).get_foreign_keys("deployments"))

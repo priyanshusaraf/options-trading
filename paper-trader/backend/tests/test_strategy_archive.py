@@ -8,6 +8,9 @@ import pytest
 from app.core import strategy_archive as arch
 from app.db.models import StrategyLifecycle
 from app.db.session import SessionLocal, init_db
+from tests.legacy_money_scope import LegacyUserScope
+
+arch = LegacyUserScope(arch, "get", "record_strategy", "set_status", "by_status", "list_archive")
 
 
 def _fresh():

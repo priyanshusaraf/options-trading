@@ -21,30 +21,34 @@ from sqlalchemy import select
 from app.db.models import Watchlist, WatchlistMembership
 
 
-def create_watchlist(session, name: str, strategy_key: str, *, status: str = "active",
+def create_watchlist(session, name: str, strategy_key: str, *, owner_id: str, status: str = "active",
                      interval: str | None = None, notes: str = "") -> Watchlist:
     # An active watchlist's strategy overrides the per-instrument assignment for every
     # member (`effective_strategy_map`, read straight into the engine's resolution), so
     # this is an engine assignment by another name and passes the same authority gate.
     from app.core.execution_binding import assert_may_execute
     assert_may_execute(strategy_key)
-    w = Watchlist(name=name, strategy_key=strategy_key, status=status,
+    w = Watchlist(owner_id=owner_id, name=name, strategy_key=strategy_key, status=status,
                   interval=interval, notes=notes)
     session.add(w)
     session.flush()   # populate w.id without forcing the caller's commit
     return w
 
 
-def get_watchlist(session, name: str) -> Watchlist | None:
-    return session.scalars(select(Watchlist).where(Watchlist.name == name)).one_or_none()
+def get_watchlist(session, name: str, *, owner_id: str) -> Watchlist | None:
+    return session.scalars(select(Watchlist).where(
+        Watchlist.owner_id == owner_id, Watchlist.name == name)).one_or_none()
 
 
-def assign_instrument(session, instrument_key: str, watchlist_id: int) -> WatchlistMembership:
+def assign_instrument(session, instrument_key: str, watchlist_id: int, *, owner_id: str) -> WatchlistMembership:
     """Assign (or MOVE) an instrument into `watchlist_id`. Idempotent per instrument:
     the membership PK is the instrument, so a re-assign updates in place."""
-    m = session.get(WatchlistMembership, instrument_key)
+    target = session.get(Watchlist, watchlist_id)
+    if target is None or target.owner_id != owner_id:
+        raise ValueError(f"no watchlist with id {watchlist_id}")
+    m = session.get(WatchlistMembership, (owner_id, instrument_key))
     if m is None:
-        m = WatchlistMembership(instrument_key=instrument_key, watchlist_id=watchlist_id)
+        m = WatchlistMembership(owner_id=owner_id, instrument_key=instrument_key, watchlist_id=watchlist_id)
         session.add(m)
     else:
         m.watchlist_id = watchlist_id
@@ -52,8 +56,8 @@ def assign_instrument(session, instrument_key: str, watchlist_id: int) -> Watchl
     return m
 
 
-def unassign_instrument(session, instrument_key: str) -> bool:
-    m = session.get(WatchlistMembership, instrument_key)
+def unassign_instrument(session, instrument_key: str, *, owner_id: str) -> bool:
+    m = session.get(WatchlistMembership, (owner_id, instrument_key))
     if m is None:
         return False
     session.delete(m)
@@ -61,19 +65,22 @@ def unassign_instrument(session, instrument_key: str) -> bool:
     return True
 
 
-def watchlist_of(session, instrument_key: str) -> Watchlist | None:
-    m = session.get(WatchlistMembership, instrument_key)
-    return session.get(Watchlist, m.watchlist_id) if m else None
+def watchlist_of(session, instrument_key: str, *, owner_id: str) -> Watchlist | None:
+    m = session.get(WatchlistMembership, (owner_id, instrument_key))
+    return (session.scalars(select(Watchlist).where(
+        Watchlist.owner_id == owner_id, Watchlist.id == m.watchlist_id)).one_or_none()
+            if m else None)
 
 
-def effective_strategy_map(session) -> dict[str, str]:
+def effective_strategy_map(session, *, owner_id: str) -> dict[str, str]:
     """`{instrument_key: strategy_key}` for every instrument in an ACTIVE watchlist.
     This is what the engine overlays onto its per-instrument strategy resolution;
     paused/archived watchlists contribute nothing (they do not trade)."""
     rows = session.execute(
         select(WatchlistMembership.instrument_key, Watchlist.strategy_key)
-        .join(Watchlist, WatchlistMembership.watchlist_id == Watchlist.id)
-        .where(Watchlist.status == "active")
+        .join(Watchlist, (WatchlistMembership.owner_id == Watchlist.owner_id) &
+              (WatchlistMembership.watchlist_id == Watchlist.id))
+        .where(WatchlistMembership.owner_id == owner_id, Watchlist.status == "active")
     ).all()
     return {key: strat for key, strat in rows}
 
@@ -123,43 +130,47 @@ def resolve_conflicts(current_membership: dict, proposals: list) -> Resolution:
     return Resolution(assign, rejected)
 
 
-def apply_resolution(session, resolution: Resolution) -> None:
+def apply_resolution(session, resolution: Resolution, *, owner_id: str) -> None:
     """Write the winning assignments. Only the `assign` set is touched — incumbents and
     losers are never moved, so applying a resolution is safe to replay."""
     for instrument_key, watchlist_id in resolution.assign.items():
-        assign_instrument(session, instrument_key, watchlist_id)
+        assign_instrument(session, instrument_key, watchlist_id, owner_id=owner_id)
 
 
-def membership_map(session) -> dict:
+def membership_map(session, *, owner_id: str) -> dict:
     """`{instrument_key: watchlist_id}` for every assigned instrument — the incumbency
     map the deploy bridge feeds to conflict resolution."""
     return {m.instrument_key: m.watchlist_id
-            for m in session.scalars(select(WatchlistMembership))}
+            for m in session.scalars(select(WatchlistMembership).where(
+                WatchlistMembership.owner_id == owner_id))}
 
 
-def in_watchlist_keys(session) -> set:
+def in_watchlist_keys(session, *, owner_id: str) -> set:
     """Every instrument committed to a watchlist (any status). The research plane treats
     these as blacklisted for strategy development (bar the always-allowed sandbox)."""
-    return set(session.scalars(select(WatchlistMembership.instrument_key)))
+    return set(session.scalars(select(WatchlistMembership.instrument_key).where(
+        WatchlistMembership.owner_id == owner_id)))
 
 
-def write_research_snapshot(session, path: str) -> dict:
+def write_research_snapshot(session, path: str, *, owner_id: str) -> dict:
     """Export a read-only snapshot of watchlist membership for the research plane to
     read. Deliberately a plain file: the research process must never open this DB, so it
     consumes the export instead of importing the execution session."""
-    snap = {"in_watchlists": sorted(in_watchlist_keys(session))}
+    snap = {"in_watchlists": sorted(in_watchlist_keys(session, owner_id=owner_id))}
     with open(path, "w") as f:
         json.dump(snap, f)
     return snap
 
 
-def list_watchlists(session) -> list[dict]:
+def list_watchlists(session, *, owner_id: str) -> list[dict]:
     """Every watchlist with its members — the read model for the UI."""
     members: dict[int, list[str]] = {}
-    for m in session.scalars(select(WatchlistMembership)):
+    for m in session.scalars(select(WatchlistMembership).where(
+            WatchlistMembership.owner_id == owner_id)):
         members.setdefault(m.watchlist_id, []).append(m.instrument_key)
     out = []
-    for w in session.scalars(select(Watchlist).order_by(Watchlist.id)):
+    for w in session.scalars(select(Watchlist).where(Watchlist.owner_id == owner_id)
+                             .order_by(Watchlist.id)):
         d = w.to_dict()
         d["instruments"] = sorted(members.get(w.id, []))
         out.append(d)

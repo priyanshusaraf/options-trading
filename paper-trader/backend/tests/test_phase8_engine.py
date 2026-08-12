@@ -77,8 +77,8 @@ def test_option_cache_persist_and_throttle():
 
 def test_runtime_override_roundtrip():
     init_db(reset=True)
-    runtime_config.clear_override("reinforce_lock_pct")
-    runtime_config.set_override("reinforce_lock_pct", 0.10)
-    assert runtime_config.effective()["reinforce_lock_pct"] == 0.10
-    assert any(row["key"] == "reinforce_lock_pct" for row in runtime_config.schema())
-    assert "error" in runtime_config.set_override("bogus_key", 1)   # whitelist guard
+    runtime_config.clear_override("reinforce_lock_pct", owner_id="owner")
+    runtime_config.set_override("reinforce_lock_pct", 0.10, owner_id="owner")
+    assert runtime_config.effective(owner_id="owner")["reinforce_lock_pct"] == 0.10
+    assert any(row["key"] == "reinforce_lock_pct" for row in runtime_config.schema(owner_id="owner"))
+    assert "error" in runtime_config.set_override("bogus_key", 1, owner_id="owner")   # whitelist guard

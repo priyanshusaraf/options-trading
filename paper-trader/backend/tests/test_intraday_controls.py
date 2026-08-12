@@ -114,7 +114,7 @@ def test_intraday_settings_overridable_and_reach_engine():
     # override flows into effective() — the dict the engine's self.params is built from
     c.post("/api/settings", json={"key": "intraday_enabled", "value": "true"})
     c.post("/api/settings", json={"key": "intraday_max_positions", "value": "2"})
-    eff = runtime_config.effective()
+    eff = runtime_config.effective(owner_id="owner")
     assert eff["intraday_enabled"] is True
     assert eff["intraday_max_positions"] == 2
 
