@@ -63,6 +63,19 @@ RUN_SELECT = f"id,'{LEGACY_OWNER_ID}',created_at,status,scope,intervals,capital,
 RESULT_COLUMNS = "id,owner_id,run_id,instrument_key,name,segment,strategy_key,interval,trades,wins,win_rate,profit_factor,max_drawdown_pct,return_pct,net_pnl,gross_pnl,charges,expectancy,cagr,calmar,consistency,sharpe,max_consec_losses,time_underwater_pct,worst_trade_pnl,worst_mae_pct,notional,lots,affordable,option_cost,open_at_end,win_rate_realised,return_pct_realised,bh_return_pct,first_ts,last_ts,effective_days,clamped,bars,curve_json,bh_curve_json,trades_json,error,premium_trades,premium_win_rate,premium_net_pnl,premium_return_pct,premium_profit_factor,premium_max_drawdown_pct,premium_expectancy,premium_charges,premium_trades_json,premium_error,params_hash,last_candle_ts,schema_version,from_cache,computed_at"
 RESULT_SELECT = f"id,'{LEGACY_OWNER_ID}',run_id,instrument_key,name,segment,strategy_key,interval,trades,wins,win_rate,profit_factor,max_drawdown_pct,return_pct,net_pnl,gross_pnl,charges,expectancy,cagr,calmar,consistency,sharpe,max_consec_losses,time_underwater_pct,worst_trade_pnl,worst_mae_pct,notional,lots,affordable,option_cost,open_at_end,win_rate_realised,return_pct_realised,bh_return_pct,first_ts,last_ts,effective_days,clamped,bars,curve_json,bh_curve_json,trades_json,error,premium_trades,premium_win_rate,premium_net_pnl,premium_return_pct,premium_profit_factor,premium_max_drawdown_pct,premium_expectancy,premium_charges,premium_trades_json,premium_error,params_hash,last_candle_ts,schema_version,from_cache,computed_at"
 
+LEGACY_RUN_DDL = (RUN_DDL
+    .replace(" id INTEGER NOT NULL, owner_id VARCHAR(64) DEFAULT 'owner' NOT NULL,\n", " id INTEGER NOT NULL,\n")
+    .replace(",\n CONSTRAINT uq_backtest_runs_owner_id UNIQUE (owner_id, id),\n FOREIGN KEY(owner_id) REFERENCES organizations (organization_id) ON DELETE RESTRICT", ""))
+LEGACY_RESULT_DDL = (RESULT_DDL
+    .replace(" id INTEGER NOT NULL, owner_id VARCHAR(64) DEFAULT 'owner' NOT NULL, run_id INTEGER NOT NULL,\n",
+             " id INTEGER NOT NULL, run_id INTEGER NOT NULL,\n")
+    .replace(", CONSTRAINT uq_backtest_results_owner_id UNIQUE (owner_id, id),\n"
+             " CONSTRAINT fk_backtest_results_owner_run FOREIGN KEY(owner_id, run_id)\n"
+             "   REFERENCES backtest_runs (owner_id, id) ON DELETE RESTRICT,\n"
+             " FOREIGN KEY(owner_id) REFERENCES organizations (organization_id) ON DELETE RESTRICT", ""))
+LEGACY_RUN_COLUMNS = RUN_COLUMNS.replace("owner_id,", "")
+LEGACY_RESULT_COLUMNS = RESULT_COLUMNS.replace("owner_id,", "")
+
 
 def _names() -> set[str]:
     return set(sa.inspect(op.get_bind()).get_table_names())
@@ -75,45 +88,59 @@ def _rows(query: str) -> tuple[int, str]:
 
 
 def _schema(table: str) -> str:
-    sql = op.get_bind().execute(sa.text(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"), {"table": table}
-    ).scalar_one()
+    rows = op.get_bind().execute(sa.text(
+        "SELECT type,name,sql FROM sqlite_master WHERE tbl_name=:table "
+        "AND type IN ('table','index','trigger') ORDER BY type,name"), {"table": table}).all()
     # A result table names its run parent. During recovery that parent may already
     # have been promoted, so normalize every migration-local physical name rather
     # than falsely treating a SQLite rename rewrite as a different contract.
-    normalized_sql = sql
-    for logical in TABLES:
-        normalized_sql = re.sub(re.escape(logical) + r"(?:__0024)?",
-                                f"__{logical}__", normalized_sql)
-    normalized = " ".join(normalized_sql.replace('"', '').replace('`', '').split()).lower()
+    normalized_parts = []
+    for row in rows:
+        normalized_sql = row.sql or ""
+        normalized_name = row.name
+        for logical in TABLES:
+            normalized_sql = re.sub(re.escape(logical) + r"(?:__0024)?",
+                                    f"__{logical}__", normalized_sql)
+            normalized_name = re.sub(re.escape(logical) + r"(?:__0024)?",
+                                     f"__{logical}__", normalized_name)
+        normalized_parts.append(
+            f"{row.type}:{normalized_name}:" +
+            " ".join(normalized_sql.replace('"', '').replace('`', '').split()).lower())
+    normalized = "\n".join(normalized_parts)
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _ensure_proofs() -> None:
     op.execute(sa.text(f"CREATE TABLE IF NOT EXISTS {PROOF_TABLE} ("
                        "table_name VARCHAR(64) PRIMARY KEY, row_count INTEGER NOT NULL, "
-                       "row_digest VARCHAR(64) NOT NULL, schema_digest VARCHAR(64) NOT NULL)"))
+                       "row_digest VARCHAR(64) NOT NULL, direction VARCHAR(8) NOT NULL, "
+                       "schema_digest VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL)"))
 
 
-def _write_proof(table: str, temp: str) -> None:
+def _write_proof(table: str, temp: str, *, direction: str) -> None:
     _ensure_proofs()
     count, digest = _rows(f"SELECT * FROM {temp} ORDER BY rowid")
-    op.get_bind().execute(sa.text(f"INSERT OR REPLACE INTO {PROOF_TABLE} VALUES (:table,:count,:digest,:schema)"), {
-        "table": table, "count": count, "digest": digest, "schema": _schema(temp)})
+    op.get_bind().execute(sa.text(
+        f"INSERT OR REPLACE INTO {PROOF_TABLE} VALUES "
+        "(:table,:count,:digest,:direction,:schema,'built')"), {
+        "table": table, "count": count, "digest": digest,
+        "direction": direction, "schema": _schema(temp)})
 
 
-def _prove_temp(table: str, temp: str) -> None:
+def _prove_temp(table: str, temp: str, *, direction: str) -> None:
     if PROOF_TABLE not in _names():
         raise RuntimeError(f"0024 refuses unproven completed rebuild for {table}")
     proof = op.get_bind().execute(sa.text(
-        f"SELECT row_count,row_digest,schema_digest FROM {PROOF_TABLE} WHERE table_name=:table"),
+        f"SELECT row_count,row_digest,direction,schema_digest,phase FROM {PROOF_TABLE} "
+        "WHERE table_name=:table"),
         {"table": table}).one_or_none()
-    if proof is None or _rows(f"SELECT * FROM {temp} ORDER BY rowid") != (proof.row_count, proof.row_digest) \
+    if proof is None or proof.direction != direction or proof.phase != "built" \
+            or _rows(f"SELECT * FROM {temp} ORDER BY rowid") != (proof.row_count, proof.row_digest) \
             or _schema(temp) != proof.schema_digest:
         raise RuntimeError(f"0024 refuses malformed completed rebuild for {table}")
 
 
-def _recover() -> None:
+def _recover(*, direction: str) -> None:
     names = _names()
     # Validate every completed, source-absent or post-rename candidate before
     # changing any table. A retry must never promote one table then discover a
@@ -121,13 +148,13 @@ def _recover() -> None:
     for table in TABLES:
         temp = f"{table}__0024"
         if table not in names and temp in names:
-            _prove_temp(table, temp)
+            _prove_temp(table, temp, direction=direction)
         elif table in names and temp not in names and PROOF_TABLE in names:
             proof = op.get_bind().execute(sa.text(
                 f"SELECT 1 FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table}
             ).scalar_one_or_none()
             if proof is not None:
-                _prove_temp(table, table)
+                _prove_temp(table, table, direction=direction)
     for table in TABLES:
         temp = f"{table}__0024"
         if table in names and temp in names:
@@ -141,14 +168,14 @@ def _recover() -> None:
             op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
 
 
-def _rebuild(table: str, ddl: str, columns: str, source: str) -> None:
+def _rebuild(table: str, ddl: str, columns: str, source: str, *, direction: str = "up") -> None:
     temp = f"{table}__0024"
     expected = _rows(f"SELECT {source} FROM {table} ORDER BY rowid")
     op.execute(sa.text(ddl.replace("__TABLE__", temp)))
     op.execute(sa.text(f"INSERT INTO {temp} ({columns}) SELECT {source} FROM {table}"))
     if _rows(f"SELECT * FROM {temp} ORDER BY rowid") != expected:
         raise RuntimeError(f"0024 source-bound payload proof failed for {table}")
-    _write_proof(table, temp)
+    _write_proof(table, temp, direction=direction)
     op.execute(sa.text(f"DROP TABLE {table}"))
     op.execute(sa.text(f"ALTER TABLE {temp} RENAME TO {table}"))
     op.get_bind().execute(sa.text(f"DELETE FROM {PROOF_TABLE} WHERE table_name=:table"), {"table": table})
@@ -171,7 +198,7 @@ def _indexes() -> None:
 
 
 def upgrade() -> None:
-    _recover()
+    _recover(direction="up")
     raw = op.get_bind().connection.driver_connection
     enabled = bool(raw.execute("PRAGMA foreign_keys").fetchone()[0])
     try:
@@ -193,4 +220,55 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("0024 downgrade refused: removing owned backtest evidence loses tenant isolation")
+    bind = op.get_bind()
+    # Preflight every authoritative candidate before recovery performs any DDL.
+    # This matters after an interrupted downgrade where the source may be absent
+    # and only a proven temp remains.
+    candidates = {}
+    names = _names()
+    for table in TABLES:
+        candidate = table if table in names else f"{table}__0024"
+        if candidate not in names:
+            raise RuntimeError(f"0024 downgrade refused: missing recovery candidate for {table}")
+        candidates[table] = candidate
+    unsafe_owner = False
+    for candidate in candidates.values():
+        columns = {c["name"] for c in sa.inspect(bind).get_columns(candidate)}
+        if "owner_id" in columns and bind.execute(sa.text(
+                f"SELECT 1 FROM {candidate} WHERE owner_id != :legacy LIMIT 1"),
+                {"legacy": LEGACY_OWNER_ID}).first():
+            unsafe_owner = True
+    run_candidate, result_candidate = candidates["backtest_runs"], candidates["backtest_results"]
+    result_columns = {c["name"] for c in sa.inspect(bind).get_columns(result_candidate)}
+    run_columns = {c["name"] for c in sa.inspect(bind).get_columns(run_candidate)}
+    broken = None
+    if "owner_id" in result_columns and "owner_id" in run_columns:
+        broken = bind.execute(sa.text(
+            f"SELECT 1 FROM {result_candidate} AS result LEFT JOIN {run_candidate} AS run "
+            "ON run.owner_id=result.owner_id AND run.id=result.run_id "
+            "WHERE run.id IS NULL LIMIT 1")).first()
+    if unsafe_owner or broken:
+        raise RuntimeError(
+            "0024 downgrade refused: owner collapse or composite relation loss is unsafe")
+    _recover(direction="down")
+    raw = bind.connection.driver_connection
+    enabled = bool(raw.execute("PRAGMA foreign_keys").fetchone()[0])
+    try:
+        raw.commit(); raw.execute("PRAGMA foreign_keys=OFF")
+        if "owner_id" in {c["name"] for c in sa.inspect(bind).get_columns("backtest_results")}:
+            _rebuild("backtest_results", LEGACY_RESULT_DDL, LEGACY_RESULT_COLUMNS,
+                     LEGACY_RESULT_COLUMNS, direction="down")
+        if "owner_id" in {c["name"] for c in sa.inspect(bind).get_columns("backtest_runs")}:
+            _rebuild("backtest_runs", LEGACY_RUN_DDL, LEGACY_RUN_COLUMNS,
+                     LEGACY_RUN_COLUMNS, direction="down")
+        for sql in (
+            "CREATE INDEX IF NOT EXISTS ix_backtest_results_run_id ON backtest_results(run_id)",
+            "CREATE INDEX IF NOT EXISTS ix_backtest_results_instrument_key ON backtest_results(instrument_key)",
+            "CREATE INDEX IF NOT EXISTS ix_backtest_results_interval ON backtest_results(interval)",
+            "CREATE INDEX IF NOT EXISTS ix_backtest_results_strategy_key ON backtest_results(strategy_key)",
+        ):
+            op.execute(sa.text(sql))
+        if PROOF_TABLE in _names():
+            op.execute(sa.text(f"DROP TABLE {PROOF_TABLE}"))
+    finally:
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")

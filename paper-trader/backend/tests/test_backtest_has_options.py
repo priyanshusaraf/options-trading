@@ -21,8 +21,9 @@ def _client():
 def test_results_carry_has_options():
     c = _client()
     with SessionLocal() as s:
-        s.add(BacktestRun(id=1, status="done", scope="liquid"))
-        s.add(BacktestResult(run_id=1, instrument_key="NIFTY", interval="15minute",
+        s.add(BacktestRun(id=1, owner_id="owner", status="done", scope="liquid"))
+        s.flush()
+        s.add(BacktestResult(owner_id="owner", run_id=1, instrument_key="NIFTY", interval="15minute",
                              trades=5, win_rate=60.0, return_pct=10.0, net_pnl=500.0))
         s.commit()
     rows = c.get("/api/backtest/results?run_id=1&min_trades=1").json()["results"]

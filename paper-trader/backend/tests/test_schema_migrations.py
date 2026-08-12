@@ -184,12 +184,27 @@ def test_revision_0024_discards_source_present_stale_temp(tmp_path, table):
         assert f"{table}__0024" not in sa.inspect(connection).get_table_names()
 
 
-def test_revision_0024_downgrade_refuses_before_schema_mutation(tmp_path):
+def test_revision_0024_legacy_only_downgrade_is_lossless_and_reupgradeable(tmp_path):
     engine = _build_from_baseline(tmp_path)
-    with engine.connect() as connection:
+    with engine.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0023")
+        assert "owner_id" not in {c["name"] for c in sa.inspect(connection).get_columns("backtest_runs")}
+        command.upgrade(migrate.alembic_config(connection), "0024")
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+    assert migrate.schema_version(engine) == "0024"
+
+
+def test_revision_0024_downgrade_refuses_nonlegacy_owner_before_mutation(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES ('other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (owner_id,status,scope,intervals,capital,total,done,note,window,instruments,strategies,created_at) "
+            "VALUES ('other','done','liquid','day',1,0,0,'','max','','',CURRENT_TIMESTAMP)"))
         before = tuple(connection.execute(sa.text(
             "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")).all())
-    with pytest.raises(RuntimeError, match="downgrade refused"):
+    with pytest.raises(RuntimeError, match="owner collapse"):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0023")
     with engine.connect() as connection:
@@ -224,6 +239,96 @@ def test_revision_0024_post_rename_proof_retries_only_if_promoted_table_is_intac
         assert stopped and table in sa.inspect(connection).get_table_names()
         command.upgrade(migrate.alembic_config(connection), "0024")
         assert "_backtest_0024_rebuild_proofs" not in sa.inspect(connection).get_table_names()
+
+
+@pytest.mark.parametrize("foreign_keys", (0, 1))
+def test_revision_0024_injected_failure_restores_fk_mode_and_version(tmp_path, foreign_keys):
+    engine = _at_revision_0020(tmp_path, f"0024-failure-fk-{foreign_keys}.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+        raw = connection.connection.driver_connection
+        raw.commit(); raw.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    failed = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal failed
+        if not failed and statement.lstrip().upper().startswith("CREATE TABLE BACKTEST_RUNS__0024"):
+            failed = True
+            raise RuntimeError("injected 0024 failure")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected 0024 failure"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0024")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.connect() as connection:
+        assert failed and migrate.schema_version(engine) == "0023"
+        assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+def test_revision_0024_retries_after_final_cleanup_before_stamp(tmp_path):
+    engine = _at_revision_0020(tmp_path, "0024-final-cleanup.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
+    stopped = False
+    def interrupt(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal stopped
+        if not stopped and statement.lstrip().upper().startswith(
+                "DROP TABLE _BACKTEST_0024_REBUILD_PROOFS"):
+            stopped = True
+            raise RuntimeError("injected before stamp")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected before stamp"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0024")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        assert stopped and migrate.schema_version(engine) == "0023"
+        command.upgrade(migrate.alembic_config(connection), "0024")
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+
+
+@pytest.mark.parametrize("table", ("backtest_runs", "backtest_results"))
+def test_revision_0024_downgrade_recovers_after_rename_before_proof_delete(tmp_path, table):
+    engine = _build_from_baseline(tmp_path)
+    stopped = False
+    def interrupt(_conn, _cursor, statement, params, _context, _many):
+        nonlocal stopped
+        values = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        if (not stopped and "DELETE FROM _BACKTEST_0024_REBUILD_PROOFS" in statement.upper()
+                and table in values):
+            stopped = True
+            raise RuntimeError("interrupt downgrade after rename")
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="interrupt downgrade after rename"):
+            with engine.begin() as connection:
+                command.downgrade(migrate.alembic_config(connection), "0023")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    with engine.begin() as connection:
+        assert stopped and migrate.schema_version(engine) == "0024"
+        command.downgrade(migrate.alembic_config(connection), "0023")
+        assert "owner_id" not in {c["name"] for c in sa.inspect(connection).get_columns(table)}
+        assert connection.execute(sa.text("PRAGMA foreign_key_check")).all() == []
+
+
+def test_revision_0024_downgrade_refuses_cross_owner_before_stale_temp_cleanup(tmp_path):
+    engine = _build_from_baseline(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO organizations VALUES ('other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO backtest_runs (owner_id,status,scope,intervals,capital,total,done,note,window,instruments,strategies,created_at) "
+            "VALUES ('other','done','liquid','day',1,0,0,'','max','','',CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text("CREATE TABLE backtest_results__0024 (attacker TEXT)"))
+    with pytest.raises(RuntimeError, match="owner collapse"):
+        with engine.begin() as connection:
+            command.downgrade(migrate.alembic_config(connection), "0023")
+    with engine.connect() as connection:
+        assert "backtest_results__0024" in sa.inspect(connection).get_table_names()
 
 
 def test_revision_0022_makes_every_review_table_owner_owned(tmp_path):

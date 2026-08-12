@@ -25,9 +25,15 @@ def latest_run(session, *, owner_id: str) -> BacktestRun | None:
         BacktestRun.owner_id == owner_id).order_by(BacktestRun.id.desc()).limit(1))
 
 
-def list_runs(session, *, owner_id: str, limit: int) -> list[BacktestRun]:
-    return list(session.scalars(select(BacktestRun).where(
-        BacktestRun.owner_id == owner_id).order_by(BacktestRun.id.desc()).limit(limit)))
+def list_runs_with_counts(session, *, owner_id: str, limit: int) -> list[tuple[BacktestRun, int]]:
+    counts = (select(BacktestResult.run_id.label("run_id"), func.count().label("result_count"))
+              .where(BacktestResult.owner_id == owner_id, BacktestResult.error == "")
+              .group_by(BacktestResult.run_id).subquery())
+    query = (select(BacktestRun, func.coalesce(counts.c.result_count, 0))
+             .outerjoin(counts, counts.c.run_id == BacktestRun.id)
+             .where(BacktestRun.owner_id == owner_id)
+             .order_by(BacktestRun.id.desc()).limit(limit))
+    return [(run, int(count)) for run, count in session.execute(query)]
 
 
 def list_results(session, *, owner_id: str, run_id: int, limit: int | None = None,
@@ -64,7 +70,8 @@ def result_detail(session, *, owner_id: str, run_id: int, instrument_key: str,
 def filtered_results(session, *, owner_id: str, run_id: int, interval: str | None,
                      strategy_key: str | None, min_win_rate: float,
                      min_profit_factor: float, max_drawdown: float, min_return: float,
-                     min_trades: int, sort_column, descending: bool, limit: int) -> list[BacktestResult]:
+                     min_trades: int, sort_column, descending: bool, limit: int,
+                     offset: int) -> list[BacktestResult]:
     """Apply the public grid filters in SQL; never load a run to filter in Python."""
     query = select(BacktestResult).where(
         BacktestResult.owner_id == owner_id, BacktestResult.run_id == run_id,
@@ -78,13 +85,14 @@ def filtered_results(session, *, owner_id: str, run_id: int, interval: str | Non
     if strategy_key:
         query = query.where(BacktestResult.strategy_key == strategy_key)
     direction = sort_column.desc() if descending else sort_column.asc()
-    return list(session.scalars(query.order_by(direction, BacktestResult.id).limit(limit)))
+    return list(session.scalars(query.order_by(direction, BacktestResult.id)
+                                .offset(offset).limit(limit)))
 
 
-def filtered_breakdown(session, *, owner_id: str, run_id: int, interval: str | None,
+def filtered_counts(session, *, owner_id: str, run_id: int, interval: str | None,
                        strategy_key: str | None, min_win_rate: float,
                        min_profit_factor: float, max_drawdown: float, min_return: float,
-                       min_trades: int) -> tuple[int, int, int]:
+                       min_trades: int) -> tuple[int, int, int, int]:
     base = [BacktestResult.owner_id == owner_id, BacktestResult.run_id == run_id]
     if interval:
         base.append(BacktestResult.interval == interval)
@@ -102,7 +110,7 @@ def filtered_breakdown(session, *, owner_id: str, run_id: int, interval: str | N
     total_eligible = int(session.scalar(select(func.count()).select_from(BacktestResult).where(
         *base, BacktestResult.error == "", BacktestResult.trades >= min_trades)) or 0)
     visible = int(session.scalar(select(func.count()).select_from(BacktestResult).where(*base, *valid)) or 0)
-    return errored, low, total_eligible - visible
+    return visible, errored, low, total_eligible - visible
 
 
 def iter_successful_results(*, owner_id: str, run_id: int, batch_size: int):
@@ -146,3 +154,13 @@ def update_run(session, *, owner_id: str, run_id: int, status: str = "",
     if note:
         run.note = note[:400]
     return run
+
+
+def reconcile_stale_runs(session, *, owner_id: str, note: str) -> int:
+    runs = list(session.scalars(select(BacktestRun).where(
+        BacktestRun.owner_id == owner_id, BacktestRun.status == "running")))
+    for run in runs:
+        run.status = "error"
+        run.done = durable_result_count(session, owner_id=owner_id, run_id=run.id)
+        run.note = note[:400]
+    return len(runs)

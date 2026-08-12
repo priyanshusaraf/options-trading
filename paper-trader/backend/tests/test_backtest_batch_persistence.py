@@ -28,7 +28,7 @@ import math
 import pytest
 from sqlalchemy import event, func, select
 
-from app.backtest import sweep
+from app.backtest import repository, sweep
 from app.core.instruments import Instrument
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal, init_db
@@ -168,16 +168,16 @@ def test_progress_is_recomputed_not_incremented(monkeypatch):
 def test_a_failed_batch_persists_neither_rows_nor_progress(monkeypatch):
     init_db(reset=True)
     run_id = _make_run(30)
-    real_count = sweep._durable_result_count
+    real_count = repository.durable_result_count
     state = {"calls": 0}
 
-    def exploding_count(session, rid, *, owner_id):
+    def exploding_count(session, *, run_id, owner_id):
         state["calls"] += 1
         if state["calls"] == 2:          # second batch only
             raise RuntimeError("disk went away")
-        return real_count(session, rid, owner_id=owner_id)
+        return real_count(session, run_id=run_id, owner_id=owner_id)
 
-    monkeypatch.setattr(sweep, "_durable_result_count", exploding_count)
+    monkeypatch.setattr(repository, "durable_result_count", exploding_count)
     _drive(run_id, 30, monkeypatch)
 
     rows, done, status = _counts(run_id)

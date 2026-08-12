@@ -106,8 +106,8 @@ def status(run_id: int | None = None, principal: Principal = Depends(get_princip
         run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id else
                repository.latest_run(s, owner_id=owner_id))
         if not run:
-            return {"run": None, "running": sweep.is_running()}
-        return {"run": run.to_dict(), "running": sweep.is_running()}
+            return {"run": None, "running": False}
+        return {"run": run.to_dict(), "running": run.status == "running"}
 
 
 @router.get("/runs")
@@ -118,12 +118,11 @@ def runs(limit: int = Query(default=100, ge=1, le=MAX_PAGE),
     'NIFTY×6 · 312 cells · done · 19 Jun'."""
     owner_id = owner_id_for(principal)
     with SessionLocal() as s:
-        rows = repository.list_runs(s, owner_id=owner_id, limit=limit)
+        rows = repository.list_runs_with_counts(s, owner_id=owner_id, limit=limit)
     out = []
-    for r in rows:
+    for r, result_count in rows:
         d = r.to_dict()
-        d["result_count"] = repository.result_count(
-            s, owner_id=owner_id, run_id=r.id, successful_only=True)
+        d["result_count"] = result_count
         out.append(d)
     return {"runs": out}
 
@@ -169,6 +168,7 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             max_drawdown: float = 100.0, min_return: float = -1e9,
             min_trades: int = 10, sort: str = "return_pct",
             limit: int = Query(default=500, ge=1, le=MAX_PAGE),
+            offset: int = Query(default=0, ge=0),
             principal: Principal = Depends(get_principal)):
             # H9: default raised 1 -> 10 so a 1-lucky-trade cell is never surfaced as
             # promotable by default (grid selection bias across the sweep). Overridable.
@@ -178,7 +178,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
         run = (repository.get_run(s, owner_id=owner_id, run_id=run_id) if run_id is not None
                else repository.latest_run(s, owner_id=owner_id))
         if run is None:
-            return {"run_id": run_id, "count": 0, "results": [], "budget": round(budget, 0),
+            return {"run_id": run_id, "count": 0, "total": 0, "offset": offset,
+                    "limit": limit, "results": [], "budget": round(budget, 0),
                     "skipped": 0, "unaffordable": 0,
                     "skipped_breakdown": {"errored": 0, "low_trades": 0, "filtered": 0}}
         run_id = run.id
@@ -189,8 +190,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             s, owner_id=owner_id, run_id=run_id, interval=interval, strategy_key=strategy,
             min_win_rate=min_win_rate, min_profit_factor=min_profit_factor,
             max_drawdown=max_drawdown, min_return=min_return, min_trades=min_trades,
-            sort_column=column, descending=reverse, limit=limit)
-        skipped_errored, skipped_low_trades, skipped_filtered = repository.filtered_breakdown(
+            sort_column=column, descending=reverse, limit=limit, offset=offset)
+        total, skipped_errored, skipped_low_trades, skipped_filtered = repository.filtered_counts(
             s, owner_id=owner_id, run_id=run_id, interval=interval, strategy_key=strategy,
             min_win_rate=min_win_rate, min_profit_factor=min_profit_factor,
             max_drawdown=max_drawdown, min_return=min_return, min_trades=min_trades)
@@ -210,7 +211,8 @@ def results(request: Request, run_id: int | None = None, interval: str | None = 
             unaffordable += 1
         out.append(d)
 
-    return {"run_id": run_id, "count": len(out), "results": out,
+    return {"run_id": run_id, "count": len(out), "total": total,
+            "offset": offset, "limit": limit, "results": out,
             "budget": round(budget, 0), "skipped": skipped, "unaffordable": unaffordable,
             "skipped_breakdown": {
                 "errored": skipped_errored, "low_trades": skipped_low_trades,

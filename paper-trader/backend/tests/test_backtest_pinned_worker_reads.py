@@ -111,7 +111,7 @@ def test_the_pinned_payload_carries_an_address_and_no_candles(store_root):
     slots, payload = sweep._plan_dataset(
         provider, inst, "15minute", 50_000.0, win,
         [get_strategy(k) for k in STRATEGIES], header,
-        pinned_address=header.dataset_address)
+        pinned_address=header.dataset_address, owner_id="owner")
 
     assert payload is not None and payload["address"] == address
     assert "candles" not in payload and "provider" not in payload

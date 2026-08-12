@@ -33,11 +33,9 @@ from app.core.config import get_settings
 from app.backtest.universe import full_universe, liquid_universe
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
-from app.db.models import BacktestResult, BacktestRun
 from app.backtest import repository
 from app.db.session import SessionLocal
 from app.providers.factory import get_provider
-from sqlalchemy import func, select
 
 # Results and progress are persisted together, in transactions of at most this
 # many cells. Two things depend on the number being small and fixed: a crash can
@@ -1090,10 +1088,7 @@ def _durable_result_count(session, run_id, *, owner_id: str) -> int:
     different transaction than the one that made the row durable, so a crash
     between the two leaves a run reporting work it cannot show.
     """
-    return int(session.scalar(
-        select(func.count()).select_from(BacktestResult)
-        .where(BacktestResult.owner_id == owner_id,
-               BacktestResult.run_id == run_id)) or 0)
+    return repository.durable_result_count(session, owner_id=owner_id, run_id=run_id)
 
 
 def _commit_batch(run_id, values: list[dict], *, owner_id: str, status: str = "",
@@ -1106,13 +1101,8 @@ def _commit_batch(run_id, values: list[dict], *, owner_id: str, status: str = ""
     with SessionLocal() as s:
         repository.append_result_batch(s, owner_id=owner_id, run_id=run_id, values=values)
         s.flush()          # rows are visible to the count below, still uncommitted
-        run = repository.get_run(s, owner_id=owner_id, run_id=run_id)
-        if run is not None:
-            run.done = _durable_result_count(s, run_id, owner_id=owner_id)
-            if status:
-                run.status = status
-            if note:
-                run.note = note[:400]
+        repository.update_run(s, owner_id=owner_id, run_id=run_id,
+                              status=status, note=note)
         s.commit()
 
 
@@ -1129,13 +1119,10 @@ def reconcile_stale_runs(*, owner_id: str) -> int:
         return 0
     repaired = 0
     with SessionLocal() as s:
-        for run in s.scalars(select(BacktestRun).where(
-                BacktestRun.owner_id == owner_id, BacktestRun.status == "running")):
-            run.status = "error"
-            run.done = _durable_result_count(s, run.id, owner_id=owner_id)
-            run.note = ("interrupted: the process ended before this sweep "
-                        "finished; progress reset to its durable results")
-            repaired += 1
+        repaired = repository.reconcile_stale_runs(
+            s, owner_id=owner_id,
+            note="interrupted: the process ended before this sweep finished; "
+                 "progress reset to its durable results")
         if repaired:
             s.commit()
     return repaired

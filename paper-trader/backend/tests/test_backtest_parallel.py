@@ -241,7 +241,8 @@ def test_the_payload_that_crosses_the_boundary_carries_no_frame_and_no_session(
     from app.strategy.registry import get_strategy
     strategies = [get_strategy(k) for k in STRATEGIES]
     slots, payload = sweep._plan_dataset(
-        provider, inst, "15minute", 50_000.0, win, strategies, prepared)
+        provider, inst, "15minute", 50_000.0, win, strategies, prepared,
+        owner_id="owner")
 
     assert payload is not None and len(payload["cells"]) == 2
     assert "frame" not in payload and "provider" not in payload
@@ -267,6 +268,7 @@ def test_a_worker_whose_strategy_version_disagrees_fails_closed(store_root):
         "candles": (), "inst": _stub_instrument(), "interval": "15minute",
         "capital": 50_000.0, "slippage_pct": 0.0005, "bars": 0, "first_ts": 0,
         "last_ts": 0, "effective_days": 0, "clamped": False,
+        "owner_id": "owner",
         "cells": [{"strategy_key": "trend_impulse_v3",
                    "strategy_version": "f" * 64,
                    "params": {}, "phash": ""}],
