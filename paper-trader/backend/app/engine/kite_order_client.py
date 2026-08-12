@@ -335,6 +335,9 @@ class KiteOrderClient:
     def orders(self) -> list[dict]:
         """Today's order identities for entry and protective-stop recovery."""
         self._sync_token()
+        raw = self.kite.orders()
+        if raw is None:
+            raise RuntimeError("broker order book is unavailable")
         return [{
             "order_id": o.get("order_id"),
             "tradingsymbol": o.get("tradingsymbol"),
@@ -346,7 +349,7 @@ class KiteOrderClient:
             "exchange": o.get("exchange"),
             "quantity": int(o.get("quantity", 0) or 0),
             "trigger_price": float(o.get("trigger_price", 0.0) or 0.0),
-        } for o in (self.kite.orders() or [])]
+        } for o in raw]
 
     def find_fill(self, tradingsymbol: str, side: str = "SELL") -> dict | None:
         """Find today's REAL fill for `tradingsymbol`/`side` (e.g. the SELL that

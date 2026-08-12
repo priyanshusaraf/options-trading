@@ -347,6 +347,7 @@ class BrokerAccount(Base):
     __table_args__ = (
         UniqueConstraint("owner_id", "broker", "external_account_id",
                          name="uq_broker_accounts_owner_broker_external"),
+        Index("ux_broker_accounts_owner_account", "owner_id", "broker_account_id", unique=True),
         CheckConstraint("status IN ('active', 'disabled')", name="ck_broker_accounts_status"),
     )
 
@@ -362,6 +363,159 @@ class BrokerAccount(Base):
                                                      nullable=False)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now,
                                                      nullable=False)
+
+
+class AccountExecutionLease(Base):
+    """Durable authority for the one execution actor of a broker account."""
+    __tablename__ = "account_execution_leases"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "broker_account_id"),
+            ("broker_accounts.owner_id", "broker_accounts.broker_account_id"),
+            name="fk_account_execution_leases_account", ondelete="RESTRICT"),
+        CheckConstraint("fence_epoch > 0", name="ck_account_execution_leases_epoch"),
+        CheckConstraint(
+            "state IN ('idle', 'recovering', 'active', 'blocked')",
+            name="ck_account_execution_leases_state"),
+        CheckConstraint(
+            "desired_state IN ('disabled', 'armed')",
+            name="ck_account_execution_leases_desired_state"),
+        CheckConstraint(
+            "effective_state IN ('disabled', 'armed')",
+            name="ck_account_execution_leases_effective_state"),
+        CheckConstraint("control_revision >= 0", name="ck_account_execution_leases_revision"),
+        CheckConstraint(
+            "(state = 'idle' AND cell_id IS NULL AND worker_id IS NULL "
+            "AND heartbeat_at IS NULL AND expires_at IS NULL) OR "
+            "(state <> 'idle' AND cell_id IS NOT NULL AND worker_id IS NOT NULL "
+            "AND heartbeat_at IS NOT NULL AND expires_at IS NOT NULL "
+            "AND expires_at > heartbeat_at)",
+            name="ck_account_execution_leases_holder_shape"),
+        CheckConstraint(
+            "(state = 'active' AND reconciled_at IS NOT NULL) OR state <> 'active'",
+            name="ck_account_execution_leases_active_reconciled"),
+        Index("ix_account_execution_leases_expiry_state", "expires_at", "state"),
+        Index("ix_account_execution_leases_worker", "cell_id", "worker_id"),
+    )
+
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    broker_account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fence_epoch: Mapped[int] = mapped_column(Integer, nullable=False, default=1,
+                                              server_default="1")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="idle",
+                                       server_default="idle")
+    cell_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    host_diagnostic: Mapped[str] = mapped_column(String(160), nullable=False, default="",
+                                                 server_default="")
+    claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    recovery_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    reconciled_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    blocked_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    block_reason: Mapped[str] = mapped_column(String(200), nullable=False, default="",
+                                              server_default="")
+    desired_state: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                default="disabled", server_default="disabled")
+    effective_state: Mapped[str] = mapped_column(String(16), nullable=False,
+                                                  default="disabled", server_default="disabled")
+    control_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0,
+                                                   server_default="0")
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                     default=dt.datetime.now)
+
+
+class AccountExecutionLeaseHistory(Base):
+    """Sparse authority transitions. Heartbeats deliberately do not land here."""
+    __tablename__ = "account_execution_lease_history"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "broker_account_id"),
+            ("account_execution_leases.owner_id", "account_execution_leases.broker_account_id"),
+            name="fk_account_execution_history_lease", ondelete="RESTRICT"),
+        CheckConstraint("fence_epoch > 0", name="ck_account_execution_history_epoch"),
+        CheckConstraint(
+            "transition IN ('claim', 'takeover', 'activate', 'block', 'release', "
+            "'cancel', 'fence_rejection')",
+            name="ck_account_execution_history_transition"),
+        Index("ix_account_execution_history_account", "owner_id", "broker_account_id", "id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    broker_account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fence_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    cell_id: Mapped[str] = mapped_column(String(96), nullable=False, default="",
+                                         server_default="")
+    worker_id: Mapped[str] = mapped_column(String(96), nullable=False, default="",
+                                           server_default="")
+    transition: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), nullable=False, default="",
+                                        server_default="")
+    occurred_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                      default=dt.datetime.now)
+
+
+class AccountExecutionCommand(Base):
+    """Epoch-stamped money/control command journal; not the event outbox."""
+    __tablename__ = "account_execution_commands"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "broker_account_id"),
+            ("account_execution_leases.owner_id", "account_execution_leases.broker_account_id"),
+            name="fk_account_execution_commands_lease", ondelete="RESTRICT"),
+        UniqueConstraint("owner_id", "broker_account_id", "idempotency_key",
+                         name="uq_account_execution_commands_idempotency"),
+        CheckConstraint("fence_epoch > 0", name="ck_account_execution_commands_epoch"),
+        CheckConstraint(
+            "state IN ('prepared', 'processing', 'sent_unknown', 'acknowledged', 'resolved', "
+            "'cancelled', 'failed', 'blocked')",
+            name="ck_account_execution_commands_state"),
+        CheckConstraint(_LowerHexDigest("request_digest"),
+                        name="ck_account_execution_commands_digest"),
+        Index("ix_account_execution_commands_recovery", "owner_id", "broker_account_id",
+              "state", "fence_epoch"),
+        Index("ix_account_execution_commands_age", "state", "updated_at"),
+    )
+    command_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    broker_account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    fence_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    cell_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    broker_tag: Mapped[str] = mapped_column(String(32), nullable=False, default="",
+                                            server_default="")
+    venue_idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False, default="",
+                                                       server_default="")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="prepared",
+                                       server_default="prepared")
+    broker_order_id: Mapped[str] = mapped_column(String(64), nullable=False, default="",
+                                                 server_default="")
+    protective_id: Mapped[str] = mapped_column(String(64), nullable=False, default="",
+                                               server_default="")
+    requested_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requested_side: Mapped[str] = mapped_column(String(8), nullable=False, default="",
+                                                server_default="")
+    requested_trigger: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="",
+                                            server_default="")
+    actor_user_id: Mapped[str] = mapped_column(String(64), nullable=False, default="",
+                                               server_default="")
+    expected_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                     default=dt.datetime.now)
+    sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resolution_digest: Mapped[str] = mapped_column(String(64), nullable=False, default="",
+                                                   server_default="")
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False,
+                                                     default=dt.datetime.now)
 
 
 class Deployment(Base):
@@ -494,6 +648,7 @@ class ExecutionIntent(Base):
         Text, default="{}", server_default="{}", nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.now, nullable=False)
+    fence_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ExecutionOrderEvent(Base):
@@ -533,6 +688,7 @@ class ExecutionOrderEvent(Base):
         Text, default="{}", server_default="{}", nullable=False)
     anomaly: Mapped[str] = mapped_column(
         String(200), default="", server_default="", nullable=False)
+    fence_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 for _trigger_name, _operation in (
@@ -1820,6 +1976,7 @@ class OrderJournal(Base):
     filled_qty: Mapped[int] = mapped_column(Integer, default=0)
     avg_price: Mapped[float] = mapped_column(Float, default=0.0)
     placed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    fence_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class EarningsEvent(Base):

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # explicit act by an owner where the env var is a deployment default. Naming one that does
     # not exist REFUSES rather than falling back — see `providers/connection.py`.
     execution_connection: str = ""
+    execution_worker: str = "auto"  # auto (local SQLite only) | api | worker
+    execution_owner_id: str = ""
+    execution_broker_account_id: str = ""
+    execution_cell_id: str = ""
     # Whose resources this process serves. One owner today; the column exists so the tenancy
     # dimension is real rather than retrofitted. `LEGACY_OWNER_ID` in models.py is the same
     # value and the two must not drift.
@@ -574,6 +578,26 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
             "REFUSING TO START: authentication is disabled for a production-like service role. "
             "Enable durable authentication or use an explicit development/test PT_SERVICE_ROLE."
         )
+    role = settings.execution_worker.strip().lower()
+    if role not in {"auto", "api", "worker"}:
+        raise BootConfigError("PT_EXECUTION_WORKER must be exactly auto, api, or worker")
+    if role == "auto" and settings.database_url.strip():
+        from sqlalchemy.engine import make_url
+        try:
+            backend = make_url(settings.database_url.strip()).get_backend_name()
+        except Exception as exc:
+            raise BootConfigError("PT_DATABASE_URL is not a valid SQLAlchemy URL") from exc
+        if backend == "postgresql":
+            raise BootConfigError(
+                "shared PostgreSQL requires explicit PT_EXECUTION_WORKER=api or worker")
+    if role == "worker":
+        identities = (settings.execution_owner_id.strip(),
+                      settings.execution_broker_account_id.strip(),
+                      settings.execution_cell_id.strip())
+        if any(not value for value in identities) or len(identities[2]) > 96:
+            raise BootConfigError(
+                "execution worker requires bounded PT_EXECUTION_OWNER_ID, "
+                "PT_EXECUTION_BROKER_ACCOUNT_ID, and PT_EXECUTION_CELL_ID")
 
     # 1. Config must be attached. An explicit PT_DISABLE_DOTENV=1 is an
     #    operator-typed opt-out and takes its own path; the heuristic misfiring

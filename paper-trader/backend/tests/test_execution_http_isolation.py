@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.db.models import BrokerAccount, Membership, Organization, User
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from app.execution.leases import LeaseRepository
 from app.main import app
 
 
@@ -48,6 +49,11 @@ def _client(monkeypatch, principal: Principal) -> tuple[TestClient, EngineRunner
         session.commit()
     runner = EngineRunner(owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
                           deployment_id=deployment.id)
+    leases = LeaseRepository(SessionLocal)
+    token = leases.claim(owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
+                         cell_id="test-cell", worker_id="test-boot")
+    leases.activate(token, reconciliation_evidence="test fixture reconciled")
+    runner.broker.execution_lease_token = token
     app.state.runner = runner
     app.dependency_overrides[get_principal] = lambda: principal
     return TestClient(app), runner
@@ -86,8 +92,15 @@ def test_local_owner_can_arm_only_the_local_execution_cell(monkeypatch):
     """Removing the local-cell equality check would make this authorization meaningless."""
     client, runner = _client(monkeypatch, _principal(OWNER_A, "owner"))
     try:
-        assert client.post("/api/v1/execution/arm", json={"armed": True}).json() == {"armed": True}
-        assert runner.armed is True
+        response = client.post("/api/v1/execution/arm", json={"armed": True})
+        assert response.status_code == 202
+        assert response.json()["armed"] is False
+        assert response.json()["desired_state"] == "armed"
+        assert response.json()["effective_state"] == "disabled"
+        assert response.json()["status"] == "accepted"
+        # The API records shared desired state; it never pretends another process's
+        # in-memory runner has already executed the command.
+        assert runner.armed is False
     finally:
         app.dependency_overrides.clear()
         runner.broker.close()

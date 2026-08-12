@@ -387,3 +387,11 @@ def test_stop_gtt_still_places_for_fo_exchanges():
     tid = KiteOrderClient(k).place_stop_gtt("NIFTY26JUL24000CE", "NFO", 75, 55.0, 80.0)
     assert tid == "555"
     assert k.gtt_placed[0]["orders"][0]["product"] == "NRML"
+
+
+def test_orders_none_is_unreadable_not_an_empty_book():
+    import pytest
+    k = FakeKite()
+    k.orders = lambda: None
+    with pytest.raises(RuntimeError, match="unavailable"):
+        KiteOrderClient(k).orders()

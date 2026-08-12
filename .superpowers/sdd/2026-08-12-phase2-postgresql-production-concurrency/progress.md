@@ -49,6 +49,9 @@
   independent SPEC PASS / QUALITY PASS. Live PostgreSQL 16 focused copy gate: 19 passed. Bounded
   schema/profile/tenant gate: 149 passed, 13 deliberate skips. See `task-4-report.md`.
 - Task 5: account leases, fencing, and replicated API ownership — brief complete at
-  `task-5-brief.md`; implementation in progress from `8e520ff`.
+  `task-5-brief.md`; implementation complete and awaiting independent review. Durable lease,
+  command/control, closed LiveBroker mutation perimeter, stale-write fencing, API-only replicas,
+  holder control execution, strict recovery activation and SQLite/live-PostgreSQL races are in the
+  uncommitted tree. See `task-5-report.md`.
 - Task 6: shared event delivery and transactional outbox.
 - Task 7: backup/restore, failure recovery, and production concurrency/load proof.

@@ -57,6 +57,9 @@ TABLE_PLANES: dict[str, Plane] = {
     "broker_connections": Plane.MONEY,
     "oauth_callback_states": Plane.MONEY,
     "broker_accounts": Plane.MONEY,
+    "account_execution_leases": Plane.MONEY,
+    "account_execution_lease_history": Plane.MONEY,
+    "account_execution_commands": Plane.MONEY,
     # ADR 0015 §2: a connection is money-plane on BLAST RADIUS, not on recovery cost. A row
     # here is the authority to place real orders on a real account. The encryption key is not
     # in any plane — it comes from the environment, so a database compromise alone is not a

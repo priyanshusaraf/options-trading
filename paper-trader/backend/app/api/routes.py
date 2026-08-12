@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -29,7 +30,11 @@ from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
 from app.api.principal import Principal, get_principal, owner_id_for
-from app.api.execution_access import local_execution_cell
+from app.api.execution_access import (durable_execution_account,
+                                      durable_execution_status,
+                                      local_execution_cell)
+from app.execution.leases import (LeaseRepository, LeaseUnavailable,
+                                  RecoveryRequired, StaleLease)
 from app.ws.manager import manager
 
 router = APIRouter()
@@ -897,30 +902,57 @@ async def set_no_take_profit(key: str, body: NoTPBody, request: Request):
 # ── execution control: arm-to-trade + kill switch ───────────────────────────
 class ArmBody(BaseModel):
     armed: bool
+    request_id: str | None = None
+    expected_revision: int | None = None
+    expected_epoch: int | None = None
 
 
 @router.get("/api/execution/state")
-def execution_state(request: Request):
-    r = _runner(request)
-    return {"armed": r.armed, "provider": r.provider.name, "running": r.running}
+def execution_state(request: Request, account_id: str | None = None,
+                    principal: Principal = Depends(get_principal)):
+    status = durable_execution_status(principal, account_id)
+    return {**status, "armed": status["effective_state"] == "armed",
+            "running": status["state"] == "active"}
 
 
-@router.post("/api/execution/arm")
+@router.post("/api/execution/arm", status_code=202)
 def execution_arm(body: ArmBody, request: Request,
+                  account_id: str | None = None,
                   principal: Principal = Depends(get_principal)):
-    # arm/disarm only flips a flag + sends a notification — no broker-session access,
-    # so a plain (threadpool) handler is safe here.
-    return {"armed": local_execution_cell(request, principal, mutation=True).arm(body.armed)}
+    if not principal.is_owner:
+        raise HTTPException(status_code=403, detail="forbidden")
+    selected = durable_execution_account(principal, account_id)
+    try:
+        result = LeaseRepository(SessionLocal).request_control(
+            owner_id=owner_id_for(principal), broker_account_id=selected,
+            kind="arm" if body.armed else "disarm",
+            idempotency_key=body.request_id or uuid.uuid4().hex,
+            actor_user_id=principal.user_id or principal.id,
+            expected_revision=body.expected_revision, expected_epoch=body.expected_epoch)
+    except LeaseUnavailable as exc:
+        raise HTTPException(status_code=404, detail="execution unavailable") from exc
+    except (RecoveryRequired, StaleLease, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {**result, "armed": result["effective_state"] == "armed"}
 
 
-@router.post("/api/execution/kill")
-async def execution_kill(request: Request):
-    # squares off open positions -> mutates the broker session, so run on the event
-    # loop under the engine lock (same guarantee as the manual close route).
-    r = _runner(request)
-    async with r._lock:
-        closed = r.kill()
-    return {"killed": True, "armed": r.armed, "squared_off": closed}
+@router.post("/api/execution/kill", status_code=202)
+async def execution_kill(request: Request, account_id: str | None = None,
+                         request_id: str | None = None,
+                         principal: Principal = Depends(get_principal)):
+    if not principal.is_owner:
+        raise HTTPException(status_code=403, detail="forbidden")
+    selected = durable_execution_account(principal, account_id)
+    try:
+        result = LeaseRepository(SessionLocal).request_control(
+            owner_id=owner_id_for(principal), broker_account_id=selected, kind="kill",
+            idempotency_key=request_id or uuid.uuid4().hex,
+            actor_user_id=principal.user_id or principal.id)
+    except LeaseUnavailable as exc:
+        raise HTTPException(status_code=404, detail="execution unavailable") from exc
+    except (RecoveryRequired, StaleLease) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {**result, "killed": False, "accepted": True}
 
 
 class ManualOpenBody(BaseModel):

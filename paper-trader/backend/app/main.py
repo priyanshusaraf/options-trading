@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -103,7 +105,8 @@ async def lifespan(app: FastAPI):
     # C7: refuse to start a second backend against the same persistent (non-mock) DB
     # — two instances would trade the same real account with independent in-flight
     # state. Mock (tests, dry-run) skips this so multiple TestClients can coexist.
-    if settings.provider != "mock":
+    from app.db.session import engine as execution_engine
+    if settings.provider != "mock" and execution_engine.dialect.name == "sqlite":
         from app.core.instance_lock import acquire_db_lock
         app.state.db_lock = acquire_db_lock(settings.db_path)
     init_db(reset=settings.provider == "mock")
@@ -147,8 +150,44 @@ async def lifespan(app: FastAPI):
     if not settings.research_enabled:
         log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — portfolio/research "
                  "API is gated off; deployed execution artifacts remain hydrated")
-    runner = EngineRunner(owner_id=LEGACY_OWNER_ID,
-                          broker_account_id=LEGACY_BROKER_ACCOUNT_ID)  # factory logs the chosen provider
+
+    worker_role = settings.execution_worker.strip().lower()
+    hosts_execution = worker_role == "worker"
+    if worker_role == "auto":
+        # Local SQLite retains the single-node compatibility cell. Shared PostgreSQL
+        # replicas are API-only until explicitly assigned an account worker role.
+        hosts_execution = execution_engine.dialect.name == "sqlite"
+    if not hosts_execution:
+        app.state.runner = None
+        log.info("API-only replica ready — durable execution status/control enabled; no broker cell")
+        yield
+        return
+
+    assigned_owner = settings.execution_owner_id.strip()
+    assigned_account = settings.execution_broker_account_id.strip()
+    if execution_engine.dialect.name == "sqlite":
+        assigned_owner = assigned_owner or LEGACY_OWNER_ID
+        assigned_account = assigned_account or LEGACY_BROKER_ACCOUNT_ID
+    if not assigned_owner or not assigned_account:
+        raise RuntimeError(
+            "execution worker requires PT_EXECUTION_OWNER_ID and "
+            "PT_EXECUTION_BROKER_ACCOUNT_ID")
+    from app.execution.leases import LeaseRepository
+    lease_repository = LeaseRepository(SessionLocal)
+    lease_token = lease_repository.claim(
+        owner_id=assigned_owner, broker_account_id=assigned_account,
+        cell_id=settings.execution_cell_id.strip() or "legacy-cell",
+        worker_id=uuid.uuid4().hex,
+        host_diagnostic=socket.gethostname())
+    runner = EngineRunner(owner_id=assigned_owner,
+                          broker_account_id=assigned_account,
+                          execution_lease_token=lease_token)  # factory logs chosen provider
+    from app.core.deployments import disarm_all
+    with SessionLocal() as disarm_session:
+        lease_repository.bind_money_session(disarm_session, lease_token)
+        disarm_all(disarm_session, owner_id=assigned_owner,
+                   broker_account_id=assigned_account)
+        disarm_session.commit()
     app.state.runner = runner
 
     manager.bind(asyncio.get_running_loop())
@@ -176,9 +215,54 @@ async def lifespan(app: FastAPI):
     # recovery adopts late fills / books filled exits so a restart resumes mid-flight.
     # Must finish before the signal loop can re-enter an instrument. Non-fatal.
     try:
-        await asyncio.to_thread(runner.broker.recover_journal, runner.provider.now())
+        reconcile = getattr(runner.broker, "reconcile_execution_lease", None)
+        if reconcile is None:
+            await asyncio.to_thread(runner.broker.recover_journal, runner.provider.now())
+            evidence = "paper/local journal replay completed"
+        else:
+            evidence = await asyncio.to_thread(reconcile, runner.provider.now())
+        lease_repository.activate(
+            lease_token, reconciliation_evidence=evidence[:200])
     except Exception as e:
         log.error(f"order journal recovery failed at startup: {e}")
+        lease_repository.block(lease_token, f"startup reconciliation failed: {type(e).__name__}")
+        runner.stop()
+        try:
+            runner.broker.close()
+        finally:
+            raise RuntimeError("execution recovery failed; runner loops were not started") from e
+
+    async def lease_watchdog() -> None:
+        while runner.running:
+            await asyncio.sleep(10)
+            try:
+                await asyncio.to_thread(lease_repository.heartbeat, lease_token)
+            except Exception as exc:
+                log.error(f"execution lease heartbeat lost: {exc}", event="LEASE_LOST")
+                runner.stop()
+                return
+
+    async def control_loop() -> None:
+        while runner.running:
+            await asyncio.sleep(0.5)
+            try:
+                commands = await asyncio.to_thread(
+                    lease_repository.claim_controls, lease_token, limit=8)
+                for command in commands:
+                    try:
+                        from app.execution.controls import apply_control
+                        async with runner._lock:
+                            await asyncio.to_thread(
+                                apply_control, lease_repository, lease_token, runner,
+                                command, SessionLocal)
+                    except Exception:
+                        continue
+            except Exception as exc:
+                log.error(f"execution control loop failed: {exc}", event="CONTROL_LOOP_FAIL")
+
+    control_task = asyncio.create_task(control_loop())
+
+    lease_task = asyncio.create_task(lease_watchdog())
     signal_task = asyncio.create_task(runner.run_signal_loop())
     risk_task = asyncio.create_task(runner.run_risk_loop())
     # Journal: detect trades the OWNER placed by hand on the Kite account and
@@ -206,13 +290,19 @@ async def lifespan(app: FastAPI):
         # restart can reach init_db(reset=True) while the old worker still owns a
         # SQLite transaction, and production shutdown can close a broker session
         # while an order poll is still using it.
-        await asyncio.gather(signal_task, risk_task, detect_task,
+        lease_task.cancel()
+        control_task.cancel()
+        await asyncio.gather(signal_task, risk_task, detect_task, lease_task, control_task,
                              return_exceptions=True)
         # Best-effort — a failure here must not stop the process exiting.
         try:
             runner.broker.close()
         except Exception as e:
             log.warn(f"broker session close failed at shutdown: {e}")
+        try:
+            lease_repository.release(lease_token)
+        except Exception as e:
+            log.warn(f"execution lease release failed at shutdown: {e}")
 
 
 class _PollingRouteFilter(logging.Filter):

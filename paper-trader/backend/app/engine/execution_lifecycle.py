@@ -334,6 +334,8 @@ class ExecutionLifecycleStore:
         self.session = session
         self.owner_id = owner_id
         self.broker_account_id = broker_account_id
+        token = session.info.get("execution_lease_token")
+        self.fence_epoch = token.fence_epoch if token is not None else None
         account = session.scalar(select(BrokerAccount).where(
             BrokerAccount.broker_account_id == broker_account_id,
             BrokerAccount.owner_id == owner_id,
@@ -376,6 +378,7 @@ class ExecutionLifecycleStore:
                 strategy_key=request.strategy_key,
                 strategy_version=request.strategy_version,
                 context_json=_canonical_json(context),
+                fence_epoch=self.fence_epoch,
                 created_at=now,
             )
             self.session.add(row)
@@ -393,6 +396,7 @@ class ExecutionLifecycleStore:
                 observed_at=now,
                 payload_json="{}",
                 anomaly="",
+                fence_epoch=self.fence_epoch,
             ))
             try:
                 self.session.commit()
@@ -440,6 +444,7 @@ class ExecutionLifecycleStore:
             observed_at=now,
             payload_json=payload_json,
             anomaly=event.anomaly,
+            fence_epoch=self.fence_epoch,
         )
         self.session.add(row)
         try:

@@ -11,10 +11,11 @@ so the engine keeps managing the position and alerts instead of assuming a fill.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 from dataclasses import replace
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.instruments import get_instrument
 from app.core.logging import log
@@ -80,10 +81,13 @@ class LiveBroker(PaperBroker):
                  deployment_id: int = LEGACY_DEPLOYMENT_ID,
                  owner_id: str, broker_account_id: str,
                  lifecycle_clock=None, connection: Connection | None = None,
-                 venue=None) -> None:
+                 venue=None, execution_lease_token=None) -> None:
         super().__init__(provider, deployment_id=deployment_id,
                          owner_id=owner_id,
-                         broker_account_id=broker_account_id)
+                         broker_account_id=broker_account_id,
+                         execution_lease_token=execution_lease_token)
+        self.execution_lease_token = execution_lease_token
+        self._lease_repository = None
         self.client = order_client
         # The wire seam. Every protective-stop call goes through here, so this broker
         # asks for a RESTING_STOP or a SERVER_TRIGGER and never for an SL-M or a GTT —
@@ -95,6 +99,17 @@ class LiveBroker(PaperBroker):
             from app.engine.kite_venue import KiteVenue
             venue = KiteVenue(order_client)
         self.venue = venue
+        if execution_lease_token is not None:
+            from app.db.session import SessionLocal
+            from app.execution.leases import (
+                BROKER_CLIENT_MUTATIONS, VENUE_MUTATIONS, FencedBrokerGateway,
+                FencedTransportProxy, LeaseRepository,
+            )
+            self._lease_repository = LeaseRepository(SessionLocal)
+            self._lease_repository.bind_money_session(self.s, execution_lease_token)
+            gateway = FencedBrokerGateway(self._lease_repository, execution_lease_token)
+            self.client = FencedTransportProxy(order_client, gateway, BROKER_CLIENT_MUTATIONS)
+            self.venue = FencedTransportProxy(venue, gateway, VENUE_MUTATIONS)
         # Which credential these orders go through. Written into every ExecutionIntent and
         # matched by the restart-recovery query, so it decides which unresolved entries this
         # broker may adopt. Defaults to the legacy derivation — the data provider serving as
@@ -625,6 +640,8 @@ class LiveBroker(PaperBroker):
                 instrument_key=(context or {}).get("inst_key", ""), side=req.side,
                 kind=kind, intent=intent, qty=req.qty,
                 context_json=json.dumps(context or {}), status="WORKING",
+                fence_epoch=(self.execution_lease_token.fence_epoch
+                             if self.execution_lease_token else None),
                 placed_at=self.provider.now())
             self.s.add(row)
             self.s.commit()
@@ -644,6 +661,11 @@ class LiveBroker(PaperBroker):
             if row:
                 row.order_id = order_id
                 self.s.commit()
+                if self.execution_lease_token and self._lease_repository:
+                    digest = hashlib.sha256(
+                        f"journal:{row.id}:{order_id}:{row.fence_epoch}".encode()).hexdigest()
+                    self._lease_repository.resolve_acknowledged_evidence(
+                        self.execution_lease_token, str(order_id), digest)
         except Exception as e:
             self.s.rollback()
             log.error(f"journal order_id set failed: {e}", event="JOURNAL_FAIL")
@@ -966,6 +988,79 @@ class LiveBroker(PaperBroker):
         self._recover_tag_sweep()
         return recovered
 
+    def reconcile_execution_lease(self, now) -> str:
+        """Run the bounded broker-visible checks required before an epoch activates.
+
+        Unlike the historical best-effort startup replay, failures propagate. Recovery cannot
+        interpret an unreadable order book, account position feed, or protective inventory as
+        absence. Known protection is observed and preserved; this method never blanket-cancels.
+        """
+        self.recover_journal(now)
+        raw_orders = self.client.orders()
+        raw_positions = self.provider.account_positions()
+        if raw_orders is None or raw_positions is None:
+            raise RuntimeError("broker order/position recovery read is unavailable")
+        orders = list(raw_orders)
+        account_positions = list(raw_positions)
+        durable_positions = list(self.open_positions())
+        kinds = {protective_kind_for_book_segment(pos.segment)
+                 for pos in durable_positions}
+        protection = []
+        protection_by_kind = {}
+        for kind in kinds:
+            raw = self.venue.protective_inventory(kind)
+            if raw is None:
+                raise RuntimeError("protective inventory recovery read is unavailable")
+            rows = list(raw)
+            protection_by_kind[kind] = rows
+            protection.extend(rows)
+        from app.execution.leases import validate_recovery_snapshot
+        validate_recovery_snapshot(
+            durable_positions, account_positions, protection_by_kind,
+            lambda position: protective_kind_for_book_segment(position.segment),
+            protective_order_id)
+        if self.execution_lease_token and self._lease_repository:
+            self._lease_repository.reconcile_prior_commands_from_snapshot(
+                self.execution_lease_token, orders=orders, protection=protection)
+        unresolved = ExecutionLifecycleStore(
+            self.s, owner_id=self.owner_id,
+            broker_account_id=self.broker_account_id).unresolved_entries(
+                self.deployment_id, self.account.external_account_id,
+                self.connection.scope, broker=self.connection.broker)
+        if unresolved:
+            raise RuntimeError(
+                f"{len(unresolved)} unresolved execution intents require reconciliation")
+        working = list(self.s.scalars(select(OrderJournal.id).where(
+            OrderJournal.owner_id == self.owner_id,
+            OrderJournal.broker_account_id == self.broker_account_id,
+            OrderJournal.deployment_id == self.deployment_id,
+            OrderJournal.status == "WORKING")))
+        if working:
+            raise RuntimeError(f"{len(working)} working journal commands remain unresolved")
+        known = {str(row.order_id) for row in self.s.scalars(select(OrderJournal).where(
+            OrderJournal.owner_id == self.owner_id,
+            OrderJournal.broker_account_id == self.broker_account_id,
+            OrderJournal.deployment_id == self.deployment_id)) if row.order_id}
+        known.update(str(protective_order_id(pos)) for pos in self.open_positions()
+                     if protective_order_id(pos))
+        lifecycle_store = ExecutionLifecycleStore(
+            self.s, owner_id=self.owner_id, broker_account_id=self.broker_account_id)
+        for intent in self.s.scalars(select(ExecutionIntent).where(
+                ExecutionIntent.owner_id == self.owner_id,
+                ExecutionIntent.broker_account_id == self.broker_account_id,
+                ExecutionIntent.deployment_id == self.deployment_id)):
+            order_id = lifecycle_store.state_for(intent.client_intent_id).broker_order_id
+            if order_id:
+                known.add(str(order_id))
+        unaccounted = [str(order.get("order_id") or "") for order in orders
+                       if is_strategy_os_tag(order.get("tag"))
+                       and str(order.get("order_id") or "") not in known]
+        if unaccounted:
+            raise RuntimeError(
+                f"{len(unaccounted)} bot-tagged broker orders have no durable identity")
+        return (f"orders={len(orders)} account_positions={len(account_positions)} "
+                f"protective_orders={len(protection)}")
+
     def _recover_tag_sweep(self) -> None:
         """Surface any tag=pt-bot exchange order the bot cannot account for (a crash
         between the journal write and the placement ack). Never auto-books — alerts to
@@ -1177,8 +1272,11 @@ class LiveBroker(PaperBroker):
         # keep only orders whose cancel failed (a fill may have beaten the cancel — let
         # adoption manage it); drop everything successfully cancelled.
         self._inflight = {s: o for s, o in self._inflight.items() if o in failed}
-        self._pending_entries = {s: c for s, c in self._pending_entries.items()
-                                 if c.get("order_id") in failed}
+        self._pending_entries = {
+            s: c for s, c in self._pending_entries.items()
+            if (not c.get("order_id") and c.get("broker_tag"))
+            or c.get("order_id") in failed
+        }
         return cancelled
 
     def _actual_fill(self, res) -> tuple[int, float]:
@@ -1727,6 +1825,8 @@ class LiveBroker(PaperBroker):
                 context_json=json.dumps({"position_id": pos.id,
                                          "stop_price": pos.stop_price}),
                 status="TERMINAL", resolution="RESTING",
+                fence_epoch=(self.execution_lease_token.fence_epoch
+                             if self.execution_lease_token else None),
                 placed_at=self.provider.now()))
             self.s.commit()
         except Exception as e:

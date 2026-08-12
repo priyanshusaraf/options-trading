@@ -2,8 +2,9 @@
 it, it keeps managing/alerting open positions either way, and a KILL switch
 instantly disarms and squares everything off."""
 from app.core.instruments import get_instrument
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from app.execution.leases import LeaseRepository
 from app.notify.notifier import Notifier
 
 
@@ -76,16 +77,26 @@ def test_arm_kill_endpoints():
     from fastapi.testclient import TestClient
     from app.main import app
     r = _runner()
+    leases = LeaseRepository(SessionLocal)
+    token = leases.claim(owner_id=r.owner_id, broker_account_id=r.broker_account_id,
+                         cell_id="local-test", worker_id="local-test-worker")
+    leases.activate(token, reconciliation_evidence="local endpoint fixture")
+    r.broker.execution_lease_token = token
     app.state.runner = r
     c = TestClient(app)
     assert c.get("/api/execution/state").json()["armed"] is False
-    assert c.post("/api/execution/arm", json={"armed": True}).json()["armed"] is True
-    assert r.armed is True
+    armed = c.post("/api/execution/arm", json={"armed": True})
+    assert armed.status_code == 202
+    assert armed.json()["armed"] is False
+    assert armed.json()["desired_state"] == "armed"
+    assert r.armed is False
     _open_nifty(r)
-    res = c.post("/api/execution/kill").json()
-    assert res["killed"] is True and res["armed"] is False
-    assert "NIFTY" in res["squared_off"]
-    assert r.broker.position_for("NIFTY") is None
+    response = c.post("/api/execution/kill")
+    assert response.status_code == 202
+    res = response.json()
+    assert res["killed"] is False and res["accepted"] is True
+    # The holder control loop, not the replica serving HTTP, performs risk reduction.
+    assert r.broker.position_for("NIFTY") is not None
 
 
 def test_arm_and_kill_notify():

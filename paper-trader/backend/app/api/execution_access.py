@@ -12,8 +12,32 @@ from fastapi import HTTPException, Request
 from sqlalchemy import select
 
 from app.api.principal import Principal, owner_id_for
-from app.db.models import BrokerAccount
+from app.db.models import AccountExecutionLease, BrokerAccount
 from app.db.session import SessionLocal
+from app.execution.leases import LeaseRepository
+
+
+def durable_execution_account(principal: Principal, requested: str | None = None) -> str:
+    """Resolve an owner-scoped account without consulting process-local runner state."""
+    owner_id = owner_id_for(principal)
+    with SessionLocal() as session:
+        statement = select(BrokerAccount.broker_account_id).where(
+            BrokerAccount.owner_id == owner_id, BrokerAccount.status == "active")
+        if requested:
+            statement = statement.where(BrokerAccount.broker_account_id == requested)
+        rows = list(session.scalars(statement.order_by(BrokerAccount.broker_account_id).limit(2)))
+    if len(rows) != 1:
+        raise HTTPException(status_code=404, detail="execution unavailable")
+    return rows[0]
+
+
+def durable_execution_status(principal: Principal, requested: str | None = None) -> dict:
+    account_id = durable_execution_account(principal, requested)
+    status = LeaseRepository(SessionLocal).status(
+        owner_id=owner_id_for(principal), broker_account_id=account_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="execution unavailable")
+    return status
 
 
 def local_execution_cell(request: Request, principal: Principal, *, mutation: bool = False):
@@ -40,4 +64,16 @@ def local_execution_cell(request: Request, principal: Principal, *, mutation: bo
         ))
     if account is None or runner.owner_id != owner_id:
         raise HTTPException(status_code=404, detail="execution unavailable")
+    token = (getattr(runner, "execution_lease_token", None)
+             or getattr(getattr(runner, "broker", None), "execution_lease_token", None))
+    with SessionLocal() as session:
+        durable = session.get(AccountExecutionLease, (owner_id, runner.broker_account_id))
+        if durable is not None and (token is None
+                or token.fence_epoch != durable.fence_epoch
+                or token.cell_id != durable.cell_id
+                or token.worker_id != durable.worker_id
+                or durable.state != "active"):
+            # A replica may host an old local runner, but it never becomes shared authority,
+            # including reads which would prime private process state or a WebSocket.
+            raise HTTPException(status_code=404, detail="execution unavailable")
     return runner

@@ -135,8 +135,8 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     # End only the clean read snapshot. SQLite readers otherwise may retain a
     # view from before the independent bootstrap commit and miss the new row.
     session.rollback()
-    _bootstrap_capital(bind, book=book,
-                       broker_account_id=broker_account_id)
+    _bootstrap_capital(bind, book=book, broker_account_id=broker_account_id,
+                       execution_lease_token=session.info.get("execution_lease_token"))
     with session.no_autoflush:
         row = session.get(CapitalState, (broker_account_id, book))
     if row is None:
@@ -144,7 +144,8 @@ def capital_for_book(session, book: str, *, broker_account_id: str):
     return row
 
 
-def _bootstrap_capital(bind, *, book: str, broker_account_id: str) -> None:
+def _bootstrap_capital(bind, *, book: str, broker_account_id: str,
+                       execution_lease_token=None) -> None:
     """Claim or create missing money state in one short independent transaction."""
     from sqlalchemy import select
     from sqlalchemy.orm import Session
@@ -155,6 +156,9 @@ def _bootstrap_capital(bind, *, book: str, broker_account_id: str) -> None:
     from app.db.models import BrokerAccount, CapitalState
 
     with Session(bind=bind, future=True, expire_on_commit=False) as bootstrap:
+        if execution_lease_token is not None:
+            from app.execution.leases import LeaseRepository
+            LeaseRepository.bind_money_session(bootstrap, execution_lease_token)
         begin_reservation(bootstrap, scope=f"capital:{broker_account_id}")
         if bootstrap.get(BrokerAccount, broker_account_id) is None:
             raise ValueError(f"broker account {broker_account_id!r} does not exist")

@@ -11,14 +11,20 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import get_settings
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
+from app.execution.leases import LeaseRepository
 from app.main import app
 
 
 def _client():
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    leases = LeaseRepository(SessionLocal)
+    token = leases.claim(owner_id=r.owner_id, broker_account_id=r.broker_account_id,
+                         cell_id="auth-test", worker_id="auth-test-worker")
+    leases.activate(token, reconciliation_evidence="auth fixture")
+    r.broker.execution_lease_token = token
     app.state.runner = r
     return TestClient(app), r
 
@@ -39,7 +45,9 @@ def test_protected_route_with_correct_bearer_token_is_allowed(monkeypatch):
         headers={"Authorization": "Bearer secret-token"},
     )
     assert res.status_code != 401
-    assert res.json().get("armed") is True
+    assert res.status_code == 202
+    assert res.json().get("armed") is False
+    assert res.json().get("desired_state") == "armed"
 
 
 def test_protected_route_with_wrong_token_is_rejected(monkeypatch):

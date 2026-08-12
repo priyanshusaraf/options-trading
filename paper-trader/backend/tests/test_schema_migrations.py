@@ -34,7 +34,7 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0031"
+HEAD = "0032"
 
 
 def test_revision_0031_downgrade_refuses_changed_legacy_preference(tmp_path):

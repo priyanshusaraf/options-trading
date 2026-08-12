@@ -37,10 +37,14 @@ class PaperBroker:
     MODE = "paper"   # stamped on every Position/Trade this broker creates (LiveBroker overrides to "live")
 
     def __init__(self, provider: MarketDataProvider, deployment_id: int = LEGACY_DEPLOYMENT_ID,
-                 *, owner_id: str, broker_account_id: str) -> None:
+                 *, owner_id: str, broker_account_id: str, execution_lease_token=None) -> None:
         self.provider = provider
         self.settings = get_settings()
         self.s = SessionLocal()
+        self.execution_lease_token = execution_lease_token
+        if execution_lease_token is not None:
+            from app.execution.leases import LeaseRepository
+            LeaseRepository.bind_money_session(self.s, execution_lease_token)
         # Which book this broker writes into. Every Position/Trade/EquitySnapshot it
         # creates is stamped with it, so attribution is a property of the write path
         # rather than something reconstructed later from timestamps and guesswork.

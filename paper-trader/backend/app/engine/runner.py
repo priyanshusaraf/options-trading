@@ -102,7 +102,8 @@ _INTERVAL_MINUTES = {"5minute": 5, "15minute": 15, "30minute": 30, "60minute": 6
 
 class EngineRunner:
     def __init__(self, *, owner_id: str, broker_account_id: str,
-                 deployment_id: int = LEGACY_DEPLOYMENT_ID) -> None:
+                 deployment_id: int = LEGACY_DEPLOYMENT_ID,
+                 execution_lease_token=None) -> None:
         self.settings = get_settings()
         self.provider = get_provider()
         self.notifier = Notifier()             # Telegram alerts (no-op if unconfigured)
@@ -114,21 +115,9 @@ class EngineRunner:
         self.deployment_id = deployment_id
         self.owner_id = owner_id
         self.broker_account_id = broker_account_id
-        # Disarm every deployment on process start — the same invariant the global
-        # `armed` flag has (it is False below), for the same reason: nobody was
-        # watching when the process went down, so no arm state may be inherited
-        # across a restart. Best-effort; a failure here must not stop the engine
-        # booting, and the in-memory flag is disarmed regardless.
-        try:
-            from app.core.deployments import disarm_all
-            with SessionLocal() as _s:
-                if disarm_all(
-                        _s, owner_id=self.owner_id,
-                        broker_account_id=self.broker_account_id):
-                    _s.commit()
-        except Exception as e:
-            log.warn(f"could not clear persisted deployment arm state at boot: {e}",
-                     event="ARM_RESET_FAIL")
+        self.execution_lease_token = execution_lease_token
+        # Durable startup disarm is performed by the composition root after it owns a lease.
+        # Construction itself never mutates shared execution authority.
         # PaperBroker unless the live-execution flags are set (then LiveBroker).
         # The execution connection is resolved here, at the composition root, because
         # this is the only place that knows both roles: `self.provider` serves prices,
@@ -141,7 +130,7 @@ class EngineRunner:
         # parallel sweep turned into `busy_timeout` contention. The default configuration reads
         # no connection row at all and must therefore touch no session.
         if (get_settings().execution_connection or "").strip():
-            with SessionLocal() as _conn_s:
+            with self._session() as _conn_s:
                 _execution_connection = configured_execution_connection(
                     self.provider, session=_conn_s, owner_id=self.owner_id,
                     broker_account_id=self.broker_account_id)
@@ -152,7 +141,8 @@ class EngineRunner:
         self.broker = make_broker(self.provider, self.notifier,
                                   deployment_id=self.deployment_id,
                                   execution_connection=_execution_connection,
-                                  broker_account_id=self.broker_account_id, owner_id=self.owner_id)
+                                  broker_account_id=self.broker_account_id, owner_id=self.owner_id,
+                                  execution_lease_token=execution_lease_token)
         # Which execution book this runner's money state belongs to. Taken from the
         # broker that was actually built rather than from configuration, because that
         # object is the one doing the writing (`core/execution_book.py`).
@@ -263,16 +253,25 @@ class EngineRunner:
         self.on_update = None                 # async callback(state) — signal-lane snapshot
         self.on_position_ticks = None         # async callback(ticks) — fast-lane marks
 
+    @contextmanager
+    def _session(self):
+        """Runner-owned DB session; every write defaults to the current execution fence."""
+        with SessionLocal() as session:
+            if self.execution_lease_token is not None:
+                from app.execution.leases import LeaseRepository
+                LeaseRepository.bind_money_session(session, self.execution_lease_token)
+            yield session
+
     # ── instrument enable/disable ─────────────────────────────────────────
     def _load_enabled(self) -> set[str]:
-        with SessionLocal() as s:
+        with self._session() as s:
             rows = list(s.scalars(select(InstrumentState).where(
                 InstrumentState.owner_id == self.owner_id)))
             en = {r.instrument_key for r in rows if r.enabled}
         return en or {i.key for i in all_instruments(self.owner_id)}
 
     def set_enabled(self, key: str, enabled: bool) -> None:
-        with SessionLocal() as s:
+        with self._session() as s:
             r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.enabled = enabled
@@ -303,13 +302,13 @@ class EngineRunner:
 
     # ── per-instrument live interval + entry blocks ───────────────────────
     def _load_intervals(self) -> dict[str, str]:
-        with SessionLocal() as s:
+        with self._session() as s:
             return {r.instrument_key: normalize_live_interval(r.live_interval or "")
                     for r in s.scalars(select(InstrumentState).where(
                         InstrumentState.owner_id == self.owner_id))}
 
     def _load_entry_blocks(self) -> set[str]:
-        with SessionLocal() as s:
+        with self._session() as s:
             return {r.instrument_key for r in s.scalars(select(InstrumentState).where(
                 InstrumentState.owner_id == self.owner_id))
                     if r.entries_blocked}
@@ -320,7 +319,7 @@ class EngineRunner:
         default to options/v3/not-priority/not-overtraded."""
         from app.core.watchlists import effective_strategy_map
         products, strategies, priority, overtrade = {}, {}, {}, {}
-        with SessionLocal() as s:
+        with self._session() as s:
             for r in s.scalars(select(InstrumentState).where(
                     InstrumentState.owner_id == self.owner_id)):
                 products[r.instrument_key] = r.product or "options"
@@ -340,7 +339,7 @@ class EngineRunner:
         """The `Strategy` this runner's deployment pins, or None for the legacy
         deployment, which pins nothing and resolves per instrument by design."""
         from app.core.deployments import resolve_deployment_strategy
-        with SessionLocal() as s:
+        with self._session() as s:
             return resolve_deployment_strategy(
                 s, self.deployment_id, owner_id=self.owner_id,
                 broker_account_id=self.broker_account_id)
@@ -417,7 +416,7 @@ class EngineRunner:
 
         problems: list[str] = []
         try:
-            with SessionLocal() as s:
+            with self._session() as s:
                 bindings = paper_authority.register_active_adapters(
                     s, owner_id=self.owner_id,
                     broker_account_id=self.broker_account_id,
@@ -512,7 +511,7 @@ class EngineRunner:
         `/api/health`. Returns the instrument keys so the caller can surface them.
         """
         try:
-            with SessionLocal() as s:
+            with self._session() as s:
                 keys = sorted({p.instrument_key
                                for p in execution_book.foreign_book_positions(
                                    s, self.book, owner_id=self.owner_id,
@@ -545,7 +544,7 @@ class EngineRunner:
         try:
             from app.core import shadow_deployments
 
-            with SessionLocal() as session:
+            with self._session() as session:
                 for found in shadow_deployments.active_bindings(
                         session, owner_id=self.owner_id,
                         broker_account_id=self.broker_account_id,
@@ -593,7 +592,7 @@ class EngineRunner:
 
     def set_interval(self, key: str, interval: str) -> str:
         iv = normalize_live_interval(interval)
-        with SessionLocal() as s:
+        with self._session() as s:
             r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.live_interval = iv
@@ -620,7 +619,7 @@ class EngineRunner:
         is where `resolve(..., instrument_key=...)` is meant to be used.
         """
         from app.core.scoped_config import resolve
-        with SessionLocal() as s:
+        with self._session() as s:
             return resolve(s, self.settings, deployment_id=self.deployment_id,
                            owner_id=self.owner_id,
                            broker_account_id=self.broker_account_id)
@@ -630,7 +629,7 @@ class EngineRunner:
         self.params = self._effective_params()
 
     def set_entries_blocked(self, key: str, blocked: bool) -> None:
-        with SessionLocal() as s:
+        with self._session() as s:
             r = s.get(InstrumentState, (self.owner_id, key))
             if r:
                 r.entries_blocked = blocked
@@ -655,7 +654,7 @@ class EngineRunner:
         The commit lives INSIDE the block, so a caller's in-memory bookkeeping
         after the `with` only runs if the write actually landed.
         """
-        with SessionLocal() as s:
+        with self._session() as s:
             r = s.get(InstrumentState, (self.owner_id, key))
             if r is None:
                 r = InstrumentState(owner_id=self.owner_id, instrument_key=key)
@@ -2046,7 +2045,7 @@ class EngineRunner:
                 # 'NSE:HEG', not 'HEG' — so querying normalized names matched nothing and
                 # the earnings blackout could never have fired on a real symbol. Index
                 # the RESULT by the normalized name so lookups work in either form.
-                with SessionLocal() as s:
+                with self._session() as s:
                     for sym, rec in earnings_map(s, list(self.enabled), today).items():
                         self._earnings_cache[normalize_key(sym)] = dt.date.fromisoformat(
                             rec["date"])
@@ -2231,7 +2230,7 @@ class EngineRunner:
         must not mask a live loss. A risk control counting the wrong book's money is not
         a conservative approximation — it is wrong in both directions."""
         from app.engine.analytics import realized_on
-        with SessionLocal() as s:
+        with self._session() as s:
             return realized_on(
                 s, today, self.book, owner_id=self.owner_id,
                 broker_account_id=self.broker_account_id)
@@ -2239,7 +2238,7 @@ class EngineRunner:
     def _today_round_trips(self, today) -> int:
         """This book's completed round trips today — the hard daily round-trip cap (#10)."""
         from app.engine.analytics import round_trips_on
-        with SessionLocal() as s:
+        with self._session() as s:
             return round_trips_on(
                 s, today, self.book, owner_id=self.owner_id,
                 broker_account_id=self.broker_account_id)
@@ -2417,7 +2416,7 @@ class EngineRunner:
         }
 
     def _record_signal(self, now, key, st, note: str = "") -> None:
-        with SessionLocal() as s:
+        with self._session() as s:
             s.add(SignalEvent(owner_id=self.owner_id,
                               broker_account_id=self.broker_account_id,
                               deployment_id=self.deployment_id,
@@ -2563,7 +2562,7 @@ class EngineRunner:
         try:
             from app.db.models import OrderJournal
             today = self.provider.now().date()
-            with SessionLocal() as s:
+            with self._session() as s:
                 rows = s.query(OrderJournal.tradingsymbol, OrderJournal.placed_at).filter(
                     OrderJournal.owner_id == self.owner_id,
                     OrderJournal.broker_account_id == self.broker_account_id).all()
@@ -2697,7 +2696,7 @@ class EngineRunner:
     def _today_trade_count(self, today) -> int:
         """Trades CLOSED today — the gate that stops the anchor moving mid-session."""
         try:
-            with SessionLocal() as s:
+            with self._session() as s:
                 return int(s.query(func.count(Trade.id)).filter(
                     Trade.mode == self.book,
                     Trade.owner_id == self.owner_id,
@@ -2772,7 +2771,7 @@ class EngineRunner:
         from app.db.models import DailyAccountSnapshot
         day = self.provider.now().date().isoformat()
         try:
-            with SessionLocal() as s:
+            with self._session() as s:
                 row = s.get(DailyAccountSnapshot, (self.broker.broker_account_id, day))
                 if row is None:
                     row = DailyAccountSnapshot(broker_account_id=self.broker.broker_account_id, day=day)
@@ -2997,7 +2996,7 @@ class EngineRunner:
         # says, not a second gate that could disagree with it.
         try:
             from app.core.deployments import set_armed as _set_deployment_armed
-            with SessionLocal() as s:
+            with self._session() as s:
                 _set_deployment_armed(
                     s, self.deployment_id, self.armed, owner_id=self.owner_id,
                     broker_account_id=self.broker_account_id)

@@ -151,6 +151,39 @@ def test_kite_provider_outside_a_test_run_warns_about_nothing():
     assert warnings == []
 
 
+def test_postgres_requires_explicit_execution_replica_role():
+    with pytest.raises(BootConfigError, match="explicit PT_EXECUTION_WORKER"):
+        assert_boot_config(Settings(database_url=" postgresql+psycopg://u@db/app ",
+                                    execution_worker="auto"),
+                           env_file=".env", under_test=True)
+
+
+def test_api_replica_needs_no_execution_assignment():
+    assert_boot_config(Settings(database_url="postgresql+psycopg://u@db/app",
+                                execution_worker="api"),
+                       env_file=".env", under_test=True)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("execution_owner_id", ""),
+    ("execution_broker_account_id", ""),
+    ("execution_cell_id", ""),
+    ("execution_cell_id", "x" * 97),
+])
+def test_execution_worker_requires_bounded_complete_assignment(field, value):
+    values = {"database_url": "postgresql+psycopg://u@db/app",
+              "execution_worker": "worker", "execution_owner_id": "owner",
+              "execution_broker_account_id": "account", "execution_cell_id": "cell"}
+    values[field] = value
+    with pytest.raises(BootConfigError, match="requires bounded"):
+        assert_boot_config(Settings(**values), env_file=".env", under_test=True)
+
+
+def test_sqlite_auto_execution_role_remains_local_compatibility():
+    assert_boot_config(Settings(database_url="sqlite:///local.db", execution_worker="auto"),
+                       env_file=".env", under_test=True)
+
+
 # ------------------------------------------------------------ wiring ----
 
 def test_the_app_boot_path_actually_calls_the_assertion():
