@@ -100,6 +100,26 @@ def _build_from_baseline(tmp_path):
     return engine
 
 
+def _build_from_baseline_at_revision(tmp_path, name: str, revision: str):
+    """Build a historical database at the revision this test actually exercises.
+
+    Historical rollback tests must not start at today's head: later revisions can
+    intentionally refuse a downgrade for unrelated, data-safety reasons.
+    """
+    engine = _fresh_engine(tmp_path, name)
+    _apply_baseline_ddl(engine)
+    migrate.stamp(engine, "0001")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), revision)
+    return engine
+
+
+def _upgrade_to_revision(engine, revision: str) -> str:
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), revision)
+    return migrate.schema_version(engine)
+
+
 def test_models_and_migrations_agree(tmp_path):
     """THE invariant. A fresh install and a migrated legacy database must be the
     same shape. A failure here means models.py and migrations/versions/ disagree —
@@ -864,17 +884,14 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
             "VALUES (1, 'legacy-order', 'RELIANCE', 'NSE_EQ|INE002A01018', 'BUY', "
             "'options', 'ENTRY', 1, 'WORKING', 0, 0.0, '2026-08-09 09:15:00')"
         ))
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0014")
 
     inspector = sa.inspect(engine)
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0014"
     assert {"execution_intents", "execution_order_events"} <= set(
         inspector.get_table_names())
     assert {column["name"] for column in inspector.get_columns("execution_intents")} == {
-        # `owner_id` arrived in 0016. This test upgrades to HEAD, so it asserts the CURRENT
-        # shape; the 0014-specific property it guards is that the legacy rows are not rewritten,
-        # which the value assertions below still check.
-        "client_intent_id", "deployment_id", "owner_id", "broker_account_id",
+        "client_intent_id", "deployment_id",
         "broker", "account_scope",
         "connection_scope",
         "broker_tag", "intent", "instrument_key", "tradingsymbol", "exchange", "side",
@@ -882,9 +899,7 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
         "signal_at", "strategy_key", "strategy_version", "context_json", "created_at",
     }
     assert {column["name"] for column in inspector.get_columns("execution_order_events")} == {
-        # `owner_id` arrived in 0017, for the same reason it is asserted above rather than
-        # excluded: this test upgrades to HEAD, so it pins the CURRENT shape.
-        "id", "client_intent_id", "owner_id", "broker_account_id", "source",
+        "id", "client_intent_id", "source",
         "source_event_id", "kind",
         "broker_order_id",
         "broker_status", "cumulative_filled_qty", "avg_price", "observed_at", "payload_json",
@@ -922,29 +937,29 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO execution_intents "
-            "(client_intent_id, deployment_id, owner_id, broker_account_id, broker, account_scope, connection_scope, "
+            "(client_intent_id, deployment_id, broker, account_scope, connection_scope, "
             " broker_tag, intent, instrument_key, tradingsymbol, exchange, side, order_type, "
             " requested_qty, created_at) "
-            "VALUES ('entry-000000000000000000000002', 1, 'owner', 'account.default', 'upstox', 'account.default', "
+            "VALUES ('entry-000000000000000000000002', 1, 'upstox', 'account.default', "
             "'connection.default', 'entry-000000000000002', 'ENTRY', "
             "'NSE_EQ|INE002A01018', 'RELIANCE', 'NSE', 'BUY', 'MARKET', 1, "
             "'2026-08-09 09:15:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO execution_order_events "
-            "(client_intent_id, owner_id, broker_account_id, source, source_event_id, kind, observed_at) "
-            "VALUES ('entry-000000000000000000000002', 'owner', 'account.default', 'broker', 'event-1', "
+            "(client_intent_id, source, source_event_id, kind, observed_at) "
+            "VALUES ('entry-000000000000000000000002', 'broker', 'event-1', "
             "'INTENT_CREATED', '2026-08-09 09:15:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO positions "
-            "(owner_id, broker_account_id, deployment_id, entry_intent_id, instrument_key, direction, option_type, "
+            "(deployment_id, entry_intent_id, instrument_key, direction, option_type, "
             " tradingsymbol, exchange, segment, strike, expiry, lot_size, qty, entry_premium, "
             " entry_charges, entry_cost, entry_spot, entry_time, entry_reason, stop_price, "
             " target_price, last_premium, last_spot, high_water_premium, mfe, mae, "
             " reinforcement_count, held_overnight, overnight_pnl, session_close_premium, "
             " manual_target, no_take_profit, mode) "
-            "VALUES ('owner', 'account.default', 1, 'entry-000000000000000000000002', 'NSE_EQ|INE002A01018', 'LONG', "
+            "VALUES (1, 'entry-000000000000000000000002', 'NSE_EQ|INE002A01018', 'LONG', "
             "'CE', 'RELIANCE', 'NSE', 'options', 1.0, '2026-08-28', 1, 1, 10.0, 0.0, "
             "10.0, 100.0, '2026-08-09 09:15:00', '', 5.0, 15.0, 10.0, 100.0, 10.0, "
             "0.0, 0.0, 0, 0, 0.0, 0.0, 0, 0, 'paper')"
@@ -966,7 +981,7 @@ def test_revision_0014_round_trips_without_rewriting_legacy_rows(tmp_path):
     assert "entry_intent_id" not in {column["name"] for column in inspector.get_columns("trades")}
 
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0014")
     with engine.connect() as connection:
         assert connection.execute(sa.text(
             "SELECT order_id, status, filled_qty FROM order_journal "
@@ -1154,7 +1169,7 @@ def test_revision_0019_removes_legacy_defaults_from_every_tenant_scope(tmp_path)
 
 
 def test_revision_0019_refuses_lossy_tenant_name_downgrade(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0019-test_revision_0019_refuses_lossy_tenant_name_downgrade.db", "0019")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES ('org-b','B','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
@@ -1342,7 +1357,7 @@ def test_revision_0020_downgrade_retry_after_graph_versions_temp_creation_restor
             raise RuntimeError("injected interruption after graph_versions temp creation")
 
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         with pytest.raises(RuntimeError, match="injected interruption"):
             command.downgrade(migrate.alembic_config(connection), "0019")
 
@@ -1375,7 +1390,7 @@ def test_revision_0020_downgrade_retry_after_graph_versions_temp_creation_discar
             raise RuntimeError("injected interruption after graph_versions temp creation")
 
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         with pytest.raises(RuntimeError, match="injected interruption"):
             command.downgrade(migrate.alembic_config(connection), "0019")
 
@@ -1402,7 +1417,7 @@ def test_revision_0020_downgrade_retry_after_projects_temp_creation_discards_sta
             raise RuntimeError("injected interruption after projects temp creation")
 
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         with pytest.raises(RuntimeError, match="injected interruption"):
             command.downgrade(migrate.alembic_config(connection), "0019")
 
@@ -1698,7 +1713,7 @@ def test_revision_0021_populated_legacy_round_trip_restores_rows_and_contracts(t
     with engine.begin() as connection:
         before_rows = _insert_populated_0020_graph_lineage(connection)
         before_contracts = {table: _revision_0020_contract(engine, table) for table in AFFECTED_0021_TABLES}
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
         expected_0021_rows = {
             table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
             for table in AFFECTED_0021_TABLES
@@ -1720,8 +1735,8 @@ def test_revision_0021_populated_legacy_round_trip_restores_rows_and_contracts(t
         table: _semantic_contract(contract) for table, contract in before_contracts.items()
     }
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
-    assert migrate.schema_version(engine) == HEAD
+        command.upgrade(migrate.alembic_config(connection), "0021")
+    assert migrate.schema_version(engine) == "0021"
     with engine.connect() as connection:
         assert {
             table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all())
@@ -1736,7 +1751,7 @@ def test_revision_0021_downgrade_refuses_two_owner_same_identifier_before_ddl(tm
     """Two tenant-local graph identities cannot collapse into the 0020 global key."""
     engine = _at_revision_0020(tmp_path, "0021-identifier-collision.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES "
             "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
@@ -1799,7 +1814,7 @@ def test_revision_0021_downgrade_post_rename_retry_recovers_before_owner_refusal
     """A completed 0020 temp table is authoritative before downgrade refusal reads it."""
     engine = _at_revision_0020(tmp_path, f"0021-{table}-downgrade-post-rename.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
     expected = _revision_0021_contract(_at_revision_0020(
         tmp_path, f"0021-{table}-downgrade-expected.db"), table)
     failed = False
@@ -1836,7 +1851,7 @@ def test_revision_0021_downgrade_retry_recovers_every_custom_rebuild_shape(tmp_p
     with engine.begin() as connection:
         expected_rows = _insert_populated_0020_graph_lineage(connection)
         expected_contract = _revision_0020_contract(engine, table)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
     failed = False
 
     @sa.event.listens_for(engine, "after_cursor_execute")
@@ -2023,7 +2038,7 @@ def test_revision_0020_fresh_and_upgraded_contracts_match_completely(tmp_path):
 def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and_fk_state(tmp_path):
     engine = _at_revision_0019(tmp_path, "0020-downgrade-refusal.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES "
             "('owner.other','Other','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
@@ -2046,7 +2061,7 @@ def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0019")
 
-    assert migrate.schema_version(engine) == "0021"
+    assert migrate.schema_version(engine) == "0020"
     assert {table: _revision_0020_contract(engine, table)
             for table in ("projects", "graph_versions")} == before
     with engine.connect() as connection:
@@ -2060,7 +2075,7 @@ def test_revision_0020_downgrade_refusal_preserves_owner_schema_data_version_and
 def test_revision_0020_downgrade_refuses_two_valid_owner_same_name_before_destructive_ddl(tmp_path):
     engine = _at_revision_0019(tmp_path, "0020-downgrade-two-owner-same-name.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         connection.execute(sa.text("UPDATE projects SET name = 'Shared' WHERE owner_id = 'owner'"))
         connection.execute(sa.text(
             "INSERT INTO organizations VALUES "
@@ -2083,7 +2098,7 @@ def test_revision_0020_downgrade_refuses_two_valid_owner_same_name_before_destru
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0019")
 
-    assert migrate.schema_version(engine) == "0021"
+    assert migrate.schema_version(engine) == "0020"
     assert {table: _revision_0020_contract(engine, table)
             for table in ("projects", "graph_versions")} == before
     with engine.connect() as connection:
@@ -2097,7 +2112,7 @@ def test_revision_0020_downgrade_and_reupgrade_round_trip_legacy_owner_losslessl
     engine = _at_revision_0019(tmp_path, "0020-downgrade-reupgrade.db")
     with engine.begin() as connection:
         project, graph, version = _insert_legacy_project_graph(connection)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         command.downgrade(migrate.alembic_config(connection), "0019")
         rolled_project = connection.execute(sa.text(
             "SELECT project_id,name,description,status,created_at,updated_at "
@@ -2107,7 +2122,7 @@ def test_revision_0020_downgrade_and_reupgrade_round_trip_legacy_owner_losslessl
             "SELECT graph_identifier,version,artifact_json,content_address,created_at "
             "FROM graph_versions WHERE graph_identifier='graph.legacy'"
         )).one()
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
         restored_project = connection.execute(sa.text(
             "SELECT project_id,owner_id,name,description,status,created_at,updated_at "
             "FROM projects WHERE project_id='project.legacy'"
@@ -2157,7 +2172,7 @@ def test_revision_0020_upgrade_failure_restores_an_already_disabled_foreign_key_
 def test_revision_0020_downgrade_failure_restores_an_already_disabled_foreign_key_state(tmp_path):
     engine = _at_revision_0019(tmp_path, "0020-downgrade-fk-caller-state.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
     failed = False
     raw = engine.raw_connection()
     try:
@@ -2187,7 +2202,7 @@ def test_revision_0020_downgrade_retry_promotes_completed_0019_temp_tables(tmp_p
     """A DROP-before-RENAME crash leaves rebuilt tables ready to promote, not recreate."""
     engine = _at_revision_0019(tmp_path, "0020-downgrade-promote-temp.db")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
 
     raw = engine.raw_connection()
     try:
@@ -2243,7 +2258,7 @@ def _canonical_0019_contract(tmp_path, table: str) -> dict:
     _apply_baseline_ddl(engine)
     migrate.stamp(engine, "0001")
     with engine.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0019")
     return _table_contract(engine, table)
 
 
@@ -2266,8 +2281,8 @@ def test_revision_0019_retry_after_account_table_rename_restores_full_contract(t
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0018")
         with pytest.raises(RuntimeError, match="injected interruption"):
-            command.upgrade(migrate.alembic_config(connection), HEAD)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+            command.upgrade(migrate.alembic_config(connection), "0019")
+        command.upgrade(migrate.alembic_config(connection), "0019")
 
     assert failed
     assert _table_contract(engine, table) == expected
@@ -2297,11 +2312,11 @@ def test_revision_0019_retry_during_default_removal_restores_exact_contract(tmp_
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0018")
         with pytest.raises(RuntimeError, match="injected interruption"):
-            command.upgrade(migrate.alembic_config(connection), HEAD)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+            command.upgrade(migrate.alembic_config(connection), "0019")
+        command.upgrade(migrate.alembic_config(connection), "0019")
 
     assert failed
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
     assert _table_contract(engine, table) == expected
 
 
@@ -2343,7 +2358,7 @@ def test_revision_0019_retry_after_deployments_default_removal_drop_promotes_gen
     with engine.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0018")
         with pytest.raises(RuntimeError, match="injected interruption"):
-            command.upgrade(migrate.alembic_config(connection), HEAD)
+            command.upgrade(migrate.alembic_config(connection), "0019")
         assert failed
         assert interrupted_table_names is not None
         assert "deployments" not in interrupted_table_names
@@ -2360,9 +2375,9 @@ def test_revision_0019_retry_after_deployments_default_removal_drop_promotes_gen
                 f"({', '.join(columns)}) VALUES "
                 f"({', '.join(f':{column}' for column in columns)})"),
                 interrupted_temp_rows)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0019")
 
-    assert migrate.schema_version(engine) == HEAD
+    assert migrate.schema_version(engine) == "0019"
     assert "_alembic_tmp_deployments" not in sa.inspect(engine).get_table_names()
     assert _table_contract(engine, "deployments") == expected
 
@@ -2439,7 +2454,7 @@ def test_graph_version_insert_requires_json_identity_to_match_row_identity(tmp_p
 def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_path):
     from app.ir.strategies.expanding_z import GRAPH
 
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0006-test_product_object_upgrade_attaches_valid_layout_and_removes_orphans.db", "0006")
     with engine.begin() as connection:
         command.downgrade(migrate.alembic_config(connection), "0005")
         connection.execute(sa.text(
@@ -2462,7 +2477,7 @@ def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_pa
                 "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
             ), {"identifier": identifier, "version": version})
 
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0006") == "0006"
     with engine.connect() as connection:
         layouts = connection.execute(sa.text(
             "SELECT graph_identifier, graph_version FROM ir_graph_layouts"
@@ -2505,12 +2520,12 @@ def test_product_object_upgrade_attaches_valid_layout_and_removes_orphans(tmp_pa
 
 
 def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0006-test_product_object_downgrade_refuses_non_seed_history.db", "0006")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO projects "
-            "(project_id, owner_id, name, description, status, created_at, updated_at) "
-            "VALUES ('project.user', 'owner', 'User project', '', 'active', "
+            "(project_id, name, description, status, created_at, updated_at) "
+            "VALUES ('project.user', 'User project', '', 'active', "
             "'2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
 
@@ -2518,7 +2533,7 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0019"
+    assert migrate.schema_version(engine) == "0006"
 
     with engine.begin() as connection:
         connection.execute(sa.text("DELETE FROM projects WHERE project_id = 'project.user'"))
@@ -2530,28 +2545,28 @@ def test_product_object_downgrade_refuses_non_seed_history(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0005")
 
-    assert migrate.schema_version(engine) == "0019"
+    assert migrate.schema_version(engine) == "0006"
 
 
 def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path):
     from app.ir.strategies.expanding_z import GRAPH
 
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0006-test_product_object_rollback_preserves_seed_layout_and_money_record.db", "0006")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
-            "(owner_id, graph_identifier, graph_version, revision, updated_at) "
-            "VALUES ('owner', :identifier, :version, 1, '2026-08-03 10:00:00')"
+            "(graph_identifier, graph_version, revision, updated_at) "
+            "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_positions "
-            "(owner_id, graph_identifier, graph_version, instance_id, x, y) "
-            "VALUES ('owner', :identifier, :version, 'n_ema', 10.0, 20.0)"
+            "(graph_identifier, graph_version, instance_id, x, y) "
+            "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         command.downgrade(migrate.alembic_config(connection), "0005")
 
@@ -2573,16 +2588,16 @@ def test_product_object_rollback_preserves_seed_layout_and_money_record(tmp_path
     assert position == ("n_ema", 10.0, 20.0)
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0006") == "0006"
 
 
 def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0005-test_layout_migration_downgrades_without_touching_the_money_record.db", "0005")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
 
     with engine.begin() as connection:
@@ -2599,40 +2614,40 @@ def test_layout_migration_downgrades_without_touching_the_money_record(tmp_path)
         )).one()
     assert capital == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0005") == "0005"
 
 
 def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_path):
     from app.ir.strategies.expanding_z import GRAPH
 
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0007-test_visual_group_migration_rolls_back_without_touching_layout_or_money.db", "0007")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layouts "
-            "(owner_id, graph_identifier, graph_version, revision, updated_at) "
-            "VALUES ('owner', :identifier, :version, 1, '2026-08-03 10:00:00')"
+            "(graph_identifier, graph_version, revision, updated_at) "
+            "VALUES (:identifier, :version, 1, '2026-08-03 10:00:00')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_positions "
-            "(owner_id, graph_identifier, graph_version, instance_id, x, y) "
-            "VALUES ('owner', :identifier, :version, 'n_ema', 10.0, 20.0)"
+            "(graph_identifier, graph_version, instance_id, x, y) "
+            "VALUES (:identifier, :version, 'n_ema', 10.0, 20.0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_groups "
-            "(owner_id, graph_identifier, graph_version, identifier, display_name, "
+            "(graph_identifier, graph_version, identifier, display_name, "
             " x, y, width, height, collapsed) "
-            "VALUES ('owner', :identifier, :version, 'g_signal', 'Signal', "
+            "VALUES (:identifier, :version, 'g_signal', 'Signal', "
             " 1.0, 2.0, 300.0, 180.0, 0)"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         connection.execute(sa.text(
             "INSERT INTO ir_graph_layout_group_members "
-            "(owner_id, graph_identifier, graph_version, group_identifier, instance_id) "
-            "VALUES ('owner', :identifier, :version, 'g_signal', 'n_ema')"
+            "(graph_identifier, graph_version, group_identifier, instance_id) "
+            "VALUES (:identifier, :version, 'g_signal', 'n_ema')"
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]})
         command.downgrade(migrate.alembic_config(connection), "0006")
 
@@ -2647,18 +2662,18 @@ def test_visual_group_migration_rolls_back_without_touching_layout_or_money(tmp_
             "SELECT initial_capital, cash, realized_pnl FROM capital_state WHERE id = 1"
         )).one() == (50000.0, 49000.0, -1000.0)
 
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0007") == "0007"
 
 
 def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_path):
     from app.ir.strategies.expanding_z import GRAPH
 
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0008-test_review_state_migration_empty_rollback_preserves_existing_records.db", "0008")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         command.downgrade(migrate.alembic_config(connection), "0007")
 
@@ -2676,17 +2691,17 @@ def test_review_state_migration_empty_rollback_preserves_existing_records(tmp_pa
         ), {"identifier": GRAPH["identifier"], "version": GRAPH["version"]}).one()
     assert capital == (50000.0, 49000.0, -1000.0)
     assert graph.content_address.startswith("sha256:")
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0008") == "0008"
 
 
 def test_review_state_migration_refuses_populated_downgrade(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0008-test_review_state_migration_refuses_populated_downgrade.db", "0008")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO project_review_notes "
-            "(owner_id, note_id, project_id, event_id, event_type, body, created_by, revision, "
+            "(note_id, project_id, event_id, event_type, body, created_by, revision, "
             " deleted_at, created_at, updated_at) VALUES "
-            "('owner', 'note-1', 'project.repository_catalogue', 'run:1', 'experiment_run', "
+            "('note-1', 'project.repository_catalogue', 'run:1', 'experiment_run', "
             " 'Retain this note', 'owner', 0, NULL, "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
@@ -2695,22 +2710,22 @@ def test_review_state_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0007")
 
-    assert migrate.schema_version(engine) == "0019"
+    assert migrate.schema_version(engine) == "0008"
 
 
 def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0009-test_review_snapshot_migration_empty_rollback_preserves_review_and_money.db", "0009")
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO capital_state "
-            "(id, broker_account_id, initial_capital, cash, realized_pnl, updated_at) "
-            "VALUES (1, 'account.default', 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
+            "(id, initial_capital, cash, realized_pnl, updated_at) "
+            "VALUES (1, 50000.0, 49000.0, -1000.0, '2026-08-03 10:00:00')"
         ))
         connection.execute(sa.text(
             "INSERT INTO project_review_notes "
-            "(owner_id, note_id, project_id, event_id, event_type, body, created_by, revision, "
+            "(note_id, project_id, event_id, event_type, body, created_by, revision, "
             " deleted_at, created_at, updated_at) VALUES "
-            "('owner', 'note-keep', 'project.repository_catalogue', 'run:1', 'experiment_run', "
+            "('note-keep', 'project.repository_catalogue', 'run:1', 'experiment_run', "
             " 'Keep this note', 'owner', 0, NULL, "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:00')"
         ))
@@ -2725,13 +2740,13 @@ def test_review_snapshot_migration_empty_rollback_preserves_review_and_money(tmp
         assert connection.execute(sa.text(
             "SELECT cash FROM capital_state WHERE id = 1"
         )).scalar_one() == 49000.0
-    assert migrate.upgrade_to_head(engine) == HEAD
+    assert _upgrade_to_revision(engine, "0009") == "0009"
 
 
 def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
     from app.ir.hashing import canonical_json, content_address
 
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0009-test_review_snapshot_migration_refuses_populated_downgrade.db", "0009")
     manifest = {
         "schema_version": 1,
         "project_id": "project.repository_catalogue",
@@ -2745,9 +2760,9 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
     with engine.begin() as connection:
         connection.execute(sa.text(
             "INSERT INTO project_review_snapshots "
-            "(owner_id, snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
+            "(snapshot_id, project_id, label, capture_key, manifest_json, content_address, "
             " created_by, capture_started_at, capture_completed_at) VALUES "
-            "('owner', 'snapshot.1', 'project.repository_catalogue', 'Daily', "
+            "('snapshot.1', 'project.repository_catalogue', 'Daily', "
             " '2ba56d22-7094-4a8d-9bf5-b84a4e8f083f', :manifest, :address, 'owner', "
             " '2026-08-03 10:00:00', '2026-08-03 10:00:01')"
         ), {"manifest": canonical_json(manifest), "address": content_address(manifest)})
@@ -2756,7 +2771,7 @@ def test_review_snapshot_migration_refuses_populated_downgrade(tmp_path):
         with engine.begin() as connection:
             command.downgrade(migrate.alembic_config(connection), "0008")
 
-    assert migrate.schema_version(engine) == "0019"
+    assert migrate.schema_version(engine) == "0009"
 
 
 def test_legacy_database_is_adopted_not_rebuilt(tmp_path):
@@ -2894,7 +2909,9 @@ def test_revision_0023_preserves_populated_strategy_configuration_and_removes_mo
 
 
 def test_revision_0023_downgrade_refuses_without_changing_schema_or_fk_mode(tmp_path):
-    engine = _build_from_models(tmp_path)
+    engine = _at_revision_0020(tmp_path, "0023-downgrade-refusal.db")
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0023")
     with engine.connect() as connection:
         before = tuple(connection.execute(sa.text(
             "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
@@ -2908,6 +2925,7 @@ def test_revision_0023_downgrade_refuses_without_changing_schema_or_fk_mode(tmp_
         assert tuple(connection.execute(sa.text(
             "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
         )).all()) == before
+        assert migrate.schema_version(engine) == "0023"
 
 
 STRATEGY_CONFIG_0023_TABLES = (
