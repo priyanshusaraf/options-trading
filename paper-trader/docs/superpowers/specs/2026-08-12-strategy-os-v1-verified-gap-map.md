@@ -1,6 +1,8 @@
 # Strategy OS V1 Verified Gap Map
 
-**Verified at:** `0b795a6` on `codex/execution-foundation`
+**Verified baseline:** `0b795a6` on `codex/execution-foundation`; this map also records the
+2026-08-12 Phase 1 continuation direction. A later commit is not evidence until its named gate
+passes.
 
 **Governing product direction:** the 12 August 2026 canonical V1 continuation directive
 
@@ -30,8 +32,12 @@ contracts below pass their acceptance gates.
 - Private-IP boundaries for immutable strategy versions: private by default, tenant-local
   identity/lookups, no cross-tenant hash/existence signals, and a future
   `PRIVATE | SHARED | PUBLISHED` seam without marketplace mechanics.
-- Phase 1 Tasks 4-7: owned backtests/jobs/results, private cache visibility, authenticated
-  principals, WebSocket/export/cache partitioning and one adversarial two-tenant gate.
+- Phase 1 Task 4A-C: owned backtests, durable claims, private cache visibility, and neutral
+  public-computation reuse passed their named gates. Task 4D durable research operations is still
+  being hardened.
+- The active branch contains durable user-session and closed tenant-resource-policy work. It does
+  not yet prove complete scoped API/export coverage, WebSocket/export/cache partitioning, or the
+  Phase 1 adversarial two-tenant gate.
 
 ## MISSING FOR V1
 

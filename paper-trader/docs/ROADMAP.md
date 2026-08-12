@@ -35,8 +35,24 @@ the older B → E → C → D → A sequence. The current order is:
 7. additional brokers;
 8. customer authentication, tenancy, and commercial administration.
 
-Broker breadth and commercial tenancy remain deliberately deferred. Internal deployment,
-account, and connection identities still belong in money-state paths before customer login does.
+Broker breadth remains deliberately deferred. Commercial tenancy is now Phase 1 work: the
+platform is establishing ownership, authentication, jobs, APIs, exports, WebSockets, and cache
+boundaries before major frontend work. Internal deployment, account, and connection identities
+still belong in money-state paths before broader commercial features.
+
+### Current product framing (2026-08-12)
+
+Strategy OS is being built as a broker-agnostic, multi-user research → backtest → deploy
+platform. The older single-user Indian-options engine remains useful execution history, not the
+current product definition. Its trend-and-displacement strategy is one strategy implementation,
+not the platform's boundary.
+
+The current Phase 1 branch has owner-scoped data and durable session foundations, while durable
+research operations and remaining shared API, export, WebSocket, cache, runner, and adversarial
+isolation gates continue. Do not infer that Phase 1 establishes horizontal production scale. The
+current deployment profile remains single-node SQLite. PostgreSQL, distributed execution
+ownership, replicated APIs, shared event delivery, and load/failure proof are early work after
+Phase 1. `500 users` is one launch-validation workload and cost tier, never a product cap.
 
 ### Phase truth
 

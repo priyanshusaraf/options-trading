@@ -3,7 +3,16 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-09** · branch `feat/exec-completeness`
+**Updated 2026-08-12** · active branch `codex/execution-foundation`
+
+> **Current framing supersedes older status below where they conflict.** Strategy OS is now a
+> broker-agnostic, multi-user research → backtest → deploy platform. The older single-user,
+> single-account Indian-options engine is historical execution context, not the current product
+> definition. Phase 1 is establishing ownership, authentication, durable jobs, scoped access,
+> WebSocket/cache boundaries, and a two-tenant adversarial gate before major frontend work.
+> SQLite remains the current single-node persistence profile; PostgreSQL, distributed execution
+> ownership, replicated APIs, and shared event delivery are not built or horizontally proven.
+> `500 users` is a workload-validation tier, never a product ceiling.
 
 **The L1 band is closed through L1.4 and is no longer the resume point.** IR paper authority
 (`ir_graph, paper, authoritative`) is granted, bound, hardened and proven recoverable;
