@@ -43,13 +43,16 @@ def test_nightly_initialises_research_db(tmp_path):
               "PT_RESEARCH_ENABLED": "1"}, tmp_path)
     assert r.returncode == 0, r.stderr
     assert os.path.exists(research_db)
-    from research.operations import ResearchOperationRecorder
-    state = ResearchOperationRecorder.load(tmp_path / "operations.json")
-    assert state["active"] is None
-    assert state["last"]["state"] == "completed"
-    assert state["last"]["trigger"] == "nightly"
-    assert state["last"]["plan"]["content_address"].startswith("sha256:")
-    assert state["last"]["completed_run_ids"]
+    from research.domain.base import make_engine, make_sessionmaker
+    from research.domain.operations import ResearchOperationRepository
+    engine = make_engine(research_db)
+    with make_sessionmaker(engine)() as session:
+        state = ResearchOperationRepository(session).latest(owner_id="test-owner")
+    engine.dispose()
+    assert state.status == "completed"
+    assert state.trigger == "nightly"
+    assert state.plan["content_address"].startswith("sha256:")
+    assert state.completed_run_ids
 
 
 def test_nightly_skips_when_research_disabled(tmp_path):

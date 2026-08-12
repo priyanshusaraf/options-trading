@@ -14,7 +14,8 @@ from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.engine.runner import EngineRunner
 from app.ir.strategies.expanding_z import GRAPH
 from research.config import research_db_path
-from research.domain.base import ResearchBase, init_research_db, make_engine
+from research.domain.base import ResearchBase, init_research_db, make_engine, make_sessionmaker
+from research.domain.operations import ResearchOperationRepository
 from research.operations import ResearchOperationRecorder, safe_plan_summary
 
 
@@ -48,7 +49,7 @@ def test_review_keeps_project_timeline_separate_from_global_operations(client):
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {
-        "project_id", "as_of", "timeline", "queues", "global_operations",
+        "project_id", "as_of", "timeline", "queues", "operations",
         "source_errors",
     }
     assert body["project_id"] == CATALOGUE_PROJECT_ID
@@ -70,9 +71,7 @@ def test_review_keeps_project_timeline_separate_from_global_operations(client):
         }],
         "next_cursor": None,
     }
-    assert body["global_operations"] == {
-        "state": "never_run", "active": None, "last": None,
-    }
+    assert body["operations"] == {"state": "never_run"}
     assert body["queues"]["failed_operation"] is None
     assert body["source_errors"] == []
     assert all(event["type"] != "research_operation" for event in body["timeline"]["events"])
@@ -399,26 +398,24 @@ def test_review_filters_and_query_contract_fail_closed(client):
     assert client.get(URL.replace(CATALOGUE_PROJECT_ID, "project.other")).status_code == 404
 
 
-def test_failed_global_operation_is_a_queue_but_never_a_project_event(client):
-    recorder = ResearchOperationRecorder.start(
-        Path(os.environ["PT_RESEARCH_OPERATION_RECEIPT"]),
-        trigger="nightly", build="abc123", provider_mode="historical",
-        operation_id="global-operation",
-        now=lambda: "2026-08-03T01:00:00Z",
-    )
-    recorder.set_plan(safe_plan_summary([]))
-    recorder.transition("generation")
-    recorder.fail(now=lambda: "2026-08-03T01:01:00Z")
+def test_failed_owner_operation_is_a_queue_but_never_a_project_event(client):
+    engine = make_engine(research_db_path())
+    with make_sessionmaker(engine)() as session:
+        repo = ResearchOperationRepository(session)
+        repo.enqueue(owner_id=get_settings().owner_id or "legacy", trigger="nightly", build="abc123", provider_mode="historical", operation_id="owner-operation", plan={})
+        claim = repo.claim_next(owner_id=get_settings().owner_id or "legacy", worker_id="test")
+        repo.fail("owner-operation", owner_id=get_settings().owner_id or "legacy", token=claim.claim_token, error={"code": "FAILED"})
+    engine.dispose()
 
     body = client.get(URL).json()
 
-    assert body["global_operations"]["last"]["operation_id"] == "global-operation"
-    assert body["queues"]["failed_operation"]["operation_id"] == "global-operation"
-    assert all("global-operation" not in event["event_id"] for event in body["timeline"]["events"])
+    assert body["operations"] == {"state": "available"}
+    assert body["queues"]["failed_operation"]["operation_id"] == "owner-operation"
+    assert all("owner-operation" not in event["event_id"] for event in body["timeline"]["events"])
     assert all(event["type"] != "research_operation" for event in body["timeline"]["events"])
 
 
-def test_corrupt_global_receipt_is_contained_from_valid_project_timeline(client):
+def test_corrupt_global_receipt_is_ignored_by_valid_project_timeline(client):
     receipt = Path(os.environ["PT_RESEARCH_OPERATION_RECEIPT"])
     receipt.write_text('{"tampered":true}', encoding="utf-8")
 
@@ -427,12 +424,9 @@ def test_corrupt_global_receipt_is_contained_from_valid_project_timeline(client)
     assert response.status_code == 200
     body = response.json()
     assert body["timeline"]["events"][0]["type"] == "graph_version_published"
-    assert body["global_operations"] is None
+    assert body["operations"] == {"state": "never_run"}
     assert body["queues"]["failed_operation"] is None
-    assert body["source_errors"] == [{
-        "source": "global_operation", "source_id": "current_last",
-        "code": "OPERATION_STATE_CORRUPT",
-    }]
+    assert body["source_errors"] == []
 
 
 def test_review_surface_is_read_only_and_research_gated(client, monkeypatch):

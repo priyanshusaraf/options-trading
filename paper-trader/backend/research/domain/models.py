@@ -63,6 +63,36 @@ class ResearchProgram(ResearchBase):
     )
 
 
+class ResearchOperation(ResearchBase):
+    """Durable, tenant-local authority for a bounded research workload."""
+    __tablename__ = "research_operation"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trigger: Mapped[str] = mapped_column(String(24), nullable=False)
+    plan_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    stage: Mapped[str] = mapped_column(String(24), nullable=False, default="startup")
+    error_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    build: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    provider_mode: Mapped[str] = mapped_column(String(80), nullable=False, default="unknown")
+    completed_run_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    queued_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claim_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cancel_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (
+        Index("ix_research_operation_owner_latest", "owner_id", "created_at", "operation_id"),
+        Index("ix_research_operation_owner_status", "owner_id", "status", "queued_at"),
+        Index("ix_research_operation_claim_expiry", "claim_expires_at"),
+    )
+
+
 class Hypothesis(ResearchBase):
     """An explicit thesis under a Program. Research always begins here. Carries the
     re-test priority — the quantity that *decays upward* over time so a killed idea

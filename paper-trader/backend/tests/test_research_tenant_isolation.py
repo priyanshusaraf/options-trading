@@ -39,7 +39,7 @@ def test_empty_initialization_stamps_research_owned_schema_version(tmp_path):
         with engine.connect() as connection:
             assert connection.execute(text(
                 "SELECT version FROM research_schema_version"
-            )).scalar_one() == "0001"
+            )).scalar_one() == "0002"
         owner_column = next(
             column for column in inspect(engine).get_columns("research_program")
             if column["name"] == "owner_id"
@@ -475,6 +475,6 @@ def test_downgrade_refusal_is_non_destructive(tmp_path):
         with pytest.raises(ResearchMigrationError, match="unsupported"):
             downgrade_research_db(engine)
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version FROM research_schema_version")).scalar_one() == "0001"
+            assert connection.execute(text("SELECT version FROM research_schema_version")).scalar_one() == "0002"
     finally:
         engine.dispose()

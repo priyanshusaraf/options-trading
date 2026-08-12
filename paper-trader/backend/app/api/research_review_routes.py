@@ -22,8 +22,9 @@ from app.core.research_review import (
     paginate_review_events,
 )
 from app.editor import graph_artifacts as store
-from research.config import operation_receipt_path
-from research.operations import OperationStateCorrupt, ResearchOperationRecorder
+from research.config import research_db_path
+from research.domain.base import init_research_db, make_engine, make_sessionmaker
+from research.domain.operations import ResearchOperationRepository
 
 
 def _research_gate() -> None:
@@ -127,32 +128,20 @@ def get_project_review(
         raise HTTPException(status_code=404, detail="project not found") from exc
     source_errors = list(project_source["source_errors"])
 
-    global_operations = None
     failed_operation = None
+    engine = make_engine(research_db_path())
     try:
-        operation_state = ResearchOperationRecorder.load(operation_receipt_path())
-        global_operations = {
-            "state": (
-                "never_run" if operation_state == {"active": None, "last": None}
-                else "available"
-            ),
-            **operation_state,
-        }
-        last = operation_state["last"]
-        if last is not None and last["state"] == "failed":
-            failed_operation = {
-                "operation_id": last["operation_id"],
-                "trigger": last["trigger"],
-                "stage": last["stage"],
-                "completed_at": last["completed_at"],
-                "failure": last["failure"],
-            }
-    except OperationStateCorrupt:
-        source_errors.append({
-            "source": "global_operation",
-            "source_id": "current_last",
-            "code": "OPERATION_STATE_CORRUPT",
-        })
+        init_research_db(engine)
+        with make_sessionmaker(engine)() as session:
+            last = ResearchOperationRepository(session).latest(
+                owner_id=owner_id_for(principal)
+            )
+        if last is not None and last.status == "failed":
+            failed_operation = {"operation_id": last.operation_id, "trigger": last.trigger,
+                                "stage": last.stage, "completed_at": last.completed_at.isoformat() if last.completed_at else None,
+                                "failure": last.error}
+    finally:
+        engine.dispose()
 
     try:
         timeline = paginate_review_events(
@@ -177,7 +166,7 @@ def get_project_review(
             **project_source["queues"],
             "failed_operation": failed_operation,
         },
-        "global_operations": global_operations,
+        "operations": {"state": "available" if last else "never_run"},
         "source_errors": source_errors,
     }
 

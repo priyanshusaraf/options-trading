@@ -13,7 +13,7 @@ from sqlalchemy.schema import CreateIndex, CreateTable, Table
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
 
 VERSION_TABLE = "research_schema_version"
-HEAD_VERSION = "0001"
+HEAD_VERSION = "0002"
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
 _CURRENT_MARKER_SHAPE = (
@@ -186,8 +186,16 @@ def _after_table_rebuilt(_table_name: str) -> None:
     """Failure-injection seam for restart and PRAGMA-restoration tests."""
 
 
-def _create_indexes_and_triggers(connection) -> None:
-    for table in ResearchBase.metadata.sorted_tables:
+def _root_tables() -> tuple[Table, ...]:
+    return tuple(table for table in ResearchBase.metadata.sorted_tables if table.name != "research_operation")
+
+
+def _operation_table() -> Table:
+    return ResearchBase.metadata.tables["research_operation"]
+
+
+def _create_indexes_and_triggers(connection, *, tables=None) -> None:
+    for table in (tables or ResearchBase.metadata.sorted_tables):
         for index in table.indexes:
             connection.exec_driver_sql(str(CreateIndex(index).compile(dialect=connection.dialect)))
     for name in ("research_experiment_spec", "research_optimization_trial"):
@@ -199,7 +207,7 @@ def _create_indexes_and_triggers(connection) -> None:
             )
 
 
-def _stamp(connection) -> None:
+def _stamp(connection, *, version: str = HEAD_VERSION) -> None:
     if VERSION_TABLE not in _table_names(connection):
         _create_current_marker(connection)
     elif _marker_shape(connection) == _LEGACY_MARKER_SHAPE:
@@ -215,7 +223,7 @@ def _stamp(connection) -> None:
     connection.exec_driver_sql(f"DELETE FROM {_quoted(VERSION_TABLE)}")
     connection.exec_driver_sql(
         f"INSERT INTO {_quoted(VERSION_TABLE)} (version, schema_cookie) VALUES (?, ?)",
-        (HEAD_VERSION, _schema_cookie(connection)),
+        (version, _schema_cookie(connection)),
     )
 
 
@@ -265,19 +273,20 @@ def _normalise_fk_options(*, ondelete=None, onupdate=None,
     return (action(ondelete), action(onupdate), deferrable, initial(initially))
 
 
-def _validate_schema(connection, *, include_marker: bool = True) -> None:
+def _validate_schema(connection, *, include_marker: bool = True, tables=None) -> None:
     """Reject every visible schema-contract drift, not merely missing owners."""
     inspector = inspect(connection)
-    expected_tables = {table.name for table in ResearchBase.metadata.sorted_tables}
+    expected = tuple(tables or ResearchBase.metadata.sorted_tables)
+    expected_tables = {table.name for table in expected}
     actual_tables = _table_names(connection) - {VERSION_TABLE}
-    if actual_tables != expected_tables:
+    if (actual_tables != expected_tables if tables is None else not expected_tables <= actual_tables):
         raise ResearchMigrationError(
             f"research table-set drift: {sorted(actual_tables)} != {sorted(expected_tables)}"
         )
     if include_marker:
         if _marker_shape(connection) != _CURRENT_MARKER_SHAPE:
             raise ResearchMigrationError("research schema marker contract drift")
-    for table in ResearchBase.metadata.sorted_tables:
+    for table in expected:
         pk_positions = {
             column.name: index + 1
             for index, column in enumerate(table.primary_key.columns)
@@ -362,17 +371,18 @@ def _validate_schema(connection, *, include_marker: bool = True) -> None:
 
 
 def _rebuild_unversioned(connection) -> None:
-    for table in ResearchBase.metadata.sorted_tables:
+    tables = _root_tables()
+    for table in tables:
         _rebuild_table(connection, table)
-    _create_indexes_and_triggers(connection)
-    _validate_schema(connection, include_marker=False)
-    _stamp(connection)
+    _create_indexes_and_triggers(connection, tables=tables)
+    _validate_schema(connection, include_marker=False, tables=tables)
+    _stamp(connection, version="0001")
 
 
-def _migration_schema_digest(connection) -> str:
+def _migration_schema_digest(connection, *, tables=None) -> str:
     """Freeze every schema dimension consumed by the historical 0001 rebuild."""
     contract = {}
-    for table in ResearchBase.metadata.sorted_tables:
+    for table in (tables or ResearchBase.metadata.sorted_tables):
         contract[table.name] = {
             "columns": [
                 (column.name, str(column.type.compile(dialect=connection.dialect)).upper(),
@@ -463,6 +473,15 @@ def migrate_research_db(engine: Engine) -> None:
                 _validate_schema(connection)
                 return
             raise ResearchMigrationError("versioned research schema is incomplete")
+        if version == "0001":
+            roots = _root_tables()
+            _validate_schema(connection, tables=roots, include_marker=False)
+            migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
+            migration.upgrade(connection, _operation_table())
+            _stamp(connection)
+            connection.commit()
+            _validate_schema(connection)
+            return
         if version is not None:
             raise ResearchMigrationError(f"unsupported research schema version {version!r}")
 
@@ -485,8 +504,11 @@ def migrate_research_db(engine: Engine) -> None:
             )
             migration.upgrade(
                 connection, _rebuild_unversioned,
-                schema_digest=_migration_schema_digest(connection),
+                schema_digest=_migration_schema_digest(connection, tables=_root_tables()),
             )
+            migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
+            migration.upgrade(connection, _operation_table())
+            _stamp(connection)
             connection.commit()
         except Exception:
             connection.rollback()

@@ -17,7 +17,6 @@ import datetime as dt
 
 from research.config import (nightly_generate_limit, nightly_interval,
                              nightly_search_seed, nightly_strategy_key,
-                             operation_lock_path, operation_receipt_path,
                              research_db_path, watchlist_snapshot_path)
 from research.plan import build_plan
 from research.universe import eligible_for_research, read_watchlist_snapshot
@@ -25,12 +24,7 @@ from research.domain.base import init_research_db, make_engine, make_sessionmake
 from research.guards import enforce
 from research.orchestrator.report import write_report
 from research.orchestrator.run import run_nightly
-from research.operations import (
-    OperationAlreadyRunning,
-    ResearchOperationRecorder,
-    acquire_operation_lock,
-    safe_plan_summary,
-)
+from research.operations import safe_plan_summary
 
 
 def _execution_db_path() -> str:
@@ -146,49 +140,51 @@ def _run_enabled_operation(research_db: str) -> list:
     owner_id = os.environ.get("PT_RESEARCH_OWNER_ID")
     if not owner_id:
         raise RuntimeError("PT_RESEARCH_OWNER_ID is required for nightly research")
-    with acquire_operation_lock(operation_lock_path()):
-        recorder = ResearchOperationRecorder.start(
-            operation_receipt_path(),
-            trigger="nightly",
-            build=_git_commit(),
-            provider_mode=get_settings().provider,
-            now=_now,
-        )
-        engine = None
-        try:
-            engine = make_engine(research_db)
-            init_research_db(engine)
-            Session = make_sessionmaker(engine)
-            with Session() as session:
-                src = _make_source()
-                recorder.transition("planning")
-                plan = _load_plan(session, owner_id=owner_id)
-                recorder.set_plan(safe_plan_summary(plan))
-                report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
-                reports = run_nightly(
-                    session,
-                    source=src,
-                    plan=plan,
-                    owner_id=owner_id,
-                    git_commit=_git_commit(),
-                    report_dir=report_dir,
-                    progress=recorder.add_completed_run,
-                    stage=recorder.transition,
-                )
-                recorder.transition("generation")
-                generated = _run_generation(session, src, plan, report_dir)
-                for report in generated:
-                    if isinstance(report.get("run_id"), int):
-                        recorder.add_completed_run(report["run_id"])
-                reports += generated
-            recorder.complete(now=_now)
+    engine = None
+    try:
+        engine = make_engine(research_db)
+        init_research_db(engine)
+        Session = make_sessionmaker(engine)
+        with Session() as session:
+            from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
+            src = _make_source()
+            plan = _load_plan(session, owner_id=owner_id)
+            recorder = DurableOperationRecorder.start(
+                ResearchOperationRepository(session), owner_id=owner_id, trigger="nightly",
+                build=_git_commit(), provider_mode=get_settings().provider,
+                worker_id=f"nightly:{os.getpid()}", plan=safe_plan_summary(plan),
+            )
+            def _heartbeat(operation_id: str, scoped_owner: str, token: str) -> bool:
+                watchdog_engine = make_engine(research_db)
+                try:
+                    with make_sessionmaker(watchdog_engine)() as watchdog_session:
+                        return ResearchOperationRepository(watchdog_session).heartbeat(
+                            operation_id, owner_id=scoped_owner, token=token)
+                finally:
+                    watchdog_engine.dispose()
+            recorder.start_watchdog(_heartbeat)
+            recorder.transition("planning")
+            report_dir = os.environ.get("PT_RESEARCH_REPORT_DIR", ".")
+            reports = run_nightly(session, source=src, plan=plan, owner_id=owner_id,
+                git_commit=_git_commit(), report_dir=report_dir,
+                progress=recorder.add_completed_run, stage=recorder.transition)
+            recorder.transition("generation")
+            generated = _run_generation(session, src, plan, report_dir)
+            for report in generated:
+                if isinstance(report.get("run_id"), int):
+                    recorder.add_completed_run(report["run_id"])
+            reports += generated
+            recorder.complete()
             return reports
-        except Exception:
-            recorder.fail(now=_now)
-            raise
-        finally:
-            if engine is not None:
-                engine.dispose()
+    except Exception:
+        try:
+            recorder.fail({"code": "RESEARCH_OPERATION_FAILED", "message": "research operation failed"})
+        except (UnboundLocalError, RuntimeError):
+            pass
+        raise
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def main() -> int:
@@ -204,11 +200,7 @@ def main() -> int:
     if not get_settings().research_enabled:
         print("research plane disabled (PT_RESEARCH_ENABLED=0) — nightly run skipped")
         return 0
-    try:
-        reports = _run_enabled_operation(research_db)
-    except OperationAlreadyRunning:
-        print("RESEARCH_OPERATION_ALREADY_RUNNING: another research operation owns the lock")
-        return 2
+    reports = _run_enabled_operation(research_db)
     print(f"research.db ready at {research_db}; ran {len(reports)} experiment(s)")
     return 0
 

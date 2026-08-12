@@ -170,14 +170,10 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
     from app.core.config import get_settings
     from app.core.instruments import get_instrument
     from app.providers.factory import get_provider
-    from research.config import operation_lock_path, operation_receipt_path
     from research.data.store import KiteDataSource
     from research.domain.base import init_research_db, make_engine, make_sessionmaker
-    from research.operations import (
-        ResearchOperationRecorder,
-        acquire_operation_lock,
-        safe_plan_summary,
-    )
+    from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
+    from research.operations import safe_plan_summary
     from research.orchestrator.generate import run_generated
     from research.orchestrator.run import run_nightly
     from research.universe import ALWAYS_ALLOWED
@@ -185,16 +181,8 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
     owner_id = os.environ.get("PT_RESEARCH_OWNER_ID")
     if not owner_id:
         raise RuntimeError("PT_RESEARCH_OWNER_ID is required for manual research")
-    with acquire_operation_lock(operation_lock_path()):
-        recorder = ResearchOperationRecorder.start(
-            operation_receipt_path(),
-            trigger="manual_script",
-            build=_git_commit(),
-            provider_mode=get_settings().provider,
-            now=_now,
-        )
-        engine = None
-        try:
+    engine = None
+    try:
             # (2) schema
             engine = make_engine(research_db)
             init_research_db(engine)
@@ -208,9 +196,22 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
 
             # (4) run the full server-owned plan and generated sandbox search.
             with Session() as session:
-                recorder.transition("planning")
                 plan = _plan(get_instrument)
-                recorder.set_plan(safe_plan_summary(plan))
+                recorder = DurableOperationRecorder.start(
+                    ResearchOperationRepository(session), owner_id=owner_id, trigger="manual",
+                    build=_git_commit(), provider_mode=get_settings().provider,
+                    worker_id=f"manual:{os.getpid()}", plan=safe_plan_summary(plan),
+                )
+                def _heartbeat(operation_id: str, scoped_owner: str, token: str) -> bool:
+                    watchdog_engine = make_engine(research_db)
+                    try:
+                        with make_sessionmaker(watchdog_engine)() as watchdog_session:
+                            return ResearchOperationRepository(watchdog_session).heartbeat(
+                                operation_id, owner_id=scoped_owner, token=token)
+                    finally:
+                        watchdog_engine.dispose()
+                recorder.start_watchdog(_heartbeat)
+                recorder.transition("planning")
                 reports = run_nightly(
                     session,
                     source,
@@ -236,14 +237,17 @@ def _run_enabled_operation(research_db: str) -> tuple[list, str]:
                             if isinstance(report.get("run_id"), int):
                                 recorder.add_completed_run(report["run_id"])
                 _dump_db(session)
-            recorder.complete(now=_now)
+            recorder.complete()
             return reports, provider.name
-        except Exception:
-            recorder.fail(now=_now)
-            raise
-        finally:
-            if engine is not None:
-                engine.dispose()
+    except Exception:
+        try:
+            recorder.fail({"code": "RESEARCH_OPERATION_FAILED", "message": "research operation failed"})
+        except (UnboundLocalError, RuntimeError):
+            pass
+        raise
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def main() -> int:

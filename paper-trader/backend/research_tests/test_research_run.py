@@ -115,6 +115,9 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
         def transition(self, *_args):
             pass
 
+        def start_watchdog(self, *_args, **_kwargs):
+            pass
+
         def set_plan(self, *_args):
             pass
 
@@ -132,6 +135,7 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
     import app.providers.factory as providers
     import research.data.store as data_store
     import research.domain.base as domain_base
+    import research.domain.operations as domain_operations
     import research.operations as operations
     import research.orchestrator.generate as generate
     import research.orchestrator.run as run
@@ -144,8 +148,8 @@ def test_manual_operation_forwards_the_required_owner_to_every_research_call(mon
     monkeypatch.setattr(domain_base, "make_engine", lambda _path: Engine())
     monkeypatch.setattr(domain_base, "init_research_db", lambda _engine: None)
     monkeypatch.setattr(domain_base, "make_sessionmaker", lambda _engine: Session)
-    monkeypatch.setattr(operations, "ResearchOperationRecorder", Recorder)
-    monkeypatch.setattr(operations, "acquire_operation_lock", lambda _path: contextlib.nullcontext())
+    monkeypatch.setattr(domain_operations, "DurableOperationRecorder", Recorder)
+    monkeypatch.setattr(domain_operations, "ResearchOperationRepository", lambda session: session)
     monkeypatch.setattr(operations, "safe_plan_summary", lambda plan: plan)
     monkeypatch.setattr(universe, "ALWAYS_ALLOWED", frozenset({"NIFTY"}))
     monkeypatch.setattr(run, "run_nightly", lambda *_args, **kwargs: seen.append(("nightly", kwargs["owner_id"])) or [])
