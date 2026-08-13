@@ -69,10 +69,11 @@ PT_TEST_POSTGRES_URL='postgresql+psycopg://priyanshusaraf@127.0.0.1:55432/strate
 2 passed
 ```
 
-The receipt test creates one unique schema, writes through the repository, issues raw SQL UPDATE
-and DELETE, observes SQLSTATE `55000` for both, rolls back each transaction, and reads the
-byte-identical receipt afterward. The schema is dropped during cleanup. No broad backend or
-historical-migration matrix was run; Task 12 owns the Phase 3 boundary suite.
+The receipt test creates one unique schema, validates the PostgreSQL startup trigger catalog,
+writes through the repository, issues raw SQL UPDATE and DELETE, observes SQLSTATE `55000` for
+both, rolls back each transaction, and reads the byte-identical receipt afterward. The schema is
+dropped during cleanup. No broad backend or historical-migration matrix was run; Task 12 owns the
+Phase 3 boundary suite.
 
 ## Freeze state
 

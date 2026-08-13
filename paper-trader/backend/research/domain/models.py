@@ -15,6 +15,7 @@ ValidationResult) will reuse `_make_immutable`.
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from sqlalchemy import (
     DDL,
@@ -31,13 +32,120 @@ from sqlalchemy import (
     event,
 )
 from sqlalchemy import Index
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.schema import Table
 
 from research.domain.base import ResearchBase
 
 
-def _make_immutable(table: Table) -> None:
+class _ContentAddress(ColumnElement):
+    """Portable strict ``sha256:<64 lowercase hex>`` validation."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_ContentAddress, "sqlite")
+def _compile_content_address_sqlite(element, _compiler, **_kw):
+    name = element.column_name
+    return (f"length({name}) = 71 AND substr({name}, 1, 7) = 'sha256:' AND "
+            f"substr({name}, 8) = lower(substr({name}, 8)) AND "
+            f"substr({name}, 8) NOT GLOB '*[^0-9a-f]*'")
+
+
+@compiles(_ContentAddress, "postgresql")
+def _compile_content_address_postgresql(element, _compiler, **_kw):
+    return f"{element.column_name} ~ '^sha256:[0-9a-f]{{64}}$'"
+
+
+class _NullableContentAddress(_ContentAddress):
+    """Allow a legacy NULL but reject malformed receipt keys."""
+
+
+@compiles(_NullableContentAddress, "sqlite")
+def _compile_nullable_content_address_sqlite(element, _compiler, **_kw):
+    return (f"{element.column_name} IS NULL OR "
+            f"({_compile_content_address_sqlite(element, _compiler, **_kw)})")
+
+
+@compiles(_NullableContentAddress, "postgresql")
+def _compile_nullable_content_address_postgresql(element, _compiler, **_kw):
+    return (f"{element.column_name} IS NULL OR "
+            f"({_compile_content_address_postgresql(element, _compiler, **_kw)})")
+
+
+class _JsonIsValid(ColumnElement):
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_JsonIsValid, "sqlite")
+def _compile_json_is_valid_sqlite(element, _compiler, **_kw):
+    return f"json_valid({element.column_name})"
+
+
+@compiles(_JsonIsValid, "postgresql")
+def _compile_json_is_valid_postgresql(_element, _compiler, **_kw):
+    return "jsonb_typeof(artifact_json::jsonb) = 'object'"
+
+
+class _JsonTextMatchesColumn(ColumnElement):
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, json_column: str, json_key: str, column_name: str):
+        self.json_column = json_column
+        self.json_key = json_key
+        self.column_name = column_name
+
+
+@compiles(_JsonTextMatchesColumn, "sqlite")
+def _compile_json_text_matches_column_sqlite(element, _compiler, **_kw):
+    return (f"json_extract({element.json_column}, '$.{element.json_key}') "
+            f"IS {element.column_name}")
+
+
+@compiles(_JsonTextMatchesColumn, "postgresql")
+def _compile_json_text_matches_column_postgresql(element, _compiler, **_kw):
+    field = f"({element.json_column}::jsonb -> '{element.json_key}')"
+    return (f"{field} IS NOT NULL AND jsonb_typeof({element.json_column}::jsonb "
+            f"-> '{element.json_key}') = 'string' AND "
+            f"({element.json_column}::jsonb ->> '{element.json_key}') = {element.column_name}")
+
+
+class _JsonNumberEquals(ColumnElement):
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, json_column: str, json_key: str, column_name: str):
+        self.json_column = json_column
+        self.json_key = json_key
+        self.column_name = column_name
+
+
+@compiles(_JsonNumberEquals, "sqlite")
+def _compile_json_number_equals_sqlite(element, _compiler, **_kw):
+    return (f"json_extract({element.json_column}, '$.{element.json_key}') "
+            f"IS {element.column_name}")
+
+
+@compiles(_JsonNumberEquals, "postgresql")
+def _compile_json_number_equals_postgresql(element, _compiler, **_kw):
+    field = f"({element.json_column}::jsonb -> '{element.json_key}')"
+    return (f"{field} IS NOT NULL AND jsonb_typeof({element.json_column}::jsonb "
+            f"-> '{element.json_key}') = 'number' AND "
+            f"(({field} #>> '{{}}')::numeric) = {element.column_name}::numeric")
+
+
+def _make_immutable(table: Table, *, sqlstate: str | None = None) -> None:
     """Attach BEFORE UPDATE/DELETE triggers that abort any mutation of `table`,
     created alongside the table itself. DB-enforced, client-agnostic."""
     for op in ("UPDATE", "DELETE"):
@@ -52,7 +160,8 @@ def _make_immutable(table: Table) -> None:
         table, "after_create",
         DDL(
             f"CREATE OR REPLACE FUNCTION {function}() RETURNS trigger AS $$ "
-            f"BEGIN RAISE EXCEPTION '{table.name} is immutable'; END; "
+            f"BEGIN RAISE EXCEPTION '{table.name} is immutable'"
+            f"{f' USING ERRCODE = {sqlstate!r}' if sqlstate else ''}; END; "
             "$$ LANGUAGE plpgsql"
         ).execute_if(dialect="postgresql"),
     )
@@ -247,6 +356,88 @@ class ExperimentSpec(ResearchBase):
 _make_immutable(ExperimentSpec.__table__)
 
 
+class ResearchStrategyAdmission(ResearchBase):
+    """One immutable owner-scoped Phase 3 causal-admission receipt.
+
+    The research plane records evidence only. An address here is never execution
+    authority and cannot share a session, model, or foreign key with execution
+    persistence.
+    """
+
+    __tablename__ = "research_strategy_admission"
+    __table_args__ = (
+        CheckConstraint(_ContentAddress("admission_address"),
+                        name="ck_research_strategy_admission_address_format"),
+        CheckConstraint(_ContentAddress("graph_address"),
+                        name="ck_research_strategy_admission_graph_address_format"),
+        CheckConstraint("graph_version >= 1",
+                        name="ck_research_strategy_admission_graph_version"),
+        CheckConstraint(_JsonIsValid("artifact_json"),
+                        name="ck_research_strategy_admission_valid_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "owner_id", "owner_id"),
+                        name="ck_research_strategy_admission_owner_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn(
+            "artifact_json", "graph_identifier", "graph_identifier"),
+            name="ck_research_strategy_admission_graph_identifier_matches_json"),
+        CheckConstraint(_JsonNumberEquals("artifact_json", "graph_version", "graph_version"),
+                        name="ck_research_strategy_admission_graph_version_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "graph_address", "graph_address"),
+                        name="ck_research_strategy_admission_graph_address_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "scheme", "scheme"),
+                        name="ck_research_strategy_admission_scheme_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "contract_suite", "contract_suite"),
+                        name="ck_research_strategy_admission_contract_suite_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "parity_suite", "parity_suite"),
+                        name="ck_research_strategy_admission_parity_suite_matches_json"),
+        UniqueConstraint("owner_id", "graph_identifier", "graph_version", "admission_address",
+                         name="uq_research_strategy_admission_owner_graph_address"),
+    )
+
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    admission_address: Mapped[str] = mapped_column(String(71), primary_key=True)
+    graph_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    graph_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    graph_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    scheme: Mapped[str] = mapped_column(String(32), nullable=False)
+    contract_suite: Mapped[str] = mapped_column(String(32), nullable=False)
+    parity_suite: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+def _research_admission_identity_matches_json(target: ResearchStrategyAdmission) -> None:
+    """Reject ORM rows whose receipt bytes and copied identity diverge."""
+    from app.ir.hashing import canonical_json, content_address
+
+    try:
+        document = json.loads(target.artifact_json)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("research admission artifact_json must be valid canonical JSON") from exc
+    if canonical_json(document) != target.artifact_json:
+        raise ValueError("research admission artifact_json must be canonical JSON")
+    if content_address(document) != target.admission_address:
+        raise ValueError("research admission address does not match artifact_json")
+    for name in ("owner_id", "graph_identifier", "graph_version", "graph_address", "scheme",
+                 "contract_suite", "parity_suite"):
+        if document.get(name) != getattr(target, name):
+            raise ValueError(f"research admission {name} does not match artifact_json")
+
+
+@event.listens_for(ResearchStrategyAdmission, "before_insert")
+def _research_admission_before_insert(_mapper, _connection, target) -> None:
+    _research_admission_identity_matches_json(target)
+
+
+@event.listens_for(ResearchStrategyAdmission, "before_update")
+@event.listens_for(ResearchStrategyAdmission, "before_delete")
+def _research_admission_orm_mutation_refused(_mapper, _connection, _target) -> None:
+    raise ValueError("research strategy admissions are immutable")
+
+
+_make_immutable(ResearchStrategyAdmission.__table__, sqlstate="55000")
+
+
 class ExperimentRun(ResearchBase):
     """The mutable execution of an ExperimentSpec: lifecycle status, checkpoint
     pointer, spent compute, and the final decision. Resuming advances the Run; a
@@ -263,7 +454,10 @@ class ExperimentRun(ResearchBase):
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     __table_args__ = (
+        CheckConstraint(_NullableContentAddress("admission_address"),
+                        name="ck_research_experiment_run_admission_address"),
         UniqueConstraint("owner_id", "id", name="uq_research_experiment_run_owner_id"),
         ForeignKeyConstraint(
             ("owner_id", "spec_id"),
@@ -352,7 +546,10 @@ class PromotionCandidate(ResearchBase):
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|approved|rejected
     approved_git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.now)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     __table_args__ = (
+        CheckConstraint(_NullableContentAddress("admission_address"),
+                        name="ck_research_promotion_candidate_admission_address"),
         UniqueConstraint("owner_id", "id", name="uq_research_promotion_candidate_owner_id"),
         ForeignKeyConstraint(("owner_id", "run_id"), ("research_experiment_run.owner_id", "research_experiment_run.id")),
         Index("ix_research_promotion_candidate_owner_run", "owner_id", "run_id"),

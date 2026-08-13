@@ -7,7 +7,7 @@ import json
 import re
 from collections.abc import Callable
 
-from sqlalchemy import CheckConstraint, Engine, UniqueConstraint, inspect, text
+from sqlalchemy import CheckConstraint, Engine, MetaData, UniqueConstraint, inspect, text
 from sqlalchemy.schema import CreateIndex, CreateTable, Table
 
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
@@ -16,7 +16,7 @@ VERSION_TABLE = "research_schema_version"
 _INTERNAL_MIGRATION_TABLES = frozenset({
     "_research_0002_operation_rebuild_proof", "sqlite_sequence",
 })
-HEAD_VERSION = "0004"
+HEAD_VERSION = "0005"
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
 _CURRENT_MARKER_SHAPE = (
@@ -26,6 +26,7 @@ _CURRENT_MARKER_SHAPE = (
 POSTGRESQL_IMMUTABLE_TABLES = (
     "research_experiment_spec",
     "research_optimization_trial",
+    "research_strategy_admission",
 )
 
 
@@ -60,9 +61,9 @@ def _check_names(table: Table) -> set[str]:
     }
 
 
-def _check_contracts(table: Table) -> dict[str, str]:
+def _check_contracts(table: Table, dialect) -> dict[str, str]:
     return {
-        constraint.name: _normalise_sql(str(constraint.sqltext))
+        constraint.name: _normalise_sql(str(constraint.sqltext.compile(dialect=dialect)))
         for constraint in table.constraints
         if isinstance(constraint, CheckConstraint) and constraint.name
     }
@@ -235,7 +236,7 @@ def _after_table_rebuilt(_table_name: str) -> None:
 
 def _root_tables() -> tuple[Table, ...]:
     """The historical 0001 tables, frozen before scheduler tables existed."""
-    return tuple(table for table in ResearchBase.metadata.sorted_tables
+    return tuple(table for table in _pre_0005_tables()
                  if table.name not in {"research_operation", "research_operation_item",
                                        "research_operation_event"}
                  and not table.name.startswith("research_outbox_"))
@@ -254,14 +255,37 @@ def _operation_event_table() -> Table:
 
 
 def _tables_through_0002() -> tuple[Table, ...]:
-    return tuple(table for table in ResearchBase.metadata.sorted_tables
+    return tuple(table for table in _pre_0005_tables()
                  if table.name not in {"research_operation_item", "research_operation_event"}
                  and not table.name.startswith("research_outbox_"))
 
 
 def _tables_through_0003() -> tuple[Table, ...]:
-    return tuple(table for table in ResearchBase.metadata.sorted_tables
+    return tuple(table for table in _pre_0005_tables()
                  if not table.name.startswith("research_outbox_"))
+
+
+def _pre_0005_tables() -> tuple[Table, ...]:
+    """Project current metadata back to the exact schema before migration 0005.
+
+    Historical migrations validate before writing. They must not validate a 0004
+    database against today's receipt table or consumer columns, because that
+    would turn an additive migration into a marker-only trust upgrade.
+    """
+    from research.domain import models  # noqa: F401 - ensure complete metadata registration
+
+    metadata = MetaData()
+    for table in ResearchBase.metadata.sorted_tables:
+        if table.name != "research_strategy_admission":
+            table.to_metadata(metadata)
+    for name in ("research_experiment_run", "research_promotion_candidate"):
+        table = metadata.tables[name]
+        address_check = f"ck_{name}_admission_address"
+        for constraint in tuple(table.constraints):
+            if constraint.name == address_check:
+                table.constraints.remove(constraint)
+        table._columns.remove(table.c.admission_address)
+    return tuple(metadata.sorted_tables)
 
 
 def _upgrade_outbox(connection) -> None:
@@ -272,11 +296,30 @@ def _upgrade_outbox(connection) -> None:
     migration.upgrade(connection, RESEARCH_OUTBOX_MODELS)
 
 
+def _upgrade_strategy_admissions(connection) -> None:
+    from research.domain.models import ResearchStrategyAdmission
+
+    migration = importlib.import_module(
+        "research.domain.migrations.0005_strategy_admissions")
+    migration.upgrade(
+        connection,
+        ResearchStrategyAdmission.__table__,
+        (
+            ResearchBase.metadata.tables["research_experiment_run"],
+            ResearchBase.metadata.tables["research_promotion_candidate"],
+        ),
+    )
+
+
 def _create_indexes_and_triggers(connection, *, tables=None) -> None:
-    for table in (tables or ResearchBase.metadata.sorted_tables):
+    selected = tuple(tables or ResearchBase.metadata.sorted_tables)
+    for table in selected:
         for index in table.indexes:
             connection.exec_driver_sql(str(CreateIndex(index).compile(dialect=connection.dialect)))
-    for name in ("research_experiment_spec", "research_optimization_trial"):
+    for name in ("research_experiment_spec", "research_optimization_trial",
+                 "research_strategy_admission"):
+        if name not in {table.name for table in selected}:
+            continue
         for operation in ("UPDATE", "DELETE"):
             trigger = f"trg_{name}_no_{operation.lower()}"
             connection.exec_driver_sql(
@@ -328,13 +371,19 @@ def _expected_default(column, dialect) -> str | None:
     return str(column.server_default.arg.compile(dialect=dialect))
 
 
-def _expected_triggers() -> dict[str, str]:
+def _expected_triggers(*, tables=None) -> dict[str, str]:
+    present = ({table.name for table in tables}
+               if tables is not None else {
+                   "research_experiment_spec", "research_optimization_trial",
+                   "research_strategy_admission",
+               })
     return {
         f"trg_{table}_no_{operation.lower()}": (
             f"CREATE TRIGGER trg_{table}_no_{operation.lower()} BEFORE {operation} "
             f"ON {table} BEGIN SELECT RAISE(ABORT, '{table} is immutable'); END"
         )
-        for table in ("research_experiment_spec", "research_optimization_trial")
+        for table in ("research_experiment_spec", "research_optimization_trial",
+                      "research_strategy_admission") if table in present
         for operation in ("UPDATE", "DELETE")
     }
 
@@ -364,10 +413,27 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
     if include_marker:
         if _marker_shape(connection) != _CURRENT_MARKER_SHAPE:
             raise ResearchMigrationError("research schema marker contract drift")
-    for table in expected:
+    # Recovery tests intentionally rewind a version marker after a completed
+    # newer migration. Accept only the exact known 0005 additive state while
+    # validating a 0001–0004 preflight; arbitrary extra columns still refuse.
+    validation_tables = list(expected)
+    admission_table = ResearchBase.metadata.tables["research_strategy_admission"]
+    if tables is not None and admission_table.name in actual_tables:
+        validation_tables.append(admission_table)
+    for table in validation_tables:
+        contract_table = table
+        actual_column_names = {
+            row[1] for row in connection.exec_driver_sql(
+                f"PRAGMA table_info({_quoted(table.name)})")
+        }
+        if (tables is not None
+                and table.name in {"research_experiment_run", "research_promotion_candidate"}
+                and "admission_address" not in {column.name for column in table.columns}
+                and "admission_address" in actual_column_names):
+            contract_table = ResearchBase.metadata.tables[table.name]
         pk_positions = {
             column.name: index + 1
-            for index, column in enumerate(table.primary_key.columns)
+            for index, column in enumerate(contract_table.primary_key.columns)
         }
         expected_columns = [
             (
@@ -377,7 +443,7 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
                 _expected_default(column, connection.dialect),
                 pk_positions.get(column.name, 0),
             )
-            for column in table.columns
+            for column in contract_table.columns
         ]
         actual_columns = [
             (row[1], row[2].upper(), bool(row[3]), row[4], row[5])
@@ -386,17 +452,18 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
         if actual_columns != expected_columns:
             raise ResearchMigrationError(f"{table.name} column contract drift")
         actual_primary_key = tuple(inspector.get_pk_constraint(table.name).get("constrained_columns") or ())
-        expected_primary_key = tuple(column.name for column in table.primary_key.columns)
+        expected_primary_key = tuple(column.name for column in contract_table.primary_key.columns)
         if actual_primary_key != expected_primary_key:
             raise ResearchMigrationError(f"{table.name} primary-key drift")
         # SQLite's inspector intentionally omits CHECK constraints.  Validate
         # their normalized bodies before secondary metadata so a relaxed state
         # machine cannot hide behind missing recreated indexes.
-        if _actual_check_contracts(connection, table) != _check_contracts(table):
+        if (_actual_check_contracts(connection, contract_table)
+                != _check_contracts(contract_table, connection.dialect)):
             raise ResearchMigrationError(f"{table.name} check-constraint drift")
         expected_uniques = {
             tuple(column.name for column in constraint.columns)
-            for constraint in table.constraints if isinstance(constraint, UniqueConstraint)
+            for constraint in contract_table.constraints if isinstance(constraint, UniqueConstraint)
         }
         actual_uniques = {
             tuple(constraint["column_names"])
@@ -405,7 +472,7 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
         if actual_uniques != expected_uniques:
             raise ResearchMigrationError(f"{table.name} unique-constraint drift")
         expected_indexes = {
-            (tuple(index.columns.keys()), bool(index.unique)) for index in table.indexes
+            (tuple(index.columns.keys()), bool(index.unique)) for index in contract_table.indexes
         }
         actual_indexes = {
             (tuple(index["column_names"]), bool(index.get("unique")))
@@ -422,7 +489,7 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
                     deferrable=fk.deferrable, initially=fk.initially,
                 ),
             )
-            for fk in table.foreign_key_constraints
+            for fk in contract_table.foreign_key_constraints
         }
         actual_fks = {
             (
@@ -442,7 +509,7 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
     actual_triggers = dict(connection.exec_driver_sql(
         "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
     ).all())
-    expected_triggers = _expected_triggers()
+    expected_triggers = _expected_triggers(tables=validation_tables)
     if set(actual_triggers) != set(expected_triggers) or any(
         _normalise_sql(actual_triggers[name]) != _normalise_sql(sql)
         for name, sql in expected_triggers.items()
@@ -464,8 +531,9 @@ def _rebuild_unversioned(connection) -> None:
 
 def _migration_schema_digest(connection, *, tables=None) -> str:
     """Freeze every schema dimension consumed by the historical 0001 rebuild."""
+    selected = tuple(tables or ResearchBase.metadata.sorted_tables)
     contract = {}
-    for table in (tables or ResearchBase.metadata.sorted_tables):
+    for table in selected:
         contract[table.name] = {
             "columns": [
                 (column.name, str(column.type.compile(dialect=connection.dialect)).upper(),
@@ -490,10 +558,10 @@ def _migration_schema_digest(connection, *, tables=None) -> str:
                  ))
                 for fk in table.foreign_key_constraints
             ),
-            "checks": _check_contracts(table),
+            "checks": _check_contracts(table, connection.dialect),
         }
     contract["triggers"] = sorted(
-        (name, _normalise_sql(sql)) for name, sql in _expected_triggers().items()
+        (name, _normalise_sql(sql)) for name, sql in _expected_triggers(tables=selected).items()
     )
     return hashlib.sha256(
         json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
@@ -583,6 +651,7 @@ def migrate_research_db(engine: Engine) -> None:
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
             _upgrade_outbox(connection)
+            _upgrade_strategy_admissions(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -593,6 +662,7 @@ def migrate_research_db(engine: Engine) -> None:
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
             _upgrade_outbox(connection)
+            _upgrade_strategy_admissions(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -601,6 +671,15 @@ def migrate_research_db(engine: Engine) -> None:
         if version == "0003":
             _validate_schema(connection, tables=_tables_through_0003(), include_marker=False)
             _upgrade_outbox(connection)
+            _upgrade_strategy_admissions(connection)
+            _validate_schema(connection, include_marker=False)
+            _stamp(connection)
+            connection.commit()
+            _validate_schema(connection)
+            return
+        if version == "0004":
+            _validate_schema(connection, tables=_pre_0005_tables(), include_marker=False)
+            _upgrade_strategy_admissions(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -635,6 +714,7 @@ def migrate_research_db(engine: Engine) -> None:
             migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
             migration.upgrade(connection, _operation_item_table(), _operation_event_table())
             _upgrade_outbox(connection)
+            _upgrade_strategy_admissions(connection)
             _validate_schema(connection, include_marker=False)
             _stamp(connection)
             connection.commit()
@@ -689,7 +769,10 @@ def _validate_postgresql(connection) -> None:
             27,   # ROW | BEFORE | DELETE | UPDATE
             f"{table}_refuse_mutation",
             _normalise_function_body(
-                f"BEGIN RAISE EXCEPTION '{table} is immutable'; END;"
+                f"BEGIN RAISE EXCEPTION '{table} is immutable' "
+                "USING ERRCODE = '55000'; END;"
+                if table == "research_strategy_admission"
+                else f"BEGIN RAISE EXCEPTION '{table} is immutable'; END;"
             ),
             None,  # no WHEN predicate may suppress the refusal trigger
         )
@@ -737,6 +820,12 @@ def _migrate_postgresql(engine: Engine) -> None:
             if outbox_names & names:
                 raise ResearchMigrationError("partial research outbox migration")
             _upgrade_outbox(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0004"})
+            rows = ["0004"]
+        if rows == ["0004"]:
+            _upgrade_strategy_admissions(connection)
             connection.execute(text(
                 f'UPDATE "{VERSION_TABLE}" SET version = :version'
             ), {"version": HEAD_VERSION})

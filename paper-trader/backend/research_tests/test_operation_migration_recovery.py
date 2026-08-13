@@ -146,7 +146,7 @@ def test_0003_upgrades_a_complete_0002_database_without_rewriting_operations(tmp
             ).first() is not None
             assert connection.exec_driver_sql(
                 "SELECT version FROM research_schema_version"
-            ).scalar_one() == "0003"
+            ).scalar_one() == "0005"
     finally:
         engine.dispose()
 

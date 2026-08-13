@@ -41,6 +41,6 @@ def test_ledger_metadata_owns_ledger_outbox_only():
 
 def test_each_plane_schema_head_includes_its_outbox_contract():
     script = ScriptDirectory.from_config(execution_migrate.alembic_config())
-    assert script.get_current_head() == "0033"
-    assert research_migrate.HEAD_VERSION == "0004"
+    assert script.get_current_head() == "0034"
+    assert research_migrate.HEAD_VERSION == "0005"
     assert ledger_db.HEAD_VERSION == "0002"
