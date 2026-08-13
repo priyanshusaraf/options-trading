@@ -23,6 +23,9 @@
 - Risk reduction and recovery for existing positions must not depend on successful admission.
 - Do not touch `app/engine/kite_venue.py`, `app/engine/venue.py`, `app/providers/brokers.py`, or `tests/test_broker_registry.py`.
 - Do not implement Phase 5 performance work, Phase 8 frontend work, Phase 9 brokers, marketplace, billing, or live-IR grant expansion.
+- Treat the receipt as causal admission only. It is necessary but never sufficient for complete
+  Strategy Preflight or live activation; do not claim point-in-time market truth, numeric validity,
+  provider capability, named-role binding, dynamic derivatives, or resource compatibility.
 - Every production change follows red, observed failure, minimal green, focused regression, then commit.
 
 ## File structure
@@ -481,6 +484,9 @@ git commit -m "feat(strategy): define immutable causal admission receipts"
 - Produces: `evaluate_prefix_stream(graph, inputs, registry) -> EvaluationResult`.
 - Produces: `CausalFixture`, `CausalFixtureSuite`, immutable `FIXTURE_SUITES`, and `FIXTURE_SUITES.require("causal-fixtures/1")`.
 - Produces the final `admit_strategy(*, owner_id, source_input, registry) -> AdmissionDecision` and `verify_admission(*, artifact, owner_id, source_input, registry) -> None` interfaces from spec §6.2; neither accepts a suite or parity bypass.
+- Seeds only the causal lane of the future first-party node conformance harness. Current scalar
+  `NaN` parity is an exact-behaviour requirement for admitted kernels, not a claim that Phase 3
+  implements the later closed numeric-validity model.
 
 - [ ] **Step 1: Write failing independence and contamination tests**
 
@@ -628,7 +634,9 @@ git commit -m "feat(strategy): prove prefix and vector decision parity"
 - Test: `paper-trader/backend/research_tests/test_builder_integration.py`
 
 **Interfaces:**
-- Produces: `composition_to_ir(comp: Composition, *, identifier: str, version: int = 1, instrument: str = "*", timeframe: str = "*") -> dict[str, Any]`.
+- Produces: `composition_to_ir(comp: Composition, *, identifier: str, version: int = 1, instrument: str = "SELF", timeframe: str = "*") -> dict[str, Any]`.
+- The default logical instrument is `SELF`, not a broker symbol. Phase 6 owns durable named-role
+  deployment bindings; Task 5 does not resolve physical instruments.
 - Search/generation produces graph plus admission address; emitted source remains review text only.
 - Consumes only `app.ir.library.REGISTRY`; no research-local component library is accepted.
 
@@ -1039,7 +1047,7 @@ Expected: new assertions fail because the complete receipt is not wired.
 
 - [ ] **Step 3: Bind promotion to experiment admission**
 
-`decide_project_candidate` permits approval only when candidate, run, graph provenance, and
+`decide_project_candidate` permits causal approval only when candidate, run, graph provenance, and
 owner-scoped receipt have the same non-null address and `verify_admission` succeeds. Git SHA remains
 recorded provenance. Return `ADMISSION_REQUIRED` or `RECEIPT_STALE`, never a generic approval.
 
@@ -1073,6 +1081,11 @@ grant authority alone. Generated Python registrations become history/read compat
 generated work runs its mechanically lowered admitted IR. Unknown fallback is retired. The default
 route goes through `ensure_legacy_deployment`, which pins the admitted expanding-z equivalent and
 receipt; otherwise it remains quarantined.
+
+This address is one additional prerequisite. Do not delete or weaken existing owner/account,
+capital, history, paper/live, execution, or protection checks, and do not label this bridge complete
+Strategy Preflight. Phase 6 adds named instrument roles and the composite provider/data/resource
+receipt required by the V1 steer.
 
 Update `BINDING_MECHANISMS` and add a source-inventory test that scans every strategy-bearing model
 column and resolver. Any new source without an explicit canonical/rerouted/retired disposition
@@ -1253,6 +1266,8 @@ Expected: FAIL because the gate does not exist.
 Use `subprocess.run` with explicit argument arrays and timeouts. Record command, exit code, duration,
 test counts, schema heads, and mutation results. Refuse success if a required command was skipped,
 timed out, or produced no tests. Do not claim managed production or Phase 5 performance.
+Also refuse any report wording that treats causal admission as proof of market truth, complete
+numeric validity, provider capability, resource compatibility, or live deployment readiness.
 
 - [ ] **Step 4: Run focused SQLite closure**
 
@@ -1293,6 +1308,9 @@ Document receipt lookup, refusal codes, quarantine inspection, dry-run/apply bac
 re-admission, rollback, and the fact that risk-reducing exits remain available. In the report paste
 exact test counts and command outputs. Mark Phase 3 complete in `ROADMAP.md` only if every acceptance
 item in the design has direct evidence; otherwise leave it partial and list the failed gate.
+Retain the V1 steer nonclaims: this phase proves the causal admission lane, not the complete node
+catalogue, validity system, point-in-time rulebook, provider matrix, resource plan, or Strategy
+Preflight.
 
 - [ ] **Step 9: Commit**
 

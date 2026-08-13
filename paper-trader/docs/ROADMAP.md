@@ -21,18 +21,28 @@ execution-first order and evidence matrix below.
 
 ## 1. Order of work
 
-The owner's 2026-08-09 direction supersedes the 2026-08-01 research/UI/futures sequence and
-the older B → E → C → D → A sequence. The current order is:
+The owner's six 2026-08-13 Strategy OS steer documents refine the 2026-08-09 execution-first
+direction and supersede older sequencing where they conflict. The durable ten-phase sequence is:
 
-1. execution safety and truthful fill behaviour;
-2. causal strategy admission;
-3. content-addressed backtest correctness, then scalable sweep performance (100 × 5 baseline,
-   followed by 1,000 × 5 and **10,000 × 5** tiers — see the scale corrections below);
-4. explicit data/execution/account role bindings;
-5. account-isolated deployment design and load/failure proof;
-6. novice research UX on the existing frontend;
-7. additional brokers;
-8. commercial administration after the closed authentication and tenancy foundation.
+1. tenant, owner, account, and authentication foundations;
+2. PostgreSQL, concurrency, recovery, replica events, and local operating proof;
+3. causal strategy language and immutable admission;
+4. numeric validity, point-in-time market truth, instrument identity, dataset provenance, and
+   provider data-capability contracts;
+5. a substantial first-party node library through one conformance harness, plus scalable
+   content-addressed research;
+6. strategy/deployment separation, named role bindings, sizing, protection intent, and complete
+   Strategy Preflight;
+7. dynamic derivatives, incremental subscriptions and computation, resource planning, QoS, and
+   production topology/failure/cost proof;
+8. the guided research-to-approval-to-deployment workflow;
+9. additional data and execution adapters through the capability matrix; and
+10. commercial administration and entitlements after the safety and operating gates close.
+
+The governing reconciliation is
+[`superpowers/specs/2026-08-13-strategy-os-v1-product-steer-design.md`](superpowers/specs/2026-08-13-strategy-os-v1-product-steer-design.md),
+and the phase dependency contract is
+[`superpowers/plans/2026-08-13-strategy-os-v1-master-sequence.md`](superpowers/plans/2026-08-13-strategy-os-v1-master-sequence.md).
 
 Broker breadth remains deliberately deferred. Phase 1 closed ownership, authentication, jobs,
 APIs, exports, WebSockets, and cache boundaries. Commercial administration remains later work.
@@ -61,14 +71,14 @@ the present code cannot support is `CLAIM REJECTED`.
 |---|---|---|
 | 1. Durable entry intent and immutable lifecycle | **COMPLETE** | Migration `0014`, append-only intent/events, pure reduction, and pre-submit commit are verified at `9827e23`. |
 | 2. Live entry integration, recovery, protection, telemetry | **COMPLETE within the live-entry scope** | Durable recovery, cumulative fill deltas, protection-before-booking, latency, slippage, and `AUTO`/`MARKET`/`LIMIT` live-entry routing passed the branch-wide gate. Live options and equity entries persist and submit the effective MARKET or LIMIT request. **Paper and backtest LIMIT fill parity remains open. Exits remain on the legacy journal and market-order path.** |
-| 3. Causal strategy contract | **PARTIAL** | IR prefix causality and handwritten-strategy mutation tests exist. Closed per-block causal declarations, admission enforcement, and streaming-versus-vectorised parity are not complete. |
-| 4. Content-addressed backtest cache | **COMPLETE on this branch** | Schema v8 binds exact ordered OHLCV bytes and source context to a closed execution manifest: strategy and transitive source, bound parameters, instrument economics, slippage, charges, event/exit policy, and premium assumptions. Historical revisions with the same final timestamp are cold; transient premium failures are not reusable; warm rows preserve every result column except row/run identity. |
-| 5. Scalable sweep: 100 × 5, then 1,000 × 5 / **10,000 × 5 in minutes** | **IN PROGRESS, now measured** | Shared dataset acquisition (`439d45d`), shared frame/signal preparation (`a291722`) and the options-pricing fix (`5ba1233`) are done. Per-stage cost is measured on realistic 5,000-bar datasets and recorded in the hardening record §10: a cell is **84.7 ms**, down from 185.7 ms, after removing a `scipy.stats.norm.cdf` wrapper that was 74% of the premium replay. **Two floors remain and both are named:** the live-fetch I/O floor is 5 h 33 m for 50,000 datasets (Kite's rate limit — not optimisable in our process, so the local dataset store is the only path and is promoted ahead of batching), and serial compute is still 4,236 s, ~20× over target, which is what justifies measured multiprocess fan-out. The store, batching, fan-out and tiered p50/p95/p99 do not exist yet. |
-| 6. Data/execution/account role bindings | **PARTIAL** | Owner and broker-account identities, broker connections, scoped execution state, and fenced account ownership exist. A second production broker adapter and complete provider-role portability remain unproven. |
-| 7. Deployable **500-user** topology at a bounded cost | **PARTIAL — local foundation implemented** | PostgreSQL plane profiles, fenced account leases, replicated API ownership, scoped event delivery, local restore proof, and bounded workload rehearsals exist. A managed multi-host deployment, sustained soak, managed PITR/failover, measured capacity, and monthly cost remain open. The five-accounts-per-worker figure remains withdrawn until measured. |
-| 8. Novice research experience | **PARTIAL** | The React/Vite graph, research, backtest, engine, portfolio, and ledger surfaces exist. The guided idea-to-paper journey and novice usability gate do not. |
-| 9. Additional brokers | **DEFERRED / UNSTARTED** | Capability and resolver seams exist; no Upstox or second execution adapter is shipped. |
-| 10. Commercial access | **PARTIAL FOUNDATION** | Multi-user identity, membership, ownership, encrypted broker credentials, sessions, and adversarial cross-tenant isolation exist. Billing, entitlements, customer administration, and production identity operations remain deferred. |
+| 3. Causal strategy admission | **IN PROGRESS** | Closed causal declarations, transitive implementation identity, and structural admission are complete through Task 3. Independent vector/streaming parity and downstream authority wiring remain. This phase proves causal admission only, not complete Strategy Preflight. |
+| 4. Market truth, numeric validity, and data capability | **PARTIAL FOUNDATION** | The content-addressed backtest cache is complete and binds exact OHLCV/source context. Closed validity states, point-in-time contract/rule truth, cross-market alignment, dataset provenance, and provider live/historical capability receipts remain unbuilt. |
+| 5. First-party language and scalable research | **PARTIAL, measured foundation** | Existing blocks and shared frame/signal preparation provide a base, and a 5,000-bar cell is measured at 84.7 ms. The substantial five-family node catalogue, shared conformance harness, local dataset store, batching, process fan-out, and tiered p50/p95/p99 evidence remain. |
+| 6. Deployment binding and Strategy Preflight | **PARTIAL FOUNDATION** | Owner/account identities, broker connections, and scoped deployment records exist. Named instrument roles, complete strategy/deployment separation, sizing and capital reservation, provider/execution/protection compatibility, and one complete preflight receipt remain. |
+| 7. Dynamic derivatives, runtime economics, and production topology | **PARTIAL INFRASTRUCTURE FOUNDATION** | PostgreSQL profiles, fenced leases, replica events, local restore, and bounded workload rehearsals exist. Point-in-time derivative selectors, subscription hysteresis, shared incremental computation, resource/QoS plans, managed topology, soak, PITR/failover, capacity, and cost remain open. |
+| 8. Guided trader workflow | **PARTIAL** | React/Vite graph, research, backtest, engine, portfolio, and ledger surfaces exist. The five-family authoring model, data/preflight explanations, and guided research-to-controlled-deployment acceptance gate do not. |
+| 9. Additional providers and brokers | **DEFERRED / UNSTARTED** | Capability and resolver seams exist; no second production data/execution adapter has passed the common capability and refusal contract. |
+| 10. Commercial administration | **PARTIAL FOUNDATION** | Multi-user identity, ownership, encrypted broker credentials, sessions, and adversarial isolation exist. Billing, entitlements, customer administration, support confidentiality controls, and production identity operations remain deferred. |
 
 The governing design and detailed gates are in
 [`superpowers/specs/2026-08-09-execution-first-product-roadmap-design.md`](superpowers/specs/2026-08-09-execution-first-product-roadmap-design.md).

@@ -21,6 +21,12 @@ Component IR. A `Composition` becomes a Component IR graph mechanically. Generat
 human-readable diagnostic output and has no authority. A handwritten strategy can enter only as an
 adapter whose declared IR equivalent and parity evidence are part of the admission artefact.
 
+This is a **causal admission** receipt, not complete Strategy Preflight. It is an additional
+necessary guard at every named boundary and is never sufficient permission for live activation.
+Point-in-time market truth, numeric-validity semantics, provider capabilities, named instrument
+roles and deployment bindings, resource plans, execution/protection compatibility, and production
+readiness remain governed by the V1 steer reconciliation and later phases.
+
 ## 2. Scope
 
 ### In scope
@@ -49,6 +55,9 @@ adapter whose declared IR equivalent and parity evidence are part of the admissi
 - A new IR format, Python language sandbox, general multi-series language, marketplace, billing,
   live IR authority expansion, or a rewrite of exit and sizing policy.
 - Proving broker observations or arbitrary external data causal.
+- The full first-party node conformance harness, closed validity-state model, point-in-time
+  instrument/rulebook model, provider capability matrix, dynamic derivative selectors, subscription
+  planner, or complete deployment preflight.
 
 ## 3. Governing constraints
 
@@ -65,6 +74,9 @@ adapter whose declared IR equivalent and parity evidence are part of the admissi
 8. Existing rows without exact proof remain readable but cannot be activated, resumed, promoted,
    newly backtested, or used to open an order.
 9. No work touches the protected broker/venue files named by the Phase 2 worktree guard.
+10. An `admission_address` proves only the causal artefact described here. Existing authority
+    boundaries keep every other money, account, history, and execution check; later phases add the
+    remaining Strategy Preflight receipts.
 
 ## 4. Decisions and rejected alternatives
 
@@ -613,7 +625,7 @@ proves identity freshness and causality independently.
 ```python
 def composition_to_ir(comp: Composition, *, identifier: str,
                       version: int = 1,
-                      instrument: str = "*",
+                      instrument: str = "SELF",
                       timeframe: str = "*") -> dict[str, Any]:
     return CompositionLowerer(
         identifier=identifier, version=version,
@@ -621,6 +633,9 @@ def composition_to_ir(comp: Composition, *, identifier: str,
 ```
 
 The lowerer:
+
+`SELF` is a logical strategy role, not a physical symbol. Phase 6 owns durable role-to-instrument
+deployment bindings; this lowerer never resolves a provider token or contract.
 
 1. round-trips `Composition.to_dict()` through `Composition.from_dict()`;
 2. creates boundary inputs only for the union of referenced blocks' declared inputs;
