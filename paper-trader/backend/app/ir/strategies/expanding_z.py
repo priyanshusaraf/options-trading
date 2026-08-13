@@ -40,15 +40,27 @@ from __future__ import annotations
 
 from typing import Any
 from dataclasses import dataclass
+import inspect
 import pandas as pd
 
 from app.ir.hashing import content_address
-from app.ir.kernels import kernel_registry
 from app.ir.causal import (
     BoundTerm, HistoryBound, RecursiveStateContract, causal_contract,
 )
+from app.ir.registry import DependencyBoundary, registered_kernel
 from app.ir.resolve import BOUNDARY_INPUT, BOUNDARY_OUTPUT, Library
-from app.strategy.registry import expanding_z_v4 as impl
+from app.strategy.registry.expanding_z_v4 import (
+    ExpandingZImpulseV4,
+    _as_bool,
+    _rma,
+    adaptive_threshold,
+    directional_entry,
+    displacement_lost,
+    drift_score,
+    impulse,
+    range_in_atr,
+    zscore,
+)
 
 FORMAT_VERSION = 1
 
@@ -230,7 +242,7 @@ COMPONENTS = [EMA, TRUE_RANGE, WILDER, ATR, ZSCORE, ABS, ADAPTIVE, VALUE, SCALE,
 # The defaults below are `ExpandingZImpulseV4.default_params`, and the parity
 # test asserts that rather than trusting this comment.
 
-D = impl.ExpandingZImpulseV4.default_params
+D = ExpandingZImpulseV4.default_params
 
 GRAPH: dict[str, Any] = {
     "format_version": FORMAT_VERSION, "kind": "graph",
@@ -382,11 +394,11 @@ def _k_true_range(params, inputs, context_inputs):
 
 
 def _k_wilder(params, inputs, context_inputs):
-    return {"out": impl._rma(inputs["in"], params["length"])}
+    return {"out": _rma(inputs["in"], params["length"])}
 
 
 def _k_zscore(params, inputs, context_inputs):
-    return {"out": impl.zscore(inputs["close"], inputs["reference"], params["length"])}
+    return {"out": zscore(inputs["close"], inputs["reference"], params["length"])}
 
 
 def _k_abs(params, inputs, context_inputs):
@@ -394,8 +406,8 @@ def _k_abs(params, inputs, context_inputs):
 
 
 def _k_adaptive(params, inputs, context_inputs):
-    return {"out": impl.adaptive_threshold(inputs["in"], params["length"], params["pct"],
-                                           inputs["floor"], inputs["fallback"])}
+    return {"out": adaptive_threshold(inputs["in"], params["length"], params["pct"],
+                                      inputs["floor"], inputs["fallback"])}
 
 
 def _k_value(params, inputs, context_inputs):
@@ -407,12 +419,12 @@ def _k_scale(params, inputs, context_inputs):
 
 
 def _k_drift(params, inputs, context_inputs):
-    return {"out": impl.drift_score(inputs["reference"], inputs["atr"],
-                                    params["lookback"])}
+    return {"out": drift_score(inputs["reference"], inputs["atr"],
+                               params["lookback"])}
 
 
 def _k_range_atr(params, inputs, context_inputs):
-    return {"out": impl.range_in_atr(inputs["high"], inputs["low"], inputs["atr"])}
+    return {"out": range_in_atr(inputs["high"], inputs["low"], inputs["atr"])}
 
 
 def _k_le(params, inputs, context_inputs):
@@ -420,19 +432,19 @@ def _k_le(params, inputs, context_inputs):
 
 
 def _k_impulse(params, inputs, context_inputs):
-    return {"out": impl.impulse(inputs["abs_z"], inputs["threshold"],
-                                params["require_expansion"],
-                                params["allow_reexpansion"])}
+    return {"out": impulse(inputs["abs_z"], inputs["threshold"],
+                           params["require_expansion"],
+                           params["allow_reexpansion"])}
 
 
 def _k_entry(params, inputs, context_inputs):
-    return {"out": impl._as_bool(impl.directional_entry(
+    return {"out": _as_bool(directional_entry(
         inputs["signal_bar_ok"], inputs["impulse"], inputs["z"], inputs["drift"],
         params["min_drift_atr"], params["direction"]))}
 
 
 def _k_exit(params, inputs, context_inputs):
-    return {"out": impl._as_bool(impl.displacement_lost(
+    return {"out": _as_bool(displacement_lost(
         inputs["drift"], inputs["close"], inputs["reference"], inputs["abs_z"],
         inputs["exit_threshold"], inputs["z"], params["direction"],
         params["exit_on_drift_flip"], params["exit_on_ema_cross"],
@@ -551,7 +563,7 @@ _CAUSAL = {
 # wrong in a way nothing would have reported: a node overriding `length` to 200
 # would still have claimed it warmed up in 50 bars, and a backtest would have
 # read 150 bars of an unwarmed indicator and looked entirely plausible.
-KERNELS = kernel_registry({
+_KERNEL_FIELDS = {
     EMA["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[EMA["body"]["ref"]]},
     TRUE_RANGE["body"]["ref"]: {"warmup": 1, "causal": _CAUSAL[TRUE_RANGE["body"]["ref"]]},
     WILDER["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[WILDER["body"]["ref"]]},
@@ -567,10 +579,78 @@ KERNELS = kernel_registry({
     IMPULSE["body"]["ref"]: {"warmup": 2, "causal": _CAUSAL[IMPULSE["body"]["ref"]]},
     ENTRY["body"]["ref"]: {"causal": _CAUSAL[ENTRY["body"]["ref"]]},
     EXIT["body"]["ref"]: {"causal": _CAUSAL[EXIT["body"]["ref"]]},
-})
+}
+
+
+def _external_dependencies(implementation, recursive_state):
+    """Derive external helpers/modules; identity independently checks exact equality."""
+    roots = [implementation]
+    if recursive_state is not None:
+        roots.extend((recursive_state.initializer, recursive_state.state_type,
+                      recursive_state.state_encoder, recursive_state.update,
+                      recursive_state.step))
+    found: dict[int, object] = {}
+    seen: set[int] = set()
+
+    def visit(value):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if inspect.ismodule(value):
+            found[id(value)] = value
+            return
+        if inspect.isfunction(value):
+            closure = inspect.getclosurevars(value)
+            for dependency in (*closure.globals.values(), *closure.nonlocals.values()):
+                if inspect.ismodule(dependency):
+                    found[id(dependency)] = dependency
+                elif inspect.isfunction(dependency) or inspect.isclass(dependency):
+                    if getattr(dependency, "__module__", None) == __name__:
+                        visit(dependency)
+                    elif inspect.isfunction(dependency):
+                        found[id(dependency)] = dependency
+                        visit(dependency)
+                    elif getattr(dependency, "__module__", None) not in {
+                            "builtins", "dataclasses"}:
+                        found[id(dependency)] = dependency
+            return
+        if inspect.isclass(value) and getattr(value, "__module__", None) == __name__:
+            for member in vars(value).values():
+                raw = member.__func__ if isinstance(member, (staticmethod, classmethod)) else member
+                if inspect.isfunction(raw):
+                    visit(raw)
+
+    for root in roots:
+        visit(root)
+    return tuple(sorted(found.values(), key=lambda item: (
+        getattr(item, "__module__", ""),
+        getattr(item, "__qualname__", getattr(item, "__name__", "")),
+    )))
+
+
+REGISTRATIONS = {}
+for _ref, _implementation in IMPLEMENTATIONS.items():
+    _fields = _KERNEL_FIELDS[_ref]
+    _causal = _fields["causal"]
+    REGISTRATIONS[_ref] = registered_kernel(
+        body_ref=_ref,
+        implementation=_implementation,
+        causal=_causal,
+        dependency_boundary=DependencyBoundary(
+            "defining_module",
+            _external_dependencies(_implementation, _causal.recursive_state)),
+        warmup=_fields.get("warmup", 0),
+    )
+
+KERNELS = {ref: registration.spec for ref, registration in REGISTRATIONS.items()}
 
 LIBRARY = Library(
     components={(c["identifier"], c["version"]): c for c in COMPONENTS},
     bodies={ATR["body"]["ref"]: ATR_BODY},
     kernels=KERNELS,
 )
+
+assert set(REGISTRATIONS) == {
+    component["body"]["ref"] for component in COMPONENTS
+    if component["body"]["body"] == "kernel"
+}

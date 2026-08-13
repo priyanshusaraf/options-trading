@@ -40,6 +40,8 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 from app.ir.hashing import canonical_json
+from app.ir.contributors import generated_blocks
+from app.ir.registry import KernelRegistration, PlatformRegistry
 from app.ir.resolve import Library
 from app.ir.strategies import expanding_z
 
@@ -52,7 +54,7 @@ from app.ir.strategies import expanding_z
 #: into a component module of their own is a later, separate, purely mechanical step; the
 #: point of this boundary is that it is now one line here rather than five imports across the
 #: tree.
-CONTRIBUTORS: tuple[Any, ...] = (expanding_z,)
+CONTRIBUTORS: tuple[Any, ...] = (generated_blocks, expanding_z)
 
 
 class LibraryConflict(Exception):
@@ -70,16 +72,15 @@ def _refuse(what: str, key: str, detail: str) -> None:
         f"one thing; the platform library will not choose between them by import order.")
 
 
-def compose(modules: Sequence[Any]) -> tuple[Library, dict[str, Callable]]:
-    """Merge contributors into one `(Library, implementations)` pair, refusing disagreement.
+def compose(modules: Sequence[Any]) -> PlatformRegistry:
+    """Merge contributors into one immutable registry, refusing disagreement.
 
     Identical duplicates are fine — that is aliasing, and two modules re-exporting one
     component is not a conflict. Different values under one identity are refused.
     """
     components: dict[tuple[str, int], Mapping[str, Any]] = {}
     bodies: dict[str, Mapping[str, Any]] = {}
-    kernels: dict[str, Any] = {}
-    implementations: dict[str, Callable] = {}
+    registrations: dict[str, KernelRegistration] = {}
 
     for module in modules:
         library = getattr(module, "LIBRARY", None)
@@ -103,40 +104,39 @@ def compose(modules: Sequence[Any]) -> tuple[Library, dict[str, Callable]]:
                 _refuse("bodies", ref, "their canonical bytes differ")
             bodies[ref] = body
 
-        for ref, spec in library.kernels.items():
-            existing = kernels.get(ref)
-            if existing is not None and existing != spec:
-                _refuse("kernel declarations", ref,
-                        f"{existing!r} against {spec!r} — warmup, purity or cache identity "
-                        f"would depend on which contributor was imported first")
-            kernels[ref] = spec
+        contributed = getattr(module, "REGISTRATIONS", None)
+        if not isinstance(contributed, Mapping):
+            raise LibraryConflict(
+                f"{getattr(module, '__name__', module)!r} exposes no REGISTRATIONS mapping")
+        if set(library.kernels) != set(contributed):
+            raise LibraryConflict(
+                f"{getattr(module, '__name__', module)!r} has split library and registration keys")
+        for ref, registration in contributed.items():
+            if not isinstance(registration, KernelRegistration):
+                raise LibraryConflict(f"{ref} is not an immutable KernelRegistration")
+            if registration.spec != library.kernels[ref]:
+                _refuse("kernel declarations", ref, "library and registration specs differ")
+            existing = registrations.get(ref)
+            if existing is not None and existing != registration:
+                if existing.spec != registration.spec:
+                    _refuse("kernel declarations", ref,
+                            "warmup, purity, cache identity, or causal contract differs")
+                _refuse("registrations", ref, "one body address names different records")
+            registrations[ref] = registration
 
-        for ref, kernel in getattr(module, "IMPLEMENTATIONS", {}).items():
-            existing = implementations.get(ref)
-            if existing is not None and existing is not kernel:
-                _refuse("implementations", ref,
-                        "one content address would execute two different functions")
-            implementations[ref] = kernel
-
-    missing = sorted(set(kernels) - set(implementations))
-    if missing:
-        # C13: the runtime knows a kernel by its address and by nothing else, so a declared
-        # kernel with no implementation is an `EvaluationError` waiting for the first graph
-        # that uses it. Better to say so when the library is built.
-        raise LibraryConflict(
-            f"the platform library declares kernels with no implementation: {missing}")
-
-    return (
-        Library(components=MappingProxyType(components),
-                bodies=MappingProxyType(bodies),
-                kernels=MappingProxyType(kernels)),
-        implementations,
+    return PlatformRegistry(
+        components=components,
+        bodies=bodies,
+        registrations=registrations,
     )
 
 
 #: **The** platform component library and its kernel implementations. Everything outside
 #: `app/ir/strategies/` that needs a library takes these two, and nothing else.
-LIBRARY, IMPLEMENTATIONS = compose(CONTRIBUTORS)
+REGISTRY = compose(CONTRIBUTORS)
+LIBRARY = REGISTRY.library
+IMPLEMENTATIONS = REGISTRY.implementations
 
 
-__all__ = ["CONTRIBUTORS", "IMPLEMENTATIONS", "LIBRARY", "LibraryConflict", "compose"]
+__all__ = ["CONTRIBUTORS", "IMPLEMENTATIONS", "LIBRARY", "REGISTRY",
+           "LibraryConflict", "compose"]

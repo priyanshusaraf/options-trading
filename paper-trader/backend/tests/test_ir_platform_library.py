@@ -20,13 +20,17 @@ The mutation that turns each red is recorded on the test.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import pathlib
 
 import pytest
 
 from app.ir import library as platform
+from app.ir.causal import HistoryBound, causal_contract
+from app.ir.contributors import generated_blocks
 from app.ir.hashing import canonical_json, content_address
-from app.ir.library import LIBRARY, LibraryConflict, compose
+from app.ir.library import IMPLEMENTATIONS, LIBRARY, REGISTRY, LibraryConflict, compose
+from app.ir.registry import PlatformRegistry
 from app.ir.resolve import Library, resolve
 from app.ir.strategies import expanding_z
 
@@ -43,6 +47,77 @@ REFERENCE_GRAPH_ADDRESS = (
 REFERENCE_NODES = 18
 REFERENCE_EDGES = 35
 REFERENCE_WARMUP = 302
+
+
+def test_platform_registry_is_the_single_immutable_authority():
+    assert isinstance(REGISTRY, PlatformRegistry)
+    assert LIBRARY is REGISTRY.library
+    assert IMPLEMENTATIONS is REGISTRY.implementations
+    with pytest.raises(TypeError):
+        REGISTRY.registrations["forged"] = object()
+
+
+def test_platform_registry_deep_copies_component_bytes():
+    component = _one_component(ref=expanding_z.EMA["body"]["ref"])
+    original = {("indicator.fake", 1): component}
+    registration = expanding_z.REGISTRATIONS[expanding_z.EMA["body"]["ref"]]
+    registry = PlatformRegistry(
+        components=original, bodies={}, registrations={registration.body_ref: registration})
+
+    component["display_name"] = "mutated outside registry"
+    assert registry.library.components[("indicator.fake", 1)]["display_name"] == "Fake"
+    with pytest.raises(TypeError):
+        registry.library.components[("indicator.fake", 1)]["display_name"] = "forged"
+
+
+def test_platform_registry_can_rebuild_from_read_only_views():
+    rebuilt = PlatformRegistry(
+        components=REGISTRY.library.components,
+        bodies=REGISTRY.library.bodies,
+        registrations=REGISTRY.registrations,
+    )
+    assert set(rebuilt.library.components) == set(REGISTRY.library.components)
+    for key in REGISTRY.library.components:
+        assert canonical_json(rebuilt.library.components[key]) == \
+            canonical_json(REGISTRY.library.components[key])
+
+
+def test_platform_registry_rejects_directly_forged_registration_address():
+    registration = expanding_z.REGISTRATIONS[expanding_z.EMA["body"]["ref"]]
+    forged = dataclasses.replace(
+        registration, implementation_address="sha256:" + "0" * 64)
+
+    with pytest.raises(ValueError, match="implementation_address"):
+        PlatformRegistry(
+            components={(expanding_z.EMA["identifier"], 1): expanding_z.EMA},
+            bodies={},
+            registrations={forged.body_ref: forged},
+        )
+
+
+def test_platform_registry_rejects_missing_or_forged_graph_body():
+    graph_component = expanding_z.ATR
+    ref = graph_component["body"]["ref"]
+
+    with pytest.raises(ValueError, match="graph body closure"):
+        PlatformRegistry(
+            components={(graph_component["identifier"], 1): graph_component},
+            bodies={},
+            registrations={},
+        )
+    with pytest.raises(ValueError, match="content address"):
+        PlatformRegistry(
+            components={(graph_component["identifier"], 1): graph_component},
+            bodies={ref: {**expanding_z.ATR_BODY, "display_name": "forged"}},
+            registrations={},
+        )
+
+
+def test_platform_registry_includes_generated_blocks_and_boolean_logic():
+    identifiers = {identifier for identifier, _version in LIBRARY.components}
+    assert {"logic.and", "logic.or"} <= identifiers
+    assert {f"block.{name}" for name in generated_blocks.BLOCKS} <= identifiers
+    assert set(LIBRARY.kernels) == set(REGISTRY.registrations) == set(IMPLEMENTATIONS)
 
 
 # ── 1. identity across the correction ────────────────────────────────────────────
@@ -81,11 +156,13 @@ def test_platform_library_resolves_the_reference_artefact_identically():
 def test_platform_library_carries_every_body_address_unchanged():
     """Body addresses are what the runtime keys kernels on (C13). If one moved, the
     implementation map would no longer answer for it."""
-    assert {k: c["body"]["ref"] for k, c in LIBRARY.components.items()} == \
-           {k: c["body"]["ref"] for k, c in expanding_z.LIBRARY.components.items()}
-    assert dict(LIBRARY.bodies) == dict(expanding_z.LIBRARY.bodies)
-    assert dict(LIBRARY.kernels) == dict(expanding_z.LIBRARY.kernels)
-    assert platform.IMPLEMENTATIONS == expanding_z.IMPLEMENTATIONS
+    for key, component in expanding_z.LIBRARY.components.items():
+        assert LIBRARY.components[key]["body"]["ref"] == component["body"]["ref"]
+    for key, body in expanding_z.LIBRARY.bodies.items():
+        assert canonical_json(LIBRARY.bodies[key]) == canonical_json(body)
+    for key, spec in expanding_z.LIBRARY.kernels.items():
+        assert LIBRARY.kernels[key] == spec
+        assert platform.IMPLEMENTATIONS[key] is expanding_z.IMPLEMENTATIONS[key]
 
 
 def test_every_declared_kernel_has_an_implementation():
@@ -99,8 +176,12 @@ def test_single_contributor_composition_is_the_identity_function():
 
     Mutation: make `compose` skip, rename or re-wrap an entry — this fails.
     """
-    assert dict(LIBRARY.components) == dict(expanding_z.LIBRARY.components)
-    assert canonical_json(sorted(f"{i}@{v}" for i, v in LIBRARY.components)) == \
+    composed = compose([expanding_z])
+    assert set(composed.library.components) == set(expanding_z.LIBRARY.components)
+    for key in expanding_z.LIBRARY.components:
+        assert canonical_json(composed.library.components[key]) == \
+            canonical_json(expanding_z.LIBRARY.components[key])
+    assert canonical_json(sorted(f"{i}@{v}" for i, v in composed.library.components)) == \
            canonical_json(sorted(f"{i}@{v}" for i, v in expanding_z.LIBRARY.components))
 
 
@@ -110,9 +191,9 @@ class _Contributor:
     """A stand-in contributor module. A dataclass would do; a class keeps the attribute
     access identical to a real module's."""
 
-    def __init__(self, library: Library, implementations=None):
+    def __init__(self, library: Library, registrations=None):
         self.LIBRARY = library
-        self.IMPLEMENTATIONS = implementations or {}
+        self.REGISTRATIONS = registrations or {}
         self.__name__ = "tests.contributor"
 
 
@@ -130,10 +211,14 @@ def _one_component(identifier="indicator.fake", version=1, display="Fake", ref="
 
 def test_two_contributors_may_alias_one_component():
     """Re-exporting the same component is not a conflict. Only *disagreement* is."""
-    component = _one_component()
-    lib = Library(components={("indicator.fake", 1): component}, bodies={}, kernels={})
-    merged, _ = compose([_Contributor(lib), _Contributor(lib)])
-    assert dict(merged.components) == {("indicator.fake", 1): component}
+    component = expanding_z.EMA
+    registration = expanding_z.REGISTRATIONS[component["body"]["ref"]]
+    lib = Library(components={("indicator.ema", 1): component}, bodies={},
+                  kernels={registration.body_ref: registration.spec})
+    merged = compose([_Contributor(lib, {registration.body_ref: registration}),
+                      _Contributor(lib, {registration.body_ref: registration})])
+    assert canonical_json(merged.library.components[("indicator.ema", 1)]) == \
+        canonical_json(component)
 
 
 def test_conflicting_component_bytes_are_refused():
@@ -152,24 +237,40 @@ def test_conflicting_component_bytes_are_refused():
 
 def test_conflicting_kernel_declarations_are_refused():
     """Warmup, purity and cache identity must not depend on which module imported first."""
-    from app.ir.kernels import kernel_spec
+    from app.ir.registry import DependencyBoundary, registered_kernel
 
     ref = "sha256:" + "1" * 64
-    a = Library(components={}, bodies={}, kernels={ref: kernel_spec(warmup=5)})
-    b = Library(components={}, bodies={}, kernels={ref: kernel_spec(warmup=9)})
+    def implementation(params, node_inputs, context_inputs):
+        return {}
+    causal = causal_contract(node_input_sockets=(), history=HistoryBound("bounded"))
+    reg_a = registered_kernel(body_ref=ref, implementation=implementation, causal=causal,
+                              dependency_boundary=DependencyBoundary("declared_objects"),
+                              warmup=5)
+    reg_b = registered_kernel(body_ref=ref, implementation=implementation, causal=causal,
+                              dependency_boundary=DependencyBoundary("declared_objects"),
+                              warmup=9)
+    a = Library(components={}, bodies={}, kernels={ref: reg_a.spec})
+    b = Library(components={}, bodies={}, kernels={ref: reg_b.spec})
     with pytest.raises(LibraryConflict, match="kernel declarations"):
-        compose([_Contributor(a, {ref: lambda p, i, c: {}}),
-                 _Contributor(b, {ref: lambda p, i, c: {}})])
+        compose([_Contributor(a, {ref: reg_a}), _Contributor(b, {ref: reg_b})])
 
 
 def test_one_address_may_not_execute_two_functions():
     """C13 keys the runtime on the address alone, so two functions at one address is the
     one thing that would make evaluation depend on import order."""
+    from app.ir.registry import DependencyBoundary, registered_kernel
     ref = "sha256:" + "2" * 64
-    lib = Library(components={}, bodies={}, kernels={})
-    with pytest.raises(LibraryConflict, match="two different functions"):
-        compose([_Contributor(lib, {ref: lambda p, i, c: {}}),
-                 _Contributor(lib, {ref: lambda p, i, c: {}})])
+    causal = causal_contract(node_input_sockets=(), history=HistoryBound("bounded"))
+    def first(params, node_inputs, context_inputs): return {}
+    def second(params, node_inputs, context_inputs): return {"different": True}
+    reg_a = registered_kernel(body_ref=ref, implementation=first, causal=causal,
+                              dependency_boundary=DependencyBoundary("declared_objects"))
+    reg_b = registered_kernel(body_ref=ref, implementation=second, causal=causal,
+                              dependency_boundary=DependencyBoundary("declared_objects"))
+    lib_a = Library(components={}, bodies={}, kernels={ref: reg_a.spec})
+    lib_b = Library(components={}, bodies={}, kernels={ref: reg_b.spec})
+    with pytest.raises(LibraryConflict, match="registrations"):
+        compose([_Contributor(lib_a, {ref: reg_a}), _Contributor(lib_b, {ref: reg_b})])
 
 
 def test_declared_kernel_without_implementation_is_refused():
@@ -177,7 +278,7 @@ def test_declared_kernel_without_implementation_is_refused():
 
     ref = "sha256:" + "3" * 64
     lib = Library(components={}, bodies={}, kernels={ref: kernel_spec(warmup=1)})
-    with pytest.raises(LibraryConflict, match="no implementation"):
+    with pytest.raises(LibraryConflict, match="split library and registration"):
         compose([_Contributor(lib)])
 
 

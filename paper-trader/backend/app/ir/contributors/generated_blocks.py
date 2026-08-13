@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import bisect
+import inspect
 import warnings
 from collections.abc import Callable
 from typing import Any, Mapping
@@ -32,6 +33,8 @@ from app.ir.causal import (
     RecursiveStateContract,
     causal_contract,
 )
+from app.ir.registry import DependencyBoundary, registered_kernel
+from app.ir.resolve import Library
 
 
 # ── indicator helpers (shared, pure) ─────────────────────────────────────────
@@ -1027,12 +1030,13 @@ BAR_INPUTS = ("open", "high", "low", "close", "volume")
 DOMAIN = {"instrument": "*", "timeframe": "*"}
 
 
-def _adapter(spec: BlockSpec, order: tuple[str, ...], fields: tuple[str, ...]):
+def _adapter(fn: Callable, order: tuple[str, ...], fields: tuple[str, ...],
+             needs_clock: bool):
     def kernel(params, node_inputs, context_inputs):
         frame = pd.DataFrame({name: node_inputs[name] for name in fields})
-        if spec.needs_clock:
+        if needs_clock:
             frame["date"] = context_inputs["bar_timestamp"]
-        return {"out": spec.fn(frame, *(params[name] for name in order))}
+        return {"out": fn(frame, *(params[name] for name in order))}
 
     return kernel
 
@@ -1057,7 +1061,7 @@ def derive(name: str, spec: BlockSpec, *, instrument: str = "*",
         causal=CAUSAL_MANIFEST[name].contract,
         closes_over={"block": name, "fn": _block_source(spec),
                      "inputs": list(spec.inputs), "context": list(spec.context_inputs)},
-    )(_adapter(spec, order, tuple(spec.inputs)))
+    )(_adapter(spec.fn, order, tuple(spec.inputs), spec.needs_clock))
 
 
 def _block_source(spec: BlockSpec) -> str:
@@ -1079,10 +1083,120 @@ def groups() -> Mapping[str, tuple[str, ...]]:
 
 
 BLOCK_COMPONENTS = derive_all()
-BLOCK_REGISTRATIONS = {
-    BLOCK_COMPONENTS[name].body_ref: BLOCK_COMPONENTS[name].kernel
+
+
+def _declared_dependencies(*roots: object) -> tuple[object, ...]:
+    """Derive executable/module reads; identity independently checks exact equality."""
+    found: dict[int, object] = {}
+    seen: set[int] = set()
+
+    def visit(value: object) -> None:
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if inspect.ismodule(value):
+            return
+        if inspect.isfunction(value):
+            closure = inspect.getclosurevars(value)
+            for dependency in (*closure.globals.values(), *closure.nonlocals.values()):
+                if inspect.ismodule(dependency) or inspect.isfunction(dependency) \
+                        or inspect.isclass(dependency):
+                    if getattr(dependency, "__module__", None) in {
+                            "builtins", "dataclasses"} and inspect.isclass(dependency):
+                        continue
+                    found[id(dependency)] = dependency
+                    visit(dependency)
+            return
+    for root in roots:
+        visit(root)
+    for root in roots:
+        found.pop(id(root), None)
+    return tuple(sorted(found.values(), key=lambda value: (
+        getattr(value, "__module__", ""),
+        getattr(value, "__qualname__", getattr(value, "__name__", "")),
+    )))
+
+
+def _registration_dependencies(authored: AuthoredComponent,
+                               disposition: BlockCausalDisposition) -> tuple[object, ...]:
+    recursive = disposition.contract.recursive_state if disposition.contract else None
+    roots = [authored.kernel]
+    if recursive is not None:
+        roots.extend((recursive.initializer, recursive.state_type,
+                      recursive.state_encoder, recursive.update, recursive.step))
+    dependencies = list(_declared_dependencies(*roots))
+    if recursive is not None:
+        dependencies.extend((recursive.initializer, recursive.state_type,
+                             recursive.state_encoder, recursive.update, recursive.step))
+    unique = {id(value): value for value in dependencies}
+    return tuple(sorted(unique.values(), key=lambda value: (
+        getattr(value, "__module__", ""),
+        getattr(value, "__qualname__", getattr(value, "__name__", "")),
+    )))
+
+
+REGISTRATIONS = {
+    BLOCK_COMPONENTS[name].body_ref: registered_kernel(
+        body_ref=BLOCK_COMPONENTS[name].body_ref,
+        implementation=BLOCK_COMPONENTS[name].kernel,
+        causal=disposition.contract,
+        dependency_boundary=DependencyBoundary(
+            "declared_objects",
+            _registration_dependencies(BLOCK_COMPONENTS[name], disposition)),
+        warmup=BLOCK_COMPONENTS[name].spec.warmup,
+    )
     for name, disposition in CAUSAL_MANIFEST.items()
     if disposition.status == "admitted"
+}
+BLOCK_REGISTRATIONS = {
+    ref: registration.implementation for ref, registration in REGISTRATIONS.items()
+}
+
+
+def _logic_and(params, node_inputs, context_inputs):
+    return {"out": node_inputs["left"] & node_inputs["right"]}
+
+
+def _logic_or(params, node_inputs, context_inputs):
+    return {"out": node_inputs["left"] | node_inputs["right"]}
+
+
+_BOOLEAN = wire("bool", instrument="*", timeframe="*")
+LOGIC_AND = component(
+    "logic.and",
+    interface=(socket("left", "input", _BOOLEAN), socket("right", "input", _BOOLEAN),
+               socket("out", "output", _BOOLEAN)),
+    causal=causal_contract(
+        node_input_sockets=("left", "right"), history=HistoryBound("bounded")),
+)(_logic_and)
+LOGIC_OR = component(
+    "logic.or",
+    interface=(socket("left", "input", _BOOLEAN), socket("right", "input", _BOOLEAN),
+               socket("out", "output", _BOOLEAN)),
+    causal=causal_contract(
+        node_input_sockets=("left", "right"), history=HistoryBound("bounded")),
+)(_logic_or)
+
+for _logic in (LOGIC_AND, LOGIC_OR):
+    REGISTRATIONS[_logic.body_ref] = registered_kernel(
+        body_ref=_logic.body_ref,
+        implementation=_logic.kernel,
+        causal=_logic.spec.causal,
+        dependency_boundary=DependencyBoundary("defining_module"),
+    )
+
+COMPONENTS = {
+    authored.key: authored.definition
+    for authored in (*BLOCK_COMPONENTS.values(), LOGIC_AND, LOGIC_OR)
+}
+BODIES: dict[str, Mapping[str, Any]] = {}
+LIBRARY = Library(
+    components=COMPONENTS,
+    bodies=BODIES,
+    kernels={ref: registration.spec for ref, registration in REGISTRATIONS.items()},
+)
+IMPLEMENTATIONS = {
+    ref: registration.implementation for ref, registration in REGISTRATIONS.items()
 }
 
 assert set(CAUSAL_MANIFEST) == set(BLOCKS)
@@ -1092,3 +1206,4 @@ _ADMITTED = {name for name, disposition in CAUSAL_MANIFEST.items()
 assert set(BLOCK_REGISTRATIONS) == {
     BLOCK_COMPONENTS[name].body_ref for name in _ADMITTED
 }
+assert {"logic.and", "logic.or"} <= {key[0] for key in COMPONENTS}
