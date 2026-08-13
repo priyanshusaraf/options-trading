@@ -17,16 +17,70 @@ from __future__ import annotations
 import json
 import logging
 
-from app.ir.hashing import content_address
+from app.ir.hashing import canonical_json, content_address
+from app.ir.library import REGISTRY
+from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+from research.strategy.builder.ir_strategy import IRGraphStrategy
 from research.domain.models import GeneratedStrategyRecord
 from research.data.store import materialize
 from research.orchestrator.run import run_experiment
-from research.strategy.builder.load import build_strategy
+from research.strategy.builder.composition_ir import composition_to_ir
+from research.strategy.builder.emit import emit_source
 from research.strategy.builder.search import (enumerate_compositions,
                                               sample_compositions)
 
 logger = logging.getLogger("research.orchestrator")
 _MAX_GENERATED_OPERATION_ITEMS = 64
+
+
+def _generated_graph(comp) -> dict:
+    """The one mechanical graph representation of a generated composition."""
+    return composition_to_ir(comp, identifier=f"generated.{comp.key}")
+
+
+def _admitted_generated_strategy(comp, *, owner_id: str,
+                                 expected_graph: dict | None = None,
+                                 expected_address: str | None = None):
+    """Build the admitted IR runtime; source text is never execution authority."""
+    graph = _generated_graph(comp)
+    if expected_graph is not None and canonical_json(graph) != canonical_json(expected_graph):
+        raise RuntimeError("generated durable graph differs from its composition")
+    graph_address = content_address(graph)
+    decision = admit_strategy(
+        owner_id=owner_id,
+        source_input=IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    if decision.artifact is None:
+        code = decision.refusal_code.value if decision.refusal_code else "UNKNOWN"
+        raise RuntimeError(f"generated graph causal admission refused: {code}: {decision.detail}")
+    if expected_address is not None and decision.artifact.admission_address != expected_address:
+        raise RuntimeError("generated durable admission address is stale or forged")
+    if decision.artifact.graph_address != graph_address:
+        raise RuntimeError("generated admission receipt does not bind its graph")
+    strategy = IRGraphStrategy(graph, (REGISTRY.library, REGISTRY.implementations))
+    # These are research annotations only. The IR graph and its causal receipt
+    # selected the executable runtime above.
+    strategy.key = comp.key
+    strategy.display_name = comp.key
+    strategy.composition = comp
+    strategy.source = emit_source(comp)
+    strategy.graph_content_address = graph_address
+    strategy.admission_address = decision.artifact.admission_address
+    return strategy, graph, decision.artifact
+
+
+def _generated_descriptor(comp, *, owner_id: str, **common: object) -> dict:
+    strategy, graph, artifact = _admitted_generated_strategy(comp, owner_id=owner_id)
+    del strategy
+    return {
+        **common,
+        "composition": comp.to_dict(),
+        "composition_identity": content_address(comp.to_dict()),
+        "graph": graph,
+        "graph_content_address": content_address(graph),
+        "admission_address": artifact.admission_address,
+    }
 
 
 def _enumerate_for_owner(session, instruments, *, owner_id: str, limit: int,
@@ -65,10 +119,8 @@ def generated_descriptors(session, instruments, interval, *, owner_id: str, limi
     compositions, _ = _enumerate_for_owner(session, instruments, owner_id=owner_id,
                                             limit=limit, seed=seed)
     universe = [getattr(instrument, "key", str(instrument)) for instrument in instruments]
-    return [{
+    common = {
         "build": str(git_commit)[:40] or "unknown",
-        "composition": composition.to_dict(),
-        "composition_identity": content_address(composition.to_dict()),
         "interval": interval,
         "limit": limit,
         "min_positive_fold_frac": min_positive_fold_frac,
@@ -78,7 +130,9 @@ def generated_descriptors(session, instruments, interval, *, owner_id: str, limi
         "program": program,
         "provider_mode": str(provider_mode)[:80] or "unknown",
         "seed": seed,
-    } for composition in compositions]
+    }
+    return [_generated_descriptor(composition, owner_id=owner_id, **common)
+            for composition in compositions]
 
 
 def compositions_from_descriptors(descriptors: list[dict]) -> list:
@@ -92,14 +146,20 @@ def compositions_from_descriptors(descriptors: list[dict]) -> list:
         if not isinstance(descriptor, dict):
             raise RuntimeError("generated durable descriptor payload is invalid")
         composition = descriptor.get("composition")
+        graph = descriptor.get("graph")
         if (not isinstance(composition, dict)
-                or descriptor.get("composition_identity") != content_address(composition)):
+                or descriptor.get("composition_identity") != content_address(composition)
+                or not isinstance(graph, dict)
+                or descriptor.get("graph_content_address") != content_address(graph)
+                or not isinstance(descriptor.get("admission_address"), str)):
             raise RuntimeError("generated durable descriptor identity is invalid")
         parsed = Composition.from_dict(composition)
         # A builder key is a second semantic identity check; a malformed grammar
         # cannot be smuggled in under a content address for some other object.
         if parsed.to_dict() != composition:
             raise RuntimeError("generated durable descriptor is not canonical")
+        if canonical_json(_generated_graph(parsed)) != canonical_json(graph):
+            raise RuntimeError("generated durable descriptor graph is not mechanical")
         compositions.append(parsed)
     return compositions
 
@@ -215,7 +275,12 @@ def run_generated(session, source, instruments, interval, *, owner_id: str, limi
                     raise RuntimeError(
                         f"generated operation item {item_key} is bound to interrupted run "
                         f"#{abandoned}; replay takeover was refused")
-        pending.append((comp, item_key, descriptor))
+        expected_graph = descriptor["graph"] if descriptor else None
+        expected_admission = descriptor["admission_address"] if descriptor else None
+        strat, graph, artifact = _admitted_generated_strategy(
+            comp, owner_id=owner_id, expected_graph=expected_graph,
+            expected_address=expected_admission)
+        pending.append((comp, item_key, descriptor, strat, graph, artifact))
     if not pending:
         return []
     if claim_guard is not None:
@@ -223,10 +288,9 @@ def run_generated(session, source, instruments, interval, *, owner_id: str, limi
     datasets = [(inst, materialize(source, inst, interval)) for inst in instruments]
 
     reports = []
-    for comp, item_key, descriptor in pending:
+    for comp, item_key, descriptor, strat, graph, artifact in pending:
         if claim_guard is not None:
             claim_guard()
-        strat = build_strategy(comp)                 # emit → AST-validate → sandbox-load
         _persist_record(session, strat, owner_id=owner_id)
         logger.info("═══ generated %s", strat.key)
         report = run_experiment(
@@ -239,6 +303,14 @@ def run_generated(session, source, instruments, interval, *, owner_id: str, limi
             n_folds=descriptor["n_folds"] if descriptor else n_folds,
             min_positive_fold_frac=(descriptor["min_positive_fold_frac"]
                                    if descriptor else min_positive_fold_frac),
+            graph_provenance={
+                "graph": {
+                    "identifier": graph["identifier"],
+                    "version": graph["version"],
+                    "content_address": content_address(graph),
+                },
+                "admission_address": artifact.admission_address,
+            },
             bind_run=(lambda run_id, key=item_key: bind_item_run(key, run_id))
             if item_key is not None and bind_item_run is not None else None,
             finalize_run=(lambda run_id, key=item_key: finalize_item(key, run_id))

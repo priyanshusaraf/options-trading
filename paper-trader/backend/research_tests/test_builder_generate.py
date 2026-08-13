@@ -11,6 +11,7 @@ import pytest
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import (
     ExperimentRun,
+    ExperimentSpec,
     GeneratedStrategyRecord,
     PromotionCandidate,
 )
@@ -44,6 +45,11 @@ def test_run_generated_evaluates_and_persists_compositions(
     # every evaluated strategy is a generated one and was run to completion
     assert all(r["explanation"]["strategy_key"].startswith("gen_") for r in reports)
     assert research_session.query(ExperimentRun).count() == 4
+    recipes = [json.loads(row.recipe_json) for row in research_session.query(ExperimentSpec).all()]
+    assert all(recipe["graph_provenance"]["graph"]["content_address"].startswith("sha256:")
+               for recipe in recipes)
+    assert all(recipe["graph_provenance"]["admission_address"].startswith("sha256:")
+               for recipe in recipes)
 
     # each generated strategy's composition is persisted and round-trips to a Composition
     recs = research_session.query(GeneratedStrategyRecord).all()
@@ -181,13 +187,59 @@ def test_generated_manifest_is_secret_free_and_replays_exact_compositions(
     )
     assert len(descriptors) == 2
     assert all(set(item) == {
-        "build", "composition", "composition_identity", "interval", "limit",
+        "admission_address", "build", "composition", "composition_identity", "graph",
+        "graph_content_address", "interval", "limit",
         "min_positive_fold_frac", "min_trades", "n_folds", "owner_universe",
         "program", "provider_mode", "seed",
     } for item in descriptors)
     assert all("secret" not in str(item).lower() for item in descriptors)
     replayed = compositions_from_descriptors(descriptors)
     assert [item.to_dict() for item in replayed] == [item["composition"] for item in descriptors]
+    assert all(item["graph_content_address"].startswith("sha256:") for item in descriptors)
+    assert all(item["admission_address"].startswith("sha256:") for item in descriptors)
+
+
+def test_generated_work_does_not_execute_legacy_build_strategy(
+        research_session, inst_factory, candles_factory, monkeypatch):
+    """Hypothesis 5: generated Python remains a new-exposure execution authority."""
+    import research.strategy.builder.load as load
+
+    monkeypatch.setattr(
+        load,
+        "build_strategy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("legacy runtime called")),
+    )
+    Candle = type(candles_factory(1)[0])
+    source = StaticDataSource({("GOLDM", "day"): _osc_candles(Candle)})
+    reports = run_generated(
+        research_session, source, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=1, git_commit="gen", min_trades=1, n_folds=3, min_positive_fold_frac=0.0)
+    assert len(reports) == 1
+
+
+@pytest.mark.parametrize("field", ("graph", "admission_address"))
+def test_durable_generated_authority_mismatch_refuses_before_provider_io(
+        research_session, inst_factory, field):
+    """Hypothesis 5: a forged durable graph or receipt reaches provider-backed research."""
+    from research.orchestrator.generate import generated_descriptors
+
+    class PoisonSource:
+        def candles(self, *_args, **_kwargs):
+            raise AssertionError("unverified durable graph must not fetch provider data")
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=1, seed=7, git_commit="build-a", provider_mode="mock")
+    if field == "graph":
+        descriptors[0]["graph"] = {**descriptors[0]["graph"], "identifier": "forged.graph"}
+    else:
+        descriptors[0]["admission_address"] = "sha256:" + "0" * 64
+    with pytest.raises(RuntimeError, match="graph|admission|identity"):
+        run_generated(
+            research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
+            owner_id=OWNER_ID, limit=1, git_commit="build-a", claim_guard=lambda: None,
+            durable_descriptors=descriptors, durable_item_keys=["generated:0"],
+        )
 
 
 def test_generated_descriptor_rejects_oversized_work_before_enumeration(

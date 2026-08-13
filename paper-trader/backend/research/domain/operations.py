@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import uuid
 import threading
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.concurrency import (append_unique_json_integer,
                                 begin_after_clean_reads, locked_rows)
-from app.ir.hashing import content_address
+from app.ir.hashing import canonical_json, content_address
 from research.domain.models import (ExperimentRun, ResearchOperation,
                                     ResearchOperationEvent, ResearchOperationItem)
 
@@ -137,7 +138,8 @@ def _plan_payload(value: dict[str, Any]) -> dict[str, Any]:
                 or not math.isfinite(float(item["capital"]))
                 or not 0.0 < float(item["capital"]) <= _MAX_CAPITAL):
             raise ValueError("operation plan payload is invalid")
-    generated_fields = {"build", "composition", "composition_identity", "interval", "limit",
+    generated_fields = {"admission_address", "build", "composition", "composition_identity",
+                        "graph", "graph_content_address", "interval", "limit",
                         "min_positive_fold_frac", "min_trades", "n_folds", "owner_universe",
                         "program", "provider_mode", "seed"}
     for descriptor in value.get("generated", []):
@@ -169,15 +171,24 @@ def _plan_payload(value: dict[str, Any]) -> dict[str, Any]:
                 or not math.isfinite(float(descriptor["min_positive_fold_frac"]))
                 or not 0 <= float(descriptor["min_positive_fold_frac"]) <= 1
                 or not isinstance(descriptor["composition"], dict)
-                or descriptor["composition_identity"] != content_address(descriptor["composition"])):
+                or descriptor["composition_identity"] != content_address(descriptor["composition"])
+                or not isinstance(descriptor["graph"], dict)
+                or descriptor["graph_content_address"] != content_address(descriptor["graph"])
+                or not isinstance(descriptor["admission_address"], str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", descriptor["admission_address"]) is None):
             raise ValueError("operation generated descriptor is invalid")
         # Parse the public grammar now, before admission.  This rejects a
         # syntactically hashed but semantically invalid composition without
         # importing a provider or postponing the error to replay.
         try:
+            from research.strategy.builder.composition_ir import composition_to_ir
             from research.strategy.builder.grammar import Composition
-            if Composition.from_dict(descriptor["composition"]).to_dict() != descriptor["composition"]:
+            composition = Composition.from_dict(descriptor["composition"])
+            if composition.to_dict() != descriptor["composition"]:
                 raise ValueError("non-canonical generated composition")
+            if canonical_json(composition_to_ir(
+                    composition, identifier=f"generated.{composition.key}")) != canonical_json(descriptor["graph"]):
+                raise ValueError("non-mechanical generated graph")
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("operation generated descriptor is invalid") from exc
     payload = {"experiment_count": value["experiment_count"], "items": value["items"]}

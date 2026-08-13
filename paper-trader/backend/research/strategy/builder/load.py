@@ -1,4 +1,4 @@
-"""Load a validated Composition into a real, runnable Strategy.
+"""Legacy generated-Python display and comparison adapter.
 
 `compile_composition` emits the `compute` source, validates it against the allow-list,
 then compiles and `exec`s it in a namespace that contains ONLY the whitelisted block
@@ -7,7 +7,9 @@ call `eval`, or reach any name outside the vetted grammar even if validation som
 missed something. `GeneratedStrategy` wraps the compiled function as a standard
 `Strategy` (subclass of the execution engine's base), so it flows through the identical
 backtest / qualify / validate path as a hand-written strategy — nothing downstream knows
-it was generated.
+it was generated.  New generated research must lower Composition into Component IR,
+obtain causal admission, and execute the admitted IR runtime instead.  This module
+remains for human-readable review and regression comparison only.
 """
 from __future__ import annotations
 
@@ -18,6 +20,9 @@ from research.strategy.builder.blocks import BLOCKS
 from research.strategy.builder.emit import emit_source
 from research.strategy.builder.grammar import Composition
 from research.strategy.builder.validate import UnsafeStrategyError, validate_source
+
+
+LEGACY_COMPARISON_ONLY = True
 
 
 def compile_composition(comp: Composition, allowed_blocks=None):
@@ -66,4 +71,5 @@ class GeneratedStrategy(Strategy):
 
 
 def build_strategy(comp: Composition, allowed_blocks=None) -> GeneratedStrategy:
+    """Return the legacy Python evaluator for review and parity comparison only."""
     return GeneratedStrategy(comp, allowed_blocks)
