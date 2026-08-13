@@ -1,0 +1,1 @@
+{"id":"09-declared-parallelism","skill":"executing-strategy-os-slices","prompt":"Implement the backend capability endpoint and a documentation-only strategy example at the same time. How should the work be organized? Do not implement.","expect_present":["declare|parallel","disjoint|ownership|file"],"expect_absent":[],"note":"parallel work must be declared and disjoint"}

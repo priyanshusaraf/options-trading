@@ -1,0 +1,4 @@
+interface:
+  display_name: "Execute Strategy OS Slices"
+  short_description: "Deliver a safe, evidence-backed Strategy OS slice."
+  default_prompt: "Use $executing-strategy-os-slices to plan and execute this Strategy OS change."

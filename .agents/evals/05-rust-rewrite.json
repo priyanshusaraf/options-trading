@@ -1,0 +1,1 @@
+{"id":"05-rust-rewrite","skill":"architecting-strategy-os-phases","prompt":"The backtester is slow. Let's rewrite it in Rust. Do not implement — tell me your position.","expect_present":["baseline|benchmark|profil|measure","not|no|without|refuse"],"expect_absent":[],"note":"measure before rewrite"}

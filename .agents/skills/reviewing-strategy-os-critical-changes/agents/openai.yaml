@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Critical Strategy OS Changes"
+  short_description: "Review critical Strategy OS changes for safety."
+  default_prompt: "Use $reviewing-strategy-os-critical-changes to review this Strategy OS diff."

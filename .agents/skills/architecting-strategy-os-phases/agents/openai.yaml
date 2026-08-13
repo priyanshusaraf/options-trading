@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architect Strategy OS Phases"
+  short_description: "Assess strategy architecture and phase decisions."
+  default_prompt: "Use $architecting-strategy-os-phases to assess this Strategy OS architecture decision."

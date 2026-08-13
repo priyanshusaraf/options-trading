@@ -1,0 +1,6 @@
+# Domain evidence
+
+- Research: reproduce the wrong number; protect against look-ahead, incomplete bars, warmup, timestamp errors, OOS contamination, survivorship, invalid forward fills, stale caches, provider blending, cross-instrument leakage, and irreproducibility. New indicators need causality evidence. Preserve next-bar open fills, direction-aware adverse slippage, the shared event-blackout table, the canonical candle-to-frame converter, and research import direction unless the accepted contract explicitly changes them.
+- Providers: keep data and execution roles separate, retain canonical instruments, declare capabilities, test conformance and concrete recovery paths, and inspect licences before reuse.
+- Tenancy: derive identity server-side, keep authorization central, scope reads and cache keys by all answer-changing dimensions, bound lists, and prevent secret leakage.
+- UI: retain one WebSocket and route all REST through the single API client; let the backend own readiness truth and keep the settings catch-all. Every displayed value is true or visibly Unknown, never a stale success. Check the actual operator flow, desktop and 390px layout, console, network, loading/error/empty states, and screenshots. Frontend implementation is owner-gated; stop at the API/design boundary unless the owner explicitly authorizes it.

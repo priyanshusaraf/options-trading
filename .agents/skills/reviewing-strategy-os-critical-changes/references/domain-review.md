@@ -1,0 +1,7 @@
+# Domain review
+
+- **Research:** audit causality, completed bars, warmup, timestamp semantics, OOS separation, survivorship, gap filling, cache provenance, provider divergence, cross-instrument alignment, and reproducibility. Check next-bar open fills, direction-aware adverse slippage, the live-shared event-blackout table, the canonical candle-to-frame converter, and research import direction. Explain the wrong number each finding could produce.
+- **Providers:** verify role separation, canonical instruments, explicit capability reporting, conformance failures, concrete failure/recovery semantics, provenance, and licence classification.
+- **Tenancy:** trace an attacker-controlled input to a concrete impact. Check central authorization, server-derived identity, object ownership where applicable, bounded reads, cache and database scoping, credential redaction, and authority escalation paths.
+- **Migrations:** verify migration head from the tool, upgrade from current and production-shaped prior schemas, downgrade or exercised restore-based rollback, model/migration agreement, mock-only reset, and preservation of historical money attribution and historical NULL values. Check direct-SQL legacy fixtures, `NULLIF` semantics, bounded negative pages, pool constraints, and SQL aggregation where relevant.
+- **Performance:** require a realistic repeated baseline, dominant-cost profile, same-workload before/after, and output equivalence. Reject a rewrite without runtime-dominance evidence.

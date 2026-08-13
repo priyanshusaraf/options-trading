@@ -52,6 +52,9 @@ data/reports/
 
 # ───────────────────────── Tooling / OS ─────────────────────────
 .playwright-mcp/
+.agent/
+.codex-log/
+.superpowers/sdd/
 .DS_Store
 .idea/
 .vscode/

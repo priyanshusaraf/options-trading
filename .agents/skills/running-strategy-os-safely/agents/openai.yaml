@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run Strategy OS Safely"
+  short_description: "Run Strategy OS locally without touching live state."
+  default_prompt: "Use $running-strategy-os-safely to start Strategy OS for local verification."
