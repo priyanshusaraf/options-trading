@@ -294,6 +294,11 @@ def slipped(price: float, side: str, half_spread: float) -> float:
     return price * (1.0 + half_spread) if side == "BUY" else price * (1.0 - half_spread)
 
 
+def _entry_fill_index(signal_index: int) -> int:
+    """The earliest fill for a decision confirmed on completed bar ``signal_index``."""
+    return signal_index + 1
+
+
 def run_trades(sig, inst, seg: str, capital: float, rm,
                event_risk: bool = True,
                slippage_pct: float | None = None) -> list[BTTrade]:
@@ -314,7 +319,7 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
     # bullion-into-expiry) correctly do not apply to a spot backtest.
     product = "equity_intraday" if seg in ("NSE", "BSE") else "futures"
     pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
-    pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
+    pending = None  # (kind, argument, fill index) — fills at the named next-bar open
     ratchet = None  # RatchetState for the open position, iff strat declares risk_model
 
     rows = sig.to_dict("records")
@@ -325,8 +330,8 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
 
         # 1) execute the PREVIOUS bar's confirmed decision at THIS bar's open
         #    (Pine parity: process_orders_on_close=false — no same-bar fills).
-        if pending is not None:
-            kind, arg = pending
+        if pending is not None and pending[2] == i:
+            kind, arg, _fill_index = pending
             pending = None
             if kind == "ENTER" and pos is None:
                 # A LONG opens with a BUY, a SHORT opens with a SELL.
@@ -382,9 +387,12 @@ def run_trades(sig, inst, seg: str, capital: float, rm,
                     ratchet_exit=ratchet_hit,
                     policy=BACKTEST_EXIT_POLICY)
                 if decision.should_exit:
-                    pending = ("EXIT", decision.reason)
+                    pending = ("EXIT", decision.reason, i + 1)
         elif r["longEntry"] or r["shortEntry"]:
-            pending = ("ENTER", "LONG" if r["longEntry"] else "SHORT")
+            pending = (
+                "ENTER", "LONG" if r["longEntry"] else "SHORT",
+                _entry_fill_index(i),
+            )
 
     # close any still-open position at the LAST AVAILABLE CANDLE (end of data,
     # not end of day) — includes a decision confirmed on the final bar, which

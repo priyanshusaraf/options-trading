@@ -2,12 +2,100 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select, update
 
 from app.db.concurrency import locked_rows
 from app.db.models import BacktestResult, BacktestRun
+
+
+class AdmissionRequired(RuntimeError):
+    """Stable refusal for a backtest that lacks a current causal receipt."""
+
+    def __init__(self, code: str = "ADMISSION_REQUIRED") -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class VerifiedBacktestAdmission:
+    """Current owner-local receipt and its only executable graph authority."""
+
+    admission_address: str
+    artifact: Any
+    graph: dict[str, Any]
+    strategy: Any
+
+
+def _admission_refusal(code: str = "RECEIPT_STALE") -> AdmissionRequired:
+    return AdmissionRequired(code)
+
+
+def load_verified_admission(session, *, owner_id: str,
+                            admission_address: str | None) -> VerifiedBacktestAdmission:
+    """Load and freshly verify one exact owner-local graph receipt.
+
+    A durable address by itself is never authority.  This reconstructs canonical
+    receipt bytes, binds them to the immutable graph version bytes, and verifies
+    them against the current platform registry before a backtest can obtain a
+    strategy or touch a provider.
+    """
+    from app.core import strategy_admissions
+    from app.db.models import GraphVersion
+    from app.ir.hashing import canonical_json, content_address
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import (
+        AdmissionRefused, IRGraphAdmissionInput, artifact_from_dict,
+        verify_admission,
+    )
+    from app.strategy.ir_adapter import IRGraphStrategy
+
+    if not isinstance(admission_address, str) or not admission_address:
+        raise _admission_refusal("ADMISSION_REQUIRED")
+    receipt = strategy_admissions.get(
+        session, owner_id=owner_id, admission_address=admission_address)
+    if receipt is None:
+        raise _admission_refusal()
+    try:
+        artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+        strategy_admissions.require_current(session, artifact)
+        version = session.get(
+            GraphVersion,
+            (owner_id, artifact.graph_identifier, artifact.graph_version),
+        )
+        if (version is None
+                or version.admission_address != admission_address
+                or version.content_address != artifact.graph_address):
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        graph = json.loads(version.artifact_json)
+        if canonical_json(graph) != version.artifact_json \
+                or content_address(graph) != artifact.graph_address:
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        if artifact.owner_id != owner_id or artifact.admission_address != admission_address:
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        source = IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None)
+        verify_admission(
+            artifact=artifact, owner_id=owner_id, source_input=source, registry=REGISTRY)
+        strategy = IRGraphStrategy(graph, (REGISTRY.library, REGISTRY.implementations))
+    except AdmissionRequired:
+        raise
+    except AdmissionRefused as exc:
+        raise _admission_refusal(exc.code.value) from exc
+    except (TypeError, ValueError, json.JSONDecodeError,
+            strategy_admissions.AdmissionPersistenceError) as exc:
+        raise _admission_refusal() from exc
+    return VerifiedBacktestAdmission(admission_address, artifact, graph, strategy)
+
+
+def _verify_enqueue_admission(session, *, owner_id: str,
+                              admission_address: str | None) -> None:
+    """Named enqueue seam kept separate so the authority mutation is isolated."""
+    load_verified_admission(
+        session, owner_id=owner_id, admission_address=admission_address)
 
 
 def _clock(now: dt.datetime | None = None) -> dt.datetime:
@@ -17,13 +105,16 @@ def _clock(now: dt.datetime | None = None) -> dt.datetime:
 
 
 def enqueue_run(session, *, owner_id: str, scope: str, intervals: str,
-                capital: float, total: int, now: dt.datetime | None = None,
+                capital: float, total: int, admission_address: str | None,
+                now: dt.datetime | None = None,
                 **values) -> BacktestRun:
     """Create durable pending work before any provider read or worker launch."""
+    _verify_enqueue_admission(
+        session, owner_id=owner_id, admission_address=admission_address)
     queued_at = _clock(now)
     run = BacktestRun(owner_id=owner_id, scope=scope, intervals=intervals,
                       capital=capital, total=total, status="pending",
-                      queued_at=queued_at, **values)
+                      queued_at=queued_at, admission_address=admission_address, **values)
     session.add(run)
     session.flush()
     from app.events.producers import append_execution_change
@@ -282,6 +373,16 @@ def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
                 heartbeat_at=moment,
                 claim_expires_at=moment + dt.timedelta(seconds=max(1, int(lease_seconds))))).rowcount != 1:
             return False
+        # A result is durable evidence for this exact run, so it may not borrow
+        # a receipt from another run (or omit its receipt) while holding a valid
+        # claim.  This lookup and the following inserts share the same fenced
+        # savepoint as the lease update; a mismatch rolls back the whole batch.
+        expected_admission = session.scalar(select(BacktestRun.admission_address).where(
+            BacktestRun.owner_id == owner_id, BacktestRun.id == run_id))
+        if not isinstance(expected_admission, str) or not expected_admission:
+            raise AdmissionRequired("ADMISSION_REQUIRED")
+        if any(value.get("admission_address") != expected_admission for value in values):
+            raise AdmissionRequired("ARTEFACT_MISMATCH")
         # Resume/replacement re-computes cells after a process death.  The first
         # claimant may already have committed part of a batch, so append only
         # identities not yet durable.  The DB constraint makes this invariant

@@ -22,18 +22,41 @@ first quietly becomes the second. So:
 from __future__ import annotations
 
 import zlib
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
-from app.backtest import dataset_store, sweep
+from app.backtest import dataset_store, repository, sweep
 from app.backtest.universe import liquid_universe
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal, init_db
 from app.providers.mock import MockProvider
+from app.strategy.registry import get_strategy
 
 INTERVALS = ["15minute", "30minute"]
 STRATEGIES = ["trend_impulse_v3", "expanding_z_v4"]
+
+
+def _admission_address(owner_id: str) -> str:
+    return "sha256:" + "d" * 64
+
+
+@pytest.fixture(autouse=True)
+def _admitted_sweeps(monkeypatch):
+    original = sweep.start_sweep
+    monkeypatch.setattr(
+        repository, "load_verified_admission",
+        lambda _session, *, admission_address, **_kwargs: SimpleNamespace(
+            admission_address=admission_address, strategy=get_strategy("trend_impulse_v3")),
+    )
+
+    def start(*args, **kwargs):
+        kwargs.setdefault("admission_address", _admission_address(kwargs["owner_id"]))
+        kwargs.pop("strategies", None)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sweep, "start_sweep", start)
 
 
 class CountingMockProvider(MockProvider):
@@ -93,7 +116,7 @@ def test_pinned_rerun_makes_no_provider_call_and_reproduces_every_artifact(
     assert [r[:2] for r in cold_provider.candle_reads] == [
         ("NIFTY", "15minute"), ("NIFTY", "30minute")]
     cold = _artifacts(cold_id)
-    assert len(cold) == 4 and all(a["error"] == "" for a in cold.values())
+    assert len(cold) == 2 and all(a["error"] == "" for a in cold.values())
 
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], INTERVALS)
@@ -116,7 +139,7 @@ def test_pinned_rerun_makes_no_provider_call_and_reproduces_every_artifact(
     assert warm == cold
     with SessionLocal() as session:
         run = session.get(BacktestRun, pinned_id)
-    assert run.status == "done" and run.done == run.total == 4
+    assert run.status == "done" and run.done == run.total == 2
 
 
 def _rows(run_id):

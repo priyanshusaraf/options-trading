@@ -140,8 +140,8 @@ def test_public_dataset_port_refuses_private_classification_before_blob_or_index
         store.close()
 
 
-def test_two_owners_share_only_neutral_public_computation_not_a_result_row():
-    """Warm B is pure bytes from MARKET, never an A result source row."""
+def test_two_receipts_keep_public_bytes_neutral_but_do_not_share_a_cache_hit():
+    """Receipt identity separates runs while the shared artifact remains pure bytes."""
     from app.core.instruments import get_instrument
     from app.providers.mock import MockProvider
     init_db(reset=True)
@@ -149,15 +149,22 @@ def test_two_owners_share_only_neutral_public_computation_not_a_result_row():
     win = {"lookback_days": 30, "start": None, "end": None}
     strategy = __import__("app.strategy.registry", fromlist=["get_strategy"]).get_strategy(None)
     prepared = sweep._prepare_dataset(provider, inst, "15minute", win)
+    first_receipt = "sha256:" + "1" * 64
+    second_receipt = "sha256:" + "2" * 64
     cold = sweep._one(provider, inst, "15minute", 50_000, win, strategy,
-                      owner_id="owner-a", prepared=prepared)
+                      owner_id="owner-a", prepared=prepared,
+                      admission_address=first_receipt)
     warm = sweep._one(provider, inst, "15minute", 50_000, win, strategy,
-                      owner_id="owner-b", prepared=prepared)
-    assert cold["from_cache"] is False and warm["from_cache"] is True
-    assert {k: v for k, v in warm.items() if k not in {"from_cache", "computed_at"}} == {
-        k: v for k, v in cold.items() if k not in {"from_cache", "computed_at"}}
+                      owner_id="owner-b", prepared=prepared,
+                      admission_address=second_receipt)
+    assert cold["from_cache"] is False and warm["from_cache"] is False
+    assert cold["admission_address"] == first_receipt
+    assert warm["admission_address"] == second_receipt
     with SessionLocal() as session:
-        assert len(list(session.scalars(select(BacktestComputation)))) == 1
+        artifacts = list(session.scalars(select(BacktestComputation)))
+        assert len(artifacts) == 2
+        assert all("admission_address" not in json.loads(row.payload_json)["result"]
+                   for row in artifacts)
 
 
 def test_generated_or_ir_strategy_is_rejected_before_shared_lookup(monkeypatch):
@@ -294,8 +301,8 @@ def test_checked_in_public_catalog_matches_only_checked_in_registry_modules():
         assert public_computation._module_source_digest(strategy) == expected["source_digest"]
 
 
-def test_parallel_shared_hit_is_planned_in_parent_and_cold_worker_publishes():
-    """Parallel paths have the same public cache contract as serial execution."""
+def test_parallel_admitted_runs_keep_public_payloads_neutral_and_receipt_scoped(monkeypatch):
+    """Admitted runs cannot turn a neutral public payload into a cross-receipt hit."""
     from app.providers.mock import MockProvider
     from app.db.models import Organization
     init_db(reset=True)
@@ -304,18 +311,28 @@ def test_parallel_shared_hit_is_planned_in_parent_and_cold_worker_publishes():
                          Organization(organization_id="parallel-b", name="Parallel B")])
         session.commit()
     provider = MockProvider()
+    def admitted(_session, *, owner_id, admission_address, **_kwargs):
+        return SimpleNamespace(
+            admission_address=admission_address,
+            strategy=__import__("app.strategy.registry", fromlist=["get_strategy"]).get_strategy(None),
+        )
+    monkeypatch.setattr(sweep.repository, "load_verified_admission", admitted)
+    first_receipt = "sha256:" + "3" * 64
+    second_receipt = "sha256:" + "4" * 64
     first = sweep.start_sweep(owner_id="parallel-a", scope="liquid", intervals=["15minute"],
                               instruments=["NIFTY"], capital=50_000, provider=provider,
-                              workers=2)
+                              workers=2, admission_address=first_receipt)
     sweep._join()
     with SessionLocal() as session:
         rows = list(session.scalars(select(BacktestComputation)))
         assert len(rows) == 1
     second = sweep.start_sweep(owner_id="parallel-b", scope="liquid", intervals=["15minute"],
                                instruments=["NIFTY"], capital=50_000, provider=provider,
-                               workers=2)
+                               workers=2, admission_address=second_receipt)
     sweep._join()
     from app.db.models import BacktestResult
     with SessionLocal() as session:
         rows = list(session.scalars(select(BacktestResult).where(BacktestResult.run_id == second)))
-        assert len(rows) == 1 and rows[0].from_cache is True
+        assert len(rows) == 1 and rows[0].from_cache is False
+        assert rows[0].admission_address == second_receipt
+        assert len(list(session.scalars(select(BacktestComputation)))) == 2

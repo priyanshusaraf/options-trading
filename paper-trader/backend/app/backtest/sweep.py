@@ -573,6 +573,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                 lookback_days: int | None = None,
                 start_date: str | None = None, end_date: str | None = None,
                 strategies: list[str] | None = None,
+                admission_address: str | None = None,
                 pinned_datasets=None, workers: int | None = None) -> int:
     """Create a run row, resolve the universe, launch its background thread.
     Returns the new durable run id. Independent sweeps may run concurrently,
@@ -595,32 +596,27 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                      (default 1 = the serial reference path). Bounded by
                      `MAX_SWEEP_WORKERS` and the CPU count. Output is gated
                      bit-identical against serial."""
-    from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
+    from app.backtest.repository import AdmissionRequired
     pinned = normalize_pinned_datasets(pinned_datasets) if pinned_datasets else None
-    worker_count = _worker_count(workers)
+    requested_keys = [key for key in (strategies or []) if key]
+    if len(set(requested_keys)) > 1:
+        raise AdmissionRequired("ADMISSION_REQUIRED")
+    # An admitted graph is the runtime authority.  It is deliberately serial:
+    # spawned legacy workers resolve registry keys, while this task must execute
+    # the exact freshly verified graph bytes rather than a mutable registry alias.
+    worker_count = 1
     # A caller for any tenant, not only the boot owner, gives expired work a
     # production reclaim path before admitting another request.
     if reconcile_stale_runs(owner_id=owner_id):
         dispatch_reclaimable(owner_id=owner_id)
     try:
         intervals = [i for i in (intervals or DEFAULT_INTERVALS) if i in MAX_DAYS]
-        # resolve + de-dupe strategy keys (preserve request order); default = v3
-        req_keys = [k for k in (strategies or [DEFAULT_STRATEGY_KEY]) if k]
-        seen: set[str] = set()
-        strat_objs = []
-        for k in req_keys:
-            strat = resolve_strategy(k, owner_id=owner_id)
-            if strat.key not in seen:
-                seen.add(strat.key)
-                strat_objs.append(strat)
-        if not strat_objs:
-            strat_objs = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
-        # A historical generated composition is reconstructed in this process for
-        # an exact replay.  Do not hand it to spawned workers through their mutable
-        # owner registry; serial replay is slower but preserves the recorded bytes.
-        from app.strategy.registry import is_generated_key
-        if any(is_generated_key(strategy.key) for strategy in strat_objs):
-            worker_count = 1
+        with SessionLocal() as admission_session:
+            admitted = repository.load_verified_admission(
+                admission_session, owner_id=owner_id, admission_address=admission_address)
+        strat_objs = [admitted.strategy]
+        if requested_keys and requested_keys != [admitted.strategy.key]:
+            raise AdmissionRequired("ARTEFACT_MISMATCH")
         win = {"lookback_days": lookback_days, "start": start_date, "end": end_date,
                "label": window_label(lookback_days, start_date, end_date)}
         # Must happen before provider/universe I/O or thread/pool creation.  The
@@ -641,6 +637,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
             run = repository.enqueue_run(
                 s, owner_id=owner_id, scope=scope,
                 intervals=",".join(intervals), capital=capital, total=total, done=0,
+                admission_address=admitted.admission_address,
                 requested_workers=worker_count,
                 window=win["label"],
                 instruments=",".join(sorted({i.strip() for i in (instruments or []) if i.strip()})),
@@ -651,6 +648,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                     "lookback_days": lookback_days, "start_date": start_date,
                     "end_date": end_date,
                     "strategies": [_strategy_descriptor(st, owner_id=owner_id) for st in strat_objs],
+                    "admission_address": admitted.admission_address,
                     # A pin is a content address, not provider state or a credential.
                     "pinned_datasets": pinned or {}, "workers": worker_count,
                 }, sort_keys=True, separators=(",", ":")),
@@ -671,6 +669,13 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
         resolving_guard.start()
         try:
             resolving_guard.ensure_active()
+            # The initial check and enqueue check happened before the reservation
+            # committed.  Reload the durable run's *own* receipt immediately
+            # before any provider construction or universe resolution, because a
+            # receipt can become stale during that reservation window.
+            admitted = _verify_claimed_admission(
+                owner_id=owner_id, run_id=run_id, claim_token=claim.claim_token)
+            strat_objs = [admitted.strategy]
             provider = provider or get_provider()
             if _terminalize_requested_cancel(owner_id=owner_id, run_id=run_id,
                                               claim_token=claim.claim_token):
@@ -718,7 +723,9 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
             with SessionLocal() as failed:
                 repository.complete_claim(failed, owner_id=owner_id, run_id=run_id,
                                           claim_token=claim.claim_token, status="error",
-                                          note=f"universe resolution failed: {exc}")
+                                          note=(str(exc.code) if isinstance(
+                                              exc, repository.AdmissionRequired)
+                                                else f"universe resolution failed: {exc}"))
                 failed.commit()
             raise
         log.info(f"backtest sweep #{run_id} started — {total} cells, "
@@ -727,7 +734,7 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
                  + (f", {worker_count} worker processes" if worker_count > 1 else ""))
         t = threading.Thread(target=_run,
                              args=(run_id, provider, specs, intervals, capital, win,
-                                   strat_objs, pinned, worker_count),
+                                   strat_objs, pinned, worker_count, admitted.admission_address),
                              kwargs={"owner_id": owner_id, "claim_token": claim.claim_token,
                                      "guard": resolving_guard},
                              daemon=True)
@@ -758,14 +765,11 @@ def start_sweep(*, owner_id: str, scope: str = "liquid", intervals: list[str] | 
 
 
 def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
-         pinned=None, workers=None, *, owner_id: str, claim_token: str,
+         pinned=None, workers=None, admission_address: str | None = None, *, owner_id: str, claim_token: str,
          guard: _ClaimGuard | None = None) -> None:
     if not isinstance(claim_token, str) or not claim_token:
         raise ValueError("backtest worker requires a durable claim token")
     win = win or {"lookback_days": None, "start": None, "end": None, "label": "max"}
-    if not strategies:
-        from app.strategy.registry import DEFAULT_STRATEGY_KEY, resolve_strategy
-        strategies = [resolve_strategy(DEFAULT_STRATEGY_KEY, owner_id=owner_id)]
     batch: list[dict] = []
     # A dispatcher may already be beating this claim while it resolves the
     # descriptor/provider. Transfer that exact guard to the worker: never leave
@@ -778,9 +782,15 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
             raise ValueError("claim guard does not match worker token")
         guard.ensure_active()
     try:
+        # A queued run can outlive receipt bytes, graph bytes, or the current
+        # registry. Re-verify before the first dataset or provider access.
+        admitted = _verify_worker_admission(
+            owner_id=owner_id, admission_address=admission_address)
+        strategies = [admitted.strategy]
         for values in _cell_values(provider, specs, intervals, capital,
                                    win, strategies, pinned, workers, owner_id=owner_id,
-                                   run_id=run_id, guard=guard):
+                                   run_id=run_id, guard=guard,
+                                   admission_address=admitted.admission_address):
             guard.ensure_active()
             batch.append(values)
             if len(batch) >= BATCH_SIZE:
@@ -804,13 +814,34 @@ def _run(run_id, provider, specs, intervals, capital, win=None, strategies=None,
     except Exception as e:  # never let the thread die silently
         # `batch` is deliberately dropped: those cells were never durable, and
         # progress is derived from what IS durable, so nothing over-reports.
+        code = getattr(e, "code", None)
         _commit_claimed_batch(run_id, [], owner_id=owner_id,
-                              claim_token=claim_token, status="error", note=str(e))
+                              claim_token=claim_token, status="error",
+                              note=str(code) if code else str(e))
         log.error(f"backtest sweep #{run_id} failed: {e}")
     finally:
         guard.close()
         with _state_lock:
             _workers.pop(run_id, None)
+
+
+def _verify_worker_admission(*, owner_id: str, admission_address: str | None):
+    """Named worker seam: verify current receipt before its data/provider path."""
+    with SessionLocal() as session:
+        return repository.load_verified_admission(
+            session, owner_id=owner_id, admission_address=admission_address)
+
+
+def _verify_claimed_admission(*, owner_id: str, run_id: int,
+                              claim_token: str):
+    """Re-read the claimed run before it can construct a provider or resolve I/O."""
+    with SessionLocal() as session:
+        run = repository.get_run(session, owner_id=owner_id, run_id=run_id)
+        if (run is None or run.status != "running"
+                or run.claim_token != claim_token):
+            raise ClaimLost("admitted run lost its claim before provider resolution")
+        return repository.load_verified_admission(
+            session, owner_id=owner_id, admission_address=run.admission_address)
 
 
 def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[int]:
@@ -823,7 +854,6 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
     fresh token rather than silently retried forever.
     """
     from app.providers.factory import get_provider
-    from app.strategy.registry import resolve_strategy
     limit = maximum if maximum is not None else max(0, int(get_settings().backtest_host_active_jobs))
     launched: list[int] = []
     for _ in range(limit):
@@ -872,13 +902,21 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
             intervals = [value for value in descriptor.get("intervals", []) if value in MAX_DAYS]
             if not intervals or not descriptor.get("strategies"):
                 raise ValueError("descriptor lacks intervals or strategies")
-            # Do this before provider I/O. A generated owner partition is rebuilt
-            # from execution-plane rows; no research DB is consulted at replay.
-            from app.core.generated_strategies import register_all
-            with SessionLocal() as hydrate:
-                register_all(hydrate, owner_id=owner_id)
-            strategies = _resolve_descriptor_strategies(owner_id=owner_id,
-                                                        descriptor=descriptor)
+            address = descriptor.get("admission_address")
+            if address != claim.admission_address:
+                raise repository.AdmissionRequired("ARTEFACT_MISMATCH")
+            # This replay check happens before the provider factory. A receipt or
+            # graph that became stale while queued is terminal evidence, never a
+            # reason to reconstruct a mutable registry strategy.
+            with SessionLocal() as verify_session:
+                admitted = repository.load_verified_admission(
+                    verify_session, owner_id=owner_id, admission_address=address)
+            strategies = [admitted.strategy]
+            described = descriptor["strategies"]
+            if (len(described) != 1 or not isinstance(described[0], dict)
+                    or described[0].get("key") != admitted.strategy.key
+                    or described[0].get("version") != admitted.strategy.version):
+                raise repository.AdmissionRequired("ARTEFACT_MISMATCH")
             if _terminalize_requested_cancel(owner_id=owner_id, run_id=claim.id,
                                               claim_token=claim.claim_token):
                 resolving_guard.close()
@@ -911,7 +949,7 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
             thread = threading.Thread(
                 target=_run,
                 args=(claim.id, provider, specs, intervals, float(descriptor.get("capital", claim.capital)),
-                      win, strategies, pinned, workers),
+                      win, strategies, pinned, workers, admitted.admission_address),
                 kwargs={"owner_id": owner_id, "claim_token": claim.claim_token,
                         "guard": resolving_guard}, daemon=True)
             with _state_lock:
@@ -945,7 +983,9 @@ def dispatch_reclaimable(*, owner_id: str, maximum: int | None = None) -> list[i
             with SessionLocal() as session:
                 repository.complete_claim(session, owner_id=owner_id, run_id=claim.id,
                                           claim_token=claim.claim_token, status="error",
-                                          note=f"restart dispatch failed: {exc}")
+                                          note=(str(exc.code) if isinstance(
+                                              exc, repository.AdmissionRequired)
+                                                else f"restart dispatch failed: {exc}"))
                 session.commit()
     return launched
 
@@ -967,7 +1007,8 @@ def dispatch_all_reclaimable() -> list[int]:
 
 def _cell_values(provider, specs, intervals, capital, win, strategies,
                  pinned, workers, *, owner_id: str, run_id: int | None = None,
-                 guard: _ClaimGuard | None = None):
+                 guard: _ClaimGuard | None = None,
+                 admission_address: str) -> None:
     """Yield one serialized result payload per cell, in request order.
 
     Serial by default and by reference: `workers <= 1` walks the cells in this
@@ -976,10 +1017,7 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
     """
     count = _worker_count(workers)
     if count > 1:
-        yield from _parallel_cell_values(
-            provider, specs, intervals, capital, win, strategies, pinned, count,
-            owner_id=owner_id, run_id=run_id, guard=guard)
-        return
+        raise RuntimeError("admitted backtests require one verified local worker")
     for inst in specs:
         if guard is not None:
             guard.ensure_active()
@@ -992,7 +1030,8 @@ def _cell_values(provider, specs, intervals, capital, win, strategies,
                 if guard is not None:
                     guard.ensure_active()
                 yield _one(provider, inst, interval, capital, win, strat,
-                           prepared=prepared, owner_id=owner_id)
+                           prepared=prepared, owner_id=owner_id,
+                           admission_address=admission_address)
 
 
 # ── multiprocess fan-out (Task 6) ────────────────────────────────────────────
@@ -1563,7 +1602,8 @@ def _pin_mismatch(stored, *, provider_identity, instrument_identity, interval,
 
 
 def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
-         prepared: _PreparedDataset | None = None) -> dict:
+         prepared: _PreparedDataset | None = None,
+         admission_address: str) -> dict:
     """Resolve one cell to a serialized result payload. Writes nothing.
 
     Returning values instead of writing them is what makes both Task 5 and Task 6
@@ -1581,15 +1621,16 @@ def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
             inst, interval, None, [], prepared.bars,
             clamped=prepared.clamped, strategy_key=strat.key,
             strategy_version=strat.version,
+            admission_address=admission_address,
             error=prepared.error)
     slippage_pct = float(get_settings().backtest_slippage_pct)
     phash = _execution_address(prepared, inst, interval, capital, win, strat,
-                               slippage_pct)
+                               slippage_pct, admission_address)
     cached = _reusable_values(inst, interval, phash, prepared.last_ts, owner_id=owner_id)
     if cached is not None:
         _measure("cache_owner_local", owner_id=owner_id)
         return cached
-    public = _public_reusable_values(prepared, strat, phash)
+    public = _public_reusable_values(prepared, strat, phash, admission_address)
     if public is not None:
         _measure("cache_public_shared", owner_id=owner_id)
         return public
@@ -1598,14 +1639,14 @@ def _one(provider, inst, interval, capital, win, strat=None, *, owner_id: str,
         dict(strat.default_params), slippage_pct, phash,
         bars=prepared.bars, first_ts=prepared.first_ts, last_ts=prepared.last_ts,
         effective_days=prepared.effective_days, clamped=prepared.clamped,
-        frame=prepared.frame)
+        frame=prepared.frame, admission_address=admission_address)
     _measure("cache_cold", owner_id=owner_id)
     _publish_public_computation(prepared, strat, phash, values)
     return values
 
 
 def _execution_address(prepared, inst, interval, capital, win, strat,
-                       slippage_pct) -> str:
+                       slippage_pct, admission_address: str) -> str:
     if not prepared.dataset_address:
         return ""
     try:
@@ -1617,6 +1658,7 @@ def _execution_address(prepared, inst, interval, capital, win, strat,
             capital=capital,
             window=win,
             slippage_pct=slippage_pct,
+            admission_address=admission_address,
             implementation_maps=(),
         ) or ""
     except Exception as exc:
@@ -1653,7 +1695,8 @@ def _public_manifest(prepared: _PreparedDataset) -> dict:
             "dataset_verified": prepared.dataset_verified}
 
 
-def _public_reusable_values(prepared: _PreparedDataset, strat, phash: str) -> dict | None:
+def _public_reusable_values(prepared: _PreparedDataset, strat, phash: str,
+                            admission_address: str = "") -> dict | None:
     """Shared lookup after explicit eligibility; private inputs never probe it."""
     if not phash or not prepared.dataset_address:
         return None
@@ -1667,12 +1710,17 @@ def _public_reusable_values(prepared: _PreparedDataset, strat, phash: str) -> di
         return None
     try:
         with SessionLocal() as session:
-            return public_computation.maybe_materialize(
+            values = public_computation.maybe_materialize(
                 session, execution_address=phash,
                 dataset_classification=prepared.dataset_classification,
                 strategy_key=strat.key, strategy_module=type(strat).__module__,
                 strategy_version=strat.version, policy_address=phash,
                 execution_manifest=manifest)
+            # Public artifacts stay deliberately provenance-neutral.  The exact
+            # execution address already includes the requested receipt, so add
+            # that local provenance only after this exact hit materializes.
+            return (dict(values, admission_address=admission_address)
+                    if values is not None else None)
     # A global cache problem cannot turn a valid customer computation into a
     # failed run.  It is bounded telemetry, then a cold owner-local result.
     except public_computation.PublicComputationIntegrityError as exc:
@@ -1719,7 +1767,8 @@ def _publish_public_computation(prepared: _PreparedDataset, strat, phash: str,
 
 def _compute_values(candles, inst, interval, capital, strat, params,
                     slippage_pct, phash, *, bars, first_ts, last_ts,
-                    effective_days, clamped, frame=None) -> dict:
+                    effective_days, clamped, frame=None,
+                    admission_address: str = "") -> dict:
     """The pure cell: candles in, serialized result values out.
 
     No database, no provider, no module-level mutable state — which is exactly
@@ -1751,7 +1800,7 @@ def _compute_values(candles, inst, interval, capital, strat, params,
         params_hash=phash, last_candle_ts=last_ts,
         first_ts=first_ts, last_ts_span=last_ts, effective_days=effective_days,
         clamped=clamped, premium_trades=p_trades, premium_metrics=p_metrics,
-        premium_error=premium_error)
+        premium_error=premium_error, admission_address=admission_address)
 
 
 def _supports_end(provider) -> bool:
@@ -1770,7 +1819,7 @@ def _result_values(inst, interval, m, trades, bars, error="",
                    effective_days=0, clamped=False, strategy_key="trend_impulse_v3",
                    strategy_version="",
                    premium_trades=None, premium_metrics=None,
-                   premium_error="") -> dict:
+                   premium_error="", admission_address: str | None = None) -> dict:
     """Every stored column for one cell, already serialized. Writes nothing.
 
     JSON encoding happens HERE rather than at the transaction, so a batch commit
@@ -1787,6 +1836,7 @@ def _result_values(inst, interval, m, trades, bars, error="",
     # computed in a worker before the run existed, nor compared across runs.
     common = dict(instrument_key=inst.key, name=inst.name,
                   segment=seg, strategy_key=strategy_key, strategy_version=strategy_version,
+                  admission_address=admission_address,
                   interval=interval, bars=bars,
                   params_hash=params_hash, last_candle_ts=last_candle_ts,
                   first_ts=first_ts, last_ts=last_ts_span,

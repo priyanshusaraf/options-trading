@@ -59,6 +59,9 @@ router = APIRouter(prefix="/api/backtest")
 
 
 class SweepRequest(BaseModel):
+    # This is causal admission only. Dataset/provider, market-truth, and live
+    # readiness checks remain separate Strategy Preflight responsibilities.
+    admission_address: str
     scope: str = "liquid"                 # "liquid" | "full"
     intervals: list[str] | None = None    # default: 1m/5m/15m/30m/1h/day
     capital: float = 50_000.0
@@ -76,7 +79,10 @@ def start(body: SweepRequest, principal: Principal = Depends(get_principal)):
             scope=body.scope, intervals=body.intervals, capital=body.capital,
             instruments=body.instruments, lookback_days=body.lookback_days,
             start_date=body.start_date, end_date=body.end_date,
-            strategies=body.strategies, owner_id=owner_id_for(principal))
+            strategies=body.strategies, admission_address=body.admission_address,
+            owner_id=owner_id_for(principal))
+    except repository.AdmissionRequired as e:
+        return {"error": e.code}
     except sweep.WorkloadAdmissionError as e:
         return {"error": "backtest workload unavailable", "reason": e.reason}
     except Exception as e:

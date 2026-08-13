@@ -150,6 +150,7 @@ def _execution(**overrides):
         "capital": 50_000.0,
         "window": {"requested": "30d", "clamped": False},
         "slippage_pct": 0.0005,
+        "admission_address": "sha256:" + "1" * 64,
         "implementation_maps": ({"sha256:kernel": _kernel_a},),
     }
     kwargs.update(overrides)

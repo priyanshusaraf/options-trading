@@ -1,12 +1,52 @@
 """Backtest result cache: stable signature + reuse on an unchanged second sweep."""
 import datetime as dt
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.db.session import init_db, SessionLocal
 from app.backtest import cache, repository, sweep
+from app.backtest.identity import execution_result_address
 from app.db.models import BacktestResult, BacktestRun
 from app.providers.mock import MockProvider
+from app.strategy.registry import get_strategy
+
+
+def _admission_address(owner_id: str) -> str:
+    return "sha256:" + "c" * 64
+
+
+@pytest.fixture(autouse=True)
+def _admitted_sweeps(monkeypatch):
+    original = sweep.start_sweep
+    monkeypatch.setattr(
+        repository, "load_verified_admission",
+        lambda _session, *, admission_address, **_kwargs: SimpleNamespace(
+            admission_address=admission_address, strategy=get_strategy("trend_impulse_v3")),
+    )
+
+    def start(*args, **kwargs):
+        kwargs.setdefault("admission_address", _admission_address(kwargs["owner_id"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sweep, "start_sweep", start)
+
+
+def test_admission_change_forces_cache_miss():
+    """Hypothesis: result reuse can cross causal-admission receipt boundaries."""
+    from app.core.instruments import get_instrument
+    from app.strategy.registry import get_strategy
+
+    manifest = dict(
+        dataset_address="a" * 64, instrument=get_instrument("NIFTY"),
+        strategy=get_strategy("trend_impulse_v3"), parameters={}, capital=50_000.0,
+        window={"label": "max"}, slippage_pct=0.0,
+    )
+    first = execution_result_address(**manifest, admission_address="sha256:" + "1" * 64)
+    second = execution_result_address(**manifest, admission_address="sha256:" + "2" * 64)
+
+    assert first != second
 
 
 def test_params_signature_stable_and_sensitive():
@@ -81,11 +121,12 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
     """A warm row is the cold result verbatim, with only its row/run identity rebound."""
     init_db(reset=True)
     computed_at = dt.datetime(2025, 1, 2, 3, 4, 5)
+    admission_address = "sha256:" + "a" * 64
     with SessionLocal() as s:
         s.add_all([BacktestRun(id=101, owner_id="owner", scope="liquid", intervals="day",
-                               capital=1, total=1),
+                               capital=1, total=1, admission_address=admission_address),
                    BacktestRun(id=202, owner_id="owner", scope="liquid", intervals="day",
-                               capital=1, total=1)])
+                               capital=1, total=1, admission_address=admission_address)])
         s.flush()
         source = BacktestResult(
             run_id=101,
@@ -94,6 +135,7 @@ def test_cached_copy_preserves_every_mapped_value_except_new_run_identity():
             segment="NFO_FUT",
             strategy_key="sentinel_strategy",
             strategy_version="sentinel-version-v1",
+            admission_address=admission_address,
             interval="15minute",
             trades=11,
             wins=7,

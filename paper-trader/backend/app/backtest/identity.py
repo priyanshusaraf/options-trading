@@ -230,6 +230,7 @@ def _execution_modules(strategy: Any) -> tuple[Any, ...]:
 def execution_result_address(*, dataset_address: str, instrument: Any,
                              strategy: Any, parameters: Mapping[str, Any],
                              capital: float, window: Any, slippage_pct: float,
+                             admission_address: str,
                              implementation_maps: Sequence[Mapping] = ()) -> str | None:
     """Return the full address of one deterministic backtest computation.
 
@@ -245,6 +246,11 @@ def execution_result_address(*, dataset_address: str, instrument: Any,
         return None
     if len(dataset_address) != 64 or any(c not in "0123456789abcdefABCDEF"
                                          for c in dataset_address):
+        return None
+    if (not isinstance(admission_address, str)
+            or len(admission_address) != 71
+            or not admission_address.startswith("sha256:")
+            or any(c not in "0123456789abcdef" for c in admission_address[7:])):
         return None
     if not math.isfinite(float(capital)) or not math.isfinite(float(slippage_pct)):
         return None
@@ -269,6 +275,7 @@ def execution_result_address(*, dataset_address: str, instrument: Any,
     manifest = {
         "scheme": EXECUTION_IDENTITY_SCHEME,
         "dataset_address": dataset_address.lower(),
+        "admission_address": admission_address,
         "instrument": _named_identity(
             instrument,
             fields=("key", "name", "segment", "lot_size", "strike_step", "has_options"),
