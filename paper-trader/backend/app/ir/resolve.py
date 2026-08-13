@@ -87,6 +87,16 @@ class ResolvedEdge:
 
 
 @dataclass(frozen=True)
+class ResolvedComponent:
+    """Every reached authored component, including graph-bodied boundaries."""
+
+    node_path: str
+    definition: tuple[str, int]
+    body_ref: str
+    params: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class ResolvedGraph:
     """The output of resolution. Never authored, never edited (C3)."""
 
@@ -97,6 +107,7 @@ class ResolvedGraph:
     versions: tuple[tuple[str, int], ...]
     inputs: Mapping[str, tuple[tuple[str, str], ...]]
     outputs: Mapping[str, tuple[str, str]]
+    components: tuple[ResolvedComponent, ...] = ()
 
     @property
     def warmup(self) -> int:
@@ -140,6 +151,7 @@ def resolve(spec: Mapping[str, Any], library: Library,
         versions=tuple(sorted(ctx.versions)),
         inputs=MappingProxyType({k: tuple(v) for k, v in ports.inputs.items()}),
         outputs=MappingProxyType(dict(ports.outputs)),
+        components=tuple(ctx.components),
     )
 
 
@@ -199,6 +211,8 @@ class _Context:
         self.nodes: list[_Pending] = []
         self.edges: list[ResolvedEdge] = []
         self.versions: set[tuple[str, int]] = set()
+        self.components: list[ResolvedComponent] = []
+        self.active_graph_bodies: set[str] = set()
         # Wired from one level up, so no ResolvedEdge records them; F8 has to
         # be told about them separately.
         self.interface_bound: set[tuple[str, str]] = set()
@@ -231,6 +245,12 @@ def _expand(graph: Mapping[str, Any], path: tuple[str, ...],
         node_domain = _merge_domain(domain, node.get("domain"))
         node_params = _bind(component, node.get("overrides") or {}, params_env, here, ctx)
         child_path = path + (instance,)
+        ctx.components.append(ResolvedComponent(
+            node_path=_join(child_path),
+            definition=(component["identifier"], component["version"]),
+            body_ref=component["body"]["ref"],
+            params=MappingProxyType(dict(node_params)),
+        ))
 
         if _body_kind(component, here) == "graph":
             local[instance] = ("sub", _expand_component_body(
@@ -256,12 +276,20 @@ def _expand_component_body(component: Mapping[str, Any], path: tuple[str, ...],
         return _Ports()
 
     ref = component["body"]["ref"]
+    if ref in ctx.active_graph_bodies:
+        raise ResolutionError(
+            "C10", here,
+            f"graph component recursion repeats body {ref}")
     body = ctx.library.bodies.get(ref)
     if body is None:
         raise ResolutionError("C5", here,
                               f"the body {ref} of {component['identifier']!r} "
                               "is not in the library")
-    return _expand(body, path, params, domain, ctx)
+    ctx.active_graph_bodies.add(ref)
+    try:
+        return _expand(body, path, params, domain, ctx)
+    finally:
+        ctx.active_graph_bodies.remove(ref)
 
 
 def _emit_leaf(component: Mapping[str, Any], path: tuple[str, ...],
@@ -437,7 +465,14 @@ def _apply_default_sources(ctx: _Context) -> None:
             ctx.versions.add((src_ref["identifier"], src_ref["version"]))
 
             derived_path = pending.path + (socket["identifier"] + DEFAULT_SOURCE_SUFFIX,)
-            _emit_leaf(source, derived_path, _declared_defaults(source), None, ctx, here,
+            source_params = _declared_defaults(source)
+            ctx.components.append(ResolvedComponent(
+                node_path=_join(derived_path),
+                definition=(source["identifier"], source["version"]),
+                body_ref=source["body"]["ref"],
+                params=MappingProxyType(dict(source_params)),
+            ))
+            _emit_leaf(source, derived_path, source_params, None, ctx, here,
                        derived_from=here)
             ctx.edges.append(ResolvedEdge(
                 source=(_join(derived_path), default["socket"]),

@@ -287,7 +287,7 @@ def test_a_failing_kernel_propagates_rather_than_being_swallowed():
     strategy = adapter()
     body = next(iter(strategy.implementations))
 
-    def exploding(_params, _inputs):
+    def exploding(_params, _inputs, _context_inputs):
         raise ZeroDivisionError("kernel failed")
 
     strategy.implementations = {**strategy.implementations, body: exploding}
