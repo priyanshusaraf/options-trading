@@ -22,11 +22,20 @@ from app.db.models import (
     Deployment,
     EquitySnapshot,
     Position,
+    GraphArtifact,
+    GraphVersion,
+    Project,
     SignalEvent,
     Trade,
 )
 from app.db.session import SessionLocal, init_db
+from app.core import strategy_admissions
+from app.ir.hashing import canonical_json, content_address
+from app.ir.library import REGISTRY
+from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
 from tests.legacy_money_scope import LegacyMoneyScope
+
+_CACHED_ADMISSION = None
 
 dep = LegacyMoneyScope(
     dep, "ensure_legacy_deployment", "create_deployment", "active_deployments",
@@ -72,28 +81,88 @@ def test_ensure_legacy_is_idempotent():
         assert len(s.scalars(select(Deployment)).all()) == 1
 
 
+def _create_admitted_deployment(session, name: str, *, status=dep.DRAFT):
+    """The one current owner-local IR receipt used by positive new-book tests."""
+    from app.ir.strategies.expanding_z import GRAPH as source_document
+
+    project_id = "deployment-tests"
+    graph_identifier = "strategy.expanding_z_impulse"
+    document = {**source_document, "version": 1}
+    if session.get(Project, project_id) is None:
+        session.add(Project(project_id=project_id, owner_id=LEGACY_OWNER_ID,
+                            name="deployment tests"))
+    if session.get(GraphArtifact, (LEGACY_OWNER_ID, graph_identifier)) is None:
+        session.add(GraphArtifact(
+            owner_id=LEGACY_OWNER_ID, identifier=graph_identifier,
+            project_id=project_id, display_name="admitted deployment graph",
+            draft_json="{}", draft_revision=0))
+    session.flush()
+    global _CACHED_ADMISSION
+    if _CACHED_ADMISSION is None:
+        decision = admit_strategy(
+            owner_id=LEGACY_OWNER_ID,
+            source_input=IRGraphAdmissionInput(graph=document, parameters={}, risk_model=None),
+            registry=REGISTRY)
+        assert decision.artifact is not None
+        _CACHED_ADMISSION = decision.artifact
+    strategy_admissions.put(session, _CACHED_ADMISSION)
+    if session.get(GraphVersion, (LEGACY_OWNER_ID, graph_identifier, 1)) is None:
+        session.add(GraphVersion(
+            owner_id=LEGACY_OWNER_ID, graph_identifier=graph_identifier, version=1,
+            artifact_json=canonical_json(document), content_address=content_address(document),
+            admission_address=_CACHED_ADMISSION.admission_address))
+    session.flush()
+    return dep.create_deployment(
+        session, name, strategy_key=f"ir.{graph_identifier}",
+        admission_address=_CACHED_ADMISSION.admission_address, status=status)
+
+
 def test_new_deployments_start_as_draft_not_active():
     """A book must be switched on deliberately. Describing one must never start it."""
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "momentum-2", strategy_key="expanding_z_v4")
+        d = _create_admitted_deployment(s, "momentum-2")
         s.commit()
         assert d.status == dep.DRAFT
         assert d.armed is False
         assert [x.id for x in dep.active_deployments(s)] == [LEGACY_DEPLOYMENT_ID]
 
 
+def test_new_explicit_deployment_without_admission_refuses_before_insert():
+    """Hypothesis: omitting a strategy lets a new deployment bypass causal admission."""
+    with SessionLocal() as s:
+        with pytest.raises(ValueError, match="ADMISSION_REQUIRED"):
+            dep.create_deployment(s, "unbound")
+        assert dep.get_by_name(s, "unbound") is None
+
+
+def test_deployment_strategy_write_bypass_mutant_is_killed(monkeypatch):
+    """Removing only the deployment receipt check accepts a forged strategy write."""
+    with SessionLocal() as s:
+        forged = "sha256:" + "f" * 64
+        monkeypatch.setattr(
+            "app.core.deployments._require_current_deployment_admission",
+            lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
+                admission_address=forged,
+                strategy=__import__("types").SimpleNamespace(version="mutant")))
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(ValueError, match="RECEIPT_STALE"):
+                dep.create_deployment(
+                    s, "mutant", strategy_key="ir.strategy.expanding_z_impulse",
+                    admission_address=forged)
+
+
 def test_duplicate_name_is_refused():
     with SessionLocal() as s:
-        dep.create_deployment(s, "dupe")
+        _create_admitted_deployment(s, "dupe")
         s.commit()
         with pytest.raises(ValueError, match="already exists"):
-            dep.create_deployment(s, "dupe")
+            _create_admitted_deployment(s, "dupe")
 
 
 def test_cannot_arm_a_non_active_deployment():
     """'Armed but not running' reads as live on a dashboard and takes nothing."""
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "draft-book")
+        d = _create_admitted_deployment(s, "draft-book")
         s.commit()
         with pytest.raises(ValueError, match="not 'active'"):
             dep.set_armed(s, d.id, True)
@@ -101,7 +170,7 @@ def test_cannot_arm_a_non_active_deployment():
 
 def test_pausing_a_deployment_disarms_it():
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "live-book", status=dep.ACTIVE)
+        d = _create_admitted_deployment(s, "live-book", status=dep.ACTIVE)
         dep.set_armed(s, d.id, True)
         s.commit()
         assert d.armed is True
@@ -124,7 +193,7 @@ def test_legacy_deployment_cannot_be_archived():
 
 def test_disarm_all_matches_the_boot_invariant():
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "b", status=dep.ACTIVE)
+        d = _create_admitted_deployment(s, "b", status=dep.ACTIVE)
         dep.set_armed(s, d.id, True)
         dep.set_status(s, LEGACY_DEPLOYMENT_ID, dep.ACTIVE)
         dep.set_armed(s, LEGACY_DEPLOYMENT_ID, True)
@@ -137,7 +206,7 @@ def test_disarm_all_matches_the_boot_invariant():
 def test_malformed_params_degrade_to_inherit_everything():
     """A bad row must never take the engine down; it must mean 'no overrides'."""
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "bad-params")
+        d = _create_admitted_deployment(s, "bad-params")
         d.params_json = "{not json"
         s.commit()
         assert dep.deployment_params(s, d.id) == {}
@@ -145,7 +214,8 @@ def test_malformed_params_degrade_to_inherit_everything():
 
 def test_params_round_trip():
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "tuned", params={"max_daily_loss": 1500.0})
+        d = _create_admitted_deployment(s, "tuned")
+        d.params_json = '{"max_daily_loss": 1500.0}'
         s.commit()
         assert dep.deployment_params(s, d.id) == {"max_daily_loss": 1500.0}
 
@@ -187,14 +257,10 @@ def test_a_deployment_with_an_unknown_strategy_raises_rather_than_substituting()
     promise: it names which strategy is trading, so an unresolvable key must stop
     it, never quietly hand the customer's capital to the platform default while the
     trade rows claim otherwise."""
-    from app.strategy.registry import StrategyNotFound
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "ghost", strategy_key="gen_does_not_exist")
-        s.commit()
-        with pytest.raises(StrategyNotFound):
-            dep.resolve_deployment_strategy(s, d.id)
-        with pytest.raises(StrategyNotFound):
-            dep.deployment_strategy_version(s, d.id)
+        with pytest.raises(ValueError, match="ADMISSION_REQUIRED"):
+            dep.create_deployment(s, "ghost", strategy_key="gen_does_not_exist")
+        assert dep.get_by_name(s, "ghost") is None
 
 
 def test_the_legacy_deployment_pins_no_strategy_and_that_is_not_an_error():
@@ -207,12 +273,11 @@ def test_the_legacy_deployment_pins_no_strategy_and_that_is_not_an_error():
 
 def test_a_deployment_pinning_a_real_strategy_reports_its_content_hash():
     with SessionLocal() as s:
-        d = dep.create_deployment(s, "real", strategy_key="trend_impulse_v3")
+        d = _create_admitted_deployment(s, "real")
         s.commit()
-        strat = dep.resolve_deployment_strategy(s, d.id)
-        assert strat is not None and strat.key == "trend_impulse_v3"
-        version = dep.deployment_strategy_version(s, d.id)
-        assert version and version == strat.version
+        assert d.strategy_key == "ir.strategy.expanding_z_impulse"
+        assert d.strategy_version
+        assert d.admission_address
 
 
 def test_money_record_tables_can_carry_a_strategy_version():

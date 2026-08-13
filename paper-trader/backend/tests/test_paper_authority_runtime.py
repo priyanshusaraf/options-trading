@@ -62,6 +62,20 @@ def _graph_document(version: int = 1) -> dict:
     return {**DOCUMENT, "version": version}
 
 
+def _admission_address(version: int) -> str:
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+
+    decision = admit_strategy(
+        owner_id="owner",
+        source_input=IRGraphAdmissionInput(
+            graph=_graph_document(version), parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    assert decision.artifact is not None
+    return decision.artifact.admission_address
+
+
 @pytest.fixture(autouse=True)
 def a_fresh_database():
     init_db(reset=True)
@@ -73,7 +87,7 @@ def evidence_bridge(monkeypatch):
     """The research read, stated as a verdict. `verified_decision` is the single door
     through the isolation boundary (hard invariant 5), so stating it here is what keeps
     these tests from reaching across the plane."""
-    state = {"decision": "approved"}
+    state = {"decision": "approved", "admission_address": None}
 
     def bridge(**asked):
         return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
@@ -81,6 +95,9 @@ def evidence_bridge(monkeypatch):
                 # Content, not name: the admission binding requires the approved
                 # address to be the address receiving authority.
                 "content_address": content_address(_graph_document(asked["graph_version"])),
+                "admission_address": (
+                    state["admission_address"]
+                    or _admission_address(asked["graph_version"])),
                 "decision": state["decision"]}
 
     monkeypatch.setattr(pa, "verified_decision", bridge)
@@ -98,6 +115,10 @@ def a_clean_registry():
 
 
 def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeployment:
+    from app.core import strategy_admissions
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+
     if session.get(Project, PROJECT) is None:
         session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
     if session.get(GraphArtifact, ("owner", GRAPH)) is None:
@@ -106,9 +127,17 @@ def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeplo
                                   draft_revision=0))
     session.flush()
     document = _graph_document(version)
+    decision = admit_strategy(
+        owner_id="owner",
+        source_input=IRGraphAdmissionInput(graph=document, parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    assert decision.artifact is not None
+    strategy_admissions.put(session, decision.artifact)
     session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
                              artifact_json=canonical_json(document),
-                             content_address=content_address(document)))
+                             content_address=content_address(document),
+                             admission_address=decision.artifact.admission_address))
     session.flush()
     row = pa.stage(session, project_id=PROJECT, graph_identifier=GRAPH,
                    graph_version=version, deployment_id=LEGACY_DEPLOYMENT_ID,
@@ -118,6 +147,80 @@ def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeplo
         pa.activate(session, row.id, revision=row.revision)
         session.commit()
     return row
+
+
+def _staged_without_local_receipt(session) -> IrPaperDeployment:
+    """A valid staged binding whose receipt is deliberately unavailable."""
+    if session.get(Project, PROJECT) is None:
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
+                                  display_name="mirror", draft_json="{}",
+                                  draft_revision=0))
+    document = _graph_document()
+    session.add(GraphVersion(
+        owner_id="owner", graph_identifier=GRAPH, version=1,
+        artifact_json=canonical_json(document), content_address=content_address(document),
+        admission_address="sha256:" + "b" * 64))
+    session.flush()
+    row = pa.stage(session, project_id=PROJECT, graph_identifier=GRAPH,
+                   graph_version=1, deployment_id=LEGACY_DEPLOYMENT_ID,
+                   instrument_key=INSTRUMENT, interval=INTERVAL)
+    session.commit()
+    return row
+
+
+def test_paper_activation_refuses_a_missing_local_causal_receipt(evidence_bridge):
+    """Hypothesis: a graph address alone can grant paper authority."""
+    with SessionLocal() as session:
+        row = _deploy(session, activate=False)
+        evidence_bridge["admission_address"] = row.admission_address
+        with pytest.raises(pa.NotAdmissible, match="RECEIPT_STALE"):
+            pa.activate(session, row.id, revision=row.revision)
+
+
+def test_paper_activate_receipt_bypass_mutant_is_killed(monkeypatch, evidence_bridge):
+    """Removing only paper activation's receipt check admits forged evidence."""
+    with SessionLocal() as session:
+        row = _staged_without_local_receipt(session)
+        row.admission_address = "sha256:" + "a" * 64
+        evidence_bridge["admission_address"] = row.admission_address
+        # Keep the bypass proof about the exact receipt gate; the separate
+        # instrument-history decision is not the condition under mutation.
+        service = __import__("app.core.paper_authority", fromlist=["*"])
+        monkeypatch.setattr(
+            service, "_admission_for",
+            lambda *_args, **_kwargs: __import__("types").SimpleNamespace(ok=True, reason=""))
+        monkeypatch.setattr(service, "_require_local_receipt", lambda *_args, **_kwargs: None)
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(pa.NotAdmissible, match="RECEIPT_STALE"):
+                pa.activate(session, row.id, revision=row.revision)
+
+
+def test_paper_resume_receipt_bypass_mutant_is_killed(monkeypatch, evidence_bridge):
+    """Removing only paper resume's shared receipt check admits stale authority."""
+    with SessionLocal() as session:
+        row = _staged_without_local_receipt(session)
+        row.state = pa.PAUSED
+        session.commit()
+        evidence_bridge["admission_address"] = row.admission_address
+        service = __import__("app.core.paper_authority", fromlist=["*"])
+        monkeypatch.setattr(
+            service, "_admission_for",
+            lambda *_args, **_kwargs: __import__("types").SimpleNamespace(ok=True, reason=""))
+        monkeypatch.setattr(service, "_require_local_receipt", lambda *_args, **_kwargs: None)
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(pa.NotAdmissible, match="RECEIPT_STALE"):
+                pa.resume(session, row.id, revision=row.revision)
+
+
+def test_paper_refuses_evidence_without_an_admission_address(evidence_bridge):
+    """Hypothesis: a paper approval can omit the exact causal receipt."""
+    with SessionLocal() as session:
+        row = _deploy(session, activate=False)
+        evidence_bridge["admission_address"] = ""
+        with pytest.raises(pa.EvidenceUnverified, match="admission"):
+            pa.activate(session, row.id, revision=row.revision)
 
 
 def _runner() -> EngineRunner:

@@ -122,18 +122,11 @@ def test_paper_authority_resolves_generated_identity_in_the_binding_owner(monkey
 
 
 def test_a_deployment_that_pins_a_strategy_wins_over_the_instrument_row():
-    """A deployment is a promise about which strategy is trading. If it pins one, a
-    per-instrument row cannot quietly override it — that would make the promise false."""
+    """A legacy handwritten pin cannot create a new deployment without an IR receipt."""
     assign("NIFTY", "expanding_z_v4")
     with SessionLocal() as session:
-        created = dep.create_deployment(session, "pinned",
-                                        strategy_key=DEFAULT_STRATEGY_KEY)
-        session.commit()
-        deployment_id = created.id
-
-    result = resolve(deployment_id=deployment_id)
-    assert result.strategy_key == DEFAULT_STRATEGY_KEY
-    assert result.origin == binding.ORIGIN_DEPLOYMENT
+        with pytest.raises(ValueError, match="ADMISSION_REQUIRED"):
+            dep.create_deployment(session, "pinned", strategy_key=DEFAULT_STRATEGY_KEY)
 
 
 def test_every_binding_carries_the_version_that_makes_it_an_artefact():
@@ -158,12 +151,8 @@ def test_an_unresolvable_deployment_pin_fails_closed():
     """A deployment that pins a strategy the registry cannot resolve must halt, never
     substitute: the trade rows would claim a strategy that never ran."""
     with SessionLocal() as session:
-        created = dep.create_deployment(session, "broken", strategy_key="no_such_strategy")
-        session.commit()
-        deployment_id = created.id
-
-    with pytest.raises(StrategyNotFound):
-        resolve(deployment_id=deployment_id)
+        with pytest.raises(ValueError, match="ADMISSION_REQUIRED"):
+            dep.create_deployment(session, "broken", strategy_key="no_such_strategy")
 
 
 def test_an_unresolvable_instrument_assignment_falls_back_and_says_so():
@@ -262,6 +251,7 @@ def test_every_mechanism_that_can_express_a_binding_is_declared():
     """
     assert binding.BINDING_MECHANISMS == (
         "deployments.strategy_key",
+        "deployments.admission_address",
         "instrument_state.strategy_key",
         "watchlists.strategy_key",
         "strategy_lifecycle.deployed_watchlist_id",

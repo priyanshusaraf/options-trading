@@ -47,6 +47,8 @@ class DeployIn(BaseModel):
     proposals: list[ProposalIn]
     source: str = "builtin"
     interval: str | None = None
+    admission_address: str
+    broker_account_id: str
     dry_run: bool = False
 
 
@@ -89,7 +91,9 @@ def deploy_promotion(candidate_id: int, body: PromotionDeployIn,
     req = DeployRequest(
         watchlist_name=name, strategy_key=cand["strategy_key"],
         proposals=[(v["instrument"], v.get("dsr", 0.0)) for v in cand["validated_universe"]],
-        source="research", interval=cand.get("interval"))
+        source="research", interval=cand.get("interval"),
+        admission_address=cand.get("admission_address", ""),
+        broker_account_id="")
     with SessionLocal() as s:
         if body.dry_run:
             prev = preview_deploy(s, req, owner_id=owner_id_for(principal))
@@ -127,7 +131,9 @@ def portfolio_deploy(body: DeployIn, principal: Principal = Depends(get_principa
     req = DeployRequest(
         watchlist_name=body.watchlist_name, strategy_key=body.strategy_key,
         proposals=[(p.instrument_key, p.score) for p in body.proposals],
-        source=body.source, interval=body.interval)
+        source=body.source, interval=body.interval,
+        admission_address=body.admission_address,
+        broker_account_id=body.broker_account_id)
     with SessionLocal() as s:
         if body.dry_run:
             prev = preview_deploy(s, req, owner_id=owner_id_for(principal))

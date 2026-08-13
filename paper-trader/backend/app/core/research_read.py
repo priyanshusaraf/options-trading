@@ -663,6 +663,7 @@ def _view(session, c: PromotionCandidate) -> dict:
         "id": c.id,
         "run_id": c.run_id,
         "status": c.status,
+        "admission_address": c.admission_address,
         "strategy_key": strategy_key,
         "params": params,
         "interval": interval,
@@ -763,6 +764,48 @@ def decide_project_candidate(
             raise CandidateDecisionConflict(candidate_id) from exc
         if not isinstance(scorecard, dict) or "decision" in scorecard:
             raise CandidateDecisionConflict(candidate_id)
+        if decision == "approved":
+            from research.domain.admissions import AdmissionBindingError, require_candidate_admission
+            from app.ir.library import REGISTRY
+            from app.editor import graph_artifacts
+            from app.strategy.admission import (
+                AdmissionRefused, IRGraphAdmissionInput, artifact_from_dict, verify_admission,
+            )
+
+            try:
+                receipt = require_candidate_admission(
+                    session, candidate, owner_id=owner_id)
+                artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+                graph_address = graph.get("content_address")
+                if (
+                    artifact.owner_id != owner_id
+                    or artifact.admission_address != candidate.admission_address
+                    or artifact.graph_identifier != graph.get("identifier")
+                    or artifact.graph_version != graph.get("version")
+                    or artifact.graph_address != graph_address
+                    or receipt.graph_identifier != graph.get("identifier")
+                    or receipt.graph_version != graph.get("version")
+                    or receipt.graph_address != graph_address
+                ):
+                    raise AdmissionBindingError("candidate receipt does not match graph provenance")
+                published = graph_artifacts.load_version(
+                    project_id, graph["identifier"], graph["version"], owner_id=owner_id)
+                source_graph = published.graph
+                if (published.content_address != graph_address
+                        or published.admission_address != candidate.admission_address):
+                    raise AdmissionBindingError("published graph receipt does not match candidate")
+                verify_admission(
+                    artifact=artifact, owner_id=owner_id,
+                    source_input=IRGraphAdmissionInput(
+                        graph=source_graph, parameters={}, risk_model=None),
+                    registry=REGISTRY,
+                )
+            except (AdmissionBindingError, AdmissionRefused, TypeError,
+                    ValueError, json.JSONDecodeError,
+                    graph_artifacts.GraphNotFound,
+                    graph_artifacts.GraphVersionCorrupt) as exc:
+                raise CandidateDecisionConflict(
+                    f"ADMISSION_REQUIRED:{candidate_id}") from exc
         decided_at = dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
         evidence = {
             "actor": actor_id,
@@ -833,24 +876,78 @@ def verified_graph_decision(*, project_id: str, graph_identifier: str,
     approval exists" is an ordinary answer for a graph nobody has decided on yet. The
     caller decides what to do about it; `shadow_deployments.activate` refuses.
     """
-    for view in list_graph_runs(project_id, owner_id=owner_id):
-        graph = view.get("graph") or {}
-        if (graph.get("identifier") != graph_identifier
-                or graph.get("version") != graph_version):
-            continue
-        candidate = view.get("candidate") or {}
-        decision = candidate.get("decision") or {}
-        if decision.get("decision") != "approved":
-            continue
-        return {
-            "run_id": view.get("run_id"),
-            "candidate_id": candidate.get("candidate_id") or candidate.get("id"),
-            "project_id": graph.get("project_id"),
-            "graph_identifier": graph.get("identifier"),
-            "graph_version": graph.get("version"),
-            "content_address": graph.get("content_address"),
-            "decision": "approved",
-        }
+    from app.editor import graph_artifacts
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import (
+        AdmissionRefused, IRGraphAdmissionInput, artifact_from_dict, verify_admission,
+    )
+    from research.domain.admissions import AdmissionBindingError, require_candidate_admission
+
+    with _research_session() as session:
+        if session is None:
+            return None
+        runs = (session.query(ExperimentRun)
+                .filter(ExperimentRun.owner_id == owner_id)
+                .order_by(ExperimentRun.id.desc()).all())
+        for run in runs:
+            recipe = _recipe_for(session, run.id, owner_id=owner_id)
+            graph = _graph_for_recipe(recipe) or {}
+            if (graph.get("project_id") != project_id
+                    or graph.get("identifier") != graph_identifier
+                    or graph.get("version") != graph_version):
+                continue
+            candidate = (session.query(PromotionCandidate)
+                         .filter(PromotionCandidate.owner_id == owner_id,
+                                 PromotionCandidate.run_id == run.id)
+                         .order_by(PromotionCandidate.id.desc()).first())
+            if candidate is None or candidate.status != "approved":
+                continue
+            try:
+                envelope = _verified_candidate_decision(candidate)
+                if envelope is None or envelope["evidence"].get("decision") != "approved":
+                    continue
+                receipt = require_candidate_admission(
+                    session, candidate, owner_id=owner_id)
+                artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+                address = candidate.admission_address
+                published = graph_artifacts.load_version(
+                    project_id, graph_identifier, graph_version, owner_id=owner_id)
+                if (
+                    not address
+                    or run.admission_address != address
+                    or receipt.admission_address != address
+                    or artifact.owner_id != owner_id
+                    or artifact.admission_address != address
+                    or artifact.graph_identifier != graph_identifier
+                    or artifact.graph_version != graph_version
+                    or artifact.graph_address != graph.get("content_address")
+                    or receipt.graph_identifier != graph_identifier
+                    or receipt.graph_version != graph_version
+                    or receipt.graph_address != graph.get("content_address")
+                    or published.content_address != graph.get("content_address")
+                    or published.admission_address != address
+                ):
+                    continue
+                verify_admission(
+                    artifact=artifact, owner_id=owner_id,
+                    source_input=IRGraphAdmissionInput(
+                        graph=published.graph, parameters={}, risk_model=None),
+                    registry=REGISTRY,
+                )
+            except (StoredEvidenceCorrupt, AdmissionBindingError, AdmissionRefused,
+                    TypeError, ValueError, json.JSONDecodeError,
+                    graph_artifacts.GraphNotFound, graph_artifacts.GraphVersionCorrupt):
+                continue
+            return {
+                "run_id": run.id,
+                "candidate_id": candidate.id,
+                "project_id": graph.get("project_id"),
+                "graph_identifier": graph.get("identifier"),
+                "graph_version": graph.get("version"),
+                "content_address": graph.get("content_address"),
+                "admission_address": address,
+                "decision": "approved",
+            }
     return None
 
 

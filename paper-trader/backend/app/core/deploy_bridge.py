@@ -17,8 +17,12 @@ from __future__ import annotations
 
 import dataclasses
 
+from sqlalchemy import select
+
+from app.core import deployments
 from app.core import strategy_archive as archive
 from app.core import watchlists as wl
+from app.db.models import BrokerAccount
 
 
 @dataclasses.dataclass
@@ -26,6 +30,8 @@ class DeployRequest:
     watchlist_name: str
     strategy_key: str
     proposals: list                 # [(instrument_key, score), ...]
+    admission_address: str
+    broker_account_id: str
     source: str = "builtin"         # builtin | generated
     interval: str | None = None
 
@@ -41,6 +47,7 @@ class DeployPreview:
 @dataclasses.dataclass
 class DeployResult:
     watchlist_id: int
+    deployment_id: int
     assigned: list
     rejected: list
 
@@ -70,6 +77,16 @@ def deploy(session, req: DeployRequest, *, owner_id: str) -> DeployResult:
     clear conflict resolution, and record the strategy as `running` in the archive.
     Idempotent — re-deploying the same request reuses the watchlist and reassigns the same
     winners in place."""
+    admitted = deployments._require_current_deployment_admission(
+        session, owner_id=owner_id, strategy_key=req.strategy_key,
+        admission_address=req.admission_address, params={})
+    account = session.scalar(select(BrokerAccount).where(
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.broker_account_id == req.broker_account_id,
+        BrokerAccount.status == "active",
+    ))
+    if account is None:
+        raise ValueError("ADMISSION_REQUIRED")
     # Checked here as well as in `create_watchlist`: the reuse branch below reassigns an
     # existing watchlist's strategy in place and never passes through the constructor, so
     # a gate on creation alone would let a redeploy install what a first deploy refused.
@@ -79,8 +96,22 @@ def deploy(session, req: DeployRequest, *, owner_id: str) -> DeployResult:
     if target is None:
         target = wl.create_watchlist(session, req.watchlist_name, req.strategy_key, owner_id=owner_id,
                                      interval=req.interval)
-    else:
-        target.strategy_key = req.strategy_key       # keep the binding current
+    session.flush()
+
+    deployment = deployments.get_by_name(
+        session, f"watchlist:{target.id}", owner_id=owner_id,
+        broker_account_id=account.broker_account_id)
+    if deployment is None:
+        deployment = deployments.create_deployment(
+            session, f"watchlist:{target.id}", strategy_key=req.strategy_key,
+            strategy_version=admitted.strategy.version,
+            admission_address=admitted.admission_address,
+            owner_id=owner_id, broker_account_id=account.broker_account_id,
+            universe_mode="watchlist", watchlist_id=target.id, params={})
+    elif (deployment.strategy_key != req.strategy_key
+          or deployment.admission_address != admitted.admission_address):
+        raise ValueError("ARTEFACT_MISMATCH")
+    target.strategy_key = req.strategy_key
     session.flush()
 
     res = _resolve(session, target.id, req, owner_id=owner_id)
@@ -89,5 +120,6 @@ def deploy(session, req: DeployRequest, *, owner_id: str) -> DeployResult:
     archive.record_strategy(session, req.strategy_key, owner_id=owner_id, source=req.source)
     archive.set_status(session, req.strategy_key, "running", owner_id=owner_id,
                        deployed_watchlist_id=target.id)
-    return DeployResult(watchlist_id=target.id, assigned=sorted(res.assign.keys()),
+    return DeployResult(watchlist_id=target.id, deployment_id=deployment.id,
+                        assigned=sorted(res.assign.keys()),
                         rejected=res.rejected)

@@ -64,6 +64,10 @@ def _graph_document(version: int = 1) -> dict:
 
 
 def seed_graph(session, version: int = 1) -> GraphVersion:
+    from app.core import strategy_admissions
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+
     if session.get(Project, PROJECT) is None:
         session.add(Project(project_id=PROJECT, owner_id="owner", name="shadow"))
     if session.get(GraphArtifact, ("owner", GRAPH)) is None:
@@ -72,9 +76,17 @@ def seed_graph(session, version: int = 1) -> GraphVersion:
                                   draft_revision=0))
     session.flush()
     document = _graph_document(version)
+    decision = admit_strategy(
+        owner_id="owner",
+        source_input=IRGraphAdmissionInput(graph=document, parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    assert decision.artifact is not None
+    strategy_admissions.put(session, decision.artifact)
     row = GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
                        artifact_json=canonical_json(document),
-                       content_address=content_address(document))
+                       content_address=content_address(document),
+                       admission_address=decision.artifact.admission_address)
     session.add(row)
     session.flush()
     return row
@@ -84,8 +96,23 @@ def approved_evidence(**overrides):
     """A verified research decision, as the read-only bridge would report it."""
     return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
             "graph_identifier": GRAPH, "graph_version": 1,
-            "content_address": "sha256:" + "e" * 64, "decision": "approved",
+            "content_address": content_address(_graph_document(1)),
+            "admission_address": _admission_address(1), "decision": "approved",
             **overrides}
+
+
+def _admission_address(version: int) -> str:
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+
+    decision = admit_strategy(
+        owner_id="owner",
+        source_input=IRGraphAdmissionInput(
+            graph=_graph_document(version), parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    assert decision.artifact is not None
+    return decision.artifact.admission_address
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +156,25 @@ def staged(session, **overrides):
     return stage(session, **overrides)
 
 
+def staged_without_local_receipt(session):
+    """A valid staged binding whose only missing authority is its local receipt."""
+    if session.get(Project, PROJECT) is None:
+        session.add(Project(project_id=PROJECT, owner_id="owner", name="shadow"))
+    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
+        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
+                                  display_name="mirror", draft_json="{}",
+                                  draft_revision=0))
+    document = _graph_document()
+    session.add(GraphVersion(
+        owner_id="owner", graph_identifier=GRAPH, version=1,
+        artifact_json=canonical_json(document), content_address=content_address(document),
+        admission_address="sha256:" + "b" * 64))
+    session.flush()
+    row = stage(session)
+    session.commit()
+    return row
+
+
 # ── the record says what it is ──────────────────────────────────────────────────
 
 def test_a_staged_deployment_carries_every_identity_separately():
@@ -152,6 +198,51 @@ def test_a_staged_deployment_carries_every_identity_separately():
         # The stable key cannot identify the build: it survives an edit, which is the
         # whole reason the version and the address are separate columns.
         assert str(row.graph_version) not in row.strategy_key
+
+
+def test_shadow_activation_refuses_a_missing_local_causal_receipt(evidence_bridge):
+    """Hypothesis: a graph address alone can grant new shadow evaluation authority."""
+    with SessionLocal() as session:
+        row = staged(session)
+        evidence_bridge["value"] = approved_evidence(admission_address=row.admission_address)
+        with pytest.raises(sd.NotAdmissible, match="RECEIPT_STALE"):
+            sd.activate(session, row.id, revision=row.revision)
+
+
+def test_shadow_activate_receipt_bypass_mutant_is_killed(monkeypatch, evidence_bridge):
+    """Removing only activation's local receipt check admits forged evidence."""
+    with SessionLocal() as session:
+        row = staged_without_local_receipt(session)
+        row.admission_address = "sha256:" + "a" * 64
+        evidence_bridge["value"] = approved_evidence(admission_address=row.admission_address)
+        # History admission is already proven elsewhere. Keep this mutation focused on
+        # the receipt guard instead of letting a test-environment history shortfall
+        # mask the forged receipt.
+        service = __import__("app.core.shadow_deployments", fromlist=["*"])
+        monkeypatch.setattr(
+            service, "_admission_for",
+            lambda *_args, **_kwargs: __import__("types").SimpleNamespace(ok=True, reason=""))
+        monkeypatch.setattr(service, "_require_local_receipt", lambda *_args, **_kwargs: None)
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(sd.NotAdmissible, match="RECEIPT_STALE"):
+                sd.activate(session, row.id, revision=row.revision)
+
+
+def test_shadow_resume_receipt_bypass_mutant_is_killed(monkeypatch, evidence_bridge):
+    """Removing only resume's shared activation receipt check admits stale state."""
+    with SessionLocal() as session:
+        row = staged_without_local_receipt(session)
+        row.state = sd.PAUSED
+        session.commit()
+        evidence_bridge["value"] = approved_evidence(admission_address=row.admission_address)
+        service = __import__("app.core.shadow_deployments", fromlist=["*"])
+        monkeypatch.setattr(
+            service, "_admission_for",
+            lambda *_args, **_kwargs: __import__("types").SimpleNamespace(ok=True, reason=""))
+        monkeypatch.setattr(service, "_require_local_receipt", lambda *_args, **_kwargs: None)
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(sd.NotAdmissible, match="RECEIPT_STALE"):
+                sd.resume(session, row.id, revision=row.revision)
 
 
 def test_the_strategy_key_is_never_the_graph_identity():
@@ -429,6 +520,32 @@ def test_reload_reverifies_and_drops_a_binding_whose_graph_moved():
         problems: list = []
         assert sd.active_bindings(session, on_problem=problems.append) == []
         assert problems and "content address" in problems[0].lower()
+
+
+def test_reload_drops_a_binding_with_a_missing_local_receipt():
+    """Hypothesis: a previous activation lets a deleted receipt survive reload."""
+    with SessionLocal() as session:
+        row = staged(session)
+        session.commit()
+        sd.activate(session, row.id, revision=row.revision)
+        session.commit()
+        row = session.get(IrShadowDeployment, row.id)
+        row.admission_address = "sha256:" + "b" * 64
+        session.flush()
+
+        problems: list[str] = []
+        assert sd.active_bindings(session, on_problem=problems.append) == []
+        assert problems and "RECEIPT_STALE" in problems[0]
+
+
+def test_shadow_refuses_evidence_without_an_admission_address(evidence_bridge):
+    """Hypothesis: a research approval can omit the exact causal receipt."""
+    with SessionLocal() as session:
+        row = staged(session)
+        session.commit()
+        evidence_bridge["value"] = approved_evidence(admission_address=None)
+        with pytest.raises(sd.EvidenceUnverified, match="admission"):
+            sd.activate(session, row.id, revision=row.revision)
 
 
 def test_a_reloaded_binding_carries_its_verified_identity():

@@ -200,6 +200,8 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
     _require_money_scope(session, deployment_id, owner_id, broker_account_id)
     version = _graph_version(session, graph_identifier, graph_version, owner_id=owner_id)
     address = _verified_address(version)
+    if not version.admission_address:
+        raise NotAdmissible("ADMISSION_REQUIRED")
     _require_known_instrument(instrument_key)
     _require_known_interval(interval)
 
@@ -208,6 +210,7 @@ def stage(session, *, project_id: str, graph_identifier: str, graph_version: int
         owner_id=owner_id, broker_account_id=broker_account_id,
         project_id=project_id, graph_identifier=graph_identifier,
         graph_version=graph_version, graph_content_address=address,
+        admission_address=version.admission_address,
         deployment_id=deployment_id, instrument_key=instrument_key, interval=interval,
         strategy_key=strategy_key_for(graph_identifier),
         runtime_source=SOURCE, execution_mode=MODE, authority=AUTHORITY,
@@ -241,6 +244,7 @@ def activate(session, row_id: int, *, revision: int, owner_id: str,
             f"claims to name them")
 
     decision = _require_evidence(row)
+    _require_local_receipt(session, row, version)
     admission = _admission_for(row, version.artifact_json)
     row.admission_ok = admission.ok
     row.admission_reason = admission.reason[:400]
@@ -333,6 +337,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
                 raise BindingUnverifiable(
                     f"{row.graph_identifier!r} v{row.graph_version} content address "
                     f"changed under paper deployment {row.id}")
+            _require_local_receipt(session, row, version)
             if (row.execution_mode, row.authority, row.runtime_source) != (
                     MODE, AUTHORITY, SOURCE):
                 raise BindingUnverifiable(
@@ -557,11 +562,66 @@ def _require_evidence(row: IrPaperDeployment) -> dict:
         f"({row.graph_content_address!r}); one identifier and version named two different "
         f"artefacts"
         if approved_address and approved_address != row.graph_content_address else "",
+        "the deployment has no causal admission address"
+        if not row.admission_address else "",
+        "the decision names no causal admission address"
+        if not decision.get("admission_address") else "",
+        f"decision admission {decision.get('admission_address')!r} != "
+        f"deployment admission {row.admission_address!r}"
+        if row.admission_address and decision.get("admission_address")
+        and decision.get("admission_address") != row.admission_address else "",
     ) if m]
     if named:
         raise EvidenceUnverified(
             f"the research decision does not approve this artefact: {'; '.join(named)}")
     return decision
+
+
+def _require_local_receipt(session, row: IrPaperDeployment, version: GraphVersion) -> None:
+    """Re-derive the exact execution-plane receipt before granting paper authority.
+
+    This adds causal proof to the existing owner, account, history, and protection
+    gates; it does not claim complete Strategy Preflight.
+    """
+    import json
+
+    from app.core import strategy_admissions
+    from app.ir.library import REGISTRY
+    from app.strategy.admission import (
+        AdmissionRefused, IRGraphAdmissionInput, artifact_from_dict, verify_admission,
+    )
+
+    if not row.admission_address:
+        raise NotAdmissible("ADMISSION_REQUIRED")
+    receipt = strategy_admissions.get(
+        session, owner_id=row.owner_id, admission_address=row.admission_address)
+    if receipt is None:
+        raise NotAdmissible("RECEIPT_STALE")
+    try:
+        artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+        strategy_admissions.require_current(session, artifact)
+        graph = json.loads(version.artifact_json)
+        if (
+            version.admission_address != row.admission_address
+            or artifact.owner_id != row.owner_id
+            or artifact.admission_address != row.admission_address
+            or artifact.graph_identifier != row.graph_identifier
+            or artifact.graph_version != row.graph_version
+            or artifact.graph_address != row.graph_content_address
+        ):
+            raise NotAdmissible("RECEIPT_STALE")
+        verify_admission(
+            artifact=artifact, owner_id=row.owner_id,
+            source_input=IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None),
+            registry=REGISTRY,
+        )
+    except NotAdmissible:
+        raise
+    except AdmissionRefused as exc:
+        raise NotAdmissible(exc.code.value) from exc
+    except (TypeError, ValueError, json.JSONDecodeError,
+            strategy_admissions.AdmissionPersistenceError) as exc:
+        raise NotAdmissible("RECEIPT_STALE") from exc
 
 
 def _admission_for(row: IrPaperDeployment, version_json: str):

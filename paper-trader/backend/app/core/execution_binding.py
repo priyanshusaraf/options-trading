@@ -98,6 +98,7 @@ ORIGIN_FALLBACK = "fallback"
 #: they still exist.
 BINDING_MECHANISMS = (
     "deployments.strategy_key",
+    "deployments.admission_address",
     "instrument_state.strategy_key",
     "watchlists.strategy_key",
     "strategy_lifecycle.deployed_watchlist_id",

@@ -42,6 +42,43 @@ STATUSES = (DRAFT, ACTIVE, PAUSED, ARCHIVED)
 LEGACY_NAME = "default"
 
 
+def _require_current_deployment_admission(session, *, owner_id: str,
+                                          strategy_key: str | None,
+                                          admission_address: str | None,
+                                          params: dict | None):
+    """Return the one admitted IR graph a new deployment may pin.
+
+    A causal receipt is only an additional prerequisite here. Account ownership,
+    lifecycle, capital, protection, and the later composite Strategy Preflight remain
+    enforced by their existing boundaries.
+    """
+    from app.backtest.repository import AdmissionRequired, load_verified_admission
+    from app.strategy.registry import IR_NAMESPACE
+
+    if not isinstance(strategy_key, str) or not strategy_key.startswith(IR_NAMESPACE):
+        raise ValueError("ADMISSION_REQUIRED")
+    if params:
+        # Phase 3 receipts bind empty IR parameters. A different parameter set needs its
+        # own receipt; accepting it here would let a deployment mutate admitted semantics.
+        raise ValueError("ARTEFACT_MISMATCH")
+    try:
+        admitted = load_verified_admission(
+            session, owner_id=owner_id, admission_address=admission_address)
+    except AdmissionRequired as exc:
+        raise ValueError(exc.code) from exc
+    if strategy_key != f"{IR_NAMESPACE}{admitted.artifact.graph_identifier}":
+        raise ValueError("ARTEFACT_MISMATCH")
+    return admitted
+
+
+def _require_nonlegacy_strategy(universe_mode: str, strategy_key: str | None) -> None:
+    """Named write seam: only the seeded legacy deployment may omit an IR strategy."""
+    if universe_mode == "legacy":
+        raise ValueError("legacy deployment is created only by ensure_legacy_deployment")
+    if strategy_key is None:
+        raise ValueError("ADMISSION_REQUIRED")
+
+
 def _deployment_producer_key(*parts: object) -> str:
     """Keep mutation identities within the outbox's bounded key contract."""
     raw = "|".join(str(part) for part in parts)
@@ -141,6 +178,7 @@ def active_deployments(session, *, owner_id: str,
 
 def create_deployment(session, name: str, *, strategy_key: str | None = None,
                       strategy_version: str | None = None,
+                      admission_address: str | None = None,
                       owner_id: str, broker_account_id: str,
                       universe_mode: str = "explicit",
                       watchlist_id: int | None = None,
@@ -151,6 +189,13 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     deliberately, never by the act of describing it."""
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}; expected one of {STATUSES}")
+    _require_nonlegacy_strategy(universe_mode, strategy_key)
+    admitted = None
+    admitted = _require_current_deployment_admission(
+        session, owner_id=owner_id, strategy_key=strategy_key,
+        admission_address=admission_address, params=params)
+    if strategy_version is not None and strategy_version != admitted.strategy.version:
+        raise ValueError("ARTEFACT_MISMATCH")
     if not _account_belongs_to_owner(
             session, owner_id=owner_id, broker_account_id=broker_account_id):
         raise ValueError("broker account is not available to this owner")
@@ -164,7 +209,9 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
             raise ValueError(f"no watchlist with id {watchlist_id}")
     row = Deployment(
         owner_id=owner_id, broker_account_id=broker_account_id,
-        name=name, strategy_key=strategy_key, strategy_version=strategy_version,
+        name=name, strategy_key=strategy_key,
+        strategy_version=(admitted.strategy.version if admitted else strategy_version),
+        admission_address=(admitted.admission_address if admitted else None),
         universe_mode=universe_mode, watchlist_id=watchlist_id,
         params_json=json.dumps(params or {}), allocation=allocation,
         status=status, armed=False, notes=notes)
