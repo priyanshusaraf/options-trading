@@ -39,9 +39,14 @@ components, references, overrides and edges.
 from __future__ import annotations
 
 from typing import Any
+from dataclasses import dataclass
+import pandas as pd
 
 from app.ir.hashing import content_address
 from app.ir.kernels import kernel_registry
+from app.ir.causal import (
+    BoundTerm, HistoryBound, RecursiveStateContract, causal_contract,
+)
 from app.ir.resolve import BOUNDARY_INPUT, BOUNDARY_OUTPUT, Library
 from app.strategy.registry import expanding_z_v4 as impl
 
@@ -365,69 +370,68 @@ GRAPH: dict[str, Any] = {
 
 # ── the kernels: bound to the strategy's own functions, never rewritten ───
 
-def _k_ema(params, inputs):
+def _k_ema(params, inputs, context_inputs):
     return {"out": inputs["source"].ewm(span=params["length"], adjust=False).mean()}
 
 
-def _k_true_range(params, inputs):
+def _k_true_range(params, inputs, context_inputs):
     prev = inputs["close"].shift(1)
-    import pandas as pd
     return {"out": pd.concat([(inputs["high"] - inputs["low"]).abs(),
                               (inputs["high"] - prev).abs(),
                               (inputs["low"] - prev).abs()], axis=1).max(axis=1)}
 
 
-def _k_wilder(params, inputs):
+def _k_wilder(params, inputs, context_inputs):
     return {"out": impl._rma(inputs["in"], params["length"])}
 
 
-def _k_zscore(params, inputs):
+def _k_zscore(params, inputs, context_inputs):
     return {"out": impl.zscore(inputs["close"], inputs["reference"], params["length"])}
 
 
-def _k_abs(params, inputs):
+def _k_abs(params, inputs, context_inputs):
     return {"out": inputs["in"].abs()}
 
 
-def _k_adaptive(params, inputs):
+def _k_adaptive(params, inputs, context_inputs):
     return {"out": impl.adaptive_threshold(inputs["in"], params["length"], params["pct"],
                                            inputs["floor"], inputs["fallback"])}
 
 
-def _k_value(params, inputs):
+def _k_value(params, inputs, context_inputs):
     return {"out": params["value"]}
 
 
-def _k_scale(params, inputs):
+def _k_scale(params, inputs, context_inputs):
     return {"out": inputs["in"] * params["factor"]}
 
 
-def _k_drift(params, inputs):
+def _k_drift(params, inputs, context_inputs):
     return {"out": impl.drift_score(inputs["reference"], inputs["atr"],
                                     params["lookback"])}
 
 
-def _k_range_atr(params, inputs):
+def _k_range_atr(params, inputs, context_inputs):
     return {"out": impl.range_in_atr(inputs["high"], inputs["low"], inputs["atr"])}
 
 
-def _k_le(params, inputs):
+def _k_le(params, inputs, context_inputs):
     return {"out": inputs["in"] <= params["threshold"]}
 
 
-def _k_impulse(params, inputs):
+def _k_impulse(params, inputs, context_inputs):
     return {"out": impl.impulse(inputs["abs_z"], inputs["threshold"],
                                 params["require_expansion"],
                                 params["allow_reexpansion"])}
 
 
-def _k_entry(params, inputs):
+def _k_entry(params, inputs, context_inputs):
     return {"out": impl._as_bool(impl.directional_entry(
         inputs["signal_bar_ok"], inputs["impulse"], inputs["z"], inputs["drift"],
         params["min_drift_atr"], params["direction"]))}
 
 
-def _k_exit(params, inputs):
+def _k_exit(params, inputs, context_inputs):
     return {"out": impl._as_bool(impl.displacement_lost(
         inputs["drift"], inputs["close"], inputs["reference"], inputs["abs_z"],
         inputs["exit_threshold"], inputs["z"], params["direction"],
@@ -452,6 +456,94 @@ IMPLEMENTATIONS = {
     EXIT["body"]["ref"]: _k_exit,
 }
 
+
+@dataclass(frozen=True)
+class _SmoothState:
+    value: float | None = None
+    missing_bars: int = 0
+    observations: int = 0
+
+
+def _smooth_initializer(params):
+    return _SmoothState()
+
+
+def _smooth_encoder(state):
+    return {"value": state.value, "missing_bars": state.missing_bars,
+            "observations": state.observations}
+
+
+def _ewm_state_update(state, current, alpha, *, span_semantics):
+    if state.value is None:
+        return state if pd.isna(current) else _SmoothState(float(current), 0, 1)
+    if pd.isna(current):
+        return _SmoothState(state.value, state.missing_bars + 1, state.observations)
+    if span_semantics:
+        effective = 1.0 - (1.0 - alpha) ** (state.missing_bars + 1)
+    else:
+        decayed = (1.0 - alpha) ** (state.missing_bars + 1)
+        effective = alpha / (alpha + decayed)
+    value = state.value + effective * (float(current) - state.value)
+    return _SmoothState(value, 0, state.observations + 1)
+
+
+def _ema_state_update(state, params, inputs, context):
+    current = float(inputs["source"])
+    alpha = 2.0 / (int(params["length"]) + 1.0)
+    return _ewm_state_update(state, current, alpha, span_semantics=True)
+
+
+def _wilder_state_update(state, params, inputs, context):
+    current = float(inputs["in"])
+    alpha = 1.0 / int(params["length"])
+    return _ewm_state_update(state, current, alpha, span_semantics=False)
+
+
+def _smooth_step(state, params, inputs, context):
+    return {"out": state.value}
+
+
+def _wilder_step(state, params, inputs, context):
+    return {"out": state.value if state.observations >= int(params["length"]) else None}
+
+
+def _bounded(*sockets, constant=0, terms=()):
+    return causal_contract(
+        node_input_sockets=tuple(sockets),
+        history=HistoryBound("bounded", constant=constant, terms=terms),
+    )
+
+
+def _recursive(sockets, update, step=_smooth_step):
+    return causal_contract(
+        node_input_sockets=tuple(sockets),
+        history=HistoryBound("causal_recursive", terms=(BoundTerm("length"),)),
+        recursive_state=RecursiveStateContract(
+            _smooth_initializer, _SmoothState, _smooth_encoder, update, step),
+    )
+
+
+_CAUSAL = {
+    EMA["body"]["ref"]: _recursive(("source",), _ema_state_update),
+    TRUE_RANGE["body"]["ref"]: _bounded("high", "low", "close", constant=2),
+    WILDER["body"]["ref"]: _recursive(("in",), _wilder_state_update, _wilder_step),
+    ZSCORE["body"]["ref"]: _bounded(
+        "close", "reference", terms=(BoundTerm("length"),)),
+    ABS["body"]["ref"]: _bounded("in"),
+    ADAPTIVE["body"]["ref"]: _bounded(
+        "in", "floor", "fallback", terms=(BoundTerm("length"),)),
+    VALUE["body"]["ref"]: _bounded(),
+    SCALE["body"]["ref"]: _bounded("in"),
+    DRIFT["body"]["ref"]: _bounded(
+        "reference", "atr", constant=1, terms=(BoundTerm("lookback"),)),
+    RANGE_ATR["body"]["ref"]: _bounded("high", "low", "atr"),
+    LE["body"]["ref"]: _bounded("in"),
+    IMPULSE["body"]["ref"]: _bounded("abs_z", "threshold", constant=3),
+    ENTRY["body"]["ref"]: _bounded("signal_bar_ok", "impulse", "z", "drift"),
+    EXIT["body"]["ref"]: _bounded(
+        "drift", "close", "reference", "abs_z", "exit_threshold", "z"),
+}
+
 # C10 — warmup per component, composed by resolution.
 #
 # Every one of these is a function of the node's *bound* parameters, not of the
@@ -460,21 +552,21 @@ IMPLEMENTATIONS = {
 # would still have claimed it warmed up in 50 bars, and a backtest would have
 # read 150 bars of an unwarmed indicator and looked entirely plausible.
 KERNELS = kernel_registry({
-    EMA["body"]["ref"]: {"warmup": lambda p: p["length"]},
-    TRUE_RANGE["body"]["ref"]: {"warmup": 1},
-    WILDER["body"]["ref"]: {"warmup": lambda p: p["length"]},
-    ZSCORE["body"]["ref"]: {"warmup": lambda p: p["length"]},
-    ABS["body"]["ref"]: {},
-    ADAPTIVE["body"]["ref"]: {"warmup": lambda p: p["length"]},
-    VALUE["body"]["ref"]: {},
-    SCALE["body"]["ref"]: {},
-    DRIFT["body"]["ref"]: {"warmup": lambda p: p["lookback"]},
-    RANGE_ATR["body"]["ref"]: {},
-    LE["body"]["ref"]: {},
+    EMA["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[EMA["body"]["ref"]]},
+    TRUE_RANGE["body"]["ref"]: {"warmup": 1, "causal": _CAUSAL[TRUE_RANGE["body"]["ref"]]},
+    WILDER["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[WILDER["body"]["ref"]]},
+    ZSCORE["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[ZSCORE["body"]["ref"]]},
+    ABS["body"]["ref"]: {"causal": _CAUSAL[ABS["body"]["ref"]]},
+    ADAPTIVE["body"]["ref"]: {"warmup": lambda p: p["length"], "causal": _CAUSAL[ADAPTIVE["body"]["ref"]]},
+    VALUE["body"]["ref"]: {"causal": _CAUSAL[VALUE["body"]["ref"]]},
+    SCALE["body"]["ref"]: {"causal": _CAUSAL[SCALE["body"]["ref"]]},
+    DRIFT["body"]["ref"]: {"warmup": lambda p: p["lookback"], "causal": _CAUSAL[DRIFT["body"]["ref"]]},
+    RANGE_ATR["body"]["ref"]: {"causal": _CAUSAL[RANGE_ATR["body"]["ref"]]},
+    LE["body"]["ref"]: {"causal": _CAUSAL[LE["body"]["ref"]]},
     # Needs the current bar and the two before it (absZ[1], absZ[2]).
-    IMPULSE["body"]["ref"]: {"warmup": 2},
-    ENTRY["body"]["ref"]: {},
-    EXIT["body"]["ref"]: {},
+    IMPULSE["body"]["ref"]: {"warmup": 2, "causal": _CAUSAL[IMPULSE["body"]["ref"]]},
+    ENTRY["body"]["ref"]: {"causal": _CAUSAL[ENTRY["body"]["ref"]]},
+    EXIT["body"]["ref"]: {"causal": _CAUSAL[EXIT["body"]["ref"]]},
 })
 
 LIBRARY = Library(

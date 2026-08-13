@@ -20,74 +20,14 @@ built on it.
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-
-# Trend vs chop is decided by the EFFICIENCY RATIO (Kaufman): net displacement
-# over the window divided by the total path walked. 1.0 = a straight line,
-# ~0 = the price went nowhere loudly. It is chosen over ADX because it is a
-# single bounded number with no smoothing constants to tune, so the labels are
-# reproducible rather than parameter-sensitive.
-TREND_WINDOW = 20
-TREND_CUTOFF = 0.35
-
-# Volatility buckets are RELATIVE to the instrument's own history: an absolute
-# ATR% threshold would label every commodity "high" and every index "low", and
-# the resulting map would describe the universe rather than the market state.
-VOL_WINDOW = 20
-VOL_LOOKBACK = 200
-
-REGIMES = ("trend_hi", "trend_lo", "chop_hi", "chop_lo")
-UNKNOWN = "unknown"
-
-
-def efficiency_ratio(close: pd.Series, window: int = TREND_WINDOW) -> pd.Series:
-    """Net move / total path over `window`. NaN during warmup, never 0.0 —
-    a warmup bar is UNKNOWN, and calling it 0 would label it 'chop'."""
-    net = (close - close.shift(window)).abs()
-    path = close.diff().abs().rolling(window).sum()
-    return net / path.replace(0.0, np.nan)
-
-
-def atr_pct(df: pd.DataFrame, window: int = VOL_WINDOW) -> pd.Series:
-    """True range as a percentage of close, smoothed. Backward-looking only."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev = close.shift(1)
-    tr = pd.concat([(high - low).abs(), (high - prev).abs(), (low - prev).abs()],
-                   axis=1).max(axis=1)
-    return (tr.rolling(window).mean() / close.replace(0.0, np.nan)) * 100.0
-
-
-def label_regimes(df: pd.DataFrame, *, trend_window: int = TREND_WINDOW,
-                  trend_cutoff: float = TREND_CUTOFF,
-                  vol_window: int = VOL_WINDOW,
-                  vol_lookback: int = VOL_LOOKBACK) -> pd.Series:
-    """One label per bar: trend_hi | trend_lo | chop_hi | chop_lo | unknown.
-
-    The volatility split uses an EXPANDING median of the instrument's own ATR%,
-    not a full-series quantile. A full-series quantile would be computed with
-    future bars visible and would leak: bar 10's label would depend on bar 900's
-    volatility. Expanding keeps every label a function of the past alone, which
-    is the whole reason these labels can be used in an experiment at all.
-    """
-    if df is None or len(df) == 0:
-        return pd.Series(dtype=object)
-    er = efficiency_ratio(df["close"], trend_window)
-    vol = atr_pct(df, vol_window)
-    # min_periods keeps the early bars UNKNOWN rather than comparing against a
-    # median of two observations.
-    med = vol.expanding(min_periods=max(2, vol_lookback // 10)).median()
-
-    trending = er >= trend_cutoff
-    high_vol = vol >= med
-    known = er.notna() & vol.notna() & med.notna()
-
-    out = np.where(
-        trending,
-        np.where(high_vol, "trend_hi", "trend_lo"),
-        np.where(high_vol, "chop_hi", "chop_lo"),
-    )
-    return pd.Series(np.where(known, out, UNKNOWN), index=df.index, dtype=object)
+from app.ir.contributors.generated_blocks import (
+    REGIMES,
+    UNKNOWN,
+    atr_pct,
+    efficiency_ratio,
+    label_regimes,
+)
 
 
 def regime_distribution(labels: pd.Series) -> dict:

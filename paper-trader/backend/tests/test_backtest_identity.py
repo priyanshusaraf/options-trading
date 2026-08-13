@@ -131,11 +131,11 @@ class _Strategy:
             self.risk_model = {"atr_length": 14, "trail_atr": 3.0}
 
 
-def _kernel_a(params, inputs):
+def _kernel_a(params, inputs, context_inputs):
     return inputs
 
 
-def _kernel_b(params, inputs):
+def _kernel_b(params, inputs, context_inputs):
     return {**inputs, "changed": True}
 
 

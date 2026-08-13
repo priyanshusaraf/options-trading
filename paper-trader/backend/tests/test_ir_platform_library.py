@@ -158,8 +158,8 @@ def test_conflicting_kernel_declarations_are_refused():
     a = Library(components={}, bodies={}, kernels={ref: kernel_spec(warmup=5)})
     b = Library(components={}, bodies={}, kernels={ref: kernel_spec(warmup=9)})
     with pytest.raises(LibraryConflict, match="kernel declarations"):
-        compose([_Contributor(a, {ref: lambda p, i: {}}),
-                 _Contributor(b, {ref: lambda p, i: {}})])
+        compose([_Contributor(a, {ref: lambda p, i, c: {}}),
+                 _Contributor(b, {ref: lambda p, i, c: {}})])
 
 
 def test_one_address_may_not_execute_two_functions():
@@ -168,8 +168,8 @@ def test_one_address_may_not_execute_two_functions():
     ref = "sha256:" + "2" * 64
     lib = Library(components={}, bodies={}, kernels={})
     with pytest.raises(LibraryConflict, match="two different functions"):
-        compose([_Contributor(lib, {ref: lambda p, i: {}}),
-                 _Contributor(lib, {ref: lambda p, i: {}})])
+        compose([_Contributor(lib, {ref: lambda p, i, c: {}}),
+                 _Contributor(lib, {ref: lambda p, i, c: {}})])
 
 
 def test_declared_kernel_without_implementation_is_refused():

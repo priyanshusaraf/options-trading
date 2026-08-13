@@ -48,7 +48,7 @@ BOOL = wire("bool", **BAR)
     ],
     warmup=lambda p: p["length"] * 2,
 )
-def rsi(params, inputs):
+def rsi(params, inputs, context_inputs):
     delta = inputs["close"].diff()
     up = delta.clip(lower=0).ewm(alpha=1 / params["length"], adjust=False).mean()
     down = (-delta.clip(upper=0)).ewm(alpha=1 / params["length"], adjust=False).mean()
@@ -63,7 +63,7 @@ def rsi(params, inputs):
         socket("out", "output", BOOL),
     ],
 )
-def below(params, inputs):
+def below(params, inputs, context_inputs):
     return {"out": inputs["in"] < params["threshold"]}
 
 
@@ -107,12 +107,12 @@ def test_the_body_address_follows_the_source():
     how a cache lies about what it computed."""
     @component("x.same", interface=[socket("in", "input", SERIES),
                                     socket("out", "output", SERIES)])
-    def one(params, inputs):
+    def one(params, inputs, context_inputs):
         return {"out": inputs["in"]}
 
     @component("x.also", interface=[socket("in", "input", SERIES),
                                     socket("out", "output", SERIES)])
-    def one(params, inputs):  # noqa: F811 — identical body, different identifier
+    def one(params, inputs, context_inputs):  # noqa: F811 — identical body, different identifier
         return {"out": inputs["in"]}
 
     assert one.body_ref  # the second binding; both hashed the same source text
@@ -128,7 +128,7 @@ def test_a_kernel_that_ignores_a_declared_input_is_refused():
             socket("close", "input", SERIES),
             socket("volume", "input", SERIES),
             socket("out", "output", SERIES)])
-        def kernel(params, inputs):
+        def kernel(params, inputs, context_inputs):
             return {"out": inputs["close"]}
 
     assert "volume" in str(exc.value)
@@ -141,7 +141,7 @@ def test_a_kernel_that_reads_something_it_did_not_declare_is_refused():
         @component("bad.undeclared", interface=[
             socket("close", "input", SERIES),
             socket("out", "output", SERIES)])
-        def kernel(params, inputs):
+        def kernel(params, inputs, context_inputs):
             return {"out": inputs["close"] * inputs["volume"]}
 
     assert "volume" in str(exc.value)
@@ -153,8 +153,10 @@ def test_the_interface_is_declared_rather_than_read_off_the_signature():
     an inferred interface changes whenever the internals do."""
     import inspect
 
-    assert tuple(inspect.signature(rsi.kernel).parameters) == ("params", "inputs")
-    assert tuple(inspect.signature(below.kernel).parameters) == ("params", "inputs")
+    assert tuple(inspect.signature(rsi.kernel).parameters) == (
+        "params", "inputs", "context_inputs")
+    assert tuple(inspect.signature(below.kernel).parameters) == (
+        "params", "inputs", "context_inputs")
 
 
 def test_a_kernel_with_the_wrong_signature_is_refused():
@@ -174,7 +176,7 @@ def test_a_component_with_no_output_is_refused():
     the no-output check left the suite green."""
     with pytest.raises(AuthoringError) as exc:
         @component("bad.silent", interface=[socket("in", "input", SERIES)])
-        def kernel(params, inputs):
+        def kernel(params, inputs, context_inputs):
             return {"nothing": inputs["in"]}
 
     assert "output" in str(exc.value)
@@ -186,7 +188,7 @@ def test_an_interface_that_would_not_validate_is_refused_with_its_clause():
             socket("in", "input", SERIES),
             parameter("length", "duration", 14),      # not in the closed vocabulary
             socket("out", "output", SERIES)])
-        def kernel(params, inputs):
+        def kernel(params, inputs, context_inputs):
             return {"out": inputs["in"] * params["length"]}
 
     assert [v.clause for v in exc.value.violations] == ["F5"]
@@ -224,7 +226,7 @@ def _from_factory(identifier: str, length: int, *, declare_closure: bool):
     only the closed-over value differs — which is exactly the shape the research
     plane's block adapter has."""
     def make(n):
-        def kernel(params, inputs):
+        def kernel(params, inputs, context_inputs):
             return {"out": inputs["in"].rolling(n).mean()}
         return kernel
 
@@ -348,7 +350,7 @@ def test_the_causality_check_catches_an_authored_lookahead():
 
     lib, impls = library(AUTHORED)
     peeking = {**impls,
-               rsi.body_ref: lambda p, i: {"out": rsi.kernel(p, i)["out"].shift(-1).bfill()}}
+               rsi.body_ref: lambda p, i, c: {"out": rsi.kernel(p, i, c)["out"].shift(-1).bfill()}}
     with pytest.raises(EvaluationError) as exc:
         check_causality(resolve(GRAPH, lib), {"close": bars()}, peeking)
     assert exc.value.clause == "C11"

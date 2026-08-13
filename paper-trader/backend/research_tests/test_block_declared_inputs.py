@@ -135,6 +135,11 @@ def test_the_clock_is_declared_separately_from_the_values():
                             "opening_range_break_down"}
     for name in clock_blocks:
         assert "date" not in BLOCKS[name].inputs, name
+        assert BLOCKS[name].context_inputs == ("bar_timestamp",), name
+
+    for name, spec in BLOCKS.items():
+        if name not in clock_blocks:
+            assert spec.context_inputs == (), name
 
 
 def test_every_declared_column_is_a_real_ohlcv_column():

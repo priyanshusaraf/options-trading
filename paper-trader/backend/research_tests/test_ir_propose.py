@@ -46,7 +46,7 @@ SERIES = wire(**BAR)
 @component("logic.and", interface=[
     socket("a", "input", BOOL), socket("b", "input", BOOL),
     socket("out", "output", BOOL)])
-def logic_and(params, inputs):
+def logic_and(params, inputs, context_inputs):
     return {"out": inputs["a"] & inputs["b"]}
 
 

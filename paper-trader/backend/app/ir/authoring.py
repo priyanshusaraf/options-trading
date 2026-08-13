@@ -20,8 +20,9 @@ from app.ir.validate import Violation, validate
 
 FORMAT_VERSION = 1
 
-# A kernel is handed its bound parameters and its inputs, and nothing else.
-KERNEL_SIGNATURE = ("params", "inputs")
+# A kernel is handed its bound parameters, exact node inputs, and declared
+# context. The context channel is explicit even when empty.
+KERNEL_SIGNATURE = ("params", "node_inputs", "context_inputs")
 
 
 class AuthoringError(Exception):
@@ -99,6 +100,7 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
               warmup: Any = 0, purity: str = "pure",
               cache_identity: str = "transitive",
               cache_key: str | None = None,
+              causal: Any = None,
               closes_over: Any = None) -> Callable[[Callable], AuthoredComponent]:
     """Declare a component whose body is this function.
 
@@ -109,6 +111,7 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
 
     def decorate(fn: Callable) -> AuthoredComponent:
         _check_signature(identifier, fn)
+        input_name = tuple(inspect.signature(fn).parameters)[1]
 
         definition: dict[str, Any] = {
             "format_version": FORMAT_VERSION,
@@ -127,12 +130,14 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
         if violations:
             raise AuthoringError(identifier, "is not a conforming component", violations)
 
-        unchecked = _check_satisfies_interface(identifier, fn, definition["interface"])
+        unchecked = _check_satisfies_interface(
+            identifier, fn, definition["interface"], input_name)
 
         return AuthoredComponent(
             definition=definition,
             spec=kernel_spec(warmup=warmup, purity=purity,
-                             cache_identity=cache_identity, cache_key=cache_key),
+                             cache_identity=cache_identity, cache_key=cache_key,
+                             causal=causal),
             kernel=fn,
             unchecked=unchecked,
         )
@@ -142,7 +147,10 @@ def component(identifier: str, *, interface: Sequence[Mapping[str, Any]],
 
 def _check_signature(identifier: str, fn: Callable) -> None:
     names = tuple(inspect.signature(fn).parameters)
-    if names != KERNEL_SIGNATURE:
+    valid = len(names) == 3 and names[0] == "params" \
+        and names[1] in {"node_inputs", "inputs"} \
+        and names[2] == "context_inputs"
+    if not valid:
         raise AuthoringError(
             identifier,
             f"a kernel takes exactly {KERNEL_SIGNATURE}, not {names}; it is handed "
@@ -166,7 +174,8 @@ def _body_address(identifier: str, fn: Callable, closes_over: Any = None) -> str
 
 
 def _check_satisfies_interface(identifier: str, fn: Callable,
-                               interface: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+                               interface: Sequence[Mapping[str, Any]],
+                               input_name: str) -> tuple[str, ...]:
     """F4 — the declaration is authoritative; the kernel must satisfy it.
 
     Statically checkable: the function reads every input and parameter it
@@ -181,13 +190,14 @@ def _check_satisfies_interface(identifier: str, fn: Callable,
     except OSError:                                          # pragma: no cover
         return ("inputs", "params")
 
-    read, dynamic = _subscripts(source)
+    read, dynamic = _subscripts(source, input_name)
     unchecked: list[str] = []
-    for kind, declared in (("inputs", declared_inputs), ("params", declared_params)):
+    for kind, logical_kind, declared in (
+            (input_name, "inputs", declared_inputs), ("params", "params", declared_params)):
         if kind in dynamic:
             # A syntactic check can conclude nothing here, so say so rather
             # than guess in either direction.
-            unchecked.append(kind)
+            unchecked.append(logical_kind)
             continue
         used = read.get(kind, set())
         missing = sorted(declared - used)
@@ -226,7 +236,8 @@ def _declared(interface: Sequence[Mapping[str, Any]]
     return inputs, params, outputs
 
 
-def _subscripts(source: str) -> tuple[dict[str, set[str]], set[str]]:
+def _subscripts(source: str, input_name: str = "node_inputs"
+                ) -> tuple[dict[str, set[str]], set[str]]:
     """Which literal keys the source reads out of `inputs` and `params`, and
     which of the two it also reaches *dynamically*.
 
@@ -236,7 +247,7 @@ def _subscripts(source: str) -> tuple[dict[str, set[str]], set[str]]:
     import ast
 
     tree = ast.parse(source)
-    names = {"inputs", "params"}
+    names = {input_name, "params"}
     found: dict[str, set[str]] = {name: set() for name in names}
     dynamic: set[str] = set()
 

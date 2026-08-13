@@ -308,7 +308,7 @@ def test_the_causality_check_would_catch_a_lookahead_here(graph, frame):
     because nothing was examined."""
     from app.ir.strategies.expanding_z import EMA
     peeking = {**IMPLEMENTATIONS,
-               EMA["body"]["ref"]: lambda p, i: {
+               EMA["body"]["ref"]: lambda p, i, c: {
                    "out": i["source"].ewm(span=p["length"], adjust=False).mean()
                    .shift(-1).bfill()}}
     with pytest.raises(Exception) as exc:

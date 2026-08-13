@@ -42,7 +42,7 @@ from tests.test_ir_resolution import (
 
 # ── the kernels, as real computations ─────────────────────────────────────
 
-def k_true_range(params, inputs):
+def k_true_range(params, inputs, context_inputs):
     high, low, close = inputs["high"], inputs["low"], inputs["close"]
     prev = close.shift(1)
     tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()],
@@ -50,16 +50,16 @@ def k_true_range(params, inputs):
     return {"out": tr}
 
 
-def k_wilder(params, inputs):
+def k_wilder(params, inputs, context_inputs):
     length = params["length"]
     return {"out": inputs["in"].ewm(alpha=1 / length, adjust=False).mean()}
 
 
-def k_ema(params, inputs):
+def k_ema(params, inputs, context_inputs):
     return {"out": inputs["in"].ewm(span=params["length"], adjust=False).mean()}
 
 
-def k_gt(params, inputs):
+def k_gt(params, inputs, context_inputs):
     return {"out": inputs["a"] > inputs["b"]}
 
 
@@ -118,9 +118,9 @@ def test_a_bound_parameter_actually_parameterises_the_kernel(graph):
     the number 7, or every layer above it is decoration."""
     seen = {}
 
-    def spy(params, inputs):
+    def spy(params, inputs, context_inputs):
         seen[params["length"]] = True
-        return k_wilder(params, inputs)
+        return k_wilder(params, inputs, context_inputs)
 
     evaluate(graph, bars(), {**IMPLEMENTATIONS, WILDER["body"]["ref"]: spy})
     assert set(seen) == {7, 21}
@@ -190,14 +190,14 @@ def test_c11_the_honest_graph_is_causal(graph):
 
 LOOKAHEAD_KERNELS = {
     "shift(-1) — tomorrow's value, today":
-        lambda params, inputs: {"out": k_wilder(params, inputs)["out"].shift(-1).bfill()},
+        lambda params, inputs, context_inputs: {"out": k_wilder(params, inputs, context_inputs)["out"].shift(-1).bfill()},
     "centred window — half the window is the future":
-        lambda params, inputs: {
+        lambda params, inputs, context_inputs: {
             "out": inputs["in"].rolling(params["length"], center=True,
                                         min_periods=1).mean()},
     "whole-series normalisation — the max is not known yet":
-        lambda params, inputs: {
-            "out": k_wilder(params, inputs)["out"] / inputs["in"].max()},
+        lambda params, inputs, context_inputs: {
+            "out": k_wilder(params, inputs, context_inputs)["out"] / inputs["in"].max()},
 }
 
 
@@ -221,7 +221,7 @@ def test_c11_every_shape_of_lookahead_is_caught(graph, description, kernel):
 def test_c11_a_kernel_may_not_change_which_bars_exist(graph):
     """The cheap half, caught locally: a kernel that resamples or reindexes
     silently would make every downstream alignment a guess."""
-    def resampler(params, inputs):
+    def resampler(params, inputs, context_inputs):
         return {"out": inputs["in"].iloc[::2]}
 
     with pytest.raises(EvaluationError) as exc:
@@ -238,7 +238,7 @@ def test_c11_the_check_uses_a_fresh_cache_or_it_would_pass_by_not_running(graph)
     with pytest.raises(EvaluationError):
         check_causality(graph, bars(),
                         {**IMPLEMENTATIONS,
-                         WILDER["body"]["ref"]: lambda p, i: {"out": i["in"].shift(-1).bfill()}})
+                         WILDER["body"]["ref"]: lambda p, i, c: {"out": i["in"].shift(-1).bfill()}})
 
 
 # ── C13 — the runtime has nothing to branch on ────────────────────────────

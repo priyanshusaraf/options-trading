@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from app.ir.causal import CausalContract
+
 PURE = "pure"
 
 IMPURITY_POLICIES = ("account_state", "broker_state", "wall_clock")
@@ -29,12 +31,13 @@ class KernelSpec:
     purity: str = PURE
     cache_identity: str = "transitive"
     cache_key: str | None = None
+    causal: CausalContract | None = None
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:
         return self.warmup(params) if callable(self.warmup) else self.warmup
 
 
-_FIELDS = frozenset({"warmup", "purity", "cache_identity", "cache_key"})
+_FIELDS = frozenset({"warmup", "purity", "cache_identity", "cache_key", "causal"})
 
 
 class KernelDeclarationError(ValueError):
@@ -56,6 +59,10 @@ def kernel_spec(**fields: Any) -> KernelSpec:
         )
 
     spec = KernelSpec(**fields)
+
+    if spec.causal is not None and not isinstance(spec.causal, CausalContract):
+        raise KernelDeclarationError(
+            "C11", "causal metadata must be a CausalContract or None")
 
     # A callable warmup is checked at resolution instead: no parameters here yet.
     if not callable(spec.warmup):

@@ -16,7 +16,10 @@ import pandas as pd
 from app.ir.kernels import PURE
 from app.ir.resolve import ResolvedGraph, ResolvedNode, topological_order
 
-Kernel = Callable[[Mapping[str, Any], Mapping[str, pd.Series]], Mapping[str, pd.Series]]
+Kernel = Callable[
+    [Mapping[str, Any], Mapping[str, pd.Series], Mapping[str, pd.Series]],
+    Mapping[str, pd.Series],
+]
 
 
 class EvaluationError(Exception):
@@ -70,6 +73,7 @@ def evaluate(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
             interface[consumer] = name
 
     produced: dict[str, Mapping[str, pd.Series]] = {}
+    timestamp_context = _timestamp_context(graph, inputs)
 
     for instance_id in order:
         node = by_id[instance_id]
@@ -81,7 +85,12 @@ def evaluate(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
                 "runtime knows a kernel by its content address and by nothing else")
 
         node_inputs = _inputs_for(node, graph, wiring, interface, inputs, produced)
-        produced[instance_id] = _compute(node, kernel, node_inputs, cache)
+        context_inputs = {
+            name: timestamp_context[name]
+            for name in (node.causal.context_inputs if node.causal else ())
+        }
+        produced[instance_id] = _compute(
+            node, kernel, node_inputs, context_inputs, cache)
 
     outputs = {}
     for name, (instance_id, socket) in graph.outputs.items():
@@ -131,7 +140,9 @@ def _inputs_for(node: ResolvedNode, graph: ResolvedGraph,
 
 
 def _compute(node: ResolvedNode, kernel: Kernel,
-             node_inputs: Mapping[str, pd.Series], cache: Cache) -> Mapping[str, pd.Series]:
+             node_inputs: Mapping[str, pd.Series],
+             context_inputs: Mapping[str, pd.Series],
+             cache: Cache) -> Mapping[str, pd.Series]:
     # C9: a declared impurity says the output is not a function of the inputs.
     cacheable = node.purity == PURE
 
@@ -139,7 +150,7 @@ def _compute(node: ResolvedNode, kernel: Kernel,
         cache.hits.append(node.instance_id)
         return cache.entries[node.cache_id]
 
-    outputs = kernel(node.params, node_inputs)
+    outputs = kernel(node.params, node_inputs, context_inputs)
     if not isinstance(outputs, Mapping):
         raise EvaluationError("C3", node.instance_id,
                               "a kernel returns its outputs by socket name")
@@ -149,6 +160,25 @@ def _compute(node: ResolvedNode, kernel: Kernel,
     if cacheable:
         cache.entries[node.cache_id] = outputs
     return outputs
+
+
+def _timestamp_context(graph: ResolvedGraph,
+                       inputs: Mapping[str, pd.Series]) -> dict[str, pd.Series]:
+    """Build context from the common recorded input index, never from a clock."""
+    if not any(node.causal and node.causal.context_inputs for node in graph.nodes):
+        return {}
+    series = [value for value in inputs.values() if isinstance(value, pd.Series)]
+    if not series:
+        raise EvaluationError("C11", "$", "bar_timestamp context needs indexed inputs")
+    index = series[0].index
+    if any(not value.index.equals(index) for value in series[1:]):
+        raise EvaluationError("C11", "$", "graph inputs do not share one timestamp index")
+    if not index.is_monotonic_increasing or not index.is_unique:
+        raise EvaluationError("C11", "$", "bar_timestamp index must be monotonic and unique")
+    if not isinstance(index, pd.DatetimeIndex) or index.tz is None:
+        raise EvaluationError(
+            "C11", "$", "bar_timestamp requires a timezone-aware DatetimeIndex")
+    return {"bar_timestamp": pd.Series(index, index=index, name="bar_timestamp")}
 
 
 def _check_index(node: ResolvedNode, node_inputs: Mapping[str, pd.Series],

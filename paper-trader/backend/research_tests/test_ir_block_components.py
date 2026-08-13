@@ -30,6 +30,7 @@ from research.strategy.builder.ir_components import (
     derive_all,
     groups,
 )
+from app.ir.contributors.generated_blocks import CAUSAL_MANIFEST
 
 BAR = {"instrument": "NIFTY", "timeframe": "15m"}
 
@@ -136,7 +137,9 @@ def _graph(name: str) -> dict:
     }
 
 
-@pytest.mark.parametrize("name", sorted(BLOCKS))
+@pytest.mark.parametrize("name", sorted(
+    name for name, disposition in CAUSAL_MANIFEST.items()
+    if disposition.status == "admitted"))
 def test_the_component_computes_exactly_what_the_block_computes(name, derived):
     """Bar for bar, on real bars. The adapter calls `BlockSpec.fn`; if this ever
     fails it means the derivation grew a second implementation, which is the
@@ -153,6 +156,14 @@ def test_the_component_computes_exactly_what_the_block_computes(name, derived):
     expected = spec.fn(frame, *spec.sample_args)
 
     assert produced.outputs["out"].equals(expected), name
+
+
+def test_quarantined_components_have_no_executable_registration():
+    from app.ir.contributors.generated_blocks import BLOCK_COMPONENTS, BLOCK_REGISTRATIONS
+
+    for name, disposition in CAUSAL_MANIFEST.items():
+        if disposition.status == "quarantined":
+            assert BLOCK_COMPONENTS[name].body_ref not in BLOCK_REGISTRATIONS
 
 
 def test_the_probe_bars_actually_exercise_the_blocks(derived):
@@ -249,7 +260,7 @@ def test_two_blocks_compose_into_one_graph(derived):
     @component("logic.and", interface=[
         sock("a", "input", boolean), sock("b", "input", boolean),
         sock("out", "output", boolean)])
-    def logic_and(params, inputs):
+    def logic_and(params, inputs, context_inputs):
         return {"out": inputs["a"] & inputs["b"]}
 
     bar = w(**BAR)

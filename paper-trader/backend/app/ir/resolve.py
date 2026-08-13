@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from app.ir.hashing import content_address
 from app.ir.kernels import KernelSpec, check_warmup
+from app.ir.causal import CausalContract
 from app.ir.schema import is_parameter_reference
 
 # A body graph wires its interface through these; resolution removes them, so
@@ -68,6 +69,7 @@ class ResolvedNode:
     warmup: int
     purity: str
     cache_id: str
+    causal: CausalContract | None = None
     derived_from: str | None = None
 
     @property
@@ -504,6 +506,7 @@ def _finish(ctx: _Context) -> tuple[ResolvedNode, ...]:
             warmup=warmup,
             purity=pending.spec.purity,
             cache_id=content_address(identity),
+            causal=pending.spec.causal,
             derived_from=pending.derived_from,
         )
 
