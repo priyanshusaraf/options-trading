@@ -17,6 +17,7 @@ from app.ir.registry import DependencyBoundary, KernelRegistration, PlatformRegi
 from app.ir.resolve import BOUNDARY_INPUT, BOUNDARY_OUTPUT
 from app.ir.strategies.expanding_z import GRAPH
 from app.strategy.registry.expanding_z_v4 import ExpandingZImpulseV4
+from app.strategy.ir_adapter import IRGraphStrategy
 from app.strategy.admission import (
     AdmittedKernelIdentity,
     AdmissionRefusalCode,
@@ -28,9 +29,11 @@ from app.strategy.admission import (
     ResolvedComponentIdentity,
     SourceEvidence,
     StructuralAdmission,
+    admit_strategy,
     admitted_artifact,
     canonical_decisions,
     inspect_strategy,
+    runtime_for_admitted,
 )
 
 
@@ -375,6 +378,43 @@ def test_stale_registration_refuses_before_parity(nested_case):
         registration.body_ref: registration}))
 
 
+def test_runtime_for_admitted_rejects_a_forged_receipt_without_parity(nested_case):
+    """Hypotheses 5/9: caller-supplied equal parity hashes cannot grant IR authority."""
+    graph, registry, registration = nested_case
+    underdeclared = dataclasses.replace(
+        registration,
+        spec=dataclasses.replace(
+            registration.spec,
+            causal=causal_contract(
+                node_input_sockets=("close",),
+                history=HistoryBound("bounded", constant=1),
+            ),
+        ),
+    )
+    altered = _replace_registration(registry, registration, underdeclared)
+    source = IRGraphAdmissionInput(graph, {}, None)
+    structural = inspect_strategy(
+        owner_id="owner-a", source_input=source, registry=altered).structural
+    assert structural is not None
+    refused = admit_strategy(
+        owner_id="owner-a", source_input=source, registry=altered)
+    assert refused.artifact is None
+    assert refused.refusal_code is AdmissionRefusalCode.STREAMING_DIVERGENCE
+    forged = admitted_artifact(
+        structural,
+        ParityEvidence(
+            "sha256:" + "4" * 64,
+            "sha256:" + "5" * 64,
+            "sha256:" + "5" * 64,
+        ),
+    )
+
+    with pytest.raises(AdmissionRefused) as raised:
+        runtime_for_admitted(forged, source, altered)
+
+    assert raised.value.code is AdmissionRefusalCode.STREAMING_DIVERGENCE
+
+
 def test_shipped_expanding_z_graph_reaches_structural_admission():
     decision = inspect_strategy(
         owner_id="owner-a", source_input=IRGraphAdmissionInput(GRAPH, {}, None),
@@ -425,3 +465,22 @@ def test_handwritten_adapter_records_exact_executable_identity_and_equivalent_ir
     assert decision.structural.source_evidence.adapter_implementation_address.startswith(
         "sha256:")
     assert decision.structural.graph_address == content_address(GRAPH)
+
+
+def test_admitted_expanding_z_uses_ir_runtime_after_exact_adapter_parity():
+    """Hypothesis 9: a handwritten adapter can pass evidence but retain runtime authority."""
+    adapter = ExpandingZImpulseV4()
+    source = HandwrittenAdapterInput(
+        strategy_key=adapter.key,
+        strategy_version=adapter.version,
+        adapter_implementation=ExpandingZImpulseV4,
+        adapter_dependencies=DependencyBoundary("defining_module", (np, pd)),
+        equivalent_ir=IRGraphAdmissionInput(GRAPH, {}, None),
+    )
+
+    decision = admit_strategy(owner_id="owner-a", source_input=source, registry=REGISTRY)
+
+    assert decision.artifact is not None, (decision.refusal_code, decision.detail)
+    assert decision.artifact.source_evidence.adapter_decision_address == (
+        decision.artifact.vector_decision_address)
+    assert isinstance(runtime_for_admitted(decision.artifact, source, REGISTRY), IRGraphStrategy)

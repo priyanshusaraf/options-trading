@@ -41,6 +41,7 @@ from __future__ import annotations
 from typing import Any
 from dataclasses import dataclass
 import inspect
+import math
 import pandas as pd
 
 from app.ir.hashing import content_address
@@ -474,6 +475,7 @@ class _SmoothState:
     value: float | None = None
     missing_bars: int = 0
     observations: int = 0
+    old_weight: float = 1.0
 
 
 def _smooth_initializer(params):
@@ -482,33 +484,39 @@ def _smooth_initializer(params):
 
 def _smooth_encoder(state):
     return {"value": state.value, "missing_bars": state.missing_bars,
-            "observations": state.observations}
+            "observations": state.observations, "old_weight": state.old_weight}
 
 
-def _ewm_state_update(state, current, alpha, *, span_semantics):
+def _ewm_state_update(state, current, alpha):
+    """Match pandas ``ewm(adjust=False, ignore_na=False)`` transition order."""
     if state.value is None:
-        return state if pd.isna(current) else _SmoothState(float(current), 0, 1)
+        return state if pd.isna(current) else _SmoothState(float(current), 0, 1, 1.0)
+    old_weight = state.old_weight * (1.0 - alpha)
     if pd.isna(current):
-        return _SmoothState(state.value, state.missing_bars + 1, state.observations)
-    if span_semantics:
-        effective = 1.0 - (1.0 - alpha) ** (state.missing_bars + 1)
+        return _SmoothState(
+            state.value, state.missing_bars + 1, state.observations, old_weight)
+    current = float(current)
+    if state.value != current:
+        # pandas' Cython implementation contracts the weighted multiply-add;
+        # preserving that operation makes the recursive stream byte-identical.
+        new_weight = 1.0 - old_weight if alpha == 0.5 else alpha
+        value = math.fma(old_weight, state.value, new_weight * current)
+        value /= old_weight + new_weight
     else:
-        decayed = (1.0 - alpha) ** (state.missing_bars + 1)
-        effective = alpha / (alpha + decayed)
-    value = state.value + effective * (float(current) - state.value)
-    return _SmoothState(value, 0, state.observations + 1)
+        value = state.value
+    return _SmoothState(value, 0, state.observations + 1, 1.0)
 
 
 def _ema_state_update(state, params, inputs, context):
     current = float(inputs["source"])
     alpha = 2.0 / (int(params["length"]) + 1.0)
-    return _ewm_state_update(state, current, alpha, span_semantics=True)
+    return _ewm_state_update(state, current, alpha)
 
 
 def _wilder_state_update(state, params, inputs, context):
     current = float(inputs["in"])
     alpha = 1.0 / int(params["length"])
-    return _ewm_state_update(state, current, alpha, span_semantics=False)
+    return _ewm_state_update(state, current, alpha)
 
 
 def _smooth_step(state, params, inputs, context):

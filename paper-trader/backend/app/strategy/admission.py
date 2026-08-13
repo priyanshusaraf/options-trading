@@ -6,6 +6,7 @@ are complete enough to be presented to that evaluator.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from enum import Enum
 import math
@@ -252,6 +253,13 @@ class StructuralAdmission:
 @dataclass(frozen=True)
 class StructuralDecision:
     structural: StructuralAdmission | None
+    refusal_code: AdmissionRefusalCode | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class AdmissionDecision:
+    artifact: "AdmittedStrategyArtifact | None"
     refusal_code: AdmissionRefusalCode | None
     detail: str
 
@@ -790,11 +798,234 @@ def inspect_strategy(*, owner_id: str,
         return _refusal(AdmissionRefusalCode.CONTRACT_INVALID, str(exc))
 
 
+def admit_strategy(*, owner_id: str,
+                   source_input: IRGraphAdmissionInput | HandwrittenAdapterInput,
+                   registry: PlatformRegistry) -> AdmissionDecision:
+    """Admit only exact structural and registered prefix/vector parity evidence."""
+    structural_decision = inspect_strategy(
+        owner_id=owner_id, source_input=source_input, registry=registry)
+    if structural_decision.structural is None:
+        return AdmissionDecision(
+            None, structural_decision.refusal_code, structural_decision.detail)
+    structural = structural_decision.structural
+    ir_input = (source_input.equivalent_ir
+                if isinstance(source_input, HandwrittenAdapterInput) else source_input)
+    graph_data = _plain_json(ir_input.graph)
+    parameters = _plain_json(ir_input.parameters)
+    assert isinstance(graph_data, Mapping) and isinstance(parameters, Mapping)
+    try:
+        resolved = resolve(graph_data, registry.library, parameters)
+    except (ResolutionError, TypeError, ValueError) as exc:
+        return AdmissionDecision(None, AdmissionRefusalCode.RESOLUTION_FAILED, str(exc))
+
+    from app.ir.runtime import EvaluationError, evaluate
+    from app.ir.streaming_reference import (
+        ReferenceEvaluationError, evaluate_prefix_stream)
+    from app.strategy.causal_fixtures import FIXTURE_SUITES
+
+    try:
+        suite = FIXTURE_SUITES.require("causal-fixtures/1")
+    except (KeyError, ValueError) as exc:
+        return AdmissionDecision(None, AdmissionRefusalCode.RECEIPT_STALE, str(exc))
+
+    vector_bytes: list[bytes] = []
+    reference_bytes: list[bytes] = []
+    adapter_bytes: list[bytes] = []
+    for fixture in suite.fixtures:
+        fixture_inputs = {
+            name: fixture.inputs[name]
+            for name in resolved.inputs
+            if name in fixture.inputs
+        }
+        if set(fixture_inputs) != set(resolved.inputs):
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.REFERENCE_EVALUATION_FAILED,
+                f"fixture {fixture.name} lacks graph inputs",
+            )
+        try:
+            vector = evaluate(resolved, fixture_inputs, registry.implementations)
+        except (EvaluationError, Exception) as exc:
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.VECTOR_EVALUATION_FAILED,
+                f"fixture {fixture.name}: {exc}",
+            )
+        try:
+            reference = evaluate_prefix_stream(resolved, fixture_inputs, registry)
+        except (ReferenceEvaluationError, Exception) as exc:
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.REFERENCE_EVALUATION_FAILED,
+                f"fixture {fixture.name}: {exc}",
+            )
+        recursive_mismatch = _first_recursive_mismatch(
+            resolved, vector.values, reference.values)
+        if recursive_mismatch is not None:
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.STREAMING_DIVERGENCE,
+                f"fixture {fixture.name}: recursive node {recursive_mismatch} diverged",
+            )
+        vector_frame = _decision_frame(vector.outputs, structural, fixture_inputs)
+        reference_frame = _decision_frame(reference.outputs, structural, fixture_inputs)
+        vector_encoded = canonical_decisions(vector_frame)
+        reference_encoded = canonical_decisions(reference_frame)
+        if vector_encoded != reference_encoded:
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.STREAMING_DIVERGENCE,
+                f"fixture {fixture.name}: canonical decisions diverged",
+            )
+        vector_bytes.append(vector_encoded)
+        reference_bytes.append(reference_encoded)
+
+        if isinstance(source_input, HandwrittenAdapterInput):
+            try:
+                adapter = (source_input.adapter_implementation()
+                           if isinstance(source_input.adapter_implementation, type)
+                           else source_input.adapter_implementation)
+                frame = pd.DataFrame({
+                    name: fixture.inputs[name] for name in fixture.inputs
+                })
+                frame["date"] = frame.index
+                adapter_frame = adapter.signals(frame, **parameters)
+                encoded = canonical_decisions(adapter_frame)
+            except Exception as exc:
+                return AdmissionDecision(
+                    None, AdmissionRefusalCode.REFERENCE_EVALUATION_FAILED,
+                    f"fixture {fixture.name}: handwritten adapter failed: {exc}",
+                )
+            if encoded != vector_encoded:
+                return AdmissionDecision(
+                    None, AdmissionRefusalCode.STREAMING_DIVERGENCE,
+                    f"fixture {fixture.name}: handwritten adapter decisions diverged",
+                )
+            adapter_bytes.append(encoded)
+
+    reference_address = content_address({
+        "suite": suite.address,
+        "decisions": [item.decode("utf-8") for item in reference_bytes],
+    })
+    vector_address = content_address({
+        "suite": suite.address,
+        "decisions": [item.decode("utf-8") for item in vector_bytes],
+    })
+    if adapter_bytes:
+        adapter_address = content_address({
+            "suite": suite.address,
+            "decisions": [item.decode("utf-8") for item in adapter_bytes],
+        })
+        if adapter_address != vector_address:
+            return AdmissionDecision(
+                None, AdmissionRefusalCode.STREAMING_DIVERGENCE,
+                "handwritten adapter decision address diverged",
+            )
+        structural = dataclasses.replace(
+            structural,
+            source_evidence=dataclasses.replace(
+                structural.source_evidence,
+                adapter_decision_address=adapter_address,
+            ),
+        )
+    try:
+        artifact = admitted_artifact(structural, ParityEvidence(
+            suite.address, reference_address, vector_address))
+    except AdmissionRefused as exc:
+        return AdmissionDecision(None, exc.code, exc.detail)
+    return AdmissionDecision(artifact, None, "")
+
+
+def verify_admission(*, artifact: AdmittedStrategyArtifact, owner_id: str,
+                     source_input: IRGraphAdmissionInput | HandwrittenAdapterInput,
+                     registry: PlatformRegistry) -> None:
+    """Recompute an admission and reject any stale or owner-mismatched receipt."""
+    decision = admit_strategy(
+        owner_id=owner_id, source_input=source_input, registry=registry)
+    if decision.artifact is None:
+        raise AdmissionRefused(
+            decision.refusal_code or AdmissionRefusalCode.RECEIPT_STALE,
+            decision.detail)
+    if decision.artifact.admission_address != artifact.admission_address:
+        raise AdmissionRefused(
+            AdmissionRefusalCode.RECEIPT_STALE,
+            "recomputed admission address differs from the supplied artifact")
+
+
+def runtime_for_admitted(
+    artifact: AdmittedStrategyArtifact,
+    source_input: IRGraphAdmissionInput | HandwrittenAdapterInput,
+    registry: PlatformRegistry,
+):
+    """Return admitted IR authority; handwritten code remains parity evidence only."""
+    from app.strategy.ir_adapter import IRGraphStrategy
+    verify_admission(
+        artifact=artifact,
+        owner_id=artifact.owner_id,
+        source_input=source_input,
+        registry=registry,
+    )
+    graph_input = (source_input.equivalent_ir
+                   if isinstance(source_input, HandwrittenAdapterInput) else source_input)
+    if artifact.graph_address != content_address(_plain_json(graph_input.graph)):
+        raise AdmissionRefused(
+            AdmissionRefusalCode.ARTEFACT_MISMATCH,
+            "runtime graph differs from the admitted graph")
+    return IRGraphStrategy(
+        _plain_json(graph_input.graph),
+        (registry.library, registry.implementations),
+    )
+
+
+def _decision_frame(outputs: Mapping[str, Any], structural: StructuralAdmission,
+                    inputs: Mapping[str, pd.Series]) -> pd.DataFrame:
+    index = next(iter(inputs.values())).index
+    frame = pd.DataFrame(index=index)
+    for canonical in CANONICAL_COLUMNS:
+        output_name = structural.canonical_mapping.get(canonical)
+        if output_name is None:
+            frame[canonical] = False
+            continue
+        value = outputs[output_name]
+        values = value if isinstance(value, pd.Series) else [value] * len(index)
+        frame[canonical] = pd.Series(values, index=index).fillna(False).astype(bool)
+    return frame
+
+
+def _first_recursive_mismatch(
+    graph: ResolvedGraph,
+    vector_values: Mapping[str, Mapping[str, Any]],
+    reference_values: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    from app.ir.hashing import canonical_json
+    for node in graph.nodes:
+        if not node.causal or node.causal.history.mode != "causal_recursive":
+            continue
+        warmup = node.warmup
+        for socket, reference in reference_values[node.instance_id].items():
+            vector = vector_values[node.instance_id].get(socket)
+            if _canonical_stream(vector, warmup, canonical_json) != _canonical_stream(
+                    reference, warmup, canonical_json):
+                return f"{node.instance_id}.{socket}"
+    return None
+
+
+def _canonical_stream(value: Any, warmup: int, canonical_json_fn) -> str:
+    if not isinstance(value, pd.Series):
+        return canonical_json_fn(value)
+    encoded = []
+    for item in value.iloc[warmup:].tolist():
+        if pd.isna(item):
+            encoded.append(None)
+        elif isinstance(item, (bool, int, float, str)):
+            encoded.append(item.item() if hasattr(item, "item") else item)
+        else:
+            encoded.append(str(item))
+    return canonical_json_fn(encoded)
+
+
 __all__ = [
-    "AdmittedKernelIdentity", "AdmittedStrategyArtifact", "AdmissionRefusalCode",
+    "AdmittedKernelIdentity", "AdmittedStrategyArtifact", "AdmissionDecision",
+    "AdmissionRefusalCode",
     "AdmissionRefused", "HandwrittenAdapterInput", "IRGraphAdmissionInput",
     "InputProvenance", "ParityEvidence", "ResolvedComponentIdentity",
     "SourceEvidence", "StructuralAdmission", "StructuralDecision",
-    "admitted_artifact", "canonical_decisions", "derive_input_provenance",
-    "inspect_strategy",
+    "admit_strategy", "admitted_artifact", "canonical_decisions",
+    "derive_input_provenance", "inspect_strategy", "runtime_for_admitted",
+    "verify_admission",
 ]
