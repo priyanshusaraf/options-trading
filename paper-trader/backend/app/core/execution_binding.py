@@ -144,6 +144,8 @@ class ExecutionBinding:
     #: so a hand-built binding that omits it is refused rather than accidentally allowed.
     execution_mode: str = ""
     owner_id: str | None = None
+    #: Immutable causal-admission receipt. None is explicit legacy quarantine.
+    admission_address: str | None = None
 
 
 def source_of(strategy_key: str | None) -> str:
@@ -160,7 +162,7 @@ def strategy_for(binding: ExecutionBinding):
     return resolve_strategy(binding.strategy_key, owner_id=binding.owner_id)
 
 
-def strategy_for_execution(binding: ExecutionBinding):
+def strategy_for_execution(binding: ExecutionBinding, *, admission_loader=None):
     """The `Strategy` a binding names, **for the purpose of executing it** — refused
     unless its (source, authority) pair is one this project has reviewed.
 
@@ -181,6 +183,11 @@ def strategy_for_execution(binding: ExecutionBinding):
     strategy = resolve_strategy(binding.strategy_key, owner_id=binding.owner_id)
     if actual == SOURCE_IR_GRAPH:
         _require_paper_authority(binding, strategy, mode)
+    # The final money boundary supplies this loader. Keeping it explicit means that
+    # a receipt read cannot be hidden inside a descriptive strategy resolver.
+    if admission_loader is not None:
+        if not binding.admission_address or not admission_loader(binding):
+            raise AuthorityNotGranted(binding.strategy_key, "ADMISSION_REQUIRED")
     return strategy
 
 
@@ -236,7 +243,8 @@ def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None)
 
 
 def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
-              enforce_authority=True, owner_id: str | None = None) -> ExecutionBinding:
+              enforce_authority=True, owner_id: str | None = None,
+              admission_address: str | None = None) -> ExecutionBinding:
     source = source_of(strategy.key)
     authority = AUTHORITY_BY_SOURCE.get(source, SHADOW)
     if enforce_authority and authority != AUTHORITATIVE:
@@ -245,11 +253,13 @@ def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
         deployment_id=deployment_id, instrument_key=instrument_key,
         strategy_key=strategy.key, strategy_version=strategy.version, source=source,
         authority=authority, origin=origin, reason=reason,
-        execution_mode=configured_execution_mode(), owner_id=owner_id)
+        execution_mode=configured_execution_mode(), owner_id=owner_id,
+        admission_address=admission_address)
 
 
 def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
-         assigned_key: str | None, paper_authority=None, owner_id: str | None = None) -> ExecutionBinding:
+         assigned_key: str | None, paper_authority=None, owner_id: str | None = None,
+         admission_address: str | None = None) -> ExecutionBinding:
     """The decision, with the reads already done — what executes, and on whose say-so.
 
     Split out from `resolve_binding` because the engine resolves a strategy per instrument
@@ -274,8 +284,10 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
                          strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
                          reason=(f"deployment {deployment_id} pins "
                                  f"{deployment_pin.key!r}, which overrides any "
-                                 f"per-instrument assignment"), owner_id=owner_id)
-    return _bind_assigned(deployment_id, instrument_key, assigned_key, owner_id=owner_id)
+                                 f"per-instrument assignment"), owner_id=owner_id,
+                         admission_address=admission_address)
+    return _bind_assigned(deployment_id, instrument_key, assigned_key, owner_id=owner_id,
+                          admission_address=admission_address)
 
 
 def _describe_paper_authority(deployment_id, instrument_key,
@@ -310,7 +322,8 @@ def _describe_paper_authority(deployment_id, instrument_key,
         reason=(f"paper deployment {record.deployment_row_id} makes "
                 f"{record.graph_identifier!r} v{record.graph_version} "
                 f"({record.content_address[:19]}…) authoritative for {instrument_key} "
-                f"at {record.interval} in the paper book"), owner_id=owner_id)
+                f"at {record.interval} in the paper book"), owner_id=owner_id,
+        admission_address=getattr(record, "admission_address", None))
 
 
 def resolve_binding(session, *, deployment_id: int, instrument_key: str,
@@ -319,21 +332,26 @@ def resolve_binding(session, *, deployment_id: int, instrument_key: str,
     database. The entry point for callers that hold a session and no cached config."""
     from app.core.deployments import resolve_deployment_strategy
 
+    from app.db.models import Deployment
+    deployment = session.get(Deployment, deployment_id)
     return bind(deployment_id=deployment_id, instrument_key=instrument_key,
                 deployment_pin=resolve_deployment_strategy(
                     session, deployment_id, owner_id=owner_id,
                     broker_account_id=broker_account_id),
                 assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id),
-                owner_id=owner_id)
+                owner_id=owner_id,
+                admission_address=(deployment.admission_address if deployment is not None else None))
 
 
-def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | None = None) -> ExecutionBinding:
+def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | None = None,
+                   admission_address: str | None = None) -> ExecutionBinding:
     if not assigned:
         return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                          strategy=resolve_strategy(DEFAULT_STRATEGY_KEY),
                          origin=ORIGIN_DEFAULT,
                          reason=(f"no deployment pin and no instrument assignment for "
-                                 f"{instrument_key}; the platform default applies"), owner_id=owner_id)
+                                 f"{instrument_key}; the platform default applies"), owner_id=owner_id,
+                         admission_address=admission_address)
     try:
         strategy = resolve_strategy(assigned, owner_id=owner_id)
     except StrategyNotFound:
@@ -346,10 +364,12 @@ def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | N
                          strategy=strategy, origin=ORIGIN_FALLBACK,
                          reason=(f"instrument {instrument_key} is assigned {assigned!r}, "
                                  f"which is not registered; the legacy path substitutes "
-                                 f"{strategy.key!r} so one stale row cannot stop the book"), owner_id=owner_id)
+                                 f"{strategy.key!r} so one stale row cannot stop the book"), owner_id=owner_id,
+                         admission_address=admission_address)
     return _describe(deployment_id=deployment_id, instrument_key=instrument_key,
                      strategy=strategy, origin=ORIGIN_INSTRUMENT,
-                     reason=f"instrument {instrument_key} is assigned {strategy.key!r}", owner_id=owner_id)
+                     reason=f"instrument {instrument_key} is assigned {strategy.key!r}", owner_id=owner_id,
+                     admission_address=admission_address)
 
 
 def resolve_shadow_binding(strategy_key: str,

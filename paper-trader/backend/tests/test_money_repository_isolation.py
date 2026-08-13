@@ -164,6 +164,7 @@ def _intent(owner_id: str, broker_account_id: str, deployment_id: int) -> NewExe
         signal_at=NOW,
         strategy_key="momentum",
         strategy_version="v1",
+        admission_address="sha256:" + "a" * 64,
         owner_id=owner_id,
         broker_account_id=broker_account_id,
     )

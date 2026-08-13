@@ -380,6 +380,45 @@ class EngineRunner:
         execution = self._binding_for(key)
         return execution, execution_binding.strategy_for_execution(execution)
 
+    def _require_entry_receipt(self, binding):
+        """Re-verify receipt, graph bytes, and current registry before new exposure.
+
+        This is deliberately separate from scan-time selection. It returns the admitted
+        IR runtime, including for a handwritten adapter, so the broker cannot open using
+        a stale adapter after its parity receipt has ceased to verify.
+        """
+        from app.backtest.repository import AdmissionRequired, load_verified_admission
+
+        if not binding.owner_id:
+            raise execution_binding.AuthorityNotGranted(
+                binding.strategy_key, "ADMISSION_REQUIRED")
+        try:
+            with self._session() as session:
+                admitted = load_verified_admission(
+                    session, owner_id=binding.owner_id,
+                    admission_address=binding.admission_address)
+        except AdmissionRequired as exc:
+            raise execution_binding.AuthorityNotGranted(
+                binding.strategy_key, exc.code) from exc
+        source = admitted.artifact.source_evidence
+        if (source.strategy_key != binding.strategy_key
+                or source.strategy_version != binding.strategy_version):
+            raise execution_binding.AuthorityNotGranted(
+                binding.strategy_key, "ARTEFACT_MISMATCH")
+        return admitted.strategy
+
+    def _admitted_entry_signal(self, binding, frame) -> str:
+        """Return only an entry decision produced by the admitted IR runtime.
+
+        The handwritten runtime remains available for existing-position exits and risk
+        management. It is never the source of a new-exposure signal once admission is
+        required: adapters are parity evidence, not execution authority.
+        """
+        strategy = self._require_entry_receipt(binding)
+        latest = self._generic_latest(strategy.signals(frame))
+        signal = latest.get("signal", "NONE") if latest else "NONE"
+        return signal if signal in ("LONG_ENTRY", "SHORT_ENTRY") else "NONE"
+
     def _strategy_for(self, key: str):
         """The `Strategy` that may execute for `key`.
 
@@ -861,6 +900,15 @@ class EngineRunner:
             self._observe_shadow(key, strat, signal_frame, sig)
             if not latest:
                 continue
+            # A legacy runtime may keep managing existing risk, but no one may turn its
+            # entry flag into exposure.  Only the freshly verified IR runtime may do
+            # that.  Failure is represented as no entry rather than discarding exit
+            # state, which is how legacy-null positions remain closable/recoverable.
+            try:
+                admitted_entry_signal = self._admitted_entry_signal(execution, signal_frame)
+            except execution_binding.AuthorityNotGranted:
+                admitted_entry_signal = "NONE"
+            latest["signal"] = admitted_entry_signal
             held = opens.get(key)
             self.publish_signal(key, execution, {
                 "instrument": key, "name": inst.name, "segment": inst.segment,
@@ -1775,6 +1823,12 @@ class EngineRunner:
                               f"not have produced it",
                               instrument=c.instrument_key, event="ATTRIBUTION_MISSING")
                     continue
+                try:
+                    self._require_entry_receipt(executed)
+                except execution_binding.AuthorityNotGranted:
+                    log.error(f"admission receipt refused {c.instrument_key}",
+                              instrument=c.instrument_key, event="ADMISSION_REQUIRED")
+                    continue
                 log.info(f"ROUTE {plan.action} {pick.chosen.tradingsymbol}"
                          + (f" @ {plan.limit_price:.2f}" if plan.limit_price else "")
                          + f" — {plan.reason}", instrument=c.instrument_key, event="ROUTE")
@@ -1782,12 +1836,13 @@ class EngineRunner:
                     inst, direction, pick.chosen, pick.reason, now, chain.spot,
                     self.params, plan=plan,
                     strategy_key=executed.strategy_key,
-                    strategy_version=executed.strategy_version)
+                    strategy_version=executed.strategy_version,
+                    admission_address=executed.admission_address)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
                 # H2 — seed the ratchet for a risk_model strategy so this position is
                 # managed by the backtest-validated ratchet, not the legacy premium trail.
-                strat_e = execution_binding.strategy_for_execution(executed)
+                strat_e = self._require_entry_receipt(executed)
                 rm_e = getattr(strat_e, "risk_model", None)
                 if rm_e:
                     self._seed_ratchet(pos, chain.spot, rm_e,
@@ -1857,12 +1912,19 @@ class EngineRunner:
                         log.warn(f"INTRADAY routing SKIP — {plan.reason}",
                                  instrument=pickk.instrument_key, event="ROUTE_SKIP")
                         continue
+                    try:
+                        self._require_entry_receipt(executed)
+                    except execution_binding.AuthorityNotGranted:
+                        log.error(f"admission receipt refused {pickk.instrument_key}",
+                                  instrument=pickk.instrument_key, event="ADMISSION_REQUIRED")
+                        continue
                     pos = self.broker.open_equity_position(
                         inst, pickk.direction, pickk.price, pickk.qty, seg,
                         f"INTRADAY {pickk.direction}", now, self.params,
                         strategy_key=executed.strategy_key,
                         strategy_version=executed.strategy_version,
-                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct, plan=plan)
+                        margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct, plan=plan,
+                        admission_address=executed.admission_address)
                     if pos is None:
                         continue
                     if self.params.get("notify_enabled", True):
@@ -2000,12 +2062,19 @@ class EngineRunner:
                           f"than attributing a trade to logic that may not have produced "
                           f"it", instrument=key, event="ATTRIBUTION_MISSING")
                 continue
+            try:
+                self._require_entry_receipt(executed)
+            except execution_binding.AuthorityNotGranted:
+                log.error(f"admission receipt refused {key}", instrument=key,
+                          event="ADMISSION_REQUIRED")
+                continue
             pos = self.broker.open_futures_position(
                 inst, direction, float(price), qty, "NFO_FUT",
                 f"FUTURES {direction}", now, expiry, margin=margin,
                 params=self.params,
                 strategy_key=executed.strategy_key,
-                strategy_version=executed.strategy_version)
+                strategy_version=executed.strategy_version,
+                admission_address=executed.admission_address)
             if pos is None:
                 continue
             slots -= 1

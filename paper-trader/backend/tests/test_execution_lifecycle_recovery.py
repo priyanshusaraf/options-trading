@@ -29,6 +29,7 @@ from app.providers.mock import MockProvider
 
 
 NOW = dt.datetime(2026, 8, 9, 10, 30)
+ADDRESS = "sha256:" + "a" * 64
 
 
 def ExecutionLifecycleStore(session, **scope):
@@ -261,6 +262,7 @@ def _seed_lifecycle(context, *, symbol, exchange, qty, account_scope="default",
                 signal_at=NOW,
                 strategy_key=None,
                 strategy_version=None,
+                admission_address="sha256:" + "a" * 64,
             ),
             context,
             NOW,
@@ -290,7 +292,7 @@ def test_exact_tag_miss_stays_blocked_and_delayed_match_is_adopted_without_repla
     inst, quote, context = _option_context(provider)
 
     assert broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={}) is None
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS) is None
     pending = broker._pending_entries[quote.tradingsymbol]
     intent_id = pending["client_intent_id"]
     tag = pending["broker_tag"]
@@ -322,7 +324,7 @@ def test_multiple_exact_tag_matches_persist_anomaly_and_remain_blocked():
     inst, quote, context = _option_context(provider)
 
     assert broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={}) is None
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS) is None
     pending = broker._pending_entries[quote.tradingsymbol]
     client.order_book = [
         {"order_id": "OID-A", "tag": pending["broker_tag"]},
@@ -400,8 +402,14 @@ def test_unrelated_legacy_position_does_not_consume_lifecycle_recovery():
     init_db(reset=True)
     provider = MockProvider()
     inst, quote, context = _option_context(provider)
-    legacy = PaperBroker(provider, owner_id="owner", broker_account_id="account.default").open_position(
-        inst, "LONG", quote, "legacy", NOW, context["spot"], params={})
+    legacy_broker = PaperBroker(provider, owner_id="owner", broker_account_id="account.default")
+    legacy = legacy_broker.open_position(
+        inst, "LONG", quote, "legacy", NOW, context["spot"], params={},
+        admission_address=ADDRESS)
+    # Historical fixture: migration preserves an already-recorded null receipt; this
+    # setup does not use the new-entry seam to manufacture one.
+    legacy.admission_address = None
+    legacy_broker.commit()
     with SessionLocal() as session:
         stored_legacy = session.get(Position, legacy.id)
         stored_legacy.mode = "live"
@@ -457,7 +465,7 @@ def test_cumulative_adoption_commit_failure_rolls_back_ledger_delta(monkeypatch)
     broker = LiveBroker(provider, client, poll_seconds=1.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     inst, quote, context = _option_context(provider)
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     assert pos.qty == 25
     cash_before = broker.cash()
     pending = broker._pending_entries[quote.tradingsymbol]
@@ -568,7 +576,7 @@ def test_option_stop_failure_remains_recoverable_after_restart():
     broker = LiveBroker(provider, failing, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     intent_id = pos.entry_intent_id
     cash_after_fill = broker.cash()
     with SessionLocal() as session:
@@ -611,7 +619,7 @@ def test_equity_stop_failure_remains_recoverable_after_restart():
 
     pos = broker.open_equity_position(
         inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
-        params={}, margin=400.0)
+        params={}, margin=400.0, admission_address=ADDRESS)
     intent_id = pos.entry_intent_id
     cash_after_fill = broker.cash()
     with SessionLocal() as session:
@@ -659,7 +667,7 @@ def test_protection_id_persistence_failure_reconciles_without_duplicate(monkeypa
 
     monkeypatch.setattr(broker.s, "commit", fail_protection_id_once)
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     intent_id = pos.entry_intent_id
 
     assert client.stop_calls == 1
@@ -694,7 +702,7 @@ def test_live_entry_uses_legacy_connection_scope():
         broker_account_id=LEGACY_BROKER_ACCOUNT_ID,
     )
 
-    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
 
     with SessionLocal() as session:
         assert session.scalar(select(ExecutionIntent)).connection_scope == "kite:legacy"
@@ -761,7 +769,7 @@ def test_the_money_record_carries_the_connection_that_actually_placed_the_order(
         connection=second,
     )
 
-    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+    broker.open_position(inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
 
     with SessionLocal() as session:
         intent = session.scalar(select(ExecutionIntent))
@@ -778,7 +786,7 @@ def test_equity_partial_growth_updates_protection_quantity_before_completion():
 
     pos = broker.open_equity_position(
         inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
-        params={}, margin=400.0)
+        params={}, margin=400.0, admission_address=ADDRESS)
     assert pos.qty == 2
     assert client.protected_qty == 2
 
@@ -801,7 +809,7 @@ def test_uncertain_invisible_protection_is_not_replaced_after_one_empty_read():
         "avg_price": 101.0, "reason": ""})
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
 
     assert client.stop_calls == 1
     restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
@@ -829,7 +837,7 @@ def test_owner_gtt_in_submit_baseline_is_never_attached_to_bot_position():
          "avg_price": 101.0, "reason": ""}, owner_gtt)
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
 
     restarted = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     restarted.recover_journal(NOW)
@@ -853,7 +861,7 @@ def test_concurrent_owner_gtt_after_empty_baseline_is_never_attached():
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
 
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     LiveBroker(provider, client, poll_seconds=0.0,
                timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID,
                broker_account_id=LEGACY_BROKER_ACCOUNT_ID).recover_journal(NOW)
@@ -878,7 +886,7 @@ def test_invalid_protection_submit_metadata_fails_closed(payload):
         "avg_price": 101.0, "reason": ""})
     broker = LiveBroker(provider, client, poll_seconds=0.0, timeout_seconds=0.0, owner_id=LEGACY_OWNER_ID, broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+        inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
 
     with SessionLocal() as session:
         session.execute(text("""
@@ -921,11 +929,11 @@ def test_live_entry_refuses_before_intent_when_protection_inventory_fails(
 
     if kind == "options":
         result = broker.open_position(
-            inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+            inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     else:
         result = broker.open_equity_position(
             inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
-            params={}, margin=400.0)
+            params={}, margin=400.0, admission_address=ADDRESS)
 
     assert result is None
     assert client.requests == []
@@ -945,11 +953,11 @@ def test_live_entry_does_not_submit_when_exchange_protection_disabled(monkeypatc
 
     if kind == "options":
         result = broker.open_position(
-            inst, "LONG", quote, "signal", NOW, context["spot"], params={})
+            inst, "LONG", quote, "signal", NOW, context["spot"], params={}, admission_address=ADDRESS)
     else:
         result = broker.open_equity_position(
             inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", NOW,
-            params={}, margin=400.0)
+            params={}, margin=400.0, admission_address=ADDRESS)
 
     assert result is None
     assert client.requests == []
@@ -984,7 +992,7 @@ def test_journal_stop_failure_rolls_back_and_same_session_remains_usable(monkeyp
             tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",
             order_type="MARKET", requested_qty=4, limit_price=None,
             decision_price=100.0, signal_at=NOW, strategy_key=None,
-            strategy_version=None), {}, NOW)
+            strategy_version=None, admission_address="sha256:" + "a" * 64), {}, NOW)
 
     assert intent.client_intent_id
     assert broker.s.scalar(select(OrderJournal).where(

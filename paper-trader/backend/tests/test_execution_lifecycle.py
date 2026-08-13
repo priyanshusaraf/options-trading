@@ -64,6 +64,7 @@ def _request(**changes) -> NewExecutionIntent:
         "signal_at": BASE_TIME,
         "strategy_key": "mean-revert",
         "strategy_version": "v1",
+        "admission_address": "sha256:" + "a" * 64,
         "context": {"setup": "test"},
         "owner_id": LEGACY_OWNER_ID,
         "broker_account_id": LEGACY_BROKER_ACCOUNT_ID,

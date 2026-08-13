@@ -35,6 +35,7 @@ def _intent(*, side="BUY", decision_price=100.0):
         signal_at=BASE,
         strategy_key="test",
         strategy_version="v1",
+        admission_address="sha256:" + "a" * 64,
         context={},
     )
 

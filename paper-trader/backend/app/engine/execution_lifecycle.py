@@ -90,6 +90,8 @@ class NewExecutionIntent:
     #: unresolved-entry recovery uses it to prevent cross-account adoption.
     owner_id: str
     broker_account_id: str
+    #: Immutable receipt copied by the final pre-entry boundary. None is legacy only.
+    admission_address: str
     context: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -353,6 +355,9 @@ class ExecutionLifecycleStore:
         if (request.owner_id != self.owner_id
                 or request.broker_account_id != self.broker_account_id):
             raise ValueError("execution intent scope does not match lifecycle store")
+        from app.ir.schema import is_content_address
+        if not is_content_address(request.admission_address):
+            raise ValueError("ADMISSION_REQUIRED")
         for attempt in range(3):
             client_intent_id = make_intent_id()
             row = ExecutionIntent(
@@ -377,6 +382,7 @@ class ExecutionLifecycleStore:
                 signal_at=request.signal_at,
                 strategy_key=request.strategy_key,
                 strategy_version=request.strategy_version,
+                admission_address=request.admission_address,
                 context_json=_canonical_json(context),
                 fence_epoch=self.fence_epoch,
                 created_at=now,

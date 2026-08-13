@@ -42,20 +42,32 @@ def test_mark_with_zero_premium_advances_freshness():
     assert pos.last_mark_time == later
 
 
-def test_manual_open_respects_capital_and_one_position():
+def test_manual_open_respects_capital_and_one_position(monkeypatch):
     b = _broker()
     inst = get_instrument("NIFTY")
     chain = b.provider.get_option_chain(inst)
-    pos, reason = b.manual_open(inst, "LONG", chain, get_settings(), b.provider.now())
+    # Manual route/receipt verification has its own direct refusal coverage; isolate
+    # manual capital/duplicate behaviour after a trusted receipt reaches this seam.
+    monkeypatch.setattr(b, "_require_current_entry_receipt", lambda **_: None)
+    address = "sha256:" + "a" * 64
+    pos, reason = b.manual_open(
+        inst, "LONG", chain, get_settings(), b.provider.now(),
+        strategy_key="expanding_z_v4", strategy_version="v4", admission_address=address)
     assert pos is not None, reason
-    pos2, reason2 = b.manual_open(inst, "LONG", chain, get_settings(), b.provider.now())
+    pos2, reason2 = b.manual_open(
+        inst, "LONG", chain, get_settings(), b.provider.now(),
+        strategy_key="expanding_z_v4", strategy_version="v4", admission_address=address)
     assert pos2 is None and "already" in reason2.lower()
 
 
-def test_manual_open_rejects_when_no_cash():
+def test_manual_open_rejects_when_no_cash(monkeypatch):
     b = _broker()
     cap = b.capital(); cap.cash = 1.0; b.commit()
     inst = get_instrument("NIFTY")
     chain = b.provider.get_option_chain(inst)
-    pos, reason = b.manual_open(inst, "LONG", chain, get_settings(), b.provider.now())
+    monkeypatch.setattr(b, "_require_current_entry_receipt", lambda **_: None)
+    pos, reason = b.manual_open(
+        inst, "LONG", chain, get_settings(), b.provider.now(),
+        strategy_key="expanding_z_v4", strategy_version="v4",
+        admission_address="sha256:" + "a" * 64)
     assert pos is None and "cash" in reason.lower()

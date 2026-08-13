@@ -168,7 +168,7 @@ def test_lifecycle_intent_commit_emits_exact_account_projection(execution_store)
             order_type="MARKET", requested_qty=25, limit_price=None,
             decision_price=100.0, signal_at=dt.datetime(2026, 8, 13),
             strategy_key="trend", strategy_version="v1", owner_id="owner-a",
-            broker_account_id="account-a",
+            broker_account_id="account-a", admission_address="sha256:" + "a" * 64,
         ), {}, dt.datetime(2026, 8, 13))
         intent_id = row.client_intent_id
     with execution_store() as session:

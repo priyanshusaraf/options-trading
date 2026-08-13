@@ -73,6 +73,52 @@ class PaperBroker:
         # the first `capital()` call would put a bootstrap write in the middle of a fill.
         capital_for_book(self.s, self.book, broker_account_id=self.broker_account_id)
 
+    def _is_legacy_recovery_intent(self, intent, entry_intent_id: str | None) -> bool:
+        """Only a persisted legacy intent can justify a receiptless recovered fill.
+
+        Do not trust a caller-supplied ORM object: it may be transient or forged. The
+        row is read again by primary key at booking time.
+        """
+        from app.db.models import ExecutionIntent
+        if not isinstance(intent, ExecutionIntent) or not entry_intent_id:
+            return False
+        with self.s.no_autoflush:
+            persisted = self.s.scalar(select(ExecutionIntent).where(
+                ExecutionIntent.client_intent_id == entry_intent_id,
+                ExecutionIntent.owner_id == self.owner_id,
+                ExecutionIntent.broker_account_id == self.broker_account_id,
+                ExecutionIntent.deployment_id == self.deployment_id,
+                ExecutionIntent.admission_address.is_(None),
+            ))
+        return persisted is not None and persisted is intent
+
+    def _is_persisted_entry_intent(self, intent, *, entry_intent_id: str | None,
+                                   admission_address: str | None,
+                                   strategy_key: str | None,
+                                   strategy_version: str | None) -> bool:
+        """Accept booking only from the exact durable intent that caused a fill.
+
+        This is not a public ``legacy_recovery`` switch.  It requires the caller's
+        ORM object to be the session's persisted row, scoped to this owner/account/
+        deployment, with the same immutable attribution.  It is used after a real
+        broker submit, when a second current-registry check could strand an already
+        filled order if helpers changed in the short interval before booking.
+        """
+        from app.db.models import ExecutionIntent
+        if not isinstance(intent, ExecutionIntent) or not entry_intent_id:
+            return False
+        with self.s.no_autoflush:
+            persisted = self.s.scalar(select(ExecutionIntent).where(
+                ExecutionIntent.client_intent_id == entry_intent_id,
+                ExecutionIntent.owner_id == self.owner_id,
+                ExecutionIntent.broker_account_id == self.broker_account_id,
+                ExecutionIntent.deployment_id == self.deployment_id,
+                ExecutionIntent.admission_address == admission_address,
+                ExecutionIntent.strategy_key == strategy_key,
+                ExecutionIntent.strategy_version == strategy_version,
+            ))
+        return persisted is not None and persisted is intent
+
     # ── ledger ────────────────────────────────────────────────────────────
     def capital(self) -> CapitalState:
         """This book's ledger row, claimed or created on first use.
@@ -151,13 +197,50 @@ class PaperBroker:
                 or pos.broker_account_id != self.broker_account_id):
             raise ValueError("position is not available to this broker account")
 
+    def _require_current_entry_receipt(self, *, admission_address: str | None,
+                                       strategy_key: str | None,
+                                       strategy_version: str | None) -> None:
+        """Verify a caller-supplied receipt at the owning paper-book write seam.
+
+        ``sha256:...`` is an identifier, never a capability.  Runner verification is
+        deliberately independent from this check because direct broker callers (manual
+        tools, recovery bugs, and future routes) otherwise turn a plausible-looking
+        string into new exposure.  The receipt's *source* identity is checked here: an
+        admitted handwritten adapter may execute its IR equivalent, while the money row
+        still records the adapter identity that produced the authorised binding.
+        """
+        from app.backtest.repository import AdmissionRequired, load_verified_admission
+
+        try:
+            admitted = load_verified_admission(
+                self.s, owner_id=self.owner_id, admission_address=admission_address)
+        except AdmissionRequired as exc:
+            raise ValueError(exc.code) from exc
+        source = admitted.artifact.source_evidence
+        if (source.strategy_key != strategy_key
+                or source.strategy_version != strategy_version):
+            raise ValueError("ARTEFACT_MISMATCH")
+
     # ── fills ─────────────────────────────────────────────────────────────
     def open_position(self, inst: Instrument, direction: str, q: OptionQuote,
                       reason: str, now: dt.datetime, spot: float,
                       params: dict | None = None, plan=None,
                       strategy_key: str | None = None,
                       strategy_version: str | None = None,
-                      entry_intent_id: str | None = None) -> Position:
+                      entry_intent_id: str | None = None,
+                      admission_address: str | None = None,
+                      recovery_intent=None) -> Position:
+        recovery_proof = self._is_persisted_entry_intent(
+            recovery_intent, entry_intent_id=entry_intent_id,
+            admission_address=admission_address, strategy_key=strategy_key,
+            strategy_version=strategy_version)
+        legacy_proof = self._is_legacy_recovery_intent(recovery_intent, entry_intent_id)
+        if not admission_address and not (legacy_proof or recovery_proof):
+            raise ValueError("ADMISSION_REQUIRED")
+        if admission_address and not recovery_proof:
+            self._require_current_entry_receipt(
+                admission_address=admission_address, strategy_key=strategy_key,
+                strategy_version=strategy_version)
         # `plan` (routing decision) is used by LiveBroker to choose market/limit;
         # the paper broker ignores it and fills at the quote.
         qty, premium = q.lot_size, q.ltp
@@ -195,6 +278,7 @@ class PaperBroker:
             # production runs `max_open_positions=0`; reachable the moment a graph became
             # authoritative, which is the slice that found it.
             strategy_key=strategy_key, strategy_version=strategy_version,
+            admission_address=admission_address,
             mode=self.MODE,
         )
         self.s.add(pos)
@@ -219,7 +303,9 @@ class PaperBroker:
                              sl_pct: float | None = None,
                              tp_pct: float | None = None,
                              entry_intent_id: str | None = None,
-                             plan=None) -> Position:
+                             plan=None,
+                             admission_address: str | None = None,
+                             recovery_intent=None) -> Position:
         """Open an intraday equity (MIS) position of `qty` shares at `price`.
 
         MIS is leveraged: only the MARGIN leaves cash, not the full notional — but P&L
@@ -232,6 +318,17 @@ class PaperBroker:
         so a later flag toggle can never reshape this position; omitted (the legacy shape)
         falls back to the global intraday_stop_loss_pct/intraday_target_pct and leaves the
         columns NULL. Charges use the intraday charge segment (NSE_INTRADAY/BSE_INTRADAY)."""
+        recovery_proof = self._is_persisted_entry_intent(
+            recovery_intent, entry_intent_id=entry_intent_id,
+            admission_address=admission_address, strategy_key=strategy_key,
+            strategy_version=strategy_version)
+        legacy_proof = self._is_legacy_recovery_intent(recovery_intent, entry_intent_id)
+        if not admission_address and not (legacy_proof or recovery_proof):
+            raise ValueError("ADMISSION_REQUIRED")
+        if admission_address and not recovery_proof:
+            self._require_current_entry_receipt(
+                admission_address=admission_address, strategy_key=strategy_key,
+                strategy_version=strategy_version)
         p = params if params is not None else effective(self.settings, owner_id=self.owner_id)
         leverage = p.get("intraday_leverage", 2.5) or 2.5
         eff_sl_pct = sl_pct if sl_pct is not None else p.get("intraday_stop_loss_pct", 0.01)
@@ -256,7 +353,7 @@ class PaperBroker:
             instrument_key=inst.key, direction=direction, option_type="EQ",
             tradingsymbol=getattr(inst, "spot_symbol", "") or inst.key,
             exchange=charge_segment, segment="equity_intraday", strategy_key=strategy_key,
-            strategy_version=strategy_version,
+            strategy_version=strategy_version, admission_address=admission_address,
             strike=0.0, expiry=now.date(), lot_size=qty, qty=qty, entry_premium=price,
             entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
             entry_reason=reason, stop_price=stop, target_price=target,
@@ -307,7 +404,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
-            strategy_version=pos.strategy_version,
+            strategy_version=pos.strategy_version, admission_address=pos.admission_address,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
@@ -333,10 +430,13 @@ class PaperBroker:
         return tr
 
     def manual_open(self, inst: Instrument, direction: str, chain, settings,
-                    now: dt.datetime) -> tuple[Position | None, str]:
-        """Owner-initiated paper entry. Same safety as the engine: 1 lot, one
-        position per instrument, capital-checked, paper-only. Returns (pos, reason)."""
+                    now: dt.datetime, *, strategy_key: str | None = None,
+                    strategy_version: str | None = None,
+                    admission_address: str | None = None) -> tuple[Position | None, str]:
+        """Owner-initiated entry with the same immutable receipt as engine entries."""
         from app.options.picker import pick_option
+        if not admission_address:
+            return None, "ADMISSION_REQUIRED"
         if self.position_for(inst.key) is not None:
             return None, "already holding a position for this instrument"
         if chain is None:
@@ -350,7 +450,10 @@ class PaperBroker:
         if cost > self.cash():
             return None, f"insufficient cash: need ₹{cost:,.0f}, have ₹{self.cash():,.0f}"
         pos = self.open_position(inst, direction, pick.chosen,
-                                 f"MANUAL {direction}", now, chain.spot)
+                                 f"MANUAL {direction}", now, chain.spot,
+                                 strategy_key=strategy_key,
+                                 strategy_version=strategy_version,
+                                 admission_address=admission_address)
         log.info(f"MANUAL OPEN {direction} {pos.tradingsymbol} @ {pick.chosen.ltp:.2f}",
                  instrument=inst.key, event="MANUAL_OPEN", manual=True)
         return pos, "ok"
@@ -416,7 +519,9 @@ class PaperBroker:
                               now: dt.datetime, expiry: dt.date,
                               margin: float, params: dict | None = None,
                               strategy_key: str | None = None,
-                              strategy_version: str | None = None) -> Position:
+                              strategy_version: str | None = None,
+                              admission_address: str | None = None,
+                              recovery_intent=None) -> Position:
         """Open an index-futures position of `qty` units at the FUTURES price.
 
         Deliberately a near-copy of `open_equity_position` rather than a shared
@@ -435,6 +540,15 @@ class PaperBroker:
         reconciliation invariant `cash == initial + realized − Σ(open entry_cost)`
         holds exactly, the same as every other segment.
         """
+        recovery_proof = self._is_persisted_entry_intent(
+            recovery_intent, entry_intent_id=None, admission_address=admission_address,
+            strategy_key=strategy_key, strategy_version=strategy_version)
+        if not admission_address and not recovery_proof:
+            raise ValueError("ADMISSION_REQUIRED")
+        if admission_address and not recovery_proof:
+            self._require_current_entry_receipt(
+                admission_address=admission_address, strategy_key=strategy_key,
+                strategy_version=strategy_version)
         if margin is None or margin <= 0:
             raise ValueError("open_futures_position requires a positive margin: "
                              "SPAN is instrument-specific and must never be guessed")
@@ -458,7 +572,7 @@ class PaperBroker:
             instrument_key=inst.key, direction=direction, option_type="FUT",
             tradingsymbol=getattr(inst, "option_name", "") or inst.key,
             exchange=charge_segment, segment="index_futures", strategy_key=strategy_key,
-            strategy_version=strategy_version,
+            strategy_version=strategy_version, admission_address=admission_address,
             strike=0.0, expiry=expiry, lot_size=qty, qty=qty, entry_premium=price,
             entry_charges=charges, entry_cost=cost, entry_spot=price, entry_time=now,
             entry_reason=reason, stop_price=stop, target_price=target,
@@ -504,7 +618,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="FUT", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="index_futures", strategy_key=pos.strategy_key,
-            strategy_version=pos.strategy_version,
+            strategy_version=pos.strategy_version, admission_address=pos.admission_address,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
@@ -551,7 +665,9 @@ class PaperBroker:
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
-            exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
+            exchange=pos.exchange, strategy_key=pos.strategy_key,
+            strategy_version=pos.strategy_version, admission_address=pos.admission_address,
+            strike=pos.strike, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=pos.entry_cost,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
             exit_premium=exit_premium, exit_charges=charges, exit_spot=spot,
@@ -612,7 +728,9 @@ class PaperBroker:
             entry_intent_id=pos.entry_intent_id,
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type=pos.option_type, tradingsymbol=pos.tradingsymbol,
-            exchange=pos.exchange, strike=pos.strike, expiry=pos.expiry, qty=qty,
+            exchange=pos.exchange, strategy_key=pos.strategy_key,
+            strategy_version=pos.strategy_version, admission_address=pos.admission_address,
+            strike=pos.strike, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=cost_slice,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,
             exit_premium=exit_premium, exit_charges=charges, exit_spot=spot,
@@ -675,7 +793,7 @@ class PaperBroker:
             instrument_key=pos.instrument_key, direction=pos.direction,
             option_type="EQ", tradingsymbol=pos.tradingsymbol, exchange=pos.exchange,
             segment="equity_intraday", strategy_key=pos.strategy_key,
-            strategy_version=pos.strategy_version,
+            strategy_version=pos.strategy_version, admission_address=pos.admission_address,
             strike=0.0, expiry=pos.expiry, qty=qty,
             entry_premium=pos.entry_premium, entry_cost=cost_slice,
             entry_spot=pos.entry_spot, entry_time=pos.entry_time,

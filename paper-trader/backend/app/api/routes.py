@@ -1014,7 +1014,16 @@ async def manual_open(body: ManualOpenBody, request: Request):
         return {"error": "instrument has no listed options (tracking only)"}
     async with r._lock:
         chain = r.provider.get_option_chain(inst)
-        pos, reason = r.broker.manual_open(inst, body.direction, chain, settings, r.provider.now())
+        execution = r._binding_for(body.key)
+        try:
+            r._require_entry_receipt(execution)
+        except AuthorityNotGranted:
+            return {"error": "ADMISSION_REQUIRED"}
+        pos, reason = r.broker.manual_open(
+            inst, body.direction, chain, settings, r.provider.now(),
+            strategy_key=execution.strategy_key,
+            strategy_version=execution.strategy_version,
+            admission_address=execution.admission_address)
         if pos is None:
             return {"error": reason}
         if body.key in r.state:

@@ -140,6 +140,25 @@ def test_the_binding_the_engine_uses_carries_its_provenance():
     assert "expanding_z_v4" in result.reason
 
 
+def test_new_entry_signal_comes_from_the_fresh_admitted_ir_runtime(monkeypatch):
+    """Changing only the legacy strategy output cannot create new exposure."""
+    runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    binding_value = runner._binding_for("NIFTY")
+    calls = []
+
+    class AdmittedIR:
+        def signals(self, frame):
+            calls.append(frame)
+            return object()
+
+    monkeypatch.setattr(runner, "_require_entry_receipt", lambda value: AdmittedIR())
+    monkeypatch.setattr(runner, "_generic_latest",
+                        lambda output: {"signal": "LONG_ENTRY"})
+
+    assert runner._admitted_entry_signal(binding_value, object()) == "LONG_ENTRY"
+    assert calls, "the admitted IR runtime did not produce the entry decision"
+
+
 def test_a_stale_assignment_still_falls_back_and_the_book_keeps_trading():
     """The legacy fail-safe is deliberate and must survive the refactor: one stale config
     row must not stop the book. What is new is that the substitution is *reported*."""

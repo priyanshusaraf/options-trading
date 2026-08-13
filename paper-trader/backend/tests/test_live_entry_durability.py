@@ -34,6 +34,12 @@ def _legacy_lifecycle_store(session, **scope):
 live_broker_module.ExecutionLifecycleStore = _legacy_lifecycle_store
 
 
+@pytest.fixture(autouse=True)
+def _trusted_receipt_for_lifecycle_ordering(monkeypatch):
+    """Keep lifecycle tests downstream of the separately tested receipt seam."""
+    monkeypatch.setattr(LiveBroker, "_require_current_entry_receipt", lambda *_, **__: None)
+
+
 class _Session:
     def get(self, model, key):
         return SimpleNamespace(id=key, account_id="account-7")
@@ -79,6 +85,10 @@ def _broker(timeline):
     broker.account = SimpleNamespace(external_account_id="account-7")
     broker._journal_open = lambda *args, **kwargs: None
     broker._journal_resolve = lambda *args, **kwargs: None
+    # These constructor-bypassing tests exercise lifecycle ordering.  Receipt
+    # verification has a separate direct owning-seam probe, so a synthetic Session
+    # cannot accidentally stand in for a persisted owner-local admission.
+    broker._require_current_entry_receipt = lambda **_: None
     return broker
 
 
@@ -86,11 +96,34 @@ def _request():
     return OrderRequest("NIFTY26AUG25000CE", "NFO", "BUY", 10, "MARKET")
 
 
-def _entry(broker):
+_FORGED_RECEIPT = "sha256:" + "f" * 64
+
+
+def _entry(broker, *, admission_address=_FORGED_RECEIPT):
     return broker._execute_entry(
         _request(), kind="options", context={"inst_key": "NIFTY"},
         now=SimpleNamespace(), decision_price=100.0,
-        strategy_key="trend", strategy_version="sha256:abc")
+        strategy_key="trend", strategy_version="sha256:abc",
+        admission_address=admission_address)
+
+
+def test_direct_live_entry_rejects_a_valid_looking_forged_receipt_before_submit(monkeypatch):
+    """The LiveBroker ownership seam cannot treat a hash-shaped caller string as authority."""
+    timeline = []
+    broker = _broker(timeline)
+    checks = []
+
+    def forged(**kwargs):
+        checks.append(kwargs)
+        raise ValueError("RECEIPT_STALE")
+
+    monkeypatch.setattr(broker, "_require_current_entry_receipt", forged)
+
+    with pytest.raises(ValueError, match="RECEIPT_STALE"):
+        _entry(broker)
+
+    assert len(checks) == 1
+    assert broker.client.places == 0
 
 
 def test_entry_does_not_call_place_when_intent_commit_fails(monkeypatch):
@@ -269,7 +302,8 @@ def test_options_entry_links_durable_intent_to_position_and_trade():
 
     pos = broker.open_position(
         inst, "LONG", quote, "signal", runtime_now, chain.spot,
-        params={}, strategy_key="trend", strategy_version="sha256:abc")
+        params={}, strategy_key="trend", strategy_version="sha256:abc",
+        admission_address=_FORGED_RECEIPT)
 
     with SessionLocal() as session:
         intent = session.scalar(select(ExecutionIntent))
@@ -310,7 +344,8 @@ def test_equity_entry_uses_decision_price_and_links_intent_while_stop_stays_lega
 
     pos = broker.open_equity_position(
         inst, "LONG", 250.0, 4, "NSE_INTRADAY", "signal", runtime_now,
-        params={}, strategy_key="equity", strategy_version="sha256:def")
+        params={}, strategy_key="equity", strategy_version="sha256:def",
+        admission_address=_FORGED_RECEIPT)
 
     with SessionLocal() as session:
         intent = session.scalar(select(ExecutionIntent))
@@ -339,7 +374,8 @@ def test_partial_timeout_books_only_later_positive_fill_delta_once():
                 key=lambda q: abs(q.strike - chain.spot))
 
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={})
+        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={},
+        admission_address=_FORGED_RECEIPT)
     cash_after_25 = broker.cash()
     assert pos.qty == 25
     assert quote.tradingsymbol in broker._pending_entries
@@ -390,7 +426,8 @@ def test_complete_then_ledger_commit_failure_recovers_and_books_once(monkeypatch
     monkeypatch.setattr(broker.s, "commit", fail_position_commit)
     with pytest.raises(RuntimeError, match="ledger commit failed"):
         broker.open_position(
-            inst, "LONG", quote, "signal", provider.now(), chain.spot, params={})
+            inst, "LONG", quote, "signal", provider.now(), chain.spot, params={},
+            admission_address=_FORGED_RECEIPT)
     with SessionLocal() as session:
         assert session.scalar(select(Position)) is None
         journal = session.scalar(select(OrderJournal).where(OrderJournal.intent == "ENTRY"))
@@ -426,7 +463,7 @@ def test_equity_partial_timeout_recomputes_cumulative_order_without_double_debit
 
     pos = broker.open_equity_position(
         inst, "LONG", 100.0, 4, "NSE_INTRADAY", "signal", provider.now(),
-        params={}, margin=400.0)
+        params={}, margin=400.0, admission_address=_FORGED_RECEIPT)
     old_cost = pos.entry_cost
     old_cash = broker.cash()
     assert pos.qty == 2
@@ -452,7 +489,8 @@ def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
     monkeypatch.setattr(broker, "_mark_position_booked", lambda *args: False)
 
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={})
+        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={},
+        admission_address=_FORGED_RECEIPT)
     cash_after_position = broker.cash()
     assert pos is not None
 
@@ -468,17 +506,19 @@ def test_restart_closes_position_booked_gap_without_second_debit(monkeypatch):
             intent.client_intent_id).reconciliation_required is False
 
 
-def test_paper_entry_remains_unlinked():
+def test_paper_entry_remains_unlinked(monkeypatch):
     init_db(reset=True)
     provider = MockProvider()
     broker = PaperBroker(provider, owner_id="owner", broker_account_id="account.default")
+    monkeypatch.setattr(broker, "_require_current_entry_receipt", lambda **_: None)
     inst = get_instrument("NIFTY")
     chain = provider.get_option_chain(inst)
     quote = min((q for q in chain.quotes if q.option_type == "CE"),
                 key=lambda q: abs(q.strike - chain.spot))
 
     pos = broker.open_position(
-        inst, "LONG", quote, "paper", provider.now(), chain.spot, params={})
+        inst, "LONG", quote, "paper", provider.now(), chain.spot, params={},
+        strategy_key="trend", strategy_version="sha256:abc", admission_address=_FORGED_RECEIPT)
 
     assert pos.entry_intent_id is None
 
@@ -503,7 +543,8 @@ def test_pre_ack_place_exception_remains_uncertain_and_reconciliation_required()
                 key=lambda q: abs(q.strike - chain.spot))
 
     pos = broker.open_position(
-        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={})
+        inst, "LONG", quote, "signal", provider.now(), chain.spot, params={},
+        admission_address=_FORGED_RECEIPT)
 
     assert pos is None
     with SessionLocal() as session:
@@ -550,7 +591,8 @@ def test_journal_commit_failure_rolls_back_before_lifecycle_write(monkeypatch):
             tradingsymbol="RELIANCE", exchange="NSE", side="BUY", product="MIS",
             order_type="MARKET", requested_qty=1, limit_price=None,
             decision_price=100.0, signal_at=dt.datetime(2026, 8, 9, 10),
-            strategy_key=None, strategy_version=None), {}, dt.datetime(2026, 8, 9, 10))
+            strategy_key=None, strategy_version=None,
+            admission_address="sha256:" + "a" * 64), {}, dt.datetime(2026, 8, 9, 10))
     assert intent.client_intent_id
 
 

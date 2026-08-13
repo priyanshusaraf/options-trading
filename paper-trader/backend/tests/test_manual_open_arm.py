@@ -30,11 +30,11 @@ def test_manual_open_rejected_when_disarmed():
     assert r.broker.position_for("NIFTY") is None
 
 
-def test_manual_open_allowed_when_armed():
+def test_manual_open_remains_refused_when_armed_without_an_admission_receipt():
     c, r = _client()
     r.arm(True)
     res = c.post(
         "/api/positions/manual-open", json={"key": "NIFTY", "direction": "LONG"}
     ).json()
-    assert res.get("opened") is True, res
-    assert r.broker.position_for("NIFTY") is not None
+    assert res.get("error") == "ADMISSION_REQUIRED"
+    assert r.broker.position_for("NIFTY") is None

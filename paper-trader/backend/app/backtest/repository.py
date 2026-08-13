@@ -68,7 +68,8 @@ def load_verified_admission(session, *, owner_id: str,
             (owner_id, artifact.graph_identifier, artifact.graph_version),
         )
         if (version is None
-                or version.admission_address != admission_address
+                or (version.admission_address is not None
+                    and version.admission_address != admission_address)
                 or version.content_address != artifact.graph_address):
             raise _admission_refusal("ARTEFACT_MISMATCH")
         graph = json.loads(version.artifact_json)

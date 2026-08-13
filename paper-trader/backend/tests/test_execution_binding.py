@@ -15,6 +15,8 @@ code change rather than a config row nobody reviews.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.core import deployments as dep
@@ -66,6 +68,15 @@ def test_the_legacy_deployment_with_no_assignment_binds_the_default_strategy():
     assert result.origin == binding.ORIGIN_DEFAULT
     assert result.source == binding.SOURCE_HANDWRITTEN
     assert result.authority == binding.AUTHORITATIVE
+
+
+def test_missing_receipt_is_refused_at_execution_consumption():
+    """A scanned signal cannot open exposure after its receipt has disappeared."""
+    described = resolve()
+    missing = replace(described, admission_address=None)
+
+    with pytest.raises(binding.AuthorityNotGranted, match="ADMISSION_REQUIRED"):
+        binding.strategy_for_execution(missing, admission_loader=lambda _: None)
 
 
 def test_a_per_instrument_assignment_wins_over_the_default():
