@@ -48,18 +48,18 @@
 - Task 4: verified SQLite-to-PostgreSQL copy and cutover — complete at `8e520ff` after final
   independent SPEC PASS / QUALITY PASS. Live PostgreSQL 16 focused copy gate: 19 passed. Bounded
   schema/profile/tenant gate: 149 passed, 13 deliberate skips. See `task-4-report.md`.
-- Task 5: account leases, fencing, and replicated API ownership — brief complete at
-  `task-5-brief.md`; implementation complete and awaiting independent review. Durable lease,
-  command/control, closed LiveBroker mutation perimeter, stale-write fencing, API-only replicas,
-  holder control execution, strict recovery activation and SQLite/live-PostgreSQL races are in the
-  uncommitted tree. See `task-5-report.md`.
-- Task 6: implementation complete and frozen for independent review. Plane-local transactional
-  outboxes, fenced at-least-once consumers, PostgreSQL LISTEN wakeups with polling authority,
-  boot-unique replica delivery for all three planes, scoped cache/WS refresh and signed resume
-  cursors are in the uncommitted tree. See `task-6-report.md`.
-- Task 7: implementation complete and frozen for independent review at base `d982428`. The tree
-  contains a signed/redacted PostgreSQL restore contract, credential-safe PG16 dump/restore tools,
-  a live clean physical-database restore proof, restore-specific execution boot takeover, bounded
-  workload presets/reports, PostgreSQL CI gate and operator runbooks. Managed PITR, production
-  capacity/cost, geographic failover and broker-side fencing remain explicitly unproven. See
-  `task-7-report.md`.
+- Task 5: complete at `8df310f`. Durable account leases, monotonically increasing fences,
+  command/control evidence, a closed LiveBroker mutation perimeter, API-only replicas, strict
+  recovery activation, and SQLite/live-PostgreSQL races are retained in `task-5-report.md`.
+- Task 6: complete at `2fca64f` plus the pagination correction at `d982428`; the current closure
+  patch adds the missing typed commit-owner producers and projection-specific reload/invalidation
+  mapping identified by final review. Plane-local outboxes, at-least-once consumers, PostgreSQL
+  LISTEN wakeups with polling authority, scoped cache/WS refresh, and signed resume cursors remain
+  the contract. See `task-6-report.md`.
+- Task 7: complete at `30acb45`. Signed/redacted restore contracts, credential-safe PG16
+  dump/restore tools, a live clean-database restore proof, restore-specific execution takeover,
+  bounded workload presets/reports, a PostgreSQL CI gate, and operator runbooks exist. Managed
+  PITR, production capacity/cost, geographic failover, and broker-side fencing remain explicitly
+  unproven. See `task-7-report.md`.
+- Phase 2 closure: implementation is complete and frozen for independent review. Phase 1 is
+  closed; frontend work remains deferred until this closure is accepted.

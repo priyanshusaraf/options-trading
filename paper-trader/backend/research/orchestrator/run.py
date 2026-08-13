@@ -249,6 +249,7 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
     spec = (session.query(ExperimentSpec)
             .filter(ExperimentSpec.owner_id == owner_id, ExperimentSpec.id == sid)
             .one_or_none())
+    spec_created = spec is None
     if spec is None:
         spec = ExperimentSpec(
             owner_id=owner_id, id=sid,
@@ -273,6 +274,24 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
     session.add(run)
     session.flush()
     run_id = run.id
+    from app.events.producers import append_research_change
+    if spec_created:
+        append_research_change(
+            session, owner_id=owner_id, aggregate_type="experiment_spec",
+            aggregate_id=sid, event_type="research.spec.changed",
+            projection="research_specs",
+            producer_key="research-spec:" + hashlib.sha256(
+                f"{owner_id}\x1f{sid}".encode("utf-8")
+            ).hexdigest(),
+            facts={"state": "created", "content_address": f"sha256:{sid}"},
+        )
+    append_research_change(
+        session, owner_id=owner_id, aggregate_type="experiment_run",
+        aggregate_id=str(run_id), event_type="research.run.changed",
+        projection="research_runs",
+        producer_key=f"research-run:{run_id}:opened",
+        facts={"state": "running"},
+    )
     session.info[_ACTIVE_RUN_KEY] = {
         "run_id": run_id,
         "recipe": recipe,
@@ -557,6 +576,28 @@ def run_experiment(session, *, owner_id: str, program_name, hypothesis_statement
     })
     if finalize_run is not None and not finalize_run(run.id):
         raise RuntimeError("research operation claim was lost before terminal receipt")
+    append_research_change(
+        session, owner_id=owner_id, aggregate_type="experiment_run",
+        aggregate_id=str(run.id), event_type="research.run.changed",
+        projection="research_runs",
+        producer_key=f"research-run:{run.id}:completed",
+        facts={"state": "completed", "decision": run.decision},
+    )
+    append_research_change(
+        session, owner_id=owner_id, aggregate_type="experiment_run_findings",
+        aggregate_id=str(run.id), event_type="research.finding.changed",
+        projection="research_findings",
+        producer_key=f"research-findings:{run.id}:completed",
+        facts={"state": "completed", "count": len(rejected) + len(validated)},
+    )
+    if promotion is not None:
+        append_research_change(
+            session, owner_id=owner_id, aggregate_type="promotion_run",
+            aggregate_id=str(run.id), event_type="research.promotion.changed",
+            projection="research_promotions",
+            producer_key=f"research-promotion:{run.id}:shadow",
+            facts={"state": "shadow"},
+        )
     session.commit()
     logger.info("[run] #%d completed: decision=%s · %d qualified · %d validated · %d bars",
                 run.id, run.decision, len(qualified), len(validated), total_bars)

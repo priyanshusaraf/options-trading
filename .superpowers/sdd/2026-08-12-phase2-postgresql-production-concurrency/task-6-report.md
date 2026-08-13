@@ -34,14 +34,24 @@ fully pruned scope advances the returned cursor through its watermark rather tha
 ## Producer seams
 
 - Execution: lease claim/takeover/activate/block/release, control request/result, command
-  preparation/acknowledged evidence, ambiguity, terminal transitions, and prior-epoch reconciliation.
-- Research: operation enqueue plus scheduler stage/item/terminal evidence, including cancellation reconciliation;
-  the outbox references the committed `ResearchOperationEvent` sequence.
+  preparation/acknowledged evidence, ambiguity, terminal transitions, prior-epoch reconciliation,
+  execution intent/order lifecycle, compound position/trade/capital book changes, backtest
+  enqueue/cancel/terminal, deployment state, graph publication, runtime configuration, universe
+  preferences, and broker-connection readiness/revocation.
+- Research: operation enqueue plus scheduler stage/item/terminal evidence, including cancellation
+  reconciliation; immutable spec creation, run open/completion, finding completion/revision, and
+  promotion admission/decision. The operation outbox references the committed
+  `ResearchOperationEvent` sequence.
 - Ledger: snapshot versions, artifact content-address metadata/deletion, and manual-fill claims.
 
 These are deliberate typed calls, not generic ORM hooks. Raw ticks, quotes, LogBus entries,
 provider payloads, credentials, OAuth/session state, broker responses, request bodies, artifact
 bytes, and mutable logs are excluded.
+
+Final closure also replaces the old fallback that mapped every unknown execution event to lease
+status. Each emitted projection now reloads its bounded owner/account state or returns a typed
+`durable_invalidation` naming the correct projection. The frontend does not yet consume these
+messages and no frontend refresh claim is made.
 
 ## Delivery and resume
 
@@ -81,15 +91,44 @@ Latest retained focused evidence before review:
   fallback, first-stream concurrency, producer retry/conflict, and initial cursor claim.
 - Changed Python modules compiled and `git diff --check` is part of the final freeze gate.
 
+The bounded Phase 2 closure pass then added the missing commit-owner seams and replaced the
+projection fallback. Its retained gates are:
+
+- Typed producer, projection reload, and deterministic regression gate: `30 passed`.
+- Outbox contract/delivery/plane/resume gate: `61 passed`.
+- Authentication boundary gate: `30 passed`; execution HTTP/lease gate: `52 passed`.
+- Current schema agreement/idempotence gate: `7 passed`; plane ownership gate: `18 passed`.
+- Research/ledger private-plane gate: `97 passed`; money/projection gate: `40 passed`.
+- Affected graph, runtime, universe, connection, lifecycle, backtest, and research gate:
+  `201 passed`.
+- Live PostgreSQL production-producer rollback/commit atomicity plus outbox and lease race gate:
+  `8 passed`.
+- A maximum-length deployment mutation first reproduced a producer-key bound failure, then passed
+  after deployment mutation identities moved to stable digests; the final focused
+  producer/deployment/reload gate is `61 passed`.
+
+Long combined and historical schema matrices were not promoted to closure evidence after the
+local command harness terminated them without a result. The retained focused current-schema and
+high-risk state-boundary gates above are the review evidence.
+
 ## Changed paths
 
 - Contract/delivery: `app/events/{outbox,planes,delivery}.py` and `app/events/__init__.py`.
 - Execution schema/factories: `app/db/{models,planes}.py` and Alembic `0033`.
 - Research schema/factories: `research/domain/{models,migrate,operations}.py` and migration `0004`.
 - Ledger schema/factories: `app/ledger/{db,models,service}.py`.
-- Typed execution producers: `app/execution/leases.py`.
-- Replica lifecycle/resume boundary: `app/main.py`, `app/api/{routes,principal}.py`, and
+- Typed execution producers: `app/execution/leases.py`, `app/events/producers.py`,
+  `app/backtest/repository.py`, `app/core/{deployments,execution_book,runtime_config,
+  universe_resolver}.py`, `app/editor/graph_artifacts.py`, `app/engine/{broker,
+  execution_lifecycle,runner}.py`, and `app/providers/connection_store.py`.
+- Typed research producers: `app/core/research_read.py`, `research/orchestrator/run.py`, and
+  `research/shadow.py`.
+- Replica lifecycle/resume boundary: `app/events/projections.py`, `app/main.py`,
+  `app/api/{routes,principal}.py`, and
   `app/core/config.py`.
+- Closure regressions: `tests/test_phase2_closure_producers.py`,
+  `tests/test_projection_reload.py`, and the production-producer PostgreSQL atomicity case in
+  `tests/test_postgres_execution_leases.py`.
 - Tests/runbook: `tests/test_outbox_*`, `tests/test_postgres_outbox.py`,
   `tests/test_task6_tenant_channels.py`, `tests/test_user_sessions.py`, `.env.example`, and
   `docs/operations/durable-event-delivery.md`.

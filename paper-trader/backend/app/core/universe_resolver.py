@@ -9,6 +9,9 @@ Seed instruments are never deleted, only un-pinned / disabled.
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
+
 from app.core import instruments as reg
 from app.core.instruments import Instrument
 from app.core.logging import log
@@ -120,6 +123,18 @@ def add_instrument(key: str, provider, on_home: bool = True,
             else:
                 st.strategy_key = strategy_key
                 applied_strategy = strategy_key
+        from app.events.producers import append_execution_change
+        mutation = hashlib.sha256(
+            f"{owner_id}\x1f{key}\x1fenabled\x1f{dt.datetime.now().isoformat()}"
+            .encode("utf-8")
+        ).hexdigest()
+        append_execution_change(
+            s, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="universe_preference", aggregate_id=key,
+            event_type="execution.universe_preference.changed",
+            projection="universe_preferences", producer_key=f"universe:{mutation}",
+            facts={"state": "enabled", "on_home": bool(on_home)},
+        )
         s.commit()
     reg.load_universe()
     log.info(f"added {key} to portfolio universe (has_options={spec.has_options}"
@@ -162,6 +177,18 @@ def remove_instrument(key: str, *, owner_id: str, broker_account_id: str) -> dic
         st = s.get(InstrumentState, (owner_id, key))
         if st is not None:
             st.enabled = False
+        from app.events.producers import append_execution_change
+        mutation = hashlib.sha256(
+            f"{owner_id}\x1f{key}\x1fdisabled\x1f{dt.datetime.now().isoformat()}"
+            .encode("utf-8")
+        ).hexdigest()
+        append_execution_change(
+            s, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="universe_preference", aggregate_id=key,
+            event_type="execution.universe_preference.changed",
+            projection="universe_preferences", producer_key=f"universe:{mutation}",
+            facts={"state": "disabled"},
+        )
         s.commit()
         was_user = pref.source == "user"
     reg.load_universe()

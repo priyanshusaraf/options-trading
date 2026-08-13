@@ -10,9 +10,11 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, BrokerAccount, CapitalState
+from app.db.models import BacktestRun, Base, BrokerAccount, CapitalState, Organization
 from app.execution.leases import LeaseRepository, LeaseUnavailable, RecoveryRequired, StaleLease
 from app.core.execution_book import capital_for_book
+from app.backtest import repository as backtest_repository
+from app.events.planes import execution_outbox
 
 
 @pytest.fixture()
@@ -30,6 +32,7 @@ def postgres_leases():
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     with sessions.begin() as session:
+        session.add(Organization(organization_id="tenant", name="Tenant"))
         session.add_all([
             BrokerAccount(broker_account_id="account-a", owner_id="tenant", broker="kite",
                           external_account_id="a", display_name="A"),
@@ -92,6 +95,33 @@ def test_postgres_two_session_claim_takeover_and_control_are_exactly_once(postgr
     independent = repo.claim(owner_id="tenant", broker_account_id="account-b",
                              cell_id="cell-b", worker_id="boot-b")
     assert independent.fence_epoch == 1
+
+
+def test_postgres_backtest_state_and_typed_event_commit_or_rollback_together(postgres_leases):
+    """The real producer uses the same PostgreSQL transaction as its durable run."""
+    _repo, sessions = postgres_leases
+    with sessions() as session:
+        rolled_back = backtest_repository.enqueue_run(
+            session, owner_id="tenant", scope="liquid", intervals="day",
+            capital=10_000, total=1,
+        )
+        rolled_back_id = rolled_back.id
+        session.rollback()
+    with sessions() as session:
+        assert session.get(BacktestRun, rolled_back_id) is None
+        assert session.scalar(sa.select(sa.func.count()).select_from(
+            execution_outbox().models.Event)) == 0
+
+    with sessions.begin() as session:
+        committed = backtest_repository.enqueue_run(
+            session, owner_id="tenant", scope="liquid", intervals="day",
+            capital=10_000, total=1,
+        )
+        committed_id = committed.id
+    with sessions() as session:
+        event = session.scalar(sa.select(execution_outbox().models.Event))
+        assert event.aggregate_id == str(committed_id)
+        assert (event.owner_id, event.broker_account_id) == ("tenant", None)
 
 
 def test_postgres_money_commit_linearizes_before_takeover(postgres_leases):

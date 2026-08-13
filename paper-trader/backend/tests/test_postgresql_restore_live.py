@@ -21,6 +21,7 @@ from app.db.models import (
 from app.backtest import repository as backtest_repository
 from app.execution.leases import LeaseRepository, StaleLease
 from app.events.outbox import OutboxRepository
+from app.db.copy_contract import CopyRefusal, validate_semantic_ownership
 from app.db.restore_contract import RestoreRefusal, capture_manifest, configured_restore_planes, verify_restore
 from app.events.planes import execution_outbox, ledger_outbox, research_outbox
 from app.ledger import models as ledger_models
@@ -119,13 +120,20 @@ def test_pg16_dump_restore_three_plane_generation_is_digest_identical(tmp_path):
                     aggregate_id="acc-a", event_type="execution.lease.changed",
                     schema_version=1, payload={"projection": "execution_status"},
                     producer_key="restore-fixture-execution")
+                repo.append(
+                    session, classification="private", owner_id="org-a",
+                    broker_account_id=None, aggregate_type="backtest_run",
+                    aggregate_id="owner-run", event_type="execution.backtest.changed",
+                    schema_version=1, payload={"projection": "backtest_runs"},
+                    producer_key="restore-fixture-execution-owner")
         with execution_sessions.begin() as session:
             repo = execution_outbox()
             claimed = repo.claim_batch(session, consumer_id="restore-consumer",
                                        lease_owner="source", limit=10, lease_seconds=30)
-            assert len(claimed.events) == 1
-            repo.ack(session, claimed.claim_token, claimed.events[0].event_id,
-                     effect_key="projection:restore-fixture")
+            assert len(claimed.events) == 2
+            for event in claimed.events:
+                repo.ack(session, claimed.claim_token, event.event_id,
+                         effect_key=f"projection:{event.producer_key}")
             repo.release(session, claimed.claim_token)
         lease_repository = LeaseRepository(execution_sessions)
         old_lease_token = lease_repository.claim(
@@ -251,6 +259,22 @@ def test_pg16_dump_restore_three_plane_generation_is_digest_identical(tmp_path):
             ledger_url=target["ledger"])
         mutation_engine = sa.create_engine(target["execution"], future=True)
         with mutation_engine.begin() as connection:
+            connection.execute(sa.text(
+                "UPDATE execution_outbox_event "
+                "SET broker_account_id='acc-b', scope_key='private:org-a:acc-b' "
+                "WHERE producer_key='restore-fixture-execution-owner'"))
+        with mutation_engine.connect() as connection:
+            with pytest.raises(CopyRefusal, match="broker-account ownership"):
+                validate_semantic_ownership(connection, Base.metadata)
+        with pytest.raises(RestoreRefusal):
+            verify_restore(restored_planes, manifest, signing_key=signing_key,
+                           require_signed=True)
+        with mutation_engine.begin() as connection:
+            connection.execute(sa.text(
+                "UPDATE execution_outbox_event "
+                "SET broker_account_id=NULL, scope_key='private:org-a:*' "
+                "WHERE producer_key='restore-fixture-execution-owner'"))
+        with mutation_engine.begin() as connection:
             connection.execute(sa.text("UPDATE alembic_version SET version_num='bad-head'"))
         with pytest.raises(RestoreRefusal):
             verify_restore(restored_planes, manifest, signing_key=signing_key, require_signed=True)
@@ -295,7 +319,7 @@ def test_pg16_dump_restore_three_plane_generation_is_digest_identical(tmp_path):
             assert session.scalar(sa.select(sa.func.count()).select_from(
                 EXECUTION_OUTBOX_MODELS.ConsumerCursor)) == 1
             assert session.scalar(sa.select(sa.func.count()).select_from(
-                EXECUTION_OUTBOX_MODELS.ConsumerReceipt)) == 1
+                EXECUTION_OUTBOX_MODELS.ConsumerReceipt)) == 2
             assert session.scalar(sa.select(AccountExecutionLease.fence_epoch).where(
                 AccountExecutionLease.owner_id == "org-a",
                 AccountExecutionLease.broker_account_id == "acc-a")) == old_lease_token.fence_epoch

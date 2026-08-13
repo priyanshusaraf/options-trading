@@ -52,6 +52,21 @@ SINGLETON_KEYED: set[str] = set()
 #: Owned by earlier revisions.
 ALREADY_OWNED = {"broker_connections", "execution_intents"}
 
+# Added after migration 0017.  Each category names the durable scope that owns it;
+# internal delivery rows do not pretend to be tenant rows when their authority is a
+# stream/consumer/scope key instead.
+ACCOUNT_SCOPED = {
+    "account_execution_leases", "account_execution_lease_history",
+    "account_execution_commands", "oauth_callback_states",
+}
+DELIVERY_SCOPED = {
+    "execution_outbox_stream_head",       # aggregate_type + aggregate_id
+    "execution_outbox_event",             # owner/account scope_key
+    "execution_outbox_consumer_cursor",   # internal consumer_id
+    "execution_outbox_consumer_receipt",  # consumer_id + event_id
+    "execution_outbox_retention_watermark",  # durable scope_key
+}
+
 
 def _money_tables() -> set[str]:
     return {t for t, plane in TABLE_PLANES.items() if plane is Plane.MONEY}
@@ -62,7 +77,8 @@ def test_every_money_table_is_accounted_for():
     the singleton-keyed list with a reason — there is no third category, and a new money table
     that is neither fails here rather than shipping unowned."""
     scoped = {"broker_accounts", "capital_state", "instrument_state", "daily_account_snapshot"}
-    accounted = set(rev0017.TABLES) | scoped | SINGLETON_KEYED | ALREADY_OWNED
+    accounted = (set(rev0017.TABLES) | scoped | SINGLETON_KEYED | ALREADY_OWNED
+                 | ACCOUNT_SCOPED | DELIVERY_SCOPED)
     unaccounted = _money_tables() - accounted
     assert not unaccounted, (
         f"money-plane tables with no ownership decision: {sorted(unaccounted)}. Add the column "

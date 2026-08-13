@@ -2684,6 +2684,10 @@ class EngineRunner:
             cap.realized_pnl = new_state["realized_pnl"]
             cap.account_baseline = new_state["account_baseline"]
             cap.anchored_at = now
+            self.broker._append_money_projection(
+                state="capital_reanchored", aggregate_id=f"capital:{self.book}",
+                revision=now.isoformat(),
+            )
             self.broker.s.commit()
             self._reanchored = True
             log.info(f"RE-ANCHORED live ledger to real equity ₹{net:,.2f} "

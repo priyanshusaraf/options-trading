@@ -23,6 +23,7 @@ second connection to the live ledger.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 
 from sqlalchemy import select
@@ -39,6 +40,12 @@ ARCHIVED = "archived"
 STATUSES = (DRAFT, ACTIVE, PAUSED, ARCHIVED)
 
 LEGACY_NAME = "default"
+
+
+def _deployment_producer_key(*parts: object) -> str:
+    """Keep mutation identities within the outbox's bounded key contract."""
+    raw = "|".join(str(part) for part in parts)
+    return "deployment:" + hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _account_belongs_to_owner(session, *, owner_id: str, broker_account_id: str) -> bool:
@@ -80,6 +87,14 @@ def ensure_legacy_deployment(session, *, owner_id: str,
     )
     session.add(row)
     session.flush()
+    from app.events.producers import append_execution_change
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        aggregate_type="deployment", aggregate_id=str(row.id),
+        event_type="execution.deployment.changed", projection="deployments",
+        producer_key=_deployment_producer_key(owner_id, row.id, "created"),
+        facts={"state": ACTIVE},
+    )
     return row
 
 
@@ -155,6 +170,14 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
         status=status, armed=False, notes=notes)
     session.add(row)
     session.flush()
+    from app.events.producers import append_execution_change
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        aggregate_type="deployment", aggregate_id=str(row.id),
+        event_type="execution.deployment.changed", projection="deployments",
+        producer_key=_deployment_producer_key(owner_id, row.id, "created"),
+        facts={"state": status},
+    )
     return row
 
 
@@ -183,6 +206,15 @@ def set_status(session, deployment_id: int, status: str, *, owner_id: str,
         row.armed = False       # a non-active deployment must never stay armed
     row.updated_at = dt.datetime.now()
     session.flush()
+    from app.events.producers import append_execution_change
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        aggregate_type="deployment", aggregate_id=str(row.id),
+        event_type="execution.deployment.changed", projection="deployments",
+        producer_key=_deployment_producer_key(
+            owner_id, row.id, "status", row.updated_at.isoformat()),
+        facts={"state": status},
+    )
     return row
 
 
@@ -206,6 +238,15 @@ def set_armed(session, deployment_id: int, armed: bool, *, owner_id: str,
     row.armed = armed
     row.updated_at = dt.datetime.now()
     session.flush()
+    from app.events.producers import append_execution_change
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        aggregate_type="deployment", aggregate_id=str(row.id),
+        event_type="execution.deployment.changed", projection="deployments",
+        producer_key=_deployment_producer_key(
+            owner_id, row.id, "armed", row.updated_at.isoformat()),
+        facts={"state": "armed" if armed else "disarmed"},
+    )
     return row
 
 
@@ -219,6 +260,16 @@ def disarm_all(session, *, owner_id: str, broker_account_id: str) -> int:
             Deployment.owner_id == owner_id,
             Deployment.broker_account_id == broker_account_id)):
         row.armed = False
+        row.updated_at = dt.datetime.now()
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=broker_account_id,
+            aggregate_type="deployment", aggregate_id=str(row.id),
+            event_type="execution.deployment.changed", projection="deployments",
+            producer_key=_deployment_producer_key(
+                owner_id, row.id, "boot-disarm", row.updated_at.isoformat()),
+            facts={"state": "disarmed"},
+        )
         n += 1
     session.flush()
     return n

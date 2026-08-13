@@ -2,7 +2,8 @@
 
 ## Status
 
-Implementation is frozen uncommitted for independent review. Base commit: `d982428`.
+Task 7 is committed at `30acb45` (`test(operations): prove PostgreSQL restore readiness`). The
+separate final Phase 2 closure diff remains frozen uncommitted for independent review.
 
 The local PostgreSQL 16 logical restore contract is implemented and exercised against a clean new
 physical database. Managed PITR, geographic failover, encrypted off-account retention, production

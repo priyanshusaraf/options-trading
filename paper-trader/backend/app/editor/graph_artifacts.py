@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass
@@ -447,6 +448,17 @@ def publish_draft(
         artifact.published_revision = artifact.draft_revision
         artifact.draft_json = encoded
         artifact.updated_at = version.created_at
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="graph", aggregate_id=identifier,
+            event_type="execution.graph.changed", projection="published_graphs",
+            producer_key="graph:" + hashlib.sha256(
+                f"{owner_id}\x1f{identifier}\x1f{version.version}".encode("utf-8")
+            ).hexdigest(),
+            facts={"state": "published", "version": version.version,
+                   "content_address": version.content_address},
+        )
         result = _published_record(project_id, version)
     return result
 
@@ -538,6 +550,17 @@ def apply_and_publish(
             base_version=source_version,
             base_presentation_revision=base_presentation_revision,
             presentation_delta=presentation_delta,
+        )
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="graph", aggregate_id=identifier,
+            event_type="execution.graph.changed", projection="published_graphs",
+            producer_key="graph:" + hashlib.sha256(
+                f"{owner_id}\x1f{identifier}\x1f{version.version}".encode("utf-8")
+            ).hexdigest(),
+            facts={"state": "published", "version": version.version,
+                   "content_address": version.content_address},
         )
         try:
             result = response_factory(publication, layout)

@@ -4,6 +4,7 @@ from app.events.outbox import OutboxRepository
 EXECUTION_EVENT_TYPES = frozenset({
     "execution.lease.changed", "execution.control.changed",
     "execution.lifecycle.changed", "execution.position.changed",
+    "execution.money.changed",
     "execution.backtest.changed", "execution.deployment.changed",
     "execution.graph.changed", "execution.runtime_config.changed",
     "execution.universe_preference.changed", "execution.connection.changed",

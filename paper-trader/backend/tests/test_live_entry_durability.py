@@ -377,7 +377,12 @@ def test_complete_then_ledger_commit_failure_recovers_and_books_once(monkeypatch
     original_commit = broker.s.commit
 
     def fail_position_commit():
-        if any(isinstance(row, Position) for row in broker.s.new):
+        # The transactional outbox flushes the position before commit so it can
+        # address the durable aggregate. It is still uncommitted and must remain
+        # covered by this injected commit failure.
+        if (any(isinstance(row, Position) for row in broker.s.new)
+                or any(isinstance(row, Position)
+                       for row in broker.s.identity_map.values())):
             broker.s.rollback()
             raise RuntimeError("ledger commit failed")
         return original_commit()

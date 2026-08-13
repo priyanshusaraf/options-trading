@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.core import credential_vault as vault
 from app.core.config import get_settings
@@ -31,6 +32,7 @@ from app.engine.runner import EngineRunner
 from app.main import app
 from app.api.principal import Principal, get_principal, token_digest
 from app.providers.connection_store import ConnectionNotFound, OwnedConnectionStore
+from app.events.planes import execution_outbox
 
 KEY = base64.b64encode(b"r" * 32).decode()
 
@@ -578,6 +580,42 @@ class _FakeKite:
         return {"access_token": "exchanged-access-token", "user_id": "AB1234"}
 
 
+def _oauth_principal(user_id: str, session_id: str, bearer: str) -> Principal:
+    from app.db.models import Membership, Organization, User, UserSession
+
+    with SessionLocal() as session:
+        if session.get(Organization, OWNER) is None:
+            session.add(Organization(organization_id=OWNER, name=OWNER))
+        session.add(User(
+            user_id=user_id, email_normalized=f"{user_id}@example.test",
+            display_name=user_id,
+        ))
+        session.flush()
+        session.add_all([
+            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
+            UserSession(
+                session_id=session_id, token_digest=token_digest(bearer),
+                user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
+                expires_at=dt.datetime.now() + dt.timedelta(hours=1),
+            ),
+        ])
+        session.commit()
+    return Principal(
+        id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
+        organization_id=OWNER, role="owner", session_id=session_id,
+    )
+
+
+def _connection_change_events(connection_id: int):
+    event = execution_outbox().models.Event
+    with SessionLocal() as session:
+        return list(session.scalars(select(event).where(
+            event.event_type == "execution.connection.changed",
+            event.aggregate_type == "broker_connection",
+            event.aggregate_id == str(connection_id),
+        ).order_by(event.plane_offset)))
+
+
 def test_the_retired_exchange_endpoint_never_reaches_the_provider(client, vault_key, monkeypatch):
     """Kite's exception messages have been observed to echo request parameters, and this one
     reaches an API response and the /api/logs ring buffer. Only the type name crosses."""
@@ -643,24 +681,10 @@ def test_a_broker_with_no_registered_login_flow_refuses_with_its_docs_url(client
 def test_oauth_callback_binds_one_durable_session_connection_and_is_single_use(
         client, vault_key, monkeypatch):
     """A callback needs opaque state, not a connection id or bearer header."""
-    from app.db.models import Membership, Organization, User, UserSession
     import app.providers.broker_auth as ba
 
     user_id, session_id = "oauth-user", "oauth-session"
-    with SessionLocal() as s:
-        if s.get(Organization, OWNER) is None:
-            s.add(Organization(organization_id=OWNER, name=OWNER))
-        s.add(User(user_id=user_id, email_normalized="oauth@example.test", display_name="OAuth"))
-        s.flush()
-        s.add_all([
-            Membership(organization_id=OWNER, user_id=user_id, role="owner"),
-            UserSession(session_id=session_id, token_digest=token_digest("oauth-bearer"),
-                        user_id=user_id, organization_id=OWNER, issued_at=dt.datetime.now(),
-                        expires_at=dt.datetime.now() + dt.timedelta(hours=1)),
-        ])
-        s.commit()
-    principal = Principal(id=user_id, kind="user", scopes=frozenset({"*"}), user_id=user_id,
-                          organization_id=OWNER, role="owner", session_id=session_id)
+    principal = _oauth_principal(user_id, session_id, "oauth-bearer")
     app.dependency_overrides[get_principal] = lambda: principal
     try:
         monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
@@ -668,12 +692,53 @@ def test_oauth_callback_binds_one_durable_session_connection_and_is_single_use(
         started = client.post(f"/api/connections/{created['id']}/oauth/initiate")
         assert started.status_code == 200, started.text
         state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        before = {event.event_id for event in _connection_change_events(created["id"])}
         callback = client.get("/api/oauth/callback", params={
             "state": state, "request_token": "one-time-rt"})
         assert callback.status_code == 200, callback.text
         assert callback.json()["id"] == created["id"]
+        appended = [event for event in _connection_change_events(created["id"])
+                    if event.event_id not in before]
+        assert len(appended) == 1
+        assert (appended[0].owner_id, appended[0].broker_account_id) == (
+            OWNER, created["broker_account_id"])
+        assert json.loads(appended[0].payload_json) == {
+            "projection": "connections", "state": "ready", "ready": True,
+        }
         assert client.get("/api/oauth/callback", params={
             "state": state, "request_token": "one-time-rt"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_oauth_callback_rolls_back_credential_and_readiness_event_together(
+        client, vault_key, monkeypatch):
+    """Failure after the callback write must commit neither credential nor readiness fact."""
+    import app.providers.broker_auth as ba
+
+    user_id, session_id = "oauth-rollback-user", "oauth-rollback-session"
+    principal = _oauth_principal(user_id, session_id, "oauth-rollback-bearer")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
+        created = _kite_with_app_keys(client, vault_key)
+        started = client.post(f"/api/connections/{created['id']}/oauth/initiate")
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        with SessionLocal() as session:
+            before_ciphertext = session.get(BrokerConnection, created["id"]).credential_ciphertext
+        before_events = {event.event_id for event in _connection_change_events(created["id"])}
+
+        def fail_after_callback_write(_self):
+            raise RuntimeError("injected callback response failure")
+
+        monkeypatch.setattr(BrokerConnection, "to_dict", fail_after_callback_write)
+        with pytest.raises(RuntimeError, match="injected callback response failure"):
+            client.get("/api/oauth/callback", params={
+                "state": state, "request_token": "one-time-rt"})
+
+        with SessionLocal() as session:
+            assert session.get(BrokerConnection, created["id"]).credential_ciphertext == before_ciphertext
+        assert {event.event_id for event in _connection_change_events(created["id"])} == before_events
     finally:
         app.dependency_overrides.clear()
 

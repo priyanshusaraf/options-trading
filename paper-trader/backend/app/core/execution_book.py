@@ -189,17 +189,18 @@ def _bootstrap_capital(bind, *, book: str, broker_account_id: str,
                     event="LEDGER_UNATTRIBUTED")
             elif not named_books and (not owners or owners == {book}):
                 legacy.book = book
-                _commit_the_bootstrap(bootstrap)
+                _commit_the_bootstrap(
+                    bootstrap, broker_account_id=broker_account_id, book=book)
                 return
 
         seed = get_settings().initial_capital
         bootstrap.add(CapitalState(
             broker_account_id=broker_account_id, book=book,
             initial_capital=seed, cash=seed, realized_pnl=0.0))
-        _commit_the_bootstrap(bootstrap)
+        _commit_the_bootstrap(bootstrap, broker_account_id=broker_account_id, book=book)
 
 
-def _commit_the_bootstrap(session) -> None:
+def _commit_the_bootstrap(session, *, broker_account_id: str, book: str) -> None:
     """Commit the claim immediately rather than flushing into the caller's transaction.
 
     A flush would leave an open write transaction, and the broker holds its session for
@@ -213,6 +214,23 @@ def _commit_the_bootstrap(session) -> None:
     (see `PaperBroker.__init__`), and no call site reaches `capital()` with its own
     writes pending.
     """
+    from app.db.models import BrokerAccount
+    account = session.get(BrokerAccount, broker_account_id)
+    if account is None:
+        raise ValueError("capital bootstrap lost its broker-account owner")
+    import hashlib
+    from app.events.producers import append_execution_change
+    producer = hashlib.sha256(
+        f"{account.owner_id}\x1f{broker_account_id}\x1f{book}\x1fbootstrap"
+        .encode("utf-8")
+    ).hexdigest()
+    append_execution_change(
+        session, owner_id=account.owner_id, broker_account_id=broker_account_id,
+        aggregate_type="capital", aggregate_id=book,
+        event_type="execution.money.changed", projection="money_book",
+        producer_key=f"capital:{producer}",
+        facts={"state": "capital_bootstrapped"},
+    )
     session.commit()
 
 

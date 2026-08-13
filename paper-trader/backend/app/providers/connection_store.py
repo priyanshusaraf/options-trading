@@ -158,6 +158,14 @@ class OwnedConnectionStore:
             status="active", created_at=dt.datetime.now(), updated_at=dt.datetime.now())
         self.s.add(row)
         self.s.flush()
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            self.s, owner_id=self.owner_id, broker_account_id=self.broker_account_id,
+            aggregate_type="broker_connection", aggregate_id=str(row.id),
+            event_type="execution.connection.changed", projection="connections",
+            producer_key=f"connection:{self.owner_id}:{row.id}:created",
+            facts={"state": "created", "ready": False},
+        )
         return row
 
     def store_credential(self, connection_id: int, secrets: dict) -> BrokerConnection:
@@ -183,6 +191,14 @@ class OwnedConnectionStore:
         row.last_authenticated_at = dt.datetime.now()
         row.updated_at = dt.datetime.now()
         self.s.flush()
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            self.s, owner_id=self.owner_id, broker_account_id=self.broker_account_id,
+            aggregate_type="broker_connection", aggregate_id=str(row.id),
+            event_type="execution.connection.changed", projection="connections",
+            producer_key=f"connection:{self.owner_id}:{row.id}:ready:{row.updated_at.isoformat()}",
+            facts={"state": "ready", "ready": True},
+        )
         # No secret, no ciphertext, no key material — this line reaches the log console.
         log.info(f"credential stored for connection {row.id} ({row.broker}:{row.scope})",
                  event="CONNECTION_CREDENTIAL_STORED")
@@ -202,6 +218,14 @@ class OwnedConnectionStore:
         row.revoked_at = dt.datetime.now()
         row.updated_at = dt.datetime.now()
         self.s.flush()
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            self.s, owner_id=self.owner_id, broker_account_id=self.broker_account_id,
+            aggregate_type="broker_connection", aggregate_id=str(row.id),
+            event_type="execution.connection.changed", projection="connections",
+            producer_key=f"connection:{self.owner_id}:{row.id}:revoked",
+            facts={"state": "revoked", "ready": False},
+        )
         log.warn(f"connection {row.id} ({row.broker}:{row.scope}) REVOKED",
                  event="CONNECTION_REVOKED")
         return row

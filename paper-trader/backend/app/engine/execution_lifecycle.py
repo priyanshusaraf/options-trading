@@ -399,6 +399,16 @@ class ExecutionLifecycleStore:
                 fence_epoch=self.fence_epoch,
             ))
             try:
+                from app.events.producers import append_execution_change
+                append_execution_change(
+                    self.session, owner_id=self.owner_id,
+                    broker_account_id=self.broker_account_id,
+                    aggregate_type="execution_intent", aggregate_id=client_intent_id,
+                    event_type="execution.lifecycle.changed",
+                    projection="execution_lifecycle",
+                    producer_key=f"lifecycle:{client_intent_id}:intent-created",
+                    facts={"state": "intent_created"},
+                )
                 self.session.commit()
                 return row
             except IntegrityError as exc:
@@ -448,6 +458,24 @@ class ExecutionLifecycleStore:
         )
         self.session.add(row)
         try:
+            from app.events.producers import append_execution_change
+            producer_digest = hashlib.sha256(
+                f"{self.owner_id}\x1f{client_intent_id}\x1f{event.source}\x1f"
+                f"{event.source_event_id}".encode("utf-8")
+            ).hexdigest()
+            append_execution_change(
+                self.session, owner_id=self.owner_id,
+                broker_account_id=self.broker_account_id,
+                aggregate_type="execution_intent", aggregate_id=client_intent_id,
+                event_type="execution.lifecycle.changed",
+                projection="execution_lifecycle",
+                producer_key=f"lifecycle:{producer_digest}",
+                facts={
+                    "state": event.kind.lower(),
+                    "terminal": event.broker_status.upper() in _TERMINAL_STATUSES,
+                    "ambiguous": bool(event.anomaly),
+                },
+            )
             self.session.commit()
             return row
         except IntegrityError:

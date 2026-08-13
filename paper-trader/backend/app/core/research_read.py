@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime as dt
+import hashlib
 import json
 
 from sqlalchemy import update
@@ -566,6 +567,15 @@ def create_project_finding(
             evidence_run_id=run_id,
         )
         session.add(finding)
+        session.flush()
+        from app.events.producers import append_research_change
+        append_research_change(
+            session, owner_id=owner_id, aggregate_type="finding",
+            aggregate_id=str(finding.id), event_type="research.finding.changed",
+            projection="research_findings",
+            producer_key=f"finding:{owner_id}:{finding.id}:created",
+            facts={"state": "created", "run_id": run_id},
+        )
         session.commit()
         return _finding_view(finding, context)
 
@@ -612,6 +622,14 @@ def revise_project_finding(
         if claimed.rowcount != 1:
             session.rollback()
             raise FindingRevisionConflict(finding_id)
+        from app.events.producers import append_research_change
+        append_research_change(
+            session, owner_id=owner_id, aggregate_type="finding",
+            aggregate_id=str(finding_id), event_type="research.finding.changed",
+            projection="research_findings",
+            producer_key=f"finding:{owner_id}:{finding_id}:superseded:{successor.id}",
+            facts={"state": "superseded", "successor_id": successor.id},
+        )
         session.commit()
         session.refresh(original)
         return {
@@ -777,6 +795,17 @@ def decide_project_candidate(
         if claimed.rowcount != 1:
             session.rollback()
             raise CandidateDecisionConflict(candidate_id)
+        from app.events.producers import append_research_change
+        decision_key = hashlib.sha256(
+            f"{owner_id}\x1f{candidate_id}\x1f{decision}\x1f{decided_at}".encode("utf-8")
+        ).hexdigest()
+        append_research_change(
+            session, owner_id=owner_id, aggregate_type="promotion_candidate",
+            aggregate_id=str(candidate_id), event_type="research.promotion.changed",
+            projection="research_promotions",
+            producer_key=f"promotion:{decision_key}",
+            facts={"state": decision, "run_id": candidate.run_id},
+        )
         session.commit()
         return {
             "candidate_id": candidate_id,

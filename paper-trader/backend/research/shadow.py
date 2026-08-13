@@ -165,6 +165,14 @@ def promote_if_ready(session, candidate_id: int, expected: dict, *,
     cand.scorecard_json = json.dumps(payload)
     cand.status = STATUS_PENDING
     session.flush()
+    from app.events.producers import append_research_change
+    append_research_change(
+        session, owner_id=cand.owner_id, aggregate_type="promotion_candidate",
+        aggregate_id=str(cand.id), event_type="research.promotion.changed",
+        projection="research_promotions",
+        producer_key=f"promotion:{cand.owner_id}:{cand.id}:pending",
+        facts={"state": "pending", "run_id": cand.run_id},
+    )
     return True
 
 

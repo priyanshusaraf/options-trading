@@ -303,10 +303,23 @@ def _validate_semantic_ownership(connection, metadata: MetaData) -> None:
         names = set(table.c.keys())
         if "broker_account_id" not in names or table.name == "broker_accounts":
             continue
-        for row in connection.execute(sa.select(table.c.broker_account_id,
-                                                *([table.c.owner_id] if "owner_id" in names else []))):
-            account = row[0]
-            if account not in accounts or ("owner_id" in names and row[1] != accounts[account]):
+        selected = [table.c.broker_account_id]
+        selected.extend(table.c[name] for name in ("owner_id", "classification", "scope_key")
+                        if name in names)
+        for row in connection.execute(sa.select(*selected)).mappings():
+            account = row["broker_account_id"]
+            owner = row.get("owner_id")
+            if account is None:
+                explicitly_owner_scoped = (
+                    table.name == "execution_outbox_event"
+                    and owner is not None
+                    and row.get("classification") == "private"
+                    and row.get("scope_key") == f"private:{owner}:*"
+                )
+                if explicitly_owner_scoped:
+                    continue
+                raise CopyRefusal(f"{table.name} violates broker-account ownership")
+            if account not in accounts or ("owner_id" in names and owner != accounts[account]):
                 raise CopyRefusal(f"{table.name} violates broker-account ownership")
 
     # A scalar FK can preserve row existence while crossing a tenant boundary. For

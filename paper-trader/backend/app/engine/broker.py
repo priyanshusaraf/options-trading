@@ -9,6 +9,7 @@ This keeps the reconciliation invariant in models.py true at all times.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 
 from sqlalchemy import select
 
@@ -129,6 +130,22 @@ class PaperBroker:
     def commit(self) -> None:
         self.s.commit()
 
+    def _append_money_projection(self, *, state: str, aggregate_id: str,
+                                 revision: str = "") -> None:
+        """Append the position/trade/capital refresh fact before this owner commits."""
+        from app.events.producers import append_execution_change
+        digest = hashlib.sha256(
+            f"{self.owner_id}\x1f{self.broker_account_id}\x1f{aggregate_id}\x1f{state}\x1f{revision}"
+            .encode("utf-8")
+        ).hexdigest()
+        append_execution_change(
+            self.s, owner_id=self.owner_id,
+            broker_account_id=self.broker_account_id,
+            aggregate_type="money_book", aggregate_id=str(aggregate_id),
+            event_type="execution.money.changed", projection="money_book",
+            producer_key=f"money:{digest}", facts={"state": state},
+        )
+
     def _require_owned_position(self, pos: Position) -> None:
         if (pos.owner_id != self.owner_id
                 or pos.broker_account_id != self.broker_account_id):
@@ -181,6 +198,8 @@ class PaperBroker:
             mode=self.MODE,
         )
         self.s.add(pos)
+        self.s.flush()
+        self._append_money_projection(state="position_opened", aggregate_id=str(pos.id))
         self.s.commit()
         log.trade(
             f"OPEN {direction} {q.tradingsymbol} @ {premium:.2f} ×{qty} "
@@ -247,6 +266,8 @@ class PaperBroker:
             mfe=0.0, mae=0.0,   # seeded at the 0 excursion at entry (E0.3)
             mode=self.MODE)
         self.s.add(pos)
+        self.s.flush()
+        self._append_money_projection(state="position_opened", aggregate_id=str(pos.id))
         self.s.commit()
         purple_note = f" — purple band SL {eff_sl_pct:.1%} / TP {eff_tp_pct:.1%}" if sl_pct is not None else ""
         log.trade(
@@ -301,6 +322,8 @@ class PaperBroker:
             mfe=pos.mfe, mae=pos.mae)
         self.s.delete(pos)
         self.s.add(tr)
+        self.s.flush()
+        self._append_money_projection(state="trade_closed", aggregate_id=str(tr.id))
         self.s.commit()
         log.trade(
             f"CLOSE EQUITY {pos.tradingsymbol} @ {exit_price:.2f} [{reason}] "
@@ -347,6 +370,8 @@ class PaperBroker:
                 pos.target_price = r["target_price"]   # owner-set target is not auto-extended
             pos.reinforcement_count = r["count"]
             pos.last_reinforce_time = now
+            self._append_money_projection(
+                state="position_reinforced", aggregate_id=str(pos.id), revision=str(r["count"]))
             self.s.commit()
             # the stop just ratcheted — push it to the exchange GTT backstop too
             # (no-op on paper; LiveBroker modifies the live GTT).
@@ -440,6 +465,8 @@ class PaperBroker:
             last_premium=price, last_spot=price, last_mark_time=now,
             high_water_premium=price, mfe=0.0, mae=0.0, mode=self.MODE)
         self.s.add(pos)
+        self.s.flush()
+        self._append_money_projection(state="position_opened", aggregate_id=str(pos.id))
         self.s.commit()
         log.trade(
             f"OPEN FUTURES {direction} {pos.tradingsymbol} {qty}@{price:.2f} "
@@ -492,6 +519,8 @@ class PaperBroker:
             mfe=pos.mfe, mae=pos.mae)
         self.s.delete(pos)
         self.s.add(tr)
+        self.s.flush()
+        self._append_money_projection(state="trade_closed", aggregate_id=str(tr.id))
         self.s.commit()
         log.trade(
             f"CLOSE FUTURES {pos.tradingsymbol} @ {exit_price:.2f} [{reason}] "
@@ -541,6 +570,8 @@ class PaperBroker:
         )
         self.s.delete(pos)
         self.s.add(tr)
+        self.s.flush()
+        self._append_money_projection(state="trade_closed", aggregate_id=str(tr.id))
         self.s.commit()
         log.trade(
             f"CLOSE {pos.tradingsymbol} @ {exit_premium:.2f} [{reason}] "
@@ -600,6 +631,8 @@ class PaperBroker:
         pos.entry_cost = remaining_cost
         pos.entry_charges = remaining_entry_charges
         self.s.add(tr)
+        self.s.flush()
+        self._append_money_projection(state="trade_partially_closed", aggregate_id=str(tr.id))
         self.s.commit()
         log.trade(
             f"PARTIAL CLOSE {pos.tradingsymbol} {qty} @ {exit_premium:.2f} [{reason}] "
@@ -658,6 +691,8 @@ class PaperBroker:
         pos.entry_cost = remaining_cost
         pos.entry_charges = remaining_entry_charges
         self.s.add(tr)
+        self.s.flush()
+        self._append_money_projection(state="trade_partially_closed", aggregate_id=str(tr.id))
         self.s.commit()
         log.trade(
             f"PARTIAL CLOSE EQUITY {pos.tradingsymbol} {qty} @ {exit_price:.2f} "

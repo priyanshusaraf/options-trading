@@ -10,6 +10,7 @@ and every value is coerced to the type of its code default.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 
 from sqlalchemy import select
 
@@ -204,11 +205,22 @@ def set_override(key: str, value, *, owner_id: str) -> dict:
     value = _coerce_for_key(key, getattr(get_settings(), key), value)
     with SessionLocal() as s:
         row = s.get(RuntimeConfig, (owner_id, key))
+        changed_at = dt.datetime.now()
         if row is None:
-            s.add(RuntimeConfig(owner_id=owner_id, key=key, value=str(value), updated_at=dt.datetime.now()))
+            s.add(RuntimeConfig(owner_id=owner_id, key=key, value=str(value), updated_at=changed_at))
         else:
             row.value = str(value)
-            row.updated_at = dt.datetime.now()
+            row.updated_at = changed_at
+        from app.events.producers import append_execution_change
+        mutation = hashlib.sha256(
+            f"{owner_id}\x1f{key}\x1f{changed_at.isoformat()}\x1f{value}".encode("utf-8")
+        ).hexdigest()
+        append_execution_change(
+            s, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="runtime_config", aggregate_id=key,
+            event_type="execution.runtime_config.changed", projection="runtime_config",
+            producer_key=f"runtime:{mutation}", facts={"state": "updated"},
+        )
         s.commit()
     return {"key": key, "value": str(value)}
 
@@ -218,6 +230,17 @@ def clear_override(key: str, *, owner_id: str) -> None:
         row = s.get(RuntimeConfig, (owner_id, key))
         if row is not None:
             s.delete(row)
+            from app.events.producers import append_execution_change
+            mutation = hashlib.sha256(
+                f"{owner_id}\x1f{key}\x1fclear\x1f{dt.datetime.now().isoformat()}"
+                .encode("utf-8")
+            ).hexdigest()
+            append_execution_change(
+                s, owner_id=owner_id, broker_account_id=None,
+                aggregate_type="runtime_config", aggregate_id=key,
+                event_type="execution.runtime_config.changed", projection="runtime_config",
+                producer_key=f"runtime:{mutation}", facts={"state": "cleared"},
+            )
             s.commit()
 
 

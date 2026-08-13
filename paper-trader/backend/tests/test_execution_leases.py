@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import datetime as dt
+import json
 
 import pytest
 from sqlalchemy import create_engine, select, update
@@ -16,6 +17,7 @@ from app.execution.leases import (
     validate_recovery_snapshot,
 )
 from app.core.execution_book import capital_for_book
+from app.events.planes import execution_outbox
 
 
 @pytest.fixture()
@@ -422,6 +424,76 @@ def test_atomic_arm_projection_refuses_superseded_control_without_deployment_dri
             token, arm.command_id, deployment_id=1, armed=True)
     with sessions() as session:
         assert session.get(Deployment, 1).armed is False
+
+
+def test_atomic_control_projection_emits_account_scoped_arm_and_disarm_changes(lease_store):
+    """Dropping deployment invalidation must leave replicas stale after controls."""
+    repo, sessions = lease_store
+    token = _claim(repo, 1)
+    repo.activate(token, reconciliation_evidence="clean")
+
+    repo.request_control(owner_id="tenant-a", broker_account_id="account-a", kind="arm",
+                         idempotency_key="projection-arm", actor_user_id="u")
+    arm = repo.claim_controls(token)[0]
+    repo.complete_control_with_projection(
+        token, arm.command_id, deployment_id=1, armed=True)
+
+    repo.request_control(owner_id="tenant-a", broker_account_id="account-a", kind="disarm",
+                         idempotency_key="projection-disarm", actor_user_id="u")
+    disarm = repo.claim_controls(token)[0]
+    repo.complete_control_with_projection(
+        token, disarm.command_id, deployment_id=1, armed=False)
+
+    event_model = execution_outbox().models.Event
+    with sessions() as session:
+        events = list(session.scalars(select(event_model).where(
+            event_model.event_type == "execution.deployment.changed",
+            event_model.aggregate_type == "deployment",
+            event_model.aggregate_id == "1",
+        ).order_by(event_model.plane_offset)))
+        assert [(event.owner_id, event.broker_account_id) for event in events] == [
+            ("tenant-a", "account-a"), ("tenant-a", "account-a"),
+        ]
+        assert [json.loads(event.payload_json) for event in events] == [
+            {"projection": "deployments", "state": "armed", "armed": True},
+            {"projection": "deployments", "state": "disabled", "armed": False},
+        ]
+        assert session.get(Deployment, 1).armed is False
+
+
+def test_deployment_projection_append_failure_rolls_back_control_and_arm_state(
+        lease_store, monkeypatch):
+    """The deployment fact must share the control-completion transaction."""
+    from app.events.outbox import OutboxRepository
+
+    repo, sessions = lease_store
+    token = _claim(repo, 1)
+    repo.activate(token, reconciliation_evidence="clean")
+    repo.request_control(owner_id="tenant-a", broker_account_id="account-a", kind="arm",
+                         idempotency_key="projection-rollback", actor_user_id="u")
+    command = repo.claim_controls(token)[0]
+    event_model = execution_outbox().models.Event
+    with sessions() as session:
+        before = set(session.scalars(select(event_model.event_id)))
+
+    original_append = OutboxRepository.append
+
+    def refuse_deployment(self, session, **kwargs):
+        if kwargs.get("event_type") == "execution.deployment.changed":
+            raise RuntimeError("injected deployment projection failure")
+        return original_append(self, session, **kwargs)
+
+    monkeypatch.setattr(OutboxRepository, "append", refuse_deployment)
+    with pytest.raises(RuntimeError, match="injected deployment projection failure"):
+        repo.complete_control_with_projection(
+            token, command.command_id, deployment_id=1, armed=True)
+
+    with sessions() as session:
+        assert session.get(Deployment, 1).armed is False
+        assert session.get(AccountExecutionCommand, command.command_id).state == "processing"
+        lease = session.get(AccountExecutionLease, ("tenant-a", "account-a"))
+        assert lease.effective_state == "disabled"
+        assert set(session.scalars(select(event_model.event_id))) == before
 
 
 def test_protective_proxy_persists_exact_wire_tag_and_target(lease_store):

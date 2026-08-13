@@ -183,9 +183,10 @@ def test_claim_lease_repeats_after_crash_and_stale_token_cannot_ack(store):
         assert [event.event_id for event in second.events] == [first.events[0].event_id]
     with sm() as session, session.begin():
         with pytest.raises(StaleClaim):
-            repo.ack(session, first.claim_token, first.events[0].event_id, effect_key="refresh:1")
+            repo.ack(session, first.claim_token, first.events[0].event_id,
+                     effect_key="refresh:1", now=now + dt.timedelta(seconds=6))
         assert repo.ack(session, second.claim_token, second.events[0].event_id,
-                        effect_key="refresh:1") is True
+                        effect_key="refresh:1", now=now + dt.timedelta(seconds=6)) is True
     with sm() as session, session.begin():
         empty = repo.claim_batch(session, consumer_id="replica-a", lease_owner="worker-3",
                                  limit=10, lease_seconds=5,

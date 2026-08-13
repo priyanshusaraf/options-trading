@@ -155,4 +155,3 @@ event; duplicate delivery is idempotent.
 duplicate-worker fencing, API replica loss, job takeover, event catch-up and bounded overload.
 Publish p50/p95/p99, throughput, connection-pool wait, lock wait, memory, WS bytes, recovery time
 and cost by workload vector. No workload tier becomes a product ceiling.
-

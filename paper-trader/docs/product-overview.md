@@ -1,6 +1,6 @@
 # Strategy OS — Product Overview
 
-*Current product direction and honest delivery state. Updated 2026-08-12.*
+*Current product direction and honest delivery state. Updated 2026-08-13.*
 
 ## Product
 
@@ -34,19 +34,21 @@ version that produced it. The legacy paper/live engine and its safety controls r
 separate from broad Strategy OS adoption. A graph-backed paper-authority path exists;
 graph-backed live authority remains deliberately unapproved.
 
-Phase 1 is making multi-user boundaries structural before major frontend work. It has
-introduced organization, user, membership, and broker-account roots; owner-scoped
-money, strategy, research, review, backtest, and cache boundaries; durable backtest
-claims; and durable user sessions. Durable owner-scoped research operations are being
-hardened. The remaining Phase 1 work includes the shared runner and lifecycle paths,
-full scoped API and export coverage, WebSocket and answer-changing cache partitioning,
-and the adversarial two-tenant gate. A component is only considered complete when its
-specific gate passes.
+Phase 1 is closed. Organization, user, membership, and broker-account roots now anchor
+owner-scoped money, strategy, research, review, backtest, API, export, WebSocket, cache,
+job, session, and execution boundaries. The adversarial two-tenant gate is part of the
+closure evidence.
 
-The current persistence profile is SQLite in separate application, research, and
-ledger planes. It is suitable for local development, tests, and the present
-single-node profile. It is not PostgreSQL, a distributed job authority, or a proven
-multi-replica production topology. The system is not yet horizontally proven.
+Phase 2 is implemented on the current branch. The execution, research, and ledger
+planes have explicit PostgreSQL profiles and verified SQLite-to-PostgreSQL copy tooling.
+Execution accounts use durable leases, monotonically increasing fences, recovery state,
+and durable controls. Plane-local transactional outboxes support scoped replica refresh;
+PostgreSQL notifications shorten the wait while durable polling remains authoritative.
+Local PostgreSQL restore and bounded workload rehearsals exist.
+
+SQLite remains supported for local development, tests, and a single-node profile. The
+PostgreSQL implementation and local proofs do not establish a managed production
+topology, managed point-in-time recovery, geographic failover, or production capacity.
 
 ## Safety and data boundaries
 
@@ -74,16 +76,17 @@ as a workload vector: active broker accounts, subscribed instruments, concurrent
 research jobs, backtest cells, order submissions, database contention, cache behavior,
 and WebSocket bytes.
 
-After Phase 1, PostgreSQL and production-concurrency work come early. The required
-work includes shared durable authority, distributed execution ownership with leases
-and fencing, stateless replicated APIs, shared event delivery, bounded queues and
-admission control, recovery and reconciliation, and load/failure drills. The desired
-growth path is to add control-plane replicas, research workers, market-data fan-out,
-and bounded execution cells without moving tenant data or redesigning the schema.
+Phase 2 supplies the local PostgreSQL and concurrency foundations: shared durable
+authority, fenced execution ownership, replicated API ownership, scoped event delivery,
+recovery tooling, admission controls, and bounded load/failure rehearsals. The intended
+growth path adds control-plane replicas, research workers, market-data fan-out, and
+bounded execution cells. Further schema and ownership changes may still be required
+when production evidence exposes them.
 
-Those outcomes are not yet proven. They must be implemented and load-tested before
-the documentation claims natural horizontal scale, multi-replica safety, recovery
-targets, or a production capacity ceiling.
+A managed topology, sustained production load, managed recovery targets, and operating
+cost are not yet proven. Those claims require deployment-specific load, failure, restore,
+and cost evidence. The current implementation does not establish effortless horizontal
+scale or a production capacity ceiling.
 
 ## Historical engine context
 
@@ -110,10 +113,9 @@ research must treat these as testable claims, not settled assumptions.
 
 ## What comes next
 
-The immediate goal is to finish Phase 1 without broadening it: close the real security
-boundaries, run the adversarial two-tenant gate, and declare the phase closed on its
-evidence. The next early platform work is PostgreSQL/storage portability and the
-production concurrency contract. Research-plane and frontend work can then proceed
-against stable, proven backend boundaries.
+The immediate goal is to close the bounded Phase 2 review findings, then return to the
+research product and frontend. Managed PostgreSQL deployment, real PITR rehearsal,
+capacity measurement, cost measurement, and production rollout remain separate gates.
+Frontend delivery remains deferred until the backend/research closure is accepted.
 
 For detailed current status, see [the verified gap map](superpowers/specs/2026-08-12-strategy-os-v1-verified-gap-map.md), [the Phase 1 plan](superpowers/plans/2026-08-11-phase-1-multi-user-contract.md), and [the roadmap](ROADMAP.md).

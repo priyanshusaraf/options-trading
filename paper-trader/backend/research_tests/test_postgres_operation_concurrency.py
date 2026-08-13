@@ -20,6 +20,7 @@ class _AdmissionSession:
 
     def __init__(self):
         self._connection = _PostgresConnection()
+        self.bind = self._connection
         self.added = []
         self.committed = False
         self.info = {}
@@ -33,11 +34,17 @@ class _AdmissionSession:
     def get_transaction(self):
         return None
 
+    def in_transaction(self):
+        # Admission already owns the transaction established by its first SQL read.
+        # Mirror SQLAlchemy Session's interface used by the transactional outbox.
+        return True
+
     def execute(self, _statement, _parameters=None):
         return None
 
-    def scalar(self, _statement):
-        return 0
+    def scalar(self, statement):
+        # Admission counts are zero; typed outbox identity/head lookups are absent.
+        return 0 if "count(" in str(statement).lower() else None
 
     def add(self, row):
         self.added.append(row)

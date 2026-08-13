@@ -197,6 +197,90 @@ def test_execution_relationship_validator_refuses_wrong_external_account_scope()
         engine.dispose()
 
 
+def test_execution_relationship_validator_accepts_an_explicit_owner_scoped_event():
+    """Removing the owner-only event exception must reject valid replica facts."""
+    from sqlalchemy.orm import Session
+
+    from app.db.copy_contract import _validate_semantic_ownership
+    from app.db.models import Base
+    from app.events.planes import execution_outbox
+
+    engine, _now = _execution_relationship_fixture()
+    try:
+        with Session(engine) as session, session.begin():
+            repo = execution_outbox()
+            with repo.writer(session):
+                repo.append(
+                    session, classification="private", owner_id="org-a",
+                    broker_account_id=None, aggregate_type="backtest_run",
+                    aggregate_id="run-a", event_type="execution.backtest.changed",
+                    schema_version=1, payload={"projection": "backtest_runs"},
+                    producer_key="copy-owner-scoped-event",
+                )
+        with engine.connect() as connection:
+            _validate_semantic_ownership(connection, Base.metadata)
+    finally:
+        engine.dispose()
+
+
+def test_execution_relationship_validator_refuses_a_foreign_account_event():
+    """A non-null event account must resolve to the event owner's account."""
+    from sqlalchemy.orm import Session
+
+    from app.db.copy_contract import CopyRefusal, _validate_semantic_ownership
+    from app.db.models import Base
+    from app.events.planes import execution_outbox
+
+    engine, _now = _execution_relationship_fixture()
+    try:
+        with Session(engine) as session, session.begin():
+            repo = execution_outbox()
+            with repo.writer(session):
+                repo.append(
+                    session, classification="private", owner_id="org-a",
+                    broker_account_id="account-b", aggregate_type="backtest_run",
+                    aggregate_id="run-a", event_type="execution.backtest.changed",
+                    schema_version=1, payload={"projection": "backtest_runs"},
+                    producer_key="copy-foreign-account-event",
+                )
+        with engine.connect() as connection:
+            with pytest.raises(CopyRefusal, match="outbox_event.*broker-account ownership"):
+                _validate_semantic_ownership(connection, Base.metadata)
+    finally:
+        engine.dispose()
+
+
+def test_execution_relationship_validator_refuses_null_account_without_owner_scope():
+    """Nullable account is not a general event escape hatch."""
+    from sqlalchemy.orm import Session
+
+    from app.db.copy_contract import CopyRefusal, _validate_semantic_ownership
+    from app.db.models import Base
+    from app.events.planes import execution_outbox
+
+    engine, _now = _execution_relationship_fixture()
+    try:
+        event_model = execution_outbox().models.Event
+        with Session(engine) as session, session.begin():
+            repo = execution_outbox()
+            with repo.writer(session):
+                identity = repo.append(
+                    session, classification="private", owner_id="org-a",
+                    broker_account_id=None, aggregate_type="backtest_run",
+                    aggregate_id="run-a", event_type="execution.backtest.changed",
+                    schema_version=1, payload={"projection": "backtest_runs"},
+                    producer_key="copy-malformed-owner-scoped-event",
+                )
+            session.execute(sa.update(event_model).where(
+                event_model.event_id == identity.event_id,
+            ).values(scope_key="private:org-a:account-a"))
+        with engine.connect() as connection:
+            with pytest.raises(CopyRefusal, match="outbox_event.*broker-account ownership"):
+                _validate_semantic_ownership(connection, Base.metadata)
+    finally:
+        engine.dispose()
+
+
 def test_position_intent_link_cannot_cross_deployments_within_one_account():
     from app.db.copy_contract import CopyRefusal, _validate_semantic_ownership
     from app.db.models import Base

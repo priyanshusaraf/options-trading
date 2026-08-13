@@ -3,20 +3,18 @@
 **One page. What is built, what is running, what is blocked, what is next.**
 Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Updated 2026-08-12** · active branch `codex/execution-foundation`
+**Updated 2026-08-13** · active branch `codex/execution-foundation`
 
 > **Current framing supersedes older status below where they conflict.** Strategy OS is now a
 > broker-agnostic, multi-user research → backtest → deploy platform. The older single-user,
 > single-account Indian-options engine is historical execution context, not the current product
-> definition. Phase 1 is establishing ownership, authentication, durable jobs, scoped access,
-> WebSocket/cache boundaries, and a two-tenant adversarial gate before major frontend work.
-> SQLite remains the current single-node persistence profile. Phase 2 Task 1 has built the
-> PostgreSQL execution-plane profile: URL authority, fresh-current-schema creation and validation,
-> stamp, PostgreSQL-native guards and refusal of populated unmanaged targets. The live PostgreSQL
-> 16 gate now passes against an isolated `PT_TEST_POSTGRES_URL`; distributed execution ownership,
-> replicated APIs and shared event delivery remain unbuilt and
-> distributed execution ownership, replicated APIs and shared event delivery remain unbuilt and
-> horizontally unproven.
+> definition. Phase 1 is closed on ownership, authentication, durable jobs, scoped APIs/exports,
+> WebSocket/cache partitioning, execution lifecycle boundaries, and the two-tenant gate.
+> Phase 2 is implemented on this branch: all three private planes have PostgreSQL profiles;
+> verified copy and local restore tooling exist; account execution uses durable fenced leases;
+> API replicas consume scoped plane-local transactional outboxes; and bounded workload rehearsals
+> are recorded. SQLite remains the local/test/single-node profile. Managed PostgreSQL, managed
+> PITR, geographic failover, production capacity, production cost, and deployment are unproven.
 > `500 users` is a workload-validation tier, never a product ceiling.
 
 > **Task 1 evidence (2026-08-12):** from `backend/`, focused database-profile, PostgreSQL-schema,
@@ -30,14 +28,9 @@ Read this first, then go to your workstream — [`engineering/WORKSTREAMS.md`](e
 queued for a session to pick up. A session arriving here should **not** resume at L1 Stage 1,
 shadow adoption, or live-authority design.
 
-**The current phase is provider maturity, tenancy, execution integrity and measured research
-performance** — the agenda is §4. Its first slice is done: a semantic **provider conformance
-contract** now holds every adapter to one contract and catches adapters that lie about, or
-silently under-declare, a capability. **Four defects, all fixed in the slice** — replay's
-`option_ltp` signature (open option positions never marked in a replay), the mock's undeclared
-futures pricing, Kite resolving index futures against the cash exchange, and — found by
-independent review, the worst of them — a futures entry path that invented *today* as the
-contract expiry and booked a position at exactly spot. Details and the five gaps left open:
+**The current phase is the bounded Phase 2 closure described in §4.** Older provider, execution,
+and research records below remain useful implementation history, not the current resume point.
+The provider conformance work and its remaining adapter gaps are retained in
 [`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md) §9.
 
 **Nothing in this phase is deployed.** "No live-money path changed" would be too strong, and
@@ -144,11 +137,11 @@ Also outstanding, unchanged: VPS OS reboot (5 ESM security updates), droplet res
 
 ## 4. Next
 
-**The agenda is [`CONTINUE.md`](CONTINUE.md) §4** — provider maturity, then tenancy, execution
-integrity and measured backtest performance. In order: settle `get_candles`'s missing failure
-channel, then Upstox data-only, then the `spot_symbol`/`option_name` relocation. The provider
-conformance contract that gates all of it is done; the five gaps it left open are named in
-[`engineering/reference/backend-hardening-2026-08-08.md`](engineering/reference/backend-hardening-2026-08-08.md) §9.4.
+Close the bounded Phase 2 review findings and freeze the branch for independent review. Then
+resume research-product and frontend work. Managed PostgreSQL deployment, a real managed PITR
+rehearsal, measured production capacity/cost, and any live rollout require their own evidence.
+Do not restart historical SQLite migration archaeology unless a money, tenant, authentication,
+irreversible-loss, or execution-state risk requires it.
 
 The rest of this section is **history**. L1 is closed and is not a resume point.
 

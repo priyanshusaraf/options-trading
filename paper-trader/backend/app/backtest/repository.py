@@ -26,6 +26,14 @@ def enqueue_run(session, *, owner_id: str, scope: str, intervals: str,
                       queued_at=queued_at, **values)
     session.add(run)
     session.flush()
+    from app.events.producers import append_execution_change
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=None,
+        aggregate_type="backtest_run", aggregate_id=str(run.id),
+        event_type="execution.backtest.changed", projection="backtest_runs",
+        producer_key=f"backtest:{owner_id}:{run.id}:pending",
+        facts={"state": "pending"},
+    )
     return run
 
 
@@ -326,6 +334,14 @@ def complete_claim(session, *, owner_id: str, run_id: int, claim_token: str,
             completed_at=moment, heartbeat_at=moment))
         if result.rowcount != 1:
             return False
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="backtest_run", aggregate_id=str(run_id),
+            event_type="execution.backtest.changed", projection="backtest_runs",
+            producer_key=f"backtest:{owner_id}:{run_id}:terminal:{status}",
+            facts={"state": status},
+        )
     return True
 
 
@@ -341,12 +357,30 @@ def request_cancel(session, *, owner_id: str, run_id: int,
                 BacktestResult.owner_id == BacktestRun.owner_id,
                 BacktestResult.run_id == BacktestRun.id).scalar_subquery()))
     if pending.rowcount == 1:
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="backtest_run", aggregate_id=str(run_id),
+            event_type="execution.backtest.changed", projection="backtest_runs",
+            producer_key=f"backtest:{owner_id}:{run_id}:cancelled",
+            facts={"state": "cancelled"},
+        )
         return True
     result = session.execute(update(BacktestRun).where(
         BacktestRun.owner_id == owner_id, BacktestRun.id == run_id,
         BacktestRun.status == "running",
         BacktestRun.cancel_requested_at.is_(None)).values(cancel_requested_at=moment))
-    return result.rowcount == 1
+    if result.rowcount == 1:
+        from app.events.producers import append_execution_change
+        append_execution_change(
+            session, owner_id=owner_id, broker_account_id=None,
+            aggregate_type="backtest_run", aggregate_id=str(run_id),
+            event_type="execution.backtest.changed", projection="backtest_runs",
+            producer_key=f"backtest:{owner_id}:{run_id}:cancel_requested",
+            facts={"state": "cancel_requested"},
+        )
+        return True
+    return False
 
 
 def is_cancel_requested(session, *, owner_id: str, run_id: int,

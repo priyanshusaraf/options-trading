@@ -121,34 +121,14 @@ async def lifespan(app: FastAPI):
                                      ResumeCursorCodec)
     from app.events.outbox import PrincipalScope
     from app.events.planes import execution_outbox, ledger_outbox, research_outbox
-    from app.execution.leases import LeaseRepository
+    from app.events.projections import reload_durable_projection
 
     def reload_projection(scope: PrincipalScope, projection: str) -> dict:
-        if scope is None:
-            return {"projection": projection, "resync": True}
-        if projection.startswith("ledger_") and scope.broker_account_id:
-            from app.ledger import service as ledger_service
-            got = ledger_service.read_snapshot(
-                ledger_sm, owner_id=scope.owner_id,
-                broker_account_id=scope.broker_account_id)
-            return ({"projection": projection, "version": got[0]} if got
-                    else {"projection": projection, "resync": True})
-        if projection == "research_operation" and settings.research_enabled:
-            from research.domain.models import ResearchOperation
-            with research_sm() as session:
-                rows = list(session.execute(select(
-                    ResearchOperation.operation_id, ResearchOperation.status,
-                    ResearchOperation.stage).where(
-                        ResearchOperation.owner_id == scope.owner_id
-                    ).order_by(ResearchOperation.created_at.desc()).limit(32)))
-            return {"projection": projection, "operations": [
-                {"operation_id": row[0], "status": row[1], "stage": row[2]}
-                for row in rows]}
-        if scope is None or scope.broker_account_id is None:
-            return {"projection": projection, "resync": True}
-        return LeaseRepository(SessionLocal).status(
-            owner_id=scope.owner_id, broker_account_id=scope.broker_account_id,
-        ) or {"projection": projection, "resync": True}
+        return reload_durable_projection(
+            scope, projection, execution_sessionmaker=SessionLocal,
+            research_sessionmaker=(research_sm if settings.research_enabled else None),
+            ledger_sessionmaker=ledger_sm,
+        )
 
     app.state.event_cache_invalidator = CacheInvalidator()
     event_gateway = DurableReplicaGateway(

@@ -603,6 +603,14 @@ class LeaseRepository:
                 producer_key=f"control:{command.command_id}:projection",
                 payload={"projection": "execution_status", "state": command.state,
                          "revision": lease.control_revision, "armed": armed})
+            _append_execution_change(
+                session, owner_id=token.owner_id,
+                broker_account_id=token.broker_account_id,
+                aggregate_type="deployment", aggregate_id=str(deployment_id),
+                event_type="execution.deployment.changed",
+                producer_key=f"control:{command.command_id}:deployment",
+                payload={"projection": "deployments",
+                         "state": "armed" if armed else "disabled", "armed": armed})
             session.commit()
 
     def prepare_command(self, token: LeaseToken, *, kind: str, target_id: str,

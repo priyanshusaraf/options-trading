@@ -6,13 +6,12 @@ This file used to be 1,279 lines and every session parsed all of it to find one 
 an index and a sequencing decision. If you are implementing, go straight to your workstream
 document — see [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
 
-**Current checkpoint: 2026-08-09** · local branch `codex/execution-foundation`, source revision
-`1e96b52` before this documentation update · not pushed · not deployed. The branch-wide gate
-collected **3,712 backend/research tests: 3,706 passed + 6 expected skips, exit 0**. The frontend
-passed **223/223 tests**, TypeScript checking, and the production build. `dryrun.py 700` ended
-`LEDGER OK`; `backtest_smoke.py` completed 16/16 cells with `SWEEP OK`; migration head remains
-`0014`. These results verify the configurable live-entry order slice within its stated scope.
-They are not deployment authorisation and do not prove paper/backtest LIMIT-fill parity.
+**Current checkpoint: 2026-08-13** · local branch `codex/execution-foundation` · not pushed · not
+deployed. Phase 1 is closed. Phase 2 implementation now covers PostgreSQL profiles for all three
+private planes, verified copy, fenced account execution, scoped durable replica events, local
+restore proof, and bounded workload rehearsals. Exact retained gates live in the Phase 2 task
+reports. These results are local engineering evidence, not deployment authorisation, managed
+PITR evidence, production capacity, or a cost certificate.
 
 The older workstream programme and implementation history remain in
 [`engineering/EXECUTION_PLAN.md`](engineering/EXECUTION_PLAN.md). The current sequence is the
@@ -33,26 +32,25 @@ the older B → E → C → D → A sequence. The current order is:
 5. account-isolated deployment design and load/failure proof;
 6. novice research UX on the existing frontend;
 7. additional brokers;
-8. customer authentication, tenancy, and commercial administration.
+8. commercial administration after the closed authentication and tenancy foundation.
 
-Broker breadth remains deliberately deferred. Commercial tenancy is now Phase 1 work: the
-platform is establishing ownership, authentication, jobs, APIs, exports, WebSockets, and cache
-boundaries before major frontend work. Internal deployment, account, and connection identities
-still belong in money-state paths before broader commercial features.
+Broker breadth remains deliberately deferred. Phase 1 closed ownership, authentication, jobs,
+APIs, exports, WebSockets, and cache boundaries. Commercial administration remains later work.
+Deployment, account, and connection identities now sit in the money-state paths; production
+rollout still requires Phase 2 closure acceptance and deployment-specific evidence.
 
-### Current product framing (2026-08-12)
+### Current product framing (2026-08-13)
 
 Strategy OS is being built as a broker-agnostic, multi-user research → backtest → deploy
 platform. The older single-user Indian-options engine remains useful execution history, not the
 current product definition. Its trend-and-displacement strategy is one strategy implementation,
 not the platform's boundary.
 
-The current Phase 1 branch has owner-scoped data and durable session foundations, while durable
-research operations and remaining shared API, export, WebSocket, cache, runner, and adversarial
-isolation gates continue. Do not infer that Phase 1 establishes horizontal production scale. The
-current deployment profile remains single-node SQLite. PostgreSQL, distributed execution
-ownership, replicated APIs, shared event delivery, and load/failure proof are early work after
-Phase 1. `500 users` is one launch-validation workload and cost tier, never a product cap.
+Phase 1 is closed on owner-scoped data, sessions, jobs, APIs, exports, WebSockets, caches,
+execution lifecycle boundaries, and adversarial isolation. Phase 2 implements PostgreSQL plane
+profiles, account execution leases and fences, replicated API ownership, scoped shared event
+delivery, copy/restore tools, and bounded failure/workload proofs. Production deployment remains
+unproven. `500 users` is one launch-validation workload and cost tier, never a product cap.
 
 ### Phase truth
 
@@ -66,11 +64,11 @@ the present code cannot support is `CLAIM REJECTED`.
 | 3. Causal strategy contract | **PARTIAL** | IR prefix causality and handwritten-strategy mutation tests exist. Closed per-block causal declarations, admission enforcement, and streaming-versus-vectorised parity are not complete. |
 | 4. Content-addressed backtest cache | **COMPLETE on this branch** | Schema v8 binds exact ordered OHLCV bytes and source context to a closed execution manifest: strategy and transitive source, bound parameters, instrument economics, slippage, charges, event/exit policy, and premium assumptions. Historical revisions with the same final timestamp are cold; transient premium failures are not reusable; warm rows preserve every result column except row/run identity. |
 | 5. Scalable sweep: 100 × 5, then 1,000 × 5 / **10,000 × 5 in minutes** | **IN PROGRESS, now measured** | Shared dataset acquisition (`439d45d`), shared frame/signal preparation (`a291722`) and the options-pricing fix (`5ba1233`) are done. Per-stage cost is measured on realistic 5,000-bar datasets and recorded in the hardening record §10: a cell is **84.7 ms**, down from 185.7 ms, after removing a `scipy.stats.norm.cdf` wrapper that was 74% of the premium replay. **Two floors remain and both are named:** the live-fetch I/O floor is 5 h 33 m for 50,000 datasets (Kite's rate limit — not optimisable in our process, so the local dataset store is the only path and is promoted ahead of batching), and serial compute is still 4,236 s, ~20× over target, which is what justifies measured multiprocess fan-out. The store, batching, fan-out and tiered p50/p95/p99 do not exist yet. |
-| 6. Data/execution/account role bindings | **PARTIAL** | Capability gates admit a second-broker-shaped test double, but `make_broker(provider)` still derives execution from one provider. No account actor owns one account yet. |
-| 7. Deployable **500-user** topology at a bounded cost | **UNSTARTED** | The current single-owner VPS deploy path is real and guarded; it is not a multi-account worker topology and has no soak, lease, fencing, failover, RPO, or RTO proof. The five-accounts-per-worker figure is **withdrawn as an assumption** — carried to 500 users it implies 100 worker processes and a hosting bill the owner has named as a blocker. Accounts-per-core, memory per active account, and sustained WebSocket bytes per user are now gates alongside latency and RPO/RTO. |
+| 6. Data/execution/account role bindings | **PARTIAL** | Owner and broker-account identities, broker connections, scoped execution state, and fenced account ownership exist. A second production broker adapter and complete provider-role portability remain unproven. |
+| 7. Deployable **500-user** topology at a bounded cost | **PARTIAL — local foundation implemented** | PostgreSQL plane profiles, fenced account leases, replicated API ownership, scoped event delivery, local restore proof, and bounded workload rehearsals exist. A managed multi-host deployment, sustained soak, managed PITR/failover, measured capacity, and monthly cost remain open. The five-accounts-per-worker figure remains withdrawn until measured. |
 | 8. Novice research experience | **PARTIAL** | The React/Vite graph, research, backtest, engine, portfolio, and ledger surfaces exist. The guided idea-to-paper journey and novice usability gate do not. |
 | 9. Additional brokers | **DEFERRED / UNSTARTED** | Capability and resolver seams exist; no Upstox or second execution adapter is shipped. |
-| 10. Commercial access | **DEFERRED / PARTIAL SEAM** | A single-owner bearer-token principal seam exists. Customer identity, ownership, encrypted credentials, and cross-account isolation do not. |
+| 10. Commercial access | **PARTIAL FOUNDATION** | Multi-user identity, membership, ownership, encrypted broker credentials, sessions, and adversarial cross-tenant isolation exist. Billing, entitlements, customer administration, and production identity operations remain deferred. |
 
 The governing design and detailed gates are in
 [`superpowers/specs/2026-08-09-execution-first-product-roadmap-design.md`](superpowers/specs/2026-08-09-execution-first-product-roadmap-design.md).
@@ -110,9 +108,11 @@ Bounded execution cells add versioned placement, resource limits, primary/standb
 shared PostgreSQL authority, leases, and fencing when measured workload demands them; they are not
 deferred until a particular user count. Per-user VPSs stay an optional premium isolation mode, not
 the default. Capacity should grow by adding stateless control-plane replicas, research workers,
-market-data fan-out capacity, and bounded execution cells without moving tenant data or redesigning
-the schema. The current application is one process, one SQLite authority, and one single-owner VPS;
-the relevant deployment gates remain unpassed.
+market-data fan-out capacity, and bounded execution cells. Shared PostgreSQL authorities, scoped
+durable event delivery, independently deployable API/worker roles, and fenced per-account execution
+ownership are implemented and locally proven. Replicated APIs, distributed execution ownership,
+shared event delivery, and production capacity remain deployment gates until production-like
+rehearsals prove them; those gates may still require schema or data-placement changes.
 
 ## 3. Parked deliberately
 

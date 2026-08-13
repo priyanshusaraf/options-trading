@@ -509,6 +509,18 @@ def _store_callback_credential(
     ))
     if changed.rowcount != 1:
         return None
+    from app.events.producers import append_execution_change
+
+    mutation_id = hashlib.sha256(
+        f"{connection_id}|{owner_id}|{user_id}|{session_id}|{now.isoformat()}".encode()
+    ).hexdigest()
+    append_execution_change(
+        session, owner_id=owner_id, broker_account_id=broker_account_id,
+        aggregate_type="broker_connection", aggregate_id=str(connection_id),
+        event_type="execution.connection.changed", projection="connections",
+        producer_key=f"connection:{connection_id}:oauth:{mutation_id}",
+        facts={"state": "ready", "ready": True},
+    )
     return session.get(BrokerConnection, connection_id)
 
 
