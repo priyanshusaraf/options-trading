@@ -187,6 +187,20 @@ def test_operation_payloads_reject_nonfinite_and_unbounded_error_details(repo):
                   error={"code": "x", "message": "m" * 4097}, now=now)
 
 
+def test_failure_projection_records_the_stable_refusal_code(repo):
+    """Hypothesis: a causal refusal is replaced by a generic failure in durable evidence."""
+    now = dt.datetime(2026, 8, 12, tzinfo=dt.UTC)
+    repo.enqueue(owner_id="owner-a", trigger="manual", plan={}, build="b",
+                 provider_mode="mock", operation_id="receipt", now=now)
+    claim = repo.claim_operation("receipt", owner_id="owner-a", worker_id="worker", now=now)
+    assert claim is not None and claim.claim_token
+    assert repo.fail("receipt", owner_id="owner-a", token=claim.claim_token,
+                     error={"code": "RECEIPT_STALE", "message": "research operation refused"}, now=now)
+    event = repo.session.get(ResearchOperationEvent, ("owner-a", "receipt", 2))
+    assert event is not None
+    assert __import__("json").loads(event.payload_json)["code"] == "RECEIPT_STALE"
+
+
 def test_owner_admission_rejects_queue_capacity_before_creating_another_operation(repo):
     now = dt.datetime(2026, 8, 12, tzinfo=dt.UTC)
     for number in range(16):

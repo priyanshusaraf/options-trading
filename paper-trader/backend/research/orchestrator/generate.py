@@ -19,7 +19,15 @@ import logging
 
 from app.ir.hashing import canonical_json, content_address
 from app.ir.library import REGISTRY
-from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+from app.strategy.admission import (
+    AdmissionRefused,
+    AdmissionRefusalCode,
+    IRGraphAdmissionInput,
+    admit_strategy,
+    artifact_from_dict,
+    verify_admission,
+)
+from research.domain.admissions import load_admission, store_admission
 from research.strategy.builder.ir_strategy import IRGraphStrategy
 from research.domain.models import GeneratedStrategyRecord
 from research.data.store import materialize
@@ -31,6 +39,14 @@ from research.strategy.builder.search import (enumerate_compositions,
 
 logger = logging.getLogger("research.orchestrator")
 _MAX_GENERATED_OPERATION_ITEMS = 64
+
+
+class ResearchAdmissionRefused(RuntimeError):
+    """A durable worker refusal whose code is safe to persist and expose."""
+
+    def __init__(self, code: AdmissionRefusalCode) -> None:
+        self.code = code
+        super().__init__(code.value)
 
 
 def _generated_graph(comp) -> dict:
@@ -70,9 +86,10 @@ def _admitted_generated_strategy(comp, *, owner_id: str,
     return strategy, graph, decision.artifact
 
 
-def _generated_descriptor(comp, *, owner_id: str, **common: object) -> dict:
+def _generated_descriptor(session, comp, *, owner_id: str, **common: object) -> dict:
     strategy, graph, artifact = _admitted_generated_strategy(comp, owner_id=owner_id)
     del strategy
+    store_admission(session, artifact)
     return {
         **common,
         "composition": comp.to_dict(),
@@ -131,8 +148,37 @@ def generated_descriptors(session, instruments, interval, *, owner_id: str, limi
         "provider_mode": str(provider_mode)[:80] or "unknown",
         "seed": seed,
     }
-    return [_generated_descriptor(composition, owner_id=owner_id, **common)
+    return [_generated_descriptor(session, composition, owner_id=owner_id, **common)
             for composition in compositions]
+
+
+def _require_durable_admission(session, *, owner_id: str, graph: dict,
+                               graph_address: str, admission_address: str):
+    """Load, bind, and freshly verify the owner-local receipt before any data I/O."""
+    receipt = load_admission(
+        session, owner_id=owner_id, admission_address=admission_address
+    )
+    if receipt is None:
+        raise AdmissionRefused(
+            AdmissionRefusalCode.RECEIPT_STALE,
+            "owner-local research receipt is absent",
+        )
+    artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+    if (artifact.owner_id != owner_id
+            or artifact.admission_address != admission_address
+            or artifact.graph_address != graph_address
+            or graph_address != content_address(graph)):
+        raise AdmissionRefused(
+            AdmissionRefusalCode.ARTEFACT_MISMATCH,
+            "durable graph and research receipt do not bind the same bytes",
+        )
+    verify_admission(
+        artifact=artifact,
+        owner_id=owner_id,
+        source_input=IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None),
+        registry=REGISTRY,
+    )
+    return artifact
 
 
 def compositions_from_descriptors(descriptors: list[dict]) -> list:
@@ -277,9 +323,18 @@ def run_generated(session, source, instruments, interval, *, owner_id: str, limi
                         f"#{abandoned}; replay takeover was refused")
         expected_graph = descriptor["graph"] if descriptor else None
         expected_admission = descriptor["admission_address"] if descriptor else None
-        strat, graph, artifact = _admitted_generated_strategy(
-            comp, owner_id=owner_id, expected_graph=expected_graph,
-            expected_address=expected_admission)
+        try:
+            if descriptor is not None:
+                _require_durable_admission(
+                    session, owner_id=owner_id, graph=descriptor["graph"],
+                    graph_address=descriptor["graph_content_address"],
+                    admission_address=descriptor["admission_address"],
+                )
+            strat, graph, artifact = _admitted_generated_strategy(
+                comp, owner_id=owner_id, expected_graph=expected_graph,
+                expected_address=expected_admission)
+        except AdmissionRefused as exc:
+            raise ResearchAdmissionRefused(exc.code) from exc
         pending.append((comp, item_key, descriptor, strat, graph, artifact))
     if not pending:
         return []

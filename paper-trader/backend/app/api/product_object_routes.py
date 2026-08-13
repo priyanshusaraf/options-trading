@@ -223,6 +223,8 @@ def post_graph_version(
                 "current_revision": exc.current_revision,
             },
         )
+    except store.GraphAdmissionRefused as exc:
+        raise HTTPException(status_code=422, detail=exc.code.value) from exc
     except store.GraphRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except store.InvalidTransition as exc:

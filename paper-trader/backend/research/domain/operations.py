@@ -286,7 +286,8 @@ class ResearchOperationRepository:
         self.session = session
 
     def _append_event(self, operation_id: str, *, owner_id: str, event_type: str,
-                      stage: str | None, now: dt.datetime) -> None:
+                      stage: str | None, now: dt.datetime,
+                      payload: dict[str, str] | None = None) -> None:
         """Append only closed, secret-free scheduler evidence with fixed retention."""
         if event_type not in {"claimed", "heartbeat", "stage", "item_completed",
                               "takeover", "completed", "failed", "cancelled"}:
@@ -313,10 +314,11 @@ class ResearchOperationRepository:
             ResearchOperationEvent.operation_id == operation_id,
         ))
         sequence = int(latest or 0) + 1
+        safe_payload = _error_payload(payload) if payload is not None else {}
         self.session.add(ResearchOperationEvent(
             owner_id=owner_id, operation_id=operation_id,
             sequence=sequence, event_type=event_type, stage=stage,
-            payload_json="{}", created_at=now,
+            payload_json=_json(safe_payload, limit=_MAX_ERROR_BYTES), created_at=now,
         ))
         from app.events.planes import research_outbox
         outbox = research_outbox()
@@ -327,7 +329,8 @@ class ResearchOperationRepository:
                 aggregate_id=operation_id, event_type="research.operation.changed",
                 schema_version=1,
                 payload={"projection": "research_operation", "state": event_type,
-                         "stage": stage or "", "audit_sequence": sequence},
+                         "stage": stage or "", "audit_sequence": sequence,
+                         **({"code": safe_payload["code"]} if "code" in safe_payload else {})},
                 producer_key=f"operation:{owner_id}:{operation_id}:{sequence}")
 
     def enqueue(self, *, owner_id: str, trigger: str, plan: dict[str, Any], build: str,
@@ -563,7 +566,8 @@ class ResearchOperationRepository:
             raise
 
     def _write(self, operation_id: str, *, owner_id: str, token: str, now: dt.datetime | None,
-               values: dict[str, Any], event_type: str | None, event_stage: str | None = None) -> bool:
+               values: dict[str, Any], event_type: str | None, event_stage: str | None = None,
+               event_payload: dict[str, str] | None = None) -> bool:
         instant = _instant(now)
         changed = self.session.execute(update(ResearchOperation).where(
             ResearchOperation.owner_id == owner_id, ResearchOperation.operation_id == operation_id,
@@ -573,7 +577,7 @@ class ResearchOperationRepository:
         ).values(**values))
         if changed.rowcount == 1 and event_type is not None:
             self._append_event(operation_id, owner_id=owner_id, event_type=event_type,
-                               stage=event_stage, now=instant)
+                               stage=event_stage, now=instant, payload=event_payload)
         self.session.commit(); return changed.rowcount == 1
 
     def heartbeat(self, operation_id: str, *, owner_id: str, token: str, now: dt.datetime | None = None, lease_seconds: int = 60) -> bool:
@@ -922,7 +926,7 @@ class ResearchOperationRepository:
             values={"status": "failed", "completed_at": instant, "heartbeat_at": instant,
                     "error_json": _json(safe_error, limit=_MAX_ERROR_BYTES), "claim_token": None,
                     "claimed_by": None, "claim_expires_at": None}, event_type="failed",
-            event_stage=safe_error.get("stage"))
+            event_stage=safe_error.get("stage"), event_payload=safe_error)
 
     def request_cancel(self, operation_id: str, *, owner_id: str, now: dt.datetime | None = None) -> bool:
         instant = _instant(now)

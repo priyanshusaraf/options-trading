@@ -12,14 +12,21 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.strategy_admissions import put as store_admission
 from app.db.models import LEGACY_OWNER_ID, GraphArtifact, GraphVersion, Project
 from app.db.session import SessionLocal
 from app.editor import layouts
 from app.ir.hashing import canonical_json, content_address
-from app.ir.library import LIBRARY
+from app.ir.library import LIBRARY, REGISTRY
 from app.ir.resolve import ResolutionError, resolve
 from app.ir.strategies.expanding_z import GRAPH
 from app.ir.validate import validate
+from app.strategy.admission import (
+    AdmissionRefused,
+    AdmissionRefusalCode,
+    IRGraphAdmissionInput,
+    admit_strategy,
+)
 
 
 CATALOGUE_PROJECT_ID = "project.repository_catalogue"
@@ -52,6 +59,7 @@ class PublishedGraph:
     identifier: str
     version: int
     content_address: str
+    admission_address: str | None
     graph: dict[str, Any]
 
 
@@ -132,6 +140,14 @@ class GraphRejected(Exception):
     pass
 
 
+class GraphAdmissionRefused(GraphRejected):
+    """A stable causal refusal which the HTTP layer may safely expose by code."""
+
+    def __init__(self, code: AdmissionRefusalCode) -> None:
+        self.code = code
+        super().__init__(code.value)
+
+
 class InvalidTransition(Exception):
     pass
 
@@ -178,6 +194,7 @@ def _published_record(project_id: str, version: GraphVersion) -> PublishedGraph:
         identifier=version.graph_identifier,
         version=version.version,
         content_address=version.content_address,
+        admission_address=version.admission_address,
         graph=graph,
     )
 
@@ -408,6 +425,24 @@ def _after_version_insert(_session: Session, _version: GraphVersion) -> None:
     """Failure-injection seam proving version insert and pointer advance are atomic."""
 
 
+def _admit_for_publication(session: Session, *, owner_id: str,
+                           document: Mapping[str, Any]):
+    """Persist one exact receipt before an immutable graph version becomes visible."""
+    decision = admit_strategy(
+        owner_id=owner_id,
+        source_input=IRGraphAdmissionInput(
+            graph=document, parameters={}, risk_model=None,
+        ),
+        registry=REGISTRY,
+    )
+    if decision.artifact is None:
+        raise GraphAdmissionRefused(
+            decision.refusal_code or AdmissionRefusalCode.RECEIPT_STALE
+        )
+    store_admission(session, decision.artifact)
+    return decision.artifact
+
+
 def publish_draft(
     project_id: str,
     identifier: str,
@@ -429,12 +464,16 @@ def publish_draft(
             current_version=artifact.current_version,
         )
         _require_resolvable(document)
+        admission = _admit_for_publication(
+            session, owner_id=owner_id, document=document
+        )
         version = GraphVersion(
             owner_id=owner_id,
             graph_identifier=identifier,
             version=int(document["version"]),
             artifact_json=encoded,
             content_address=content_address(document),
+            admission_address=admission.admission_address,
             created_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
         )
         session.add(version)
@@ -475,6 +514,8 @@ def apply_and_publish(
     owner_id: str,
 ) -> T:
     """Apply an edit and build its canonical response before committing."""
+    deferred_refusal: GraphAdmissionRefused | None = None
+    result: T | None = None
     with SessionLocal.begin() as session:
         _active_project(session, project_id, owner_id)
         artifact = _owned_artifact(session, project_id, identifier, owner_id)
@@ -492,24 +533,55 @@ def apply_and_publish(
         )
         _require_resolvable(document)
         next_revision = base_revision + 1
-        version = GraphVersion(
+        try:
+            admission = _admit_for_publication(
+                session, owner_id=owner_id, document=document
+            )
+        except GraphAdmissionRefused as exc:
+            claimed = session.execute(
+                update(GraphArtifact)
+                .where(
+                    GraphArtifact.identifier == identifier,
+                    GraphArtifact.owner_id == owner_id,
+                    GraphArtifact.project_id == project_id,
+                    GraphArtifact.draft_revision == base_revision,
+                )
+                .values(
+                    display_name=str(document["display_name"]),
+                    draft_json=encoded,
+                    draft_revision=next_revision,
+                    updated_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+                )
+            )
+            if claimed.rowcount != 1:
+                session.expire_all()
+                current = _owned_artifact(session, project_id, identifier, owner_id)
+                raise GraphConflict(current.draft_revision)
+            deferred_refusal = exc
+        if deferred_refusal is not None:
+            # Commit the draft-only CAS update, then return the stable refusal.
+            pass
+        else:
+            assert admission is not None
+            version = GraphVersion(
             owner_id=owner_id,
             graph_identifier=identifier,
             version=int(document["version"]),
             artifact_json=encoded,
             content_address=content_address(document),
+            admission_address=admission.admission_address,
             created_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
-        )
-        session.add(version)
-        try:
-            session.flush()
-        except IntegrityError as exc:
-            raise GraphConflict(artifact.draft_revision) from exc
-        _after_version_insert(session, version)
+            )
+            session.add(version)
+            try:
+                session.flush()
+            except IntegrityError as exc:
+                raise GraphConflict(artifact.draft_revision) from exc
+            _after_version_insert(session, version)
 
-        source_version = artifact.current_version
-        valid_ids = _authored_ids(document)
-        layout, presentation_delta = layouts.carry_and_reconcile_presentation(
+            source_version = artifact.current_version
+            valid_ids = _authored_ids(document)
+            layout, presentation_delta = layouts.carry_and_reconcile_presentation(
             session,
             identifier,
             source_version,
@@ -519,9 +591,9 @@ def apply_and_publish(
             target_instance_ids=valid_ids,
             operations=presentation_operations,
             owner_id=owner_id,
-        )
+            )
 
-        claimed = session.execute(
+            claimed = session.execute(
             update(GraphArtifact)
             .where(
                 GraphArtifact.identifier == identifier,
@@ -537,12 +609,12 @@ def apply_and_publish(
                 current_version=version.version,
                 updated_at=version.created_at,
             )
-        )
-        if claimed.rowcount != 1:
-            session.expire_all()
-            current = _owned_artifact(session, project_id, identifier, owner_id)
-            raise GraphConflict(current.draft_revision)
-        publication = EditPublication(
+            )
+            if claimed.rowcount != 1:
+                session.expire_all()
+                current = _owned_artifact(session, project_id, identifier, owner_id)
+                raise GraphConflict(current.draft_revision)
+            publication = EditPublication(
             draft_revision=next_revision,
             published=_published_record(project_id, version),
             applied_operations=edit_result.applied_operations,
@@ -550,9 +622,9 @@ def apply_and_publish(
             base_version=source_version,
             base_presentation_revision=base_presentation_revision,
             presentation_delta=presentation_delta,
-        )
-        from app.events.producers import append_execution_change
-        append_execution_change(
+            )
+            from app.events.producers import append_execution_change
+            append_execution_change(
             session, owner_id=owner_id, broker_account_id=None,
             aggregate_type="graph", aggregate_id=identifier,
             event_type="execution.graph.changed", projection="published_graphs",
@@ -561,11 +633,14 @@ def apply_and_publish(
             ).hexdigest(),
             facts={"state": "published", "version": version.version,
                    "content_address": version.content_address},
-        )
-        try:
-            result = response_factory(publication, layout)
-        except Exception as exc:
-            raise EditorDocumentFailed("editor document construction failed") from exc
+            )
+            try:
+                result = response_factory(publication, layout)
+            except Exception as exc:
+                raise EditorDocumentFailed("editor document construction failed") from exc
+    if deferred_refusal is not None:
+        raise deferred_refusal
+    assert result is not None
     return result
 
 

@@ -5,8 +5,10 @@ import copy
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
-from app.db.session import init_db
+from app.db.models import GraphArtifact, GraphVersion, StrategyAdmission
+from app.db.session import SessionLocal, init_db
 from app.ir.strategies.expanding_z import GRAPH
 
 
@@ -91,6 +93,44 @@ def test_publish_conflict_and_invalid_transition_are_explicit(client):
     duplicate = client.post(f"{base}/versions", json={"base_revision": 0})
     assert duplicate.status_code == 409
     assert duplicate.json() == {"detail": "this draft revision is already published"}
+
+
+def test_version_publication_returns_stable_admission_refusal_without_advancing_state(
+        client, monkeypatch):
+    """Hypothesis: direct publication leaks detail or advances immutable authority on refusal."""
+    from app.editor import graph_artifacts as store
+    from app.strategy.admission import AdmissionDecision, AdmissionRefusalCode
+
+    project = _create_project(client)
+    base = f"/api/ir/projects/{project['project_id']}/graphs/strategy.desk"
+    assert client.post(
+        f"/api/ir/projects/{project['project_id']}/graphs",
+        json={"identifier": "strategy.desk", "graph": _graph()},
+    ).status_code == 201
+    monkeypatch.setattr(
+        store, "admit_strategy",
+        lambda **_kwargs: AdmissionDecision(
+            None, AdmissionRefusalCode.STREAMING_DIVERGENCE, "private diagnostic"
+        ),
+    )
+
+    response = client.post(f"{base}/versions", json={"base_revision": 0})
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "STREAMING_DIVERGENCE"}
+    with SessionLocal() as session:
+        artifact = session.get(GraphArtifact, ("owner", "strategy.desk"))
+        versions = tuple(session.scalars(select(GraphVersion).where(
+            GraphVersion.owner_id == "owner", GraphVersion.graph_identifier == "strategy.desk",
+        )))
+        receipts = tuple(session.scalars(select(StrategyAdmission).where(
+            StrategyAdmission.owner_id == "owner", StrategyAdmission.graph_identifier == "strategy.desk",
+        )))
+    assert artifact.draft_revision == 0
+    assert artifact.current_version is None
+    assert artifact.published_revision is None
+    assert versions == ()
+    assert receipts == ()
 
 
 def test_version_list_is_server_owned_ordered_and_mirrored(client):

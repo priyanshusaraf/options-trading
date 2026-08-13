@@ -14,6 +14,7 @@ from research.domain.models import (
     ExperimentSpec,
     GeneratedStrategyRecord,
     PromotionCandidate,
+    ResearchStrategyAdmission,
 )
 from research.orchestrator.generate import run_generated
 
@@ -109,6 +110,23 @@ def test_generated_durable_worker_refuses_unadmitted_enumeration_before_provider
     with pytest.raises(RuntimeError, match="admitted durable item descriptors"):
         run_generated(research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
                       owner_id=OWNER_ID, limit=1, claim_guard=lambda: None)
+
+
+def test_generated_enqueue_persists_owner_scoped_receipts_before_worker_io(
+        research_session, inst_factory):
+    """Hypothesis: a durable generated descriptor names no stored receipt."""
+    from research.orchestrator.generate import generated_descriptors
+
+    descriptors = generated_descriptors(
+        research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+        limit=1, seed=7, git_commit="build-a", provider_mode="mock",
+    )
+
+    receipt = research_session.get(
+        ResearchStrategyAdmission, (OWNER_ID, descriptors[0]["admission_address"])
+    )
+    assert receipt is not None
+    assert receipt.graph_address == descriptors[0]["graph_content_address"]
 
 
 def test_completed_generated_operation_items_need_no_provider_read(

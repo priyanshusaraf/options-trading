@@ -741,6 +741,38 @@ def test_failure_after_version_insert_rolls_back_edit_and_pointer(client, monkey
     ).status_code == 404
 
 
+def test_admission_refusal_returns_a_stable_422_and_preserves_the_draft(client, monkeypatch):
+    """Hypotheses: editor publication ignores a refusal or leaks unstable detail."""
+    from app.editor import descriptors
+    from app.strategy.admission import AdmissionDecision, AdmissionRefusalCode
+
+    monkeypatch.setattr(descriptors, "sockets", lambda _interface: ())
+    before = client.get(EDITOR_URL).json()
+    monkeypatch.setattr(
+        graph_store,
+        "admit_strategy",
+        lambda **_kwargs: AdmissionDecision(
+            None, AdmissionRefusalCode.STREAMING_DIVERGENCE, "internal future read detail"
+        ),
+    )
+
+    response = _post(
+        client, before["draft_revision"],
+        {"operation": "set_display_name", "display_name": "Must not publish"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "STREAMING_DIVERGENCE"
+    assert "internal future read detail" not in response.text
+    draft = client.get(
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/{IDENTIFIER}/draft"
+    ).json()
+    assert draft["revision"] == before["draft_revision"] + 1
+    assert draft["current_version"] == before["version"]
+    assert draft["graph"]["display_name"] == "Must not publish"
+    assert client.get(EDITOR_URL).status_code == 409
+
+
 def test_failure_after_layout_prepare_rolls_back_graph_and_layout(client, monkeypatch):
     from app.editor import layouts
 

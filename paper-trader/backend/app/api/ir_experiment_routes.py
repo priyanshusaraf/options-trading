@@ -21,7 +21,9 @@ from research.data.store import materialize
 from research.domain.base import init_research_db, make_engine, make_sessionmaker
 from research.domain.models import ExperimentSpec
 from research.orchestrator.graph_experiment import (
+    GraphAdmissionRejected,
     GraphBindingRejected,
+    enqueue_graph_admission,
     run_published_graph_experiment,
 )
 
@@ -297,35 +299,39 @@ def post_graph_experiment(
             409, "EXPERIMENT_GRAPH_UNPUBLISHED", "graph has no published version"
         ) from exc
 
-    datasets = []
-    for selection in body.datasets:
-        try:
-            instrument = get_instrument(selection.instrument_key)
-        except KeyError as exc:
-            raise _error(
-                422,
-                "EXPERIMENT_DATASET_INVALID",
-                f"unknown instrument {selection.instrument_key!r}",
-            ) from exc
-        dataset = materialize(
-            local_execution_cell(request, principal).provider,
-            instrument,
-            selection.interval,
-            selection.days,
-        )
-        if dataset.bar_count == 0:
-            raise _error(
-                422,
-                "EXPERIMENT_DATASET_EMPTY",
-                f"dataset {selection.instrument_key!r} contains no bars",
-            )
-        datasets.append((instrument, dataset))
-
     engine = make_engine(research_database_url())
     try:
         init_research_db(engine)
         Session = make_sessionmaker(engine)
         with Session() as session:
+            try:
+                enqueue_graph_admission(
+                    session, owner_id=owner_id_for(principal), graph=published.graph,
+                    graph_content_address=published.content_address,
+                    admission_address=published.admission_address,
+                )
+            except GraphAdmissionRejected as exc:
+                session.rollback()
+                raise _error(422, exc.code, "causal admission refused") from exc
+            datasets = []
+            for selection in body.datasets:
+                try:
+                    instrument = get_instrument(selection.instrument_key)
+                except KeyError as exc:
+                    raise _error(
+                        422, "EXPERIMENT_DATASET_INVALID",
+                        f"unknown instrument {selection.instrument_key!r}",
+                    ) from exc
+                dataset = materialize(
+                    local_execution_cell(request, principal).provider,
+                    instrument, selection.interval, selection.days,
+                )
+                if dataset.bar_count == 0:
+                    raise _error(
+                        422, "EXPERIMENT_DATASET_EMPTY",
+                        f"dataset {selection.instrument_key!r} contains no bars",
+                    )
+                datasets.append((instrument, dataset))
             try:
                 report = run_published_graph_experiment(
                     session,
@@ -333,6 +339,7 @@ def post_graph_experiment(
                     project_id=project_id,
                     graph=published.graph,
                     declared_content_address=published.content_address,
+                    admission_address=published.admission_address,
                     datasets=datasets,
                     program_name=body.program_name,
                     hypothesis_statement=body.hypothesis_statement,
@@ -348,10 +355,10 @@ def post_graph_experiment(
                     slippage_bps=body.cost_assumptions.slippage_bps,
                     slippage_multiplier=body.cost_assumptions.slippage_multiplier,
                 )
-            except GraphBindingRejected as exc:
+            except (GraphBindingRejected, GraphAdmissionRejected) as exc:
                 session.rollback()
                 raise _error(
-                    422, "EXPERIMENT_GRAPH_BINDING_INVALID", str(exc)
+                    422, getattr(exc, "code", "EXPERIMENT_GRAPH_BINDING_INVALID"), str(exc)
                 ) from exc
             spec = session.get(ExperimentSpec, (owner_id_for(principal), report["spec_id"]))
             recipe = json.loads(spec.recipe_json)

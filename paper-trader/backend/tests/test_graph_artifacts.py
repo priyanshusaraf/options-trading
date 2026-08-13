@@ -7,7 +7,7 @@ import inspect
 import pytest
 from sqlalchemy import select
 
-from app.db.models import GraphArtifact, GraphVersion
+from app.db.models import GraphArtifact, GraphVersion, StrategyAdmission
 from app.db.session import SessionLocal, init_db
 from app.editor import graph_artifacts as store
 from app.ir.hashing import canonical_json, content_address
@@ -118,6 +118,25 @@ def test_publish_is_append_only_and_server_assigns_version_identity():
         store.publish_draft(project.project_id, "strategy.desk", base_revision=1, owner_id="owner")
 
 
+def test_publish_persists_the_exact_owner_scoped_admission_receipt():
+    """Hypothesis: publication advances a graph without durable causal evidence."""
+    project = store.create_project("Desk", owner_id="owner")
+    store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
+
+    published = store.publish_draft(
+        project.project_id, "strategy.desk", base_revision=0, owner_id="owner"
+    )
+
+    with SessionLocal() as session:
+        version = session.get(GraphVersion, ("owner", "strategy.desk", published.version))
+        receipt = session.get(StrategyAdmission, ("owner", version.admission_address))
+    assert version.admission_address is not None
+    assert receipt is not None
+    assert receipt.graph_address == published.content_address
+    assert receipt.graph_identifier == published.identifier
+    assert receipt.graph_version == published.version
+
+
 def test_different_immutable_json_cannot_claim_one_executable_identity():
     project = store.create_project("Desk", owner_id="owner")
     store.create_artifact(project.project_id, "strategy.desk", _graph("strategy.desk"), owner_id="owner")
@@ -180,9 +199,14 @@ def test_publish_failure_after_version_insert_rolls_back_version_and_pointer(mon
             GraphVersion.owner_id == "owner",
             GraphVersion.graph_identifier == "strategy.desk"
         )))
+        receipts = tuple(session.scalars(select(StrategyAdmission).where(
+            StrategyAdmission.owner_id == "owner",
+            StrategyAdmission.graph_identifier == "strategy.desk",
+        )))
     assert artifact.current_version is None
     assert artifact.published_revision is None
     assert versions == ()
+    assert receipts == ()
 
 
 def test_identity_changing_edit_creates_reconciled_presentation_head():

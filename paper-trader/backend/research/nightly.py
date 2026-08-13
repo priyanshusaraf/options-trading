@@ -247,9 +247,12 @@ def _run_enabled_operation(research_db: str) -> list:
             reports += generated
             recorder.complete()
             return reports
-    except Exception:
+    except Exception as exc:
         try:
-            recorder.fail({"code": "RESEARCH_OPERATION_FAILED", "message": "research operation failed"})
+            from research.orchestrator.generate import ResearchAdmissionRefused
+            code = (exc.code.value if isinstance(exc, ResearchAdmissionRefused)
+                    else "RESEARCH_OPERATION_FAILED")
+            recorder.fail({"code": code, "message": "research operation refused"})
         except (UnboundLocalError, RuntimeError):
             pass
         raise

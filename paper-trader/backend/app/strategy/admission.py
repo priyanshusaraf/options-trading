@@ -356,6 +356,50 @@ class AdmittedStrategyArtifact:
         return content_address(self.to_dict())
 
 
+def artifact_from_dict(document: Mapping[str, Any]) -> AdmittedStrategyArtifact:
+    """Rebuild one persisted receipt only when its full canonical shape is valid."""
+    try:
+        source = document["source_evidence"]
+        artifact = AdmittedStrategyArtifact(
+            owner_id=document["owner_id"], source=document["source"],
+            source_evidence=SourceEvidence(
+                source["source"], source["strategy_key"], source["strategy_version"],
+                source["adapter_implementation_address"], source["adapter_decision_address"],
+            ),
+            graph_identifier=document["graph_identifier"], graph_version=document["graph_version"],
+            graph_address=document["graph_address"],
+            resolved_components=tuple(ResolvedComponentIdentity(
+                item["node_path"], item["identifier"], item["version"], item["body_ref"],
+                item["bound_parameters"],
+            ) for item in document["resolved_components"]),
+            input_provenance=tuple(InputProvenance(
+                item["node_path"], item["socket"], tuple(item["root_market_inputs"]),
+                tuple(tuple(path) for path in item["source_paths"]),
+            ) for item in document["input_provenance"]),
+            bound_parameters=document["bound_parameters"],
+            kernels=tuple(AdmittedKernelIdentity(
+                item["body_ref"], item["implementation_address"], item["causal_contract"],
+                item["evaluated_history_bars"],
+            ) for item in document["kernels"]),
+            canonical_mapping=document["canonical_mapping"],
+            declared_warmup=document["declared_warmup"], risk_model=document["risk_model"],
+            fixture_suite_address=document["fixture_suite_address"],
+            reference_decision_address=document["reference_decision_address"],
+            vector_decision_address=document["vector_decision_address"],
+            scheme=document["scheme"], contract_suite=document["contract_suite"],
+            parity_suite=document["parity_suite"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AdmissionRefused(
+            AdmissionRefusalCode.RECEIPT_STALE, "persisted admission receipt is invalid"
+        ) from exc
+    if artifact.to_dict() != dict(document):
+        raise AdmissionRefused(
+            AdmissionRefusalCode.RECEIPT_STALE, "persisted admission receipt is not canonical"
+        )
+    return artifact
+
+
 def admitted_artifact(structural: StructuralAdmission,
                       parity: ParityEvidence) -> AdmittedStrategyArtifact:
     """The explicit Task 4 hand-off; structural evidence alone has no address."""
@@ -1025,7 +1069,7 @@ __all__ = [
     "AdmissionRefused", "HandwrittenAdapterInput", "IRGraphAdmissionInput",
     "InputProvenance", "ParityEvidence", "ResolvedComponentIdentity",
     "SourceEvidence", "StructuralAdmission", "StructuralDecision",
-    "admit_strategy", "admitted_artifact", "canonical_decisions",
+    "admit_strategy", "admitted_artifact", "artifact_from_dict", "canonical_decisions",
     "derive_input_provenance", "inspect_strategy", "runtime_for_admitted",
     "verify_admission",
 ]

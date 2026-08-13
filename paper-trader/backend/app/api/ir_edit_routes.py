@@ -346,6 +346,26 @@ EditorErrorCode = Literal[
     "REQUEST_VALIDATION_FAILED",
     "IR_VALIDATION_FAILED",
     "EDITOR_DOCUMENT_FAILED",
+    "IR_INVALID",
+    "RESOLUTION_FAILED",
+    "CONTRACT_MISSING",
+    "CONTRACT_INVALID",
+    "COMPONENT_QUARANTINED",
+    "INPUT_UNDECLARED",
+    "CONTEXT_UNDECLARED",
+    "EXTERNAL_SERIES_UNRESOLVED",
+    "IMPURE_KERNEL",
+    "IMPLEMENTATION_UNIDENTIFIED",
+    "IMPLEMENTATION_STALE",
+    "HISTORY_INVALID",
+    "OUTPUT_DELAY_INVALID",
+    "OUTPUT_MAPPING_INVALID",
+    "STREAMING_DIVERGENCE",
+    "VECTOR_EVALUATION_FAILED",
+    "REFERENCE_EVALUATION_FAILED",
+    "OWNER_SCOPE_INVALID",
+    "ARTEFACT_MISMATCH",
+    "RECEIPT_STALE",
 ]
 
 
@@ -750,6 +770,8 @@ def post_graph_edit(
                 message=violation.message,
             ) for violation in exc.violations],
         )
+    except store.GraphAdmissionRefused as exc:
+        return _error_response(422, exc.code.value, "Causal admission refused")
     except store.GraphRejected as exc:
         return _error_response(
             422,
