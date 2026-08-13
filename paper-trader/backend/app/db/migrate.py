@@ -46,7 +46,7 @@ MIGRATIONS_DIR = os.path.join(_BACKEND_DIR, "migrations")
 BASELINE_REVISION = "0001"
 BASELINE_SCHEMA_SQL = os.path.join(MIGRATIONS_DIR, "baseline_schema.ddl")
 POSTGRESQL_IMMUTABLE_TABLES = (
-    "execution_order_events", "graph_versions", "project_review_snapshots",
+    "execution_order_events", "graph_versions", "project_review_snapshots", "strategy_admissions",
 )
 
 # The tables that existed at revision 0001 — the documented inventory of the
@@ -222,8 +222,40 @@ def _defaults_are_equivalent(column, expected, actual, dialect_name: str) -> boo
     )
 
 
+def _validate_strategy_admission_immutable_trigger(connection) -> None:
+    """Reject a same-name trigger that no longer protects admission receipts."""
+    row = connection.execute(_sa_text("""
+        SELECT trigger.tgenabled, trigger.tgtype, trigger.tgqual IS NULL AS has_no_when,
+               relation_namespace.nspname AS relation_schema,
+               function_namespace.nspname AS function_schema,
+               procedure.proname, procedure.prosrc, pg_get_triggerdef(trigger.oid) AS trigger_definition
+        FROM pg_trigger AS trigger
+        JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+        JOIN pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace
+        JOIN pg_proc AS procedure ON procedure.oid = trigger.tgfoid
+        JOIN pg_namespace AS function_namespace ON function_namespace.oid = procedure.pronamespace
+        WHERE NOT trigger.tgisinternal
+          AND relation.relname = 'strategy_admissions'
+          AND relation_namespace.nspname = current_schema()
+          AND trigger.tgname = 'strategy_admissions_refuse_mutation'
+    """)).mappings().one_or_none()
+    expected_source = (
+        "begin raise exception 'strategy admissions are immutable' "
+        "using errcode = '55000'; end;"
+    )
+    # PostgreSQL: ROW (1) | BEFORE (2) | DELETE (8) | UPDATE (16).
+    if (row is None or row["tgenabled"] != "O" or row["tgtype"] != 27
+            or not row["has_no_when"]
+            or row["relation_schema"] != row["function_schema"]
+            or row["proname"] != "strategy_admissions_refuse_mutation"
+            or " ".join(str(row["prosrc"]).lower().split()) != expected_source
+            or "execute function strategy_admissions_refuse_mutation()" not in " ".join(
+                str(row["trigger_definition"]).lower().split())):
+        raise RuntimeError("strategy_admissions immutable-trigger contract is invalid")
+
+
 def _validate_postgresql_immutable_triggers(engine: Engine) -> None:
-    """Require the append-only fact triggers on every PostgreSQL startup."""
+    """Require append-only facts and the full receipt-trigger contract at startup."""
     expected = {f"{table}_refuse_mutation" for table in POSTGRESQL_IMMUTABLE_TABLES}
     with engine.connect() as connection:
         actual = set(connection.execute(_sa_text("""
@@ -239,6 +271,8 @@ def _validate_postgresql_immutable_triggers(engine: Engine) -> None:
             "PostgreSQL immutable-fact triggers are missing: "
             f"{sorted(missing)}"
         )
+    with engine.connect() as connection:
+        _validate_strategy_admission_immutable_trigger(connection)
 
 
 def _validate_current_schema(engine: Engine, expected_tables) -> None:

@@ -79,6 +79,7 @@ TABLE_PLANES: dict[str, Plane] = {
     "projects": Plane.USER,
     "graph_artifacts": Plane.USER,
     "graph_versions": Plane.USER,
+    "strategy_admissions": Plane.USER,
     "ir_graph_layouts": Plane.USER,
     "ir_graph_layout_positions": Plane.USER,
     "ir_graph_layout_groups": Plane.USER,

@@ -155,9 +155,11 @@ def test_postgresql_create_profile_installs_immutable_fact_triggers():
     Base.metadata.create_all(engine)
     ddl = "\n".join(statements)
 
-    for table in ("execution_order_events", "graph_versions", "project_review_snapshots"):
+    for table in ("execution_order_events", "graph_versions", "project_review_snapshots",
+                  "strategy_admissions"):
         assert f"CREATE OR REPLACE FUNCTION {table}_refuse_mutation()" in ddl
         assert f"BEFORE UPDATE OR DELETE ON {table}" in ddl
+    assert "strategy admissions are immutable' USING ERRCODE = '55000'" in ddl
 
 
 def test_postgresql_immutable_trigger_validator_rejects_one_missing_trigger(monkeypatch):
@@ -186,6 +188,70 @@ def test_postgresql_immutable_trigger_validator_rejects_one_missing_trigger(monk
     with pytest.raises(RuntimeError, match="project_review_snapshots_refuse_mutation"):
         migrate._validate_postgresql_immutable_triggers(Engine())
     assert seen == ["connect"]
+
+
+@pytest.mark.parametrize("tamper", ("disabled", "when_false", "wrong_sqlstate"))
+def test_strategy_admission_trigger_validator_rejects_same_name_inert_contract(tamper):
+    """A trigger name alone must not bless a receipt table that raw SQL can mutate."""
+    row = {
+        "tgenabled": "O", "tgtype": 27, "has_no_when": True,
+        "relation_schema": "public", "function_schema": "public",
+        "proname": "strategy_admissions_refuse_mutation",
+        "prosrc": "BEGIN RAISE EXCEPTION 'strategy admissions are immutable' "
+                  "USING ERRCODE = '55000'; END;",
+        "trigger_definition": "CREATE TRIGGER strategy_admissions_refuse_mutation "
+                              "BEFORE UPDATE OR DELETE ON strategy_admissions "
+                              "FOR EACH ROW EXECUTE FUNCTION "
+                              "strategy_admissions_refuse_mutation()",
+    }
+    if tamper == "disabled":
+        row["tgenabled"] = "D"
+    elif tamper == "when_false":
+        row["has_no_when"] = False
+    else:
+        row["prosrc"] = "BEGIN RAISE EXCEPTION 'strategy admissions are immutable' " \
+                         "USING ERRCODE = 'P0001'; END;"
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return row
+
+    class Connection:
+        def execute(self, _statement):
+            return Result()
+
+    with pytest.raises(RuntimeError, match="immutable-trigger contract"):
+        migrate._validate_strategy_admission_immutable_trigger(Connection())
+
+
+def test_strategy_admission_trigger_validator_accepts_exact_catalog_contract():
+    row = {
+        "tgenabled": "O", "tgtype": 27, "has_no_when": True,
+        "relation_schema": "app_test", "function_schema": "app_test",
+        "proname": "strategy_admissions_refuse_mutation",
+        "prosrc": "BEGIN RAISE EXCEPTION 'strategy admissions are immutable' "
+                  "USING ERRCODE = '55000'; END;",
+        "trigger_definition": "CREATE TRIGGER strategy_admissions_refuse_mutation "
+                              "BEFORE UPDATE OR DELETE ON strategy_admissions "
+                              "FOR EACH ROW EXECUTE FUNCTION "
+                              "strategy_admissions_refuse_mutation()",
+    }
+
+    class Result:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return row
+
+    class Connection:
+        def execute(self, _statement):
+            return Result()
+
+    migrate._validate_strategy_admission_immutable_trigger(Connection())
 
 
 def test_current_schema_validation_rejects_missing_execution_index(tmp_path):

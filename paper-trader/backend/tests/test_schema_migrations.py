@@ -34,7 +34,41 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0032"
+HEAD = "0034"
+
+
+def test_revision_0034_adds_immutable_admissions_and_nullable_consumer_references(tmp_path):
+    """0034 preserves legacy rows while refusing malformed new receipt references."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0034-admissions.db", "0033")
+    consumers = (
+        "graph_versions", "backtest_runs", "backtest_results", "deployments",
+        "ir_shadow_deployments", "ir_paper_deployments", "positions", "trades",
+        "execution_intents",
+    )
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0034")
+        inspector = sa.inspect(connection)
+        assert inspector.get_columns("strategy_admissions")
+        admission_columns = {
+            table: next(column for column in inspector.get_columns(table)
+                        if column["name"] == "admission_address")
+            for table in consumers
+        }
+        assert all(column["nullable"] and str(column["type"]) == "VARCHAR(71)"
+                   for column in admission_columns.values())
+        for table in consumers:
+            sql = connection.execute(sa.text(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=:table"
+            ), {"table": table}).scalar_one().lower()
+            assert f"ck_{table}_admission_address" in sql
+        triggers = {name for (name,) in connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='trigger' "
+            "AND tbl_name='strategy_admissions'"
+        ))}
+        assert triggers == {
+            "strategy_admissions_refuse_update", "strategy_admissions_refuse_delete",
+        }
+    assert migrate.schema_version(engine) == "0034"
 
 
 def test_revision_0031_downgrade_refuses_changed_legacy_preference(tmp_path):
@@ -1829,7 +1863,8 @@ def test_product_object_schema_owns_graph_versions_and_sparse_layouts(tmp_path):
         "published_revision", "current_version", "created_at", "updated_at",
     }
     assert set(schema["graph_versions"]["columns"]) == {
-        "owner_id", "graph_identifier", "version", "artifact_json", "content_address", "visibility", "created_at",
+        "owner_id", "graph_identifier", "version", "artifact_json", "content_address",
+        "admission_address", "visibility", "created_at",
     }
     assert set(schema["ir_graph_layouts"]["columns"]) == {
         "owner_id", "graph_identifier", "graph_version", "revision", "updated_at",

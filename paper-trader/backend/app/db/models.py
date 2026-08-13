@@ -149,7 +149,49 @@ def _compile_json_number_equals_postgresql(element, _compiler, **_kw):
             f"({field} #>> '{{}}')::numeric = {element.expected}")
 
 
-def _install_postgresql_immutable_trigger(table, message: str) -> None:
+class _ContentAddress(ColumnElement):
+    """Portable strict ``sha256:<64 lowercase hex>`` validation."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_ContentAddress, "sqlite")
+def _compile_content_address_sqlite(element, _compiler, **_kw):
+    name = element.column_name
+    return (f"length({name}) = 71 AND substr({name}, 1, 7) = 'sha256:' AND "
+            f"substr({name}, 8) = lower(substr({name}, 8)) AND "
+            f"substr({name}, 8) NOT GLOB '*[^0-9a-f]*'")
+
+
+@compiles(_ContentAddress, "postgresql")
+def _compile_content_address_postgresql(element, _compiler, **_kw):
+    return f"{element.column_name} ~ '^sha256:[0-9a-f]{{64}}$'"
+
+
+class _NullableContentAddress(_ContentAddress):
+    """Allow legacy NULL while refusing malformed newly written receipt keys."""
+
+
+@compiles(_NullableContentAddress, "sqlite")
+def _compile_nullable_content_address_sqlite(element, _compiler, **_kw):
+    return f"{element.column_name} IS NULL OR ({_compile_content_address_sqlite(element, _compiler, **_kw)})"
+
+
+@compiles(_NullableContentAddress, "postgresql")
+def _compile_nullable_content_address_postgresql(element, _compiler, **_kw):
+    return f"{element.column_name} IS NULL OR ({_compile_content_address_postgresql(element, _compiler, **_kw)})"
+
+
+def _admission_address_check(table: str) -> CheckConstraint:
+    return CheckConstraint(_NullableContentAddress("admission_address"),
+                           name=f"ck_{table}_admission_address")
+
+
+def _install_postgresql_immutable_trigger(table, message: str, *, sqlstate: str | None = None) -> None:
     """Make append-only facts immutable on PostgreSQL as well as SQLite."""
     function_name = f"{table.name}_refuse_mutation"
     event.listen(
@@ -157,7 +199,8 @@ def _install_postgresql_immutable_trigger(table, message: str) -> None:
         "after_create",
         DDL(
             f"CREATE OR REPLACE FUNCTION {function_name}() RETURNS trigger AS $$ "
-            f"BEGIN RAISE EXCEPTION '{message}'; END; $$ LANGUAGE plpgsql"
+            f"BEGIN RAISE EXCEPTION '{message}'"
+            f"{f' USING ERRCODE = {sqlstate!r}' if sqlstate else ''}; END; $$ LANGUAGE plpgsql"
         ).execute_if(dialect="postgresql"),
     )
     event.listen(
@@ -545,6 +588,7 @@ class Deployment(Base):
     __table_args__ = (
         UniqueConstraint("owner_id", "name", name="uq_deployments_owner_name"),
         Index("ix_deployments_owner_account", "owner_id", "broker_account_id"),
+        _admission_address_check("deployments"),
     )
     #: Whose money this row records. See migration 0017.
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -558,6 +602,9 @@ class Deployment(Base):
     # the legacy deployment forever — it does not pin a strategy, so it cannot pin a
     # version either.
     strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # NULL is explicit legacy quarantine.  An address proves causal admission only;
+    # later phases still require full deployment preflight before activation.
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
 
     # ── where it runs ────────────────────────────────────────────────────────
     # The broker account this book belongs to. One account today; the column exists
@@ -614,6 +661,7 @@ class ExecutionIntent(Base):
         CheckConstraint("intent = 'ENTRY'", name="ck_execution_intent_entry"),
         CheckConstraint("requested_qty > 0", name="ck_execution_intent_requested_qty"),
         Index("ix_execution_intents_owner_account", "owner_id", "broker_account_id"),
+        _admission_address_check("execution_intents"),
     )
 
     client_intent_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -644,6 +692,7 @@ class ExecutionIntent(Base):
     signal_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     strategy_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     context_json: Mapped[str] = mapped_column(
         Text, default="{}", server_default="{}", nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
@@ -756,6 +805,7 @@ class Position(Base):
     __tablename__ = "positions"
     __table_args__ = (
         Index("ix_positions_owner_account", "owner_id", "broker_account_id"),
+        _admission_address_check("positions"),
     )
     #: Whose money this row records. See migration 0017.
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -788,6 +838,7 @@ class Position(Base):
     # running but could not be identified. Same three-value rule as build_sha —
     # never collapse the two.
     strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     lot_size: Mapped[int] = mapped_column(Integer)
@@ -929,6 +980,7 @@ class Trade(Base):
     __tablename__ = "trades"
     __table_args__ = (
         Index("ix_trades_owner_account", "owner_id", "broker_account_id"),
+        _admission_address_check("trades"),
     )
     #: Whose money this row records. See migration 0017.
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -960,6 +1012,7 @@ class Trade(Base):
     # running but could not be identified. Same three-value rule as build_sha —
     # never collapse the two.
     strategy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     strike: Mapped[float] = mapped_column(Float)
     expiry: Mapped[dt.date] = mapped_column(Date)
     qty: Mapped[int] = mapped_column(Integer)
@@ -1253,6 +1306,7 @@ class BacktestRun(Base):
         Index("ix_backtest_runs_owner_status", "owner_id", "status"),
         Index("ix_backtest_runs_owner_status_queued", "owner_id", "status", "queued_at"),
         Index("ix_backtest_runs_claim_expires", "claim_expires_at"),
+        _admission_address_check("backtest_runs"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[str] = mapped_column(
@@ -1287,6 +1341,7 @@ class BacktestRun(Base):
     window: Mapped[str] = mapped_column(String(64), default="")          # lookback label: "1y" | "max" | "2024-01-01→2024-06-01"
     instruments: Mapped[str] = mapped_column(String(400), default="")    # csv of selected keys (empty = whole scope)
     strategies: Mapped[str] = mapped_column(String(400), default="")     # csv of strategy keys this run swept
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -1326,6 +1381,7 @@ class BacktestResult(Base):
                              ondelete="RESTRICT", name="fk_backtest_results_owner_run"),
         Index("ix_backtest_results_owner_run", "owner_id", "run_id"),
         Index("ix_backtest_results_owner_cache", "owner_id", "params_hash", "last_candle_ts"),
+        _admission_address_check("backtest_results"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[str] = mapped_column(
@@ -1343,6 +1399,7 @@ class BacktestResult(Base):
     # not enough: a generated key can be republished with different executable
     # bytes while an expired worker is being replaced.
     strategy_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     trades: Mapped[int] = mapped_column(Integer, default=0)
     wins: Mapped[int] = mapped_column(Integer, default=0)
     win_rate: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1583,6 +1640,7 @@ class GraphVersion(Base):
                         name="ck_graph_versions_version_matches_json"),
         CheckConstraint("visibility = 'PRIVATE'", name="ck_graph_versions_private_visibility"),
         Index("ix_graph_versions_content_address", "content_address"),
+        _admission_address_check("graph_versions"),
     )
 
     owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1590,10 +1648,106 @@ class GraphVersion(Base):
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
     content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(16), nullable=False, default="PRIVATE", server_default="PRIVATE")
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, nullable=False, default=dt.datetime.now)
+
+
+class StrategyAdmission(Base):
+    """One owner-scoped, append-only causal-admission receipt.
+
+    This records only the proof that a graph passed Phase 3 causal admission.  It
+    is deliberately not Strategy Preflight and grants no provider, deployment, or
+    execution authority by itself.
+    """
+    __tablename__ = "strategy_admissions"
+    __table_args__ = (
+        CheckConstraint(_ContentAddress("admission_address"),
+                        name="ck_strategy_admissions_address_format"),
+        CheckConstraint(_ContentAddress("graph_address"),
+                        name="ck_strategy_admissions_graph_address_format"),
+        CheckConstraint("graph_version >= 1", name="ck_strategy_admissions_graph_version"),
+        CheckConstraint(_JsonIsValid("artifact_json"),
+                        name="ck_strategy_admissions_valid_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "owner_id", "owner_id"),
+                        name="ck_strategy_admissions_owner_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn(
+            "artifact_json", "graph_identifier", "graph_identifier"),
+            name="ck_strategy_admissions_graph_identifier_matches_json"),
+        CheckConstraint(_JsonNumberEquals("artifact_json", "graph_version", "graph_version"),
+                        name="ck_strategy_admissions_graph_version_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "graph_address", "graph_address"),
+                        name="ck_strategy_admissions_graph_address_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "scheme", "scheme"),
+                        name="ck_strategy_admissions_scheme_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "contract_suite", "contract_suite"),
+                        name="ck_strategy_admissions_contract_suite_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("artifact_json", "parity_suite", "parity_suite"),
+                        name="ck_strategy_admissions_parity_suite_matches_json"),
+        UniqueConstraint("owner_id", "graph_identifier", "graph_version", "admission_address",
+                         name="uq_strategy_admissions_owner_graph_address"),
+    )
+
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    admission_address: Mapped[str] = mapped_column(String(71), primary_key=True)
+    graph_identifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    graph_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    graph_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    scheme: Mapped[str] = mapped_column(String(32), nullable=False)
+    contract_suite: Mapped[str] = mapped_column(String(32), nullable=False)
+    parity_suite: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+def _strategy_admission_identity_matches_json(target: StrategyAdmission) -> None:
+    """Reject ORM writes whose receipt bytes, key, or copied identity disagree."""
+    from app.ir.hashing import canonical_json, content_address
+
+    try:
+        document = json.loads(target.artifact_json)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("strategy admission artifact_json must be valid canonical JSON") from exc
+    if canonical_json(document) != target.artifact_json:
+        raise ValueError("strategy admission artifact_json must be canonical JSON")
+    if content_address(document) != target.admission_address:
+        raise ValueError("strategy admission address does not match artifact_json")
+    for name in ("owner_id", "graph_identifier", "graph_version", "graph_address", "scheme",
+                 "contract_suite", "parity_suite"):
+        if document.get(name) != getattr(target, name):
+            raise ValueError(f"strategy admission {name} does not match artifact_json")
+
+
+@event.listens_for(StrategyAdmission, "before_insert")
+def _strategy_admission_before_insert(_mapper, _connection, target) -> None:
+    _strategy_admission_identity_matches_json(target)
+
+
+@event.listens_for(StrategyAdmission, "before_update")
+@event.listens_for(StrategyAdmission, "before_delete")
+def _strategy_admission_orm_mutation_refused(_mapper, _connection, _target) -> None:
+    raise ValueError("strategy admissions are immutable")
+
+
+for _trigger_name, _operation in (
+    ("strategy_admissions_refuse_update", "UPDATE"),
+    ("strategy_admissions_refuse_delete", "DELETE"),
+):
+    event.listen(
+        StrategyAdmission.__table__,
+        "after_create",
+        DDL(
+            f"CREATE TRIGGER {_trigger_name} BEFORE {_operation} "
+            "ON strategy_admissions BEGIN "
+            "SELECT RAISE(ABORT, 'strategy admissions are immutable'); END"
+        ).execute_if(dialect="sqlite"),
+    )
+
+_install_postgresql_immutable_trigger(
+    StrategyAdmission.__table__, "strategy admissions are immutable", sqlstate="55000")
 
 
 @event.listens_for(GraphVersion, "before_insert")
@@ -2118,6 +2272,7 @@ class IrPaperDeployment(Base):
                         name="ck_ir_paper_deployment_state"),
         CheckConstraint("graph_version >= 1", name="ck_ir_paper_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_paper_deployment_revision"),
+        _admission_address_check("ir_paper_deployments"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -2127,6 +2282,7 @@ class IrPaperDeployment(Base):
     #: Recorded at activation, re-derived on every reload, and re-checked against the
     #: resolved adapter at the authority gate. Three independent places, on purpose.
     graph_content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     evidence_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: **The graph content address the research decision approved** — not the address of
@@ -2263,6 +2419,7 @@ class IrShadowDeployment(Base):
                         name="ck_ir_shadow_deployment_state"),
         CheckConstraint("graph_version >= 1", name="ck_ir_shadow_deployment_version"),
         CheckConstraint("revision >= 0", name="ck_ir_shadow_deployment_revision"),
+        _admission_address_check("ir_shadow_deployments"),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     #: Which project owns the logic. Not derivable from the graph identifier.
@@ -2274,6 +2431,7 @@ class IrShadowDeployment(Base):
     #: Recorded at activation and re-verified on every reload. A content address that stops
     #: matching its version means the bytes moved under a row that claims to name them.
     graph_content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    admission_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
     #: Verified research lineage, recorded rather than foreign-keyed (see the class
     #: docstring). NULL run id means "staged without evidence", which may not activate.
     evidence_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
