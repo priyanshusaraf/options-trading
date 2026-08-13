@@ -57,4 +57,9 @@
   outboxes, fenced at-least-once consumers, PostgreSQL LISTEN wakeups with polling authority,
   boot-unique replica delivery for all three planes, scoped cache/WS refresh and signed resume
   cursors are in the uncommitted tree. See `task-6-report.md`.
-- Task 7: backup/restore, failure recovery, and production concurrency/load proof.
+- Task 7: implementation complete and frozen for independent review at base `d982428`. The tree
+  contains a signed/redacted PostgreSQL restore contract, credential-safe PG16 dump/restore tools,
+  a live clean physical-database restore proof, restore-specific execution boot takeover, bounded
+  workload presets/reports, PostgreSQL CI gate and operator runbooks. Managed PITR, production
+  capacity/cost, geographic failover and broker-side fencing remain explicitly unproven. See
+  `task-7-report.md`.

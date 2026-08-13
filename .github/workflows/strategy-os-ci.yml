@@ -20,6 +20,69 @@ env:
   PT_RESEARCH_ENABLED: "0"
 
 jobs:
+  postgresql-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strategy_os
+          POSTGRES_PASSWORD: strategy_os_test
+          POSTGRES_DB: strategy_os_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strategy_os -d strategy_os_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PT_TEST_POSTGRES_URL: postgresql+psycopg://strategy_os:strategy_os_test@127.0.0.1:5432/strategy_os_test
+      PT_DATABASE_URL: postgresql+psycopg://strategy_os:strategy_os_test@127.0.0.1:5432/strategy_os_test?options=-csearch_path%3Dexecution
+      PT_RESEARCH_DATABASE_URL: postgresql+psycopg://strategy_os:strategy_os_test@127.0.0.1:5432/strategy_os_test?options=-csearch_path%3Dresearch
+      PT_LEDGER_DATABASE_URL: postgresql+psycopg://strategy_os:strategy_os_test@127.0.0.1:5432/strategy_os_test?options=-csearch_path%3Dledger
+      PT_EVENT_CURSOR_SECRET: strategy-os-ci-resume-cursor-secret
+      PT_SERVICE_ROLE: test
+      PT_AUTH_DISABLED: "1"
+      PT_EXECUTION_WORKER: api
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: paper-trader/backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: paper-trader/backend
+        run: python -m pip install -r requirements.txt
+      - name: Install PostgreSQL 16 client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CODENAME)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          echo "PT_PG_BIN_DIR=/usr/lib/postgresql/16/bin" >> "$GITHUB_ENV"
+      - name: Run PG16 restore and concurrency contracts
+        working-directory: paper-trader/backend
+        run: >-
+          python -m pytest
+          tests/test_postgresql_restore_live.py
+          tests/test_postgresql_restore_contract.py
+          tests/test_postgresql_backup_tools.py
+          tests/test_postgres_execution_leases.py
+          tests/test_postgres_outbox.py
+          tests/test_postgres_claim_sql.py
+          --tb=short
+      - name: Run the deterministic small workload contract twice
+        working-directory: paper-trader/backend
+        run: |
+          python scripts/phase2_load.py --preset ci --seed 20260813 --output /tmp/phase2-ci-first.json
+          python scripts/phase2_load.py --preset ci --seed 20260813 --output /tmp/phase2-ci-second.json
+
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 30

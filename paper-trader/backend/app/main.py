@@ -260,11 +260,21 @@ async def lifespan(app: FastAPI):
             "PT_EXECUTION_BROKER_ACCOUNT_ID")
     from app.execution.leases import LeaseRepository
     lease_repository = LeaseRepository(SessionLocal)
-    lease_token = lease_repository.claim(
-        owner_id=assigned_owner, broker_account_id=assigned_account,
-        cell_id=settings.execution_cell_id.strip() or "legacy-cell",
-        worker_id=uuid.uuid4().hex,
-        host_diagnostic=socket.gethostname())
+    worker_id = uuid.uuid4().hex
+    cell_id = settings.execution_cell_id.strip() or "legacy-cell"
+    if settings.restore_safety_state.strip().lower() == "verified":
+        from app.execution.disaster_recovery import claim_restored_execution_lease
+        lease_token = claim_restored_execution_lease(
+            lease_repository, owner_id=assigned_owner,
+            broker_account_id=assigned_account, cell_id=cell_id,
+            worker_id=worker_id,
+            verification_address=settings.restore_verification_address.strip(),
+            old_primary_isolated=settings.restore_old_primary_isolated)
+    else:
+        lease_token = lease_repository.claim(
+            owner_id=assigned_owner, broker_account_id=assigned_account,
+            cell_id=cell_id, worker_id=worker_id,
+            host_diagnostic=socket.gethostname())
     runner = EngineRunner(owner_id=assigned_owner,
                           broker_account_id=assigned_account,
                           execution_lease_token=lease_token)  # factory logs chosen provider

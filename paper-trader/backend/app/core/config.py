@@ -469,6 +469,13 @@ class Settings(BaseSettings):
     research_database_url: str = ""
     ledger_database_url: str = ""
     production: bool = False
+    # Deployment-owned restore approval. `quarantined` blocks every role;
+    # `verified` binds boot to one retained verifier report and generation.
+    # `normal` is the non-restore path and preserves existing deployments.
+    restore_safety_state: str = "normal"
+    restore_generation_id: str = ""
+    restore_verification_address: str = ""
+    restore_old_primary_isolated: bool = False
     db_path: str = "paper_trader.db"
     research_db_path: str = "research.db"
     ledger_db_path: str = ""
@@ -606,6 +613,25 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
             raise BootConfigError(
                 "execution worker requires bounded PT_EXECUTION_OWNER_ID, "
                 "PT_EXECUTION_BROKER_ACCOUNT_ID, and PT_EXECUTION_CELL_ID")
+    restore_state = settings.restore_safety_state.strip().lower()
+    if restore_state not in {"normal", "quarantined", "verified"}:
+        raise BootConfigError(
+            "PT_RESTORE_SAFETY_STATE must be exactly normal, quarantined, or verified")
+    if restore_state == "quarantined":
+        raise BootConfigError(
+            "restore target is quarantined until the three-plane verifier approves it")
+    if restore_state == "verified":
+        address = settings.restore_verification_address.strip()
+        generation = settings.restore_generation_id.strip()
+        if (not generation or len(generation) > 128 or not address.startswith("sha256:")
+                or len(address) != 71
+                or any(character not in "0123456789abcdef" for character in address[7:])):
+            raise BootConfigError(
+                "verified restore boot requires a bounded restore generation and verifier "
+                "report content address")
+        if not settings.restore_old_primary_isolated:
+            raise BootConfigError(
+                "verified restore boot requires PT_RESTORE_OLD_PRIMARY_ISOLATED=1")
 
     # 1. Config must be attached. An explicit PT_DISABLE_DOTENV=1 is an
     #    operator-typed opt-out and takes its own path; the heuristic misfiring

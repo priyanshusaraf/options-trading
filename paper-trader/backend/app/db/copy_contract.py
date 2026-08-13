@@ -745,6 +745,38 @@ def _validate_sequences(connection, metadata: MetaData) -> list[dict[str, object
     return results
 
 
+# Stable, read-only integrity primitives shared with the PostgreSQL restore
+# contract.  The copy workflow above remains SQLite-to-PostgreSQL; exporting
+# these bounded primitives does not turn it into a backup verifier.
+def typed_row_digest(table: Table, row: dict[str, object]) -> str:
+    return _row_digest(table, row)
+
+
+def stream_table_summary(connection, table: Table, *, batch_size: int = 500) -> dict[str, object]:
+    return _stream_summary(connection, table, batch_size=batch_size)
+
+
+def validate_semantic_ownership(connection, metadata: MetaData) -> None:
+    _validate_semantic_ownership(connection, metadata)
+
+
+def validate_content_addresses(connection, metadata: MetaData) -> None:
+    _validate_content_addresses(connection, metadata)
+
+
+def validate_postgresql_constraints(connection) -> None:
+    _validate_postgresql_constraints(connection)
+
+
+def validate_sequence_safety(connection, metadata: MetaData) -> list[dict[str, object]]:
+    return _validate_sequences(connection, metadata)
+
+
+def streamed_identity_set(connection, table: Table, columns: tuple[str, ...],
+                          *, batch_size: int = 500) -> set[bytes]:
+    return _streamed_identity_set(connection, table, columns, batch_size=batch_size)
+
+
 def verify_planes(planes: Iterable[CopyPlane], report: dict[str, object]) -> None:
     """Recompute the report's load-bearing evidence without changing either side."""
     planes = list(planes)

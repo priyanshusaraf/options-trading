@@ -181,6 +181,70 @@ class LeaseRepository:
             session.commit()
             return _token(lease)
 
+    def claim_after_restore(self, *, owner_id: str, broker_account_id: str,
+                            cell_id: str, worker_id: str, restore_evidence: str,
+                            ttl_seconds: int = 30) -> LeaseToken:
+        """Fence historical restored authority through the existing lease row.
+
+        The caller proves infrastructure isolation and verifier approval before
+        entering here.  This transaction takes the same row lock as normal claim,
+        increments the same epoch and never grants active broker authority.
+        """
+        if ttl_seconds < 2 or ttl_seconds > 300:
+            raise ValueError("lease TTL must be between 2 and 300 seconds")
+        if not cell_id or not worker_id or len(cell_id) > 96 or len(worker_id) > 96:
+            raise ValueError("bounded cell and boot-unique worker identities are required")
+        if not restore_evidence.startswith("sha256:") or len(restore_evidence) != 71:
+            raise ValueError("restore verification evidence is required")
+        with self.sessions() as session:
+            begin_after_clean_reads(session, scope=_scope(owner_id, broker_account_id))
+            account = session.scalar(select(BrokerAccount).where(
+                BrokerAccount.owner_id == owner_id,
+                BrokerAccount.broker_account_id == broker_account_id,
+                BrokerAccount.status == "active"))
+            if account is None:
+                raise LeaseUnavailable("broker account unavailable")
+            lease = session.scalar(locked_rows(select(AccountExecutionLease).where(
+                AccountExecutionLease.owner_id == owner_id,
+                AccountExecutionLease.broker_account_id == broker_account_id), session))
+            now = _db_now(session)
+            if lease is None:
+                raise LeaseUnavailable("restored execution lease evidence is absent")
+            if lease.fence_epoch >= 2_147_483_647:
+                raise LeaseUnavailable("execution fence epoch is exhausted")
+            lease.fence_epoch += 1
+            lease.state = "recovering"
+            lease.cell_id = cell_id
+            lease.worker_id = worker_id
+            lease.host_diagnostic = "restored-generation"
+            lease.claimed_at = now
+            lease.heartbeat_at = now
+            lease.expires_at = now + dt.timedelta(seconds=ttl_seconds)
+            lease.recovery_started_at = now
+            lease.reconciled_at = None
+            lease.blocked_at = None
+            lease.block_reason = ""
+            lease.desired_state = lease.effective_state = "disabled"
+            lease.updated_at = now
+            session.execute(update(AccountExecutionCommand).where(
+                AccountExecutionCommand.owner_id == owner_id,
+                AccountExecutionCommand.broker_account_id == broker_account_id,
+                AccountExecutionCommand.kind.like("control_%"),
+                AccountExecutionCommand.state.in_(("prepared", "processing")),
+            ).values(state="prepared", fence_epoch=lease.fence_epoch,
+                     cell_id=cell_id, worker_id=worker_id, updated_at=now))
+            _history(session, lease, "takeover", now,
+                     f"restore:{restore_evidence}"[:200])
+            _append_execution_change(
+                session, owner_id=owner_id, broker_account_id=broker_account_id,
+                aggregate_type="execution_lease", aggregate_id=broker_account_id,
+                event_type="execution.lease.changed",
+                producer_key=f"lease:{owner_id}:{broker_account_id}:{lease.fence_epoch}:restore",
+                payload={"projection": "execution_status", "state": "recovering",
+                         "fence_epoch": lease.fence_epoch})
+            session.commit()
+            return _token(lease)
+
     def _current(self, session: Session, token: LeaseToken, *, allow_blocked: bool = False,
                  require_unexpired: bool = True) -> tuple[AccountExecutionLease, dt.datetime]:
         now = _db_now(session)
