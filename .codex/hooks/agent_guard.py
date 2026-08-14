@@ -184,6 +184,27 @@ def current_changed_paths(repo: Path, excluded: Path) -> List[str]:
     )
 
 
+def commit_changed_paths(repo: Path, base_sha: str, head_sha: str) -> List[str]:
+    output = run_git(
+        repo,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-ext-diff",
+        f"{base_sha}..{head_sha}",
+    )
+    return sorted(
+        entry.decode("utf-8", "replace")
+        for entry in output.split(b"\0")
+        if entry
+    )
+
+
+def commit_diff_digest(repo: Path, base_sha: str, head_sha: str) -> str:
+    diff = run_git(repo, "diff", "--binary", "--no-ext-diff", f"{base_sha}..{head_sha}")
+    return hashlib.sha256(diff).hexdigest()
+
+
 def state_directory(repo: Path) -> Path:
     configured = os.environ.get("STRATEGY_OS_AGENT_STATE_DIR")
     if configured:
@@ -287,9 +308,29 @@ def validate_review_package(repo: Path, data: dict, review: dict) -> Tuple[Optio
         excludes = normalized_paths(review.get("exclude_paths", []), "review exclusions")
         if package_data.get("scope_prefixes") != includes or package_data.get("excluded_paths") != excludes:
             return None, None, "review package scope does not match capsule"
+        review_state = package_data.get("review_state", "dirty_tree")
+        if review_state == "commit":
+            declared_head = package_data.get("head_sha")
+            if not isinstance(declared_head, str) or not declared_head:
+                return None, None, "commit-bound review package head SHA is invalid"
+            head_sha = run_git(repo, "rev-parse", "--verify", f"{declared_head}^{{commit}}").decode().strip()
+            current_head = run_git(repo, "rev-parse", "HEAD").decode().strip()
+            if head_sha != declared_head or current_head != head_sha:
+                return None, None, "checkout does not match the reviewed head"
+            if run_git(repo, "status", "--porcelain=v1", "--untracked-files=no"):
+                return None, None, "commit-bound review requires a clean tracked and index state"
+            complete_paths = commit_changed_paths(repo, base_sha, head_sha)
+            if package_data.get("complete_changed_paths") != complete_paths:
+                return None, None, "commit-bound review package complete paths are stale"
+            if package_data.get("commit_diff_sha256") != commit_diff_digest(repo, base_sha, head_sha):
+                return None, None, "commit-bound review package diff digest is stale"
+        elif review_state == "dirty_tree":
+            complete_paths = current_changed_paths(repo, package)
+        else:
+            return None, None, "review package state is invalid"
         expected_paths = [
             path
-            for path in current_changed_paths(repo, package)
+            for path in complete_paths
             if (not includes or any(path_matches(path, prefix) for prefix in includes))
             and not any(path_matches(path, prefix) for prefix in excludes)
         ]
@@ -305,7 +346,7 @@ def validate_review_package(repo: Path, data: dict, review: dict) -> Tuple[Optio
             actual = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
             if digests.get(relative) != actual:
                 return None, None, "review evidence digest is stale"
-        if package_data.get("dirty_tree_fingerprint") != fingerprint(repo, package):
+        if review_state == "dirty_tree" and package_data.get("dirty_tree_fingerprint") != fingerprint(repo, package):
             return None, None, "review package fingerprint is stale"
         for field in ("open_findings", "owner_gates"):
             if not isinstance(package_data.get(field), list) or not all(isinstance(item, str) for item in package_data[field]):

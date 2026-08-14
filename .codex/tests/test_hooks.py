@@ -488,6 +488,89 @@ class AgentGuardTests(HookTestCase):
         payload = self.agent_payload("critical-review", model="gpt-5.6-sol", reasoning_effort="high", agent_type="critical-reviewer")
         self.assert_denied(self.run_hook(AGENT_GUARD, payload, repo=repo), "scope")
 
+    def test_commit_bound_reviewer_accepts_exact_package_and_rejects_tampering(self) -> None:
+        generator = ROOT / ".codex" / "scripts" / "make_review_package.py"
+        repo = self.base / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        (repo / "file.txt").write_text("base\n")
+        subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+        (repo / "file.txt").write_text("changed\n")
+        subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "head"], cwd=repo, check=True)
+        head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+        evidence = repo / ".agent" / "evidence.log"
+        evidence.parent.mkdir()
+        evidence.write_text("pass\n")
+        package = repo / ".agent" / "review-package.json"
+
+        def generate() -> None:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(generator),
+                    "--repo",
+                    str(repo),
+                    "--task-id",
+                    "test-slice",
+                    "--base",
+                    base_sha,
+                    "--head",
+                    head_sha,
+                    "--acceptance-status",
+                    "pass",
+                    "--evidence",
+                    ".agent/evidence.log",
+                    "--output",
+                    str(package),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+
+        metadata = json.loads(capsule_text([]).split("---")[1])
+        metadata["review"]["base_sha"] = base_sha
+        self.capsule.write_text(f"---\n{json.dumps(metadata)}\n---\n")
+        payload = self.agent_payload(
+            "critical-review",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+            agent_type="critical-reviewer",
+        )
+
+        generate()
+        exact = self.run_hook(AGENT_GUARD, payload, repo=repo)
+        self.assertEqual(exact.stdout, "", exact.stderr)
+
+        for field, value, message in (
+            ("changed_paths", [], "declared review scope"),
+            ("complete_changed_paths", [], "complete paths"),
+            ("commit_diff_sha256", "0" * 64, "diff digest"),
+        ):
+            generate()
+            tampered = json.loads(package.read_text())
+            tampered[field] = value
+            package.write_text(json.dumps(tampered))
+            payload["session_id"] = f"tampered-{field}"
+            self.assert_denied(self.run_hook(AGENT_GUARD, payload, repo=repo), message)
+
+        generate()
+        (repo / "file.txt").write_text("dirty after package\n")
+        payload["session_id"] = "dirty-tracked"
+        self.assert_denied(self.run_hook(AGENT_GUARD, payload, repo=repo), "clean tracked")
+        subprocess.run(["git", "restore", "file.txt"], cwd=repo, check=True)
+
+        generate()
+        (repo / "later.txt").write_text("later\n")
+        subprocess.run(["git", "add", "later.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "later"], cwd=repo, check=True)
+        payload["session_id"] = "stale-head"
+        self.assert_denied(self.run_hook(AGENT_GUARD, payload, repo=repo), "reviewed head")
+
     def test_reviewer_is_limited_to_initial_review_plus_one_recheck(self) -> None:
         generator = ROOT / ".codex" / "scripts" / "make_review_package.py"
         repo = self.base / "repo"
