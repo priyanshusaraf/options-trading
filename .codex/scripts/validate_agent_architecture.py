@@ -585,7 +585,46 @@ def main() -> int:
 
     package = root / ".agent" / "review-package.json"
     if package.exists():
-        validate_review_package(package, failures, root)
+        try:
+            runtime_package = json.loads(package.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            validate_review_package(package, failures, root)
+        else:
+            current_task_ids: set[str] = set()
+            if current_path.is_file():
+                try:
+                    current_state = json_frontmatter(current_path)
+                    active_value = current_state.get("active_capsule")
+                    active_path = repository_file(root, active_value)
+                    if active_path:
+                        active_data = json_frontmatter(active_path)
+                        if isinstance(active_data.get("id"), str):
+                            current_task_ids.add(active_data["id"])
+                    for route_value in current_state.get("review_capsules", {}).values():
+                        route_path = repository_file(root, route_value)
+                        if route_path:
+                            route_data = json_frontmatter(route_path)
+                            if isinstance(route_data.get("id"), str):
+                                current_task_ids.add(route_data["id"])
+                except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+                    current_task_ids = set()
+            if runtime_package.get("task_id") in current_task_ids:
+                validate_review_package(package, failures, root)
+    if current_path.is_file():
+        try:
+            current_state = json_frontmatter(current_path)
+            for route_value in current_state.get("review_capsules", {}).values():
+                route_path = repository_file(root, route_value)
+                route_data = json_frontmatter(route_path) if route_path else {}
+                review = route_data.get("review", {})
+                package_value = review.get("package") if isinstance(review, dict) else None
+                if not isinstance(package_value, str) or Path(package_value).is_absolute():
+                    continue
+                routed_package = (root / package_value).resolve()
+                if root in routed_package.parents and routed_package.is_file() and routed_package != package:
+                    validate_review_package(routed_package, failures, root)
+        except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+            pass
 
     report = {
         "status": "pass" if not failures else "fail",

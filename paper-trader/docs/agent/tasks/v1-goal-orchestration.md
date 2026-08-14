@@ -80,7 +80,7 @@
     "model": "gpt-5.6-sol",
     "reasoning_effort": "high",
     "base_sha": "db77593e3d3a278c0d1fdd7504b25b8080543f23",
-    "package": ".agent/review-package.json",
+    "package": ".agent/review-packages/v1-goal-orchestration.json",
     "review_paths": [],
     "exclude_paths": [],
     "output": ".agent/runs/v1-goal-orchestration/critical-review/verdict.md",
