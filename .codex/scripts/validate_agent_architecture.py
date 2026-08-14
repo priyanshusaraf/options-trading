@@ -503,6 +503,29 @@ def main() -> int:
                 stage = indexed.get(programme.get("current_stage_id"))
                 if isinstance(stage, dict) and stage.get("capsule") != active:
                     failures.append("CURRENT.md active capsule differs from programme")
+            review_capsules = current.get("review_capsules", {})
+            if not isinstance(review_capsules, dict) or not all(
+                isinstance(key, str)
+                and re.fullmatch(r"[a-z0-9_]+", key)
+                and repository_file(root, value) is not None
+                for key, value in review_capsules.items()
+            ):
+                failures.append("CURRENT.md review capsule routes are invalid")
+            else:
+                for assignment_id, capsule_value in review_capsules.items():
+                    route_path = repository_file(root, capsule_value)
+                    try:
+                        route_capsule = json_frontmatter(route_path) if route_path else {}
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        route_capsule = {}
+                    route_review = route_capsule.get("review")
+                    if (
+                        not isinstance(route_review, dict)
+                        or route_review.get("assignment_id") != assignment_id
+                    ):
+                        failures.append(
+                            f"CURRENT.md review capsule route does not match assignment: {assignment_id}"
+                        )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             failures.append(f"invalid CURRENT.md frontmatter: {exc}")
 

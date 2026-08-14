@@ -84,7 +84,7 @@ Spawned children always use `fork_turns: none`, exact declared assignment IDs, a
 - `pause`: an owner gate, invalid state, stale lease, or missing evidence requires attention;
 - `complete`: the V1 release gate is accepted.
 
-The scheduled task runs every two hours in the saved backend project. Each run performs one state transition at most. It exits immediately when another goal is active. It never edits application code, retries a rejected phase as if it passed, or bypasses an owner gate.
+The scheduled task runs every two hours in the saved backend project. Each run first queries authoritative Codex task state and passes the exact active-programme-goal count to the atomic claim; unavailable or ambiguous state pauses rather than assuming zero. Each run performs one state transition at most. It exits immediately when another goal is active. It never edits application code, retries a rejected phase as if it passed, or bypasses an owner gate.
 
 Controller leases live under ignored `.agent/programme/`; detailed task and test logs remain under ignored `.agent/runs/`. The tracked programme state and capsules remain sufficient to reconstruct the work if runtime state is deleted.
 

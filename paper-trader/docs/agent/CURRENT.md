@@ -6,6 +6,9 @@
   "programme": "paper-trader/docs/agent/programme/PROGRAMME.json",
   "active_stage": "phase3-task12-correction-1",
   "active_capsule": "paper-trader/docs/agent/tasks/phase3-task12-correction-1.md",
+  "review_capsules": {
+    "v1_goal_orchestration_critical_review": "paper-trader/docs/agent/tasks/v1-goal-orchestration.md"
+  },
   "canonical_checkout": "/Users/priyanshusaraf/dev/options-trading",
   "active_worktree": "/Users/priyanshusaraf/dev/options-trading/.claude/worktrees/codex-execution-foundation",
   "active_branch": "codex/execution-foundation",

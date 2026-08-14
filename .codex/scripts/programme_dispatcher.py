@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +19,14 @@ RUNNABLE = {"ready", "correction", "review"}
 VALID_STATUSES = RUNNABLE | {"active", "blocked", "accepted", "paused_owner_gate"}
 FORBIDDEN_EFFORTS = {"xhigh", "ultra", "max"}
 LEASE_MAX_SECONDS = 6 * 60 * 60
+STAGE_ROUTES = {
+    "correction": ("gpt-5.6-terra", "medium"),
+    "implementation_sequence": ("gpt-5.6-terra", "medium"),
+    "phase_architecture": ("gpt-5.6-sol", "medium"),
+    "interphase_architecture": ("gpt-5.6-sol", "medium"),
+    "phase_review": ("gpt-5.6-sol", "high"),
+    "release_review": ("gpt-5.6-sol", "high"),
+}
 
 
 class InvalidProgramme(ValueError):
@@ -56,6 +66,70 @@ def load_capsule(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise InvalidProgramme("active capsule frontmatter must be an object")
     return value
+
+
+def markdown_headings(path: Path) -> list[tuple[int, str]]:
+    headings = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^(#{1,4})\s+(.+?)\s*$", line)
+        if match:
+            headings.append((len(match.group(1)), match.group(2)))
+    return headings
+
+
+def validate_source_map(root: Path, source_map: dict[str, Any]) -> None:
+    if source_map.get("schema_version") != 1:
+        raise InvalidProgramme("source map schema is invalid")
+    sources = source_map.get("sources")
+    views = source_map.get("phase_views")
+    if not isinstance(sources, list) or not isinstance(views, dict):
+        raise InvalidProgramme("source map lacks sources or phase views")
+    routed: dict[tuple[str, str], set[str]] = {}
+    source_sections: dict[tuple[str, str], set[str]] = {}
+    source_ids: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict) or not isinstance(source.get("id"), str):
+            raise InvalidProgramme("source map contains an invalid source")
+        source_id = source["id"]
+        if source_id in source_ids:
+            raise InvalidProgramme(f"source map duplicates source: {source_id}")
+        source_ids.add(source_id)
+        source_path = contained(root, source.get("path"), f"source {source_id}")
+        if source.get("sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest():
+            raise InvalidProgramme(f"source hash is stale: {source_id}")
+        sections = source.get("sections")
+        if not isinstance(sections, list):
+            raise InvalidProgramme(f"source sections are invalid: {source_id}")
+        declared: list[tuple[int, str]] = []
+        for section in sections:
+            if not isinstance(section, dict):
+                raise InvalidProgramme(f"source section is invalid: {source_id}")
+            level, heading, consumers = section.get("level"), section.get("heading"), section.get("consumers")
+            if (
+                not isinstance(level, int)
+                or not isinstance(heading, str)
+                or not heading
+                or not isinstance(consumers, list)
+                or not consumers
+                or not all(isinstance(item, str) and item for item in consumers)
+            ):
+                raise InvalidProgramme(f"source section is invalid: {source_id}")
+            declared.append((level, heading))
+            source_sections[(source_id, heading)] = set(consumers)
+        if declared != markdown_headings(source_path):
+            raise InvalidProgramme(f"source heading coverage is stale: {source_id}")
+    for phase, entries in views.items():
+        if not isinstance(phase, str) or not isinstance(entries, list) or not entries:
+            raise InvalidProgramme(f"source map phase view is invalid: {phase}")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise InvalidProgramme(f"source map phase entry is invalid: {phase}")
+            key = (entry.get("source_id"), entry.get("heading"))
+            if key not in source_sections or phase not in source_sections[key]:
+                raise InvalidProgramme(f"source map phase entry is not routed: {phase}")
+            routed.setdefault(key, set()).add(phase)
+    if any(routed.get(key, set()) != consumers for key, consumers in source_sections.items()):
+        raise InvalidProgramme("source map phase coverage is incomplete")
 
 
 def parse_time(value: object) -> datetime:
@@ -147,6 +221,7 @@ def action_for(
     root: Path,
     programme: dict[str, Any],
     current: dict[str, Any],
+    source_map: dict[str, Any],
     *,
     active_goal_count: int | None,
     controller_path: Path,
@@ -200,6 +275,12 @@ def action_for(
     capsule_value = current.get("capsule")
     capsule_path = contained(root, capsule_value, "active capsule")
     capsule = load_capsule(capsule_path)
+    if capsule.get("id") != current["id"]:
+        raise InvalidProgramme("active capsule ID does not match current stage")
+    source_view = current.get("source_view")
+    if source_view != current.get("phase"):
+        raise InvalidProgramme("current stage source view does not match its phase")
+    phase_view(root, source_map, str(source_view))
     goal_contract = capsule.get("goal_contract")
     if not isinstance(goal_contract, dict) or goal_contract.get("create_before_work") is not True:
         raise InvalidProgramme("active capsule lacks create-before-work goal contract")
@@ -209,6 +290,16 @@ def action_for(
     model, effort = current.get("model"), current.get("reasoning_effort")
     if not isinstance(model, str) or not isinstance(effort, str) or effort in FORBIDDEN_EFFORTS:
         raise InvalidProgramme("active stage route is invalid or forbidden")
+    expected_route = STAGE_ROUTES.get(str(current.get("kind")))
+    if expected_route is None or (model, effort) != expected_route:
+        raise InvalidProgramme("active stage route does not match its kind")
+    model_route = capsule.get("model_route")
+    if (
+        not isinstance(model_route, dict)
+        or model_route.get("owner") != model
+        or model_route.get("owner_reasoning_effort") != effort
+    ):
+        raise InvalidProgramme("active capsule route does not match current stage")
     return 0, {
         "action": "dispatch",
         "stage_id": current["id"],
@@ -305,6 +396,7 @@ def main() -> int:
         programme = load_json(programme_path, "programme")
         source_path = contained(root, programme.get("source_map"), "source map")
         source_map = load_json(source_path, "source map")
+        validate_source_map(root, source_map)
         if args.phase_view:
             output = phase_view(root, source_map, args.phase_view)
         else:
@@ -360,6 +452,10 @@ def main() -> int:
                         "status": lease["status"],
                     }
             elif args.claim:
+                if args.active_goal_count is None:
+                    raise InvalidProgramme(
+                        "atomic claim requires an authoritative active goal count"
+                    )
                 controller.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 lock_path = controller.parent / "controller.lock"
                 with lock_path.open("a+", encoding="utf-8") as lock:
@@ -368,7 +464,8 @@ def main() -> int:
                         root,
                         programme,
                         current,
-                        active_goal_count=args.active_goal_count if args.active_goal_count is not None else 0,
+                        source_map,
+                        active_goal_count=args.active_goal_count,
                         controller_path=controller,
                         now=now,
                     )
@@ -379,6 +476,7 @@ def main() -> int:
                     root,
                     programme,
                     current,
+                    source_map,
                     active_goal_count=args.active_goal_count,
                     controller_path=controller,
                     now=now,

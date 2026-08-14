@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,13 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.write_capsule(self.capsule_path)
         self.write_source_map()
 
-    def write_capsule(self, relative: str) -> None:
+    def write_capsule(
+        self,
+        relative: str,
+        *,
+        model: str = "gpt-5.6-terra",
+        effort: str = "medium",
+    ) -> None:
         path = self.repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
@@ -35,17 +42,24 @@ class ProgrammeDispatcherTests(unittest.TestCase):
                 "create_before_work": True,
                 "stopping_condition": "Complete only after the exact gate passes.",
             },
+            "model_route": {
+                "owner": model,
+                "owner_reasoning_effort": effort,
+            },
         }
         path.write_text(f"---\n{json.dumps(data)}\n---\n", encoding="utf-8")
 
     def write_source_map(self) -> None:
+        source = self.repo / "paper-trader" / "docs" / "source.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("## Gate\n", encoding="utf-8")
         data = {
             "schema_version": 1,
             "sources": [
                 {
                     "id": "verification",
                     "path": "paper-trader/docs/source.md",
-                    "sha256": "0" * 64,
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                     "sections": [
                         {"level": 2, "heading": "Gate", "consumers": ["phase3", "phase4"]}
                     ],
@@ -115,7 +129,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
             [self.stage("correction", 1, status="ready", depends_on=[], capsule=self.capsule_path)],
             "correction",
         )
-        result, action = self.run_dispatcher("--claim")
+        result, action = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(action["action"], "dispatch")
         self.assertEqual((action["model"], action["reasoning_effort"]), ("gpt-5.6-terra", "medium"))
@@ -127,7 +141,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.assertEqual(controller["active_goal"]["stage_id"], "correction")
         self.assertEqual(controller["active_goal"]["status"], "reserved")
 
-        second_result, second = self.run_dispatcher("--claim")
+        second_result, second = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertEqual(second_result.returncode, 0, second_result.stderr)
         self.assertEqual(second["action"], "monitor")
 
@@ -149,7 +163,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.assertEqual(updated["action"], "recorded")
         self.assertEqual(updated["status"], "completed")
 
-        stopped_result, stopped = self.run_dispatcher("--claim")
+        stopped_result, stopped = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(stopped_result.returncode, 0)
         self.assertEqual(stopped["action"], "pause")
         self.assertIn("not advanced", stopped["reason"])
@@ -171,18 +185,24 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         interphase = self.stage("ir-review", 2, status="blocked", depends_on=["phase3-review"], kind="phase_review", capsule=self.capsule_path, model="gpt-5.6-sol", effort="high", phase="phase3")
         phase4 = self.stage("phase4-architecture", 3, status="ready", depends_on=["ir-review"], kind="phase_architecture", capsule=self.capsule_path, model="gpt-5.6-sol", effort="medium", phase="phase4")
         self.write_programme([phase3, interphase, phase4], "phase4-architecture")
-        result, action = self.run_dispatcher("--claim")
+        result, action = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(action["action"], "pause")
         self.assertIn("dependency", action["reason"].lower())
 
     def test_phase_review_is_dispatched_with_sol_high_before_next_phase(self) -> None:
+        review_capsule = "paper-trader/docs/agent/tasks/phase4-review.md"
+        self.write_capsule(
+            review_capsule,
+            model="gpt-5.6-sol",
+            effort="high",
+        )
         architecture = self.stage("phase4-architecture", 1, status="accepted", depends_on=[], kind="phase_architecture", capsule=self.capsule_path, model="gpt-5.6-sol", effort="medium", phase="phase4")
         implementation = self.stage("phase4-implementation", 2, status="accepted", depends_on=["phase4-architecture"], kind="implementation_sequence", capsule=self.capsule_path, phase="phase4")
-        review = self.stage("phase4-review", 3, status="review", depends_on=["phase4-implementation"], kind="phase_review", capsule=self.capsule_path, model="gpt-5.6-sol", effort="high", phase="phase4")
+        review = self.stage("phase4-review", 3, status="review", depends_on=["phase4-implementation"], kind="phase_review", capsule=review_capsule, model="gpt-5.6-sol", effort="high", phase="phase4")
         next_phase = self.stage("phase5-architecture", 4, status="blocked", depends_on=["phase4-review"], kind="phase_architecture", capsule=self.capsule_path, model="gpt-5.6-sol", effort="medium", phase="phase4")
         self.write_programme([architecture, implementation, review, next_phase], "phase4-review")
-        result, action = self.run_dispatcher("--claim")
+        result, action = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(action["action"], "dispatch")
         self.assertEqual((action["model"], action["reasoning_effort"]), ("gpt-5.6-sol", "high"))
@@ -220,7 +240,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
             [self.stage("correction", 1, status="ready", depends_on=[], capsule="paper-trader/docs/agent/tasks/missing.md")],
             "correction",
         )
-        missing_result, missing = self.run_dispatcher("--claim")
+        missing_result, missing = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(missing_result.returncode, 0)
         self.assertEqual(missing["action"], "pause")
 
@@ -239,7 +259,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
             "release",
             status="complete",
         )
-        false_result, false = self.run_dispatcher("--claim")
+        false_result, false = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(false_result.returncode, 0)
         self.assertEqual(false["action"], "pause")
         self.assertIn("complete", false["reason"].lower())
@@ -248,7 +268,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         second = self.stage("second", 2, status="accepted", depends_on=["first"], capsule=self.capsule_path)
         third = self.stage("third", 3, status="ready", depends_on=["first"], capsule=self.capsule_path)
         self.write_programme([first, second, third], "third")
-        skipped_result, skipped = self.run_dispatcher("--claim")
+        skipped_result, skipped = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(skipped_result.returncode, 0)
         self.assertEqual(skipped["action"], "pause")
         self.assertIn("predecessor", skipped["reason"].lower())
@@ -262,6 +282,52 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(action["action"], "pause")
         self.assertIn("unknown", action["reason"].lower())
+
+        claim_result, claim = self.run_dispatcher("--claim")
+        self.assertNotEqual(claim_result.returncode, 0)
+        self.assertEqual(claim["action"], "pause")
+        self.assertIn("authoritative", claim["reason"].lower())
+
+    def test_dispatch_rejects_stale_sources_capsule_identity_and_route(self) -> None:
+        stage = self.stage(
+            "correction",
+            1,
+            status="ready",
+            depends_on=[],
+            capsule=self.capsule_path,
+        )
+        self.write_programme([stage], "correction")
+        source_map_path = self.repo / "paper-trader" / "docs" / "agent" / "programme" / "SOURCE_MAP.json"
+        source_map = json.loads(source_map_path.read_text())
+        source_map["sources"][0]["sha256"] = "0" * 64
+        source_map_path.write_text(json.dumps(source_map))
+        stale_result, stale = self.run_dispatcher("--claim", "--active-goal-count", "0")
+        self.assertNotEqual(stale_result.returncode, 0)
+        self.assertIn("hash", stale["reason"].lower())
+
+        self.write_source_map()
+        self.write_capsule(self.capsule_path)
+        capsule_path = self.repo / self.capsule_path
+        capsule_data = json.loads(capsule_path.read_text().split("---", 2)[1])
+        capsule_data["id"] = "wrong"
+        capsule_path.write_text(f"---\n{json.dumps(capsule_data)}\n---\n")
+        identity_result, identity = self.run_dispatcher("--claim", "--active-goal-count", "0")
+        self.assertNotEqual(identity_result.returncode, 0)
+        self.assertIn("capsule id", identity["reason"].lower())
+
+        self.write_capsule(self.capsule_path)
+        stage["model"] = "gpt-5.6-sol"
+        self.write_programme([stage], "correction")
+        route_result, route = self.run_dispatcher("--claim", "--active-goal-count", "0")
+        self.assertNotEqual(route_result.returncode, 0)
+        self.assertIn("route", route["reason"].lower())
+
+        stage["model"] = "gpt-5.6-terra"
+        stage["source_view"] = "phase4"
+        self.write_programme([stage], "correction")
+        view_result, view = self.run_dispatcher("--claim", "--active-goal-count", "0")
+        self.assertNotEqual(view_result.returncode, 0)
+        self.assertIn("source view", view["reason"].lower())
 
     def test_phase_view_returns_only_exact_routed_sections(self) -> None:
         self.write_programme(

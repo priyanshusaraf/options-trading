@@ -84,15 +84,17 @@ class HookTestCase(unittest.TestCase):
         payload: dict,
         *,
         repo: Path | None = None,
+        capsule_override: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        env.update(
-            {
-                "STRATEGY_OS_CAPSULE_PATH": str(self.capsule),
-                "STRATEGY_OS_AGENT_STATE_DIR": str(self.state),
-                "STRATEGY_OS_REPO_ROOT": str(repo or ROOT),
-            }
-        )
+        env.update({
+            "STRATEGY_OS_AGENT_STATE_DIR": str(self.state),
+            "STRATEGY_OS_REPO_ROOT": str(repo or ROOT),
+        })
+        if capsule_override:
+            env["STRATEGY_OS_CAPSULE_PATH"] = str(self.capsule)
+        else:
+            env.pop("STRATEGY_OS_CAPSULE_PATH", None)
         return subprocess.run(
             [sys.executable, str(script)],
             input=json.dumps(payload),
@@ -570,6 +572,82 @@ class AgentGuardTests(HookTestCase):
         subprocess.run(["git", "commit", "-qm", "later"], cwd=repo, check=True)
         payload["session_id"] = "stale-head"
         self.assert_denied(self.run_hook(AGENT_GUARD, payload, repo=repo), "reviewed head")
+
+    def test_current_routes_exact_orchestration_review_capsule_through_native_guard(self) -> None:
+        generator = ROOT / ".codex" / "scripts" / "make_review_package.py"
+        repo = self.base / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        (repo / "file.txt").write_text("base\n")
+        subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+        base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+        (repo / "file.txt").write_text("changed\n")
+        subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "head"], cwd=repo, check=True)
+        head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+        evidence = repo / ".agent" / "evidence.log"
+        evidence.parent.mkdir()
+        evidence.write_text("pass\n")
+        package = repo / ".agent" / "review-package.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(generator),
+                "--repo",
+                str(repo),
+                "--task-id",
+                "v1-goal-orchestration",
+                "--base",
+                base_sha,
+                "--head",
+                head_sha,
+                "--acceptance-status",
+                "pass",
+                "--evidence",
+                ".agent/evidence.log",
+                "--output",
+                str(package),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        task_root = repo / "paper-trader" / "docs" / "agent" / "tasks"
+        task_root.mkdir(parents=True)
+        route = task_root / "v1-goal-orchestration.md"
+        metadata = json.loads(capsule_text([]).split("---")[1])
+        metadata["id"] = "v1-goal-orchestration"
+        metadata["review"].update({
+            "assignment_id": "v1_goal_orchestration_critical_review",
+            "base_sha": base_sha,
+        })
+        route.write_text(f"---\n{json.dumps(metadata)}\n---\n")
+        current = repo / "paper-trader" / "docs" / "agent" / "CURRENT.md"
+        current.write_text(
+            "---\n"
+            + json.dumps({
+                "active_capsule": "paper-trader/docs/agent/tasks/missing.md",
+                "review_capsules": {
+                    "v1_goal_orchestration_critical_review": "paper-trader/docs/agent/tasks/v1-goal-orchestration.md"
+                },
+            })
+            + "\n---\n"
+        )
+        payload = self.agent_payload(
+            "v1_goal_orchestration_critical_review",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+            agent_type="critical-reviewer",
+        )
+        result = self.run_hook(
+            AGENT_GUARD,
+            payload,
+            repo=repo,
+            capsule_override=False,
+        )
+        self.assertEqual(result.stdout, "", result.stderr)
 
     def test_reviewer_is_limited_to_initial_review_plus_one_recheck(self) -> None:
         generator = ROOT / ".codex" / "scripts" / "make_review_package.py"

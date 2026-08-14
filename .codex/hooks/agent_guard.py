@@ -67,11 +67,17 @@ def git_root() -> Path:
     return Path(result.stdout.strip()).resolve() if result.returncode == 0 else Path.cwd().resolve()
 
 
-def active_capsule(repo: Path) -> Path:
+def active_capsule(repo: Path, task_name: object = None) -> Path:
     if os.environ.get("STRATEGY_OS_CAPSULE_PATH"):
         return Path(os.environ["STRATEGY_OS_CAPSULE_PATH"]).resolve()
     current = capsule(repo / "paper-trader" / "docs" / "agent" / "CURRENT.md")
-    location = current.get("active_capsule")
+    review_capsules = current.get("review_capsules", {})
+    if not isinstance(review_capsules, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in review_capsules.items()
+    ):
+        raise ValueError("CURRENT.md review_capsules is invalid")
+    location = review_capsules.get(task_name, current.get("active_capsule"))
     if not isinstance(location, str) or not location:
         raise ValueError("CURRENT.md has no active_capsule")
     resolved = (repo / location).resolve()
@@ -362,7 +368,9 @@ def main() -> int:
     try:
         payload = json.load(sys.stdin)
         repo = git_root()
-        data = capsule(active_capsule(repo))
+        tool_input = payload.get("tool_input", {})
+        task_name = tool_input.get("task_name") if isinstance(tool_input, dict) else None
+        data = capsule(active_capsule(repo, task_name))
     except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
         deny(f"invalid capsule: {exc}")
         return 0
