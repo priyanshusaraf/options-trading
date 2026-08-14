@@ -56,7 +56,7 @@
     "This migration does not complete Phase 3 Task 12 or alter its application code.",
     "Prompt-size reduction is measured on the installed local Codex build and is not a universal billing guarantee.",
     "The three-slice usage target remains a rollout gate; one installation session cannot establish it.",
-    "The installed Codex build exposes only Sol and Terra to spawned agents, so the narrow luna-worker role temporarily uses Terra medium; Luna is not claimed available.",
+    "Luna-medium availability is scoped to the narrow mechanical worker and does not authorize architecture or product judgment.",
     "The installed build skips project hook discovery in linked worktrees, so a user-level dispatcher scoped only to Strategy OS is a temporary compatibility layer; tracked repository scripts remain authoritative."
   ],
   "owner_gates": [
@@ -81,7 +81,7 @@
   "assignments": [],
   "acceptance": [
     "Before review, the dirty worktree has a private recovery snapshot and its tracked diff, untracked manifest, and four protected hashes match that snapshot; the owner repeats the same check after cherry-pick before declaring integration complete.",
-    "Project defaults route Terra medium, declare up to five clean children, use a Terra-medium safe fallback until Luna becomes locally available, disable broad surfaces, and cap stored tool output and instruction bytes.",
+    "Project defaults route Terra medium, declare up to five clean children, use Luna medium as the safe unspecified-child fallback, disable broad surfaces, and cap stored tool output and instruction bytes.",
     "Native AGENTS chains, four progressive-disclosure skills, twelve behavioral evals, three custom roles, task capsules, hooks, audit tools, and compact state documents validate.",
     "A prompt-free native probe proves the worktree dispatcher sees collaborationspawn_agent, enforces fork_turns none, supplies the declared Terra-medium route, and starts the declared custom role.",
     "The eight Claude evals and every durable Claude rule have an explicit migration disposition before the tracked Claude harness is retired.",

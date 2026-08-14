@@ -1,6 +1,6 @@
 # Claude harness migration audit
 
-The installed Codex build currently reports only Sol and Terra as valid spawned-agent models. The mechanical `luna-worker` contract is retained as a narrow role but routes to Terra medium until a future local diagnostic explicitly lists Luna. This compatibility rewrite prevents the default child launch from failing before repository hooks run.
+The installed Codex build exposes Luna to spawned agents. The mechanical `luna-worker` contract routes to Luna medium and remains limited to exact, non-judgmental assignments; Terra medium remains the implementation route for work requiring code judgment.
 
 The same build silently skips project hook discovery from linked Git worktrees and uses a normalized `collaborationspawn_agent` hook name for direct multi-agent V2 calls. The tracked hook accepts that native alias. A user-level dispatcher scoped to `/Users/priyanshusaraf/dev/options-trading` and its worktrees delegates to the tracked scripts until the worktree discovery defect is fixed. Ordinary code-mode tools remain enabled; only multi-agent V2 uses the direct hook-visible route.
 

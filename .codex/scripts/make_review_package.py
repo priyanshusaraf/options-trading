@@ -51,6 +51,30 @@ def changed_paths(repo: Path, excluded_output: str) -> list[str]:
     )
 
 
+def commit_changed_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:
+    output = git(
+        repo,
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-ext-diff",
+        f"{base_sha}..{head_sha}",
+    )
+    return sorted(
+        entry.decode("utf-8", "replace")
+        for entry in output.split(b"\0")
+        if entry
+    )
+
+
+def commit_diff(repo: Path, base_sha: str, head_sha: str) -> bytes:
+    return git(repo, "diff", "--binary", "--no-ext-diff", f"{base_sha}..{head_sha}")
+
+
+def tracked_tree_is_clean(repo: Path) -> bool:
+    return not git(repo, "status", "--porcelain=v1", "--untracked-files=no")
+
+
 def scoped_paths(paths: Iterable[str], includes: list[str], excludes: list[str]) -> list[str]:
     return [
         path
@@ -75,6 +99,7 @@ def main() -> int:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--head")
     parser.add_argument("--acceptance-status", required=True)
     parser.add_argument("--evidence", action="append", default=[])
     parser.add_argument("--owner-gate", action="append", default=[])
@@ -100,7 +125,21 @@ def main() -> int:
         base_sha = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}").decode().strip()
     except subprocess.CalledProcessError:
         parser.error(f"base is not a commit: {args.base}")
-    changed = scoped_paths(changed_paths(repo, output_relative), includes, excludes)
+    head_sha = None
+    if args.head is not None:
+        try:
+            head_sha = git(repo, "rev-parse", "--verify", f"{args.head}^{{commit}}").decode().strip()
+        except subprocess.CalledProcessError:
+            parser.error(f"head is not a commit: {args.head}")
+        if not tracked_tree_is_clean(repo):
+            parser.error("--head requires a clean tracked/index state; repository is dirty")
+
+    complete = (
+        commit_changed_paths(repo, base_sha, head_sha)
+        if head_sha is not None
+        else changed_paths(repo, output_relative)
+    )
+    changed = scoped_paths(complete, includes, excludes)
     evidence_logs = [relative for relative, _ in evidence_items]
     evidence_sha256 = {
         relative: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -118,7 +157,14 @@ def main() -> int:
         "evidence_sha256": evidence_sha256,
         "open_findings": args.open_finding,
         "owner_gates": args.owner_gate,
+        "review_state": "commit" if head_sha is not None else "dirty_tree",
+        "complete_changed_paths": complete,
     }
+    if head_sha is not None:
+        package["head_sha"] = head_sha
+        package["commit_diff_sha256"] = hashlib.sha256(
+            commit_diff(repo, base_sha, head_sha)
+        ).hexdigest()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(package, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(output), "changed_paths": len(changed)}))

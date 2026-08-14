@@ -4,7 +4,7 @@ The dispatcher substitutes bracketed fields from `PROGRAMME.json` and the active
 
 ## Dispatcher task
 
-Run `.codex/scripts/programme_dispatcher.py --json` once from the repository root. If the action is `monitor`, `pause`, or `complete`, report it and stop. If the action is `dispatch`, create one new local task in the saved backend project with the returned model, reasoning effort, title, capsule, and goal objective. Never edit product or tracked programme files. Never create a second task while the controller reports an active goal.
+Run `.codex/scripts/programme_dispatcher.py --claim --json` once from the repository root. The atomic ignored lease prevents a second scheduled run from dispatching the same stage. If the action is `monitor`, `pause`, or `complete`, report it and stop. If the action is `dispatch`, create one new local task in the saved backend project with the returned model, reasoning effort, title, capsule, and goal objective. Immediately bind it with `.codex/scripts/programme_dispatcher.py --bind-thread [CLAIM_ID] [THREAD_ID] --json`. On a later run, inspect only the bound task and record `running`, `needs_input`, `completed`, or `failed` with `.codex/scripts/programme_dispatcher.py --update-lease [CLAIM_ID] [STATUS] --json`. Never edit product or tracked programme files. Never create a second task while the controller reports an active goal.
 
 ## Phase architecture goal
 

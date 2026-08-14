@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -142,6 +143,68 @@ def validate_review_package(path: Path, failures: List[str], root: Path) -> None
         elif evidence_sha256.get(item) != hashlib.sha256(resolved.read_bytes()).hexdigest():
             failures.append(f"review package evidence digest is stale: {item}")
 
+    if package.get("review_state") != "commit":
+        return
+
+    head_sha = package.get("head_sha")
+    base_sha = package.get("base_sha")
+    if not isinstance(head_sha, str) or not isinstance(base_sha, str):
+        failures.append("commit-bound review package lacks head_sha or base_sha")
+        return
+    try:
+        resolved_base = subprocess.check_output(
+            ["git", "rev-parse", "--verify", f"{base_sha}^{{commit}}"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        resolved_head = subprocess.check_output(
+            ["git", "rev-parse", "--verify", f"{head_sha}^{{commit}}"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        diff = subprocess.check_output(
+            ["git", "diff", "--binary", "--no-ext-diff", f"{resolved_base}..{resolved_head}"],
+            cwd=root,
+        )
+        names = subprocess.check_output(
+            ["git", "diff", "--name-only", "-z", "--no-ext-diff", f"{resolved_base}..{resolved_head}"],
+            cwd=root,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        failures.append("commit-bound review package references an unavailable commit")
+        return
+    expected_paths = sorted(
+        entry.decode("utf-8", "replace")
+        for entry in names.split(b"\0")
+        if entry
+    )
+    if package.get("head_sha") != resolved_head or package.get("base_sha") != resolved_base:
+        failures.append("commit-bound review package commit identity is stale")
+    if package.get("commit_diff_sha256") != hashlib.sha256(diff).hexdigest():
+        failures.append("commit-bound review package diff digest is stale")
+    complete_paths = package.get("complete_changed_paths")
+    if complete_paths != expected_paths:
+        failures.append("commit-bound review package complete paths are stale")
+    if not isinstance(package.get("changed_paths"), list):
+        failures.append("review package changed_paths is invalid")
+    else:
+        includes = package.get("scope_prefixes", [])
+        excludes = package.get("excluded_paths", [])
+        if not isinstance(includes, list) or not isinstance(excludes, list):
+            failures.append("review package scope fields are invalid")
+        else:
+            def matches(value: str, prefix: object) -> bool:
+                return isinstance(prefix, str) and (value == prefix or value.startswith(prefix + "/"))
+
+            expected_scoped = [
+                item
+                for item in expected_paths
+                if (not includes or any(matches(item, prefix) for prefix in includes))
+                and not any(matches(item, prefix) for prefix in excludes)
+            ]
+            if package.get("changed_paths") != expected_scoped:
+                failures.append("commit-bound review package scoped paths are stale")
+
 
 def repository_file(root: Path, value: object) -> Optional[Path]:
     if not isinstance(value, str) or not value or Path(value).is_absolute():
@@ -262,7 +325,7 @@ def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[
     if current_id not in indexed:
         failures.append("programme current stage does not exist")
     seen: set[str] = set()
-    for stage in stages:
+    for index, stage in enumerate(stages):
         stage_id = stage["id"]
         status = stage.get("status")
         dependencies = stage.get("depends_on")
@@ -272,6 +335,11 @@ def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[
             failures.append(f"programme dependencies are invalid: {stage_id}")
         elif not set(dependencies) <= seen:
             failures.append(f"programme dependency order is invalid: {stage_id}")
+        expected = [] if index == 0 else [stages[index - 1]["id"]]
+        if isinstance(dependencies, list) and dependencies != expected:
+            failures.append(
+                f"programme dependency order is invalid: {stage_id} must follow {expected}"
+            )
         seen.add(stage_id)
         capsule_value = stage.get("capsule")
         if capsule_value is None and stage.get("dynamic") is True:

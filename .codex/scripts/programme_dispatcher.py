@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -115,7 +118,7 @@ def validate_programme(root: Path, programme: dict[str, Any]) -> tuple[list[dict
     if current_id not in indexed:
         raise InvalidProgramme("current_stage_id does not exist")
     seen: set[str] = set()
-    for stage in stages:
+    for index, stage in enumerate(stages):
         status = stage.get("status")
         if status not in VALID_STATUSES:
             raise InvalidProgramme(f"invalid status for {stage['id']}: {status}")
@@ -124,6 +127,11 @@ def validate_programme(root: Path, programme: dict[str, Any]) -> tuple[list[dict
             raise InvalidProgramme(f"invalid dependencies for {stage['id']}")
         if not set(dependencies) <= seen:
             raise InvalidProgramme(f"dependency ordering is invalid for {stage['id']}")
+        expected = [] if index == 0 else [stages[index - 1]["id"]]
+        if dependencies != expected:
+            raise InvalidProgramme(
+                f"exact predecessor is invalid for {stage['id']}: expected {expected}"
+            )
         seen.add(stage["id"])
     current = indexed[current_id]
     for dependency in current["depends_on"]:
@@ -140,13 +148,13 @@ def action_for(
     programme: dict[str, Any],
     current: dict[str, Any],
     *,
-    active_goal_count: int,
+    active_goal_count: int | None,
     controller_path: Path,
     now: datetime,
 ) -> tuple[int, dict[str, Any]]:
-    if active_goal_count < 0:
+    if active_goal_count is not None and active_goal_count < 0:
         raise InvalidProgramme("active goal count cannot be negative")
-    if active_goal_count > 1:
+    if active_goal_count is not None and active_goal_count > 1:
         return 2, {"action": "pause", "stage_id": current["id"], "reason": "more than one active goal owns the programme"}
     if active_goal_count == 1:
         return 0, {"action": "monitor", "stage_id": current["id"], "reason": "one active goal already owns the programme"}
@@ -158,7 +166,7 @@ def action_for(
             if not isinstance(lease, dict):
                 raise InvalidProgramme("controller active_goal must be an object")
             status = lease.get("status")
-            if status in {"running", "needs_input"}:
+            if status in {"reserved", "running", "needs_input"}:
                 updated = parse_time(lease.get("updated_at"))
                 age = (now - updated).total_seconds()
                 if age > LEASE_MAX_SECONDS:
@@ -166,6 +174,12 @@ def action_for(
                 if lease.get("stage_id") != current["id"]:
                     return 2, {"action": "pause", "stage_id": current["id"], "reason": "active goal lease belongs to a different stage"}
                 return 0, {"action": "monitor", "stage_id": current["id"], "thread_id": lease.get("thread_id"), "reason": "controller lease is active"}
+            if lease.get("stage_id") == current["id"] and status in {"completed", "failed"}:
+                return 2, {
+                    "action": "pause",
+                    "stage_id": current["id"],
+                    "reason": f"goal lease is {status} but the tracked programme has not advanced",
+                }
 
     status = current.get("status")
     if status == "paused_owner_gate":
@@ -176,6 +190,12 @@ def action_for(
         return 2, {"action": "pause", "stage_id": current["id"], "reason": "stage is active without a valid controller lease"}
     if status not in RUNNABLE:
         return 2, {"action": "pause", "stage_id": current["id"], "reason": f"current stage is not dispatchable: {status}"}
+    if active_goal_count is None:
+        return 2, {
+            "action": "pause",
+            "stage_id": current["id"],
+            "reason": "active goal state is unknown; use an authoritative query or atomic claim",
+        }
 
     capsule_value = current.get("capsule")
     capsule_path = contained(root, capsule_value, "active capsule")
@@ -203,11 +223,77 @@ def action_for(
     }
 
 
+def write_controller(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def write_claim(path: Path, stage_id: str, now: datetime) -> str:
+    claim_id = uuid.uuid4().hex
+    write_controller(path, {
+        "schema_version": 1,
+        "active_goal": {
+            "claim_id": claim_id,
+            "thread_id": None,
+            "stage_id": stage_id,
+            "status": "reserved",
+            "updated_at": now.isoformat(),
+        },
+    })
+    return claim_id
+
+
+def update_claim(
+    path: Path,
+    *,
+    claim_id: str,
+    stage_id: str,
+    now: datetime,
+    thread_id: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    if not path.is_file():
+        raise InvalidProgramme("controller claim does not exist")
+    state = load_json(path, "controller state")
+    lease = state.get("active_goal")
+    if not isinstance(lease, dict) or lease.get("claim_id") != claim_id:
+        raise InvalidProgramme("controller claim ID does not match the active lease")
+    if lease.get("stage_id") != stage_id:
+        raise InvalidProgramme("controller claim belongs to a different stage")
+    if thread_id is not None:
+        if not thread_id.strip():
+            raise InvalidProgramme("thread ID cannot be empty")
+        if lease.get("status") not in {"reserved", "running"}:
+            raise InvalidProgramme("only a reserved or running claim can be bound")
+        lease["thread_id"] = thread_id
+        lease["status"] = "running"
+    if status is not None:
+        allowed = {"running", "needs_input", "completed", "failed"}
+        if status not in allowed:
+            raise InvalidProgramme(f"invalid lease status: {status}")
+        if not lease.get("thread_id") and status != "failed":
+            raise InvalidProgramme("an unbound claim cannot enter that status")
+        lease["status"] = status
+    lease["updated_at"] = now.isoformat()
+    write_controller(path, state)
+    return lease
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--active-goal-count", type=int, default=0)
+    parser.add_argument("--active-goal-count", type=int)
     parser.add_argument("--controller-state", type=Path)
+    parser.add_argument("--claim", action="store_true")
+    parser.add_argument("--bind-thread", nargs=2, metavar=("CLAIM_ID", "THREAD_ID"))
+    parser.add_argument(
+        "--update-lease",
+        nargs=2,
+        metavar=("CLAIM_ID", "STATUS"),
+    )
     parser.add_argument("--phase-view")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -221,23 +307,82 @@ def main() -> int:
         source_map = load_json(source_path, "source map")
         if args.phase_view:
             output = phase_view(root, source_map, args.phase_view)
-        elif programme.get("status") == "complete":
-            output = {"action": "complete", "stage_id": programme.get("current_stage_id"), "reason": "programme status is complete"}
         else:
-            _, current = validate_programme(root, programme)
+            stages, current = validate_programme(root, programme)
+            if programme.get("status") == "complete":
+                if (
+                    any(stage.get("status") != "accepted" for stage in stages)
+                    or current["id"] != stages[-1]["id"]
+                    or stages[-1].get("kind") != "release_review"
+                ):
+                    raise InvalidProgramme(
+                        "programme status complete requires every stage and the final release review to be accepted"
+                    )
+                output = {"action": "complete", "stage_id": current["id"], "reason": "all stages and the final release review are accepted"}
+                print(json.dumps(output, sort_keys=True))
+                return 0
             controller = args.controller_state or (root / ".agent" / "programme" / "controller.json")
             controller = controller.resolve()
             allowed = (root / ".agent" / "programme").resolve()
             if allowed != controller and allowed not in controller.parents:
                 raise InvalidProgramme("controller state must stay under .agent/programme")
-            code, output = action_for(
-                root,
-                programme,
-                current,
-                active_goal_count=args.active_goal_count,
-                controller_path=controller,
-                now=datetime.now(timezone.utc),
-            )
+            now = datetime.now(timezone.utc)
+            mutations = sum(bool(value) for value in (args.claim, args.bind_thread, args.update_lease))
+            if mutations > 1:
+                raise InvalidProgramme("claim, bind-thread, and update-lease are mutually exclusive")
+            if args.bind_thread or args.update_lease:
+                controller.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                lock_path = controller.parent / "controller.lock"
+                with lock_path.open("a+", encoding="utf-8") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    if args.bind_thread:
+                        claim_id, thread_id = args.bind_thread
+                        lease = update_claim(
+                            controller,
+                            claim_id=claim_id,
+                            stage_id=current["id"],
+                            now=now,
+                            thread_id=thread_id,
+                        )
+                    else:
+                        claim_id, status = args.update_lease
+                        lease = update_claim(
+                            controller,
+                            claim_id=claim_id,
+                            stage_id=current["id"],
+                            now=now,
+                            status=status,
+                        )
+                    output = {
+                        "action": "monitor" if lease["status"] in {"reserved", "running", "needs_input"} else "recorded",
+                        "stage_id": current["id"],
+                        "thread_id": lease.get("thread_id"),
+                        "status": lease["status"],
+                    }
+            elif args.claim:
+                controller.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                lock_path = controller.parent / "controller.lock"
+                with lock_path.open("a+", encoding="utf-8") as lock:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                    code, output = action_for(
+                        root,
+                        programme,
+                        current,
+                        active_goal_count=args.active_goal_count if args.active_goal_count is not None else 0,
+                        controller_path=controller,
+                        now=now,
+                    )
+                    if output.get("action") == "dispatch":
+                        output["claim_id"] = write_claim(controller, current["id"], now)
+            else:
+                code, output = action_for(
+                    root,
+                    programme,
+                    current,
+                    active_goal_count=args.active_goal_count,
+                    controller_path=controller,
+                    now=now,
+                )
     except InvalidProgramme as exc:
         code = 2
         output = {"action": "pause", "stage_id": None, "reason": str(exc)}

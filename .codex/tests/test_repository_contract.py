@@ -57,7 +57,7 @@ class RepositoryContractTests(unittest.TestCase):
         )
         self.assertTrue(config["agents"]["enabled"])
         self.assertEqual(config["agents"]["max_concurrent_threads_per_session"], 5)
-        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-5.6-terra")
+        self.assertEqual(config["agents"]["default_subagent_model"], "gpt-5.6-luna")
         self.assertEqual(config["agents"]["default_subagent_reasoning_effort"], "medium")
         self.assertFalse(config["agents"]["interrupt_message"])
         self.assertFalse(config["mcp_servers"]["node_repl"]["enabled"])
@@ -86,7 +86,7 @@ class RepositoryContractTests(unittest.TestCase):
     def test_custom_agents_pin_model_effort_permissions_and_mcp_state(self) -> None:
         expected = {
             "terra-worker.toml": ("terra-worker", "gpt-5.6-terra", "medium", "workspace-write"),
-            "luna-worker.toml": ("luna-worker", "gpt-5.6-terra", "medium", "workspace-write"),
+            "luna-worker.toml": ("luna-worker", "gpt-5.6-luna", "medium", "workspace-write"),
             "critical-reviewer.toml": (
                 "critical-reviewer",
                 "gpt-5.6-sol",

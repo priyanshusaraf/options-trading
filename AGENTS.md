@@ -12,7 +12,7 @@ This repository is Strategy OS: a visual platform for composing, researching, ad
 
 ## Routing and session limits
 
-- A phase architecture capsule may route one fresh Sol-medium task. Implementation slice owners use Terra medium. Mechanical children use the narrow `luna-worker` role and judgment-heavy children use `terra-worker`. On this installed build, both roles route through Terra medium because Luna is unavailable to spawned agents; move `luna-worker` to Luna only after diagnostics list it as available.
+- A phase architecture capsule may route one fresh Sol-medium task. Implementation slice owners use Terra medium. Mechanical children use Luna medium through the narrow `luna-worker` role; judgment-heavy children use `terra-worker`.
 - Children require `fork_turns: none` and an exact assignment declared in the active capsule. Run zero to five only when their dependencies and write ownership are disjoint. Do not create speculative, overlapping, or future-scope workers.
 - Use one `critical-reviewer` only for a critical slice, after integration and an evidence-backed review package exist. No live reviewer, reviewer swarm, permanent Sol controller, Fast mode, xhigh, ultra, or max effort.
 - Keep a task bounded to one capsule or coherent slice. A first automatic compaction is the handoff warning; start a fresh task before a second.

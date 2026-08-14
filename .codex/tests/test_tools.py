@@ -301,6 +301,77 @@ class ReviewPackageTests(unittest.TestCase):
         self.assertEqual(package["changed_paths"], ["scoped/keep.txt"])
         self.assertEqual(package["excluded_paths"], ["scoped/future.txt"])
 
+    def test_commit_bound_package_records_head_complete_paths_and_diff_digest(self) -> None:
+        (self.repo / "tracked.txt").write_text("changed\n")
+        (self.repo / ".gitattributes").write_text("*.md whitespace=-trailing-space\n")
+        subprocess.run(["git", "add", "tracked.txt", ".gitattributes"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "target"], cwd=self.repo, check=True)
+        head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo, text=True).strip()
+        expected_diff = subprocess.check_output(
+            ["git", "diff", "--binary", "--no-ext-diff", f"{self.base_sha}..{head_sha}"],
+            cwd=self.repo,
+        )
+        output = self.repo / ".agent" / "review-package.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MAKE_REVIEW_PACKAGE),
+                "--repo",
+                str(self.repo),
+                "--task-id",
+                "commit-review",
+                "--base",
+                self.base_sha,
+                "--head",
+                head_sha,
+                "--acceptance-status",
+                "ready",
+                "--output",
+                str(output),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        package = json.loads(output.read_text())
+        self.assertEqual(package["head_sha"], head_sha)
+        self.assertEqual(package["changed_paths"], [".gitattributes", "tracked.txt"])
+        self.assertEqual(package["complete_changed_paths"], package["changed_paths"])
+        self.assertEqual(package["commit_diff_sha256"], hashlib.sha256(expected_diff).hexdigest())
+        self.assertEqual(package["review_state"], "commit")
+
+    def test_commit_bound_package_rejects_dirty_tracked_state(self) -> None:
+        (self.repo / "tracked.txt").write_text("changed\n")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "target"], cwd=self.repo, check=True)
+        head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.repo, text=True).strip()
+        (self.repo / "tracked.txt").write_text("dirty after target\n")
+        output = self.repo / ".agent" / "review-package.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MAKE_REVIEW_PACKAGE),
+                "--repo",
+                str(self.repo),
+                "--task-id",
+                "commit-review",
+                "--base",
+                self.base_sha,
+                "--head",
+                head_sha,
+                "--acceptance-status",
+                "ready",
+                "--output",
+                str(output),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dirty", result.stderr.lower())
+
 
 class PromptInputAuditTests(unittest.TestCase):
     def test_compares_same_build_baseline_without_retaining_prompt_text(self) -> None:
@@ -617,12 +688,34 @@ class ArchitectureValidatorTests(unittest.TestCase):
                 "source_map": "paper-trader/docs/agent/programme/SOURCE_MAP.json",
                 "stages": [
                     {
-                        "id": "phase4-architecture",
+                        "id": "first",
                         "order": 1,
+                        "phase": "phase3",
+                        "kind": "correction",
+                        "status": "accepted",
+                        "depends_on": [],
+                        "capsule": "paper-trader/docs/agent/tasks/missing.md",
+                        "model": "gpt-5.6-terra",
+                        "reasoning_effort": "medium",
+                    },
+                    {
+                        "id": "second",
+                        "order": 2,
+                        "phase": "ir_v2",
+                        "kind": "phase_review",
+                        "status": "accepted",
+                        "depends_on": ["first"],
+                        "capsule": "paper-trader/docs/agent/tasks/missing.md",
+                        "model": "gpt-5.6-sol",
+                        "reasoning_effort": "high",
+                    },
+                    {
+                        "id": "phase4-architecture",
+                        "order": 3,
                         "phase": "phase4",
                         "kind": "phase_architecture",
                         "status": "ready",
-                        "depends_on": [],
+                        "depends_on": ["first"],
                         "capsule": "paper-trader/docs/agent/tasks/missing.md",
                         "model": "gpt-5.6-sol",
                         "reasoning_effort": "medium",
@@ -649,6 +742,7 @@ class ArchitectureValidatorTests(unittest.TestCase):
             self.assertIn("active capsule does not exist", failures)
             self.assertIn("owner source hash mismatch", failures)
             self.assertIn("programme capsule does not exist", failures)
+            self.assertIn("programme dependency order is invalid", failures)
             self.assertIn("likely static credential", failures)
             self.assertIn("retired Claude harness", failures)
 

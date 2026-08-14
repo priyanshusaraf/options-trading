@@ -1,6 +1,6 @@
 name = "luna-worker"
-description = "Mechanical Strategy OS worker for narrow, repeatable assignments with no architecture decisions; uses the Terra compatibility route until Luna is available locally."
-model = "gpt-5.6-terra"
+description = "Mechanical Strategy OS worker for narrow, repeatable assignments with no architecture decisions."
+model = "gpt-5.6-luna"
 model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 developer_instructions = """

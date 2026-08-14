@@ -17,7 +17,7 @@
 | Scheduled dispatcher | Luna medium, one action, no product edits |
 | Phase architecture | Fresh Sol medium goal |
 | Implementation or correction | Fresh Terra medium goal |
-| Spawned mechanical work | `luna-worker` on Terra medium until Luna is exposed to spawned agents |
+| Spawned mechanical work | `luna-worker` on Luna medium |
 | Phase/release gate | Fresh Sol high goal, product code read-only |
 
 Children use `fork_turns: none` and exact declared assignment IDs. Use zero to five only for disjoint ownership. No permanent Sol, live reviewer, reviewer swarm, future-phase worker, Fast mode, xhigh, ultra, or max.

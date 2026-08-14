@@ -130,7 +130,7 @@
     {
       "id": "evidence_lineage_audit",
       "agent": "luna-worker",
-      "model": "gpt-5.6-terra",
+      "model": "gpt-5.6-luna",
       "reasoning_effort": "medium",
       "mode": "read",
       "depends_on": [],

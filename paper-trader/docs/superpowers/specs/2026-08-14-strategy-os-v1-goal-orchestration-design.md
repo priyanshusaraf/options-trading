@@ -69,7 +69,7 @@ The standard routes are:
 | Dispatcher | Luna medium | Read programme state, create or continue one task, write ignored controller state only |
 | Phase architecture | Sol medium | Write phase design, plan, capsules, and source-coverage matrix only |
 | Implementation slice | Terra medium | Implement one bounded capsule |
-| Mechanical assignment | Luna medium when top-level; Terra-medium `luna-worker` when spawned | Exact declared assignment; no architecture decisions |
+| Mechanical assignment | Luna medium through `luna-worker` | Exact declared assignment; no architecture decisions |
 | Corrective slice | Terra medium | Resolve named rejected findings without widening scope |
 | Phase gate | Sol high | Read-only critical review; separate `SPEC` and `QUALITY` verdicts |
 
@@ -77,7 +77,7 @@ Spawned children always use `fork_turns: none`, exact declared assignment IDs, a
 
 ## 6. Dispatcher contract
 
-`.codex/scripts/programme_dispatcher.py` is deterministic and side-effect free with respect to tracked files. It validates the programme, source map, active capsule, phase ordering, route, and controller lease, then emits exactly one action:
+`.codex/scripts/programme_dispatcher.py` is deterministic and side-effect free with respect to tracked files. It validates the programme, source map, active capsule, phase ordering, route, and controller lease, then emits exactly one action. A dispatch first creates an atomic reserved lease. The scheduled controller must bind the created task ID to that claim and record later task-state transitions under the same lease:
 
 - `dispatch`: start the active capsule as a new goal task;
 - `monitor`: an active goal already owns the programme;
