@@ -16,11 +16,19 @@ MAKE_REVIEW_PACKAGE = ROOT / ".codex" / "scripts" / "make_review_package.py"
 SESSION_AUDIT = ROOT / ".codex" / "scripts" / "session_audit.py"
 VALIDATOR = ROOT / ".codex" / "scripts" / "validate_agent_architecture.py"
 PROMPT_AUDIT = ROOT / ".codex" / "scripts" / "prompt_input_audit.py"
+PROGRAMME_DISPATCHER = ROOT / ".codex" / "scripts" / "programme_dispatcher.py"
 
 
 class ScriptPresenceTests(unittest.TestCase):
     def test_required_scripts_exist(self) -> None:
-        for script in (RUN_LOGGED, MAKE_REVIEW_PACKAGE, SESSION_AUDIT, VALIDATOR, PROMPT_AUDIT):
+        for script in (
+            RUN_LOGGED,
+            MAKE_REVIEW_PACKAGE,
+            SESSION_AUDIT,
+            VALIDATOR,
+            PROMPT_AUDIT,
+            PROGRAMME_DISPATCHER,
+        ):
             with self.subTest(script=script.name):
                 self.assertTrue(script.is_file(), f"missing {script}")
 
@@ -573,12 +581,14 @@ class ArchitectureValidatorTests(unittest.TestCase):
             (root / ".codex" / "scripts").mkdir(parents=True)
             (root / ".agents" / "skills" / "broken").mkdir(parents=True)
             (root / "paper-trader" / "docs" / "agent" / "tasks").mkdir(parents=True)
+            (root / "paper-trader" / "docs" / "agent" / "programme").mkdir(parents=True)
+            (root / "paper-trader" / "docs" / "program" / "owner-steers").mkdir(parents=True)
             (root / "AGENTS.md").write_text("root\n")
             (root / ".codex" / "config.toml").write_text('model = "unterminated\n')
             (root / ".codex" / "hooks.json").write_text("{not-json")
             (root / ".codex" / "hooks" / "agent_guard.py").write_text("# guard\n")
             (root / ".codex" / "hooks" / "compaction_guard.py").write_text("# guard\n")
-            for name in ("run_logged.py", "make_review_package.py", "session_audit.py"):
+            for name in ("run_logged.py", "make_review_package.py", "session_audit.py", "programme_dispatcher.py"):
                 (root / ".codex" / "scripts" / name).write_text("# script\n")
             (root / ".agents" / "skills" / "broken" / "SKILL.md").write_text(
                 "---\nname: broken\ndescription: broken\n---\n[missing](references/nope.md)\n"
@@ -586,6 +596,40 @@ class ArchitectureValidatorTests(unittest.TestCase):
             (root / "paper-trader" / "docs" / "agent" / "CURRENT.md").write_text(
                 '---\n{"active_capsule":"paper-trader/docs/agent/tasks/missing.md"}\n---\n'
             )
+            source_path = "paper-trader/docs/program/owner-steers/source.md"
+            (root / source_path).write_text("# Altered source\n")
+            source_map = {
+                "schema_version": 1,
+                "sources": [
+                    {
+                        "id": "source",
+                        "path": source_path,
+                        "sha256": "0" * 64,
+                        "sections": [{"level": 1, "heading": "Original source", "consumers": ["phase4"]}],
+                    }
+                ],
+                "phase_views": {"phase4": [{"source_id": "source", "heading": "Original source"}]},
+            }
+            (root / "paper-trader" / "docs" / "agent" / "programme" / "SOURCE_MAP.json").write_text(json.dumps(source_map))
+            programme = {
+                "schema_version": 1,
+                "current_stage_id": "phase4-architecture",
+                "source_map": "paper-trader/docs/agent/programme/SOURCE_MAP.json",
+                "stages": [
+                    {
+                        "id": "phase4-architecture",
+                        "order": 1,
+                        "phase": "phase4",
+                        "kind": "phase_architecture",
+                        "status": "ready",
+                        "depends_on": [],
+                        "capsule": "paper-trader/docs/agent/tasks/missing.md",
+                        "model": "gpt-5.6-sol",
+                        "reasoning_effort": "medium",
+                    }
+                ],
+            }
+            (root / "paper-trader" / "docs" / "agent" / "programme" / "PROGRAMME.json").write_text(json.dumps(programme))
             header = "".join(("Author", "ization"))
             credential = "".join(("Bearer ", "static-token-value-123456"))
             (root / "paper-trader" / "CLAUDE.md").write_text(
@@ -603,6 +647,8 @@ class ArchitectureValidatorTests(unittest.TestCase):
             self.assertIn("invalid TOML", failures)
             self.assertIn("missing skill reference", failures)
             self.assertIn("active capsule does not exist", failures)
+            self.assertIn("owner source hash mismatch", failures)
+            self.assertIn("programme capsule does not exist", failures)
             self.assertIn("likely static credential", failures)
             self.assertIn("retired Claude harness", failures)
 

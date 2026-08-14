@@ -1,0 +1,4897 @@
+{
+  "schema_version": 1,
+  "policy": "Workers load only the exact entries in their active phase view. Phase architects and Sol-high phase reviewers validate complete mapped coverage.",
+  "sources": [
+    {
+      "id": "product_architecture",
+      "path": "paper-trader/docs/program/owner-steers/00-STRATEGY-OS-PRODUCT-STEER.md",
+      "sha256": "2f51a019870c94996d77c24c3f92821f7097c8703cebed0b617850187226115d",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "Strategy OS — Product Architecture Steer",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Purpose",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. The five user-facing node families",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Type 1 — Execution & Position",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release",
+            "phase6",
+            "phase7"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Type 2 — Indicators & Derived Features",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release",
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Type 4 — Price, Instrument & Market Data",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release",
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Type 5 — Logic, Math & State",
+          "consumers": [
+            "phase5",
+            "phase8",
+            "v1_release",
+            "phase6",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. Hidden platform layers",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "A. Instrument Resolver",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "B. Point-in-Time Market Rulebook",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "C. Data Contract Engine",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "D. Causality Engine",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "E. Provider Capability Matrix",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "F. Subscription & Resource Planner",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "G. Numeric Validity System",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "H. Deployment Binding System",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Strategy definition is not deployment",
+          "consumers": [
+            "phase6",
+            "phase8",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Two equivalent UI entry points",
+          "consumers": [
+            "phase6",
+            "phase8",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. Named secondary instrument roles",
+          "consumers": [
+            "ir_v2",
+            "phase6",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. Dynamic derivative identity",
+          "consumers": [
+            "ir_v2",
+            "phase4",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Critical invariant",
+          "consumers": [
+            "ir_v2",
+            "phase4",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Options lifecycle model",
+          "consumers": [
+            "ir_v2",
+            "phase4",
+            "phase7",
+            "phase8",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Position and strategy state",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Trust is a product requirement",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "9. V1 acceptance scenarios",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Scenario A — reusable equity strategy",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Scenario B — Indian options/order-flow strategy",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Scenario C — cross-market strategy",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "10. Non-negotiable product rules",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strategy_language",
+      "path": "paper-trader/docs/program/owner-steers/01-STRATEGY-LANGUAGE-NODE-SYSTEM.md",
+      "sha256": "9be080888822fae23e196fa78c445eb0933886229749d4d2421a77a230f7f306",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "Strategy Language & Node System Steer",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Goal",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. Node contract required for every first-party node",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. First-party indicator starter pack",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Moving averages",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Trend",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Momentum",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Volatility",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Advanced realized-vol estimators",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Volume / participation",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Price transforms",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Statistics",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Regression / relative value",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Returns",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Market/session structure",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Pattern/event primitives",
+          "consumers": [
+            "phase5",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Type 3 derivative/microstructure library",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Option structure",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Options analytics",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Futures",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Order book / ladder",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Trade-flow features where the provider truly supplies enough data",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. Type 1 execution starter pack",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Entry/exit",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Order type",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Position sizing",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Protection",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Pyramiding / scaling",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Position/portfolio inputs",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. Type 5 logic, temporal and state pack",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Boolean / comparison",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Arithmetic",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Reducers",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Temporal",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Confirmation",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Noise/state control",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Scheduling",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Validity",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase8"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Custom-node hierarchy",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 1 — Fork first-party node",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 2 — Formula node",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 3 — Sandboxed custom Python",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 4 — External signal",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Numerical validity",
+          "consumers": [
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Node versioning",
+          "consumers": [
+            "ir_v2",
+            "phase5",
+            "phase6",
+            "phase9"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "market_truth",
+      "path": "paper-trader/docs/program/owner-steers/02-MARKET-TRUTH-DATA-CONTRACTS.md",
+      "sha256": "ee91b160d50dbcdb78889521f31f6560d8e312caf92f26047996eab20e54fd27",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "Market Truth & Data Contracts Steer",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Goal",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. Point-in-time market rulebook",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. Historical derivative truth",
+          "consumers": [
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Strike-grid evolution",
+          "consumers": [
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. Contract identity",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. Futures and continuous series",
+          "consumers": [
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Option-window policies",
+          "consumers": [
+            "phase4",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Data sufficiency",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Live versus historical capability",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "9. Missing-data semantics",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "10. Cross-instrument alignment",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "11. Cross-timeframe causality",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "12. Corporate actions",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "13. Dataset provenance",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase7",
+            "phase9",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "14. Provider capability changes",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 0 — transparent",
+          "consumers": [
+            "phase4"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 1 — operational",
+          "consumers": [
+            "phase4"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 2 — material capability change",
+          "consumers": [
+            "phase4"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Level 3 — semantic break",
+          "consumers": [
+            "phase4"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deployment_trust",
+      "path": "paper-trader/docs/program/owner-steers/03-DEPLOYMENT-EXECUTION-TRUST.md",
+      "sha256": "6151b1d2ebb6a587255754c651564874c21f43e3ec9e6ca9a4b9bbd7e28b0805",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "Deployment, Execution & Trader Trust Steer",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Goal",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. Deployment object",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. Deployment preflight",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Position sizing hierarchy",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. Multi-strategy position ownership",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. Open-position version ownership",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Protection semantics",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Strategy-managed exits",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Software-managed hard protection",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Broker/exchange-resident protection",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Order semantics",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Pyramiding and scaling",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "9. Degraded deployment states",
+          "consumers": [
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "10. Senior-trader trust requirements",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Strategy IP confidentiality",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "No silent semantic change",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Reproducibility",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Explainability without exposing secrets",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "User control",
+          "consumers": [
+            "phase3",
+            "phase6",
+            "phase8",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "11. Sharing scope",
+          "consumers": [
+            "phase6",
+            "phase8",
+            "phase10"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "runtime_economics",
+      "path": "paper-trader/docs/program/owner-steers/04-RUNTIME-ECONOMICS-PROVIDER-CAPABILITIES.md",
+      "sha256": "932b0281ce6fc2468b3b960e1da4e72ac0f3c0de0acbbfb8bea9188812f6a3a1",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "Runtime Economics & Provider Capability Steer",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Goal",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase9",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. Compile a resource plan with every strategy",
+          "consumers": [
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Static",
+          "consumers": [
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Dynamic",
+          "consumers": [
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. Incremental streaming runtime",
+          "consumers": [
+            "phase5",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Batch/vector research runtime",
+          "consumers": [
+            "phase5",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. Evaluation clocks/triggers",
+          "consumers": [
+            "phase5",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. Shared calculations",
+          "consumers": [
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Cache identity",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase7"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Order-book/ladder processing",
+          "consumers": [
+            "phase5",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Dynamic option-window subscription management",
+          "consumers": [
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "9. Resource QoS priorities",
+          "consumers": [
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "10. Per-deployment resource ceilings",
+          "consumers": [
+            "phase6",
+            "phase7",
+            "phase10"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "11. Provider capability matrix",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Data",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Execution",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Historical market support",
+          "consumers": [
+            "phase4",
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "12. Provider fallback",
+          "consumers": [
+            "phase6",
+            "phase7",
+            "phase9"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "13. Cost telemetry",
+          "consumers": [
+            "phase5",
+            "phase7",
+            "phase10"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verification_policy",
+      "path": "paper-trader/docs/program/owner-steers/05-V1-IMPLEMENTATION-PRIORITIES-VERIFICATION.md",
+      "sha256": "bd15bb27284b7e4f467673a491c4c1b556565c9d7b342966ccd695a2b924fad5",
+      "sections": [
+        {
+          "level": 1,
+          "heading": "V1 Implementation Priorities & Verification Policy",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "Goal",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "1. Risk-weighted verification",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Critical",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Important",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Routine",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Trivial",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "2. Test rule",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "3. Test cadence",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "4. First-party node conformance harness",
+          "consumers": [
+            "phase5",
+            "phase7",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "5. V1 product priorities",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Must have",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Can be deferred",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "6. Implementation sequencing",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "7. Canonical acceptance scenarios",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "A. Reusable equity",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "B. Weekly-options/order-flow",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "C. Cross-market",
+          "consumers": [
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 2,
+          "heading": "8. Guard against scope drift",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Core-abstraction issue",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        },
+        {
+          "level": 3,
+          "heading": "Local implementation edge case",
+          "consumers": [
+            "phase3",
+            "ir_v2",
+            "phase4",
+            "phase5",
+            "phase6",
+            "phase7",
+            "phase8",
+            "phase9",
+            "phase10",
+            "v1_release"
+          ]
+        }
+      ]
+    }
+  ],
+  "phase_views": {
+    "phase3": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "1. Deployment object"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "2. Deployment preflight"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "3. Position sizing hierarchy"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "4. Multi-strategy position ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "5. Open-position version ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "6. Protection semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy-managed exits"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Software-managed hard protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Broker/exchange-resident protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "7. Order semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "8. Pyramiding and scaling"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "10. Senior-trader trust requirements"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy IP confidentiality"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "No silent semantic change"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Reproducibility"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Explainability without exposing secrets"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "User control"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "ir_v2": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "4. Named secondary instrument roles"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "5. Dynamic derivative identity"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Critical invariant"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "7. Position and strategy state"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Strategy Language & Node System Steer"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "1. Node contract required for every first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "3. Type 3 derivative/microstructure library"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Option structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Options analytics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Futures"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order book / ladder"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trade-flow features where the provider truly supplies enough data"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "4. Type 1 execution starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Entry/exit"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order type"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position sizing"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Protection"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pyramiding / scaling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position/portfolio inputs"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "5. Type 5 logic, temporal and state pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Boolean / comparison"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Arithmetic"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Reducers"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Temporal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Confirmation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Noise/state control"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Scheduling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "6. Custom-node hierarchy"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 1 — Fork first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 2 — Formula node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 3 — Sandboxed custom Python"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 4 — External signal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "7. Numerical validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "8. Node versioning"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase4": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "2. Hidden platform layers"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "A. Instrument Resolver"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "B. Point-in-Time Market Rulebook"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "C. Data Contract Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "D. Causality Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "E. Provider Capability Matrix"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "F. Subscription & Resource Planner"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "G. Numeric Validity System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "5. Dynamic derivative identity"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Critical invariant"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "7. Numerical validity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Market Truth & Data Contracts Steer"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "1. Point-in-time market rulebook"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "2. Historical derivative truth"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "3. Strike-grid evolution"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "4. Contract identity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "5. Futures and continuous series"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "6. Option-window policies"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "7. Data sufficiency"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "8. Live versus historical capability"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "9. Missing-data semantics"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "10. Cross-instrument alignment"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "11. Cross-timeframe causality"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "12. Corporate actions"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "13. Dataset provenance"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "14. Provider capability changes"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Level 0 — transparent"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Level 1 — operational"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Level 2 — material capability change"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Level 3 — semantic break"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "6. Cache identity"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "11. Provider capability matrix"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Data"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Execution"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Historical market support"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase5": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "1. The five user-facing node families"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 1 — Execution & Position"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 2 — Indicators & Derived Features"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 5 — Logic, Math & State"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "2. Hidden platform layers"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "A. Instrument Resolver"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "B. Point-in-Time Market Rulebook"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "C. Data Contract Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "D. Causality Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "E. Provider Capability Matrix"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "F. Subscription & Resource Planner"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "G. Numeric Validity System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "7. Position and strategy state"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Strategy Language & Node System Steer"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "1. Node contract required for every first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "2. First-party indicator starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Moving averages"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trend"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Momentum"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Volatility"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Advanced realized-vol estimators"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Volume / participation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Price transforms"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Statistics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Regression / relative value"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Returns"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Market/session structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pattern/event primitives"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "3. Type 3 derivative/microstructure library"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Option structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Options analytics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Futures"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order book / ladder"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trade-flow features where the provider truly supplies enough data"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "4. Type 1 execution starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Entry/exit"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order type"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position sizing"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Protection"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pyramiding / scaling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position/portfolio inputs"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "5. Type 5 logic, temporal and state pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Boolean / comparison"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Arithmetic"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Reducers"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Temporal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Confirmation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Noise/state control"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Scheduling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "6. Custom-node hierarchy"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 1 — Fork first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 2 — Formula node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 3 — Sandboxed custom Python"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 4 — External signal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "7. Numerical validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "8. Node versioning"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "12. Corporate actions"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "13. Dataset provenance"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "1. Compile a resource plan with every strategy"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Static"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Dynamic"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "2. Incremental streaming runtime"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "3. Batch/vector research runtime"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "4. Evaluation clocks/triggers"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "5. Shared calculations"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "6. Cache identity"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "7. Order-book/ladder processing"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "13. Cost telemetry"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "4. First-party node conformance harness"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase6": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 1 — Execution & Position"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 5 — Logic, Math & State"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "2. Hidden platform layers"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "A. Instrument Resolver"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "B. Point-in-Time Market Rulebook"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "C. Data Contract Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "D. Causality Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "E. Provider Capability Matrix"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "F. Subscription & Resource Planner"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "G. Numeric Validity System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "3. Strategy definition is not deployment"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Two equivalent UI entry points"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "4. Named secondary instrument roles"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "7. Position and strategy state"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Strategy Language & Node System Steer"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "1. Node contract required for every first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "4. Type 1 execution starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Entry/exit"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order type"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position sizing"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Protection"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pyramiding / scaling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position/portfolio inputs"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "7. Numerical validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "8. Node versioning"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Market Truth & Data Contracts Steer"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "1. Point-in-time market rulebook"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "4. Contract identity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "7. Data sufficiency"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "8. Live versus historical capability"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "9. Missing-data semantics"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "10. Cross-instrument alignment"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "11. Cross-timeframe causality"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "14. Provider capability changes"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "1. Deployment object"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "2. Deployment preflight"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "3. Position sizing hierarchy"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "4. Multi-strategy position ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "5. Open-position version ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "6. Protection semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy-managed exits"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Software-managed hard protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Broker/exchange-resident protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "7. Order semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "8. Pyramiding and scaling"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "9. Degraded deployment states"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "10. Senior-trader trust requirements"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy IP confidentiality"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "No silent semantic change"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Reproducibility"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Explainability without exposing secrets"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "User control"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "11. Sharing scope"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "1. Compile a resource plan with every strategy"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Static"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Dynamic"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "10. Per-deployment resource ceilings"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "11. Provider capability matrix"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Data"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Execution"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Historical market support"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "12. Provider fallback"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase7": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 1 — Execution & Position"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 5 — Logic, Math & State"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "2. Hidden platform layers"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "A. Instrument Resolver"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "B. Point-in-Time Market Rulebook"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "C. Data Contract Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "D. Causality Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "E. Provider Capability Matrix"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "F. Subscription & Resource Planner"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "G. Numeric Validity System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "5. Dynamic derivative identity"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Critical invariant"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "7. Position and strategy state"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Strategy Language & Node System Steer"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "1. Node contract required for every first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "3. Type 3 derivative/microstructure library"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Option structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Options analytics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Futures"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order book / ladder"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trade-flow features where the provider truly supplies enough data"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "4. Type 1 execution starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Entry/exit"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order type"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position sizing"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Protection"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pyramiding / scaling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position/portfolio inputs"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "5. Type 5 logic, temporal and state pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Boolean / comparison"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Arithmetic"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Reducers"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Temporal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Confirmation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Noise/state control"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Scheduling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Validity"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "6. Custom-node hierarchy"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 1 — Fork first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 2 — Formula node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 3 — Sandboxed custom Python"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 4 — External signal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "7. Numerical validity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Market Truth & Data Contracts Steer"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "1. Point-in-time market rulebook"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "2. Historical derivative truth"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "3. Strike-grid evolution"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "4. Contract identity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "5. Futures and continuous series"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "6. Option-window policies"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "7. Data sufficiency"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "8. Live versus historical capability"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "9. Missing-data semantics"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "10. Cross-instrument alignment"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "11. Cross-timeframe causality"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "12. Corporate actions"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "13. Dataset provenance"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "14. Provider capability changes"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "1. Deployment object"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "2. Deployment preflight"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "3. Position sizing hierarchy"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "4. Multi-strategy position ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "5. Open-position version ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "6. Protection semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy-managed exits"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Software-managed hard protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Broker/exchange-resident protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "7. Order semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "8. Pyramiding and scaling"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "9. Degraded deployment states"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "1. Compile a resource plan with every strategy"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Static"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Dynamic"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "2. Incremental streaming runtime"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "3. Batch/vector research runtime"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "4. Evaluation clocks/triggers"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "5. Shared calculations"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "6. Cache identity"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "7. Order-book/ladder processing"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "8. Dynamic option-window subscription management"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "9. Resource QoS priorities"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "10. Per-deployment resource ceilings"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "11. Provider capability matrix"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Data"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Execution"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Historical market support"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "12. Provider fallback"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "13. Cost telemetry"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "4. First-party node conformance harness"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase8": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "1. The five user-facing node families"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 1 — Execution & Position"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 2 — Indicators & Derived Features"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 5 — Logic, Math & State"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "3. Strategy definition is not deployment"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Two equivalent UI entry points"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "4. Named secondary instrument roles"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "7. Position and strategy state"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Strategy Language & Node System Steer"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "2. First-party indicator starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Moving averages"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trend"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Momentum"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Volatility"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Advanced realized-vol estimators"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Volume / participation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Price transforms"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Statistics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Regression / relative value"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Returns"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Market/session structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pattern/event primitives"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "4. Type 1 execution starter pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Entry/exit"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order type"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position sizing"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Protection"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Pyramiding / scaling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Position/portfolio inputs"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "5. Type 5 logic, temporal and state pack"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Boolean / comparison"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Arithmetic"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Reducers"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Temporal"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Confirmation"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Noise/state control"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Scheduling"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Validity"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "1. Deployment object"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "2. Deployment preflight"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "3. Position sizing hierarchy"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "4. Multi-strategy position ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "5. Open-position version ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "6. Protection semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy-managed exits"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Software-managed hard protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Broker/exchange-resident protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "7. Order semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "8. Pyramiding and scaling"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "9. Degraded deployment states"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "10. Senior-trader trust requirements"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy IP confidentiality"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "No silent semantic change"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Reproducibility"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Explainability without exposing secrets"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "User control"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "11. Sharing scope"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase9": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "2. Hidden platform layers"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "A. Instrument Resolver"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "B. Point-in-Time Market Rulebook"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "C. Data Contract Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "D. Causality Engine"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "E. Provider Capability Matrix"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "F. Subscription & Resource Planner"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "G. Numeric Validity System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "H. Deployment Binding System"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "5. Dynamic derivative identity"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Critical invariant"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "3. Type 3 derivative/microstructure library"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Option structure"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Options analytics"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Futures"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Order book / ladder"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Trade-flow features where the provider truly supplies enough data"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "8. Node versioning"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Market Truth & Data Contracts Steer"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "1. Point-in-time market rulebook"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "2. Historical derivative truth"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "3. Strike-grid evolution"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "4. Contract identity"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "5. Futures and continuous series"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "6. Option-window policies"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "7. Data sufficiency"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "8. Live versus historical capability"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "9. Missing-data semantics"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "10. Cross-instrument alignment"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "11. Cross-timeframe causality"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "12. Corporate actions"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "13. Dataset provenance"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "14. Provider capability changes"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "6. Protection semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy-managed exits"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Software-managed hard protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Broker/exchange-resident protection"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "7. Order semantics"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "8. Pyramiding and scaling"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "9. Degraded deployment states"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "10. Senior-trader trust requirements"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy IP confidentiality"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "No silent semantic change"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Reproducibility"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Explainability without exposing secrets"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "User control"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "7. Order-book/ladder processing"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "8. Dynamic option-window subscription management"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "11. Provider capability matrix"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Data"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Execution"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Historical market support"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "12. Provider fallback"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "phase10": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "6. Custom-node hierarchy"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 1 — Fork first-party node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 2 — Formula node"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 3 — Sandboxed custom Python"
+      },
+      {
+        "source_id": "strategy_language",
+        "heading": "Level 4 — External signal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Deployment, Execution & Trader Trust Steer"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "1. Deployment object"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "2. Deployment preflight"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "3. Position sizing hierarchy"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "4. Multi-strategy position ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "5. Open-position version ownership"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "9. Degraded deployment states"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "10. Senior-trader trust requirements"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Strategy IP confidentiality"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "No silent semantic change"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Reproducibility"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "Explainability without exposing secrets"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "User control"
+      },
+      {
+        "source_id": "deployment_trust",
+        "heading": "11. Sharing scope"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Runtime Economics & Provider Capability Steer"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "1. Compile a resource plan with every strategy"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Static"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "Dynamic"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "5. Shared calculations"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "9. Resource QoS priorities"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "10. Per-deployment resource ceilings"
+      },
+      {
+        "source_id": "runtime_economics",
+        "heading": "13. Cost telemetry"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ],
+    "v1_release": [
+      {
+        "source_id": "product_architecture",
+        "heading": "Strategy OS — Product Architecture Steer"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Purpose"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "1. The five user-facing node families"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 1 — Execution & Position"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 2 — Indicators & Derived Features"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 4 — Price, Instrument & Market Data"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Type 5 — Logic, Math & State"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "3. Strategy definition is not deployment"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Two equivalent UI entry points"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "5. Dynamic derivative identity"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Critical invariant"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "6. Options lifecycle model"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "8. Trust is a product requirement"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "9. V1 acceptance scenarios"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario A — reusable equity strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario B — Indian options/order-flow strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "Scenario C — cross-market strategy"
+      },
+      {
+        "source_id": "product_architecture",
+        "heading": "10. Non-negotiable product rules"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Market Truth & Data Contracts Steer"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "7. Data sufficiency"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "8. Live versus historical capability"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "9. Missing-data semantics"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "10. Cross-instrument alignment"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "11. Cross-timeframe causality"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "12. Corporate actions"
+      },
+      {
+        "source_id": "market_truth",
+        "heading": "13. Dataset provenance"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "V1 Implementation Priorities & Verification Policy"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Goal"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "1. Risk-weighted verification"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Critical"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Important"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Routine"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Trivial"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "2. Test rule"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "3. Test cadence"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "4. First-party node conformance harness"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "5. V1 product priorities"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Must have"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Can be deferred"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "6. Implementation sequencing"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "7. Canonical acceptance scenarios"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "A. Reusable equity"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "B. Weekly-options/order-flow"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "C. Cross-market"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "8. Guard against scope drift"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Core-abstraction issue"
+      },
+      {
+        "source_id": "verification_policy",
+        "heading": "Local implementation edge case"
+      }
+    ]
+  }
+}

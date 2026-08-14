@@ -39,6 +39,15 @@ REQUIRED_CAPSULE_FIELDS = {
     "test_plan",
     "review",
 }
+PROGRAMME_STATUSES = {
+    "blocked",
+    "ready",
+    "active",
+    "correction",
+    "review",
+    "accepted",
+    "paused_owner_gate",
+}
 
 
 def relative(path: Path, root: Path) -> str:
@@ -134,6 +143,173 @@ def validate_review_package(path: Path, failures: List[str], root: Path) -> None
             failures.append(f"review package evidence digest is stale: {item}")
 
 
+def repository_file(root: Path, value: object) -> Optional[Path]:
+    if not isinstance(value, str) or not value or Path(value).is_absolute():
+        return None
+    resolved = (root / value).resolve()
+    if root not in resolved.parents or not resolved.is_file():
+        return None
+    return resolved
+
+
+def markdown_headings(path: Path) -> List[tuple[int, str]]:
+    result = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^(#{1,4})\s+(.+?)\s*$", line)
+        if match:
+            result.append((len(match.group(1)), match.group(2)))
+    return result
+
+
+def validate_source_map(path: Path, failures: List[str], root: Path) -> Optional[Dict[str, Any]]:
+    try:
+        source_map = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        failures.append(f"invalid source map: {exc}")
+        return None
+    if not isinstance(source_map, dict) or source_map.get("schema_version") != 1:
+        failures.append("source map schema is invalid")
+        return None
+    sources = source_map.get("sources")
+    phase_views = source_map.get("phase_views")
+    if not isinstance(sources, list) or not isinstance(phase_views, dict):
+        failures.append("source map lacks sources or phase_views")
+        return source_map
+    indexed: Dict[str, Dict[str, Any]] = {}
+    section_consumers: Dict[tuple[str, str], set[str]] = {}
+    for source in sources:
+        if not isinstance(source, dict) or not isinstance(source.get("id"), str):
+            failures.append("source map contains an invalid source record")
+            continue
+        source_id = source["id"]
+        if source_id in indexed:
+            failures.append(f"source map contains duplicate source ID: {source_id}")
+            continue
+        indexed[source_id] = source
+        source_path = repository_file(root, source.get("path"))
+        if source_path is None:
+            failures.append(f"owner source does not exist: {source.get('path')}")
+            continue
+        actual_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if source.get("sha256") != actual_digest:
+            failures.append(f"owner source hash mismatch: {source_id}")
+        sections = source.get("sections")
+        if not isinstance(sections, list):
+            failures.append(f"source map sections are invalid: {source_id}")
+            continue
+        mapped = []
+        for section in sections:
+            if not isinstance(section, dict):
+                failures.append(f"source map section is invalid: {source_id}")
+                continue
+            level, heading, consumers = section.get("level"), section.get("heading"), section.get("consumers")
+            if (
+                not isinstance(level, int)
+                or not isinstance(heading, str)
+                or not heading
+                or not isinstance(consumers, list)
+                or not consumers
+                or not all(isinstance(item, str) and item for item in consumers)
+            ):
+                failures.append(f"source map section is invalid: {source_id}")
+                continue
+            mapped.append((level, heading))
+            section_consumers[(source_id, heading)] = set(consumers)
+        if mapped != markdown_headings(source_path):
+            failures.append(f"owner source heading coverage mismatch: {source_id}")
+    view_entries: Dict[tuple[str, str], set[str]] = {}
+    for phase, entries in phase_views.items():
+        if not isinstance(phase, str) or not isinstance(entries, list) or not entries:
+            failures.append(f"source map phase view is invalid: {phase}")
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                failures.append(f"source map phase entry is invalid: {phase}")
+                continue
+            key = (entry.get("source_id"), entry.get("heading"))
+            if key not in section_consumers or phase not in section_consumers[key]:
+                failures.append(f"source map phase entry is not routed: {phase} -> {key}")
+                continue
+            view_entries.setdefault(key, set()).add(phase)
+    for key, consumers in section_consumers.items():
+        if view_entries.get(key, set()) != consumers:
+            failures.append(f"source map phase coverage mismatch: {key[0]} -> {key[1]}")
+    return source_map
+
+
+def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[Dict[str, Any]]:
+    try:
+        programme = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        failures.append(f"invalid programme: {exc}")
+        return None
+    if not isinstance(programme, dict) or programme.get("schema_version") != 1:
+        failures.append("programme schema is invalid")
+        return None
+    stages = programme.get("stages")
+    if not isinstance(stages, list) or not stages:
+        failures.append("programme has no stages")
+        return programme
+    orders = [item.get("order") for item in stages if isinstance(item, dict)]
+    if len(orders) != len(stages) or orders != list(range(1, len(stages) + 1)):
+        failures.append("programme stage order is invalid")
+    ids = [item.get("id") for item in stages if isinstance(item, dict)]
+    if len(ids) != len(stages) or len(set(ids)) != len(ids) or not all(isinstance(item, str) for item in ids):
+        failures.append("programme stage IDs are invalid")
+        return programme
+    indexed = {item["id"]: item for item in stages}
+    current_id = programme.get("current_stage_id")
+    if current_id not in indexed:
+        failures.append("programme current stage does not exist")
+    seen: set[str] = set()
+    for stage in stages:
+        stage_id = stage["id"]
+        status = stage.get("status")
+        dependencies = stage.get("depends_on")
+        if status not in PROGRAMME_STATUSES:
+            failures.append(f"programme stage status is invalid: {stage_id}")
+        if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
+            failures.append(f"programme dependencies are invalid: {stage_id}")
+        elif not set(dependencies) <= seen:
+            failures.append(f"programme dependency order is invalid: {stage_id}")
+        seen.add(stage_id)
+        capsule_value = stage.get("capsule")
+        if capsule_value is None and stage.get("dynamic") is True:
+            continue
+        capsule_path = repository_file(root, capsule_value)
+        if capsule_path is None:
+            failures.append(f"programme capsule does not exist: {stage_id} -> {capsule_value}")
+            continue
+        try:
+            capsule = json_frontmatter(capsule_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if capsule.get("id") != stage_id:
+            failures.append(f"programme capsule ID mismatch: {stage_id}")
+        goal_contract = capsule.get("goal_contract")
+        if (
+            not isinstance(goal_contract, dict)
+            or goal_contract.get("create_before_work") is not True
+            or not isinstance(goal_contract.get("stopping_condition"), str)
+            or not goal_contract.get("stopping_condition")
+        ):
+            failures.append(f"programme capsule lacks goal contract: {stage_id}")
+    for phase in range(4, 11):
+        architecture = indexed.get(f"phase{phase}-architecture")
+        review = indexed.get(f"phase{phase}-review")
+        implementation = f"phase{phase}-implementation"
+        if not architecture or (architecture.get("model"), architecture.get("reasoning_effort")) != ("gpt-5.6-sol", "medium"):
+            failures.append(f"programme phase architecture route is invalid: phase{phase}")
+        if (
+            not review
+            or review.get("kind") != "phase_review"
+            or (review.get("model"), review.get("reasoning_effort")) != ("gpt-5.6-sol", "high")
+            or implementation not in review.get("depends_on", [])
+        ):
+            failures.append(f"programme phase review gate is invalid: phase{phase}")
+    return programme
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
@@ -154,14 +330,23 @@ def main() -> int:
         ".codex/scripts/make_review_package.py",
         ".codex/scripts/session_audit.py",
         ".codex/scripts/prompt_input_audit.py",
+        ".codex/scripts/programme_dispatcher.py",
         "paper-trader/docs/agent/CURRENT.md",
         "paper-trader/docs/agent/ROUTER.md",
+        "paper-trader/docs/agent/programme/SOURCE_MAP.json",
+        "paper-trader/docs/agent/programme/PROGRAMME.json",
+        "paper-trader/docs/agent/programme/GOAL_TEMPLATES.md",
     ]
     for item in required_artifacts:
         if not (root / item).is_file():
             failures.append(f"missing required artifact: {item}")
 
-    scan_roots = [root / ".agents", root / ".codex", root / "paper-trader" / "docs" / "agent"]
+    scan_roots = [
+        root / ".agents",
+        root / ".codex",
+        root / "paper-trader" / "docs" / "agent",
+        root / "paper-trader" / "docs" / "program" / "owner-steers",
+    ]
     files = sorted(
         {
             path.resolve()
@@ -204,6 +389,12 @@ def main() -> int:
         if STATIC_SECRET.search(text):
             failures.append(f"likely static credential: {relative(path, root)}")
 
+    source_map_path = root / "paper-trader" / "docs" / "agent" / "programme" / "SOURCE_MAP.json"
+    if source_map_path.is_file():
+        validate_source_map(source_map_path, failures, root)
+    programme_path = root / "paper-trader" / "docs" / "agent" / "programme" / "PROGRAMME.json"
+    programme = validate_programme(programme_path, failures, root) if programme_path.is_file() else None
+
     skills = root / ".agents" / "skills"
     skill_files = sorted(skills.glob("*/SKILL.md")) if skills.exists() else []
     if not skill_files:
@@ -233,6 +424,17 @@ def main() -> int:
             active_path = (root / active).resolve() if isinstance(active, str) else None
             if active_path is None or root not in active_path.parents or not active_path.is_file():
                 failures.append("active capsule does not exist")
+            if isinstance(programme, dict):
+                if current.get("active_stage") != programme.get("current_stage_id"):
+                    failures.append("CURRENT.md active stage differs from programme")
+                indexed = {
+                    item.get("id"): item
+                    for item in programme.get("stages", [])
+                    if isinstance(item, dict)
+                }
+                stage = indexed.get(programme.get("current_stage_id"))
+                if isinstance(stage, dict) and stage.get("capsule") != active:
+                    failures.append("CURRENT.md active capsule differs from programme")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             failures.append(f"invalid CURRENT.md frontmatter: {exc}")
 

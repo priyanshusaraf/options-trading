@@ -1,0 +1,2 @@
+# Preserve owner-authored Markdown bytes, including intentional hard-break spaces.
+paper-trader/docs/program/owner-steers/*.md whitespace=-trailing-space

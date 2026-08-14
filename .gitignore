@@ -53,6 +53,7 @@ data/reports/
 # ───────────────────────── Tooling / OS ─────────────────────────
 .playwright-mcp/
 .agent/
+.agent/programme/
 .codex-log/
 .superpowers/sdd/
 .DS_Store

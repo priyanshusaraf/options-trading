@@ -5,7 +5,7 @@ This repository is Strategy OS: a visual platform for composing, researching, ad
 ## Start every task
 
 1. Work only in the `dev/options-trading` checkout. The active Phase 3 worktree is `/Users/priyanshusaraf/dev/options-trading/.claude/worktrees/codex-execution-foundation`; the Desktop clone is frozen.
-2. Read `paper-trader/docs/agent/CURRENT.md`, then the active capsule named there.
+2. Read `paper-trader/docs/agent/CURRENT.md`, confirm its stage in `paper-trader/docs/agent/programme/PROGRAMME.json`, then read the active capsule.
 3. Read only the capsule's exact `required_docs` sections and the applicable local `AGENTS.md` files. Do not load `docs/CONTINUE.md`, large handoff documents, whole phase plans, or future-phase findings by default.
 4. Audit `git status`, the relevant diff, and protected-file hashes before editing a dirty tree. Never stash, reset, clean, or overwrite inherited work.
 5. Treat the repository, capsule, evidence logs, and commit history as the handoff. Do not request an old task transcript or paste one into a new task.
@@ -16,6 +16,7 @@ This repository is Strategy OS: a visual platform for composing, researching, ad
 - Children require `fork_turns: none` and an exact assignment declared in the active capsule. Run zero to five only when their dependencies and write ownership are disjoint. Do not create speculative, overlapping, or future-scope workers.
 - Use one `critical-reviewer` only for a critical slice, after integration and an evidence-backed review package exist. No live reviewer, reviewer swarm, permanent Sol controller, Fast mode, xhigh, ultra, or max effort.
 - Keep a task bounded to one capsule or coherent slice. A first automatic compaction is the handoff warning; start a fresh task before a second.
+- Every executable capsule is one durable goal. Create that goal before product work and complete it only when the capsule stopping condition has direct evidence.
 - Put full command output under ignored `.agent/runs/` with `.codex/scripts/run_logged.py`. Return compact results and evidence paths to the slice owner.
 
 ## Invariants and gates

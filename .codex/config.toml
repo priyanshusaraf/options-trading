@@ -12,6 +12,7 @@ apps = false
 browser_use = false
 computer_use = false
 fast_mode = false
+goals = true
 hooks = true
 in_app_browser = false
 memories = false

@@ -44,6 +44,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertFalse(config["memories"]["use_memories"])
         self.assertFalse(config["memories"]["generate_memories"])
         self.assertTrue(config["features"]["multi_agent"])
+        self.assertTrue(config["features"]["goals"])
         self.assertEqual(
             config["features"]["multi_agent_v2"],
             {
@@ -142,21 +143,25 @@ class RepositoryContractTests(unittest.TestCase):
     def test_current_state_and_task_capsule_form_the_resume_interface(self) -> None:
         current = ROOT / "paper-trader" / "docs" / "agent" / "CURRENT.md"
         router = ROOT / "paper-trader" / "docs" / "agent" / "ROUTER.md"
-        capsule = ROOT / "paper-trader" / "docs" / "agent" / "tasks" / "phase3-task12.md"
-        for path in (current, router, capsule):
+        programme = ROOT / "paper-trader" / "docs" / "agent" / "programme" / "PROGRAMME.json"
+        capsule = ROOT / "paper-trader" / "docs" / "agent" / "tasks" / "phase3-task12-correction-1.md"
+        for path in (current, router, programme, capsule):
             self.assertTrue(path.is_file(), f"missing {path}")
 
         self.assertLessEqual(len(current.read_bytes()), 4_096)
         self.assertLessEqual(len(router.read_bytes()), 4_096)
         state = frontmatter(current)
         task = frontmatter(capsule)
-        self.assertEqual(state["active_capsule"], "paper-trader/docs/agent/tasks/phase3-task12.md")
+        programme_state = json.loads(programme.read_text())
+        self.assertEqual(state["programme"], "paper-trader/docs/agent/programme/PROGRAMME.json")
+        self.assertEqual(state["active_capsule"], "paper-trader/docs/agent/tasks/phase3-task12-correction-1.md")
         self.assertEqual(state["status"], "ready")
         required = {
             "id",
             "phase",
             "status",
             "goal",
+            "goal_contract",
             "risk_tags",
             "required_docs",
             "allowed_paths",
@@ -171,13 +176,27 @@ class RepositoryContractTests(unittest.TestCase):
             "review",
         }
         self.assertEqual(required - set(task), set())
-        self.assertEqual(task["id"], "phase3-task12")
+        self.assertEqual(task["id"], "phase3-task12-correction-1")
         self.assertEqual(task["status"], "ready")
+        self.assertEqual(programme_state["current_stage_id"], task["id"])
         self.assertIn("critical", task["risk_tags"])
         self.assertLessEqual(task["parallel_budget"], 5)
         self.assertLessEqual(len(task["assignments"]), task["parallel_budget"])
         self.assertEqual(task["review"]["base_sha"], "HEAD")
         self.assertEqual(task["review"]["exclude_paths"], task["dirty_tree_baseline"]["future_findings_excluded"])
+
+    def test_programme_declares_goal_routes_and_phase_review_gates(self) -> None:
+        path = ROOT / "paper-trader" / "docs" / "agent" / "programme" / "PROGRAMME.json"
+        programme = json.loads(path.read_text())
+        self.assertEqual(programme["controller"]["model"], "gpt-5.6-luna")
+        self.assertEqual(programme["controller"]["reasoning_effort"], "medium")
+        self.assertEqual(programme["controller"]["max_active_goals"], 1)
+        stages = {stage["id"]: stage for stage in programme["stages"]}
+        for phase in range(4, 11):
+            self.assertEqual(stages[f"phase{phase}-architecture"]["model"], "gpt-5.6-sol")
+            self.assertEqual(stages[f"phase{phase}-architecture"]["reasoning_effort"], "medium")
+            self.assertEqual(stages[f"phase{phase}-review"]["model"], "gpt-5.6-sol")
+            self.assertEqual(stages[f"phase{phase}-review"]["reasoning_effort"], "high")
 
     def test_agent_runtime_artifacts_are_ignored(self) -> None:
         result = subprocess.run(

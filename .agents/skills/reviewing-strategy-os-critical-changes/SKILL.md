@@ -18,3 +18,14 @@ Load only the relevant reference:
 - [Money and authority review](references/money-and-authority.md)
 - [Research, provider, tenancy, migration, and performance review](references/domain-review.md)
 - [Runtime and UI review](references/runtime-and-ui.md)
+
+## Programme phase and release gates
+
+When all declared slices for a phase or release are integrated, the gate is one fresh Sol-high durable review goal. Product code is read-only: write only the verdict and the minimal programme transition.
+
+Return two independent verdicts, each `PASS`, `FAIL`, or `UNVERIFIABLE`:
+
+- `SPEC` — the integrated result satisfies the capsule and mapped owner steers.
+- `QUALITY` — the implementation and current evidence are safe, maintainable, non-vacuous, and proportionate to risk.
+
+Both must pass before the next phase starts. On any other result, leave the next phase blocked and record a bounded Terra correction state. One recheck is allowed; a second rejection requires replanning.
