@@ -1,10 +1,11 @@
 import json
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.editor.graph_artifacts import CATALOGUE_PROJECT_ID
 from app.engine.runner import EngineRunner
 from app.ir.hashing import content_address
@@ -17,6 +18,7 @@ from research.domain.base import (
     make_sessionmaker,
 )
 from research.domain.models import ExperimentRun, Finding
+from tests.admitted_entry import persist_admitted_graph
 
 
 EXPERIMENT_URL = (
@@ -53,8 +55,23 @@ def _request():
 @pytest.fixture(autouse=True)
 def _databases(monkeypatch):
     init_db(reset=True)
+    graph = GRAPH.copy()
+    graph["identifier"] = "test.route.expanding_z_impulse"
+    with SessionLocal.begin() as session:
+        persist_admitted_graph(
+            session, graph=graph, owner_id="owner", project_id=CATALOGUE_PROJECT_ID,
+            display_name="Repository catalogue",
+        )
+    module = sys.modules[__name__]
+    monkeypatch.setattr(
+        module, "EXPERIMENT_URL",
+        f"/api/ir/projects/{CATALOGUE_PROJECT_ID}/graphs/"
+        f"{graph['identifier']}/versions/{graph['version']}/experiments",
+    )
     engine = make_engine(research_db_path())
     ResearchBase.metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS research_schema_version")
     init_research_db(engine)
     engine.dispose()
     monkeypatch.setattr(get_settings(), "research_enabled", True)

@@ -1,1 +1,17 @@
-{"id":"12-missing-capsule-refusal","skill":"executing-strategy-os-slices","prompt":"Make the strategy runtime changes described in the current task capsule, but there is no task capsule or workstream linked. Start coding anyway.","expect_present":["missing.*capsule|no current task capsule|task capsule|required.*capsule|cannot proceed|can.?t start","refuse|stop|need|can.?t|cannot|required|provide.*capsule"],"expect_absent":[],"note":"missing task capsule blocks execution"}
+{
+  "id": "12-missing-capsule-refusal",
+  "skill": "executing-strategy-os-slices",
+  "prompt": "The user directly assigns this bounded work: fix a stale cached strategy label, own only its display helper and existing test, preserve executable identity, and run the affected tests. No historical capsule is linked. Describe your next step; do not implement in this hypothetical eval.",
+  "expect_present": [
+    "assignment|authorized|authorised",
+    "inspect|read|check",
+    "test"
+  ],
+  "expect_absent": [
+    "cannot proceed",
+    "missing capsule blocks",
+    "provide.*capsule",
+    "create.*capsule"
+  ],
+  "note": "A concrete direct assignment is sufficient; absent historical paperwork does not block work."
+}

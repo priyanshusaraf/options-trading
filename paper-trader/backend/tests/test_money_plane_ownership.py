@@ -1,11 +1,11 @@
-"""Migration 0017 — an owner on the money plane, and an honest account of where it is not.
+"""Every money-plane table has one explicit, content-addressed, or parent scope.
 
 `0015` and `0016` made the *authority* to trade per-owner: a broker connection and an execution
 intent both know whose they are. What the orders PRODUCE did not. A second owner would have
 shared the first owner's positions, trades, order journal and equity curve — which is not a
 privacy problem, it is one customer's money in another customer's book.
 
-This file guards three separate claims, and they fail in different ways:
+This file guards four separate claims, and they fail in different ways:
 
   * the column exists, is non-null, and defaults to the original owner on every legacy row —
     because NULL on a row recording a real fill would make "belongs to the owner"
@@ -17,7 +17,10 @@ This file guards three separate claims, and they fail in different ways:
     `daily_account_snapshot` are keyed one-row-per-book/instrument/day, so an `owner_id` on them
     would be a column that cannot express two owners — correct, indexed, non-null and wired to
     nothing, which is this codebase's defining defect. If a later slice adds the column without
-    also changing the key, this test fails and says why.
+    also changing the key, this test fails and says why;
+  * Phase 5's capital facts form three deliberate ownership categories: global immutable
+    content addresses, explicit owner/account rows, and facts scoped through a money parent.
+    A table omitted from or duplicated across those categories fails the totality ratchet.
 """
 from __future__ import annotations
 
@@ -45,26 +48,59 @@ def _load_revision(filename: str):
 
 rev0017 = _load_revision("20260811_0017_money_plane_owner.py")
 
-#: Keyed so that only one row can exist per book / instrument / day. Making these per-owner is a
-#: PRIMARY KEY change, not an added column — see `rev0017`'s module docstring.
-SINGLETON_KEYED: set[str] = set()
+#: Owner columns added by the migration whose list is loaded above.
+MIGRATION_0017_OWNED = frozenset(rev0017.TABLES)
+
+#: Durable identity or replacement-key scoped rows.
+KEY_SCOPED = frozenset({
+    "broker_accounts", "capital_state", "instrument_state", "daily_account_snapshot",
+})
 
 #: Owned by earlier revisions.
-ALREADY_OWNED = {"broker_connections", "execution_intents"}
+ALREADY_OWNED = frozenset({"broker_connections", "execution_intents"})
 
 # Added after migration 0017.  Each category names the durable scope that owns it;
 # internal delivery rows do not pretend to be tenant rows when their authority is a
 # stream/consumer/scope key instead.
-ACCOUNT_SCOPED = {
+ACCOUNT_SCOPED = frozenset({
     "account_execution_leases", "account_execution_lease_history",
     "account_execution_commands", "oauth_callback_states",
-}
-DELIVERY_SCOPED = {
+})
+DELIVERY_SCOPED = frozenset({
     "execution_outbox_stream_head",       # aggregate_type + aggregate_id
     "execution_outbox_event",             # owner/account scope_key
     "execution_outbox_consumer_cursor",   # internal consumer_id
     "execution_outbox_consumer_receipt",  # consumer_id + event_id
     "execution_outbox_retention_watermark",  # durable scope_key
+})
+
+# Phase 5 capital ownership. These three categories are the accepted architecture
+# decision recorded by phase5-integration-evidence-recovery-replan.
+GLOBAL_CONTENT_ADDRESSED = frozenset({"sizing_policies", "sizing_decisions"})
+EXPLICIT_ACCOUNT_SCOPED = frozenset({
+    "target_position_requests",
+    "candidate_intents",
+    "capital_reservation_heads",
+    "decision_batches",
+    "capital_reservations",
+    "position_campaigns",
+})
+PARENT_SCOPED = frozenset({
+    "portfolio_admission_decisions",
+    "capital_reservation_events",
+    "position_tranches",
+    "fill_allocations",
+})
+
+OWNERSHIP_CATEGORIES = {
+    "migration_0017": MIGRATION_0017_OWNED,
+    "key_scoped": KEY_SCOPED,
+    "already_owned": ALREADY_OWNED,
+    "account_scoped": ACCOUNT_SCOPED,
+    "delivery_scoped": DELIVERY_SCOPED,
+    "global_content_addressed": GLOBAL_CONTENT_ADDRESSED,
+    "explicit_account_scoped": EXPLICIT_ACCOUNT_SCOPED,
+    "parent_scoped": PARENT_SCOPED,
 }
 
 
@@ -72,17 +108,63 @@ def _money_tables() -> set[str]:
     return {t for t, plane in TABLE_PLANES.items() if plane is Plane.MONEY}
 
 
-def test_every_money_table_is_accounted_for():
-    """No money-plane table may be silently left out. Either it carries an owner, or it is on
-    the singleton-keyed list with a reason — there is no third category, and a new money table
-    that is neither fails here rather than shipping unowned."""
-    scoped = {"broker_accounts", "capital_state", "instrument_state", "daily_account_snapshot"}
-    accounted = (set(rev0017.TABLES) | scoped | SINGLETON_KEYED | ALREADY_OWNED
-                 | ACCOUNT_SCOPED | DELIVERY_SCOPED)
-    unaccounted = _money_tables() - accounted
-    assert not unaccounted, (
-        f"money-plane tables with no ownership decision: {sorted(unaccounted)}. Add the column "
-        f"in a migration, or add the table to SINGLETON_KEYED with the key that prevents it.")
+def test_every_money_table_has_exactly_one_ownership_decision():
+    """The category partition is total, disjoint, and contains no stale non-money table."""
+    money_tables = _money_tables()
+    accounted = set().union(*OWNERSHIP_CATEGORIES.values())
+    memberships = {
+        table: sorted(name for name, tables in OWNERSHIP_CATEGORIES.items() if table in tables)
+        for table in accounted | money_tables
+    }
+    invalid = {table: categories for table, categories in memberships.items()
+               if table not in money_tables or len(categories) != 1}
+    assert accounted == money_tables and not invalid, (
+        f"money ownership accounting is not a partition; "
+        f"missing={sorted(money_tables - accounted)}, "
+        f"stale={sorted(accounted - money_tables)}, invalid={invalid}"
+    )
+
+
+def test_global_capital_facts_are_content_addressed_primary_keys():
+    expected_keys = {
+        "sizing_policies": ["policy_address"],
+        "sizing_decisions": ["decision_address"],
+    }
+    for table_name, expected_key in expected_keys.items():
+        table = Base.metadata.tables[table_name]
+        assert [column.name for column in table.primary_key] == expected_key
+        assert "owner_id" not in table.c and "broker_account_id" not in table.c
+
+
+def test_explicit_capital_facts_require_their_complete_account_scope():
+    expected_scope = {
+        "target_position_requests": ("owner_id", "broker_account_id", "book"),
+        "candidate_intents": ("owner_id", "broker_account_id", "book", "currency"),
+        "capital_reservation_heads": ("owner_id", "broker_account_id", "book", "currency"),
+        "decision_batches": ("owner_id", "broker_account_id", "book", "currency"),
+        "capital_reservations": ("owner_id", "broker_account_id", "book", "currency"),
+        "position_campaigns": ("owner_id", "broker_account_id", "book"),
+    }
+    assert set(expected_scope) == set(EXPLICIT_ACCOUNT_SCOPED)
+    for table_name, columns in expected_scope.items():
+        table = Base.metadata.tables[table_name]
+        assert all(column in table.c and not table.c[column].nullable for column in columns)
+
+
+def test_parent_scoped_capital_facts_have_money_plane_ownership_paths():
+    expected_parents = {
+        "portfolio_admission_decisions": {"decision_batches", "candidate_intents"},
+        "capital_reservation_events": {"capital_reservations"},
+        "position_tranches": {"position_campaigns"},
+        "fill_allocations": {"position_tranches", "execution_order_events"},
+    }
+    assert set(expected_parents) == set(PARENT_SCOPED)
+    for table_name, required_parents in expected_parents.items():
+        table = Base.metadata.tables[table_name]
+        actual_parents = {fk.column.table.name for fk in table.foreign_keys}
+        assert required_parents <= actual_parents
+        assert all(TABLE_PLANES[parent] is Plane.MONEY for parent in actual_parents)
+        assert "owner_id" not in table.c and "broker_account_id" not in table.c
 
 
 def test_the_ten_owned_tables_require_an_explicit_owner():

@@ -1,0 +1,132 @@
+{
+  "date": "2026-08-29",
+  "original_nine_count": 9,
+  "records": [
+    {
+      "path": "paper-trader/docs/program/owner-steers/00-STRATEGY-OS-PRODUCT-STEER.md",
+      "sha256": "2f51a019870c94996d77c24c3f92821f7097c8703cebed0b617850187226115d",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/01-STRATEGY-LANGUAGE-NODE-SYSTEM.md",
+      "sha256": "9be080888822fae23e196fa78c445eb0933886229749d4d2421a77a230f7f306",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/02-MARKET-TRUTH-DATA-CONTRACTS.md",
+      "sha256": "ee91b160d50dbcdb78889521f31f6560d8e312caf92f26047996eab20e54fd27",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/03-DEPLOYMENT-EXECUTION-TRUST.md",
+      "sha256": "6151b1d2ebb6a587255754c651564874c21f43e3ec9e6ca9a4b9bbd7e28b0805",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/04-RUNTIME-ECONOMICS-PROVIDER-CAPABILITIES.md",
+      "sha256": "932b0281ce6fc2468b3b960e1da4e72ac0f3c0de0acbbfb8bea9188812f6a3a1",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/05-V1-IMPLEMENTATION-PRIORITIES-VERIFICATION.md",
+      "sha256": "bd15bb27284b7e4f467673a491c4c1b556565c9d7b342966ccd695a2b924fad5",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_GRAND_PRODUCT_VISION_2026-08-11.md",
+      "sha256": "32ea36c1410b55f703d63caf11841c8a116534df0d02cc277906272f33c288c0",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_V1_PRODUCT_SCOPE_AND_SEQUENCE_2026-08-11.md",
+      "sha256": "5ea8a7c68ac8e734e0e5898c0c28d8ae1f945326b616b0941505293764a0baec",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/strategyos-v1-v1.1-v1.5-v2-v3-product-architecture-memo-2026-08-24.md",
+      "sha256": "087d87df2658398f89ef6b3b5a4551bac28efa2855a2d7e1e2693d63047657d8",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "original nine; retained invariants, timing superseded where recorded"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/CANONICAL-DOCUMENT-RECONCILIATION.md",
+      "sha256": "f8b172b3dfb996f3820d5b799a668f23d7d04d25480b1858ef6c0204615b28fd",
+      "read_status": "fully_read",
+      "sections": "all",
+      "role": "accepted successor; current permission remains capsule-scoped"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_HYBRID_PRODUCT_DIRECTION_AND_V1_PROGRAMME_REBASE_2026-08-24.md",
+      "sha256": "26d2c9b37aa67ae52217a55db5940c0605831125b90dc2c2671e230ae8227b41",
+      "read_status": "selected_sections_read",
+      "sections": "0–4.4; 5–6; 15–16",
+      "role": "accepted successor; current permission remains capsule-scoped"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v0-release-audit-2026-08-27/03-V0-SCOPE-AND-GOLDEN-PATH.md",
+      "sha256": "f79b5df769eaa166aa861b17c5cda689a3942c3856ada4c2315e8835c60e19eb",
+      "read_status": "selected_sections_read",
+      "sections": "Public V0 scope; Canonical V0 objects; V0 signal semantics; Golden path; V0 golden five",
+      "role": "accepted successor; current permission remains capsule-scoped"
+    },
+    {
+      "path": "paper-trader/docs/research/kleppmann/STRATEGY_OS_KLEPPMANN_AND_PROFESSIONAL_ENGINEERING_REVIEW_PROMPT_V2_2026-08-28.md",
+      "sha256": "efa8332219f6690927257ce23f959cf44961a61284ac02079893553b6835c1c8",
+      "read_status": "fully_read",
+      "sections": "all 0-21, including V2 addendum",
+      "role": "controlling composite for the 29 August continuation"
+    },
+    {
+      "path": "paper-trader/docs/program/owner-directions/2026-08-29/05-PROFESSIONAL-ENGINEERING-CORPUS-REVIEW-V4.md",
+      "sha256": "95b006de56aa599af1ae6c8880e8a1cc2d7cc584c111296ff13346b47b2e9a26",
+      "read_status": "fully_read",
+      "sections": "all 0-12",
+      "role": "controlling 29 August product-horizon and simplicity delta"
+    },
+    {
+      "path": "paper-trader/docs/engineering-references/STRATEGY_OS_PROFESSIONAL_ENGINEERING_REFERENCE_PROGRAM_2026-08-28.md",
+      "sha256": "9a17c99d75ce659cfa639ebf00a841401c1df0e0a1cd25b999069cd330763eb6",
+      "read_status": "fully_read",
+      "sections": "all 1-8",
+      "role": "controlling claim-admission and anti-cargo-cult programme"
+    },
+    {
+      "path": "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_V0_V6_OWNER_DIRECTION_RECONCILIATION_2026-08-29.md",
+      "sha256": "8940a2d3f470b411eb354a8e4b612ef6f00127895695b022d3a878df658456cb",
+      "read_status": "fully_read",
+      "sections": "all; especially precedence, scale/professional-engineering and collision decision",
+      "role": "accepted composite precedence and no-recrawl authority"
+    },
+    {
+      "path": "STRATEGY_OS_KLEPPMANN_AND_PROFESSIONAL_ENGINEERING_REVIEW_PROMPT_V3_SIMPLICITY_GUARDED_2026-08-28.md",
+      "sha256": null,
+      "read_status": "unavailable_not_read",
+      "sections": null,
+      "role": "explicitly unavailable and superseded for this run by owner instruction"
+    },
+    {
+      "path": "STRATEGY_OS_CODEX_SIMPLICITY_AND_ANTI_OVERENGINEERING_DIRECTIVE_2026-08-28.md",
+      "sha256": null,
+      "read_status": "unavailable_not_read",
+      "sections": null,
+      "role": "explicitly unavailable and superseded for this run by owner instruction"
+    }
+  ]
+}

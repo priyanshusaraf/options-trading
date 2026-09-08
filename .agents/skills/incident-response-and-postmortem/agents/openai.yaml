@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Respond to an incident and preserve evidence"
+  short_description: "Coordinate evidence, containment and recovery"
+  default_prompt: "Use $incident-response-and-postmortem for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

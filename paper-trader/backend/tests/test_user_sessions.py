@@ -9,21 +9,35 @@ from __future__ import annotations
 import concurrent.futures
 import datetime as dt
 import hashlib
+import inspect
 import logging
 import secrets
 import base64
+from uuid import RFC_4122, UUID, uuid4
 
 import pytest
 from fastapi import Request
 from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api import principal as principal_api
 from app.core.config import BootConfigError, Settings, assert_boot_config, get_settings
 from app.db import models
 from app.db.session import SessionLocal, engine, init_db
+from app.platform_operations.contracts import OperationsRefused, _FORBIDDEN, reference
 
 
 UTC = dt.timezone.utc
+
+
+def _canonical_session_handle(value: str) -> UUID:
+    parsed = UUID(value)
+    assert value == str(parsed)
+    assert parsed.variant == RFC_4122
+    assert parsed.version == 4
+    assert parsed.int != 0
+    assert len(value) == 36
+    return parsed
 
 
 class _FakeWs:
@@ -107,6 +121,111 @@ def test_issued_bearer_contains_at_least_256_random_bits(monkeypatch):
     issued = _issue(user_id="user.a", organization_id="org.a")
     padding = "=" * (-len(issued.token) % 4)
     assert len(base64.urlsafe_b64decode(issued.token + padding)) >= 32
+
+
+def test_generated_record_handle_is_canonical_uuid4_and_caller_override_is_retired(monkeypatch):
+    """The handle is one server authority, while the bearer retains 256 random bits."""
+    _seed()
+    monkeypatch.setattr(get_settings(), "auth_disabled", False)
+    issued = _issue(user_id="user.a", organization_id="org.a")
+
+    _canonical_session_handle(issued.session_id)
+    assert reference(issued.session_id, "browser session", maximum=64) == issued.session_id
+    assert "session_id" not in inspect.signature(principal_api.issue_user_session).parameters
+    with SessionLocal() as session:
+        row = session.get(models.UserSession, issued.session_id)
+        assert row.session_id == issued.session_id
+        assert row.token_digest == hashlib.sha256(issued.token.encode()).hexdigest()
+        assert row.token_digest != issued.session_id
+
+
+@pytest.mark.parametrize("invalid", ("-" + "A" * 23, "_" + "A" * 23, "s.token" + "A" * 19))
+def test_old_and_prefixed_base64url_handle_mutations_are_refused(monkeypatch, invalid):
+    """Restoring either rejected generator must reproduce the closed-consumer RED."""
+    _seed()
+    monkeypatch.setattr(principal_api, "uuid4", lambda: invalid)
+    issued = _issue(user_id="user.a", organization_id="org.a")
+    assert issued.session_id == invalid
+    with pytest.raises(OperationsRefused):
+        reference(issued.session_id, "browser session", maximum=64)
+
+
+def test_uuid4_alphabet_cannot_form_an_operations_privacy_sentinel():
+    """Broadening the downstream privacy contract is unnecessary and forbidden."""
+    alphabet = set("0123456789abcdef-")
+    assert all(not set(sentinel).issubset(alphabet) for sentinel in _FORBIDDEN)
+    for _ in range(256):
+        handle = str(uuid4())
+        _canonical_session_handle(handle)
+        assert reference(handle, "browser session", maximum=64) == handle
+
+
+@pytest.mark.parametrize("collision", ("handle", "digest"))
+def test_session_handle_and_digest_collisions_roll_back_without_rebinding(
+    monkeypatch, collision
+):
+    """Both database identities fail closed and a fresh whole-operation retry works."""
+    _seed()
+    monkeypatch.setattr(get_settings(), "auth_disabled", False)
+    monkeypatch.setattr(get_settings(), "api_token", "")
+    existing_handle = str(uuid4())
+    colliding_bearer = "B" * 43
+    existing_digest = (
+        hashlib.sha256(colliding_bearer.encode()).hexdigest()
+        if collision == "digest"
+        else "a" * 64
+    )
+    with SessionLocal() as session:
+        session.add(models.UserSession(
+            session_id=existing_handle,
+            token_digest=existing_digest,
+            user_id="user.b",
+            organization_id="org.b",
+            issued_at=dt.datetime.now(UTC),
+            expires_at=dt.datetime.now(UTC) + dt.timedelta(hours=1),
+        ))
+        session.commit()
+
+    original_token_urlsafe = principal_api.secrets.token_urlsafe
+    with monkeypatch.context() as collision_patch:
+        if collision == "handle":
+            collision_patch.setattr(principal_api, "uuid4", lambda: UUID(existing_handle))
+        else:
+            collision_patch.setattr(
+                principal_api.secrets,
+                "token_urlsafe",
+                lambda size: colliding_bearer if size == 32 else original_token_urlsafe(size),
+            )
+        with SessionLocal() as session:
+            issued = principal_api.issue_user_session(
+                session,
+                user_id="user.a",
+                organization_id="org.a",
+                expires_at=dt.datetime.now(UTC) + dt.timedelta(hours=1),
+            )
+            with pytest.raises(IntegrityError):
+                session.commit()
+            session.rollback()
+        collision_resolution = principal_api.resolve_principal(issued.token)
+        if collision == "handle":
+            assert collision_resolution is None
+        else:
+            assert (collision_resolution.user_id, collision_resolution.organization_id) == (
+                "user.b", "org.b")
+            assert collision_resolution.session_id == existing_handle
+
+    with SessionLocal() as session:
+        existing = session.get(models.UserSession, existing_handle)
+        assert (existing.user_id, existing.organization_id, existing.token_digest) == (
+            "user.b", "org.b", existing_digest)
+        assert session.scalars(select(models.UserSession).where(
+            models.UserSession.user_id == "user.a"
+        )).all() == []
+
+    recovered = _issue(user_id="user.a", organization_id="org.a")
+    _canonical_session_handle(recovered.session_id)
+    resolved = principal_api.resolve_principal(recovered.token)
+    assert (resolved.user_id, resolved.organization_id) == ("user.a", "org.a")
 
 
 def test_one_user_can_hold_distinct_active_organization_sessions(monkeypatch):
@@ -206,6 +325,29 @@ def test_persistence_sql_logs_and_principal_dto_never_expose_plaintext_token(mon
     assert all(issued.token not in statement and issued.token not in repr(parameters)
                for statement, parameters in captured)
     assert issued.token not in caplog.text
+
+
+@pytest.mark.parametrize("representation", ("repr", "str", "list", "log_s", "log_r"))
+def test_issued_bearer_routine_representations_omit_token(monkeypatch, caplog, representation):
+    """Removing token repr suppression must fail every routine representation."""
+    _seed()
+    monkeypatch.setattr(get_settings(), "auth_disabled", False)
+    monkeypatch.setattr(get_settings(), "api_token", "configured-legacy-token")
+    issued = _issue(user_id="user.a", organization_id="org.a")
+
+    # Explicit one-time delivery remains usable; this is not serialization redaction.
+    principal = principal_api.resolve_principal(issued.token)
+    assert (principal.user_id, principal.organization_id) == ("user.a", "org.a")
+    if representation.startswith("log_"):
+        with caplog.at_level(logging.INFO, logger=__name__):
+            logging.getLogger(__name__).info(
+                "issued %s" if representation == "log_s" else "issued %r", issued)
+        rendered = caplog.text
+    else:
+        rendered = {"repr": repr(issued), "str": str(issued), "list": repr([issued])}[representation]
+    assert "IssuedBearerCredential" in rendered
+    assert issued.session_id in rendered
+    assert issued.token not in rendered
 
 
 def test_unknown_token_is_a_digest_first_lookup_without_membership_materialization(monkeypatch):
@@ -329,6 +471,7 @@ def test_concurrent_issuance_and_revocation_leave_only_active_sessions_resolvabl
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         issued = list(pool.map(issue_one, range(8)))
     assert len({item.session_id for item in issued}) == len(issued)
+    assert all(_canonical_session_handle(item.session_id) for item in issued)
     assert len({hashlib.sha256(item.token.encode()).hexdigest() for item in issued}) == len(issued)
     assert all(principal_api.resolve_principal(item.token) is not None for item in issued)
 
@@ -360,6 +503,9 @@ def test_legacy_token_bootstrap_binds_only_the_seeded_legacy_identity(monkeypatc
         legacy = session.scalar(select(UserSession).where(UserSession.token_digest == digest))
         assert legacy.user_id == models.LEGACY_USER_ID
         assert legacy.organization_id == models.LEGACY_OWNER_ID
+        _canonical_session_handle(legacy.session_id)
+        bootstrap = _service("bootstrap_legacy_session")
+        assert bootstrap(session, token).session_id == legacy.session_id
         session.add(models.Organization(organization_id="org.a", name="A"))
         session.add(models.User(user_id="user.a", email_normalized="a@example.test",
                                 display_name="A"))
@@ -372,7 +518,6 @@ def test_legacy_token_bootstrap_binds_only_the_seeded_legacy_identity(monkeypatc
                                 issued_at=dt.datetime.now(UTC),
                                 expires_at=dt.datetime.now(UTC) + dt.timedelta(hours=1)))
         session.commit()
-        bootstrap = _service("bootstrap_legacy_session")
         with pytest.raises(RuntimeError, match="foreign"):
             bootstrap(session, token)
         foreign = session.get(UserSession, "foreign-binding")

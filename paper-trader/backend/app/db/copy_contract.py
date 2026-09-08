@@ -15,6 +15,8 @@ from sqlalchemy import Engine, MetaData, Table, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.sql.sqltypes import Boolean, Date, DateTime, Float, LargeBinary
 
+from app.db.migrate import validate_paper_entry_lifecycle_manifest
+
 TOOL_VERSION = "1"
 
 
@@ -91,6 +93,13 @@ def _validate_source_schema(plane: CopyPlane, engine: Engine) -> str:
             rows = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
             if rows != [plane.source_head]:
                 raise CopyRefusal(f"unsupported execution SQLite schema head {rows!r}")
+            if plane.source_head in {"0045", "0046", "0047", "0048"}:
+                try:
+                    validate_paper_entry_lifecycle_manifest(
+                        connection, compatible_heads=frozenset({plane.source_head}))
+                except RuntimeError as exc:
+                    raise CopyRefusal(
+                        "execution SQLite Paper lifecycle manifest is invalid") from exc
         elif plane.name == "research":
             rows = connection.execute(text(
                 "SELECT version, schema_cookie FROM research_schema_version"
@@ -337,11 +346,23 @@ def _validate_semantic_ownership(connection, metadata: MetaData) -> None:
             shared = (set(table.c.keys()) & set(target.c.keys()) & scope_columns) - local_fk_names
             if not shared:
                 continue
-            joined = sa.and_(*(
-                element.parent == element.column for element in foreign_key.elements
-            ))
-            mismatched = sa.or_(*(table.c[name] != target.c[name] for name in sorted(shared)))
-            statement = (sa.select(sa.literal(1)).select_from(table.join(target, joined))
+            if target is table:
+                # Self-referential chain (e.g. authority rows superseding prior
+                # authority): joining a table to itself renders ONE name twice,
+                # which SQLite refuses as ambiguous. Alias the referred side.
+                target_side = table.alias(f"{table.name}__scope_check")
+                joined = sa.and_(*(
+                    table.c[element.parent.name] == target_side.c[element.column.name]
+                    for element in foreign_key.elements
+                ))
+                mismatched = sa.or_(*(
+                    table.c[name] != target_side.c[name] for name in sorted(shared)))
+            else:
+                joined = sa.and_(*(
+                    element.parent == element.column for element in foreign_key.elements
+                ))
+                mismatched = sa.or_(*(table.c[name] != target.c[name] for name in sorted(shared)))
+            statement = (sa.select(sa.literal(1)).select_from(table.join(target_side if target is table else target, joined))
                          .where(mismatched).limit(1))
             if connection.execute(statement).first() is not None:
                 raise CopyRefusal(
@@ -385,6 +406,15 @@ def _validate_semantic_ownership(connection, metadata: MetaData) -> None:
         child, parent = metadata.tables[child_name], metadata.tables[parent_name]
         match = sa.and_(*(child.c[left] == parent.c[right] for left, right in pairs))
         predicate = ~sa.exists(sa.select(sa.literal(1)).select_from(parent).where(match))
+        if child_name == "execution_intents" and parent_name == "broker_connections":
+            # A Paper entry intent is durable lifecycle identity, not a fabricated
+            # external connection or broker acknowledgement. Its exact canonical
+            # marker is the only supported exception to the real-connection link.
+            paper_identity = sa.and_(
+                child.c.connection_scope == "paper",
+                child.c.context_json == '{"schema":"paper-entry-lifecycle/1"}',
+            )
+            predicate = sa.and_(sa.not_(paper_identity), predicate)
         if optional_column is not None:
             predicate = sa.and_(child.c[optional_column].is_not(None), predicate)
         missing = (sa.select(sa.literal(1)).select_from(child)
@@ -405,6 +435,34 @@ def _validate_semantic_ownership(connection, metadata: MetaData) -> None:
             ).limit(1))
         if connection.execute(invalid_active_session).first() is not None:
             raise CopyRefusal("active user_sessions require an active membership")
+
+    if 'browser_credentials' in metadata.tables:
+        from app.accounts.browser_auth import valid_verifier
+        credentials = metadata.tables['browser_credentials']
+        for row in connection.execution_options(stream_results=True).execute(sa.select(credentials.c.verifier)).yield_per(200):
+            if not valid_verifier(row.verifier):
+                raise CopyRefusal('browser credential profile is unsupported')
+    if {'browser_sessions', 'user_sessions'} <= set(metadata.tables):
+        browser = metadata.tables['browser_sessions']
+        sessions = metadata.tables['user_sessions']
+        rows = connection.execution_options(stream_results=True).execute(sa.select(
+            sessions.c.user_id, sessions.c.issued_at, sessions.c.expires_at,
+            browser.c.last_seen_at).select_from(browser.join(sessions))).yield_per(200)
+        for row in rows:
+            if (row.user_id == 'owner-user' or row.expires_at <= row.issued_at
+                    or row.expires_at - row.issued_at > dt.timedelta(hours=12)
+                    or row.last_seen_at < row.issued_at or row.last_seen_at > row.expires_at):
+                raise CopyRefusal('browser session lifetime or identity is invalid')
+    if 'browser_auth_attempts' in metadata.tables:
+        from app.accounts.browser_auth import MAX_COUNTERS, WINDOW_SECONDS, _now
+        attempts = metadata.tables['browser_auth_attempts']
+        retained = connection.scalar(sa.select(sa.func.count()).select_from(attempts))
+        if retained > MAX_COUNTERS:
+            raise CopyRefusal('browser attempt counter capacity is invalid')
+        impossible = connection.execute(sa.select(attempts.c.key_digest).where(
+            attempts.c.expires_at > _now() + dt.timedelta(seconds=WINDOW_SECONDS)).limit(1)).first()
+        if impossible is not None:
+            raise CopyRefusal('browser attempt window expiry is impossible')
 
 
 def _hashed_identity(values: tuple[object, ...]) -> bytes:
@@ -526,6 +584,178 @@ def _validate_credentials(connection, metadata: MetaData) -> None:
 
 
 def _validate_content_addresses(connection, metadata: MetaData) -> None:
+    if "ir_v2_editor_presentations" in metadata.tables:
+        import json as _json
+        from app.ir.hashing import canonical_json
+
+        table = metadata.tables["ir_v2_editor_presentations"]
+        required = {"schema", "positions", "groups", "viewport", "selection"}
+        for encoded, format_version in connection.execute(sa.select(
+                table.c.presentation_json, table.c.format_version)):
+            try:
+                document = _json.loads(encoded)
+                valid = (
+                    format_version == 2
+                    and isinstance(document, dict)
+                    and set(document) == required
+                    and document.get("schema") == "strategy-os-v2-presentation/1"
+                    and canonical_json(document) == encoded
+                    and isinstance(document.get("positions"), dict)
+                    and isinstance(document.get("groups"), dict)
+                    and isinstance(document.get("selection"), dict)
+                    and set(document["selection"]) == {"nodes", "edges", "outputs"}
+                )
+            except Exception:
+                valid = False
+            if not valid:
+                raise CopyRefusal("v2 editor presentation is not canonical closed JSON")
+    if "chart_context_annotations" in metadata.tables:
+        from app.chart.annotation_geometry import decode_applicability, decode_geometry
+        from app.chart.annotation_repository import (
+            AnnotationLimit, validate_annotation_group_ceiling,
+        )
+
+        table = metadata.tables["chart_context_annotations"]
+        try:
+            validate_annotation_group_ceiling(connection, table)
+        except AnnotationLimit as exc:
+            raise CopyRefusal(
+                "chart annotation group exceeds the presentation ceiling") from exc
+        rows = connection.execution_options(stream_results=True).execute(sa.select(
+            table.c.geometry_json, table.c.geometry_address,
+            table.c.applicability_json, table.c.applicability_address,
+        )).yield_per(200)
+        for geometry_json, geometry_address, applicability_json, applicability_address in rows:
+            try:
+                geometry = decode_geometry(geometry_json)
+                applicability = decode_applicability(applicability_json)
+                valid = (geometry.canonical_bytes.decode() == geometry_json
+                         and geometry.address == geometry_address
+                         and applicability.canonical_bytes.decode() == applicability_json
+                         and applicability.address == applicability_address)
+            except Exception:
+                valid = False
+            if not valid:
+                raise CopyRefusal("chart annotation is not canonical closed presentation JSON")
+    schedule_columns = {
+        "positions": (("paper_entry_charge_schedule_id",
+                       "paper_entry_charge_schedule_address"),),
+        "trades": (
+            ("paper_entry_charge_schedule_id", "paper_entry_charge_schedule_address"),
+            ("paper_exit_charge_schedule_id", "paper_exit_charge_schedule_address"),
+        ),
+    }
+    if set(schedule_columns) <= set(metadata.tables):
+        reflected = inspect(connection)
+        actual_tables = set(reflected.get_table_names())
+        actual_columns = {
+            table_name: {
+                column["name"] for column in reflected.get_columns(table_name)
+            }
+            for table_name in schedule_columns
+            if table_name in actual_tables
+        }
+        required_columns = {
+            table_name: {
+                name for pair in pairs for name in pair
+            }
+            for table_name, pairs in schedule_columns.items()
+        }
+        marker_heads = (
+            list(connection.execute(text(
+                "SELECT version_num FROM alembic_version"
+            )).scalars()) if "alembic_version" in actual_tables else []
+        )
+        if (marker_heads != ["0044"]
+                and "alembic_version" in actual_tables
+                and all(required_columns[name] <= actual_columns.get(name, set())
+                        for name in schedule_columns)):
+            try:
+                validate_paper_entry_lifecycle_manifest(connection)
+            except RuntimeError as exc:
+                if "trigger" in str(exc):
+                    raise CopyRefusal(
+                        "Paper entry intent immutability triggers are missing or invalid"
+                    ) from exc
+                raise CopyRefusal(
+                    "Paper lifecycle schema manifest is invalid") from exc
+        from app.engine.charges import ChargeScheduleRefusal, charge_schedule_address
+
+        for table_name, pairs in schedule_columns.items():
+            table = metadata.tables[table_name]
+            selected = [table.c.id, table.c.mode]
+            for schedule_id, schedule_address in pairs:
+                selected.extend((table.c[schedule_id], table.c[schedule_address]))
+            for row in connection.execute(sa.select(*selected)).mappings():
+                for schedule_id, schedule_address in pairs:
+                    identity = row[schedule_id]
+                    address = row[schedule_address]
+                    if (identity is None) != (address is None):
+                        raise CopyRefusal(
+                            f"{table_name} Paper charge schedule pair is incomplete")
+                    if row["mode"] != "paper" and identity is not None:
+                        raise CopyRefusal(
+                            f"{table_name} live row carries Paper charge authority")
+                    if identity is None:
+                        continue
+                    try:
+                        expected = charge_schedule_address(identity)
+                    except ChargeScheduleRefusal as exc:
+                        raise CopyRefusal(
+                            f"{table_name} Paper charge schedule is unknown") from exc
+                    if address != expected:
+                        raise CopyRefusal(
+                            f"{table_name} Paper charge schedule address is invalid")
+        _validate_paper_lifecycle_identity(connection, metadata)
+    monitoring_tables = {
+        "monitoring_assignments", "monitoring_state_snapshots",
+        "monitoring_signal_events", "monitoring_signal_alerts",
+        "monitoring_alert_delivery_attempts", "monitoring_alert_attention_events",
+        "monitoring_latest_state", "monitoring_alert_attention_state",
+        "monitoring_signal_reviews",
+    }
+    if monitoring_tables & set(metadata.tables):
+        from app.monitoring.repository import (
+            MonitoringPersistenceError, validate_persisted_monitoring,
+        )
+        try:
+            validate_persisted_monitoring(connection)
+        except MonitoringPersistenceError as exc:
+            raise CopyRefusal("monitoring persistence identity or projection is invalid") from exc
+    operations_tables = {name for name in metadata.tables if name.startswith("platform_")}
+    if operations_tables:
+        from app.platform_operations.repository import (
+            OPERATIONS_TABLES, validate_persisted_operations,
+        )
+        from app.platform_operations.contracts import OperationsRefused
+        if operations_tables != set(OPERATIONS_TABLES):
+            raise CopyRefusal("platform operations table inventory is incomplete")
+        try:
+            validate_persisted_operations(connection)
+        except OperationsRefused as exc:
+            raise CopyRefusal("platform operations source or projection is invalid") from exc
+    account_commerce_tables = {
+        "account_profile_evidence", "account_trial_uses",
+    }
+    present_account_commerce = account_commerce_tables & set(
+        sa.inspect(connection).get_table_names()
+    )
+    if present_account_commerce:
+        from app.account_commerce.repository import (
+            AccountCommerceRefused, validate_persisted_account_commerce,
+        )
+        if present_account_commerce != account_commerce_tables:
+            raise CopyRefusal("account-commerce table inventory is incomplete")
+        try:
+            validate_persisted_account_commerce(connection)
+        except AccountCommerceRefused as exc:
+            raise CopyRefusal("account-commerce source or privacy facts are invalid") from exc
+    if {"static_instrument_scopes", "static_instrument_scope_revisions"} & set(metadata.tables):
+        from app.core.static_scopes import validate_persisted_scopes, ScopeInvalid, ScopeNotFound
+        try:
+            validate_persisted_scopes(connection)
+        except (ScopeInvalid, ScopeNotFound) as exc:
+            raise CopyRefusal("static scope identity or predecessor chain is invalid") from exc
     if "research_experiment_spec" in metadata.tables:
         import json as _json
         from research.orchestrator.run import spec_hash
@@ -561,6 +791,110 @@ def _validate_content_addresses(connection, metadata: MetaData) -> None:
                 raise CopyRefusal("review snapshot content address is invalid")
 
 
+def _validate_paper_lifecycle_identity(connection, metadata: MetaData) -> None:
+    """Require known Paper entry authority to resolve through one exact intent."""
+    required = {"execution_intents", "positions", "trades"}
+    if not required <= set(metadata.tables):
+        return
+    inspector = inspect(connection)
+    if "alembic_version" in inspector.get_table_names():
+        heads = list(connection.execute(text(
+            "SELECT version_num FROM alembic_version"
+        )).scalars())
+        if heads == ["0044"]:
+            # Closed monitoring compatibility permits an exact pre-Paper-charge
+            # execution head. It cannot carry any 0045 schedule authority.
+            for table_name in ("positions", "trades"):
+                columns = {
+                    column["name"] for column in inspector.get_columns(table_name)
+                }
+                if "paper_entry_charge_schedule_id" not in columns:
+                    continue
+                table = metadata.tables[table_name]
+                if connection.scalar(sa.select(sa.func.count()).select_from(table).where(
+                        table.c.paper_entry_charge_schedule_id.is_not(None))):
+                    raise CopyRefusal(
+                        "0044 cannot carry Paper entry charge authority")
+            return
+    required_triggers = {
+        "positions_refuse_entry_intent_id_rebind",
+        "trades_refuse_entry_intent_id_rebind",
+    }
+    if connection.dialect.name == "sqlite":
+        actual_triggers = set(connection.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"
+        )).scalars())
+    elif connection.dialect.name == "postgresql":
+        actual_triggers = set(connection.execute(text(
+            "SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"
+        )).scalars())
+    else:
+        raise CopyRefusal("Paper lifecycle identity requires SQLite or PostgreSQL")
+    if required_triggers - actual_triggers:
+        raise CopyRefusal("Paper entry intent immutability triggers are missing")
+    intent_table = metadata.tables["execution_intents"]
+    intents = {
+        row["client_intent_id"]: row
+        for row in connection.execute(sa.select(intent_table)).mappings()
+    }
+    groups: dict[str, list[dict[str, object]]] = {}
+    fields = (
+        "entry_intent_id", "owner_id", "broker_account_id", "deployment_id",
+        "instrument_key", "tradingsymbol", "exchange", "segment", "direction",
+        "entry_premium", "entry_time", "strategy_key", "strategy_version",
+        "admission_address", "graph_address", "attribution_state", "qty",
+    )
+    for table_name in ("positions", "trades"):
+        table = metadata.tables[table_name]
+        statement = sa.select(*(table.c[name] for name in fields)).where(
+            table.c.mode == "paper",
+            table.c.paper_entry_charge_schedule_id.is_not(None),
+        )
+        for row in connection.execute(statement).mappings():
+            intent_id = row["entry_intent_id"]
+            if intent_id is None or intent_id not in intents:
+                raise CopyRefusal(
+                    f"{table_name} known Paper entry schedule lacks an intent")
+            groups.setdefault(str(intent_id), []).append(dict(row))
+    for intent_id, rows in groups.items():
+        intent = intents[intent_id]
+        anchor = rows[0]
+        segment = anchor["segment"] or "options"
+        side = "BUY" if segment == "options" else (
+            "BUY" if anchor["direction"] == "LONG" else "SELL")
+        product = "MIS" if segment == "equity_intraday" else (
+            "NRML" if segment == "index_futures" else None)
+        expected = {
+            "owner_id": anchor["owner_id"],
+            "broker_account_id": anchor["broker_account_id"],
+            "deployment_id": anchor["deployment_id"],
+            "intent": "ENTRY",
+            "instrument_key": anchor["instrument_key"],
+            "tradingsymbol": anchor["tradingsymbol"],
+            "exchange": anchor["exchange"],
+            "side": side,
+            "product": product,
+            "order_type": "MARKET",
+            "limit_price": None,
+            "decision_price": anchor["entry_premium"],
+            "signal_at": anchor["entry_time"],
+            "strategy_key": anchor["strategy_key"],
+            "strategy_version": anchor["strategy_version"],
+            "admission_address": anchor["admission_address"],
+            "graph_address": anchor["graph_address"],
+            "attribution_state": anchor["attribution_state"],
+        }
+        if any(intent[key] != value for key, value in expected.items()):
+            raise CopyRefusal("Paper entry intent content or scope is inconsistent")
+        sibling_fields = fields[1:-1]
+        if any((row["segment"] or "options") != segment
+               or any(row[field] != anchor[field] for field in sibling_fields)
+               for row in rows):
+            raise CopyRefusal("Paper entry intent joins inconsistent lifecycle rows")
+        if sum(int(row["qty"]) for row in rows) != int(intent["requested_qty"]):
+            raise CopyRefusal("Paper entry intent lifecycle quantity is inconsistent")
+
+
 def _copy_one(plane: CopyPlane, *, batch_size: int,
               expected_source_snapshot: dict[str, object] | None = None) -> dict[str, object]:
     path = Path(plane.source_path)
@@ -584,6 +918,17 @@ def _copy_one(plane: CopyPlane, *, batch_size: int,
             raise CopyRefusal(f"{plane.name} SQLite source changed during preflight")
         plane.initialize_destination(destination)
         plane.validate_destination(destination)
+        if plane.name == "execution" and (plane.destination_head or plane.source_head) in {
+                "0045", "0046", "0047", "0048"}:
+            with destination.connect() as destination_connection:
+                try:
+                    validate_paper_entry_lifecycle_manifest(
+                        destination_connection,
+                        compatible_heads=frozenset({plane.destination_head or plane.source_head}),
+                    )
+                except RuntimeError as exc:
+                    raise CopyRefusal(
+                        "execution PostgreSQL Paper lifecycle manifest is invalid") from exc
         for table in plane.metadata.sorted_tables:
             with destination.connect() as connection:
                 if connection.execute(sa.select(sa.func.count()).select_from(table)).scalar_one():
@@ -761,10 +1106,6 @@ def _validate_sequences(connection, metadata: MetaData) -> list[dict[str, object
 # Stable, read-only integrity primitives shared with the PostgreSQL restore
 # contract.  The copy workflow above remains SQLite-to-PostgreSQL; exporting
 # these bounded primitives does not turn it into a backup verifier.
-def typed_row_digest(table: Table, row: dict[str, object]) -> str:
-    return _row_digest(table, row)
-
-
 def stream_table_summary(connection, table: Table, *, batch_size: int = 500) -> dict[str, object]:
     return _stream_summary(connection, table, batch_size=batch_size)
 
@@ -804,6 +1145,17 @@ def verify_planes(planes: Iterable[CopyPlane], report: dict[str, object]) -> Non
             _validate_source_schema(plane, source)
             plane.validate_destination(destination)
             with source.connect() as source_connection, destination.connect() as destination_connection:
+                if plane.name == "execution" and (
+                        plane.destination_head or plane.source_head) in {"0045", "0046", "0047", "0048"}:
+                    try:
+                        validate_paper_entry_lifecycle_manifest(
+                            destination_connection,
+                            compatible_heads=frozenset({
+                                plane.destination_head or plane.source_head}),
+                        )
+                    except RuntimeError as exc:
+                        raise CopyRefusal(
+                            "execution PostgreSQL Paper lifecycle manifest is invalid") from exc
                 _validate_semantic_ownership(destination_connection, plane.metadata)
                 _validate_credentials(destination_connection, plane.metadata)
                 _validate_content_addresses(destination_connection, plane.metadata)

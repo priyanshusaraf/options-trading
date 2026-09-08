@@ -30,7 +30,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self,
         relative: str,
         *,
-        model: str = "gpt-5.6-terra",
+        model: str = "gpt-5.6-sol",
         effort: str = "medium",
     ) -> None:
         path = self.repo / relative
@@ -83,7 +83,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         depends_on: list[str],
         kind: str = "correction",
         capsule: str | None = None,
-        model: str = "gpt-5.6-terra",
+        model: str = "gpt-5.6-sol",
         effort: str = "medium",
         phase: str = "phase3",
     ) -> dict:
@@ -132,7 +132,7 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         result, action = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(action["action"], "dispatch")
-        self.assertEqual((action["model"], action["reasoning_effort"]), ("gpt-5.6-terra", "medium"))
+        self.assertEqual((action["model"], action["reasoning_effort"]), ("gpt-5.6-sol", "medium"))
         self.assertEqual(action["capsule"], self.capsule_path)
         self.assertIn("Complete only after the exact gate passes", action["goal_objective"])
         controller = json.loads(
@@ -206,6 +206,41 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(action["action"], "dispatch")
         self.assertEqual((action["model"], action["reasoning_effort"]), ("gpt-5.6-sol", "high"))
+
+    def test_exact_phase5_special_kinds_dispatch_sol_medium_and_unknown_refuses(self) -> None:
+        for kind in (
+            "correction",
+            "implementation_sequence",
+            "critical_runtime_lifecycle",
+            "independent_assurance",
+            "critical_architecture",
+        ):
+            with self.subTest(kind=kind):
+                capsule = f"paper-trader/docs/agent/tasks/{kind}.md"
+                self.write_capsule(capsule, model="gpt-5.6-sol", effort="medium")
+                stage = self.stage(
+                    kind, 1, status="ready", depends_on=[], kind=kind,
+                    capsule=capsule, model="gpt-5.6-sol", effort="medium",
+                    phase="phase4")
+                self.write_programme([stage], kind)
+                result, action = self.run_dispatcher("--active-goal-count", "0")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(action["action"], "dispatch")
+                self.assertEqual(
+                    (action["model"], action["reasoning_effort"]),
+                    ("gpt-5.6-sol", "medium"))
+
+        capsule = "paper-trader/docs/agent/tasks/unknown_phase5_kind.md"
+        self.write_capsule(capsule, model="gpt-5.6-sol", effort="medium")
+        unknown = self.stage(
+            "unknown_phase5_kind", 1, status="ready", depends_on=[],
+            kind="unknown_phase5_kind", capsule=capsule,
+            model="gpt-5.6-sol", effort="medium", phase="phase4")
+        self.write_programme([unknown], "unknown_phase5_kind")
+        result, action = self.run_dispatcher("--active-goal-count", "0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(action["action"], "pause")
+        self.assertIn("route", action["reason"].lower())
 
     def test_owner_gate_and_stale_lease_pause_without_duplicate_dispatch(self) -> None:
         self.write_programme(
@@ -316,13 +351,13 @@ class ProgrammeDispatcherTests(unittest.TestCase):
         self.assertIn("capsule id", identity["reason"].lower())
 
         self.write_capsule(self.capsule_path)
-        stage["model"] = "gpt-5.6-sol"
+        stage["model"] = "gpt-5.6-terra"
         self.write_programme([stage], "correction")
         route_result, route = self.run_dispatcher("--claim", "--active-goal-count", "0")
         self.assertNotEqual(route_result.returncode, 0)
         self.assertIn("route", route["reason"].lower())
 
-        stage["model"] = "gpt-5.6-terra"
+        stage["model"] = "gpt-5.6-sol"
         stage["source_view"] = "phase4"
         self.write_programme([stage], "correction")
         view_result, view = self.run_dispatcher("--claim", "--active-goal-count", "0")

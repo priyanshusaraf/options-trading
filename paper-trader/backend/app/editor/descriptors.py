@@ -57,6 +57,15 @@ def _items(
             yield item, panel_path
 
 
+def _plain(value: Any) -> Any:
+    """Copy immutable registry values into ordinary editor payload values."""
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return copy.deepcopy(value)
+
+
 def parameters(
     interface: Iterable[Mapping[str, Any]],
 ) -> tuple[ParameterDescriptor, ...]:
@@ -81,7 +90,7 @@ def sockets(
             identifier=str(item["identifier"]),
             display_name=str(item.get("display_name", item["identifier"])),
             direction=str(item["direction"]),
-            wire_type=copy.deepcopy(dict(item["wire_type"])),
+            wire_type=_plain(item["wire_type"]),
             has_default_source="default_source" in item,
         )
         for item, _path in _items(interface)
@@ -117,4 +126,3 @@ def graph_sockets(
             has_default_source=socket.has_default_source,
         ))
     return tuple(result)
-

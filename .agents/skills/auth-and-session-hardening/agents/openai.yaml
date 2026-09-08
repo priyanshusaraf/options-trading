@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review authentication and session lifecycles"
+  short_description: "Review login, recovery and session lifecycle"
+  default_prompt: "Use $auth-and-session-hardening for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

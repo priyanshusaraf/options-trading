@@ -86,10 +86,15 @@ A1_EXPANDING_Z = {
          "overrides": {"length": 50}},
         {"instance_id": "n_z", "component": {"identifier": "indicator.zscore", "version": 1},
          "overrides": {"length": 50}},
+        {"instance_id": "io_out", "component": {"identifier": "graph.output", "version": 1},
+         "overrides": {}},
     ],
     "edges": [
         {"source": {"instance": "n_ema", "socket": "out"},
          "target": {"instance": "n_z", "socket": "reference"}},
+        *({"source": {"instance": "n_z", "socket": "out"},
+           "target": {"instance": "io_out", "socket": name}}
+          for name in ("longEntry", "shortEntry", "longExit", "shortExit")),
     ],
     "groups": [],
 }
@@ -136,12 +141,16 @@ A3_GENERATED = {
          "overrides": {"length": 14, "mult": 0.8}},
         {"instance_id": "n_3", "component": {"identifier": "logic.and", "version": 1},
          "overrides": {}},
+        {"instance_id": "io_out", "component": {"identifier": "graph.output", "version": 1},
+         "overrides": {}},
     ],
     "edges": [
         {"source": {"instance": "n_1", "socket": "out"},
          "target": {"instance": "n_3", "socket": "a"}},
         {"source": {"instance": "n_2", "socket": "out"},
          "target": {"instance": "n_3", "socket": "b"}},
+        {"source": {"instance": "n_3", "socket": "out"},
+         "target": {"instance": "io_out", "socket": "longEntry"}},
     ],
     "groups": [],
 }
@@ -175,6 +184,8 @@ A4_DUAL_ATR = {
          "overrides": {"length": 21}},
         {"instance_id": "n_cmp", "component": {"identifier": "compare.gt", "version": 1},
          "overrides": {}},
+        {"instance_id": "io_out", "component": {"identifier": "graph.output", "version": 1},
+         "overrides": {}},
     ],
     "edges": [
         # Appendix A.4 abbreviates these away; a real artefact has to feed the
@@ -186,6 +197,8 @@ A4_DUAL_ATR = {
          "target": {"instance": "n_cmp", "socket": "a"}},
         {"source": {"instance": "n_slow", "socket": "atr"},
          "target": {"instance": "n_cmp", "socket": "b"}},
+        {"source": {"instance": "n_cmp", "socket": "out"},
+         "target": {"instance": "io_out", "socket": "longEntry"}},
     ],
     "groups": [],
 }
@@ -213,6 +226,8 @@ A5_MULTI_TIMEFRAME = {
          "overrides": {"length": 20}, "domain": {"instrument": "NIFTY", "timeframe": "15m"}},
         {"instance_id": "n_cmp", "component": {"identifier": "compare.gt", "version": 1},
          "overrides": {}, "domain": {"instrument": "NIFTY", "timeframe": "5m"}},
+        {"instance_id": "io_out", "component": {"identifier": "graph.output", "version": 1},
+         "overrides": {}},
     ],
     "edges": [
         *({"source": {"instance": "io_in", "socket": "close"},
@@ -221,6 +236,8 @@ A5_MULTI_TIMEFRAME = {
          "target": {"instance": "n_cmp", "socket": "a"}},
         {"source": {"instance": "n_15m", "socket": "out"},
          "target": {"instance": "n_cmp", "socket": "b"}},   # ✗ 15m into a 5m node
+        {"source": {"instance": "n_cmp", "socket": "out"},
+         "target": {"instance": "io_out", "socket": "longEntry"}},
     ],
     "groups": [],
 }
@@ -378,9 +395,11 @@ def test_without_a_library_f7_is_reported_unchecked_not_passed():
     """An unchecked clause that looks like a passing clause is how a validator
     lies. This codebase's documented failure mode is mechanisms that exist and
     are wired to nothing; a silent skip is the same defect in a validator."""
-    assert {"F7", "F8"} <= unchecked_clauses(library=None)
-    assert not ({"F7", "F8"} & unchecked_clauses(library=LIBRARY))
+    assert {"F7", "F8", "F9"} <= unchecked_clauses(library=None)
+    assert not ({"F7", "F8", "F9"} & unchecked_clauses(library=LIBRARY))
     # F8 joined F7 on 2026-08-03: an input that is neither wired nor defaulted
     # is a socket nothing feeds, and which sockets a node has lives in the
     # component — so, like F7, it needs a library to check.
-    assert LIBRARY_DEPENDENT_CLAUSES == {"F7", "F8"}
+    # F9's edge shape/cardinality is local, but socket direction lives in that
+    # same referenced interface and cannot be claimed without the library.
+    assert LIBRARY_DEPENDENT_CLAUSES == {"F7", "F8", "F9"}

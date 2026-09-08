@@ -9,6 +9,7 @@ from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner, _to_df
 from app.providers.base import Candle
+from tests.admitted_entry import persist_admitted_entry
 
 RM = {"atr_length": 14, "initial_risk_atr": 1.25, "trail_start_r": 1.75, "trail_atr": 3.0,
       "use_mfe_capture_floor": True, "capture_start_r": 1.25, "capture_pct": 0.35}
@@ -27,8 +28,14 @@ def test_live_ratchet_incremental_drive_matches_a_single_drive():
     q = r.provider.get_option_chain(nifty).quotes[0]
     entry_ts = r.provider.now()
     entry_spot, entry_atr = 20000.0, 8.0
-    pos = r.broker.open_position(nifty, "LONG", q, "t", entry_ts, entry_spot, params={})
-    r._seed_ratchet(pos, entry_spot, RM, entry_atr, "expanding_z_v4")
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(nifty, "LONG", q, "t", entry_ts, entry_spot,
+                                 params={}, **admission)
+    admitted_strategy = (pos.strategy_key, pos.strategy_version, pos.admission_address,
+                         pos.graph_address, pos.attribution_state)
+    r._seed_ratchet(pos, entry_spot, RM, entry_atr, pos.strategy_key)
+    assert (pos.strategy_key, pos.strategy_version, pos.admission_address,
+            pos.graph_address, pos.attribution_state) == admitted_strategy
     assert pos.entry_atr == entry_atr and pos.spot_stop == entry_spot - 1.25 * entry_atr
 
     seq = [(entry_spot + 20, entry_spot, entry_spot + 18),
@@ -57,6 +64,8 @@ def test_default_strategy_position_is_not_ratchet_managed():
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     nifty = get_instrument("NIFTY")
     q = r.provider.get_option_chain(nifty).quotes[0]
-    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), 20000.0, params={})
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), 20000.0,
+                                 params={}, **admission)
     # the default v3 strategy declares no risk_model -> no seeding -> legacy trail still runs
     assert pos.entry_atr is None

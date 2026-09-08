@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Classify what a provider change can alter"
+  short_description: "Classify provider changes and revalidation needs"
+  default_prompt: "Use $provider-change-impact-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

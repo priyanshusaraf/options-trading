@@ -46,12 +46,14 @@ def _events(session):
         execution_outbox().models.Event.plane_offset)))
 
 
-def test_backtest_enqueue_and_rollback_keep_state_and_event_atomic(execution_store):
+def test_backtest_enqueue_and_rollback_keep_state_and_event_atomic(
+        execution_store, admitted_backtest_receipt):
     """Removing the typed append must expose a committed run without its refresh fact."""
     with execution_store() as session:
+        identity = admitted_backtest_receipt(session, owner_id="owner-a")
         run = backtests.enqueue_run(
             session, owner_id="owner-a", scope="liquid", intervals="day",
-            capital=10_000, total=1, now=dt.datetime(2026, 8, 13),
+            capital=10_000, total=1, now=dt.datetime(2026, 8, 13), **identity,
         )
         run_id = run.id
         session.rollback()
@@ -59,10 +61,12 @@ def test_backtest_enqueue_and_rollback_keep_state_and_event_atomic(execution_sto
         assert session.get(BacktestRun, run_id) is None
         assert _events(session) == []
 
+    with execution_store() as session:
+        identity = admitted_backtest_receipt(session, owner_id="owner-a")
     with execution_store.begin() as session:
         run = backtests.enqueue_run(
             session, owner_id="owner-a", scope="liquid", intervals="day",
-            capital=10_000, total=1, now=dt.datetime(2026, 8, 13),
+            capital=10_000, total=1, now=dt.datetime(2026, 8, 13), **identity,
         )
         run_id = run.id
     with execution_store() as session:
@@ -75,13 +79,16 @@ def test_backtest_enqueue_and_rollback_keep_state_and_event_atomic(execution_sto
         assert event.aggregate_id == str(run_id)
 
 
-def test_backtest_cancel_and_terminal_each_emit_one_typed_change(execution_store):
+def test_backtest_cancel_and_terminal_each_emit_one_typed_change(
+        execution_store, admitted_backtest_receipt):
     """A cancel or terminal transition without a new sequence leaves replicas stale."""
     now = dt.datetime(2026, 8, 13)
+    with execution_store() as session:
+        identity = admitted_backtest_receipt(session, owner_id="owner-a")
     with execution_store.begin() as session:
         run = backtests.enqueue_run(
             session, owner_id="owner-a", scope="liquid", intervals="day",
-            capital=10_000, total=1, now=now,
+            capital=10_000, total=1, now=now, **identity,
         )
         pending_id = run.id
     with execution_store.begin() as session:
@@ -89,10 +96,12 @@ def test_backtest_cancel_and_terminal_each_emit_one_typed_change(execution_store
             session, owner_id="owner-a", run_id=pending_id, now=now,
         )
 
+    with execution_store() as session:
+        identity = admitted_backtest_receipt(session, owner_id="owner-a")
     with execution_store.begin() as session:
         run = backtests.enqueue_run(
             session, owner_id="owner-a", scope="liquid", intervals="day",
-            capital=10_000, total=1, now=now,
+            capital=10_000, total=1, now=now, **identity,
         )
         terminal_id = run.id
         claimed = backtests.claim_run(
@@ -112,11 +121,19 @@ def test_backtest_cancel_and_terminal_each_emit_one_typed_change(execution_store
         assert states == ["pending", "cancelled", "pending", "done"]
 
 
-def test_deployment_commit_owner_emits_account_scoped_invalidation(execution_store):
+def test_deployment_commit_owner_emits_account_scoped_invalidation(
+        execution_store, admitted_entry_identity):
     """Deleting the deployment producer must leave another API replica unaware."""
+    with execution_store() as session:
+        identity = admitted_entry_identity(session, owner_id="owner-a")
     with execution_store.begin() as session:
         row = deployments.create_deployment(
             session, "alpha", owner_id="owner-a", broker_account_id="account-a",
+            strategy_key=identity["strategy_key"],
+            strategy_version=identity["strategy_version"],
+            graph_address=identity["graph_address"],
+            admission_address=identity["admission_address"],
+            attribution_state=identity["attribution_state"],
         )
         deployment_id = row.id
     with execution_store() as session:

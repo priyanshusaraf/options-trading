@@ -616,6 +616,350 @@ def _connection_change_events(connection_id: int):
         ).order_by(event.plane_offset)))
 
 
+def test_durable_user_gets_closed_data_only_lifecycle_on_both_mounts(
+        client, vault_key):
+    principal = _oauth_principal("data-user", "data-session", "data-bearer")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        created = client.post("/api/connections", json={"label": "Research feed"})
+        assert created.status_code == 201, created.text
+        body = created.json()
+        handle = body["connection_handle"]
+        assert body == {
+            "connection_handle": handle,
+            "provider": "kite",
+            "role": "DATA",
+            "label": "Research feed",
+            "capabilities": ["historical_data", "live_quotes"],
+            "connection_status": "CREDENTIAL_REQUIRED",
+            "credential_present": False,
+            "auth_method": "DAILY_OAUTH",
+            "last_credential_replaced_at": None,
+            "credential_expiry": "UNVERIFIED",
+            "rate_quota": "UNVERIFIED",
+        }
+        forbidden = {
+            "owner_id", "broker_account_id", "scope", "id", "ciphertext", "credential_key_id",
+            "live_execution", "account_funds", "account_positions", "account_equity", "order_margin",
+        }
+        assert forbidden.isdisjoint(body)
+        assert client.post("/api/v1/connections", json={"label": "duplicate"}).status_code == 409
+        assert client.get(f"/api/v1/connections/{handle}").json() == body
+        assert client.get("/api/connections").json() == {"connections": [body]}
+
+        rejected = client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"access_token": "must-not-enter-headlessly"}})
+        assert rejected.status_code == 422
+        stored = client.post(f"/api/v1/connections/{handle}/credential", json={
+            "secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+        assert stored.status_code == 200
+        assert stored.json()["connection_status"] == "PRESENT_UNVERIFIED"
+        assert "ak-123" not in stored.text and "as-456" not in stored.text
+        assert client.get(f"/api/connections/{handle}/login").status_code == 409
+
+        revoked = client.delete(f"/api/v1/connections/{handle}")
+        assert revoked.status_code == 200
+        assert revoked.json()["connection_status"] == "REVOKED"
+        assert revoked.json()["credential_present"] is False
+        assert client.get(f"/api/connections/{handle}").status_code == 404
+        assert client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"api_key": "x", "api_secret": "y"}}).status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_data_only_oauth_is_session_bound_single_use_and_returns_closed_projection(
+        client, vault_key, monkeypatch):
+    import app.providers.broker_auth as ba
+
+    principal = _oauth_principal("data-oauth-user", "data-oauth-session", "data-oauth-bearer")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
+        created = client.post("/api/connections", json={"label": "OAuth feed"}).json()
+        handle = created["connection_handle"]
+        keys = client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+        assert keys.status_code == 200
+        started = client.post(f"/api/v1/connections/{handle}/oauth/initiate")
+        assert started.status_code == 200, started.text
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        from app.db.models import OAuthCallbackState
+        with SessionLocal() as session:
+            persisted = session.scalars(select(OAuthCallbackState).where(
+                OAuthCallbackState.connection_id == int(handle))).one()
+            assert persisted.expires_at - persisted.created_at == dt.timedelta(minutes=10)
+        callback = client.get("/api/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"})
+        assert callback.status_code == 200, callback.text
+        assert callback.json()["role"] == "DATA"
+        assert callback.json()["connection_status"] == "PRESENT_UNVERIFIED"
+        assert "user_id" not in callback.json() and "access_token" not in callback.text
+        assert client.get("/api/v1/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_data_only_connection_is_organization_local_and_request_cannot_select_authority(client):
+    principal = _oauth_principal("data-authority-user", "data-authority-session", "data-authority")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        for field, value in {
+            "owner_id": "other", "organization_id": "other", "user_id": "other", "role": "execution",
+        }.items():
+            response = client.post("/api/connections", json={"label": "x", field: value})
+            assert response.status_code == 422
+        created = client.post("/api/connections", json={"label": "local"}).json()
+        foreign = _foreign_connection()
+        assert client.get(f"/api/connections/{foreign}").status_code == 404
+        assert client.delete(f"/api/connections/{foreign}").status_code == 404
+        assert client.get(f"/api/connections/{created['connection_handle']}").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_concurrent_data_creates_converge_to_one_row(client):
+    import concurrent.futures
+
+    principal = _oauth_principal("data-race-user", "data-race-session", "data-race")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        def create_one(label):
+            return client.post("/api/connections", json={"label": label}).status_code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = sorted(pool.map(create_one, ("one", "two")))
+        assert statuses == [201, 409]
+        with SessionLocal() as session:
+            rows = session.scalars(select(BrokerConnection).where(
+                BrokerConnection.owner_id == OWNER,
+                BrokerConnection.scope.like("strategy-os-v0:data:%"),
+                BrokerConnection.status == "active",
+            )).all()
+        assert len(rows) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_data_oauth_state_and_connection_resources_remain_bounded(client, vault_key):
+    from app.db.models import OAuthCallbackState
+
+    principal = _oauth_principal("data-bound-user", "data-bound-session", "data-bound")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        created = client.post("/api/connections", json={"label": "bounded"}).json()
+        handle = created["connection_handle"]
+        client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+        states = []
+        for _ in range(6):
+            response = client.post(f"/api/connections/{handle}/oauth/initiate")
+            assert response.status_code == 200
+            states.append(parse_qs(urlsplit(response.json()["login_url"]).query)["state"][0])
+        with SessionLocal() as session:
+            rows = session.scalars(select(OAuthCallbackState).where(
+                OAuthCallbackState.connection_id == int(handle))).all()
+            active = [row for row in rows if row.revoked_at is None and row.consumed_at is None]
+        assert len(rows) <= 2 and len(active) == 1
+        assert client.get("/api/connections").json()["connections"] == [
+            client.get(f"/api/connections/{handle}").json()]
+        assert client.get("/api/oauth/callback", params={
+            "state": states[0], "request_token": "never-exchanged"}).status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_concurrent_data_oauth_initiation_converges_to_one_usable_state(
+        client, vault_key, monkeypatch):
+    import concurrent.futures
+    import app.providers.broker_auth as ba
+    from app.db.models import OAuthCallbackState
+
+    principal = _oauth_principal("init-race-user", "init-race-session", "init-race")
+    app.dependency_overrides[get_principal] = lambda: principal
+    try:
+        monkeypatch.setattr(ba.KiteAuthenticator, "_client", lambda self, key: _FakeKite(key))
+        created = client.post("/api/connections", json={"label": "race"}).json()
+        handle = created["connection_handle"]
+        client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+
+        def initiate(_):
+            return client.post(f"/api/connections/{handle}/oauth/initiate")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(initiate, range(2)))
+        assert all(response.status_code == 200 for response in responses)
+        states = [parse_qs(urlsplit(response.json()["login_url"]).query)["state"][0]
+                  for response in responses]
+        with SessionLocal() as session:
+            rows = session.scalars(select(OAuthCallbackState).where(
+                OAuthCallbackState.connection_id == int(handle))).all()
+        assert len([row for row in rows if row.revoked_at is None and row.consumed_at is None]) == 1
+        callbacks = [client.get("/api/oauth/callback", params={
+            "state": state, "request_token": "one-time-rt"}) for state in states]
+        assert sorted(response.status_code for response in callbacks) == [200, 400]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_data_callback_racing_connection_revoke_never_restores_a_credential(
+        client, vault_key, monkeypatch):
+    import threading
+    import app.api.connection_routes as routes
+
+    principal = _oauth_principal("revoke-race-user", "revoke-race-session", "revoke-race")
+    app.dependency_overrides[get_principal] = lambda: principal
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingAuthenticator:
+        def login_url(self, secrets):
+            assert secrets["api_key"] == "ak-123"
+            return "https://kite.example.test/login"
+        def exchange(self, secrets, request_token):
+            assert secrets["api_secret"] == "as-456" and request_token == "one-time-rt"
+            entered.set()
+            assert release.wait(timeout=5)
+            return {**secrets, "access_token": "must-not-survive"}
+
+    try:
+        created = client.post("/api/connections", json={"label": "revoke race"}).json()
+        handle = created["connection_handle"]
+        client.post(f"/api/connections/{handle}/credential", json={
+            "secrets": {"api_key": "ak-123", "api_secret": "as-456"}})
+        monkeypatch.setattr(routes, "_authenticator", lambda _broker: BlockingAuthenticator())
+        started = client.post(f"/api/connections/{handle}/oauth/initiate")
+        state = parse_qs(urlsplit(started.json()["login_url"]).query)["state"][0]
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault("response", client.get(
+            "/api/oauth/callback", params={"state": state, "request_token": "one-time-rt"})))
+        worker.start()
+        assert entered.wait(timeout=3)
+        revoked = client.delete(f"/api/connections/{handle}")
+        assert revoked.status_code == 200
+        release.set()
+        worker.join(timeout=5)
+        assert not worker.is_alive() and result["response"].status_code == 400
+        with SessionLocal() as session:
+            row = session.get(BrokerConnection, int(handle))
+            assert row.status == "revoked" and row.credential_ciphertext is None
+    finally:
+        release.set()
+        app.dependency_overrides.clear()
+
+
+def test_data_route_query_memory_and_response_ceilings_are_measured(client):
+    import tracemalloc
+    from sqlalchemy import event
+    from app.db.session import engine
+
+    principal = _oauth_principal("resource-user", "resource-session", "resource")
+    app.dependency_overrides[get_principal] = lambda: principal
+    queries = []
+    def count_query(*_args):
+        queries.append(1)
+    try:
+        created = client.post("/api/connections", json={"label": "measured"})
+        event.listen(engine, "before_cursor_execute", count_query)
+        tracemalloc.start()
+        listed = client.get("/api/connections")
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        event.remove(engine, "before_cursor_execute", count_query)
+        assert listed.status_code == 200
+        assert len(queries) <= 2
+        assert peak <= 8 * 1024 * 1024
+        assert len(listed.content) <= 1024 and len(created.content) <= 1024
+        assert client.post("/api/connections", json={"label": "x" * 81}).status_code == 422
+        print({"list_queries": len(queries), "peak_bytes": peak,
+               "list_response_bytes": len(listed.content)})
+    finally:
+        if tracemalloc.is_tracing():
+            tracemalloc.stop()
+        if event.contains(engine, "before_cursor_execute", count_query):
+            event.remove(engine, "before_cursor_execute", count_query)
+        app.dependency_overrides.clear()
+
+
+def test_removed_membership_cannot_read_or_mutate_its_data_connection(
+        client, monkeypatch):
+    from app.db.models import Membership
+
+    bearer = "removed-data-bearer"
+    principal = _oauth_principal("removed-data-user", "removed-data-session", bearer)
+    app.dependency_overrides[get_principal] = lambda: principal
+    created = client.post("/api/connections", json={"label": "withdrawn"}).json()
+    handle = created["connection_handle"]
+    app.dependency_overrides.clear()
+    monkeypatch.setattr(get_settings(), "api_token", "legacy-header-token")
+    with SessionLocal() as session:
+        session.get(Membership, (OWNER, principal.user_id)).status = "revoked"
+        session.commit()
+    headers = {"Authorization": f"Bearer {bearer}"}
+    assert client.get(f"/api/connections/{handle}", headers=headers).status_code == 401
+    assert client.delete(f"/api/connections/{handle}", headers=headers).status_code == 401
+    with SessionLocal() as session:
+        row = session.get(BrokerConnection, int(handle))
+        assert row.status == "active" and row.credential_ciphertext is None
+
+
+def test_real_browser_cookie_origin_and_csrf_gate_the_data_routes(monkeypatch):
+    """Exercise Q01's actual cookie resolver and middleware, not a dependency override."""
+    from app.accounts import browser_auth
+    import app.main as main_module
+
+    origin = "https://testserver"
+    settings = get_settings()
+    for name, value in {
+        "browser_auth_enabled": True,
+        "browser_auth_origin": origin,
+        "browser_auth_counter_secret": "b2" * 32,
+        "auth_disabled": False,
+        "api_token": "",
+        "release_profile": "v0_research_signal",
+        "release_service_role": "api",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    init_db(reset=True)
+    # Capability remains BLOCKED in product truth. This test-only bypass reaches
+    # the route solely to prove the already-accepted cookie Origin/CSRF boundary.
+    monkeypatch.setattr(main_module, "denied_route", lambda *_args, **_kwargs: None)
+    invite = browser_auth.create_invite("cookie-data@example.test")
+    browser = TestClient(app, base_url=origin)
+    try:
+        enrolled = browser.post("/api/v1/auth/enroll", headers={"Origin": origin}, json={
+            "email": "cookie-data@example.test",
+            "password": "a synthetic sufficiently long password",
+            "display_name": "Cookie Data",
+            "invitation": invite.token,
+        })
+        assert enrolled.status_code == 200
+        bootstrap = browser.get("/api/v1/auth/session")
+        assert bootstrap.status_code == 200
+        state = bootstrap.json()
+        organization_id = state["memberships"][0]["organization_id"]
+        with SessionLocal() as session:
+            session.add(BrokerAccount(
+                broker_account_id=f"account.{organization_id}", owner_id=organization_id,
+                broker="kite", external_account_id="cookie-data", display_name="Cookie Data"))
+            session.commit()
+
+        assert browser.post("/api/connections", json={"label": "missing origin"}).status_code == 403
+        assert browser.post("/api/connections", headers={"Origin": "https://evil.test"},
+                            json={"label": "wrong origin"}).status_code == 403
+        assert browser.post("/api/connections", headers={"Origin": origin},
+                            json={"label": "missing csrf"}).status_code == 403
+        created = browser.post("/api/connections", headers={
+            "Origin": origin, "x-strategy-csrf": state["csrf"]},
+            json={"label": "cookie data"})
+        assert created.status_code == 201, created.text
+        handle = created.json()["connection_handle"]
+        same_owner = browser.get(f"/api/v1/connections/{handle}")
+        assert same_owner.status_code == 200 and same_owner.json()["role"] == "DATA"
+    finally:
+        browser.close()
+
+
 def test_the_retired_exchange_endpoint_never_reaches_the_provider(client, vault_key, monkeypatch):
     """Kite's exception messages have been observed to echo request parameters, and this one
     reaches an API response and the /api/logs ring buffer. Only the type name crosses."""

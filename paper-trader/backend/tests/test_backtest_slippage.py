@@ -58,7 +58,7 @@ def _sig_rows(n=6, price=100.0):
 
 
 def _run(sig, slippage_pct):
-    return run_trades(sig, Inst(), "NSE", 10_000.0, None, slippage_pct=slippage_pct)
+    return run_trades(sig, Inst(), "NSE_EQ", 10_000.0, None, slippage_pct=slippage_pct)
 
 
 def _run_lot(sig, slippage_pct):
@@ -176,3 +176,118 @@ def test_simulate_applies_the_configured_default(monkeypatch):
     b, _ = simulate(candles, Inst(), "15minute", slippage_pct=0.02)
     if a:   # only assert when the strategy actually traded this synthetic series
         assert sum(t.net_pnl for t in b) < sum(t.net_pnl for t in a)
+
+
+@pytest.mark.parametrize("direction,close,reason", [
+    ("LONG", 99.0, "STOP_LOSS"), ("LONG", 102.0, "TARGET"),
+    ("SHORT", 101.0, "STOP_LOSS"), ("SHORT", 98.0, "TARGET"),
+])
+def test_percentage_bands_confirm_close_and_fill_actual_next_open(direction, close, reason):
+    sig = _sig_rows()
+    sig.loc[0, "longEntry" if direction == "LONG" else "shortEntry"] = True
+    sig.loc[2, "close"] = close
+    sig.loc[3, "open"] = 95.0 if direction == "LONG" else 105.0
+    trade = run_trades(sig, Inst(), "NSE_EQ", 10_000, None, event_risk=False,
+                       slippage_pct=0, stop_loss_pct=.01, take_profit_pct=.02)[0]
+    assert trade.reason == reason
+    assert trade.exit_price == sig.loc[3, "open"]
+    assert trade.bars_held == 2
+
+
+def test_percentage_bands_ignore_intrabar_touches_and_entry_bar_close():
+    sig = _sig_rows()
+    sig.loc[0, "longEntry"] = True
+    sig.loc[1, "close"] = 90.0
+    sig.loc[2, ["low", "high"]] = [90.0, 110.0]  # both touched, close neutral
+    trade = run_trades(sig, Inst(), "NSE_EQ", 10_000, None, event_risk=False,
+                       slippage_pct=0, stop_loss_pct=.01, take_profit_pct=.02)[0]
+    assert trade.reason == "OPEN_AT_END"
+    assert trade.bars_held == 4
+
+
+@pytest.mark.parametrize("direction", ["LONG", "SHORT"])
+def test_percentage_band_basis_and_exit_cost_are_actual_slipped_fills(direction):
+    sig = _sig_rows()
+    sig.loc[0, "longEntry" if direction == "LONG" else "shortEntry"] = True
+    # At the clean-open target, but not at the slipped-entry target.
+    sig.loc[2, "close"] = 102.0 if direction == "LONG" else 98.0
+    sig.loc[3, "close"] = 103.0 if direction == "LONG" else 97.0
+    trade = run_trades(sig, Inst(), "NSE_EQ", 10_000, None, event_risk=False,
+                       slippage_pct=.01, take_profit_pct=.02)[0]
+    assert trade.reason == "TARGET"
+    assert trade.bars_held == 3
+    assert trade.entry_price == pytest.approx(100.5 if direction == "LONG" else 99.5)
+    assert trade.exit_price == pytest.approx(99.5 if direction == "LONG" else 100.5)
+
+
+@pytest.mark.parametrize("disabled", [None, 0, 0.0])
+def test_disabled_percentage_bands_preserve_replay(disabled):
+    sig = _sig_rows()
+    sig.loc[0, "longEntry"] = True
+    sig.loc[2, "close"] = 90.0
+    kwargs = dict(event_risk=False, slippage_pct=0, replay_policy="pine-reversal-fixed-unit/1")
+    assert run_trades(sig, Inst(), "NSE_EQ", 10_000, None, **kwargs) == run_trades(
+        sig, Inst(), "NSE_EQ", 10_000, None, **kwargs,
+        stop_loss_pct=disabled, take_profit_pct=disabled)
+
+
+@pytest.mark.parametrize("value", [-.01, 1, float("nan"), float("inf"), True, False, "0.01"])
+@pytest.mark.parametrize("field", ["stop_loss_pct", "take_profit_pct"])
+def test_percentage_bands_refuse_invalid_fractions_even_with_no_bars(value, field):
+    with pytest.raises(ValueError, match=field):
+        run_trades(_sig_rows(0), Inst(), "NSE_EQ", 10_000, None, **{field: value})
+
+
+def test_percentage_terminal_trigger_does_not_invent_next_open():
+    sig = _sig_rows(3)
+    sig.loc[0, "longEntry"] = True
+    sig.loc[2, "close"] = 99.0
+    trade = run_trades(sig, Inst(), "NSE_EQ", 10_000, None,
+                       slippage_pct=0, stop_loss_pct=.01)[0]
+    assert trade.reason == "OPEN_AT_END"
+    assert trade.exit_price == 99.0
+
+
+def test_protective_exit_precedes_strategy_exit_and_pine_reversal():
+    sig = _sig_rows()
+    sig.loc[0, "longEntry"] = True
+    sig.loc[2, ["close", "shortEntry", "longExit"]] = [99.0, True, True]
+    trades = run_trades(sig, Inst(), "NSE_EQ", 10_000, None, slippage_pct=0,
+                        stop_loss_pct=.01, replay_policy="pine-reversal-fixed-unit/1")
+    assert len(trades) == 1
+    assert trades[0].reason == "STOP_LOSS"
+    assert trades[0].qty == 1
+
+
+def test_simulate_explicit_percentage_settings_change_real_results():
+    from types import SimpleNamespace
+    sig = _sig_rows(80)
+    sig.loc[0, "longEntry"] = True
+    sig.loc[2, "close"] = 102.0
+    sig.loc[3, "open"] = 101.0
+    candles = [SimpleNamespace(ts=row["date"], **{name: row[name] for name in
+                ("open", "high", "low", "close")}) for row in sig.to_dict("records")]
+    plain, plain_metrics = simulate(candles, Inst(), "day", signals=sig, slippage_pct=0)
+    protected, protected_metrics = simulate(candles, Inst(), "day", signals=sig,
+        slippage_pct=0, stop_loss_pct=.01, take_profit_pct=.02)
+    assert plain[0].reason == "OPEN_AT_END"
+    assert protected[0].reason == "TARGET"
+    assert protected[0].exit_price == 101.0
+    assert protected_metrics.net_pnl != plain_metrics.net_pnl
+
+
+
+def test_disabled_band_pine_reversal_skips_prior_position_management(monkeypatch):
+    from app.backtest import engine
+    sig = _sig_rows(3)
+    sig.loc[0, "longEntry"] = True
+    sig.loc[2, "shortEntry"] = True
+    managed = []
+    original = engine.replay_decisions.held_exit
+    def held(*args, **kwargs):
+        managed.append(args[3])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(engine.replay_decisions, "held_exit", held)
+    run_trades(sig, Inst(), "NSE_EQ", 10_000, None, slippage_pct=0,
+               replay_policy="pine-reversal-fixed-unit/1")
+    assert managed == [1]  # original entry bar, never the later reversal bar

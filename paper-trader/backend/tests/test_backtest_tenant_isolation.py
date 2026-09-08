@@ -193,16 +193,22 @@ def test_every_repository_boundary_requires_explicit_keyword_owner_id():
         repository.result_detail, repository.filtered_results, repository.filtered_counts,
         repository.iter_successful_results, repository.append_result_batch,
         repository.durable_result_count, repository.update_run,
-        repository.reconcile_stale_runs,
+        repository.snapshot_claimable_runs,
     )
     for boundary in boundaries:
         owner = inspect.signature(boundary).parameters["owner_id"]
         assert owner.kind is inspect.Parameter.KEYWORD_ONLY
         assert owner.default is inspect.Parameter.empty
 
+    # The closed reclaim mutations consume an immutable owner-bearing snapshot
+    # instead of accepting a fresh owner selector.
+    for boundary in (repository.reconcile_frozen_run, repository.claim_frozen_run):
+        frozen = inspect.signature(boundary).parameters["frozen"]
+        assert frozen.kind is inspect.Parameter.KEYWORD_ONLY
+
     for boundary in (sweep.start_sweep, sweep._run, sweep._one, sweep._reusable_values,
                      sweep._durable_result_count, sweep._commit_batch,
-                     sweep.reconcile_stale_runs):
+                     sweep.dispatch_reclaimable):
         owner = inspect.signature(boundary).parameters["owner_id"]
         assert owner.kind is inspect.Parameter.KEYWORD_ONLY
         assert owner.default is inspect.Parameter.empty

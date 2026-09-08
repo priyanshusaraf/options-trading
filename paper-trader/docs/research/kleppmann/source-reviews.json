@@ -1,0 +1,96 @@
+{
+  "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html": {
+    "status": "fully_read",
+    "sections": [
+      "all article text, code example, conclusion, update and reference list",
+      "unsafe-lock.png and fencing-tokens.png inspected"
+    ],
+    "visuals_inspected": true,
+    "summary": "For correctness-sensitive leases, stale effects must be rejected at the protected resource. This packet tests the corresponding database claim predicate.",
+    "claim_ids": [
+      "KCL-001"
+    ],
+    "limitations": "2016 Redis details are historical; linked rebuttal not reviewed. No current Redis claim or adoption.",
+    "code_actionability": "KEEP existing job token predicates; independent local contention/mutation evidence",
+    "notes_path": "source-notes/job-claim-fencing.md"
+  },
+  "https://martin.kleppmann.com/2014/11/25/hermitage-testing-the-i-in-acid.html": {
+    "status": "fully_read",
+    "sections": [
+      "all article text",
+      "isolation-levels.png inspected"
+    ],
+    "visuals_inspected": true,
+    "summary": "Use concrete concurrent histories to test the actual engine instead of treating an isolation label as proof.",
+    "claim_ids": [
+      "KCL-002"
+    ],
+    "limitations": "2014 database comparisons are historical. Linked Hermitage repository, paper and talk are separate unreviewed artifacts.",
+    "code_actionability": "Independent same-run contention probe; exact-engine recovery verification remains open",
+    "notes_path": "source-notes/job-claim-fencing.md"
+  },
+  "https://martin.kleppmann.com/2020/11/18/distributed-systems-and-elliptic-curves.html": {
+    "status": "fully_read",
+    "sections": [
+      "all article text and course-artifact links",
+      "licence statement and course coverage list"
+    ],
+    "visuals_inspected": false,
+    "summary": "The author publishes the Cambridge distributed-systems notes and videos under CC BY-SA and identifies the system-model, clocks, causality, replication, consensus and consistency scope.",
+    "claim_ids": ["KCA-001"],
+    "limitations": "The course page is a route to separately reviewed notes. Videos were not reviewed and no unseen demonstrations are claimed.",
+    "code_actionability": "Use clock semantics to audit elapsed-time measurement; no distributed-systems infrastructure adoption.",
+    "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+  },
+  "https://martin.kleppmann.com/2026/03/24/designing-data-intensive-applications-2e.html": {
+    "status": "fully_read",
+    "sections": [
+      "all public author-page text and bibliographic metadata"
+    ],
+    "visuals_inspected": false,
+    "summary": "The author page establishes the second edition, coauthor, date, ISBNs and broad trade-off remit; the official publisher contents and companion references supply the bounded public delta.",
+    "claim_ids": ["KCA-005", "KCA-006", "KCA-007", "KCA-008"],
+    "limitations": "No lawful full-book copy was supplied or read; author/publisher page-count variants are bibliographic, not substantive evidence.",
+    "code_actionability": "Document bounded adoption triggers and retained simplicity; do not infer chapter claims from metadata.",
+    "notes_path": "12-DDIA-2E-DELTA-FOR-STRATEGY-OS.md"
+  },
+  "https://martin.kleppmann.com/papers/stream-processing.pdf": {
+    "status": "fully_read",
+    "sections": [
+      "all 183 pages",
+      "all page renders; diagrams on event sourcing, dual writes, logs, CDC, derived data, materialized views and UI subscriptions inspected"
+    ],
+    "visuals_inspected": true,
+    "summary": "A durable source of truth and ordered change stream can drive rebuildable projections, but the 2016 Kafka-centric implementation examples do not imply a new event platform for Strategy OS.",
+    "claim_ids": ["KCA-002", "KCA-003"],
+    "limitations": "Copyright O'Reilly; no reuse permission inferred. Historical product examples and throughput claims require current direct evidence.",
+    "code_actionability": "Keep the existing transaction-bound outbox and distinct monitoring facts; reject Kafka or universal event sourcing.",
+    "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+  },
+  "https://martin.kleppmann.com/papers/olep-acm-queue.pdf": {
+    "status": "fully_read",
+    "sections": [
+      "all 21 pages",
+      "three transaction/log/payment architecture diagrams inspected"
+    ],
+    "visuals_inspected": true,
+    "summary": "Sequencing derived effects through a log addresses non-atomic and reordered cross-system writes, while the paper explicitly retains lag and cross-store read-isolation limits.",
+    "claim_ids": ["KCA-002", "KCA-003"],
+    "limitations": "Copyright owner/authors with ACM publication rights; no broad reuse licence. OLEP is not a universal transaction replacement.",
+    "code_actionability": "Retain transactional outbox, idempotent at-least-once delivery and rebuildable monitoring projections; no new event bus.",
+    "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+  },
+  "https://martin.kleppmann.com/papers/local-first.pdf": {
+    "status": "fully_read",
+    "sections": [
+      "all 25 pages",
+      "conflict screenshots, seven-ideal comparison, CRDT examples and prototype figures inspected"
+    ],
+    "visuals_inspected": true,
+    "summary": "Offline/collaborative systems need explicit conflict semantics, portability and user control; CRDT convergence does not automatically resolve executable graph meaning.",
+    "claim_ids": ["KCA-004"],
+    "limitations": "The research prototypes do not prove arbitrary executable graph merge safety or current V0 demand. ACM reuse terms apply.",
+    "code_actionability": "Keep immutable graph versions and optimistic draft conflicts; preserve a future semantic-collaboration seam without CRDT adoption.",
+    "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+  }
+}

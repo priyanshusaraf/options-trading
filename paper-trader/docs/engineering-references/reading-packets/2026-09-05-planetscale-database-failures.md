@@ -1,0 +1,34 @@
+# Database lessons from the Sam Lambert reading thread
+
+The owner requested an Astra agent at low effort to read every blog in [this thread](https://x.com/samlambert/status/2095966289013702679). The agent read all eight linked primary articles and checked the final author post; no further continuation was visible. This covers the thread's reading list, not every outbound reference nested in the articles. Root reconciled the findings below on 5 September 2026.
+
+The source is a database vendor's engineering blog. Its incidents provide useful failure hypotheses; product marketing and another system's scale do not establish a Strategy OS requirement. No database replacement, sharding, pooler or new service is approved by this packet.
+
+## Complete inventory and application
+
+| Primary article | Repository check and decision | Verification or future trigger |
+| --- | --- | --- |
+| [What is a Neki router?](https://planetscale.com/blog/what-is-a-neki-router), 1 September | Distributed routing/fan-out is not a demonstrated current need. Keep the existing PostgreSQL/SQLAlchemy boundaries. | Revisit only after measured single-deployment capacity fails despite query/index/batch/retention work; verify transaction, lock and recovery compatibility. |
+| [How one connection kills a database](https://planetscale.com/blog/debugging-live-database-connections), 31 August | Context-managed sessions exist, but inspected repository settings do not establish statement, DDL lock or idle-transaction bounds. Actual server/role settings were not inspected. | In disposable PG16, hold a read transaction, queue bounded DDL, then verify another read recovers and rollback preserves data. Choose separate bounds for API work, research, migrations and backups. |
+| [Problems with large tables in Postgres](https://planetscale.com/blog/dealing-with-large-tables-in-postgres), 25 August | Outbox deletion is bounded and restore-content checks exist. Growth/vacuum/restore duration still need representative-volume evidence. Following the backup path exposed the TLS defect below. | Recheck when retained volume or recovery objectives exceed the last measured fixture; measure cleanup/WAL/locks and restore time. |
+| [The history of Postgres sharding](https://planetscale.com/blog/the-history-of-postgres-sharding), 24 August | No measured requirement for sharding. Execution/research/ledger separation is an ownership contract, not proof of shard need. | Require reproducible capacity failure and a tested locality, transaction, migration, failover and cost plan before adoption. |
+| [Poisoned Postgres connection pools](https://planetscale.com/blog/postgres-poisoned-connection-pools), 18 August | The article's session read-only poisoning source was not found in scanned application/research/deploy code. Liveness pre-ping is not session hygiene. No blanket reset or pooler change is justified. | A new session-level setting, tenant RLS context, read-only route or transaction pooler triggers a reused-connection test across owners and failed transactions. |
+| [What is a data topology?](https://planetscale.com/blog/what-is-a-data-topology), 17 August | Placement and colocation are future design considerations; no new topology is required now. | Revisit with measured cross-node/cross-owner workloads. A shard key never replaces authorization. |
+| [The dangers of Postgres subtransactions](https://planetscale.com/blog/the-dangers-of-postgres-subtransactions), 11 August | Nested writing savepoints exist in monitoring/admission paths. No overflowing production transaction was demonstrated. Preserve caller-owned atomicity. | Measure assigned non-aborted subtransactions inside real batch entry points before their outer commit. Bound a proven excessive caller batch; never insert a commit inside the savepoint helper. Verify diagnostic availability on PG16. |
+| [Concurrency vs. Throughput](https://planetscale.com/blog/concurrency-vs-throughput-vitess-mysql), 7 August | Bounded pools already exist; maxima are per engine/process, and transient research engines also count. MySQL-specific diagnostics and numerical limits are not PG16 evidence. | Measure aggregate connections, checkout/lock waits, retry rate and useful throughput at supported load. Test saturation, rollback and duplicate prevention before increasing concurrency. |
+
+## Confirmed defect: backup transport policy
+
+`paper-trader/backend/app/operations/postgresql_backup.py::postgres_process_spec` constructs libpq subprocess settings from a SQLAlchemy URL but drops requested TLS options. A pure construction test with `sslmode=verify-full` and `sslrootcert` produced no `PGSSLMODE` or `PGSSLROOTCERT`. No database or subprocess was contacted. Ambient/default libpq behavior can then differ from the requested connection policy.
+
+This is a repository-derived security finding, not a claim made by a PlanetScale article. [PostgreSQL 16 connection parameters](https://www.postgresql.org/docs/16/libpq-connect.html) and [environment-variable mappings](https://www.postgresql.org/docs/16/libpq-envars.html) provide the independent implementation reference.
+
+Root assigned a bounded correction in the existing backup module and `tests/test_postgresql_backup_tools.py`: preserve supported explicit transport requirements for dump and restore, give explicit URL requirements precedence over ambient defaults, refuse unsupported security options, and retain password/argument/log privacy. Keep this finding open until regression, mutation, quality and review evidence pass. A local process-spec test will not prove a remote TLS handshake or a full restore.
+
+## Code checked and evidence boundaries
+
+The inspection covered the engine factories in `app/db/engine.py`, `research/domain/base.py` and `app/ledger/db.py`; session cleanup in `app/core/research_read.py`; migrations; caller-owned savepoints in `app/db/concurrency.py`; monitoring persistence; `app/events/outbox.py`; PostgreSQL backup and restore contracts; and representative owner-scoped repository calls.
+
+It did not inspect production database settings or run live load, migration or recovery tests. Existing examples of owner filtering are not a complete tenant-isolation pass. Timeout, savepoint-batch and capacity concerns remain verification tasks rather than proven outages. Treat an absent poison pattern as a future trigger, not a reason to add defensive infrastructure now.
+
+The complete eight-source inventory, thread discovery, pure TLS reproduction and exact code-line findings are preserved under `.agent/runs/v0-launch-reset-2026-09-05/astra-database-reading/`. The reading was performed by the requested Astra-low child; the root independently inspected the backup code and PostgreSQL parameter documentation. Other article applicability checks retain that attribution.

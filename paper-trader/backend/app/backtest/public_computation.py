@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.backtest.cache import CACHED_RESULT_FIELDS, SCHEMA_VERSION
+from app.db.concurrency import caller_owned_savepoint
 from app.db.models import BacktestComputation
 
 
@@ -181,6 +182,10 @@ def maybe_materialize(session, *, execution_address: str, dataset_classification
                       strategy_key: str, strategy_module: str, strategy_version: str,
                       policy_address: str, execution_manifest: Mapping) -> dict | None:
     """Authenticate expected metadata before touching the ownerless table."""
+    from app.backtest.identity import is_legacy_result_compatibility_alias
+    if (is_legacy_result_compatibility_alias(execution_address)
+            or is_legacy_result_compatibility_alias(policy_address)):
+        return None
     if not is_eligible(dataset_classification=dataset_classification, strategy_key=strategy_key,
                        strategy_module=strategy_module, execution_manifest=execution_manifest):
         return None
@@ -210,6 +215,11 @@ def put_immutable(session, *, execution_address: str, dataset_address: str,
                   strategy_key: str, strategy_version: str, policy_address: str,
                   payload: Mapping) -> BacktestComputation:
     """Publish once; concurrent identical writers converge, conflicts refuse."""
+    from app.backtest.identity import is_legacy_result_compatibility_alias
+    if (is_legacy_result_compatibility_alias(execution_address)
+            or is_legacy_result_compatibility_alias(policy_address)):
+        raise PublicComputationIntegrityError(
+            "legacy compatibility identity cannot be published as current")
     if not (_is_address(execution_address) and _is_address(dataset_address)
             and _is_address(policy_address) and policy_address == execution_address):
         raise PublicComputationIntegrityError("public computation address identity is invalid")
@@ -225,7 +235,7 @@ def put_immutable(session, *, execution_address: str, dataset_address: str,
         policy_address=policy_address, schema_version=SCHEMA_VERSION,
         payload_json=payload_json, payload_digest=digest)
     try:
-        with session.begin_nested():
+        with caller_owned_savepoint(session, scope="public_backtest_computation"):
             session.add(candidate)
             session.flush()
         return candidate

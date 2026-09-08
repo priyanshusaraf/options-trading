@@ -114,6 +114,9 @@ def _create_admitted_deployment(session, name: str, *, status=dep.DRAFT):
     session.flush()
     return dep.create_deployment(
         session, name, strategy_key=f"ir.{graph_identifier}",
+        strategy_version=str(_CACHED_ADMISSION.graph_version),
+        graph_address=_CACHED_ADMISSION.graph_address,
+        attribution_state="VERIFIED_GRAPH",
         admission_address=_CACHED_ADMISSION.admission_address, status=status)
 
 
@@ -143,12 +146,14 @@ def test_deployment_strategy_write_bypass_mutant_is_killed(monkeypatch):
             "app.core.deployments._require_current_deployment_admission",
             lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
                 admission_address=forged,
-                strategy=__import__("types").SimpleNamespace(version="mutant")))
+                strategy=__import__("types").SimpleNamespace(
+                    version=forged, graph_version_label="1")))
         with pytest.raises(pytest.fail.Exception):
-            with pytest.raises(ValueError, match="RECEIPT_STALE"):
+            with pytest.raises(ValueError, match="GRAPH_ATTRIBUTION_MISMATCH"):
                 dep.create_deployment(
                     s, "mutant", strategy_key="ir.strategy.expanding_z_impulse",
-                    admission_address=forged)
+                    strategy_version="1", graph_address=forged,
+                    attribution_state="VERIFIED_GRAPH", admission_address=forged)
 
 
 def test_duplicate_name_is_refused():
@@ -278,6 +283,79 @@ def test_a_deployment_pinning_a_real_strategy_reports_its_content_hash():
         assert d.strategy_key == "ir.strategy.expanding_z_impulse"
         assert d.strategy_version
         assert d.admission_address
+
+
+def test_ir_deployments_resolve_exact_owner_receipts_without_global_contamination():
+    """Two owners may pin different graph bytes under the same stable graph key.
+
+    Resolution must return each verified receipt's strategy without publishing either
+    object into the owner-blind module registry.
+    """
+    from copy import deepcopy
+
+    from app.core import deployments as deployment_module
+    from app.db.models import BrokerAccount
+    from app.strategy import registry
+    from app.ir.strategies.expanding_z import GRAPH
+    from tests.admitted_entry import persist_admitted_graph
+
+    owners = (
+        ("owner.ir.a", "account.ir.a", "Owner A graph"),
+        ("owner.ir.b", "account.ir.b", "Owner B graph"),
+    )
+    rows = []
+    with SessionLocal() as s:
+        for owner_id, account_id, display_name in owners:
+            graph = deepcopy(GRAPH)
+            graph["identifier"] = "test.strategy.owner_scoped"
+            graph["display_name"] = display_name
+            artifact = persist_admitted_graph(
+                s,
+                graph=graph,
+                owner_id=owner_id,
+                project_id=f"project.{owner_id}",
+                display_name=display_name,
+            )
+            s.add(BrokerAccount(
+                broker_account_id=account_id,
+                owner_id=owner_id,
+                broker="mock",
+                external_account_id=account_id,
+                display_name=account_id,
+            ))
+            s.flush()
+            rows.append((
+                owner_id,
+                account_id,
+                deployment_module.create_deployment(
+                    s,
+                    display_name,
+                    owner_id=owner_id,
+                    broker_account_id=account_id,
+                    strategy_key=f"ir.{artifact.graph_identifier}",
+                    strategy_version=str(artifact.graph_version),
+                    graph_address=artifact.graph_address,
+                    attribution_state="VERIFIED_GRAPH",
+                    admission_address=artifact.admission_address,
+                ).id,
+                artifact.graph_address,
+            ))
+        s.commit()
+
+        before = tuple((strategy.key, strategy.version) for strategy in registry.all_strategies())
+        resolved = [
+            deployment_module.resolve_deployment_strategy(
+                s, deployment_id, owner_id=owner_id, broker_account_id=account_id)
+            for owner_id, account_id, deployment_id, _ in rows
+        ]
+        after = tuple((strategy.key, strategy.version) for strategy in registry.all_strategies())
+
+    assert resolved[0].key == resolved[1].key == "ir.test.strategy.owner_scoped"
+    assert [strategy.version for strategy in resolved] == [row[3] for row in rows]
+    assert resolved[0].version != resolved[1].version
+    assert after == before
+    assert all(strategy.key != "ir.test.strategy.owner_scoped"
+               for strategy in registry.all_strategies())
 
 
 def test_money_record_tables_can_carry_a_strategy_version():

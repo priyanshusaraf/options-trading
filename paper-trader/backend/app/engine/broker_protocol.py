@@ -131,12 +131,16 @@ class Broker(Protocol):
     # the row, so option positions were written unattributed.
     def open_position(self, inst, direction, q, reason, now, spot,
                       params=None, plan=None, strategy_key=None,
-                      strategy_version=None, entry_intent_id=None): ...
+                      strategy_version=None, entry_intent_id=None,
+                      admission_address=None, graph_address=None,
+                      attribution_state="NON_GRAPH", recovery_intent=None): ...
     def open_equity_position(self, inst, direction, price, qty, charge_segment,
                              reason, now, params=None, strategy_key=None,
                              strategy_version=None,
                              margin=None, sl_pct=None, tp_pct=None,
-                             entry_intent_id=None, plan=None): ...
+                             entry_intent_id=None, plan=None,
+                             admission_address=None, graph_address=None,
+                             attribution_state="NON_GRAPH", recovery_intent=None): ...
     def close_position(self, pos, exit_premium, reason, now, spot,
                        exit_price_estimated: bool = False): ...
     def close_equity_position(self, pos, exit_price, reason, now,

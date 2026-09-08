@@ -12,9 +12,21 @@ from research.domain.operations import (DurableOperationRecorder, ResearchOperat
                                         operation_item_keys)
 
 
-@pytest.fixture
-def repo(tmp_path):
-    engine = make_engine(str(tmp_path / "research.db"))
+def quota_plan(count):
+    """A bounded synthetic plan; no instrument or provider work is admitted."""
+    from research.operations import safe_plan_summary
+    return safe_plan_summary([{
+        "program": "quota-recovery", "hypothesis": f"item-{i}",
+        "strategy_key": "trend_impulse_v3", "instruments": [],
+        "interval": "day", "days": 10, "seed": 17,
+    } for i in range(count)])
+
+
+@pytest.fixture(params=["sqlite", "postgresql"])
+def repo(tmp_path, request):
+    authority = (request.getfixturevalue("pg_sandbox").research_url
+                 if request.param == "postgresql" else str(tmp_path / "research.db"))
+    engine = make_engine(authority)
     init_research_db(engine)
     Session = make_sessionmaker(engine)
     with Session() as session:
@@ -342,6 +354,20 @@ def test_generated_manifest_items_are_admitted_and_receive_durable_checkpoints(r
                           build="build-a", provider_mode="mock", operation_id="generated", now=now)
     assert queued.plan == plan
     assert len(operation_item_keys(plan, trigger="generated")) == 2
+    import copy
+    from research.domain.operations import _plan_payload
+    for field in ("composition_identity", "graph_content_address", "admission_address"):
+        changed = copy.deepcopy(payload)
+        changed["generated"][0][field] = "invalid" if field == "admission_address" else "sha256:" + "f" * 64
+        with pytest.raises(ValueError, match="generated descriptor is invalid"):
+            _plan_payload({"content_address": content_address(changed), **changed})
+    changed = copy.deepcopy(payload)
+    changed["generated"][0]["graph"]["unexpected"] = True
+    changed["generated"][0]["graph_content_address"] = content_address(changed["generated"][0]["graph"])
+    with pytest.raises(ValueError, match="generated descriptor is invalid"):
+        _plan_payload({"content_address": content_address(changed), **changed})
+    with pytest.raises(ValueError, match="content address is invalid"):
+        _plan_payload({**plan, "content_address": "sha256:" + "f" * 64})
 
 
 def test_reclaim_bound_item_marks_old_run_failed_then_resets_checkpoint(repo):
@@ -422,8 +448,311 @@ def test_operation_item_schema_requires_one_owner_local_run_and_coherent_receipt
     assert ("owner_id", "run_id") in {
         tuple(foreign_key["constrained_columns"]) for foreign_key in foreign_keys
     }
-    sql = repo.session.connection().exec_driver_sql(
-        "SELECT sql FROM sqlite_master WHERE type='table' "
-        "AND name='research_operation_item'"
-    ).scalar_one().upper()
-    assert "CHECK" in sql and "RUNNING" in sql and "COMPLETED" in sql
+    checks = inspect(repo.session.bind).get_check_constraints("research_operation_item")
+    sql = " ".join(check["sqltext"] for check in checks).upper()
+    assert "RUNNING" in sql and "COMPLETED" in sql
+
+
+@pytest.mark.parametrize("boundary", ["host_queue", "owner_pending_items", "host_pending_items",
+                                      "owner_active_items", "host_active_items"])
+def test_real_quota_boundaries_refuse_then_release_exact_capacity(repo, boundary):
+    """Exercise shipped caps through admission/claim, without lowering policy."""
+    import json
+    import resource
+    from sqlalchemy import func, select
+    from research.domain.models import ResearchOperation
+
+    started = time.monotonic()
+    now = dt.datetime.now(dt.UTC)
+    active = "active" in boundary
+    if boundary == "host_queue":
+        count, width = 256, 0
+        owner_for = lambda i: f"owner-{i // 16}"
+        overflow_owner, overflow_width = "overflow", 0
+    elif boundary == "owner_pending_items":
+        count, width = 2, 64
+        owner_for = lambda i: "owner"
+        overflow_owner, overflow_width = "owner", 1
+    elif boundary == "host_pending_items":
+        count, width = 8, 64
+        owner_for = lambda i: f"owner-{i}"
+        overflow_owner, overflow_width = "overflow", 1
+    elif boundary == "owner_active_items":
+        count, width = 1, 32
+        owner_for = lambda i: "owner"
+        overflow_owner, overflow_width = "owner", 1
+    else:
+        count, width = 4, 32
+        owner_for = lambda i: f"owner-{i}"
+        overflow_owner, overflow_width = "overflow", 1
+    for i in range(count):
+        repo.enqueue(owner_id=owner_for(i), operation_id=f"op-{i}", trigger="manual",
+                     plan=quota_plan(width), build="quota-build", provider_mode="mock", now=now)
+        if active:
+            assert repo.claim_operation(f"op-{i}", owner_id=owner_for(i), worker_id="worker", now=now)
+    enqueue = lambda: repo.enqueue(owner_id=overflow_owner, operation_id="overflow", trigger="manual",
+                                    plan=quota_plan(overflow_width), build="quota-build",
+                                    provider_mode="mock", now=now)
+    if active:
+        enqueue()
+        assert repo.claim_operation("overflow", owner_id=overflow_owner, worker_id="extra", now=now) is None
+    else:
+        with pytest.raises(RuntimeError, match="admission capacity"):
+            enqueue()
+        assert repo.get("overflow", owner_id=overflow_owner) is None
+    assert repo.request_cancel("op-0", owner_id=owner_for(0), now=now)
+    if not active:
+        enqueue()
+    else:
+        assert repo.claim_operation("overflow", owner_id=overflow_owner, worker_id="extra", now=now)
+    rows = repo.session.scalar(select(func.count()).select_from(ResearchOperation))
+    assert rows == count + 1
+    print(json.dumps({"boundary": boundary, "dialect": repo.session.bind.dialect.name,
+                      "operations": rows, "elapsed_seconds": time.monotonic() - started,
+                      "process_peak_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+
+
+def test_terminal_receipt_rollback_never_publishes_success(repo, monkeypatch):
+    from research.orchestrator.run import run_nightly
+    from research.domain.operations import reconstruct_plan
+
+    plan = quota_plan(1)
+    recorder = DurableOperationRecorder.start(repo, owner_id="owner", operation_id="atomic",
+        trigger="manual", plan=plan, build="atomic-build", provider_mode="mock", worker_id="worker")
+    key = operation_item_keys(plan, trigger="manual")[0]
+    original = repo._append_event
+
+    def fail_receipt(*args, **kwargs):
+        original(*args, **kwargs)
+        if kwargs["event_type"] == "item_completed":
+            raise RuntimeError("injected receipt interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, "_append_event", fail_receipt)
+        with pytest.raises(RuntimeError, match="injected receipt interruption"):
+            run_nightly(repo.session, None, reconstruct_plan(plan, instrument_for_key=lambda _: None),
+                owner_id="owner", git_commit="atomic-build", item_keys=[key],
+                bind_item_run=recorder.bind_item_run_in_transaction,
+                finalize_item=recorder.finalize_item_in_transaction)
+        repo.session.rollback()
+    run_id = recorder.bound_item_run(key)
+    assert run_id is not None
+    # The actual consumer rolls back terminal success, then records a failed
+    # run in its exception handler. This differs from abrupt process death.
+    assert repo.session.get(ExperimentRun, run_id).status == "failed"
+    assert recorder.completed_item_run(key) is None
+    assert repo.get("atomic", owner_id="owner").completed_run_ids == []
+    assert all(event["type"] != "item_completed" for event in repo.events("atomic", owner_id="owner"))
+    assert recorder.reclaim_bound_item(key) is None
+    assert repo.request_cancel("atomic", owner_id="owner")
+    assert repo.get("atomic", owner_id="owner").status == "cancelled"
+
+
+def test_expired_token_refuses_all_terminal_and_progress_writes(repo):
+    now = dt.datetime.now(dt.UTC)
+    repo.enqueue(owner_id="owner", operation_id="expired", trigger="manual", plan={},
+                 build="b", provider_mode="mock", now=now)
+    claim = repo.claim_operation("expired", owner_id="owner", worker_id="first", now=now, lease_seconds=1)
+    late = now + dt.timedelta(seconds=2)
+    assert not repo.heartbeat("expired", owner_id="owner", token=claim.claim_token, now=late)
+    assert not repo.transition("expired", owner_id="owner", token=claim.claim_token, stage="reports", now=late)
+    assert not repo.add_completed_run("expired", owner_id="owner", token=claim.claim_token, run_id=1, now=late)
+    assert not repo.fail("expired", owner_id="owner", token=claim.claim_token, error={"code": "STALE"}, now=late)
+    assert not repo.complete("expired", owner_id="owner", token=claim.claim_token, now=late)
+    replacement = repo.claim_next(owner_id="owner", worker_id="second", now=late)
+    assert replacement.claim_token != claim.claim_token
+    assert replacement.attempt_count == 2
+    assert not repo.complete("expired", owner_id="owner", token=claim.claim_token, now=late)
+    assert repo.complete("expired", owner_id="owner", token=replacement.claim_token, now=late)
+    assert not repo.complete("expired", owner_id="owner", token=replacement.claim_token, now=late)
+
+
+def test_real_watchdog_observes_cancellation_and_refuses_next_stage(repo):
+    import threading
+    recorder = DurableOperationRecorder.start(repo, owner_id="owner", operation_id="watchdog-real",
+        trigger="manual", plan={}, build="b", provider_mode="mock", worker_id="worker")
+    sessions = make_sessionmaker(repo.session.bind)
+    observed = threading.Event()
+
+    def heartbeat(operation_id, owner_id, token):
+        with sessions() as session:
+            alive = ResearchOperationRepository(session).heartbeat(operation_id, owner_id=owner_id, token=token)
+        if not alive:
+            observed.set()
+        return alive
+
+    repo.request_cancel("watchdog-real", owner_id="owner")
+    started = time.monotonic()
+    recorder.start_watchdog(heartbeat, interval_seconds=0.01)
+    try:
+        assert observed.wait(timeout=5)
+        assert recorder._claim_lost.wait(timeout=5)
+        with pytest.raises(RuntimeError, match="claim was lost"):
+            recorder.transition("collection")
+        assert repo.events("watchdog-real", owner_id="owner")[-1]["type"] == "cancelled"
+        print({"dialect": repo.session.bind.dialect.name,
+               "local_cancellation_observation_seconds": time.monotonic() - started})
+    finally:
+        recorder.close_watchdog()
+
+
+def test_cancellation_terminalizes_bound_run_and_fences_item_writes(repo):
+    plan = quota_plan(1)
+    recorder = DurableOperationRecorder.start(repo, owner_id="owner", operation_id="bound-cancel",
+        trigger="manual", plan=plan, build="b", provider_mode="mock", worker_id="worker")
+    program = ResearchProgram(owner_id="owner", name="cancel", thesis="")
+    repo.session.add(program); repo.session.flush()
+    hypothesis = Hypothesis(owner_id="owner", program_id=program.id, statement="cancel")
+    repo.session.add(hypothesis); repo.session.flush()
+    spec = ExperimentSpec(owner_id="owner", id="cancel-spec", hypothesis_id=hypothesis.id)
+    repo.session.add(spec); repo.session.flush()
+    run = ExperimentRun(owner_id="owner", spec_id=spec.id, status="running")
+    repo.session.add(run); repo.session.flush()
+    run_id = run.id
+    key = operation_item_keys(plan, trigger="manual")[0]
+    assert recorder.bind_item_run_in_transaction(key, run_id)
+    repo.session.commit()
+    assert not repo.request_cancel("bound-cancel", owner_id="foreign")
+    assert repo.request_cancel("bound-cancel", owner_id="owner")
+    repo.session.expire_all()
+    assert repo.session.get(ExperimentRun, run_id).status == "failed"
+    assert repo.session.get(ExperimentRun, run_id).error == "RESEARCH_OPERATION_CANCELLED"
+    assert not recorder.finalize_item_in_transaction(key, run_id)
+    repo.session.rollback()
+    assert not repo.complete_item("bound-cancel", owner_id="owner", token=recorder.token,
+                                  item_key=key, run_id=run_id)
+    assert not repo.bind_item_run("bound-cancel", owner_id="owner", token=recorder.token,
+                                  item_key=key, run_id=run_id)
+    assert recorder.reclaim_bound_item(key) is None
+    assert repo.get("bound-cancel", owner_id="owner").completed_run_ids == []
+    assert repo.completed_item_run("bound-cancel", owner_id="owner", item_key=key) is None
+    assert repo.claim_next(owner_id="owner", worker_id="replacement") is None
+
+
+@pytest.mark.parametrize("field,value,accepted", [
+    ("program", "", False), ("program", "p" * 80, True), ("program", "p" * 81, False),
+    ("hypothesis", "h" * 4001, False), ("strategy_key", "s" * 81, False),
+    ("interval", "i" * 25, False), ("instrument_keys", [], True),
+    ("instrument_keys", [""], False), ("instrument_keys", ["i" * 49], False),
+    ("instrument_keys", ["i"] * 65, False), ("instrument_keys", [1], False),
+    ("days", False, False), ("days", 0, True), ("days", 10000, True), ("days", 10001, False),
+    ("optimize_search", 0, False), ("params", [], False), ("params", {"": None}, True),
+    ("params", {"p" * 65: 1}, False), ("params", {"p": []}, False),
+    ("seed", None, False), ("seed", False, False), ("seed", 2147483647, True),
+    ("seed", 2147483648, False), ("min_trades", 0, False), ("min_trades", 100001, False),
+    ("n_folds", 1, False), ("n_folds", 32, True), ("n_folds", 33, False),
+    ("min_positive_fold_frac", False, False), ("min_positive_fold_frac", 1.0, True),
+    ("min_positive_fold_frac", 1.01, False), ("capital", False, False),
+    ("capital", 0, False), ("capital", 1000000000.0, True), ("capital", 1000000000.01, False),
+])
+def test_handwritten_plan_boundaries_keep_the_closed_public_contract(field, value, accepted):
+    from research.domain.operations import _plan_payload
+    plan = quota_plan(1)
+    plan["items"][0][field] = value
+    plan["content_address"] = content_address({"experiment_count": 1, "items": plan["items"]})
+    if accepted:
+        assert _plan_payload(plan) == plan
+    else:
+        with pytest.raises(ValueError, match="operation plan payload is invalid"):
+            _plan_payload(plan)
+
+
+def test_pending_capacity_counts_only_the_requesting_owner(repo):
+    repo.enqueue(owner_id="other", trigger="manual", plan=quota_plan(64), build="b", provider_mode="mock", operation_id="other-1")
+    repo.enqueue(owner_id="other", trigger="manual", plan=quota_plan(64), build="b", provider_mode="mock", operation_id="other-2")
+    queued = repo.enqueue(owner_id="owner", trigger="manual", plan=quota_plan(1), build="b", provider_mode="mock", operation_id="owner-1")
+    assert queued.operation_id == "owner-1"
+    assert repo._pending_capacity_counts("owner") == (1, 3, 1, 129)
+
+
+def test_manual_duplicate_keeps_the_existing_operation(repo):
+    original = repo.enqueue(owner_id="owner", trigger="manual", plan=quota_plan(1), build="b", provider_mode="mock", operation_id="same")
+    with pytest.raises(ValueError, match="operation_id already exists"):
+        repo.enqueue(owner_id="owner", trigger="manual", plan=quota_plan(1), build="b", provider_mode="mock", operation_id="same")
+    assert repo.get("same", owner_id="owner").plan == original.plan
+
+
+@pytest.mark.parametrize('count,complete', [(0, True), (20, True), (21, False), (25, False)])
+def test_active_recovery_is_owner_scoped_complete_or_explicitly_truncated(repo, count, complete):
+    from research.domain.models import ResearchOperation
+
+    now = dt.datetime(2026, 9, 5, tzinfo=dt.UTC)
+    # Insert an over-cap historical state to prove the reader fails closed too.
+    for number in range(count):
+        repo.session.add(ResearchOperation(owner_id='owner-a', operation_id=f'active-{number:02}',
+            trigger='v2_graph', plan_json='{}', status='running' if number < 4 else 'pending',
+            queued_at=now + dt.timedelta(seconds=number)))
+    repo.session.add_all([
+        ResearchOperation(owner_id='owner-b', operation_id='foreign', trigger='v2_graph',
+                          plan_json='{}', status='running', queued_at=now + dt.timedelta(days=1)),
+        ResearchOperation(owner_id='owner-a', operation_id='terminal', trigger='v2_graph',
+                          plan_json='{}', status='completed', queued_at=now + dt.timedelta(days=1)),
+    ])
+    repo.session.commit()
+    operations, is_complete = repo.active_for_recovery(owner_id='owner-a')
+    assert is_complete is complete
+    assert [item.operation_id for item in operations] == [
+        f'active-{number:02}' for number in reversed(range(count))][:21]
+    assert repo.active_for_recovery(owner_id='absent') == ([], True)
+
+
+@pytest.mark.parametrize("change", [
+    {"extra": True}, {"content_address": None}, {"experiment_count": False},
+    {"experiment_count": -1}, {"experiment_count": 65}, {"items": {}},
+    {"generated": {}}, {"experiment_count": 1},
+])
+def test_legacy_operation_plan_refuses_open_or_inconsistent_workload_shape(change):
+    from research.domain.operations import _plan_payload
+    payload = {"content_address": "sha256:" + "a" * 64, "experiment_count": 0, "items": []}
+    payload.update(change)
+    with pytest.raises(ValueError, match="operation plan payload is invalid"):
+        _plan_payload(payload)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("limit", 0), ("limit", 65), ("owner_universe", []), ("owner_universe", [""]),
+    ("seed", False), ("seed", -1), ("min_trades", 0), ("n_folds", 1),
+    ("min_positive_fold_frac", 1.1),
+])
+def test_generated_workload_bounds_refuse_before_composition_loading(field, value):
+    from research.domain.operations import _generated_bounds
+    descriptor = {"limit": 1, "owner_universe": ["GOLDM"], "seed": None,
+                  "min_trades": 1, "n_folds": 2, "min_positive_fold_frac": 0.5}
+    descriptor[field] = value
+    with pytest.raises(ValueError, match="generated descriptor is invalid"):
+        _generated_bounds(descriptor)
+
+
+def test_running_v2_count_keeps_pending_findings_and_heartbeat_writable(repo):
+    from research.domain.models import Finding
+
+    now = dt.datetime.now(dt.UTC)
+    repo.enqueue(owner_id="owner-a", trigger="manual", plan={}, build="b",
+                 provider_mode="mock", operation_id="finding-heartbeat", now=now)
+    claim = repo.claim_operation("finding-heartbeat", owner_id="owner-a",
+                                 worker_id="worker", now=now)
+    program = ResearchProgram(owner_id="owner-a", name="pending-finding", thesis="")
+    repo.session.add(program)
+    repo.session.flush()
+    hypothesis = Hypothesis(owner_id="owner-a", program_id=program.id, statement="pending")
+    repo.session.add(hypothesis)
+    repo.session.commit()
+    finding = Finding(owner_id="owner-a", hypothesis_id=hypothesis.id,
+                      statement="Uncommitted validation evidence", polarity="negative")
+    repo.session.add(finding)
+    assert repo.running_v2_count(owner_id="owner-a") == 0
+    Session = make_sessionmaker(repo.session.get_bind())
+    with Session() as other:
+        if other.bind.dialect.name == "sqlite":
+            other.connection().exec_driver_sql("PRAGMA busy_timeout=50")
+        assert ResearchOperationRepository(other).heartbeat(
+            "finding-heartbeat", owner_id="owner-a", token=claim.claim_token, now=now)
+    assert finding in repo.session.new
+    repo.session.rollback()
+
+
+@pytest.mark.parametrize("value", [None, [], "plan", True])
+def test_operation_plan_refuses_non_object_before_dispatch(value):
+    from research.domain.operations import _plan_payload
+    with pytest.raises(ValueError, match="payload is invalid"):
+        _plan_payload(value)

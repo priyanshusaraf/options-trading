@@ -18,7 +18,8 @@ def _migrated_null_ledger(tmp_path):
             "INSERT INTO capital_state "
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
             "VALUES (99, NULL, 100.25, 90.75, -9.5, 98.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00')"))
-        command.upgrade(migrate.alembic_config(connection), "head")
+        command.upgrade(migrate.alembic_config(connection), "0054")
+    migrate.upgrade_to_head(engine)
     return engine
 
 
@@ -182,7 +183,8 @@ def test_revision_0018_preserves_legacy_money_rows_under_legacy_scope(tmp_path):
             "INSERT INTO daily_account_snapshot "
             "(day, account_net, account_available, updated_at) "
             "VALUES ('2026-08-10', 112345.67, 99876.54, '2026-08-10 15:30:00')"))
-        command.upgrade(migrate.alembic_config(connection), "head")
+        command.upgrade(migrate.alembic_config(connection), "0054")
+    migrate.upgrade_to_head(engine)
 
     with engine.connect() as connection:
         assert connection.execute(sa.text(
@@ -337,7 +339,8 @@ def test_init_db_does_not_collide_with_a_preserved_id_one_legacy_capital_row(
             "(id, book, initial_capital, cash, realized_pnl, updated_at) "
             "VALUES (1, :book, 123.0, 117.5, -5.5, '2026-08-11 09:01:00')"),
             {"book": legacy_book})
-        command.upgrade(migrate.alembic_config(connection), "0018")
+        # Bootstrap starts at an accepted predecessor of the managed rebuild.
+        command.upgrade(migrate.alembic_config(connection), "0054")
 
     isolated_sessions = sa.orm.sessionmaker(bind=engine, future=True, expire_on_commit=False)
     monkeypatch.setattr(session_module, "engine", engine)
@@ -361,7 +364,8 @@ def test_upgrade_preserves_null_and_live_ledgers_and_paper_request_creates_a_thi
             "(id, book, initial_capital, cash, realized_pnl, account_baseline, anchored_at, updated_at) "
             "VALUES (41, NULL, 101.0, 91.0, -10.0, 99.0, '2026-08-10 09:30:00', '2026-08-10 09:31:00'), "
             "(42, 'live', 202.0, 192.0, -10.0, 198.0, '2026-08-10 10:30:00', '2026-08-10 10:31:00')"))
-        command.upgrade(migrate.alembic_config(connection), "head")
+        command.upgrade(migrate.alembic_config(connection), "0054")
+    migrate.upgrade_to_head(engine)
 
     with sa.orm.Session(engine) as session:
         before = {(row.id, row.book): (row.initial_capital, row.cash, row.realized_pnl,

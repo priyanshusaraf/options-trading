@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orient in the Strategy OS repository"
+  short_description: "Verify checkout, capsule and inherited work"
+  default_prompt: "Use $strategyos-repo-orientation for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

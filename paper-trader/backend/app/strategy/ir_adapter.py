@@ -182,6 +182,13 @@ class IRGraphStrategy(Strategy):
         self.resolved: ResolvedGraph = resolve(graph, components)
         self.mapping = column_mapping(tuple(self.resolved.outputs))
         self.address = content_address(graph)
+        graph_version = graph.get("version")
+        if isinstance(graph_version, bool) or not isinstance(graph_version, int) \
+                or graph_version < 1:
+            raise ValueError("IR graph version must be a positive integer")
+        # Source-domain label used by durable graph attribution.  Strategy.version
+        # remains the immutable content identity pinned below.
+        self.graph_version_label = str(graph_version)
         self.key = (
             f"ir.{self.resolved.identifier}.{self.address.split(':')[1][:12]}"
             if self.key_includes_address else f"ir.{self.resolved.identifier}")

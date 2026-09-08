@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import sqlalchemy as sa
 
 from app.ir.hashing import canonical_json
 from app.db.models import ExecutionIntent, GraphVersion
@@ -282,4 +283,26 @@ def test_real_expanding_z_intent_maps_only_exact_handwritten_identity():
     with SessionLocal() as session:
         report = run_backfill(session, registry=REGISTRY, apply=False)
         row = next(item for item in report["rows"] if item["identity"] == "owner:backfill-expanding-z")
-        assert row["reason"] == "NO_EXACT_GRAPH_PROOF"
+        # The immutable graph bytes are known, but the altered handwritten
+        # version does not match that exact receipt's execution identity.
+        assert row["reason"] == "ARTEFACT_MISMATCH"
+
+
+def test_0040_legacy_graph_version_bytes_never_gain_graph_attribution():
+    init_db(reset=True)
+    historical = "sha256:" + "d" * 64
+    with SessionLocal.begin() as session:
+        session.execute(sa.text(
+            "UPDATE deployments SET strategy_key='ir.legacy', strategy_version=:version, "
+            "graph_address=NULL, admission_address=NULL, "
+            "attribution_state='LEGACY_UNVERIFIED' WHERE id=1"),
+            {"version": historical})
+    with SessionLocal.begin() as session:
+        report = run_backfill(session, registry=REGISTRY, apply=True)
+        row = session.execute(sa.text(
+            "SELECT strategy_version,graph_address,admission_address,attribution_state "
+            "FROM deployments WHERE id=1")).one()
+    assert row == (historical, None, None, "LEGACY_UNVERIFIED")
+    item = next(entry for entry in report["rows"]
+                if entry["consumer"] == "Deployment")
+    assert (item["status"], item["reason"]) == ("quarantined", "LEGACY_UNVERIFIED")

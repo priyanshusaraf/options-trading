@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getStatus } from './lib/api'
+import { getReleaseProfile, getStatus } from './lib/api'
+import type { ReleaseProfileManifest } from './lib/types'
 import { LiveProvider } from './state/LiveContext'
-import TopBar from './components/TopBar'
-import MobileTopBar from './components/MobileTopBar'
+import TopBar, { V0TopBar } from './components/TopBar'
+import MobileTopBar, { V0MobileTopBar } from './components/MobileTopBar'
+import { V0ReleaseBanner } from './components/SessionBanner'
 import Watchlist from './views/WatchlistView'
 import ActivePositionsView from './views/ActivePositionsView'
 import EngineView from './views/EngineView'
@@ -30,6 +32,17 @@ const TABS: [string, string][] = [
   ['graph', 'Strategy Graph'],
   ['settings', 'Settings'],
 ]
+
+const V0_SURFACES = [
+  ['strategy_graph', 'graph', 'Strategy Graph'],
+  ['backtesting', 'backtests', 'Backtests'],
+] as const
+
+export function v0TabsFor(manifest: ReleaseProfileManifest): readonly (readonly [string, string])[] {
+  return V0_SURFACES
+    .filter(([capability]) => manifest.capabilities[capability]?.ui_navigation === true)
+    .map(([, id, label]) => [id, label] as const)
+}
 
 // Desktop ≥768px keeps the original layout; below that we render the phone header.
 function useIsDesktop() {
@@ -85,6 +98,59 @@ function Shell() {
   )
 }
 
-export default function App() {
+export function V0Shell({ manifest }: { manifest: ReleaseProfileManifest }) {
+  const tabs = v0TabsFor(manifest)
+  const [tab, setTab] = useState(() => tabs[0]?.[0] ?? 'unavailable')
+  const isDesktop = useIsDesktop()
+  return (
+    <div className="min-h-full w-full min-w-0 max-w-full overflow-x-hidden flex flex-col">
+      {isDesktop
+        ? <V0TopBar tab={tab} setTab={setTab} tabs={tabs} />
+        : <V0MobileTopBar tab={tab} setTab={setTab} tabs={tabs} />}
+      <V0ReleaseBanner />
+      <main className="flex-1 w-full min-w-0 max-w-full overflow-x-auto p-3">
+        {tab === 'graph' && <GraphView researchEnabled={manifest.research_enabled} />}
+        {tab === 'backtests' && <BacktestsView />}
+        {tab === 'unavailable' && (
+          <div className="card p-4 text-sm text-muted">
+            No research surface is enabled by the server release profile.
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+export function AppForReleaseState({
+  manifest,
+  profileUnavailable,
+}: {
+  manifest: ReleaseProfileManifest | null
+  profileUnavailable: boolean
+}) {
+  if (profileUnavailable) {
+    return (
+      <main className="min-h-full grid place-items-center p-4">
+        <div className="card max-w-lg p-4 text-sm text-amber-300" role="alert">
+          The server release profile could not be verified. Product surfaces remain unavailable.
+        </div>
+      </main>
+    )
+  }
+  if (manifest === null) {
+    return <main className="min-h-full grid place-items-center text-sm text-muted">Loading release profile…</main>
+  }
+  if (manifest.release_profile === 'v0_research_signal') {
+    return <V0Shell manifest={manifest} />
+  }
   return <LiveProvider><Shell /></LiveProvider>
+}
+
+export default function App() {
+  const [manifest, setManifest] = useState<ReleaseProfileManifest | null>(null)
+  const [profileUnavailable, setProfileUnavailable] = useState(false)
+  useEffect(() => {
+    getReleaseProfile().then(setManifest).catch(() => setProfileUnavailable(true))
+  }, [])
+  return <AppForReleaseState manifest={manifest} profileUnavailable={profileUnavailable} />
 }

@@ -9,3 +9,19 @@ handed. See `backend/conftest.py` for the incident and the reasoning.
 Do NOT reintroduce env forcing here. A second writer would silently win or lose by
 import order — which is the exact class of bug that made the hole invisible.
 """
+
+import pytest
+
+from tests.postgres_sandbox import PostgresSandbox, postgres_url_available
+
+
+@pytest.fixture
+def pg_sandbox():
+    """One private set of disposable PostgreSQL databases; skips without harness."""
+    if not postgres_url_available():
+        pytest.skip("disposable PostgreSQL 16 harness not configured")
+    sandbox = PostgresSandbox()
+    try:
+        yield sandbox
+    finally:
+        sandbox.close()

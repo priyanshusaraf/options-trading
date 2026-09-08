@@ -43,6 +43,7 @@ from app.ir.schema import (
     is_secret_reference,
     is_value_reference,
 )
+from app.ir.formats.dispatch import UnsupportedFormatVersion, select_format
 
 # F1–F13 are checked here, against a component or graph artefact.
 #
@@ -64,7 +65,9 @@ UNENFORCEABLE_CLAUSES: frozenset[str] = frozenset()
 # then raises at evaluation, because the socket is simply never fed. The
 # research proposer produced one within its first hundred mutations. Which
 # sockets a node has lives in the component, so this needs a library like F7.
-LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7", "F8"})
+# F9's socket-direction half also needs the referenced component interface;
+# its graph-shape and cardinality checks remain available without a library.
+LIBRARY_DEPENDENT_CLAUSES = frozenset({"F7", "F8", "F9"})
 
 # One §4 clause is visible in an artefact and is reported here too. C14 says
 # sweeping belongs to the searcher; an override holding a list of candidates has
@@ -112,13 +115,21 @@ def validate(artefact: Any, library: Mapping[tuple[str, int], Any] | None = None
     # format_version it does not understand, and MUST NOT attempt to interpret
     # it partially" — so an unreadable envelope returns here and reports
     # nothing further. Anything else would be partial interpretation.
-    if "format_version" not in artefact:
-        r.add("F1", "$.format_version", "missing")
-    elif artefact["format_version"] != SUPPORTED_FORMAT_VERSION:
-        r.add("F1", "$.format_version",
-              f"{artefact['format_version']!r} is not understood "
-              f"(this reader knows {SUPPORTED_FORMAT_VERSION})")
+    try:
+        format_version = select_format(artefact)
+    except UnsupportedFormatVersion as exc:
+        r.add("F1", "$.format_version", str(exc))
         return r.violations
+
+    if format_version == 2:
+        # A v2 document cannot be interpreted without the one PlatformRegistry.
+        # Keeping this guard here preserves the old v1-only public call shape.
+        if not hasattr(library, "v2_components"):
+            r.add("F1", "$.format_version", "2 is not understood (this reader knows 1)")
+            return r.violations
+        from app.ir.formats.v2 import validate_document
+        return [Violation(error.code, error.path, error.message)
+                for error in validate_document(artefact, library)]
 
     kind = artefact.get("kind")
     if "kind" not in artefact:
@@ -339,8 +350,20 @@ def _graph(r: _Report, art: Mapping[str, Any],
 
     edges = art.get("edges")
     if isinstance(edges, list):
+        targets: set[tuple[str, str]] = set()
         for i, edge in enumerate(edges):
             _edge(r, edge, f"$.edges[{i}]", instances, art, library)
+            if not isinstance(edge, Mapping) or not isinstance(edge.get("target"), Mapping):
+                continue
+            target = edge["target"]
+            key = (target.get("instance"), target.get("socket"))
+            if not all(isinstance(value, str) and value for value in key):
+                continue
+            if key in targets:
+                r.add("F9", f"$.edges[{i}].target",
+                      "a v1 target socket accepts only one incoming edge")
+            targets.add(key)
+        _declared_graph_outputs(r, art, instances, edges)
     elif edges is not None:
         r.add("F9", "$.edges", "must be a list")
 
@@ -406,6 +429,30 @@ def _input_sockets(component: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
     walk(component.get("interface"))
     return out
+
+
+def _declared_graph_outputs(r: _Report, art: Mapping[str, Any], instances: dict,
+                            edges: list[Any]) -> None:
+    boundary_instances = {
+        instance_id
+        for instance_id, node in instances.items()
+        if (node.get("component") or {}).get("identifier") == "graph.output"
+    }
+    producers: dict[str, int] = {}
+    for edge in edges:
+        if not isinstance(edge, Mapping) or not isinstance(edge.get("target"), Mapping):
+            continue
+        target = edge["target"]
+        if target.get("instance") in boundary_instances:
+            name = target.get("socket")
+            producers[name] = producers.get(name, 0) + 1
+    for socket in _interface_socket_definitions(art):
+        if socket.get("direction") != "output":
+            continue
+        name = socket.get("identifier")
+        if producers.get(name, 0) != 1:
+            r.add("F9", "$.interface",
+                  f"declared graph output {name!r} must have exactly one producer")
 
 
 def _node(r: _Report, node: Any, path: str, instances: dict) -> None:
@@ -503,24 +550,49 @@ def _edge(r: _Report, edge: Any, path: str, instances: dict,
             ends[end] = (instances[instance], ref["socket"])
 
     if library is not None and len(ends) == 2:
-        _edge_types(r, ends, path, library)
+        _edge_types(r, ends, path, art, library)
 
 
-def _edge_types(r: _Report, ends: dict, path: str,
+def _edge_types(r: _Report, ends: dict, path: str, art: Mapping[str, Any],
                 library: Mapping[tuple[str, int], Any]) -> None:
     """F7 — exact match on all three axes. No coercion, no overlap."""
     resolved = {}
     for end, (node, socket_name) in ends.items():
         ref = node.get("component", {})
-        component = library.get((ref.get("identifier"), ref.get("version")))
+        identifier = ref.get("identifier")
+        if identifier == "graph.input" and end != "source":
+            r.add("F9", f"{path}.{end}.socket",
+                  "a graph input boundary may only be an edge source")
+            continue
+        if identifier == "graph.output" and end != "target":
+            r.add("F9", f"{path}.{end}.socket",
+                  "a graph output boundary may only be an edge target")
+            continue
+        component = (art if identifier in {"graph.input", "graph.output"}
+                     else library.get((identifier, ref.get("version"))))
         if component is None:
             continue
-        wt = _socket_wire_type(component, socket_name)
-        if wt is None:
+        socket = _socket_definition(component, socket_name)
+        if socket is None:
             r.add("F9", f"{path}.{end}.socket",
                   f"{socket_name!r} is not a socket on "
                   f"{ref.get('identifier')!r} v{ref.get('version')}")
             continue
+        expected_direction = (
+            "input" if identifier == "graph.input"
+            else "output" if identifier == "graph.output"
+            else "output" if end == "source"
+            else "input"
+        )
+        if socket.get("direction") != expected_direction:
+            r.add("F9", f"{path}.{end}.socket",
+                  f"an edge {end} must name a declared {expected_direction} socket")
+            continue
+        if identifier in {"graph.input", "graph.output"}:
+            # V1 graph inputs may fan into differently pinned domains (A.5).
+            # Boundary nodes validate names/directions, not component wire types.
+            continue
+        wt = socket.get("wire_type")
         # A node may pin the domain it runs in; the socket's declared domain is
         # the default. This is what makes A.5's two EMAs different wire types.
         if node.get("domain"):
@@ -542,7 +614,7 @@ def _edge_types(r: _Report, ends: dict, path: str,
                   f"{tgt.get('domain', {}).get(axis)!r}; the domain is part of the type")
 
 
-def _socket_wire_type(component: Mapping[str, Any], name: str) -> Mapping[str, Any] | None:
+def _socket_definition(component: Mapping[str, Any], name: str) -> Mapping[str, Any] | None:
     def walk(items):
         for item in items or ():
             if not isinstance(item, Mapping):
@@ -552,7 +624,23 @@ def _socket_wire_type(component: Mapping[str, Any], name: str) -> Mapping[str, A
                 if found is not None:
                     return found
             elif item.get("item") == "socket" and item.get("identifier") == name:
-                return item.get("wire_type")
+                return item
         return None
 
     return walk(component.get("interface"))
+
+
+def _interface_socket_definitions(component: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    sockets: list[Mapping[str, Any]] = []
+
+    def walk(items):
+        for item in items or ():
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("item") == "panel":
+                walk(item.get("items"))
+            elif item.get("item") == "socket":
+                sockets.append(item)
+
+    walk(component.get("interface"))
+    return sockets

@@ -168,3 +168,32 @@ def test_lifecycle_intent_seam_refuses_direct_receiptless_creation():
         )
         with pytest.raises(ValueError, match="ADMISSION_REQUIRED"):
             store.create_intent(request, {}, NOW)
+
+
+def test_legacy_unverified_position_can_exit_without_attribution_upgrade(monkeypatch):
+    """Migration quarantine never blocks risk reduction or invents graph truth."""
+    import sqlalchemy as sa
+
+    init_db(reset=True)
+    provider = MockProvider()
+    broker = PaperBroker(provider, owner_id="owner", broker_account_id="account.default")
+    monkeypatch.setattr(broker, "_require_current_entry_receipt", lambda **_: None)
+    inst = get_instrument("NIFTY")
+    chain = provider.get_option_chain(inst)
+    quote = next(item for item in chain.quotes if item.option_type == "CE")
+    position = broker.open_position(
+        inst, "LONG", quote, "legacy seed", NOW, chain.spot,
+        strategy_key="expanding_z_v4", strategy_version="source-v4",
+        admission_address=ADDRESS)
+    historical = "sha256:" + "f" * 64
+    broker.s.execute(sa.text(
+        "UPDATE positions SET strategy_key='ir.legacy', strategy_version=:version, "
+        "graph_address=NULL, attribution_state='LEGACY_UNVERIFIED' WHERE id=:id"),
+        {"version": historical, "id": position.id})
+    broker.s.commit()
+    broker.s.expire_all()
+    legacy = broker.s.get(type(position), position.id)
+    trade = broker.close_position(legacy, quote.ltp, "RISK_REDUCTION", NOW, chain.spot)
+    assert trade.strategy_version == historical
+    assert trade.graph_address is None
+    assert trade.attribution_state == "LEGACY_UNVERIFIED"

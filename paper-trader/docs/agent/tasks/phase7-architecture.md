@@ -15,6 +15,15 @@
   ],
   "required_docs": [
     {
+      "path": "paper-trader/docs/agent/DEPLOYABILITY.md",
+      "sections": [
+        "Current verdict",
+        "Open obligations",
+        "Phase 7 ownership",
+        "V1 release gate"
+      ]
+    },
+    {
       "path": "paper-trader/docs/superpowers/plans/2026-08-13-strategy-os-v1-master-sequence.md",
       "sections": [
         "Phase 7: Dynamic derivatives, incremental runtime, and operational economics",
@@ -177,10 +186,34 @@
         "Core-abstraction issue",
         "Local implementation edge case"
       ]
+    },
+    {
+      "path": "paper-trader/docs/program/owner-steers/06-POST-PHASE7-DERIVATIVES-EXECUTION-ASSURANCE.md",
+      "sections": [
+        "Goal",
+        "1. Timing and authority",
+        "2. Current evidence boundary",
+        "3. Entry authority and position ownership",
+        "4. Owner seed scenarios",
+        "5. Mandatory adversarial discovery matrix",
+        "Instrument and contract identity",
+        "Deployment and control-plane races",
+        "Order lifecycle and reconciliation",
+        "Account-wide capital and risk",
+        "Multi-leg and portfolio actions",
+        "Safety and degraded operation",
+        "Derivatives-market and tier stress",
+        "Observability and economics",
+        "8. Requirements carried through Phase 7",
+        "9. Post-Phase-7 audit gate",
+        "10. Acceptance evidence",
+        "11. Nonclaims and owner gates"
+      ]
     }
   ],
   "dependency_gate": "phase6-review",
   "allowed_paths": [
+    "paper-trader/docs/agent/DEPLOYABILITY.md",
     "paper-trader/docs/superpowers/specs/phase7-strategy-os-design.md",
     "paper-trader/docs/superpowers/plans/phase7-strategy-os.md",
     "paper-trader/docs/reports/phase7-source-coverage.json",
@@ -208,7 +241,7 @@
     "owner": "gpt-5.6-sol",
     "owner_reasoning_effort": "medium",
     "service_tier": "default",
-    "implementation_owner": "gpt-5.6-terra",
+    "implementation_owner": "gpt-5.6-sol",
     "implementation_reasoning_effort": "medium",
     "phase_reviewer": "gpt-5.6-sol",
     "phase_reviewer_reasoning_effort": "high"
@@ -217,8 +250,8 @@
   "assignments": [
     {
       "id": "existing_capability_audit",
-      "agent": "terra-worker",
-      "model": "gpt-5.6-terra",
+      "agent": "default",
+      "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "mode": "read",
       "depends_on": [],
@@ -234,8 +267,8 @@
     },
     {
       "id": "source_coverage_audit",
-      "agent": "luna-worker",
-      "model": "gpt-5.6-luna",
+      "agent": "default",
+      "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "mode": "read",
       "depends_on": [],
@@ -246,7 +279,8 @@
         "paper-trader/docs/program/owner-steers/02-MARKET-TRUTH-DATA-CONTRACTS.md",
         "paper-trader/docs/program/owner-steers/03-DEPLOYMENT-EXECUTION-TRUST.md",
         "paper-trader/docs/program/owner-steers/04-RUNTIME-ECONOMICS-PROVIDER-CAPABILITIES.md",
-        "paper-trader/docs/program/owner-steers/05-V1-IMPLEMENTATION-PRIORITIES-VERIFICATION.md"
+        "paper-trader/docs/program/owner-steers/05-V1-IMPLEMENTATION-PRIORITIES-VERIFICATION.md",
+        "paper-trader/docs/program/owner-steers/06-POST-PHASE7-DERIVATIVES-EXECUTION-ASSURANCE.md"
       ],
       "write_paths": [
         ".agent/runs/phase7-architecture/source_coverage_audit"
@@ -255,9 +289,18 @@
     }
   ],
   "acceptance": [
+    "Every affected deployment-contract dimension has current evidence or an exact owning future capsule; no deployment debt is deferred vaguely.",
     "Accepted preceding contracts and existing implementation are audited before proposing changes.",
     "Every SOURCE_MAP.json phase7 entry has an explicit design, task, test, nonclaim, or deferral disposition.",
     "The design and plan preserve one canonical IR and existing ownership/authority boundaries.",
+    "Dynamic derivatives and options are a separate Critical capacity class: the design publishes measured Standard, Pro, and Desk envelopes for exact-contract requests, option-chain windows, quote/OI/depth/trade-flow subscriptions, incremental recomputation, cache fan-out, and concurrent permitted user queries.",
+    "Derivatives accounting uses physical instruments, provider products/contracts, fields, depth, update/event rate, recomputation fan-out, retention, and concurrency; strike distance or an ATM-relative label is not a cost proxy, and one exact deep-ITM or deep-OTM contract is not penalized merely for distance.",
+    "The capacity gate covers market-open, market-close, expiry-day and expiry-roll bursts, high-volatility turnover, deep-ITM/deep-OTM exact selectors, simultaneous broad and narrow chains, multiple expiries/underlyings, held-contract priority, cache stampedes, cold starts, mass reconnects, provider throttling/outage, and cross-tenant bursts.",
+    "Standard, Pro, and Desk are tested at representative ordinary load, every admitted structural/resource maximum, simultaneous maxima allowed by the conjunctive policy, and deliberate over-limit abuse; Pro and Desk receive materially deeper and more concurrent testing than Standard.",
+    "Backpressure preserves exits, protection, held-position data, broker reconciliation, and other P0 work before entries, research, scans, broad option windows, and UI refresh; overload must remain bounded and observable without cross-tenant starvation or unbounded queue, memory, database-pool, or provider-quota growth.",
+    "Measured workloads include same-instrument authority-conflict bursts, different-instrument account saturation, one-strategy/many-instrument signals, reservation release and recovery, and derivative alias/expiry/roll ambiguity so capacity evidence covers the authority and account-risk paths under load rather than isolated query throughput alone.",
+    "Every tier envelope states fairness, admission, refusal, queue, reservation, provider, database, cache, memory, compute, and recovery bounds. Higher tiers receive more measured headroom and concurrency but no weaker identity, account-risk, exit, protection, isolation, or reconciliation guarantee.",
+    "The Phase 5 beta node caps may change only from dated reproducible Phase 7 measurements with workload definitions, duration, repetitions, hardware/service configuration, provider simulators or approved fixture contracts, p95/p99 and saturation evidence, recovery behavior, and unit-cost/tier-margin formulas; local benchmarks alone never imply production readiness.",
     "Implementation work is split into fresh durable-goal capsules with exact dependencies, allowed paths, exclusive write ownership, observable acceptance, and proportional tests.",
     "The programme implementation placeholder is expanded into ordered slice stages and an exact phase-review capsule.",
     "The final phase gate requires one Sol-high goal with separate SPEC and QUALITY verdicts."
@@ -265,6 +308,13 @@
   "test_plan": [
     "Validate all structured artifacts and references.",
     "Compare the source-coverage matrix to SOURCE_MAP.json phase view phase7.",
+    "Run a risk-weighted derivatives matrix across Standard, Pro, and Desk covering exact deep-ITM/deep-OTM contracts, narrow and broad option chains, multiple quote/OI/depth/trade-flow requests, multiple underlyings and expiries, expiry overlap, held contracts, burst reconnects, provider throttling, and concurrent tenants.",
+    "For every workload publish exact request mix, graph/resource vector, concurrency, duration, repetitions, dataset/provider-fixture contract, compute/memory/database/cache/provider consumption, queue age, p50/p95/p99 latency, error/refusal/degradation counts, recovery time, and cost per active strategy/tenant/minute.",
+    "Prove admitted-max workloads stay inside the declared envelope, over-limit workloads refuse or shed lower-priority work before saturation, no P0 event is lost or starved, no cross-tenant leakage occurs, and resource use returns to a bounded baseline after the burst.",
+    "During market-open, expiry, volatility and reconnect bursts, contend same-instrument entry authority and saturate one account with different-instrument signals; measure one-winner behavior, reservation fairness, refusal latency, leaked-capacity alarms, exit/protection latency, recovery, and steady-state resource return.",
+    "Run exact derivative identity and provider-ambiguity cases across aliases, weekly/monthly overlap, expiry, roll, rapid ATM movement, deep-ITM/deep-OTM contracts, held-contract priority, multiple underlyings and expiries, and cold-cache or throttled-provider conditions.",
+    "For Standard, Pro, and Desk publish ordinary, individual-maximum, simultaneous-conjunctive-maximum, sustained saturation, and deliberate-abuse results; report p50/p95/p99, fairness and starvation, cost, recovery, and the measured headroom that justifies every commercial limit.",
+    "Calibrate the Phase 5 structural hypotheses and Phase 6 weighted/concurrency ceilings only from these measurements, preserving a dated decision record and explicit commercial margin sensitivity for Standard, Pro, and Desk.",
     "Validate goal-capsule dependencies, routes, parallel budgets, path ownership, owner gates, and test cadence.",
     "Run the complete .codex architecture test suite and git diff --check."
   ],
@@ -293,3 +343,7 @@
 # Phase 7 architecture goal
 
 This capsule stays blocked until phase6-review is accepted. It creates future implementation goals; it does not implement them.
+
+## Owner derivatives-capacity directive
+
+The options path must be tested as a bursty shared-data system, not as a larger copy of an equity strategy. Phase 7 must distinguish provider subscriptions from user requests, deduplicate safe shared calculations without sharing tenant authority, and meter both the physical upstream footprint and downstream per-tenant compute/fan-out. The ordinary Standard experience must still support exact deep contracts and useful bounded windows. Pro and Desk buy wider windows, more strategies, and more concurrency only when the measured server and provider envelope supports them.

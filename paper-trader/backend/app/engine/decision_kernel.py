@@ -29,16 +29,15 @@ return types. Their existing tests pass unchanged, which is the proof.
 
 Declared divergence
 -------------------
-The backtester still does not model a protective band, because the historical option
-premium path it would need does not exist for most instruments. That is no longer an
-unstated absence: it is `ExitPolicy.no_protective_band()`, a named policy the caller
-must choose, and `divergences()` reports it. The difference between "we decided not
-to model this" and "nobody noticed this was missing" is the entire point of the
-phase.
+The default backtest path uses `ExitPolicy.no_protective_band()` because historical
+option premiums are unavailable for most instruments. An explicit percentage policy
+can instead manage the underlying with completed-close triggers and next-open fills.
+Neither policy claims to reproduce historical option-premium stops.
 """
 from __future__ import annotations
 
 import dataclasses
+import math
 
 # Exit reasons, in the order they are evaluated. The ORDER IS THE POLICY: a
 # protective stop must win any tie against a target or a strategy flag, because the
@@ -190,3 +189,19 @@ def decide_exit(*, direction: str, price: float,
             return ExitDecision(True, STRATEGY_EXIT)
 
     return ExitDecision(False, None)
+
+def protective_band_document(stop_loss_pct=0.0, take_profit_pct=0.0):
+    """Bind optional directional fractions to the close-confirmed replay policy."""
+    values = {}
+    for name, value in (("stop_loss_pct", stop_loss_pct), ("take_profit_pct", take_profit_pct)):
+        if value is None:
+            value = 0.0
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value < 1:
+            raise ValueError(f"{name} must be a finite fraction from 0 (disabled) to less than 1")
+        values[name] = float(value)
+    if not any(values.values()):
+        return None
+    return {"schema": "research-percentage-exit-policy/1", **values,
+            "basis": "slipped-entry-fill", "trigger": "completed-close-after-entry-bar",
+            "fill": "next-bar-open-adverse-slippage", "intrabar": "not-evaluated",
+            "precedence": "stop-target-ratchet-strategy"}

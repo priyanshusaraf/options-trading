@@ -30,6 +30,7 @@ from app.core.config import get_settings
 from app.core.instruments import Instrument
 from app.core.logging import WarnGate, log
 from app.engine.gtt import TICK_SIZE
+from app.market_data.numeric import NumericIngressError, market_float
 from app.providers import capabilities as caps
 from app.providers.instrument_resolver import ResolvedInstrument
 from app.providers.base import (Candle, MarketDataProvider, OptionChain, OptionQuote,
@@ -43,6 +44,43 @@ TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.j
 # No limit for these is documented anywhere in this repo, so it takes the same
 # 1.05s floor as quote — far under the 30s cadence the lane actually polls at.
 _MIN_INTERVAL = {"quote": 1.05, "historical": 0.40, "orders": 1.05}
+_CANDLE_SECONDS = {"minute": 60, "3minute": 180, "5minute": 300,
+    "10minute": 600, "15minute": 900, "30minute": 1800,
+    "60minute": 3600, "day": 86400}
+
+
+def completed_candles(rows, interval: str, now: datetime) -> list[Candle]:
+    """Keep completed intervals, including the final row after a closed session.
+
+    Daily labels use the next midnight as a conservative completion boundary;
+    this does not assert an exchange session calendar or current-data freshness.
+    """
+    seconds = _CANDLE_SECONDS.get(interval)
+    if seconds is None:
+        raise ProviderReadError("Kite candle interval is unsupported")
+    cutoff = now - dt.timedelta(seconds=seconds)
+    candles = [candle_from_row(row) for row in rows]
+    return [candle for candle in candles if candle.ts <= cutoff]
+
+
+def candle_from_row(r: dict) -> Candle:
+    """One Kite historical row → ``Candle`` (A-02: numbers gated before coercion).
+
+    The OHLC fields are passed through ``market_float``, not raw: a JSON
+    ``true`` from the wire must be refused here, not become price ``1.0``
+    downstream. Timestamps keep the repo's naive-IST candle epoch.
+    """
+    try:
+        return Candle(
+            ts=r["date"].replace(tzinfo=None),
+            open=market_float(r["open"], field="kite candle open"),
+            high=market_float(r["high"], field="kite candle high"),
+            low=market_float(r["low"], field="kite candle low"),
+            close=market_float(r["close"], field="kite candle close"),
+            volume=market_float(r.get("volume", 0), field="kite candle volume"),
+        )
+    except NumericIngressError as e:
+        raise ProviderReadError(f"kite {e}") from e
 
 
 class _Throttle:
@@ -94,7 +132,34 @@ class KiteProvider(MarketDataProvider):
         self._tick_cache: dict[tuple[str, str], float] = {}   # (exchange, tradingsymbol) -> tick_size
         self._throttle = _Throttle()
         self._warn = WarnGate()   # de-dupe repeating account-read failures (fix E)
+        self._strict_data_runtime = False
         self._load_saved_token()
+
+    @classmethod
+    def from_data_runtime(cls, runtime) -> "KiteProvider":
+        """Build the existing market-data mapper around a closed owner runtime.
+
+        This construction path does not read Settings, environment app keys or
+        the process token file. The supplied runtime owns every credential read,
+        rate gate and wire call.
+        """
+        from app.providers.zerodha_data_runtime import ZerodhaDataRuntime
+
+        if not isinstance(runtime, ZerodhaDataRuntime):
+            raise TypeError("closed Zerodha DATA runtime required")
+        provider = cls.__new__(cls)
+        provider.s = None
+        provider.api_key = ""
+        provider.api_secret = ""
+        provider.access_token = None
+        provider.kite = runtime
+        provider._dumps = {}
+        provider._fut_cache = {}
+        provider._tick_cache = {}
+        provider._throttle = _Throttle()
+        provider._warn = WarnGate()
+        provider._strict_data_runtime = True
+        return provider
 
     # ── throttled Kite calls (respect documented rate limits) ─────────────
     def _ltp(self, keys: list[str]) -> dict:
@@ -290,7 +355,7 @@ class KiteProvider(MarketDataProvider):
         try:
             rows = self.kite.instruments(exchange)
         except Exception as e:
-            if strict:
+            if strict or self._strict_data_runtime:
                 raise
             # not authenticated yet / transient API error — degrade gracefully so
             # callers (option chain, ltp) return empty instead of 500.
@@ -451,10 +516,7 @@ class KiteProvider(MarketDataProvider):
             raise ProviderReadError(f"historical_data failed: {e}") from e
         if not raw:
             return []
-        raw = raw[:-1]  # drop the still-forming bar
-        return [Candle(ts=r["date"].replace(tzinfo=None), open=r["open"], high=r["high"],
-                       low=r["low"], close=r["close"], volume=float(r.get("volume", 0)))
-                for r in raw]
+        return completed_candles(raw, interval, now)
 
     def _future_for_expiry(self, inst: Instrument, expiry) -> dict | None:
         """The FUT contract for one EXACT expiry, not the nearest one.
@@ -525,6 +587,8 @@ class KiteProvider(MarketDataProvider):
         try:
             return self._ltp([key]).get(key, {}).get("last_price")
         except Exception as e:
+            if self._strict_data_runtime:
+                raise
             log.error(f"ltp failed: {e}", instrument=inst.key)
             return None
 

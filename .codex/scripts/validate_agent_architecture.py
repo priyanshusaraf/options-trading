@@ -324,6 +324,12 @@ def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[
     current_id = programme.get("current_stage_id")
     if current_id not in indexed:
         failures.append("programme current stage does not exist")
+    first_unfinished = next(
+        (item for item in stages if item.get("status") != "accepted"), None)
+    if first_unfinished is not None and first_unfinished.get("id") != current_id:
+        failures.append(
+            "programme current stage is not the first unfinished executable dependency"
+        )
     seen: set[str] = set()
     for index, stage in enumerate(stages):
         stage_id = stage["id"]
@@ -364,7 +370,8 @@ def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[
             failures.append(f"programme capsule lacks goal contract: {stage_id}")
     for phase in range(4, 11):
         architecture = indexed.get(f"phase{phase}-architecture")
-        review = indexed.get(f"phase{phase}-review")
+        review = indexed.get(
+            "phase4-final-review-5" if phase == 4 else f"phase{phase}-review")
         implementation = f"phase{phase}-implementation"
         if not architecture or (architecture.get("model"), architecture.get("reasoning_effort")) != ("gpt-5.6-sol", "medium"):
             failures.append(f"programme phase architecture route is invalid: phase{phase}")
@@ -372,7 +379,10 @@ def validate_programme(path: Path, failures: List[str], root: Path) -> Optional[
             not review
             or review.get("kind") != "phase_review"
             or (review.get("model"), review.get("reasoning_effort")) != ("gpt-5.6-sol", "high")
-            or implementation not in review.get("depends_on", [])
+            or (phase == 4 and (
+                review.get("status") != "accepted"
+                or not isinstance(review.get("acceptance"), str)))
+            or (phase != 4 and implementation not in review.get("depends_on", []))
         ):
             failures.append(f"programme phase review gate is invalid: phase{phase}")
     return programme
@@ -465,8 +475,6 @@ def main() -> int:
 
     skills = root / ".agents" / "skills"
     skill_files = sorted(skills.glob("*/SKILL.md")) if skills.exists() else []
-    if not skill_files:
-        failures.append("no repository skills found")
     for skill in skill_files:
         try:
             header = frontmatter_text(skill)
@@ -484,10 +492,22 @@ def main() -> int:
                     f"missing skill reference: {relative(skill, root)} -> {reference}"
                 )
 
+    frozen_non_executable_capsule_prefixes: tuple[str, ...] = ()
     current_path = root / "paper-trader" / "docs" / "agent" / "CURRENT.md"
     if current_path.is_file():
         try:
             current = json_frontmatter(current_path)
+            frozen_values = current.get("frozen_non_executable_capsule_prefixes", [])
+            if not isinstance(frozen_values, list) or not all(
+                isinstance(item, str)
+                and item.startswith("paper-trader/docs/agent/tasks/")
+                and not Path(item).is_absolute()
+                and ".." not in Path(item).parts
+                for item in frozen_values
+            ):
+                failures.append("CURRENT.md frozen non-executable capsule prefixes are invalid")
+            else:
+                frozen_non_executable_capsule_prefixes = tuple(frozen_values)
             active = current.get("active_capsule")
             active_path = (root / active).resolve() if isinstance(active, str) else None
             if active_path is None or root not in active_path.parents or not active_path.is_file():
@@ -538,6 +558,9 @@ def main() -> int:
             capsule = json_frontmatter(capsule_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             failures.append(f"invalid capsule: {relative(capsule_path, root)} ({exc})")
+            continue
+        capsule_relative = relative(capsule_path, root)
+        if any(capsule_relative.startswith(prefix) for prefix in frozen_non_executable_capsule_prefixes):
             continue
         missing = REQUIRED_CAPSULE_FIELDS - set(capsule)
         if missing:

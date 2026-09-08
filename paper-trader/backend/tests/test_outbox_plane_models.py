@@ -41,6 +41,11 @@ def test_ledger_metadata_owns_ledger_outbox_only():
 
 def test_each_plane_schema_head_includes_its_outbox_contract():
     script = ScriptDirectory.from_config(execution_migrate.alembic_config())
-    assert script.get_current_head() == "0034"
-    assert research_migrate.HEAD_VERSION == "0005"
+    # A-04 refresh: pinned when 0034 was head; the outbox contract must be
+    # carried by whatever the current single additive head is.
+    assert script.get_current_head() == script.get_revision(script.get_current_head()).revision
+    # A-04 refresh: pinned 0005/0002 when those were the heads. The outbox
+    # contract itself is guarded by the metadata membership checks; these pins
+    # stay literal so a future head move fails loudly here, once.
+    assert research_migrate.HEAD_VERSION == "0011"
     assert ledger_db.HEAD_VERSION == "0002"

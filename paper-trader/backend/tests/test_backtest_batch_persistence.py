@@ -66,11 +66,12 @@ class _CommitCounter:
             self.n += 1
 
 
-def _make_run(total: int) -> int:
+def _make_run(total: int, admitted_backtest_receipt) -> int:
     with SessionLocal() as s:
+        receipt = admitted_backtest_receipt(s)
         run = repository.enqueue_run(s, owner_id="owner", scope="liquid",
                                      intervals="15minute", capital=50_000.0,
-                                     total=total, done=0)
+                                     total=total, done=0, **receipt)
         s.commit()
         return run.id
 
@@ -107,22 +108,42 @@ def _drive(run_id, cells, monkeypatch, *, one=None):
     monkeypatch.setattr(sweep, "_prepare_dataset",
                         lambda *a, **k: sweep._PreparedDataset())
     counter = {"i": 0}
+    with SessionLocal() as session:
+        admission_address = session.get(BacktestRun, run_id).admission_address
+        admitted = repository.load_verified_admission(
+            session, owner_id="owner", admission_address=admission_address)
+        attribution = {
+            "strategy_key": admitted.strategy_key,
+            "strategy_version": admitted.strategy_version,
+            "graph_address": admitted.graph_address,
+            "attribution_state": admitted.attribution_state,
+        }
 
     def stub_one(*a, **k):
         counter["i"] += 1
-        return _values(counter["i"])
+        return {**_values(counter["i"]), **attribution,
+                "admission_address": admission_address}
 
-    monkeypatch.setattr(sweep, "_one", one or stub_one)
+    if one is not None:
+        def admitted_one(*args, **kwargs):
+            return {**one(*args, **kwargs), **attribution,
+                    "admission_address": admission_address}
+        monkeypatch.setattr(sweep, "_one", admitted_one)
+    else:
+        monkeypatch.setattr(sweep, "_one", stub_one)
     sweep._run(run_id, None, [INST] * cells, ["15minute"], 50_000.0, WIN,
-               [get_strategy(None)], owner_id="owner", claim_token=_claim(run_id))
+               [get_strategy(None)], admission_address=admission_address,
+               expected_attribution={**attribution, "admission_address": admission_address},
+               owner_id="owner", claim_token=_claim(run_id))
 
 
 # ── 1. the transaction budget ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("cells", [500, 5_000, 50_000])
-def test_persistence_stays_within_the_transaction_budget(cells, monkeypatch):
+def test_persistence_stays_within_the_transaction_budget(cells, monkeypatch,
+                                                          admitted_backtest_receipt):
     init_db(reset=True)
-    run_id = _make_run(cells)
+    run_id = _make_run(cells, admitted_backtest_receipt)
     with _CommitCounter() as counter:
         _drive(run_id, cells, monkeypatch)
     # One durable claim precedes worker execution; then bounded batches plus the
@@ -135,12 +156,12 @@ def test_persistence_stays_within_the_transaction_budget(cells, monkeypatch):
     assert _counts(run_id) == (cells, cells, "done")
 
 
-def test_a_batch_is_never_larger_than_ten(monkeypatch):
+def test_a_batch_is_never_larger_than_ten(monkeypatch, admitted_backtest_receipt):
     """Bounded batches are what keeps a crash from losing an unbounded amount of
     completed work, and what keeps the write transaction short enough that the
     single SQLite writer is not held while the next cell simulates."""
     init_db(reset=True)
-    run_id = _make_run(95)
+    run_id = _make_run(95, admitted_backtest_receipt)
     sizes: list[int] = []
     real = sweep._commit_claimed_batch
 
@@ -156,11 +177,11 @@ def test_a_batch_is_never_larger_than_ten(monkeypatch):
 
 # ── 2. progress is derived from durable rows ─────────────────────────────────
 
-def test_progress_never_runs_ahead_of_durable_rows(monkeypatch):
+def test_progress_never_runs_ahead_of_durable_rows(monkeypatch, admitted_backtest_receipt):
     """The invariant the old `_bump` could not hold: at every commit boundary the
     progress counter equals the number of rows a *separate* connection can see."""
     init_db(reset=True)
-    run_id = _make_run(95)
+    run_id = _make_run(95, admitted_backtest_receipt)
     observed: list[tuple[int, int]] = []
     real = sweep._commit_claimed_batch
 
@@ -177,11 +198,11 @@ def test_progress_never_runs_ahead_of_durable_rows(monkeypatch):
     assert observed[-1] == (95, 95)
 
 
-def test_progress_is_recomputed_not_incremented(monkeypatch):
+def test_progress_is_recomputed_not_incremented(monkeypatch, admitted_backtest_receipt):
     """A stale or hand-edited counter must be corrected by the next batch, not
     added to. Increment-based progress carries its error to the end of the run."""
     init_db(reset=True)
-    run_id = _make_run(30)
+    run_id = _make_run(30, admitted_backtest_receipt)
     with SessionLocal() as s:
         s.get(BacktestRun, run_id).done = 999
         s.commit()
@@ -191,9 +212,10 @@ def test_progress_is_recomputed_not_incremented(monkeypatch):
 
 # ── 3. all-or-nothing ────────────────────────────────────────────────────────
 
-def test_a_failed_batch_persists_neither_rows_nor_progress(monkeypatch):
+def test_a_failed_batch_persists_neither_rows_nor_progress(monkeypatch,
+                                                            admitted_backtest_receipt):
     init_db(reset=True)
-    run_id = _make_run(30)
+    run_id = _make_run(30, admitted_backtest_receipt)
     real_count = repository.durable_result_count
     state = {"calls": 0}
 
@@ -215,17 +237,19 @@ def test_a_failed_batch_persists_neither_rows_nor_progress(monkeypatch):
 
 # ── 4/5. terminal and interrupted consistency ────────────────────────────────
 
-def test_terminal_run_progress_equals_its_durable_result_count(monkeypatch):
+def test_terminal_run_progress_equals_its_durable_result_count(monkeypatch,
+                                                                admitted_backtest_receipt):
     init_db(reset=True)
-    run_id = _make_run(47)
+    run_id = _make_run(47, admitted_backtest_receipt)
     _drive(run_id, 47, monkeypatch)
     rows, done, status = _counts(run_id)
     assert (rows, done, status) == (47, 47, "done")
 
 
-def test_an_interrupted_run_never_reports_more_than_it_stored(monkeypatch):
+def test_an_interrupted_run_never_reports_more_than_it_stored(monkeypatch,
+                                                               admitted_backtest_receipt):
     init_db(reset=True)
-    run_id = _make_run(100)
+    run_id = _make_run(100, admitted_backtest_receipt)
     calls = {"i": 0}
 
     def one(*a, **k):
@@ -242,12 +266,13 @@ def test_an_interrupted_run_never_reports_more_than_it_stored(monkeypatch):
     assert status == "error"
 
 
-def test_a_run_left_running_by_a_dead_process_is_reconciled(monkeypatch):
+def test_a_run_left_running_by_a_dead_process_is_reconciled(monkeypatch,
+                                                            admitted_backtest_receipt):
     """A killed process leaves `status='running'` forever: the UI shows a sweep
     in flight that no thread is driving, and `is_running()` disagrees with the
     row. The next sweep repairs it against the durable row count."""
     init_db(reset=True)
-    stale = _make_run(100)
+    stale = _make_run(100, admitted_backtest_receipt)
     with SessionLocal() as s:
         for _ in range(7):
             s.add(BacktestResult(run_id=stale, **_values()))
@@ -256,21 +281,23 @@ def test_a_run_left_running_by_a_dead_process_is_reconciled(monkeypatch):
         s.commit()
 
     assert not sweep.is_running()
-    sweep.reconcile_stale_runs(owner_id="owner")
+    sweep.dispatch_reclaimable(owner_id="owner", maximum=1,
+                               _reclaim_policy=sweep._ReclaimPolicy.BOOT)
 
     rows, done, status = _counts(stale)
     assert (rows, done) == (7, 7)
     assert status == "error" and status != "running"
 
 
-def test_reconciliation_never_touches_a_finished_run():
+def test_reconciliation_never_touches_a_finished_run(admitted_backtest_receipt):
     init_db(reset=True)
-    finished = _make_run(3)
+    finished = _make_run(3, admitted_backtest_receipt)
     with SessionLocal() as s:
         run = s.get(BacktestRun, finished)
         run.status, run.done, run.note = "done", 3, "keep me"
         s.commit()
-    sweep.reconcile_stale_runs(owner_id="owner")
+    sweep.dispatch_reclaimable(owner_id="owner", maximum=1,
+                               _reclaim_policy=sweep._ReclaimPolicy.BOOT)
     with SessionLocal() as s:
         run = s.get(BacktestRun, finished)
         assert (run.status, run.done, run.note) == ("done", 3, "keep me")

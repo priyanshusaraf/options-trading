@@ -25,10 +25,9 @@ def provider_named(name: str) -> MarketDataProvider:
     names `kite` for execution must therefore land on the object Connect Kite
     actually authenticated, not a fresh one that will never hold a token.
 
-    Unlike `get_provider`, this refuses an unrecognised name instead of defaulting.
-    `get_provider` reads a long-standing setting whose fall-through to mock is
-    documented and warned about at startup; this reads a new one, where a typo
-    would otherwise mean "route orders to a synthetic market".
+    Like `get_provider`, this refuses an unrecognised name instead of defaulting.
+    When the requested name matches the process setting it delegates to the same
+    validated singleton path; a typo cannot reuse or construct a synthetic market.
     """
     wanted = (name or "").strip().lower()
     if wanted == (get_settings().provider or "").strip().lower():
@@ -54,16 +53,22 @@ def provider_named(name: str) -> MarketDataProvider:
 def get_provider() -> MarketDataProvider:
     """Process-wide singleton provider."""
     global _provider
+    s = get_settings()
+    configured = (s.provider or "").strip().lower()
+    if configured not in {"kite", "mock", "replay", "upstox"}:
+        raise UnknownProvider(
+            f"configured provider {s.provider!r} is unavailable; "
+            "expected one of: kite, mock, replay, upstox"
+        )
     if _provider is not None:
         return _provider
-    s = get_settings()
-    if s.provider == "replay":
+    if configured == "replay":
         from app.providers.replay import ReplayProvider
         _provider = ReplayProvider(s.replay_path)
         log.info(f"provider: REPLAY ({s.replay_path}) — recorded session, "
                  f"cannot authenticate, cannot trade")
         return _provider
-    if s.provider == "upstox":
+    if configured == "upstox":
         from app.providers.upstox import UpstoxProvider
         _provider = UpstoxProvider()
         # Said at startup because the consequence is invisible otherwise: this connection
@@ -71,12 +76,12 @@ def get_provider() -> MarketDataProvider:
         # that can, `make_broker` has no live path to build and the session is paper.
         log.info("provider: UPSTOX (data only — set PT_EXECUTION_PROVIDER for orders)")
         return _provider
-    if s.provider == "kite":
+    if configured == "kite":
         from app.providers.kite import KiteProvider
         _provider = KiteProvider()
         log.info("provider: KITE (live Zerodha)")
-    else:
-        from app.providers.mock import MockProvider
-        _provider = MockProvider()
-        log.info("provider: MOCK (synthetic market — no Kite needed)")
+        return _provider
+    from app.providers.mock import MockProvider
+    _provider = MockProvider()
+    log.info("provider: MOCK (synthetic market — no Kite needed)")
     return _provider

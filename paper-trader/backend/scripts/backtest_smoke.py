@@ -25,7 +25,15 @@ from app.db.session import SessionLocal, init_db  # noqa: E402
 
 def main() -> int:
     init_db(reset=True)
-    run_id = start_sweep(owner_id="owner", scope="liquid", intervals=["15minute", "day"], capital=50_000)
+    # Phase-3 causal admission is a hard backtest boundary: a sweep runs one
+    # admitted strategy version or nothing.  Persist the canonical fixture
+    # receipt (the same evidence path the suite uses) and name it here.
+    from tests.admitted_entry import persist_admitted_entry  # noqa: E402
+    with SessionLocal() as session:
+        identity = persist_admitted_entry(session, owner_id="owner")
+    run_id = start_sweep(owner_id="owner", scope="liquid", intervals=["15minute", "day"],
+                         capital=50_000,
+                         admission_address=identity["admission_address"])
 
     # poll until the background thread finishes
     for _ in range(120):

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Diagnose without exposing proprietary strategies"
+  short_description: "Triage with minimal, privacy-safe diagnostic receipts"
+  default_prompt: "Use $support-diagnostics-runbook for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

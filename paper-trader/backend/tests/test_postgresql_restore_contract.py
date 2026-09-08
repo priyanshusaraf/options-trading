@@ -4,6 +4,86 @@ import copy
 
 import pytest
 
+from tests.test_static_scopes import db
+
+
+def test_execution_copy_orders_intents_before_positions_and_trades():
+    from app.db.models import Base
+
+    order = [table.name for table in Base.metadata.sorted_tables]
+    assert order.index("execution_intents") < order.index("positions")
+    assert order.index("execution_intents") < order.index("trades")
+
+
+def test_copy_restore_validator_recomputes_paper_charge_schedule_address(
+        admitted_entry_identity):
+    """FH-07/FH-15: valid-looking corrupt attribution cannot cross copy/restore."""
+    import sqlalchemy as sa
+    from app.core.instruments import get_instrument
+    from app.db.copy_contract import (
+        CopyRefusal, validate_content_addresses, validate_semantic_ownership,
+    )
+    from app.db.models import Base, ExecutionIntent
+    from app.db.session import init_db
+    from app.engine.broker import PaperBroker
+    from app.providers.mock import MockProvider
+
+    init_db(reset=True)
+    broker = PaperBroker(MockProvider(), owner_id="owner",
+                         broker_account_id="account.default")
+    instrument = get_instrument("NIFTY")
+    chain = broker.provider.get_option_chain(instrument)
+    quote = next(item for item in chain.quotes if item.option_type == "CE")
+    position = broker.open_position(
+        instrument, "LONG", quote, "COPY", broker.provider.now(), chain.spot,
+        **admitted_entry_identity(broker.s),
+    )
+    validate_content_addresses(broker.s.connection(), Base.metadata)
+    validate_semantic_ownership(broker.s.connection(), Base.metadata)
+    broker.s.execute(sa.text(
+        "UPDATE positions SET paper_entry_charge_schedule_address=:wrong WHERE id=:id"),
+        {"wrong": "sha256:" + "0" * 64, "id": position.id})
+    broker.s.flush()
+    with pytest.raises(CopyRefusal, match="schedule address"):
+        validate_content_addresses(broker.s.connection(), Base.metadata)
+    broker.s.rollback()
+    intent = broker.s.get(ExecutionIntent, position.entry_intent_id)
+    intent.instrument_key = "BANKNIFTY"
+    broker.s.flush()
+    with pytest.raises(CopyRefusal, match="intent content or scope"):
+        validate_content_addresses(broker.s.connection(), Base.metadata)
+    broker.s.rollback()
+    broker.s.execute(sa.text(
+        "DROP TRIGGER positions_refuse_entry_intent_id_rebind"))
+    with pytest.raises(CopyRefusal, match="immutability triggers"):
+        validate_content_addresses(broker.s.connection(), Base.metadata)
+    broker.s.rollback()
+
+
+@pytest.mark.parametrize('mutation', ['digest', 'owner', 'predecessor', 'membership', 'root'])
+def test_static_scope_restore_rejects_tampered_identity(db, mutation):
+    """Simulate damaged offline backup bytes, after explicitly removing the SQL guard."""
+    import sqlalchemy as sa
+    from app.db.models import Base
+    from app.db.copy_contract import validate_content_addresses, CopyRefusal
+    from tests.test_static_scopes import create
+    engine, members = db
+    create(engine, members[:1])
+    with engine.begin() as c:
+        validate_content_addresses(c, Base.metadata)
+        c.exec_driver_sql('DROP TRIGGER static_instrument_scope_revisions_refuse_update')
+        if mutation == 'root':
+            c.exec_driver_sql('UPDATE static_instrument_scopes SET revision=2')
+        else:
+            # Disable FK checks only on this disposable corruption fixture.
+            c.exec_driver_sql('PRAGMA foreign_keys=OFF')
+            updates = {'digest': "address='sha256:" + 'f'*64 + "'",
+                       'owner': "owner_id='b'", 'membership': "membership_address='sha256:"+'e'*64+"'",
+                       'predecessor': "revision=2, predecessor='sha256:"+'d'*64+"'"}
+            c.exec_driver_sql('UPDATE static_instrument_scope_revisions SET ' + updates[mutation])
+        with pytest.raises(CopyRefusal, match='static scope'):
+            validate_content_addresses(c, Base.metadata)
+
 from app.db.restore_contract import (
     RestoreRefusal,
     canonical_manifest,
@@ -11,6 +91,38 @@ from app.db.restore_contract import (
     validate_manifest,
     verify_manifest_signature,
 )
+
+
+@pytest.mark.parametrize("mutation", ("address", "forbidden"))
+def test_monitoring_copy_restore_gate_rejects_tampered_canonical_event(tmp_path, mutation):
+    from sqlalchemy.orm import Session
+    from app.db.copy_contract import CopyRefusal, validate_content_addresses
+    from app.db.models import Base
+    from app.monitoring.repository import MonitoringRepository
+    from tests.test_v0_monitoring_persistence import _engine, _facts, _spec, T0
+
+    engine = _engine(tmp_path, f"monitoring-restore-{mutation}.db")
+    before, after, event, _alert = _facts()
+    with Session(engine, expire_on_commit=False) as session, session.begin():
+        repository = MonitoringRepository(session, owner_id="tenant.alpha")
+        repository.create_assignment(_spec(), now=T0)
+        repository.append_state_snapshot(before, created_at=T0)
+        repository.append_state_snapshot(after, created_at=event.event_at)
+        repository.append_event(event, created_at=event.knowledge_cutoff_at)
+        validate_content_addresses(session.connection(), Base.metadata)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TRIGGER monitoring_signal_events_refuse_update")
+        if mutation == "address":
+            connection.exec_driver_sql(
+                "UPDATE monitoring_signal_events SET canonical_json = "
+                "json_set(canonical_json, '$.reason_code', 'FORGED_REASON')")
+        else:
+            connection.exec_driver_sql(
+                "UPDATE monitoring_signal_events SET canonical_json = "
+                "json_set(canonical_json, '$.order_id', 'forbidden')")
+        with pytest.raises(CopyRefusal, match="monitoring persistence"):
+            validate_content_addresses(connection, Base.metadata)
+    engine.dispose()
 
 
 def _manifest() -> dict:
@@ -97,3 +209,46 @@ def test_unsigned_development_manifest_never_satisfies_production_approval():
     assert manifest["signature"] == {"algorithm": "none", "status": "unsigned-development"}
     with pytest.raises(RestoreRefusal, match="signed"):
         verify_manifest_signature(manifest, signing_key=None, require_signed=True)
+
+
+def test_restore_manifest_summarizes_v2_presentation_revision_and_bytes(tmp_path):
+    import datetime as dt
+    import json
+    import sqlalchemy as sa
+    from app.db.models import Base
+    from app.db.restore_contract import _content_summary, _state_counts
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'v2-presentation-restore.db'}", future=True)
+    Base.metadata.create_all(engine)
+    now = dt.datetime.now()
+    document = json.dumps({
+        "schema": "strategy-os-v2-presentation/1", "positions": {}, "groups": {},
+        "viewport": None, "selection": {"nodes": [], "edges": [], "outputs": []},
+    }, sort_keys=True, separators=(",", ":"))
+    with engine.begin() as connection:
+        connection.execute(Base.metadata.tables["organizations"].insert(), {
+            "organization_id": "restore-owner", "name": "Restore", "created_at": now,
+            "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["projects"].insert(), {
+            "project_id": "restore-project", "owner_id": "restore-owner", "name": "Restore",
+            "description": "", "status": "active", "created_at": now, "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["graph_artifacts"].insert(), {
+            "owner_id": "restore-owner", "identifier": "restore-graph",
+            "project_id": "restore-project", "display_name": "Restore", "draft_json": "{}",
+            "draft_revision": 0, "published_revision": None, "current_version": None,
+            "created_at": now, "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["ir_v2_editor_presentations"].insert(), {
+            "owner_id": "restore-owner", "graph_identifier": "restore-graph",
+            "format_version": 2, "presentation_json": document, "revision": 7,
+            "updated_at": now,
+        })
+        assert _state_counts(connection, Base.metadata)["ir_v2_editor_presentations"] == {
+            "rows": 1, "max_revision": 7,
+        }
+        row = next(item for item in _content_summary(connection, Base.metadata)
+                   if item["table"] == "ir_v2_editor_presentations")
+        assert row["count"] == 1
+        assert len(row["set_digest"]) == 64

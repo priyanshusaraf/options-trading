@@ -8,6 +8,7 @@ from app.db.session import init_db, SessionLocal
 from app.db.models import InstrumentState
 from app.engine.runner import EngineRunner
 from app.core import config
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner():
@@ -63,7 +64,9 @@ def test_trailing_stop_ratchets_on_marks():
     nifty = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(nifty)
     q = chain.quotes[0]
-    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), chain.spot)
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), chain.spot,
+                                 **admission)
     base_stop = pos.stop_price
     # simulate the premium climbing well past the first trail trigger
     r.broker.mark(pos, premium=q.ltp * 1.30, spot=chain.spot, now=r.provider.now())

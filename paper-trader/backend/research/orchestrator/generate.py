@@ -17,6 +17,9 @@ from __future__ import annotations
 import json
 import logging
 
+from sqlalchemy.orm import Session
+
+from app.db.concurrency import has_pending_writes
 from app.ir.hashing import canonical_json, content_address
 from app.ir.library import REGISTRY
 from app.strategy.admission import (
@@ -86,10 +89,9 @@ def _admitted_generated_strategy(comp, *, owner_id: str,
     return strategy, graph, decision.artifact
 
 
-def _generated_descriptor(session, comp, *, owner_id: str, **common: object) -> dict:
+def _generated_descriptor(comp, *, owner_id: str, **common: object) -> tuple[dict, object]:
     strategy, graph, artifact = _admitted_generated_strategy(comp, owner_id=owner_id)
     del strategy
-    store_admission(session, artifact)
     return {
         **common,
         "composition": comp.to_dict(),
@@ -97,7 +99,7 @@ def _generated_descriptor(session, comp, *, owner_id: str, **common: object) -> 
         "graph": graph,
         "graph_content_address": content_address(graph),
         "admission_address": artifact.admission_address,
-    }
+    }, artifact
 
 
 def _enumerate_for_owner(session, instruments, *, owner_id: str, limit: int,
@@ -133,6 +135,11 @@ def generated_descriptors(session, instruments, interval, *, owner_id: str, limi
     if (not isinstance(limit, int) or isinstance(limit, bool)
             or not 0 <= limit <= _MAX_GENERATED_OPERATION_ITEMS):
         raise ValueError("generated descriptor limit is invalid")
+    if has_pending_writes(session):
+        # A durable receipt uses its own transaction.  On SQLite a caller's
+        # pending write would take the only writer lane; refusing leaves that
+        # caller-owned unit of work untouched instead of committing it here.
+        raise RuntimeError("generated descriptors require a caller session without pending writes")
     compositions, _ = _enumerate_for_owner(session, instruments, owner_id=owner_id,
                                             limit=limit, seed=seed)
     universe = [getattr(instrument, "key", str(instrument)) for instrument in instruments]
@@ -148,8 +155,22 @@ def generated_descriptors(session, instruments, interval, *, owner_id: str, limi
         "provider_mode": str(provider_mode)[:80] or "unknown",
         "seed": seed,
     }
-    return [_generated_descriptor(session, composition, owner_id=owner_id, **common)
-            for composition in compositions]
+    described = [
+        _generated_descriptor(composition, owner_id=owner_id, **common)
+        for composition in compositions
+    ]
+    # Receipts are prerequisites for operation admission, but this helper does
+    # not own its caller's unit of work.  Persist them in a dedicated, bounded
+    # transaction after the pending-write guard above.
+    with Session(bind=session.get_bind(), future=True) as receipt_session:
+        try:
+            for _descriptor, artifact in described:
+                store_admission(receipt_session, artifact)
+            receipt_session.commit()
+        except Exception:
+            receipt_session.rollback()
+            raise
+    return [descriptor for descriptor, _artifact in described]
 
 
 def _require_durable_admission(session, *, owner_id: str, graph: dict,

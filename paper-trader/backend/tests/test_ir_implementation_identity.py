@@ -15,6 +15,7 @@ from app.ir.implementation_identity import (
     ImplementationUnidentified,
     implementation_address,
 )
+from app.ir import implementation_identity
 from app.ir.registry import DependencyBoundary, registered_kernel
 
 
@@ -111,6 +112,34 @@ def test_module_dependencies_must_be_declared_exactly():
         implementation_address(
             _identity, DependencyBoundary("declared_objects", (math,))
         )
+
+
+def test_distribution_discovery_is_cached_without_changing_exact_versions(monkeypatch):
+    """Recursive identity reads discover installed-package ownership once per process."""
+    implementation_identity._distribution_packages.cache_clear()
+    calls = []
+
+    def discover_packages():
+        calls.append("discovered")
+        return {"math": ["identity-probe"]}
+
+    monkeypatch.setattr(implementation_identity.importlib.metadata,
+                        "packages_distributions", discover_packages)
+    monkeypatch.setattr(implementation_identity.importlib.metadata, "version",
+                        lambda name: "7.4.2" if name == "identity-probe" else None)
+    try:
+        first = implementation_identity._module_identity(math)
+        second = implementation_identity._module_identity(math)
+    finally:
+        implementation_identity._distribution_packages.cache_clear()
+
+    assert calls == ["discovered"]
+    assert first == second == {
+        "kind": "distribution_module",
+        "module": "math",
+        "distributions": [{"name": "identity-probe", "version": "7.4.2"}],
+        "path": "math",
+    }
 
 
 def test_runtime_import_and_dynamic_module_lookup_refuse():
@@ -306,3 +335,87 @@ def test_actual_expanding_z_rma_change_makes_registration_stale(monkeypatch):
             bodies={},
             registrations={registration.body_ref: registration},
         )
+
+
+def test_identity_reuses_each_successful_function_observation_once(monkeypatch):
+    calls = {"source": 0, "closure": 0}
+    source = implementation_identity.inspect.getsource
+    closure = implementation_identity.inspect.getclosurevars
+    def observed_source(fn):
+        calls["source"] += 1
+        return source(fn)
+    def observed_closure(fn):
+        calls["closure"] += 1
+        return closure(fn)
+    expected = implementation_address(_identity, DependencyBoundary("declared_objects", ()))
+    monkeypatch.setattr(implementation_identity.inspect, "getsource", observed_source)
+    monkeypatch.setattr(implementation_identity.inspect, "getclosurevars", observed_closure)
+    assert implementation_address(_identity, DependencyBoundary("declared_objects", ())) == expected
+    assert calls == {"source": 1, "closure": 1}
+
+
+def test_new_identity_visit_observes_mapping_and_default_mutations():
+    state = {"offset": 1}
+    def kernel(params=None, node_inputs=None, context_inputs=None):
+        return state["offset"]
+    boundary = DependencyBoundary("declared_objects", ())
+    first = implementation_address(kernel, boundary)
+    state["offset"] = 2
+    second = implementation_address(kernel, boundary)
+    kernel.__defaults__ = (1, None, None)
+    third = implementation_address(kernel, boundary)
+    assert len({first, second, third}) == 3
+    state["offset"] = 1
+    kernel.__defaults__ = (None, None, None)
+    assert implementation_address(kernel, boundary) == first
+
+
+def _identity_replacement(params, node_inputs, context_inputs):
+    return {"out": node_inputs["close"] + 1}
+
+
+def test_new_identity_visit_observes_replaced_code(monkeypatch):
+    boundary = DependencyBoundary("declared_objects", ())
+    first = implementation_address(_identity, boundary)
+    with monkeypatch.context() as change:
+        change.setattr(_identity, "__code__", _identity_replacement.__code__)
+        assert implementation_address(_identity, boundary) != first
+    assert implementation_address(_identity, boundary) == first
+
+
+def test_constant_module_and_input_attribute_lookups_keep_prior_identity_rules():
+    def constant(params, node_inputs, context_inputs):
+        operation = getattr(math, "fabs")
+        return {"out": operation(node_inputs["close"])}
+    def input_attribute(params, node_inputs, context_inputs):
+        return {"out": getattr(node_inputs["close"], params["attribute"])}
+    assert implementation_address(constant, DependencyBoundary("declared_objects", (math,))).startswith("sha256:")
+    assert implementation_address(input_attribute, DependencyBoundary("declared_objects", ())).startswith("sha256:")
+
+
+def test_unreadable_source_preserves_dynamic_and_defining_module_guard_order():
+    namespace = {"__name__": __name__}
+    exec(compile(
+        "def missing(params, node_inputs, context_inputs):\n    return node_inputs['close']\n"
+        "def importing(params, node_inputs, context_inputs):\n    import math\n    return math.pi\n"
+        "def outer():\n    value = 1\n    def closed(params, node_inputs, context_inputs):\n        return value\n    return closed\n",
+        "<identity-unreadable-source>", "exec"), namespace)
+    with pytest.raises(ImplementationUnidentified, match="has no readable source"):
+        implementation_address(namespace["missing"], DependencyBoundary("declared_objects", ()))
+    with pytest.raises(ImplementationUnidentified, match="performs a runtime import"):
+        implementation_address(namespace["importing"], DependencyBoundary("declared_objects", ()))
+    with pytest.raises(ImplementationUnidentified, match="uses closures under defining_module"):
+        implementation_address(namespace["outer"](), DependencyBoundary("defining_module"))
+
+
+_IDENTITY_GLOBAL_PROBE = 0
+
+
+def test_new_identity_visit_observes_reassigned_global(monkeypatch):
+    def kernel(params, node_inputs, context_inputs):
+        return _IDENTITY_GLOBAL_PROBE
+    monkeypatch.setitem(globals(), "_IDENTITY_GLOBAL_PROBE", 1)
+    boundary = DependencyBoundary("declared_objects", ())
+    first = implementation_address(kernel, boundary)
+    monkeypatch.setitem(globals(), "_IDENTITY_GLOBAL_PROBE", 2)
+    assert implementation_address(kernel, boundary) != first

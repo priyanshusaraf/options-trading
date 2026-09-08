@@ -11,7 +11,16 @@ import random
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-from app.ir.edit import EditRejected, add_node, connect, disconnect, remove_node, set_override
+from app.ir.edit import (
+    AddNode,
+    Connect,
+    Disconnect,
+    EditRejected,
+    RemoveNode,
+    SocketRef,
+    apply_batch,
+    set_override,
+)
 
 COMBINER = "logic.and"
 
@@ -76,15 +85,28 @@ def _next_id(graph: Mapping[str, Any], stem: str) -> str:
     return f"{stem}_{n}"
 
 
+def _ref(value: tuple[str, str]) -> SocketRef:
+    return SocketRef(*value)
+
+
+def _closed_batch(graph: Mapping[str, Any], operations) -> Mapping[str, Any]:
+    """Apply one structural mutation without exposing invalid intermediate IR."""
+    return apply_batch(graph, operations, {}).graph
+
+
 def _place_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
                      block: str) -> tuple[Mapping[str, Any], str]:
     """Add a block node and feed it the bars. Never leaves an input unfed."""
     instance = _next_id(graph, "n")
-    out = add_node(graph, instance, f"block.{block}", 1,
-                   dict(vocabulary.defaults.get(block, {})))
-    for field in (vocabulary.block_inputs or {}).get(block, vocabulary.bar_inputs):
-        out = connect(out, ("io_in", field), (instance, field))
-    return out, instance
+    operations = [AddNode(
+        instance, f"block.{block}", 1,
+        dict(vocabulary.defaults.get(block, {})), None, (),
+    )]
+    operations.extend(
+        Connect(_ref(("io_in", field)), _ref((instance, field)))
+        for field in (vocabulary.block_inputs or {}).get(block, vocabulary.bar_inputs)
+    )
+    return _closed_batch(graph, operations), instance
 
 
 # ── the mutations ─────────────────────────────────────────────────────────
@@ -102,14 +124,21 @@ def add_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
     source, target = spliced["source"], spliced["target"]
 
     block = rng.choice(vocabulary.blocks)
-    out, instance = _place_predicate(graph, vocabulary, block)
-    combiner = _next_id(out, "c")
-    out = add_node(out, combiner, COMBINER, 1)
-    out = disconnect(out, (source["instance"], source["socket"]),
-                     (target["instance"], target["socket"]))
-    out = connect(out, (source["instance"], source["socket"]), (combiner, "a"))
-    out = connect(out, (instance, "out"), (combiner, "b"))
-    out = connect(out, (combiner, "out"), (target["instance"], target["socket"]))
+    instance = _next_id(graph, "n")
+    combiner = _next_id(graph, "c")
+    operations = [
+        AddNode(instance, f"block.{block}", 1,
+                dict(vocabulary.defaults.get(block, {})), None, ()),
+        *(Connect(_ref(("io_in", field)), _ref((instance, field)))
+          for field in (vocabulary.block_inputs or {}).get(block, vocabulary.bar_inputs)),
+        AddNode(combiner, COMBINER, 1, {}, None, ()),
+        Disconnect(_ref((source["instance"], source["socket"])),
+                   _ref((target["instance"], target["socket"]))),
+        Connect(_ref((source["instance"], source["socket"])), _ref((combiner, "a"))),
+        Connect(_ref((instance, "out")), _ref((combiner, "b"))),
+        Connect(_ref((combiner, "out")), _ref((target["instance"], target["socket"]))),
+    ]
+    out = _closed_batch(graph, operations)
     return Proposal(
         f"add {block} as {instance} through {combiner} "
         f"before {target['instance']}.{target['socket']}", out)
@@ -136,10 +165,12 @@ def drop_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
     if survivor is None or onward is None:
         return None
 
-    out = remove_node(graph, victim)
-    out = remove_node(out, combiner)
-    out = connect(out, (survivor["instance"], survivor["socket"]),
-                  (onward["instance"], onward["socket"]))
+    out = _closed_batch(graph, (
+        RemoveNode(victim),
+        RemoveNode(combiner),
+        Connect(_ref((survivor["instance"], survivor["socket"])),
+                _ref((onward["instance"], onward["socket"]))),
+    ))
     return Proposal(f"drop {victim} and {combiner}", out)
 
 
@@ -159,9 +190,15 @@ def swap_predicate(graph: Mapping[str, Any], vocabulary: Vocabulary,
         return None
 
     block = rng.choice(vocabulary.blocks)
-    out = remove_node(graph, victim)
-    out, instance = _place_predicate(out, vocabulary, block)
-    out = connect(out, (instance, "out"), (into["instance"], into["socket"]))
+    instance = _next_id(graph, "n")
+    out = _closed_batch(graph, (
+        RemoveNode(victim),
+        AddNode(instance, f"block.{block}", 1,
+                dict(vocabulary.defaults.get(block, {})), None, ()),
+        *(Connect(_ref(("io_in", field)), _ref((instance, field)))
+          for field in (vocabulary.block_inputs or {}).get(block, vocabulary.bar_inputs)),
+        Connect(_ref((instance, "out")), _ref((into["instance"], into["socket"]))),
+    ))
     return Proposal(f"swap {victim} → {block} as {instance}", out)
 
 
@@ -177,10 +214,12 @@ def rewire(graph: Mapping[str, Any], vocabulary: Vocabulary,
     if a is None or b is None or (a["instance"], a["socket"]) == (b["instance"], b["socket"]):
         return None
 
-    out = disconnect(graph, (left, "out"), (a["instance"], a["socket"]))
-    out = disconnect(out, (right, "out"), (b["instance"], b["socket"]))
-    out = connect(out, (left, "out"), (b["instance"], b["socket"]))
-    out = connect(out, (right, "out"), (a["instance"], a["socket"]))
+    out = _closed_batch(graph, (
+        Disconnect(_ref((left, "out")), _ref((a["instance"], a["socket"]))),
+        Disconnect(_ref((right, "out")), _ref((b["instance"], b["socket"]))),
+        Connect(_ref((left, "out")), _ref((b["instance"], b["socket"]))),
+        Connect(_ref((right, "out")), _ref((a["instance"], a["socket"]))),
+    ))
     return Proposal(f"rewire {left} ↔ {right}", out)
 
 

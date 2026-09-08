@@ -27,7 +27,22 @@ import datetime as dt
 import json
 
 from app.providers import capabilities as caps
+from app.market_data.numeric import market_float
 from app.providers.base import Candle, MarketDataProvider
+
+
+def candle_from_record(r: dict) -> Candle:
+    """One recorded replay row → ``Candle`` (A-02: gate before coercion)."""
+    ts = r.get("ts") or r.get("date") or r.get("time")
+    when = ts if isinstance(ts, dt.datetime) else dt.datetime.fromisoformat(str(ts))
+    raw_volume = 0 if r.get("volume") is None else r["volume"]
+    return Candle(
+        ts=when.replace(tzinfo=None),
+        open=market_float(r["open"], field="replay candle open"),
+        high=market_float(r["high"], field="replay candle high"),
+        low=market_float(r["low"], field="replay candle low"),
+        close=market_float(r["close"], field="replay candle close"),
+        volume=market_float(raw_volume, field="replay candle volume"))
 
 
 def load_session(path: str) -> dict:
@@ -41,15 +56,7 @@ def load_session(path: str) -> dict:
         raw = json.load(f)
     out: dict = {}
     for key, rows in (raw or {}).items():
-        candles = []
-        for r in rows or []:
-            ts = r.get("ts") or r.get("date") or r.get("time")
-            when = ts if isinstance(ts, dt.datetime) else dt.datetime.fromisoformat(str(ts))
-            candles.append(Candle(
-                ts=when.replace(tzinfo=None),
-                open=float(r["open"]), high=float(r["high"]),
-                low=float(r["low"]), close=float(r["close"]),
-                volume=float(r.get("volume", 0) or 0)))
+        candles = [candle_from_record(r) for r in rows or []]
         out[key] = sorted(candles, key=lambda c: c.ts)
     return out
 

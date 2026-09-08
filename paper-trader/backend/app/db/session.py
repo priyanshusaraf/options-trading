@@ -254,22 +254,43 @@ def _migrate_schema() -> None:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
-def init_db(reset: bool = False) -> None:
+def _drop_mock_sqlite_schema() -> None:
+    """Drop a guarded mock schema, including restrictive snapshot self-links."""
+    engine.dispose()
+    with engine.connect() as connection:
+        raw = connection.connection.driver_connection
+        enabled = bool(raw.execute("PRAGMA foreign_keys").fetchone()[0])
+        try:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            with connection.begin():
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                Base.metadata.drop_all(connection)
+                connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        finally:
+            connection.rollback()
+            raw.execute(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
+
+
+def _require_mock_sqlite_reset() -> None:
     # Fail closed: a destructive reset is only ever legitimate in mock mode (the
     # sim clock restarts each run). In any other provider, refuse to DROP — this
     # is the last line of defence against a stray init_db(reset=True) (e.g. a bare
     # `python -c` run outside the pytest/conftest isolation) wiping the live book.
-    if reset and get_settings().provider != "mock":
+    if get_settings().provider != "mock":
         raise RuntimeError(
             "init_db(reset=True) refused: destructive reset is only allowed in mock "
             "mode (provider='mock'). Refusing to DROP tables on a non-mock database."
         )
-    if reset and engine.dialect.name != "sqlite":
+    if engine.dialect.name != "sqlite":
         raise RuntimeError(
             "init_db(reset=True) is supported only for a throwaway SQLite database. "
             "Refusing to DROP a PostgreSQL execution database."
         )
+
+
+def init_db(reset: bool = False) -> None:
     if reset:
+        _require_mock_sqlite_reset()
         # Release every idle pooled connection before dropping. `DROP TABLE`
         # needs an exclusive lock, and in WAL mode a pooled connection that
         # still holds a read transaction blocks it until `busy_timeout` gives
@@ -283,13 +304,10 @@ def init_db(reset: bool = False) -> None:
         # Safe on the box: this branch is mock-only (see the guard above), and
         # a destructive reset should not be reusing connections opened before
         # the schema changed underneath them.
-        engine.dispose()
-        Base.metadata.drop_all(engine)
         # drop_all leaves alembic_version behind (it is not a mapped table), which
         # would tell the next init_schema() this is a managed database while every
         # real table is gone. Drop it too so a reset returns to the empty state.
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        _drop_mock_sqlite_schema()
     # Versioned migrations own the schema now. Empty DB -> create_all + stamp head;
     # pre-Alembic DB -> frozen legacy ALTERs, stamp baseline, then upgrade; managed
     # DB -> upgrade. See app/db/migrate.py for why all three converge.

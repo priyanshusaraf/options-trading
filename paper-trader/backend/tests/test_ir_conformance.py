@@ -74,10 +74,15 @@ def a_graph():
              "overrides": {"length": 50}},
             {"instance_id": "n_cmp", "component": {"identifier": "compare.gt", "version": 1},
              "overrides": {}},
+            {"instance_id": "io_out",
+             "component": {"identifier": "graph.output", "version": 1},
+             "overrides": {}},
         ],
         "edges": [
             {"source": {"instance": "n_ema", "socket": "out"},
              "target": {"instance": "n_cmp", "socket": "a"}},
+            {"source": {"instance": "n_cmp", "socket": "out"},
+             "target": {"instance": "io_out", "socket": "longEntry"}},
         ],
         "groups": [],
     }
@@ -383,6 +388,7 @@ def test_f9_instance_ids_must_be_unique_within_a_graph():
     art = a_graph()
     art["nodes"][1]["instance_id"] = "n_ema"
     art["edges"][0]["target"]["instance"] = "n_ema"     # keep every edge resolvable
+    art["edges"][1]["source"]["instance"] = "n_ema"
     paths = [v.path for v in validate(art) if v.clause == "F9"]
     assert paths == ["$.nodes[1].instance_id"], f"got {paths}"
 
@@ -391,6 +397,45 @@ def test_f9_an_edge_must_reference_a_declared_instance():
     art = a_graph()
     art["edges"][0]["target"]["instance"] = "n_missing"
     assert_violates(art, "F9")
+
+
+@pytest.mark.parametrize(
+    "end,edge_index,socket",
+    [("source", 3, "high"), ("target", 3, "out")],
+)
+def test_f9_edge_ends_obey_declared_socket_directions(end, edge_index, socket):
+    """An input cannot produce and an output cannot consume, even at the same type."""
+    from tests.test_ir_resolution import ATR_BODY, library
+
+    art = copy.deepcopy(ATR_BODY)
+    art["edges"][edge_index][end]["socket"] = socket
+
+    paths = [v.path for v in validate(art, library().components) if v.clause == "F9"]
+    assert f"$.edges[{edge_index}].{end}.socket" in paths
+
+
+def test_f9_v1_target_socket_accepts_only_one_incoming_edge():
+    """Two valid producers cannot silently make edge order choose a v1 input value."""
+    from tests.test_ir_resolution import DUAL_ATR, library
+
+    art = copy.deepcopy(DUAL_ATR)
+    art["edges"].append({
+        "source": {"instance": "n_slow", "socket": "atr"},
+        "target": {"instance": "n_cmp", "socket": "a"},
+    })
+
+    violations = validate(art, library().components)
+    assert any(v.clause == "F9" and v.path == "$.edges[9].target" for v in violations)
+
+
+def test_f9_declared_graph_output_has_exactly_one_producer():
+    from tests.test_ir_resolution import ATR_BODY, library
+
+    art = copy.deepcopy(ATR_BODY)
+    art["edges"].pop()
+
+    violations = validate(art, library().components)
+    assert any(v.clause == "F9" and "output" in v.message for v in violations)
 
 
 # ── F10 — overrides carry values only ─────────────────────────────────────

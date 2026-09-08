@@ -4,10 +4,13 @@ from __future__ import annotations
 import importlib
 import hashlib
 import json
+import pkgutil
 import re
 from collections.abc import Callable
 
-from sqlalchemy import CheckConstraint, Engine, MetaData, UniqueConstraint, inspect, text
+from sqlalchemy import Boolean, CheckConstraint, Engine, MetaData, UniqueConstraint, inspect, text
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.schema import CreateIndex, CreateTable, Table
 
 from research.domain.base import LEGACY_OWNER_ID, ResearchBase
@@ -16,9 +19,33 @@ VERSION_TABLE = "research_schema_version"
 _INTERNAL_MIGRATION_TABLES = frozenset({
     "_research_0002_operation_rebuild_proof", "sqlite_sequence",
 })
-HEAD_VERSION = "0005"
+HEAD_VERSION = "0012"
+# Marker shape is a DECLARED DIALECT CONTRACT (foundation audit A-05):
+# SQLite stores (version, schema_cookie) because the cookie powers the
+# restart fast-path trust check (_schema_cookie vs the stamped value);
+# PostgreSQL stores (version) only, because that plane adopts exclusively
+# empty databases and has no rebuild history for a cookie to guard.  Neither
+# plane may silently grow the other's column; the shape is pinned by
+# research_tests/test_foundation_a01_migration_upgrade.py.
 _VERSION_COLUMNS = ("version", "schema_cookie")
 _LEGACY_MARKER_SHAPE = (("version", "VARCHAR(16)", True, None, 1),)
+
+
+def head_version() -> str:
+    """Return the newest on-disk research migration version.
+
+    The migration runner owns this discovery so evidence commands do not copy a
+    head literal from a review report.
+    """
+    package = importlib.import_module("research.domain.migrations")
+    versions = [
+        item.name.split("_", 1)[0]
+        for item in pkgutil.iter_modules(package.__path__)
+        if re.fullmatch(r"\d{4}_.+", item.name)
+    ]
+    if not versions:
+        raise ResearchMigrationError("research migration directory is empty")
+    return max(versions)
 _CURRENT_MARKER_SHAPE = (
     ("version", "VARCHAR(16)", True, None, 1),
     ("schema_cookie", "INTEGER", True, None, 0),
@@ -27,11 +54,36 @@ POSTGRESQL_IMMUTABLE_TABLES = (
     "research_experiment_spec",
     "research_optimization_trial",
     "research_strategy_admission",
+    "research_dataset_manifests",
+    "research_ir_v2_graph_versions",
+    "research_dataset_segments_v2",
+    "research_dataset_manifests_v2",
+    "research_dataset_manifest_segments_v2",
 )
 
 
 class ResearchMigrationError(RuntimeError):
     """A migration refused to make a lossy or structurally unsafe change."""
+
+
+class _JsonShapeAt0009(ColumnElement):
+    """Exact accepted 0009 helper, retained only for forward-upgrade validation."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_JsonShapeAt0009, "sqlite")
+def _compile_json_shape_at_0009_sqlite(element, _compiler, **_kw):
+    return f"json_valid({element.column_name})"
+
+
+@compiles(_JsonShapeAt0009, "postgresql")
+def _compile_json_shape_at_0009_postgresql(element, _compiler, **_kw):
+    return f"jsonb_typeof({element.column_name}::jsonb) = 'object'"
 
 
 def _quoted(identifier: str) -> str:
@@ -195,7 +247,7 @@ def _validate_copied_payload(connection, table: Table, source: str, target: str)
         raise ResearchMigrationError(f"payload mismatch rebuilding {source}")
 
 
-def _rebuild_table(connection, table: Table) -> None:
+def _rebuild_table(connection, table: Table, *, notify: bool = True) -> None:
     source = table.name
     target = _temporary_name(table)
     names = _table_names(connection)
@@ -227,15 +279,29 @@ def _rebuild_table(connection, table: Table) -> None:
     connection.exec_driver_sql(
         f"ALTER TABLE {_quoted(target)} RENAME TO {_quoted(source)}"
     )
-    _after_table_rebuilt(table.name)
+    if notify:
+        _after_table_rebuilt(table.name)
 
 
 def _after_table_rebuilt(_table_name: str) -> None:
     """Failure-injection seam for restart and PRAGMA-restoration tests."""
 
 
+def _restore_table_contracts(connection, table: Table) -> None:
+    """Restore every index and trigger owned by one rebuilt SQLite table."""
+    for index in table.indexes:
+        connection.exec_driver_sql(
+            str(CreateIndex(index).compile(dialect=connection.dialect)))
+    for sql in _expected_triggers(tables=(table,)).values():
+        connection.exec_driver_sql(sql)
+
+
+def _after_0010_boundary(_completed_contracts: int) -> None:
+    """Failure-injection seam after a complete, validated 0010 boundary."""
+
+
 def _root_tables() -> tuple[Table, ...]:
-    """The historical 0001 tables, frozen before scheduler tables existed."""
+    """Synthetic current-metadata subset for retained module-unit fixtures."""
     return tuple(table for table in _pre_0005_tables()
                  if table.name not in {"research_operation", "research_operation_item",
                                        "research_operation_event"}
@@ -266,17 +332,20 @@ def _tables_through_0003() -> tuple[Table, ...]:
 
 
 def _pre_0005_tables() -> tuple[Table, ...]:
-    """Project current metadata back to the exact schema before migration 0005.
+    """Build a synthetic current-metadata subset labelled pre-0005.
 
-    Historical migrations validate before writing. They must not validate a 0004
-    database against today's receipt table or consumer columns, because that
-    would turn an additive migration into a marker-only trust upgrade.
+    This helper is not a frozen historical catalog and grants no active-runner
+    support. It remains only for direct lower-level migration module tests.
     """
     from research.domain import models  # noqa: F401 - ensure complete metadata registration
 
     metadata = MetaData()
-    for table in ResearchBase.metadata.sorted_tables:
-        if table.name != "research_strategy_admission":
+    for table in _pre_0010_tables():
+        if table.name not in {
+            "research_strategy_admission", "research_dataset_manifests",
+            "research_ir_v2_graph_versions", "research_dataset_segments_v2",
+            "research_dataset_manifests_v2", "research_dataset_manifest_segments_v2",
+        }:
             table.to_metadata(metadata)
     for name in ("research_experiment_run", "research_promotion_candidate"):
         table = metadata.tables[name]
@@ -288,6 +357,100 @@ def _pre_0005_tables() -> tuple[Table, ...]:
     return tuple(metadata.sorted_tables)
 
 
+def _pre_0006_tables() -> tuple[Table, ...]:
+    """Exact 0005 schema: v1 receipt rows have no inferred v2 identity."""
+    from research.domain import models  # noqa: F401 - ensure receipt metadata is registered
+    metadata = MetaData()
+    for table in _pre_0010_tables():
+        if table.name not in {
+            "research_dataset_manifests", "research_ir_v2_graph_versions",
+            "research_dataset_segments_v2", "research_dataset_manifests_v2",
+            "research_dataset_manifest_segments_v2",
+        }:
+            table.to_metadata(metadata)
+    table = metadata.tables["research_strategy_admission"]
+    table._columns.remove(table.c.format_version)
+    table._columns.remove(table.c.content_address)
+    return tuple(metadata.sorted_tables)
+
+
+def _pre_0007_tables() -> tuple[Table, ...]:
+    """Exact 0006 schema, before dataset provenance and v2 graph evidence."""
+    from research.domain import models  # noqa: F401
+
+    metadata = MetaData()
+    for table in _pre_0010_tables():
+        if table.name not in {
+            "research_dataset_manifests", "research_ir_v2_graph_versions",
+            "research_dataset_segments_v2", "research_dataset_manifests_v2",
+            "research_dataset_manifest_segments_v2",
+        }:
+            table.to_metadata(metadata)
+    return tuple(metadata.sorted_tables)
+
+
+def _pre_0008_tables() -> tuple[Table, ...]:
+    """Exact 0007 schema, before the additive v2 graph evidence table."""
+    from research.domain import models  # noqa: F401
+
+    metadata = MetaData()
+    for table in _pre_0010_tables():
+        if table.name not in {"research_ir_v2_graph_versions", "research_dataset_segments_v2",
+                              "research_dataset_manifests_v2",
+                              "research_dataset_manifest_segments_v2"}:
+            table.to_metadata(metadata)
+    return tuple(metadata.sorted_tables)
+
+
+def _pre_0009_tables() -> tuple[Table, ...]:
+    """Exact 0008 schema, before typed dataset authority."""
+    from research.domain import models  # noqa: F401
+
+    metadata = MetaData()
+    for table in _pre_0010_tables():
+        if table.name not in {"research_dataset_segments_v2", "research_dataset_manifests_v2",
+                              "research_dataset_manifest_segments_v2"}:
+            table.to_metadata(metadata)
+    return tuple(metadata.sorted_tables)
+
+
+def _json_shape_tables_at(new_contract_count: int) -> tuple[Table, ...]:
+    """Build one synthetic current-metadata 0010-prefix module fixture.
+
+    This does not establish historical catalog authority or supported replay.
+    """
+    from research.domain import models  # noqa: F401
+
+    migration = importlib.import_module(
+        "research.domain.migrations.0010_research_json_shape_parity")
+    if not 0 <= new_contract_count <= len(migration.JSON_SHAPE_SITES):
+        raise ValueError("invalid 0010 JSON-shape prefix")
+    metadata = MetaData()
+    for table in ResearchBase.metadata.sorted_tables:
+        table.to_metadata(metadata)
+    for index, (table_name, constraint_name, column_name, _shape) in enumerate(
+            migration.JSON_SHAPE_SITES):
+        if index < new_contract_count:
+            continue
+        table = metadata.tables[table_name]
+        for constraint in tuple(table.constraints):
+            if constraint.name == constraint_name:
+                table.constraints.remove(constraint)
+                break
+        else:
+            raise ResearchMigrationError(
+                f"missing projected JSON constraint {constraint_name}"
+            )
+        table.append_constraint(CheckConstraint(
+            _JsonShapeAt0009(column_name), name=constraint_name))
+    return tuple(metadata.sorted_tables)
+
+
+def _pre_0010_tables() -> tuple[Table, ...]:
+    """Exact accepted 0009 research schema, before JSON-shape parity repair."""
+    return _json_shape_tables_at(0)
+
+
 def _upgrade_outbox(connection) -> None:
     from research.domain.models import RESEARCH_OUTBOX_MODELS
 
@@ -297,18 +460,140 @@ def _upgrade_outbox(connection) -> None:
 
 
 def _upgrade_strategy_admissions(connection) -> None:
-    from research.domain.models import ResearchStrategyAdmission
-
     migration = importlib.import_module(
         "research.domain.migrations.0005_strategy_admissions")
+    tables = {table.name: table for table in _pre_0010_tables()}
     migration.upgrade(
         connection,
-        ResearchStrategyAdmission.__table__,
+        tables["research_strategy_admission"],
         (
-            ResearchBase.metadata.tables["research_experiment_run"],
-            ResearchBase.metadata.tables["research_promotion_candidate"],
+            tables["research_experiment_run"],
+            tables["research_promotion_candidate"],
         ),
     )
+    if connection.dialect.name == "sqlite":
+        # A-01 prevention invariant: a stage installs its COMPLETE target
+        # contract before the marker advances.  The 0004-era database has no
+        # admission triggers (the table is born here), so the staged path
+        # installs them from the one canonical source — exactly what fresh
+        # installs receive wholesale.
+        existing = {row[0] for row in connection.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='trigger'").all()}
+        for name, sql in _expected_triggers(
+                tables=(tables["research_strategy_admission"],)).items():
+            if name not in existing:
+                connection.exec_driver_sql(sql)
+
+
+def _upgrade_ir_v2_admissions(connection) -> None:
+    migration = importlib.import_module("research.domain.migrations.0006_ir_v2_admissions")
+    tables = {table.name: table for table in _pre_0010_tables()}
+    migration.upgrade(connection, tables["research_strategy_admission"])
+
+
+def _upgrade_dataset_provenance(connection) -> None:
+    migration = importlib.import_module("research.domain.migrations.0007_phase4_dataset_provenance")
+    tables = {table.name: table for table in _pre_0010_tables()}
+    migration.upgrade(connection, tables["research_dataset_manifests"])
+
+
+def _upgrade_ir_v2_graph_versions(connection) -> None:
+    migration = importlib.import_module(
+        "research.domain.migrations.0008_ir_v2_graph_versions")
+    tables = {table.name: table for table in _pre_0010_tables()}
+    migration.upgrade(connection, tables["research_ir_v2_graph_versions"])
+
+
+def _upgrade_dataset_authority(connection) -> None:
+    migration = importlib.import_module(
+        "research.domain.migrations.0009_phase4_dataset_authority")
+    tables = {table.name: table for table in _pre_0010_tables()}
+    selected = (
+        tables["research_dataset_segments_v2"],
+        tables["research_dataset_manifests_v2"],
+        tables["research_dataset_manifest_segments_v2"],
+    )
+    migration.upgrade(connection, selected)
+    if connection.dialect.name == "sqlite":
+        for sql in _expected_triggers(tables=selected).values():
+            connection.exec_driver_sql(sql.replace("CREATE TRIGGER ",
+                                                   "CREATE TRIGGER IF NOT EXISTS ", 1))
+    else:
+        for table in selected:
+            function = f"{table.name}_refuse_mutation"
+            connection.exec_driver_sql(
+                f"CREATE OR REPLACE FUNCTION {_quoted(function)}() RETURNS trigger AS $$ "
+                f"BEGIN RAISE EXCEPTION '{table.name} is immutable' "
+                "USING ERRCODE = '55000'; END; $$ LANGUAGE plpgsql"
+            )
+            connection.exec_driver_sql(
+                f"CREATE TRIGGER {_quoted(function)} BEFORE UPDATE OR DELETE "
+                f"ON {_quoted(table.name)} FOR EACH ROW EXECUTE FUNCTION {_quoted(function)}()"
+            )
+
+
+def _validate_0010_sqlite_state(connection, *, expected: int | None = None) -> int:
+    """Return only an exact declared SQLite 0010 restart boundary."""
+    allowed = (0, 1, 2, 3, 8)
+    candidates = (expected,) if expected is not None else allowed
+    if any(candidate not in allowed for candidate in candidates):
+        raise ResearchMigrationError("undeclared SQLite 0010 restart boundary")
+    expected_names = {table.name for table in ResearchBase.metadata.sorted_tables}
+    actual_names = _table_names(connection) - {VERSION_TABLE}
+    if actual_names != expected_names:
+        raise ResearchMigrationError(
+            f"research table-set drift: {sorted(actual_names)} != {sorted(expected_names)}"
+        )
+    matches = []
+    for candidate in candidates:
+        try:
+            _validate_schema(
+                connection, include_marker=False,
+                tables=_json_shape_tables_at(candidate),
+            )
+        except ResearchMigrationError:
+            continue
+        matches.append(candidate)
+    if len(matches) != 1:
+        raise ResearchMigrationError(
+            f"research SQLite 0010 state is not an exact declared prefix: {matches!r}"
+        )
+    return matches[0]
+
+
+def _upgrade_json_shape_parity_sqlite(connection) -> None:
+    migration = importlib.import_module(
+        "research.domain.migrations.0010_research_json_shape_parity")
+    migration.upgrade_sqlite(
+        connection, ResearchBase.metadata.sorted_tables,
+        validate_state=_validate_0010_sqlite_state,
+        rebuild_table=_rebuild_table,
+        restore_table_contracts=_restore_table_contracts,
+        after_boundary=_after_0010_boundary,
+    )
+
+
+def _complete_0010_sqlite(connection, *, establish_0009: bool) -> None:
+    """Create a durable 0009 handoff, then advance through restart boundaries."""
+    if establish_0009:
+        _validate_0010_sqlite_state(connection, expected=0)
+        _stamp(connection, version="0009")
+        connection.commit()
+    foreign_keys = int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one())
+    connection.commit()
+    connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+    try:
+        _upgrade_json_shape_parity_sqlite(connection)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.exec_driver_sql(f"PRAGMA foreign_keys={foreign_keys}")
+    _validate_schema(connection, include_marker=False)
+    _stamp(connection)
+    connection.commit()
+    _validate_schema(connection)
 
 
 def _create_indexes_and_triggers(connection, *, tables=None) -> None:
@@ -317,7 +602,9 @@ def _create_indexes_and_triggers(connection, *, tables=None) -> None:
         for index in table.indexes:
             connection.exec_driver_sql(str(CreateIndex(index).compile(dialect=connection.dialect)))
     for name in ("research_experiment_spec", "research_optimization_trial",
-                 "research_strategy_admission"):
+                 "research_strategy_admission", "research_ir_v2_graph_versions",
+                 "research_dataset_segments_v2", "research_dataset_manifests_v2",
+                 "research_dataset_manifest_segments_v2"):
         if name not in {table.name for table in selected}:
             continue
         for operation in ("UPDATE", "DELETE"):
@@ -374,18 +661,36 @@ def _expected_default(column, dialect) -> str | None:
 def _expected_triggers(*, tables=None) -> dict[str, str]:
     present = ({table.name for table in tables}
                if tables is not None else {
-                   "research_experiment_spec", "research_optimization_trial",
-                   "research_strategy_admission",
+                "research_experiment_spec", "research_optimization_trial",
+                "research_strategy_admission",
+                "research_dataset_manifests",
+                "research_ir_v2_graph_versions",
+                "research_dataset_segments_v2", "research_dataset_manifests_v2",
+                "research_dataset_manifest_segments_v2",
                })
-    return {
+    immutable = {
         f"trg_{table}_no_{operation.lower()}": (
             f"CREATE TRIGGER trg_{table}_no_{operation.lower()} BEFORE {operation} "
             f"ON {table} BEGIN SELECT RAISE(ABORT, '{table} is immutable'); END"
         )
         for table in ("research_experiment_spec", "research_optimization_trial",
-                      "research_strategy_admission") if table in present
+                      "research_strategy_admission", "research_dataset_manifests",
+                      "research_ir_v2_graph_versions", "research_dataset_segments_v2",
+                      "research_dataset_manifests_v2",
+                      "research_dataset_manifest_segments_v2") if table in present
         for operation in ("UPDATE", "DELETE")
     }
+    if "research_dataset_manifests" in present:
+        immutable["research_dataset_manifests_refuse_secret_key"] = (
+            "CREATE TRIGGER research_dataset_manifests_refuse_secret_key "
+            "BEFORE INSERT ON research_dataset_manifests WHEN EXISTS ("
+            "SELECT 1 FROM json_tree(NEW.manifest_json) WHERE key IS NOT NULL AND ("
+            " lower(key) LIKE '%token%' OR lower(key) LIKE '%secret%' OR "
+            "lower(key) LIKE '%password%' OR lower(key) LIKE '%api_key%' OR "
+            "lower(key) LIKE '%credential%' OR lower(key) LIKE '%authorization%'"
+            " )) BEGIN SELECT RAISE(ABORT, 'research_dataset_manifests contains credential-bearing key'); END"
+        )
+    return immutable
 
 
 def _normalise_fk_options(*, ondelete=None, onupdate=None,
@@ -416,10 +721,33 @@ def _validate_schema(connection, *, include_marker: bool = True, tables=None) ->
     # Recovery tests intentionally rewind a version marker after a completed
     # newer migration. Accept only the exact known 0005 additive state while
     # validating a 0001–0004 preflight; arbitrary extra columns still refuse.
-    validation_tables = list(expected)
+    #
+    # This synthetic current-metadata projection supports retained lower-level
+    # module tests only. It is not a historical catalog or active replay path.
     admission_table = ResearchBase.metadata.tables["research_strategy_admission"]
-    if tables is not None and admission_table.name in actual_tables:
-        validation_tables.append(admission_table)
+    frozen_admission_table = next(
+        table for table in _pre_0010_tables()
+        if table.name == admission_table.name)
+    validation_tables = list(expected)
+    actual_admission_columns = (
+        {row[1] for row in connection.exec_driver_sql(
+            f"PRAGMA table_info({_quoted(admission_table.name)})")}
+        if admission_table.name in actual_tables else set()
+    )
+    if (tables is not None and admission_table.name in actual_tables
+            and any(table.name == admission_table.name for table in expected)
+            and not {"format_version", "content_address"} <= {
+                column.name for column in next(
+                    table for table in expected if table.name == admission_table.name
+                ).columns
+            }
+            and {"format_version", "content_address"} <= actual_admission_columns):
+        # Replace, do not append: the old projected table must not be checked
+        # against an exact resumable post-DDL state.
+        validation_tables = [
+            frozen_admission_table if table.name == admission_table.name else table
+            for table in validation_tables
+        ]
     for table in validation_tables:
         contract_table = table
         actual_column_names = {
@@ -530,7 +858,7 @@ def _rebuild_unversioned(connection) -> None:
 
 
 def _migration_schema_digest(connection, *, tables=None) -> str:
-    """Freeze every schema dimension consumed by the historical 0001 rebuild."""
+    """Digest schema dimensions consumed by the retained 0001 module fixture."""
     selected = tuple(tables or ResearchBase.metadata.sorted_tables)
     contract = {}
     for table in selected:
@@ -597,134 +925,22 @@ def _recover_interrupted_swaps(connection) -> None:
 
 
 def migrate_research_db(engine: Engine) -> None:
-    """Migrate empty, unversioned legacy, or already-head research databases."""
-    from research.domain import models  # noqa: F401 - register every mapped table
-
-    if engine.dialect.name == "postgresql":
-        _migrate_postgresql(engine)
-        return
-
-    with engine.connect() as connection:
-        _recover_interrupted_swaps(connection)
-        connection.commit()
-        marker = _current_version(connection)
-        version = marker[0] if marker else None
-        marker_cookie = marker[1] if marker else None
-        expected_tables = {table.name for table in ResearchBase.metadata.sorted_tables}
-        present_tables = _table_names(connection)
-        if version == HEAD_VERSION:
-            if expected_tables.issubset(present_tables):
-                # c8230d9 stamped the valid 0001 head with a one-column
-                # marker. Validate that head before adding the fast-path cookie;
-                # an invalid database must never become trusted by a marker-only
-                # upgrade.
-                if marker_cookie is None:
-                    _validate_schema(connection, include_marker=False)
-                    _stamp(connection)
-                    connection.commit()
-                    return
-                if marker_cookie == _schema_cookie(connection):
-                    if int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()) != 1:
-                        raise ResearchMigrationError("research foreign-key enforcement is disabled")
-                    return
-                _validate_schema(connection)
-                connection.exec_driver_sql(
-                    f"UPDATE {_quoted(VERSION_TABLE)} SET schema_cookie=?", (_schema_cookie(connection),)
+    """Run the finite clean/0010/0011/0012 direct migration contract."""
+    direct = importlib.import_module(
+        "research.domain.migrations.0012_v2_preparation_evidence"
+    )
+    try:
+        with engine.begin() as connection:
+            if engine.dialect.name == "postgresql":
+                direct.upgrade_postgresql(connection)
+            elif engine.dialect.name == "sqlite":
+                direct.upgrade_sqlite(connection)
+            else:
+                raise ResearchMigrationError(
+                    f"unsupported research database dialect {engine.dialect.name!r}"
                 )
-                connection.commit()
-                return
-            # Test and maintenance code may have intentionally dropped every
-            # research table while the database-owned marker remains.  This is a
-            # fresh-schema path, never an attempt to alter a populated database.
-            if not (expected_tables & present_tables):
-                ResearchBase.metadata.create_all(connection)
-                _stamp(connection)
-                connection.commit()
-                _validate_schema(connection)
-                return
-            raise ResearchMigrationError("versioned research schema is incomplete")
-        if version == "0001":
-            roots = _root_tables()
-            _validate_schema(connection, tables=roots, include_marker=False)
-            migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
-            migration.upgrade(connection, _operation_table())
-            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
-            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
-            _upgrade_outbox(connection)
-            _upgrade_strategy_admissions(connection)
-            _validate_schema(connection, include_marker=False)
-            _stamp(connection)
-            connection.commit()
-            _validate_schema(connection)
-            return
-        if version == "0002":
-            _validate_schema(connection, tables=_tables_through_0002(), include_marker=False)
-            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
-            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
-            _upgrade_outbox(connection)
-            _upgrade_strategy_admissions(connection)
-            _validate_schema(connection, include_marker=False)
-            _stamp(connection)
-            connection.commit()
-            _validate_schema(connection)
-            return
-        if version == "0003":
-            _validate_schema(connection, tables=_tables_through_0003(), include_marker=False)
-            _upgrade_outbox(connection)
-            _upgrade_strategy_admissions(connection)
-            _validate_schema(connection, include_marker=False)
-            _stamp(connection)
-            connection.commit()
-            _validate_schema(connection)
-            return
-        if version == "0004":
-            _validate_schema(connection, tables=_pre_0005_tables(), include_marker=False)
-            _upgrade_strategy_admissions(connection)
-            _validate_schema(connection, include_marker=False)
-            _stamp(connection)
-            connection.commit()
-            _validate_schema(connection)
-            return
-        if version is not None:
-            raise ResearchMigrationError(f"unsupported research schema version {version!r}")
-
-        names = present_tables
-        if not any(name in names or _temporary_name(table) in names for name, table in (
-            (table.name, table) for table in ResearchBase.metadata.sorted_tables
-        )):
-            ResearchBase.metadata.create_all(connection)
-            _stamp(connection)
-            connection.commit()
-            _validate_schema(connection)
-            return
-
-        foreign_keys = int(connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one())
-        connection.commit()
-        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
-        try:
-            migration = importlib.import_module(
-                "research.domain.migrations.0001_owner_scoped_roots"
-            )
-            migration.upgrade(
-                connection, _rebuild_unversioned,
-                schema_digest=_migration_schema_digest(connection, tables=_root_tables()),
-            )
-            migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
-            migration.upgrade(connection, _operation_table())
-            migration = importlib.import_module("research.domain.migrations.0003_operation_item_checkpoints")
-            migration.upgrade(connection, _operation_item_table(), _operation_event_table())
-            _upgrade_outbox(connection)
-            _upgrade_strategy_admissions(connection)
-            _validate_schema(connection, include_marker=False)
-            _stamp(connection)
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.exec_driver_sql(f"PRAGMA foreign_keys={foreign_keys}")
-        _validate_schema(connection)
-
+    except direct.previous.FoundationMigrationError as error:
+        raise ResearchMigrationError(str(error)) from error
 
 def _normalise_function_body(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).lower()
@@ -755,11 +971,11 @@ def _postgresql_trigger_contracts(connection) -> dict[str, tuple]:
     }
 
 
-def _validate_postgresql(connection) -> None:
+def _validate_postgresql_contract(connection, metadata) -> None:
     from app.db.plane_schema import validate_postgresql_plane
 
     validate_postgresql_plane(
-        connection, ResearchBase.metadata,
+        connection, metadata,
         marker_table=VERSION_TABLE, plane="research",
     )
     expected = {
@@ -771,7 +987,13 @@ def _validate_postgresql(connection) -> None:
             _normalise_function_body(
                 f"BEGIN RAISE EXCEPTION '{table} is immutable' "
                 "USING ERRCODE = '55000'; END;"
-                if table == "research_strategy_admission"
+                if table in {
+                    "research_strategy_admission",
+                    "research_ir_v2_graph_versions",
+                    "research_dataset_segments_v2",
+                    "research_dataset_manifests_v2",
+                    "research_dataset_manifest_segments_v2",
+                }
                 else f"BEGIN RAISE EXCEPTION '{table} is immutable'; END;"
             ),
             None,  # no WHEN predicate may suppress the refusal trigger
@@ -784,6 +1006,43 @@ def _validate_postgresql(connection) -> None:
             "research PostgreSQL immutable-trigger contract drift: "
             f"actual={actual!r} expected={expected!r}"
         )
+
+
+def _validate_postgresql(connection) -> None:
+    _validate_postgresql_contract(connection, ResearchBase.metadata)
+
+
+def _validate_0010_postgresql_state(connection, *, expected: int | None = None) -> int:
+    """Return only an exact ordered PostgreSQL 0010 constraint prefix."""
+    allowed = tuple(range(3, 9))
+    candidates = (expected,) if expected is not None else allowed
+    if any(candidate not in allowed for candidate in candidates):
+        raise ResearchMigrationError("undeclared PostgreSQL 0010 restart boundary")
+    matches = []
+    for candidate in candidates:
+        metadata = MetaData()
+        for table in _json_shape_tables_at(candidate):
+            table.to_metadata(metadata)
+        try:
+            _validate_postgresql_contract(connection, metadata)
+        except (ResearchMigrationError, RuntimeError):
+            continue
+        matches.append(candidate)
+    if len(matches) != 1:
+        raise ResearchMigrationError(
+            f"research PostgreSQL 0010 state is not an exact declared prefix: {matches!r}"
+        )
+    return matches[0]
+
+
+def _upgrade_json_shape_parity_postgresql(connection) -> None:
+    migration = importlib.import_module(
+        "research.domain.migrations.0010_research_json_shape_parity")
+    migration.upgrade_postgresql(
+        connection, ResearchBase.metadata.sorted_tables,
+        validate_state=_validate_0010_postgresql_state,
+        after_boundary=_after_0010_boundary,
+    )
 
 
 def _migrate_postgresql(engine: Engine) -> None:
@@ -812,6 +1071,16 @@ def _migrate_postgresql(engine: Engine) -> None:
         rows = connection.execute(text(
             f'SELECT version FROM "{VERSION_TABLE}"'
         )).scalars().all()
+        if rows and rows[0] != HEAD_VERSION:
+            # Historical replay reproduces, in isolation: provenance- and
+            # authority-era DDL carries CHECK constraints calling
+            # phase4_json_has_secret_key, but that function is otherwise
+            # installed only by the DatasetManifest before_create event hook,
+            # which replay bypasses. Install the identical function first;
+            # CREATE OR REPLACE keeps repeated replays idempotent.
+            from research.domain.models import _PHASE4_SECRET_FUNCTION
+
+            connection.exec_driver_sql(_PHASE4_SECRET_FUNCTION)
         if rows == ["0003"]:
             outbox_names = {
                 table.name for table in ResearchBase.metadata.sorted_tables
@@ -828,6 +1097,36 @@ def _migrate_postgresql(engine: Engine) -> None:
             _upgrade_strategy_admissions(connection)
             connection.execute(text(
                 f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0005"})
+            rows = ["0005"]
+        if rows == ["0005"]:
+            _upgrade_ir_v2_admissions(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0006"})
+            rows = ["0006"]
+        if rows == ["0006"]:
+            _upgrade_dataset_provenance(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0007"})
+            rows = ["0007"]
+        if rows == ["0007"]:
+            _upgrade_ir_v2_graph_versions(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0008"})
+            rows = ["0008"]
+        if rows == ["0008"]:
+            _upgrade_dataset_authority(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
+            ), {"version": "0009"})
+            rows = ["0009"]
+        if rows == ["0009"]:
+            _upgrade_json_shape_parity_postgresql(connection)
+            connection.execute(text(
+                f'UPDATE "{VERSION_TABLE}" SET version = :version'
             ), {"version": HEAD_VERSION})
             rows = [HEAD_VERSION]
         if rows != [HEAD_VERSION]:
@@ -840,5 +1139,7 @@ def _migrate_postgresql(engine: Engine) -> None:
 def downgrade_research_db(_engine: Engine) -> None:
     """Explicitly refuse destructive downgrade until a lossless reverse is needed."""
     raise ResearchMigrationError(
-        "research schema downgrade is unsupported and refuses destructive DDL"
+        "research schema downgrade is unsupported and refuses destructive DDL. "
+        "Back up the database, use a read-only diagnostic/export if needed, "
+        "then restore or rebuild a clean research database."
     )

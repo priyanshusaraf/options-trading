@@ -66,10 +66,10 @@ def test_no_edit_mutates_its_input(graph):
     references rather than of inverting operations."""
     before = copy.deepcopy(graph)
 
-    add_node(graph, "n_new", "math.abs", 1)
-    set_override(graph, "n_ema", "length", 21)
-    connect(graph, ("n_ema", "out"), ("n_range", "high"))
-    remove_node(graph, "n_range")
+    edited = add_node(graph, "n_new", "math.abs", 1)
+    edited = set_override(edited, "n_ema", "length", 21)
+    edited = connect(edited, ("n_ema", "out"), ("n_new", "in"))
+    edited = remove_node(edited, "n_range")
 
     assert graph == before
 
@@ -77,8 +77,8 @@ def test_no_edit_mutates_its_input(graph):
 def test_adding_a_node_and_wiring_it_produces_a_resolvable_graph(graph):
     """The end-to-end claim: what the editor writes, the resolver reads."""
     edited = add_node(graph, "n_ema_slow", "indicator.ema", 1, {"length": 200})
-    edited = connect(edited, ("n_ema_slow", "out"), ("n_long_exit", "reference"))
     edited = disconnect(edited, ("n_ema", "out"), ("n_long_exit", "reference"))
+    edited = connect(edited, ("n_ema_slow", "out"), ("n_long_exit", "reference"))
 
     resolved = resolve(edited, LIBRARY)
     assert resolved.node("n_ema_slow").params["length"] == 200

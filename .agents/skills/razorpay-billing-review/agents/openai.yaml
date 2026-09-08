@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review Razorpay billing"
+  short_description: "Review payment verification and entitlement safety"
+  default_prompt: "Use $razorpay-billing-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

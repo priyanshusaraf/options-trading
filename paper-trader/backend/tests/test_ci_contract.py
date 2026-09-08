@@ -15,6 +15,9 @@ EXPECTED_ACTIONS = {
     "backend": {"actions/checkout", "actions/setup-python"},
     "deterministic-smoke": {"actions/checkout", "actions/setup-python"},
     "frontend": {"actions/checkout", "actions/setup-node"},
+    # The Phase-2 PostgreSQL contracts job adds a PG16 service container and
+    # the same pinned checkout/setup-python pair.
+    "postgresql-contracts": {"actions/checkout", "actions/setup-python"},
 }
 
 
@@ -39,9 +42,13 @@ def test_ci_runs_on_every_push_and_pull_request_with_read_only_permissions():
 
 
 def test_ci_has_only_the_three_required_fail_closed_jobs():
+    """A-04 refresh: Phase 2 added `postgresql-contracts` (a real PG16 service
+    container for the dual-dialect migration contracts). The contract still
+    requires EVERY job fail-closed; the set is now four."""
     jobs = _workflow()["jobs"]
 
-    assert set(jobs) == {"backend", "deterministic-smoke", "frontend"}
+    assert set(jobs) == {"backend", "deterministic-smoke", "frontend",
+                         "postgresql-contracts"}
     for job in jobs.values():
         assert job["runs-on"] == "ubuntu-latest"
         assert int(job["timeout-minutes"]) > 0

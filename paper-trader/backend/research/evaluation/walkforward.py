@@ -1,12 +1,8 @@
-"""Walk-forward evaluation — the substrate of the validation gate.
+"""Walk-forward evaluation over a locked chronological evaluation window.
 
-Signals are computed ONCE over the full series (causal, so seed-consistent), then
-trades are replayed over each contiguous fold window via the extracted `run_trades`
-seam. For fixed-parameter validation (the M1 harness over existing strategies) each
-fold is an independent out-of-sample slice, so per-fold metrics measure whether the
-edge holds across sub-periods — temporal robustness, not curve-fit in-sample fit.
-When optimization arrives (M2), the search runs inside each fold's in-sample window
-and is scored on the fold's untouched OOS slice; this module is that outer loop.
+Signals are computed once over the complete immutable series so causal indicators
+keep their historical warmup. Trade replay is then restricted to the locked
+validation suffix and divided into contiguous folds.
 """
 from __future__ import annotations
 
@@ -15,6 +11,19 @@ import dataclasses
 from app.core.market_hours import ist_epoch
 
 from research.evaluation import kernels
+
+
+def signal_window(signals, *, start_at=None, stop_before=None,
+                  expected_bars: int | None = None):
+    """Return only bars admitted to one chronological evaluation window."""
+    if expected_bars == 0:
+        return signals.iloc[:0].reset_index(drop=True)
+    selected = signals
+    if start_at is not None:
+        selected = selected[selected["date"] >= start_at]
+    if stop_before is not None:
+        selected = selected[selected["date"] < stop_before]
+    return selected.reset_index(drop=True)
 
 
 @dataclasses.dataclass
@@ -50,13 +59,15 @@ class WalkForwardResult:
 
 
 def walk_forward(candles, inst, strategy, params, *, n_folds: int = 4,
-                 capital: float = 50_000.0) -> WalkForwardResult:
-    """Split the (warmup-trimmed) signal frame into `n_folds` contiguous OOS windows
-    and evaluate the strategy on each. Returns no folds when there is too little data
-    to give every fold at least one bar."""
+                 capital: float = 50_000.0, evaluation_start=None,
+                 evaluation_bars: int | None = None) -> WalkForwardResult:
+    """Evaluate the locked suffix in contiguous folds after full-series warmup."""
     if n_folds < 1:
         return WalkForwardResult(folds=[])
-    sig = kernels.compute_signals(candles, strategy, params)
+    sig = signal_window(
+        kernels.compute_signals(candles, strategy, params),
+        start_at=evaluation_start, expected_bars=evaluation_bars,
+    )
     n = len(sig)
     size = n // n_folds
     if size < 1:
@@ -69,7 +80,11 @@ def walk_forward(candles, inst, strategy, params, *, n_folds: int = 4,
         a = k * size
         b = n if k == n_folds - 1 else (k + 1) * size
         window = sig.iloc[a:b].reset_index(drop=True)
-        trades = kernels.run_trades(window, inst, seg, capital, rm)
+        trades = kernels.run_trades(
+            window, inst, seg, capital, rm,
+            replay_policy=getattr(strategy, "replay_policy", None),
+            **kernels.replay_exit_kwargs(strategy),
+        )
         metrics = kernels.compute_metrics(trades, capital)
         folds.append(FoldResult(
             fold_index=k,

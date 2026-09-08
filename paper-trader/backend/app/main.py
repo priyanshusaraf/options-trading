@@ -22,29 +22,50 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette._utils import get_route_path
 
 from app.api import (
+    auth_session_routes,
     backtest_routes,
+    catalogue_routes,
     connection_routes,
+    data_connection_routes,
     ir_experiment_routes,
     ir_edit_routes,
+    ir_v2_edit_routes,
+    ir_preset_routes,
+    research_settings_routes,
     ir_layout_routes,
     ir_routes,
     portfolio_routes,
     product_object_routes,
     research_operation_routes,
     research_review_routes,
+    research_spine_routes,
+    release_profile_routes,
     routes,
 )
+from app.account_commerce.publication import build_published_account_commerce_router
+from app.monitoring.publication import build_published_monitoring_router
 from app.api.principal import (action_for_request, auth_enabled, install_websocket_payload_redaction,
                                is_request_allowed, resolve_http_principal)
 from app.api.versioning import VERSION_PREFIX, mount_versioned, unversioned_path
+from app.api.csv_request_limits import CsvRequestBodyLimitMiddleware
+from research.data.user_csv_import import MAX_CSV_BYTES
 from app.core.instruments import get_instrument
 from app.core.config import assert_boot_config, get_settings
 from app.core.logging import log
+from app.core.release_profile import (
+    ReleaseServiceRole,
+    denied_route,
+    is_v0_profile,
+    manifest,
+    parse_release_service_role,
+    refusal_payload,
+    required_readiness_planes,
+)
 from app.core.version import get_build_info, log_build_banner
 from app.db.session import init_db
-from app.engine.runner import EngineRunner
 from app.ledger import routes as ledger_routes
 from app.ws.manager import manager
 
@@ -69,6 +90,11 @@ async def lifespan(app: FastAPI):
     # with /api/health returning 200 the whole time. Raising here is the point —
     # a config-less boot must be a dead process, not a healthy-looking one.
     assert_boot_config(settings)
+    release_role = (
+        parse_release_service_role(settings.release_service_role)
+        if is_v0_profile(settings.release_profile) else None
+    )
+    app.state.release_service_role = release_role.value if release_role else None
     from app.db.engine import database_url
     from app.ledger.config import ledger_database_url
     from research.config import research_database_url
@@ -110,7 +136,10 @@ async def lifespan(app: FastAPI):
     if settings.provider != "mock" and execution_engine.dialect.name == "sqlite":
         from app.core.instance_lock import acquire_db_lock
         app.state.db_lock = acquire_db_lock(settings.db_path)
-    init_db(reset=settings.provider == "mock")
+    # The validated browser-auth V0 API has no simulation execution cell.
+    # Its invited identities/sessions must survive a process restart even when
+    # local evidence uses the mock provider. Preserve standard mock reset behavior.
+    init_db(reset=settings.provider == "mock" and not settings.browser_auth_enabled)
     manager.bind(asyncio.get_running_loop())
 
     # Every replica consumes the execution projection outbox. LISTEN only wakes
@@ -163,6 +192,12 @@ async def lifespan(app: FastAPI):
                 consumer_id=f"research-{socket.gethostname()}-{replica_boot}",
                 lease_owner=replica_boot, effect=event_gateway.apply,
             ), engine=research_delivery_engine, plane="research"))
+    if is_v0_profile(settings.release_profile):
+        app.state.v0_plane_sessionmakers = {
+            "execution": SessionLocal,
+            "ledger": ledger_sm,
+            "research": research_sm,
+        }
     delivery_tasks = [asyncio.create_task(delivery.run()) for delivery in deliveries]
 
     async def stop_deliveries() -> None:
@@ -205,11 +240,22 @@ async def lifespan(app: FastAPI):
                 register_all(s, owner_id=owner_id)
     except Exception as e:
         log.error(f"generated-strategy registration failed at startup: {e}")
-    try:
-        from app.backtest.sweep import dispatch_all_reclaimable
-        dispatch_all_reclaimable()
-    except Exception as e:
-        log.error(f"backtest restart dispatch failed: {e}")
+    dispatch_research_jobs = (
+        not is_v0_profile(settings.release_profile)
+        or release_role in {ReleaseServiceRole.RESEARCH_WORKER, ReleaseServiceRole.SCHEDULER}
+    )
+    if dispatch_research_jobs:
+        try:
+            from app.backtest.reclaim_authority import ReclaimAuthorityContext
+            from app.backtest.sweep import dispatch_all_reclaimable
+            authority_context = None
+            if settings.research_enabled:
+                from app.ir.library import REGISTRY
+                authority_context = ReclaimAuthorityContext(
+                    registry=REGISTRY, research_sessionmaker=research_sm)
+            dispatch_all_reclaimable(authority_context=authority_context)
+        except Exception as e:
+            log.error(f"backtest restart dispatch failed: {e}")
     if not settings.research_enabled:
         log.info("research plane disabled (PT_RESEARCH_ENABLED=0) — portfolio/research "
                  "API is gated off; deployed execution artifacts remain hydrated")
@@ -220,9 +266,17 @@ async def lifespan(app: FastAPI):
         # Local SQLite retains the single-node compatibility cell. Shared PostgreSQL
         # replicas are API-only until explicitly assigned an account worker role.
         hosts_execution = execution_engine.dialect.name == "sqlite"
+    if is_v0_profile(settings.release_profile):
+        # Boot validation already requires the API-only role. Keep this second,
+        # local refusal at the construction boundary so a later role refactor
+        # still cannot build a broker runner or claim an execution lease in V0.
+        hosts_execution = False
     if not hosts_execution:
         app.state.runner = None
-        log.info("API-only replica ready — durable execution status/control enabled; no broker cell")
+        if is_v0_profile(settings.release_profile):
+            log.info("V0 research/signal API ready — execution authority unavailable; no broker cell")
+        else:
+            log.info("API-only replica ready — durable execution status/control enabled; no broker cell")
         try:
             yield
         finally:
@@ -255,6 +309,7 @@ async def lifespan(app: FastAPI):
             owner_id=assigned_owner, broker_account_id=assigned_account,
             cell_id=cell_id, worker_id=worker_id,
             host_diagnostic=socket.gethostname())
+    from app.engine.runner import EngineRunner
     runner = EngineRunner(owner_id=assigned_owner,
                           broker_account_id=assigned_account,
                           execution_lease_token=lease_token)  # factory logs chosen provider
@@ -389,15 +444,23 @@ class _PollingRouteFilter(logging.Filter):
     # to /api/v1 and the access log fills up again for no visible reason.
     _NOISY_PATHS = tuple(_NOISY) + tuple(
         f"{VERSION_PREFIX}{p[len('/api'):]}" for p in _NOISY)
+    _SENSITIVE_CALLBACKS = (
+        "/api/oauth/callback",
+        "/api/v1/data-connections/oauth/callback",
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        return not any(f"GET {p} " in msg for p in self._NOISY_PATHS)
+        return not (
+            any(f"GET {p} " in msg for p in self._NOISY_PATHS)
+            or any(f"GET {p}" in msg for p in self._SENSITIVE_CALLBACKS)
+        )
 
 
 logging.getLogger("uvicorn.access").addFilter(_PollingRouteFilter())
 
 app = FastAPI(title="Options Paper Trader", lifespan=lifespan)
+app.add_middleware(CsvRequestBodyLimitMiddleware, max_file_bytes=MAX_CSV_BYTES)
 
 
 @app.exception_handler(ir_experiment_routes.GraphExperimentFailure)
@@ -410,16 +473,81 @@ async def graph_experiment_failure_handler(
     )
 
 
+# Request-controlled dictionary keys, union tags and validator messages can all
+# occur in Pydantic errors. Only this fixed vocabulary may cross the V0 boundary.
+# Unknown fields remain actionable as a generic location, without publishing
+# strategy names, graph keys or future validators' exception text.
+_V0_VALIDATION_FIELDS = frozenset("""
+    body path query header cookie name description identifier graph document
+    project_id graph_identifier version format_version base_revision
+    base_presentation_revision edits presentation_edits operation display_name
+    instance_id parameter value overrides domain secret_params node_index
+    source target socket edge_index x y width height group_id frame
+    program_name hypothesis_statement datasets instrument_key interval days seed
+    gates min_oos_trades n_folds min_positive_fold_fraction optimize_search
+    pbo_threshold sibling_trials cost_assumptions capital slippage_bps
+    slippage_multiplier charge_model sizing_model left right left_run_id
+    right_run_id run_id graph_version expected_status decision reason status
+    credential bundle provider connection_id
+""".split())
+_V0_VALIDATION_MESSAGES = {
+    "missing": "Field required",
+    "extra_forbidden": "Unexpected field",
+    "string_type": "Expected a string",
+    "string_too_short": "String is too short",
+    "string_too_long": "String is too long",
+    "int_type": "Expected an integer",
+    "int_parsing": "Expected an integer",
+    "float_type": "Expected a number",
+    "float_parsing": "Expected a number",
+    "bool_type": "Expected a boolean",
+    "bool_parsing": "Expected a boolean",
+    "dict_type": "Expected an object",
+    "list_type": "Expected a list",
+    "greater_than": "Value is below the allowed range",
+    "greater_than_equal": "Value is below the allowed range",
+    "less_than": "Value is above the allowed range",
+    "less_than_equal": "Value is above the allowed range",
+    "too_short": "Too few items",
+    "too_long": "Too many items",
+    "literal_error": "Unsupported value",
+    "union_tag_invalid": "Unsupported variant",
+    "union_tag_not_found": "Variant is required",
+    "json_invalid": "Invalid JSON",
+    "finite_number": "Expected a finite number",
+    "value_error": "Invalid value",
+}
+
+
+def _v0_validation_errors(errors: list[dict]) -> list[dict]:
+    closed = []
+    for error in errors[:32]:
+        kind = error.get("type")
+        if kind not in _V0_VALIDATION_MESSAGES:
+            kind = "value_error"
+        location = [
+            part if (type(part) is int and part >= 0) or (
+                isinstance(part, str) and part in _V0_VALIDATION_FIELDS
+            ) else "field"
+            for part in error.get("loc", ())[:12]
+        ]
+        closed.append({"loc": location, "type": kind,
+                       "msg": _V0_VALIDATION_MESSAGES[kind]})
+    return closed
+
+
 @app.exception_handler(RequestValidationError)
 async def editor_request_validation_handler(
     request: Request, exc: RequestValidationError
 ):
-    """Give only editor mutations their closed error envelope.
+    """Preserve editor envelopes; close diagnostic values throughout V0.
 
-    Other routes retain FastAPI's established validation body. The versioned
+    Standard routes retain their established validation body. The versioned
     mirror is normalized through ``unversioned_path`` before matching.
     """
     path = unversioned_path(request.url.path)
+    v0 = is_v0_profile(get_settings().release_profile)
+    errors = _v0_validation_errors(exc.errors()) if v0 else exc.errors()
     if (
         path.startswith("/api/ir/projects/")
         and (
@@ -433,7 +561,7 @@ async def editor_request_validation_handler(
     ):
         return JSONResponse(
             status_code=422,
-            content=ir_experiment_routes.request_validation_envelope(exc.errors()),
+            content=ir_experiment_routes.request_validation_envelope(errors),
         )
     if (
         path.startswith("/api/ir/projects/")
@@ -442,8 +570,14 @@ async def editor_request_validation_handler(
     ):
         return JSONResponse(
             status_code=422,
-            content=ir_edit_routes.request_validation_envelope(exc.errors()),
+            content=ir_edit_routes.request_validation_envelope(errors),
         )
+    if v0:
+        return JSONResponse(status_code=422, content={
+            "code": "REQUEST_VALIDATION_FAILED",
+            "message": "Request validation failed",
+            "detail": errors,
+        })
     if path.startswith("/api/connections/") and path.endswith("/credential"):
         # FastAPI's default envelope includes pydantic's `input` — the value that failed
         # validation. On every other route that is a helpful echo; on this one it is a live
@@ -463,7 +597,11 @@ async def editor_request_validation_handler(
         )
     return await request_validation_exception_handler(request, exc)
 
-_AUTH_EXEMPT_PATHS = {"/api/health", "/api/oauth/callback"}
+_AUTH_EXEMPT_PATHS = {
+    "/api/health", "/api/oauth/callback",
+    "/api/data-connections/oauth/callback", "/api/release-profile",
+}
+_V0_ROLE_EXEMPT_PATHS = {"/api/health", "/api/readiness", "/api/release-profile"}
 
 
 @app.middleware("http")
@@ -494,28 +632,97 @@ async def auth_gate(request: Request, call_next):
     for the same reason /api/health is. Getting this wrong would 401 the deploy
     probe the moment deploy.sh moves to v1."""
     settings = get_settings()
-    path = unversioned_path(request.url.path)
-    principal = resolve_http_principal(request)
+    # Share the router's decoded path and mount semantics. Reconstructing a URL
+    # would mistake encoded path question/hash characters for URL delimiters.
+    path = unversioned_path(get_route_path(request.scope))
+    browser_route = False
+    browser_public = False
+    stale_browser_cookie = False
+    if settings.browser_auth_enabled:
+        from app.accounts import browser_auth
+        if not browser_auth.validate_configuration(settings):
+            return auth_session_routes.refusal(503)
+        browser_route = (request.method, path) in auth_session_routes.AUTH_ROUTES
+        browser_public = (request.method, path) in auth_session_routes.PUBLIC_ROUTES
+    try:
+        if settings.browser_auth_enabled:
+            from starlette.concurrency import run_in_threadpool
+            principal = await run_in_threadpool(resolve_http_principal, request)
+        else:
+            principal = resolve_http_principal(request)
+    except Exception as exc:
+        from app.accounts.browser_auth import AuthRefusal, SessionRefusal
+        from sqlalchemy.exc import SQLAlchemyError
+        if isinstance(exc, SessionRefusal) and (path in _AUTH_EXEMPT_PATHS or not path.startswith('/api')):
+            principal = None
+            stale_browser_cookie = True
+        elif isinstance(exc, AuthRefusal):
+            return auth_session_routes.refusal(exc.status)
+        elif settings.browser_auth_enabled and isinstance(exc, SQLAlchemyError):
+            return auth_session_routes.refusal(503)
+        else:
+            raise
     if (
         auth_enabled()
         and path.startswith("/api")
         and path not in _AUTH_EXEMPT_PATHS
+        and not browser_public
         and request.method != "OPTIONS"
     ):
         if principal is None:
+            if settings.browser_auth_enabled:
+                return auth_session_routes.refusal(401)
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+    request.state.principal = principal
+    unavailable = denied_route(settings.release_profile, request.method, path)
+    if unavailable is not None:
+        return JSONResponse(refusal_payload(unavailable), status_code=409)
+    if (
+        is_v0_profile(settings.release_profile)
+        and parse_release_service_role(settings.release_service_role) is not ReleaseServiceRole.API
+        and path.startswith("/api")
+        and path not in _V0_ROLE_EXEMPT_PATHS
+    ):
+        return JSONResponse({
+            "code": "V0_SERVICE_ROLE_UNAVAILABLE",
+            "release_profile": settings.release_profile,
+            "service_role": settings.release_service_role,
+            "message": "this V0 service role does not serve product API routes",
+        }, status_code=503)
     action = action_for_request(request.method, path)
     # A durable user may only reach a resource family whose authorization and
     # organization-scoped repository boundary have both been named.  Legacy
     # runner endpoints remain callable only through the compatibility owner
     # until Task 5C converts their process-global state.
-    if (action is None and path not in _AUTH_EXEMPT_PATHS and principal is not None
+    if (action is None and not browser_route and path not in _AUTH_EXEMPT_PATHS and principal is not None
             and principal.kind == "user" and path.startswith("/api")):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     if action is not None and not is_request_allowed(principal, action):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    request.state.principal = principal
-    return await call_next(request)
+    response = await call_next(request)
+    if stale_browser_cookie:
+        auth_session_routes.clear_cookie(response)
+    return response
+
+
+@app.middleware("http")
+async def data_connection_cache_gate(request: Request, call_next):
+    """Never cache direct data-connection status, errors or callback responses."""
+    response = await call_next(request)
+    path = unversioned_path(get_route_path(request.scope))
+    if path == "/api/data-connections" or path.startswith("/api/data-connections/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.middleware("http")
+async def market_context_cache_gate(request: Request, call_next):
+    """Keep private research charts and monitoring records out of browser/shared caches."""
+    response = await call_next(request)
+    path = unversioned_path(get_route_path(request.scope))
+    if path.startswith("/api/monitoring/") or (path.startswith("/api/ir/projects/") and "/market-context" in path):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # CORSMiddleware is registered AFTER auth_gate above so it ends up OUTERMOST
@@ -524,7 +731,8 @@ async def auth_gate(request: Request, call_next):
 # attached, and a preflight OPTIONS is answered by CORS before it ever
 # reaches auth_gate.
 app.add_middleware(
-    CORSMiddleware, allow_origins=get_settings().cors_origins_list, allow_credentials=True,
+    CORSMiddleware, allow_origins=([get_settings().browser_auth_origin] if get_settings().browser_auth_enabled
+                                  else get_settings().cors_origins_list), allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
 app.include_router(routes.router)
@@ -535,10 +743,21 @@ app.include_router(ir_routes.router)
 app.include_router(ir_layout_routes.router)
 app.include_router(product_object_routes.router)
 app.include_router(ir_edit_routes.router)
+app.include_router(ir_v2_edit_routes.router)
+app.include_router(ir_preset_routes.router)
+app.include_router(research_settings_routes.router)
+app.include_router(build_published_monitoring_router())
 app.include_router(ir_experiment_routes.router)
+app.include_router(catalogue_routes.router)
 app.include_router(research_operation_routes.router)
 app.include_router(research_review_routes.router)
+app.include_router(research_spine_routes.router)
 app.include_router(connection_routes.router)
+app.include_router(data_connection_routes.router)
+app.include_router(release_profile_routes.router)
+app.include_router(auth_session_routes.router)
+published_account_commerce_router = build_published_account_commerce_router()
+app.include_router(published_account_commerce_router)
 
 # H3: mount the SAME routers a second time under /api/v1 (see app/api/versioning.py
 # for why this is a mount-time transform and not 45 edited decorators, and for the
@@ -549,9 +768,11 @@ app.include_router(connection_routes.router)
 mount_versioned(app, routes.router, backtest_routes.router,
                 portfolio_routes.router, ledger_routes.router, ir_routes.router,
                 ir_layout_routes.router, product_object_routes.router,
-                ir_edit_routes.router, ir_experiment_routes.router,
+                ir_edit_routes.router, ir_experiment_routes.router, catalogue_routes.router,
+                ir_v2_edit_routes.router, ir_preset_routes.router, research_settings_routes.router,
                 research_operation_routes.router, research_review_routes.router,
-                connection_routes.router)
+                research_spine_routes.router,
+                connection_routes.router, release_profile_routes.router, auth_session_routes.router)
 
 
 def _probe_db() -> tuple[bool, str]:
@@ -567,6 +788,18 @@ def _probe_db() -> tuple[bool, str]:
         return True, ""
     except Exception as e:                       # noqa: BLE001 — any failure is a failure
         return False, f"{type(e).__name__}: {e}"[:200]
+
+
+def _probe_sessionmaker(sessionmaker) -> tuple[bool, str]:
+    try:
+        from sqlalchemy import text
+        with sessionmaker() as session:
+            session.execute(text("SELECT 1"))
+        return True, ""
+    except Exception as exc:                      # noqa: BLE001
+        if is_v0_profile(get_settings().release_profile):
+            return False, "DATABASE_PROBE_FAILED"
+        return False, f"{type(exc).__name__}: {exc}"[:200]
 
 
 def _schema_info() -> dict:
@@ -588,7 +821,8 @@ def _schema_info() -> dict:
         from app.db.session import engine
         return schema_state(engine)
     except Exception as e:                       # noqa: BLE001
-        return {"current": None, "head": None, "up_to_date": None, "error": str(e)}
+        error = "SCHEMA_PROBE_FAILED" if is_v0_profile(get_settings().release_profile) else str(e)
+        return {"current": None, "head": None, "up_to_date": None, "error": error}
 
 
 def _readiness_payload() -> dict:
@@ -602,6 +836,28 @@ def _readiness_payload() -> dict:
         signal_stale_seconds=settings.health_signal_stale_seconds,
         startup_grace_seconds=settings.health_startup_grace_seconds,
     )
+    if is_v0_profile(settings.release_profile):
+        role = parse_release_service_role(settings.release_service_role)
+        sessionmakers = getattr(app.state, "v0_plane_sessionmakers", {})
+        planes = {}
+        for plane in required_readiness_planes(role):
+            factory = sessionmakers.get(plane)
+            ok, error = ((False, "DATABASE_SESSION_UNAVAILABLE") if factory is None
+                         else _probe_sessionmaker(factory))
+            planes[plane] = {"ok": ok, "error": error}
+        failed = [f"database:{plane}" for plane, state in planes.items() if not state["ok"]]
+        ready = not failed
+        return {
+            "ready": ready,
+            "status": "ok" if ready else "unready",
+            "failed_checks": failed,
+            "database_planes": planes,
+            "engine": {"present": False},
+            "release_profile": settings.release_profile,
+            "service_role": role.value,
+            "execution_authority": False,
+        }
+
     db_ok, db_error = _probe_db()
     runner = getattr(app.state, "runner", None)
 
@@ -655,6 +911,38 @@ def _readiness_payload() -> dict:
     return payload
 
 
+@app.get("/api/readiness")
+def execution_readiness():
+    """Full execution-readiness payload: feed quality, lane ages, degraded checks.
+
+    Rehomed off the public `/api/health` when that route became tenant-neutral:
+    this payload carries account-specific runner and position state, which must
+    not cross an unauthenticated boundary.  The auth middleware protects this
+    path (it is not on the exemption list); with `PT_API_TOKEN` empty — local
+    development — it answers to the anonymous owner exactly like every other
+    authenticated surface.
+
+    Status semantics are the ones this payload always had: 503 when any check
+    FAILED (the process must be able to say no), 200 while merely degraded or
+    starting.  A probe that raises answers 503 naming itself — a 500 here is
+    indistinguishable from a dead process to every monitor.
+    """
+    try:
+        payload = _readiness_payload()
+    except Exception:                            # noqa: BLE001 — any failure is a failure
+        payload = {"ready": False, "status": "unready",
+                   "failed_checks": ["probe"]}
+    # Legacy consumer contract carried over from the pre-tenancy /api/health:
+    # every answer identifies its build, and `ok` tracks the verdict.
+    payload["ok"] = bool(payload.get("ready"))
+    payload.setdefault("build", get_build_info())
+    return JSONResponse(payload, status_code=200 if payload.get("ready") else 503)
+
+
+app.add_api_route(f"{VERSION_PREFIX}/readiness", execution_readiness,
+                  methods=["GET"], name="v1_readiness")
+
+
 def _foreign_book_positions(runner) -> list[str]:
     """Never raise: the readiness probe answering is more important than this field."""
     try:
@@ -677,10 +965,19 @@ def health():
     # carries account-specific runner and position state and must not cross this
     # unauthenticated boundary.
     db_ok, _ = _probe_db()
+    settings = get_settings()
+    profile = manifest(
+        settings.release_profile,
+        research_enabled=settings.research_enabled,
+        service_role=settings.release_service_role,
+    )
     return JSONResponse({"ok": db_ok, "ready": db_ok,
                          "status": "ok" if db_ok else "unready",
                          "build": get_build_info(),
-                         "schema": _schema_info()},
+                         "schema": _schema_info(),
+                         "release_profile": profile["release_profile"],
+                         "service_role": profile["service_role"],
+                         "execution_authority": profile["execution_authority"]},
                         status_code=200 if db_ok else 503)
 
 

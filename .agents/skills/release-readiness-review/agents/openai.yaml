@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review an actual release candidate"
+  short_description: "Assess launch journeys and actual sign-off evidence"
+  default_prompt: "Use $release-readiness-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

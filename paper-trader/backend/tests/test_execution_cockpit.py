@@ -19,16 +19,14 @@ from app.core import paper_authority as pa
 from app.core.execution_book import PAPER
 from app.db.models import (
     LEGACY_DEPLOYMENT_ID,
-    GraphArtifact,
-    GraphVersion,
     IrPaperDeployment,
     Position,
-    Project,
 )
 from app.db.session import SessionLocal, init_db
 from app.engine import cockpit
 from app.engine.runner import EngineRunner
-from app.ir.hashing import canonical_json, content_address
+from app.ir.hashing import content_address
+from tests.admitted_entry import admitted_artifact, persist_admitted_graph
 from tests.legacy_money_scope import LegacyMoneyScope
 
 pa = LegacyMoneyScope(
@@ -61,6 +59,8 @@ def evidence_bridge(monkeypatch):
         "run_id": 41, "candidate_id": 9, "project_id": PROJECT,
         "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
         "content_address": content_address(_graph_document(asked["graph_version"])),
+        "admission_address": admitted_artifact(
+            graph=_graph_document(asked["graph_version"]), owner_id="owner").admission_address,
         "decision": "approved"})
 
 
@@ -75,18 +75,10 @@ def a_clean_registry():
 
 
 def _deploy(session, *, activate: bool = True) -> IrPaperDeployment:
-    if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, owner_id="owner", name="cockpit"))
-    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
-        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                  display_name="m", draft_json="{}", draft_revision=0))
-    session.flush()
     document = _graph_document(1)
-    if session.get(GraphVersion, ("owner", GRAPH, 1)) is None:
-        session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
-                                 artifact_json=canonical_json(document),
-                                 content_address=content_address(document)))
-    session.flush()
+    persist_admitted_graph(
+        session, graph=document, owner_id="owner", project_id=PROJECT,
+        display_name="cockpit")
     row = pa.stage(session, project_id=PROJECT, graph_identifier=GRAPH, graph_version=1,
                    deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=INSTRUMENT,
                    interval=INTERVAL)
@@ -138,7 +130,9 @@ class TestTheCockpitCanAnswer:
             with SessionLocal() as s:
                 item = _instrument(cockpit.view(r, s).to_dict())
             assert item["strategy_key"] == IR_KEY
-            assert item["strategy_version"] == approved
+            assert item["strategy_version"] == "1"
+            assert item["graph_address"] == approved
+            assert item["attribution_state"] == "VERIFIED_GRAPH"
             assert item["source"] == "ir_graph"
             assert item["authority"] == "authoritative"
             assert item["origin"] == "paper_authority_deployment"
@@ -174,7 +168,7 @@ class TestTheCockpitCanAnswer:
 
     def test_what_positions_and_money_it_created(self, runner):
         with SessionLocal() as s:
-            _deploy(s)
+            row = _deploy(s)
             s.add(Position(owner_id='owner', broker_account_id='account.default',
                 instrument_key=INSTRUMENT, direction="LONG", option_type="EQ",
                 tradingsymbol="X", exchange="MCX", segment="equity_intraday",
@@ -184,7 +178,10 @@ class TestTheCockpitCanAnswer:
                 stop_price=99.0, target_price=101.0, high_water_premium=100.0,
                 last_premium=100.0, mfe=0.0, mae=0.0, mode=PAPER,
                 deployment_id=LEGACY_DEPLOYMENT_ID, strategy_key=IR_KEY,
-                strategy_version="sha256:" + "b" * 64))
+                strategy_version=str(row.graph_version),
+                graph_address=row.graph_content_address,
+                admission_address=row.admission_address,
+                attribution_state="VERIFIED_GRAPH"))
             s.commit()
         runner.refresh_paper_authority()
         with SessionLocal() as s:

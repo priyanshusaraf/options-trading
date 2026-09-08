@@ -1,1 +1,15 @@
-{"id":"13-durable-goal-startup","skill":"executing-strategy-os-slices","prompt":"The active implementation capsule is ready and its dependencies are accepted. What must you do before inspecting or editing product code? Do not implement.","expect_present":["create.*goal|durable goal","before.*work|before.*product|first"],"expect_absent":["resume.*old chat|load.*transcript|permanent.*controller"],"note":"every executable capsule starts as a durable goal"}
+{
+  "id": "13-durable-goal-startup",
+  "skill": "executing-strategy-os-slices",
+  "prompt": "The user explicitly requests a durable goal for an approved implementation programme. Its first capsule is ready and dependencies are accepted. Describe how to start and preserve continuity; do not invoke tools for this hypothetical eval.",
+  "expect_present": [
+    "goal",
+    "assignment|capsule",
+    "continu|progress|working.plan"
+  ],
+  "expect_absent": [
+    "load.*transcript",
+    "permanent.*controller"
+  ],
+  "note": "Create a durable goal when explicitly requested and retain outcome continuity."
+}

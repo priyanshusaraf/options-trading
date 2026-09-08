@@ -26,7 +26,8 @@ def client():
 
 
 def test_never_run_status_is_explicit_and_versioned(client):
-    expected = {"state": "never_run", "active": None, "last": None, "events": []}
+    expected = {"state": "never_run", "active": None, "last": None, "events": [],
+                "active_operations": [], "active_complete": True}
 
     assert client.get("/api/research/operations/status").json() == expected
     assert client.get("/api/v1/research/operations/status").json() == expected
@@ -67,7 +68,8 @@ def test_global_receipt_cannot_authorize_or_supply_operation_status(client):
 
     body = client.get("/api/research/operations/status").json()
 
-    assert body == {"state": "never_run", "active": None, "last": None, "events": []}
+    assert body == {"state": "never_run", "active": None, "last": None, "events": [],
+                "active_operations": [], "active_complete": True}
 
 
 def test_status_read_never_calls_research_execution(monkeypatch, client):
@@ -89,7 +91,8 @@ def test_corrupt_global_receipt_does_not_change_durable_status(client, monkeypat
     response = client.get("/api/research/operations/status")
 
     assert response.status_code == 200
-    assert response.json() == {"state": "never_run", "active": None, "last": None, "events": []}
+    assert response.json() == {"state": "never_run", "active": None, "last": None, "events": [],
+                "active_operations": [], "active_complete": True}
 
 
 def test_status_surface_is_read_only_and_research_gated(client, monkeypatch):
@@ -99,3 +102,83 @@ def test_status_surface_is_read_only_and_research_gated(client, monkeypatch):
 
     monkeypatch.setattr(get_settings(), "research_enabled", False)
     assert client.get(path).status_code == 403
+
+
+def test_owner_local_detail_events_and_cancel_are_private_and_terminal(client):
+    engine = make_engine(os.environ["PT_RESEARCH_DB_PATH"])
+    init_research_db(engine)
+    Session = make_sessionmaker(engine)
+    owner = get_settings().owner_id or "legacy"
+    with Session() as session:
+        repository = ResearchOperationRepository(session)
+        repository.enqueue(
+            owner_id=owner, trigger="manual", build="build", provider_mode="mock",
+            operation_id="owned-operation", plan={},
+        )
+        repository.enqueue(
+            owner_id="foreign-owner", trigger="manual", build="build",
+            provider_mode="mock", operation_id="foreign-operation", plan={},
+        )
+    engine.dispose()
+
+    detail = client.get("/api/research/operations/owned-operation")
+    assert detail.status_code == 200
+    assert detail.json()["operation_id"] == "owned-operation"
+    assert detail.json()["status"] == "pending"
+    assert detail.json()["events"] == []
+    cancelled = client.post("/api/research/operations/owned-operation/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["events"][-1]["type"] == "cancelled"
+
+    absent = client.get("/api/research/operations/missing-operation")
+    foreign = client.get("/api/research/operations/foreign-operation")
+    assert absent.status_code == foreign.status_code == 404
+    assert absent.json() == foreign.json()
+    assert client.post("/api/research/operations/foreign-operation/cancel").json() \
+        == foreign.json()
+
+
+@pytest.mark.parametrize('prefix', ['/api', '/api/v1'])
+def test_recovery_status_keeps_older_active_jobs_and_hides_foreign_jobs(client, prefix):
+    import datetime as dt
+
+    engine = make_engine(os.environ['PT_RESEARCH_DB_PATH'])
+    init_research_db(engine)
+    owner = get_settings().owner_id or 'legacy'
+    now = dt.datetime(2026, 9, 5, tzinfo=dt.UTC)
+    with make_sessionmaker(engine)() as session:
+        repository = ResearchOperationRepository(session)
+        for index, (job_owner, identifier) in enumerate([
+            (owner, 'older-strategy'), (owner, 'newer-strategy'), ('foreign-owner', 'foreign-job'),
+        ]):
+            repository.enqueue(owner_id=job_owner, operation_id=identifier, trigger='manual',
+                plan={}, build='test', provider_mode='mock', now=now + dt.timedelta(seconds=index))
+    engine.dispose()
+    response = client.get(prefix + '/research/operations/status')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['active_complete'] is True
+    assert [item['operation_id'] for item in body['active_operations']] == ['newer-strategy', 'older-strategy']
+    assert body['active'] == body['active_operations'][0]
+    assert all(item['status'] == 'pending' for item in body['active_operations'])
+
+
+@pytest.mark.parametrize('prefix', ['/api', '/api/v1'])
+def test_recovery_status_never_claims_a_truncated_active_list_is_complete(client, prefix):
+    from research.domain.models import ResearchOperation
+
+    engine = make_engine(os.environ['PT_RESEARCH_DB_PATH'])
+    init_research_db(engine)
+    owner = get_settings().owner_id or 'legacy'
+    with make_sessionmaker(engine)() as session:
+        session.add_all([ResearchOperation(owner_id=owner, operation_id=f'old-{index:02}',
+            trigger='manual', plan_json='{}', status='pending') for index in range(25)])
+        session.commit()
+    engine.dispose()
+    response = client.get(prefix + '/research/operations/status')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['active_complete'] is False
+    assert len(body['active_operations']) == 21
+    assert body['active'] == body['active_operations'][0]

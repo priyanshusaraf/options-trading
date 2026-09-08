@@ -1,3 +1,38 @@
+export type ReleaseProfileName = 'standard' | 'v0_research_signal'
+export type ReleaseServiceRole = 'api' | 'research_worker' | 'monitor' | 'scheduler'
+export type ReleaseCapabilityState =
+  | 'ENABLED'
+  | 'ENABLED_WITH_LIMIT'
+  | 'INTERNAL'
+  | 'UNAVAILABLE'
+  | 'BLOCKED'
+
+export interface ReleaseCapability {
+  readonly state: ReleaseCapabilityState
+  readonly ui_navigation?: boolean
+  readonly reason?: string
+}
+
+export interface ReleaseRouteRule {
+  readonly method: string
+  readonly template: string
+  readonly state: 'UNAVAILABLE'
+  readonly capability: string
+  readonly reason: string
+}
+
+export interface ReleaseProfileManifest {
+  readonly schema: 'strategy-os-release-profile/1'
+  readonly release_profile: ReleaseProfileName
+  readonly research_enabled: boolean
+  readonly service_role: ReleaseServiceRole | null
+  readonly allowed_service_roles: readonly string[]
+  readonly required_readiness_planes: readonly string[]
+  readonly capabilities: Readonly<Record<string, ReleaseCapability>>
+  readonly route_rules: readonly ReleaseRouteRule[]
+  readonly execution_authority: boolean | null
+}
+
 export interface Capital {
   initial: number; cash: number; invested: number;
   equity: number; realized_pnl: number; open_count: number

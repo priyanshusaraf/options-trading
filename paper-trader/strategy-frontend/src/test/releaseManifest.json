@@ -1,0 +1,397 @@
+{
+  "schema": "strategy-os-release-profile/1",
+  "release_profile": "v0_research_signal",
+  "research_enabled": true,
+  "service_role": "api",
+  "allowed_service_roles": [
+    "api",
+    "research_worker",
+    "monitor",
+    "scheduler"
+  ],
+  "required_readiness_planes": [
+    "execution",
+    "ledger",
+    "research"
+  ],
+  "capabilities": {
+    "strategy_graph": {
+      "state": "ENABLED",
+      "ui_navigation": true
+    },
+    "backtesting": {
+      "state": "ENABLED_WITH_LIMIT",
+      "ui_navigation": false,
+      "reason": "the current cockpit mixes research results with execution-watchlist controls"
+    },
+    "research_review": {
+      "state": "ENABLED",
+      "ui_navigation": false,
+      "reason": "available inside the canonical strategy graph surface"
+    },
+    "provider_connections": {
+      "state": "BLOCKED",
+      "ui_navigation": false,
+      "reason": "data-only connection separation is owned by V0-D"
+    },
+    "static_watchlists": {
+      "state": "BLOCKED",
+      "reason": "research-only static scope is owned by V0-D"
+    },
+    "monitoring": {
+      "state": "BLOCKED",
+      "reason": "monitoring-only authority is owned by V0-G"
+    },
+    "signals": {
+      "state": "BLOCKED",
+      "reason": "canonical signal transitions are owned by V0-G"
+    },
+    "execution": {
+      "state": "UNAVAILABLE"
+    },
+    "orders": {
+      "state": "UNAVAILABLE"
+    },
+    "positions": {
+      "state": "UNAVAILABLE"
+    },
+    "execution_stream": {
+      "state": "UNAVAILABLE"
+    },
+    "capital_admission": {
+      "state": "INTERNAL"
+    }
+  },
+  "route_rules": [
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/toggle",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy engine instrument mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/add",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy engine universe mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/remove",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy engine universe mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/add-bulk",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy engine universe mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/interval",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy engine cadence mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/block-entries",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "entry-authority mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/product",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "execution-product mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/priority",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "execution priority mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/overtrade",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "execution risk mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/instruments/{key}/strategy",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "execution assignment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/positions/{key}/close",
+      "state": "UNAVAILABLE",
+      "capability": "positions",
+      "reason": "position mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/positions/{key}/sltp",
+      "state": "UNAVAILABLE",
+      "capability": "positions",
+      "reason": "position protection mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/positions/{key}/no-take-profit",
+      "state": "UNAVAILABLE",
+      "capability": "positions",
+      "reason": "position protection mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/execution/arm",
+      "state": "UNAVAILABLE",
+      "capability": "execution",
+      "reason": "execution control"
+    },
+    {
+      "method": "POST",
+      "template": "/api/execution/kill",
+      "state": "UNAVAILABLE",
+      "capability": "execution",
+      "reason": "execution control"
+    },
+    {
+      "method": "POST",
+      "template": "/api/positions/manual-open",
+      "state": "UNAVAILABLE",
+      "capability": "positions",
+      "reason": "position creation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/settings",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy runtime setting mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/settings/reset",
+      "state": "UNAVAILABLE",
+      "capability": "execution_configuration",
+      "reason": "legacy runtime setting mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ir-shadow/deployments",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "shadow deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ir-shadow/deployments/{row_id}/{action}",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "shadow deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ir-paper/deployments",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "paper deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ir-paper/deployments/{row_id}/{action}",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "paper deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ir-paper/deployments/{row_id}/retire",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "paper deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/promotions/{candidate_id}/deploy",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "research-to-deployment bridge"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/deploy",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "watchlist deployment mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/watchlists/{name}/status",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "execution watchlist lifecycle mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/portfolio/archive/{strategy_key}/status",
+      "state": "UNAVAILABLE",
+      "capability": "deployment",
+      "reason": "execution strategy lifecycle mutation"
+    },
+    {
+      "method": "PUT",
+      "template": "/api/ledger/snapshot",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "execution ledger mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ledger/artifacts",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "execution ledger mutation"
+    },
+    {
+      "method": "DELETE",
+      "template": "/api/ledger/artifacts/{artifact_id}",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "execution ledger mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/ledger/manual-fills/{order_id}/claim",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "broker fill mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/connections",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "mixed-role broker connection creation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/connections/{connection_id}/credential",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "broker credential mutation"
+    },
+    {
+      "method": "DELETE",
+      "template": "/api/connections/{connection_id}",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "broker connection mutation"
+    },
+    {
+      "method": "POST",
+      "template": "/api/connections/{connection_id}/oauth/initiate",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "broker OAuth mutation"
+    },
+    {
+      "method": "GET",
+      "template": "/api/status",
+      "state": "UNAVAILABLE",
+      "capability": "execution",
+      "reason": "legacy execution-cell status"
+    },
+    {
+      "method": "GET",
+      "template": "/api/execution/state",
+      "state": "UNAVAILABLE",
+      "capability": "execution",
+      "reason": "execution control state"
+    },
+    {
+      "method": "GET",
+      "template": "/api/positions",
+      "state": "UNAVAILABLE",
+      "capability": "positions",
+      "reason": "execution position book"
+    },
+    {
+      "method": "GET",
+      "template": "/api/signals",
+      "state": "UNAVAILABLE",
+      "capability": "legacy_signals",
+      "reason": "legacy runner signal surface"
+    },
+    {
+      "method": "GET",
+      "template": "/api/trades",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "execution trade book"
+    },
+    {
+      "method": "GET",
+      "template": "/api/analytics",
+      "state": "UNAVAILABLE",
+      "capability": "execution_journal",
+      "reason": "execution analytics"
+    },
+    {
+      "method": "GET",
+      "template": "/api/connections",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "mixed-role broker connection list"
+    },
+    {
+      "method": "GET",
+      "template": "/api/connections/{connection_id}",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "mixed-role broker connection detail"
+    },
+    {
+      "method": "GET",
+      "template": "/api/connections/{connection_id}/login",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "broker login materialization"
+    },
+    {
+      "method": "GET",
+      "template": "/api/oauth/callback",
+      "state": "UNAVAILABLE",
+      "capability": "provider_connections",
+      "reason": "broker OAuth token exchange"
+    },
+    {
+      "method": "WEBSOCKET",
+      "template": "/ws",
+      "state": "UNAVAILABLE",
+      "capability": "execution_stream",
+      "reason": "private execution state stream"
+    },
+    {
+      "method": "WEBSOCKET",
+      "template": "/ws/instrument/{key}",
+      "state": "UNAVAILABLE",
+      "capability": "execution_stream",
+      "reason": "position-aware price stream"
+    }
+  ],
+  "execution_authority": false
+}

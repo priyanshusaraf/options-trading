@@ -21,18 +21,19 @@ class FakeKite:
         return 100_000.0
 
 
-def _short_in_profit():
+def _short_in_profit(admitted_entry_identity):
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    admission = admitted_entry_identity(r.broker.s)
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "SHORT", 100.0, 10,
-                                        "NSE_INTRADAY", "t", r.provider.now(), params={})
+                                        "NSE_INTRADAY", "t", r.provider.now(), params={}, **admission)
     pos.last_premium = 95.0        # price FELL 5 → a short is up 5 × 10 = +50
     r.broker.commit()
     return pos
 
 
-def test_a_winning_equity_short_reads_as_a_profit():
-    pos = _short_in_profit()
+def test_a_winning_equity_short_reads_as_a_profit(admitted_entry_identity):
+    pos = _short_in_profit(admitted_entry_identity)
     assert pos.unrealized_pnl() == 50.0        # the direction-aware truth
 
     with SessionLocal() as s:
@@ -43,12 +44,13 @@ def test_a_winning_equity_short_reads_as_a_profit():
         f"short's unrealized P&L is sign-inverted in the account split: {res}")
 
 
-def test_a_long_is_unaffected():
+def test_a_long_is_unaffected(admitted_entry_identity):
     """Guard against fixing the short by breaking the long."""
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    admission = admitted_entry_identity(r.broker.s)
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "LONG", 100.0, 10,
-                                        "NSE_INTRADAY", "t", r.provider.now(), params={})
+                                        "NSE_INTRADAY", "t", r.provider.now(), params={}, **admission)
     pos.last_premium = 105.0                   # price rose 5 → a long is up +50
     r.broker.commit()
 

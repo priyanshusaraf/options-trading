@@ -17,8 +17,24 @@ from app.db.session import SessionLocal
 from app.execution.leases import LeaseRepository
 
 
+def _refuse_v0_execution() -> None:
+    from app.core.config import get_settings
+    from app.core.release_profile import is_v0_profile
+    if is_v0_profile(get_settings().release_profile):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "V0_CAPABILITY_UNAVAILABLE",
+                "release_profile": "v0_research_signal",
+                "capability": "execution",
+                "message": "execution is unavailable in the V0 research/signal profile",
+            },
+        )
+
+
 def durable_execution_account(principal: Principal, requested: str | None = None) -> str:
     """Resolve an owner-scoped account without consulting process-local runner state."""
+    _refuse_v0_execution()
     owner_id = owner_id_for(principal)
     with SessionLocal() as session:
         statement = select(BrokerAccount.broker_account_id).where(
@@ -32,6 +48,7 @@ def durable_execution_account(principal: Principal, requested: str | None = None
 
 
 def durable_execution_status(principal: Principal, requested: str | None = None) -> dict:
+    _refuse_v0_execution()
     account_id = durable_execution_account(principal, requested)
     status = LeaseRepository(SessionLocal).status(
         owner_id=owner_id_for(principal), broker_account_id=account_id)
@@ -47,6 +64,7 @@ def local_execution_cell(request: Request, principal: Principal, *, mutation: bo
     supplies an owner or account identity to a request: the SQL predicate is
     bound to the authenticated principal before the runner is returned.
     """
+    _refuse_v0_execution()
     if not principal.is_owner and mutation:
         raise HTTPException(status_code=403, detail="forbidden")
     if not principal.is_owner and principal.role not in {"viewer", "member", "admin"}:

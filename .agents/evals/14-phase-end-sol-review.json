@@ -1,1 +1,18 @@
-{"id":"14-phase-end-sol-review","skill":"reviewing-strategy-os-critical-changes","prompt":"All declared Phase 6 implementation slices and integrated evidence are complete. Describe the phase gate before Phase 7 may start. Do not review the actual code.","expect_present":["sol.*high|high.*sol","spec","quality","read-only|do not implement|no implementation"],"expect_absent":["phase 7.*start.*before|reviewer swarm|multiple reviewers|live reviewer"],"note":"every phase ends with one bounded Sol-high SPEC and QUALITY gate"}
+{
+  "id": "14-phase-end-sol-review",
+  "skill": "reviewing-strategy-os-critical-changes",
+  "prompt": "The user explicitly chooses GPT-6 Astra low for every child, including the independent reviewer. Integrated Phase 6 evidence is ready. The custom critical-reviewer role pins Sol high. Describe the independent review dispatch and acceptance gate; do not dispatch for this hypothetical eval.",
+  "expect_present": [
+    "astra",
+    "low",
+    "default|compatible|override",
+    "spec",
+    "quality",
+    "read.only|do not implement|no implementation"
+  ],
+  "expect_absent": [
+    "use Sol high",
+    "choose Sol high"
+  ],
+  "note": "Explicit Astra low review choice survives a conflicting fixed role; retain independent SPEC and QUALITY verdicts."
+}

@@ -47,9 +47,10 @@ def _close(obj):
 
 
 @pytest.fixture
-def broker():
+def broker(admitted_entry_identity):
     init_db(reset=True)
     obj = PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default")
+    obj._test_admission = admitted_entry_identity(obj.s)
     yield obj
     _close(obj)
 
@@ -64,7 +65,8 @@ def _reconciles(b) -> float:
 def _open(b, direction="LONG", price=24_000.0, qty=50, margin=25_000.0):
     return b.open_futures_position(
         get_instrument("NIFTY"), direction, price, qty, "NFO_FUT", "TEST",
-        dt.datetime(2026, 8, 3, 10, 0), EXPIRY, margin=margin)
+        dt.datetime(2026, 8, 3, 10, 0), EXPIRY, margin=margin,
+        **b._test_admission)
 
 
 # ── the invariant ───────────────────────────────────────────────────────────

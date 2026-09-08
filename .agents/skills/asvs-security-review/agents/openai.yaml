@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Inspect security against ASVS"
+  short_description: "Inspect versioned ASVS controls with evidence"
+  default_prompt: "Use $asvs-security-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

@@ -63,15 +63,21 @@ def test_the_price_columns_are_unchanged_by_the_addition():
     pd.testing.assert_frame_equal(new[["date", "open", "high", "low", "close"]], old)
 
 
-def test_a_record_with_no_volume_attribute_reads_zero_rather_than_crashing():
+def test_a_record_with_no_volume_attribute_remains_missing_and_has_distinct_identity():
     """The replay provider's JSON and hand-written regression fixtures predate the
     column. A frame built from them must still be a frame."""
     class Bar:
         def __init__(self, ts):
             self.ts, self.open, self.high, self.low, self.close = ts, 100.0, 101.0, 99.0, 100.0
 
-    df = frame_from([Bar(dt.datetime(2026, 1, 1, 9, 15))])
-    assert list(df["volume"]) == [0.0]
+    timestamp = dt.datetime(2026, 1, 1, 9, 15)
+    missing = frame_from([Bar(timestamp)])
+    zero = frame_from([_c(0, volume=0.0)])
+    assert missing["volume"].isna().all()
+    assert list(zero["volume"]) == [0.0]
+
+    from app.ir.experiment import data_digest
+    assert data_digest({"volume": missing["volume"]}) != data_digest({"volume": zero["volume"]})
 
 
 def test_an_empty_frame_still_declares_the_column():

@@ -10,6 +10,7 @@ stops and SL/TP for EVERY open position — silently, every ~1s, forever.
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 GHOST = "GHOST_DELISTED"
 
@@ -22,8 +23,9 @@ def _runner():
 def _open_option(r, key):
     inst = get_instrument(key)
     chain = r.provider.get_option_chain(inst)
+    admission = persist_admitted_entry(r.broker.s)
     return r.broker.open_position(inst, "LONG", chain.quotes[0], "t",
-                                  r.provider.now(), chain.spot)
+                                  r.provider.now(), chain.spot, **admission)
 
 
 def _poison(r, pos):
@@ -57,10 +59,11 @@ def test_poisoned_key_does_not_stop_the_mis_close_flatten():
     A poisoned key must not leave other MIS positions carrying overnight."""
     r = _runner()
     inst = get_instrument("NIFTY")
+    admission = persist_admitted_entry(r.broker.s)
     bad = r.broker.open_equity_position(inst, "LONG", 100.0, 10, "equity_intraday",
-                                        "t", r.provider.now())
+                                        "t", r.provider.now(), **admission)
     good = r.broker.open_equity_position(get_instrument("GOLDM"), "LONG", 200.0, 5,
-                                         "equity_intraday", "t", r.provider.now())
+                                         "equity_intraday", "t", r.provider.now(), **admission)
     _poison(r, bad)
 
     # force "at the close" for every segment so the flatten is due

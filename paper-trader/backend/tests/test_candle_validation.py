@@ -30,12 +30,15 @@ keeps the observation and makes those tests pass unchanged.
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from app.market_data.candles import candles_to_df, validate_candles
+from app.market_data.candles import candles_to_df, frame_from, validate_candles
+from app.market_data.numeric import NumericIngressError
 from app.providers.base import Candle
 
 
@@ -261,3 +264,34 @@ def test_both_historic_converters_now_share_one_implementation():
     dirty = [_c(15), _c(16, close=float("nan")), _c(17)]
     assert len(_to_df(dirty)) == 2, "the live converter is not validating"
     assert len(_candles_to_df(dirty)) == 2, "the backtest converter is not validating"
+
+
+_BOOLEAN_SCALARS = (True, False, np.bool_(True), np.bool_(False))
+
+
+@pytest.mark.parametrize("field", ("open", "high", "low", "close", "volume"))
+@pytest.mark.parametrize("value", _BOOLEAN_SCALARS)
+def test_validation_and_signal_frame_refuse_boolean_ohlcv(field, value):
+    candle = _c(15)
+    setattr(candle, field, value)
+
+    clean, report = validate_candles([candle])
+    assert clean == []
+    assert report.dropped_corrupt == 1
+    assert candles_to_df([candle]).empty
+    with pytest.raises(NumericIngressError):
+        frame_from([candle])
+
+
+@pytest.mark.parametrize("value", (Decimal("100.25"), "100.25",
+                                    np.int64(100), np.float64(100.25)))
+def test_float_coercible_non_boolean_prices_keep_plain_float_frame_behavior(value):
+    candle = _c(15, o=value, h=Decimal("101.5"), lo="99.5",
+                close=np.float64(100.75), vol=np.int64(7))
+    frame = candles_to_df([candle])
+    assert frame.to_dict("records") == [{
+        "date": candle.ts, "open": float(value), "high": 101.5,
+        "low": 99.5, "close": 100.75, "volume": 7.0,
+    }]
+    assert all(type(frame.iloc[0][name]) in (float, np.float64)
+               for name in ("open", "high", "low", "close", "volume"))

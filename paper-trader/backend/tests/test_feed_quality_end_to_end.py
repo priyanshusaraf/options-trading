@@ -90,7 +90,7 @@ def test_a_corrupt_feed_reaches_the_health_endpoint(client, monkeypatch):
 
     assert r.feed_quality.anomaly_count() > 0, \
         "the scan repaired a corrupt feed without recording it"
-    body = client.get("/api/health").json()
+    body = client.get("/api/readiness").json()
     assert body["provider_feed"], "anomalies never reached /api/health"
     assert body["status"] == "degraded", \
         "a dirty feed did not degrade the probe"
@@ -106,7 +106,7 @@ def test_a_dirty_feed_is_degraded_not_unready(client, monkeypatch):
                         lambda inst, interval, days: _dirty_series(), raising=False)
     monkeypatch.setattr(r.provider, "is_tradable_now", lambda inst: True, raising=False)
     r.scan_signals()
-    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/readiness").status_code == 200
 
 
 def test_the_report_names_the_instrument_and_the_problem(client, monkeypatch):
@@ -117,7 +117,7 @@ def test_the_report_names_the_instrument_and_the_problem(client, monkeypatch):
                         lambda inst, interval, days: _dirty_series(), raising=False)
     monkeypatch.setattr(r.provider, "is_tradable_now", lambda inst: True, raising=False)
     r.scan_signals()
-    feed = client.get("/api/health").json()["provider_feed"]
+    feed = client.get("/api/readiness").json()["provider_feed"]
     key, row = next(iter(feed.items()))
     assert key
     detail = row["detail"].lower()
@@ -137,7 +137,7 @@ def test_a_clean_feed_leaves_the_probe_alone(client, monkeypatch):
     monkeypatch.setattr(r.provider, "is_tradable_now", lambda inst: True, raising=False)
     r.scan_signals()
     assert r.feed_quality.anomaly_count() == 0
-    assert client.get("/api/health").json()["provider_feed"] == {}
+    assert client.get("/api/readiness").json()["provider_feed"] == {}
 
 
 def test_a_recovered_feed_clears_the_warning(client, monkeypatch):
@@ -156,4 +156,4 @@ def test_a_recovered_feed_clears_the_warning(client, monkeypatch):
     monkeypatch.setattr(r.provider, "get_candles",
                         lambda inst, interval, days: clean, raising=False)
     r.scan_signals()
-    assert client.get("/api/health").json()["provider_feed"] == {}
+    assert client.get("/api/readiness").json()["provider_feed"] == {}

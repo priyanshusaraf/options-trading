@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.core.instruments import get_instrument
 from app.db.session import SessionLocal, init_db
 from app.engine.broker import PaperBroker
+from tests.admitted_entry import persist_admitted_entry
 
 
 def test_purple_sltp_defaults_exist_and_are_wider_than_normal():
@@ -31,10 +32,11 @@ def _now():
 
 def test_purple_entry_gets_wider_band_and_persists_pcts():
     broker = _broker()
+    admission = persist_admitted_entry(broker.s)
     pos = broker.open_equity_position(
         get_instrument("NIFTY"), "LONG", price=100.0, qty=200,
         charge_segment="NSE_INTRADAY", reason="test", now=_now(),
-        sl_pct=0.015, tp_pct=0.03)
+        sl_pct=0.015, tp_pct=0.03, **admission)
     assert pos.entry_sl_pct == 0.015
     assert pos.entry_tp_pct == 0.03
     assert pos.stop_price == pytest.approx(100.0 * 0.985, rel=1e-6)
@@ -43,9 +45,10 @@ def test_purple_entry_gets_wider_band_and_persists_pcts():
 
 def test_normal_entry_leaves_pcts_none_and_uses_global_defaults():
     broker = _broker()
+    admission = persist_admitted_entry(broker.s)
     pos = broker.open_equity_position(
         get_instrument("NIFTY"), "LONG", price=100.0, qty=200,
-        charge_segment="NSE_INTRADAY", reason="test", now=_now())  # legacy call shape
+        charge_segment="NSE_INTRADAY", reason="test", now=_now(), **admission)
     assert pos.entry_sl_pct is None
     assert pos.entry_tp_pct is None
     # global defaults: SL 0.008, TP 0.03 (widened 2026-07-21)
@@ -55,10 +58,11 @@ def test_normal_entry_leaves_pcts_none_and_uses_global_defaults():
 
 def test_purple_short_band_is_direction_aware():
     broker = _broker()
+    admission = persist_admitted_entry(broker.s)
     pos = broker.open_equity_position(
         get_instrument("NIFTY"), "SHORT", price=100.0, qty=200,
         charge_segment="NSE_INTRADAY", reason="test", now=_now(),
-        sl_pct=0.015, tp_pct=0.03)
+        sl_pct=0.015, tp_pct=0.03, **admission)
     # a SHORT's stop sits ABOVE entry and its target BELOW
     assert pos.stop_price == pytest.approx(100.0 * 1.015, rel=1e-6)
     assert pos.target_price == pytest.approx(100.0 * 0.97, rel=1e-6)
@@ -97,10 +101,11 @@ def test_apply_lockstep_prefers_frozen_pcts_over_changed_globals():
     still ratchet on its own frozen 1.5%/3% band."""
     from app.engine.runner import EngineRunner
     broker = _broker()
+    admission = persist_admitted_entry(broker.s)
     pos = broker.open_equity_position(
         get_instrument("NIFTY"), "LONG", price=100.0, qty=200,
         charge_segment="NSE_INTRADAY", reason="test", now=_now(),
-        sl_pct=0.015, tp_pct=0.03)
+        sl_pct=0.015, tp_pct=0.03, **admission)
     pos.last_premium = 100.0
 
     r = EngineRunner(session=broker.s) if "session" in inspect.signature(

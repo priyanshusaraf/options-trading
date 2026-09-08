@@ -20,7 +20,7 @@ First call `create_goal` with the exact objective below:
 
 > Execute [STAGE_ID] from [CAPSULE]. The goal completes only when every acceptance criterion has current evidence, proportional tests pass, the integrated review package is current, and the next declared gate is ready. A failed gate creates correction state and does not advance the programme. Stop with the goal active for an owner gate or an unresolved required environment.
 
-Use Terra medium. Audit the inherited tree before editing. Use zero to five clean-fork children only for declared disjoint assignments. Keep full output under `.agent/runs/`; return compact evidence paths. Do not run the broad suite more than the capsule permits.
+Use Sol medium. Audit the inherited tree before editing. Use zero to five clean-fork children only for declared disjoint assignments. Keep full output under `.agent/runs/`; return compact evidence paths. Do not run the broad suite more than the capsule permits.
 
 ## Critical phase-review goal
 
@@ -34,7 +34,7 @@ Use Sol high. Read only the capsule, source-coverage matrix, review package, int
 
 - `SPEC=PASS` and `QUALITY=PASS` are both required for acceptance.
 - A missing, stale, partial, timed-out, skipped, or failed required command is rejection evidence.
-- A rejected phase activates a Terra-medium correction stage before the same Sol reviewer may recheck it.
+- A rejected phase activates a Sol-medium correction stage before the same Sol-high reviewer may recheck it.
 - Component IR v2 must pass after Phase 3 and before Phase 4.
 - Every Phase 4–10 architecture goal expands its implementation placeholder into fresh bounded slice goals and creates the exact phase-review capsule.
 - V1 completion requires all three canonical scenarios, every phase report, broad release verification, and truthful nonclaim resolution.

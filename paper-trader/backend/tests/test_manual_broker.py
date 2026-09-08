@@ -4,6 +4,7 @@ from app.providers.mock import MockProvider
 from app.engine.broker import PaperBroker
 from app.core.instruments import get_instrument
 from app.core.config import get_settings
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _broker():
@@ -16,7 +17,9 @@ def test_mark_sets_freshness_and_high_water():
     inst = get_instrument("NIFTY")
     chain = b.provider.get_option_chain(inst)
     q = chain.quotes[0]
-    pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot)
+    admission = persist_admitted_entry(b.s)
+    pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot,
+                          **admission)
     assert pos.last_mark_time is not None
     assert pos.high_water_premium == q.ltp
     b.mark(pos, premium=q.ltp * 1.5, spot=chain.spot, now=b.provider.now())
@@ -35,7 +38,8 @@ def test_mark_with_zero_premium_advances_freshness():
     chain = b.provider.get_option_chain(inst)
     q = chain.quotes[0]
     t0 = b.provider.now()
-    pos = b.open_position(inst, "LONG", q, "test", t0, chain.spot)
+    admission = persist_admitted_entry(b.s)
+    pos = b.open_position(inst, "LONG", q, "test", t0, chain.spot, **admission)
     later = t0 + dt.timedelta(seconds=5)
     b.mark(pos, premium=0.0, spot=chain.spot, now=later)
     assert pos.last_premium == 0.0
@@ -54,6 +58,7 @@ def test_manual_open_respects_capital_and_one_position(monkeypatch):
         inst, "LONG", chain, get_settings(), b.provider.now(),
         strategy_key="expanding_z_v4", strategy_version="v4", admission_address=address)
     assert pos is not None, reason
+    assert pos.entry_intent_id is not None
     pos2, reason2 = b.manual_open(
         inst, "LONG", chain, get_settings(), b.provider.now(),
         strategy_key="expanding_z_v4", strategy_version="v4", admission_address=address)
@@ -71,3 +76,27 @@ def test_manual_open_rejects_when_no_cash(monkeypatch):
         strategy_key="expanding_z_v4", strategy_version="v4",
         admission_address="sha256:" + "a" * 64)
     assert pos is None and "cash" in reason.lower()
+
+
+def test_manual_and_strategy_options_share_broker_seam_but_keep_distinct_intents():
+    b = _broker()
+    inst = get_instrument("NIFTY")
+    chain = b.provider.get_option_chain(inst)
+    quote = chain.quotes[0]
+    now = b.provider.now()
+    admission = persist_admitted_entry(b.s)
+    strategy = b.open_position(
+        inst, "LONG", quote, "STRATEGY", now, chain.spot, **admission)
+    strategy_intent = strategy.entry_intent_id
+    b.close_position(strategy, quote.ltp, "STRATEGY", now, chain.spot)
+
+    manual, reason = b.manual_open(
+        inst, "LONG", chain, get_settings(), now,
+        strategy_key=admission["strategy_key"],
+        strategy_version=admission["strategy_version"],
+        admission_address=admission["admission_address"],
+        graph_address=admission["graph_address"],
+        attribution_state=admission["attribution_state"])
+    assert manual is not None, reason
+    assert manual.entry_intent_id is not None
+    assert manual.entry_intent_id != strategy_intent

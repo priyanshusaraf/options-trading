@@ -9,7 +9,8 @@
 #      could no longer create files
 #
 # Usage:
-#   scripts/deploy.sh                       # normal deploy
+#   scripts/deploy.sh                       # existing bot deploy
+#   scripts/deploy.sh --strategy-os-v0      # V0 candidate; explicit destination required
 #   scripts/deploy.sh --force-market-hours  # deploy inside the trading session
 #   scripts/deploy.sh --dry-run             # show what would transfer, change nothing
 #   scripts/deploy.sh --prune               # additionally delete remote-only files,
@@ -34,6 +35,8 @@ APP_BASE="${PT_APP_BASE:-http://127.0.0.1:8090}"
 # git root: REPO_ROOT would become the parent repo (stock-market-analyst/, data/,
 # screenshots) and the real tree would land at $VPS_PATH/paper-trader/.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Existing bot releases retain their source; V0 selects its candidate explicitly.
+FRONTEND_SOURCE="$REPO_ROOT/frontend"
 
 # Anything here is NEVER pushed and NEVER pruned. Production owns these; they are
 # not in git. Verified against a live `find /opt/paper-trader` on 2026-07-28 —
@@ -57,6 +60,7 @@ EXCLUDES=(
   --exclude '*.sql'           # ledger backups taken before risky operations
   --exclude 'backups'         # nightly DB backups, ~600MB, created by backup.sh
   --exclude 'backup.sh'       # the cron script that creates them — VPS-only
+  --exclude 'strategy-frontend/dist' # Built separately; never prune either SPA artifact.
   --exclude 'frontend/dist'   # Gitignored, and BUILT ON THE MAC (see below) —
                               #   shipped by its own targeted rsync, never by the
                               #   main one. It stays excluded here precisely so
@@ -89,11 +93,13 @@ EXCLUDES=(
 FORCE_MARKET_HOURS=0
 DRY_RUN=0
 PRUNE=0
+STRATEGY_OS_V0=0
 for arg in "$@"; do
   case "$arg" in
     --force-market-hours) FORCE_MARKET_HOURS=1 ;;
     --dry-run)            DRY_RUN=1 ;;
     --prune)              PRUNE=1 ;;
+    --strategy-os-v0)     STRATEGY_OS_V0=1; FRONTEND_SOURCE="$REPO_ROOT/strategy-frontend" ;;
     --force)
       echo "--force is gone. Use --force-market-hours. There is deliberately no" >&2
       echo "flag to ship a dirty tree: a -dirty SHA in trades.build_sha is" >&2
@@ -105,6 +111,11 @@ done
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31mFAIL:\033[0m %s\n' "$*" >&2; exit 1; }
+
+if [[ $STRATEGY_OS_V0 -eq 1 ]]; then
+  [[ -n "${PT_VPS_HOST:-}" && -n "${PT_VPS_PATH:-}" && -n "${PT_SERVICE:-}" && -n "${PT_VPS_KEY:-}" ]] \
+    || fail "V0 requires explicit PT_VPS_HOST, PT_VPS_PATH, PT_SERVICE and PT_VPS_KEY for the approved destination"
+fi
 
 # ------------------------------------------------------- preflight guards ----
 
@@ -291,25 +302,29 @@ log "Guard 3 OK: ledger reconciled (LEDGER OK present in the dryrun output)"
 # build there competes for memory with a process holding real positions and can
 # take the engine down. Local build, then ship the artifact.
 #
-# frontend/dist is gitignored, so this cannot dirty the tree checked by Guard 2
+# strategy-frontend/dist is gitignored, so this cannot dirty the tree checked by Guard 2
 # (which has already run, above).
 if [[ $DRY_RUN -eq 1 ]]; then
-  log "dry run: SKIPPING frontend build (it writes to frontend/dist, and a dry run changes nothing)"
+  log "dry run: SKIPPING frontend build (a dry run changes no artifacts)"
 else
   command -v npm >/dev/null || fail "npm not found — the SPA is built on the Mac now, not the VPS"
-  [[ -d "$REPO_ROOT/frontend/node_modules" ]] \
-    || fail "frontend/node_modules missing — run (cd frontend && npm install) first"
+  if [[ $STRATEGY_OS_V0 -eq 1 ]]; then
+    node -e 'process.exit(Number(process.versions.node.split(".")[0]) === 24 ? 0 : 1)' \
+      || fail "Node.js 24 is required for the Strategy OS frontend build"
+  fi
+  [[ -d "$FRONTEND_SOURCE/node_modules" ]] \
+    || fail "$FRONTEND_SOURCE/node_modules missing — run npm ci in the selected frontend package first"
 
   log "building frontend on this machine (NOT on the 1GB droplet)"
-  ( cd "$REPO_ROOT/frontend" && npm run build ) > /tmp/pt-deploy-build.log 2>&1 \
+  ( cd "$FRONTEND_SOURCE" && npm run build ) > /tmp/pt-deploy-build.log 2>&1 \
     || { tail -40 /tmp/pt-deploy-build.log; fail "frontend build failed — see /tmp/pt-deploy-build.log"; }
 
   # Refuse to ship an empty or half-written dist. The targeted rsync below would
   # otherwise happily overwrite a working remote SPA with nothing, which is the
   # 404-with-green-health failure mode this script exists to prevent.
-  [[ -s "$REPO_ROOT/frontend/dist/index.html" ]] \
-    || fail "frontend build produced no dist/index.html — refusing to ship an empty SPA"
-  log "frontend built: $(find "$REPO_ROOT/frontend/dist" -type f | wc -l | tr -d ' ') files"
+  [[ -s "$FRONTEND_SOURCE/dist/index.html" ]] \
+    || fail "selected frontend build produced no dist/index.html — refusing to ship an empty SPA"
+  log "frontend built: $(find "$FRONTEND_SOURCE/dist" -type f | wc -l | tr -d ' ') files"
 fi
 
 # ------------------------------------------------------------- transfer -----
@@ -326,6 +341,7 @@ fi
 # deletion is opt-in per-invocation via --prune, which shows its work first.
 RSYNC_FLAGS=(-rlptD --omit-dir-times --no-owner --no-group -v)
 [[ $DRY_RUN -eq 1 ]] && RSYNC_FLAGS+=(--dry-run)
+TREE_RSYNC_FLAGS=("${RSYNC_FLAGS[@]}")
 
 # Stamp the build into backend/, where the app reads it with no path traversal.
 # Written after the guards (so a failed run leaves no misleading VERSION) and
@@ -387,7 +403,8 @@ capture_rollback_point() {
 
   if [[ -n "$ROLLBACK_SHA" ]]; then
     if git cat-file -e "${ROLLBACK_SHA}^{commit}" 2>/dev/null; then
-      printf '    To roll back:  \033[1mgit checkout %s && scripts/deploy.sh\033[0m\n\n' "$ROLLBACK_SHA"
+      printf '    Rollback source: git checkout %s\n' "$ROLLBACK_SHA"
+      echo '    Then rerun the original approved deployment command with the same frontend mode and explicit destination.'
     else
       # Worth saying out loud: the SHA is captured but not reachable from here,
       # so `git checkout` will fail until the branch holding it is fetched.
@@ -458,7 +475,7 @@ if [[ $PRUNE -eq 1 ]]; then
     else
       read -r -p "Type 'delete' to confirm, anything else to abort: " confirm
       [[ "$confirm" == "delete" ]] || fail "prune aborted — nothing was changed"
-      RSYNC_FLAGS+=(--delete)
+      TREE_RSYNC_FLAGS+=(--delete)
     fi
   fi
 fi
@@ -469,7 +486,7 @@ fi
 [[ $DRY_RUN -eq 0 ]] && write_version
 
 log "syncing $BRANCH@$SHA -> $VPS_HOST:$VPS_PATH"
-rsync "${RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" \
+rsync "${TREE_RSYNC_FLAGS[@]}" "${EXCLUDES[@]}" \
   -e "ssh -i $VPS_KEY -o StrictHostKeyChecking=accept-new" \
   "$REPO_ROOT/" "$VPS_HOST:$VPS_PATH/"
 
@@ -492,7 +509,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   log "syncing built frontend -> $VPS_PATH/frontend/dist/"
   rsync "${RSYNC_FLAGS[@]}" \
     -e "ssh -i $VPS_KEY -o StrictHostKeyChecking=accept-new" \
-    "$REPO_ROOT/frontend/dist/" "$VPS_HOST:$VPS_PATH/frontend/dist/"
+    "$FRONTEND_SOURCE/dist/" "$VPS_HOST:$VPS_PATH/frontend/dist/"
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
@@ -534,8 +551,8 @@ remote_assert "test -s $VPS_PATH/backend/.env" "production .env is present and n
 log "verifying built frontend landed"
 remote_assert "test -s $VPS_PATH/frontend/dist/index.html" "frontend/dist/index.html is present" \
   || fail "frontend/dist/index.html is missing — the SPA would 404. Do NOT build on the
-      VPS (1GB droplet, OOMs with the engine running). Build here and re-run:
-      (cd $REPO_ROOT/frontend && npm run build) && scripts/deploy.sh"
+      VPS (1GB droplet, OOMs with the engine running). Build $FRONTEND_SOURCE here,
+      then rerun the original approved deployment command with the same frontend mode and explicit destination."
 
 # The remote .venv is EXCLUDED from the sync (it is per-host and platform-specific),
 # so a new entry in requirements.txt does not reach the VPS by itself. Before

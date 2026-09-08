@@ -238,3 +238,17 @@ def daily_profit_lock(day_pnl: float, high_water: float, deployed_capital: float
         return False, None
     floor = giveback_frac * high_water
     return day_pnl <= floor, floor
+
+
+def account_halt_reason(realized: float, unrealized: float, round_trips: int,
+                        profit_lock_halted: bool, limits: dict) -> str:
+    """Account entry-only caps, followed by the existing profit-giveback latch."""
+    halted, reason = daily_loss_halt(realized, unrealized, limits["max_daily_loss"],
+                                     limits["max_open_drawdown"])
+    if halted:
+        return reason
+    if round_trip_cap_reached(round_trips, limits["max_round_trips_per_day"]):
+        return "round_trips"
+    if limits["max_daily_profit"] > 0 and realized >= limits["max_daily_profit"]:
+        return "realized_profit"
+    return "profit_lock" if profit_lock_halted else ""

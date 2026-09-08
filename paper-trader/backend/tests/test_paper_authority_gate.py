@@ -54,7 +54,10 @@ def _paper_binding(strategy, *, origin=None, version=_UNSET, mode=None):
     return binding.ExecutionBinding(
         deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY",
         strategy_key=strategy.key,
-        strategy_version=strategy.version if version is _UNSET else version,
+        strategy_version=strategy.graph_version_label,
+        graph_address=strategy.version if version is _UNSET else version,
+        attribution_state="VERIFIED_GRAPH",
+        admission_address="sha256:" + "a" * 64,
         source=binding.SOURCE_IR_GRAPH, authority=binding.AUTHORITATIVE,
         execution_mode=configured_execution_mode() if mode is None else mode,
         origin=binding.ORIGIN_PAPER_AUTHORITY if origin is None else origin,

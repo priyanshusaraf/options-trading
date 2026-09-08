@@ -5,9 +5,11 @@ when something validates, update the hypothesis, and return a report — all in
 research.db, touching no capital.
 """
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from app.strategy.registry.base import Strategy
 from research.data.store import StaticDataSource, materialize
 from research.domain.models import (
     ExperimentRun,
@@ -22,6 +24,16 @@ from research.orchestrator.run import run_experiment, spec_hash
 from research.evidence import EvidenceRejected, decode_terminal_evidence
 
 OWNER_ID = "test-owner"
+
+_PARAMETER_NEIGHBORHOOD = {
+    "enabled": True,
+    "axes": [{
+        "node_id": "signal", "parameter_id": "window",
+        "step": "1", "minimum": "1", "maximum": "3",
+    }],
+    "maximum_score_drop_paise": 100,
+    "minimum_stable_fraction_ppm": 500_000,
+}
 
 
 def _datasets(inst_factory, candles_factory, keys):
@@ -292,6 +304,23 @@ def test_report_renders_markdown(research_session, inst_factory, candles_factory
     assert report["hypothesis"] in md
 
 
+def test_report_marks_holdout_selected_promotion_as_selection_affected():
+    candidate = {
+        "instrument": "AAA", "dsr": 0.8, "dsr_breadth_deflated": 0.6,
+        "scorecard": {"trades": 30, "return_pct": 4.0,
+                      "max_drawdown_pct": 2.0},
+    }
+    markdown = render_markdown({
+        "validated": [candidate], "promotion": candidate,
+        "qualified": ["AAA"], "rejected": [],
+    })
+    assert "breadth-adjusted 0.600" in markdown
+    assert "selected on this holdout" in markdown
+    assert "selection-affected" in markdown
+    assert "untouched shadow period" in markdown
+    assert "not treated as independent confirmation" in markdown
+
+
 def test_run_nightly_writes_report_files(research_session, inst_factory, candles_factory, tmp_path):
     import os
 
@@ -430,15 +459,34 @@ def test_real_durable_receipt_rolls_back_when_terminal_commit_crashes(
     assert operation.completed_run_ids == []
 
 
-def _validating_run(session, inst_factory, uptrend_factory, keys=("UPA", "UPB")):
-    strat = kernels.get_strategy("trend_impulse_v3")
+class _RepeatingOpportunityStrategy(Strategy):
+    """Deterministic signal scaffold with closed trades on both sides of the cutoff."""
+
+    key = "trend_impulse_v3"
+    display_name = "Repeated opportunity scaffold"
+    default_params = {}
+
+    def compute(self, frame):
+        result = frame.copy()
+        phase = result.index % 8
+        result["longEntry"] = phase == 0
+        result["longExit"] = phase == 4
+        result["shortEntry"] = False
+        result["shortExit"] = False
+        return result
+
+
+def _validating_run(session, inst_factory, uptrend_factory, keys=("UPA", "UPB"),
+                    strategy=None):
+    strat = strategy or _RepeatingOpportunityStrategy()
     src = StaticDataSource({(k, "day"): uptrend_factory(400) for k in keys})
     datasets = [(inst_factory(k), materialize(src, inst_factory(k), "day")) for k in keys]
     return run_experiment(session, owner_id=OWNER_ID, program_name="Trend Following",
                           hypothesis_statement="EMA trend persists", strategy=strat,
                           datasets=datasets, params=dict(strat.default_params),
                           git_commit="deadbeef", seed=1, min_trades=1, n_folds=3,
-                          min_positive_fold_frac=0.0)
+                          min_positive_fold_frac=0.0,
+                          parameter_neighborhood=_PARAMETER_NEIGHBORHOOD)
 
 
 def test_promotion_candidate_carries_validated_universe_with_scores(
@@ -447,6 +495,7 @@ def test_promotion_candidate_carries_validated_universe_with_scores(
     promotion) with a per-instrument score, not just the qualified keys + one best
     row — that is exactly what the human needs to review and what deploy assigns."""
     report = _validating_run(research_session, inst_factory, uptrend_factory)
+    assert report["validated"], report["rejected"]
     cand = research_session.query(PromotionCandidate).one()
     payload = json.loads(cand.scorecard_json)
     validated = payload["validated"]
@@ -455,6 +504,59 @@ def test_promotion_candidate_carries_validated_universe_with_scores(
     assert {v["instrument"] for v in validated} == {v["instrument"] for v in report["validated"]}
     # the headline best is still present and is one of the validated instruments
     assert payload["best"]["instrument"] in {v["instrument"] for v in validated}
+    run = research_session.get(ExperimentRun, report["run_id"])
+    results = decode_terminal_evidence(run.checkpoint_json)["results"]
+    assert all(row["qualification"]["trades"] > 10
+               for row in results["instruments"])
+    assert all(row["validation"]["gates"]["min_oos_trades"]["value"] > 5
+               for row in results["instruments"])
+    parameter_evidence = results["parameter_neighborhood"]
+    assert parameter_evidence["reason_code"] == "MULTI_INSTRUMENT_AMBIGUITY"
+
+
+def test_training_only_trend_entry_does_not_promote(
+        research_session, inst_factory, uptrend_factory):
+    report = _validating_run(
+        research_session, inst_factory, uptrend_factory,
+        strategy=kernels.get_strategy("trend_impulse_v3"),
+    )
+
+    assert report["qualified"] == ["UPA", "UPB"]
+    assert report["validated"] == []
+    assert {row["reason"] for row in report["rejected"]} == {
+        "failed validation: min_oos_trades, confident_edge, slippage_stress_2x",
+    }
+    assert research_session.query(PromotionCandidate).count() == 0
+    run = research_session.get(ExperimentRun, report["run_id"])
+    results = decode_terminal_evidence(run.checkpoint_json)["results"]
+    assert all(row["qualification"]["trades"] == 1
+               for row in results["instruments"])
+    assert all(row["validation"]["gates"]["min_oos_trades"]["value"] == 0
+               for row in results["instruments"])
+    parameter_evidence = results["parameter_neighborhood"]
+    assert parameter_evidence["reason_code"] == "MULTI_INSTRUMENT_AMBIGUITY"
+
+
+def test_parameter_evidence_with_different_folds_is_withheld():
+    from research.orchestrator.run import _checked_parameter_evidence
+
+    locked = SimpleNamespace(wf=SimpleNamespace(folds=[SimpleNamespace(
+        fold_index=0, start_ts=10, end_ts=20, n_bars=5,
+    )]))
+    evidence = {
+        "state": "AVAILABLE",
+        "population": [{"folds": [[0, 10, 21, 5]]}],
+    }
+
+    checked = _checked_parameter_evidence(
+        _PARAMETER_NEIGHBORHOOD, evidence, locked,
+    )
+
+    assert checked == {
+        "schema": "strategy-os-parameter-neighbourhood-evidence/1",
+        "state": "UNAVAILABLE",
+        "reason_code": "PARAMETER_NEIGHBORHOOD_CANDIDATE_REFUSED",
+    }
 
 
 def test_run_experiment_with_optimization_persists_immutable_trials(
@@ -476,8 +578,90 @@ def test_run_experiment_with_optimization_persists_immutable_trials(
     trials = research_session.query(OptimizationTrial).all()
     assert len(trials) > 0
     assert any(t.selected for t in trials)
+    final_trials = [trial for trial in trials if trial.fold_index == -1]
+    assert final_trials and sum(trial.selected for trial in final_trials) == 2
     # the trial ledger is immutable — tampering must abort
     trials[0].is_objective = 999.0
     with pytest.raises(DatabaseError):
         research_session.commit()
     research_session.rollback()
+
+
+def _canonical_experiment_arguments(monkeypatch, fake_inst, uptrend_factory, *, fail_at=None, cancelled=False):
+    from research_tests.test_optimize import _canonical_search_case
+    from research.pipeline.v2_parameter_search import SEARCH_SCHEMA
+    prepared, evaluator, case, _, _ = _canonical_search_case(
+        monkeypatch, fake_inst, uptrend_factory, fail_at=fail_at, cancelled=cancelled)
+    dataset = materialize(StaticDataSource({(fake_inst.key, "day"): case["dataset"].candles}), fake_inst, "day")
+    strategy = SimpleNamespace(key="canonical.test", display_name="Controlled canonical signals", default_params={},
+        window=2, risk_model=None, replay_policy=None, replay_slippage_pct=.0005)
+    graph = {"project_id": "search-project", "identifier": "canonical.test", "version": 1,
+             "content_address": prepared.binding["baseline_content_address"],
+             "graph_address": prepared.candidates[0]["graph_address"]}
+    return dict(owner_id=OWNER_ID, program_name="Canonical search",
+        hypothesis_statement="Frozen canonical candidates remain attributable", strategy=strategy,
+        datasets=[(fake_inst, dataset)], params={}, git_commit="test-build", min_trades=1, n_folds=2,
+        min_positive_fold_frac=0, optimize_search=True, optimizer_version=SEARCH_SCHEMA,
+        canonical_search=prepared, canonical_candidate_evaluator=evaluator, graph_provenance={"graph": graph})
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_failed_canonical_search_persists_population_and_reader_rejects_rehashed_loss(
+        research_session, monkeypatch, fake_inst, uptrend_factory, cancelled):
+    import copy
+    from research.robustness.parameter_integration import CandidateEvaluationCancelled
+    from research.evidence import encode_terminal_evidence
+    from app.core import research_read
+    arguments = _canonical_experiment_arguments(monkeypatch, fake_inst, uptrend_factory,
+                                                 fail_at=2, cancelled=cancelled)
+    with pytest.raises((ValueError, CandidateEvaluationCancelled)):
+        run_experiment(research_session, **arguments)
+    run = research_session.query(ExperimentRun).one()
+    assert run.status == "failed" and run.error == "RESEARCH_OPTIMIZATION_FAILED"
+    with pytest.raises(research_read.FindingEvidenceUnavailable):
+        research_read._verified_finding_run(research_session, "search-project", run.id, owner_id=OWNER_ID)
+    evidence = decode_terminal_evidence(run.checkpoint_json)
+    search = evidence["results"]["canonical_optimization"]
+    assert len(search["candidates"]) == 3
+    assert [row["state"] for row in search["candidates"]] == ["evaluated", "cancelled" if cancelled else "failed", "pending"]
+    assert research_read._graph_run_view(research_session, run, include_evidence=True)["evidence_state"] == "verified"
+    forged = copy.deepcopy(evidence)
+    forged["results"]["canonical_optimization"]["candidates"].pop()
+    original = run.checkpoint_json
+    with research_session.no_autoflush:
+        run.checkpoint_json = encode_terminal_evidence(forged)
+        with pytest.raises(research_read.StoredEvidenceCorrupt):
+            research_read._graph_run_view(research_session, run, include_evidence=True)
+        run.checkpoint_json = original
+
+
+
+def test_completed_canonical_search_persists_selected_runtime_and_trial_ledger(
+        research_session, monkeypatch, fake_inst, uptrend_factory):
+    from research.domain.models import OptimizationTrial
+    from app.core import research_read
+    import research.orchestrator.run as runner
+    arguments = _canonical_experiment_arguments(monkeypatch, fake_inst, uptrend_factory)
+    candidates, heldout = {}, []
+    evaluator, validator = arguments["canonical_candidate_evaluator"], runner.validate
+    def evaluate(point):
+        runtime = evaluator(point)
+        candidates[runtime.candidate_graph_address] = runtime.strategy
+        return runtime
+    def validate(candles, instrument, strategy, params, **kwargs):
+        assert params == {}
+        heldout.append(strategy)
+        return validator(candles, instrument, strategy, params, **kwargs)
+    arguments["canonical_candidate_evaluator"] = evaluate
+    monkeypatch.setattr(runner, "validate", validate)
+    report = run_experiment(research_session, **arguments)
+    run = research_session.get(ExperimentRun, report["run_id"])
+    evidence = decode_terminal_evidence(run.checkpoint_json)
+    search = evidence["results"]["canonical_optimization"]
+    assert run.status == "completed" and search["state"] == "selected"
+    assert len(heldout) == 1 and heldout[0] is candidates[search["selected"]["graph_address"]]
+    trials = research_session.query(OptimizationTrial).all()
+    assert len(trials) == 9
+    assert sum(row.selected for row in trials if row.fold_index == -1) == 1
+    assert research_read._verified_finding_run(research_session, "search-project", run.id, owner_id=OWNER_ID) is not None
+    assert research_read._verified_finding_run(research_session, "search-project", run.id, owner_id="foreign") is None

@@ -1,0 +1,161 @@
+{
+  "schema": "professional-reference-numerical-index/1",
+  "date": "2026-08-28",
+  "indexing_status": "INDEXED; numerical assurance PENDING",
+  "scope": "Bookkeeping only; original Kleppmann mandate not reopened",
+  "coordinator_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+  "indexer_task": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+  "source_receipt": {
+    "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/reference-claims.md",
+    "sha256": "16ce66e26b31ffc8b75d0294650a42381c797da0536677a44717401f9fa857f1",
+    "role": "correction-owner source/claim application receipt",
+    "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+  },
+  "source_ids": [
+    "PYTHON_STDLIB_3_13",
+    "STRATEGY_OS_CORE_MATH_SPEC"
+  ],
+  "claim_ids": [
+    "NUM-001",
+    "NUM-002",
+    "NUM-003",
+    "NUM-004"
+  ],
+  "provenance_chain": [
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/closure-seal.json",
+      "sha256": "78b899afb76b12f3a536bc9a577dcdeb43e716b6221cf36abc9d6f7a8e8d86d0",
+      "role": "binds evidence.json",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/evidence.json",
+      "sha256": "6a8727990a5fa94456264ee7ff9a3b6887a7fbc31281a86f7bf8dd3d598cacfc",
+      "role": "binds reference-claims.md",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/reference-claims.md",
+      "sha256": "16ce66e26b31ffc8b75d0294650a42381c797da0536677a44717401f9fa857f1",
+      "role": "correction-owner source/claim application receipt",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    }
+  ],
+  "local_evidence": [
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/report.md",
+      "sha256": "bcb693f4469f8b0dfa03d4087f3e6338b1f3b2293b0625d06edea05926aadfeb",
+      "role": "local correction report",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/evidence.json",
+      "sha256": "6a8727990a5fa94456264ee7ff9a3b6887a7fbc31281a86f7bf8dd3d598cacfc",
+      "role": "owner-reported direct checks and artifact hashes",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/closure-seal.json",
+      "sha256": "78b899afb76b12f3a536bc9a577dcdeb43e716b6221cf36abc9d6f7a8e8d86d0",
+      "role": "local correction closure, independent assurance pending",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/source-proof.json",
+      "sha256": "85e0cf34cbd1f87ee6910da44991c774d11495c97e3a10100d4a6d61300cda91",
+      "role": "source/identity/semantic preservation proof",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/arithmetic-executor-receipt.json",
+      "sha256": "c97607eb05ad2e733af0982795ad3be389ffd7cb83ab7f9e546dce65ee602a85",
+      "role": "actual measured executable and arithmetic modules",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/mutation-receipt.json",
+      "sha256": "6d4e0b6f91dd0acb8abf3c443b0e9ed1a8b34b92f75158252162dd30ed8f3238",
+      "role": "owner-reported mutations",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/resources-exact.json",
+      "sha256": "8b7d2aaec212209b4c303bfe0d5536c808eb0e5c3e46a48faca71dbdee56e91b",
+      "role": "owner-reported resource measurements",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    }
+  ],
+  "documentation": {
+    "reported_version": "3.13.15",
+    "series": "3.13",
+    "checked_by": "correction owner",
+    "upstream_reread_by_indexer": false,
+    "per_page_content_sha256": null
+  },
+  "runtime": {
+    "version": "3.13.5",
+    "execution_attribution": "copied from sealed arithmetic executor receipt; no runtime execution in this indexing task",
+    "receipt": {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/arithmetic-executor-receipt.json",
+      "sha256": "c97607eb05ad2e733af0982795ad3be389ffd7cb83ab7f9e546dce65ee602a85",
+      "role": "actual local executor",
+      "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+    },
+    "executable_sha256": "a1f6d9dc20d4787a84dc2fe782094a7bac5946f49a962aa0af48a02f0e8d5bc5",
+    "arithmetic_modules": {
+      "math": {
+        "path": "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/lib-dynload/math.cpython-313-darwin.so",
+        "sha256": "89e7675a78d1b8ef36fd2ea5fb2887e2d4ac80843cc786635d16cde8e9bad982"
+      },
+      "decimal": {
+        "path": "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/decimal.py",
+        "sha256": "ed070025c9742f71f7ea92ec1a3d24f85b3199dd79b9d15a141716154e647989"
+      },
+      "_decimal": {
+        "path": "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/lib-dynload/_decimal.cpython-313-darwin.so",
+        "sha256": "012ccc5fc549ca1da531e00957e6f1807e364971fcd55209f51d5545d788e585"
+      },
+      "fractions": {
+        "path": "/opt/homebrew/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/lib/python3.13/fractions.py",
+        "sha256": "58f7750133f2e23999ba3f634d1b14edfec6dc48bf8bb00a9911262cd7198f63"
+      }
+    },
+    "libmpdec": {
+      "path": "/opt/homebrew/Cellar/mpdecimal/4.0.1/lib/libmpdec.4.0.1.dylib",
+      "sha256": "30a40206c5b075e7b92f11aead6e937559e7a418914fd01dc925e92894c1796d",
+      "version": "4.0.1",
+      "kind": "separate executable-environment provenance; no product dependency/lock mutation"
+    }
+  },
+  "local_correction_verdict": "LOCAL_CORRECTION_PASS_PENDING_INDEPENDENT_ASSURANCE",
+  "independent_assurance": {
+    "status": "PENDING",
+    "owner_task": "01a04883-7dc6-71a1-bb51-9e9dff45c450",
+    "capsule": "paper-trader/docs/agent/tasks/post-phase5-indicator-accuracy-core-correction-assurance.md",
+    "independent_acceptance": false
+  },
+  "publication": false,
+  "deployment": false,
+  "v0_complete": false,
+  "registry_delta": {
+    "sources_before": 31,
+    "sources_added": 2,
+    "sources_after": 33,
+    "claims_before": 2,
+    "claims_added": 4,
+    "claims_after": 6,
+    "source_registry_before_sha256": "62a884bf7def8d53e46ff6cfcd23e0223ba651fa443fa6f4ae7d47afed85be55",
+    "source_registry_after_sha256": "414b165e02fb27bf821087b29de9034dfb37647665775ed1db76fa75cea21ced",
+    "claim_registry_before_sha256": "3a1449c921c8979148448be1f3d0d11e16a02c9bf375909e8b6d7a18c65131a0",
+    "claim_registry_after_sha256": "7a656f277a763252cdb7f194472af9b332451bb1d5ff907439d7712326fb5770"
+  },
+  "original_intake_evidence": {
+    "path": ".agent/runs/kleppmann-professional-review-20260828",
+    "policy": "immutable; original intake records and closure not rewritten"
+  },
+  "verification_receipt": ".agent/runs/professional-reference-numerical-index-20260828/root/validation.json",
+  "gap": "No indexing blocker. Upstream per-page content digests are not supplied by the indexed receipt; left unknown. Independent numerical acceptance remains PENDING.",
+  "deployment_impact": "none",
+  "migration": "none",
+  "attribution_limits": "The correction receipt attributes reading and local evidence to the correction owner by role, not a task UUID. Coordinator, indexer and pending assurance task identities are preserved separately; no implementation task UUID is inferred."
+}

@@ -1,0 +1,270 @@
+{
+  "schema": "professional-reference-f04-index/1",
+  "date": "2026-08-28",
+  "indexing_status": "INDEXED; independent numerical acceptance PENDING",
+  "coordinator_task": "01a048c2-42d6-7850-94e9-af0f2ed5e0e1",
+  "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+  "indexer_task": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+  "source_receipt": {
+    "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/reference-application.md",
+    "sha256": "e4a4a0fd34c546f3eca88b095de02b940f1aca14e4a3db8750a39d304ac9b045",
+    "role": "F04 correction-owner source application",
+    "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification",
+    "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af"
+  },
+  "provided_correction_seal_sha256": "417c9e7e5ca7cc6bad47b24f069c096cc20f76b7e830d3c4e4cb4136eeb83c00",
+  "provenance_chain": [
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/closure-seal.json",
+      "sha256": "417c9e7e5ca7cc6bad47b24f069c096cc20f76b7e830d3c4e4cb4136eeb83c00",
+      "role": "binds evidence.json",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/evidence.json",
+      "sha256": "04867c448fb44896bff53de914dbba98332ea94a033ade24ea9c1b5fbe943716",
+      "role": "binds reference-application.md",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/reference-application.md",
+      "sha256": "e4a4a0fd34c546f3eca88b095de02b940f1aca14e4a3db8750a39d304ac9b045",
+      "role": "F04 correction-owner source application",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification",
+      "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af"
+    }
+  ],
+  "source_ids": [
+    "NIST_LEAST_SQUARES_CAPTURE",
+    "TA_LIB_0_7_1_LEVEL_REFERENCES",
+    "STRATEGY_OS_F04_SPEC"
+  ],
+  "claim_ids": [
+    "NUM-005",
+    "NUM-006",
+    "NUM-007",
+    "NUM-008"
+  ],
+  "captured_source_authority": {
+    "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-authority.json",
+    "sha256": "e5f2864f8ac3daec0ff054f55600ecd7a16d5d8f9138000746413cf495395a6e",
+    "role": "existing captured-source authority, reused without new retrieval",
+    "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+  },
+  "reused_captured_sources": {
+    "nist-least-squares": {
+      "kind": "PUBLIC_PRIMARY_DOCUMENTATION",
+      "url": "https://www.itl.nist.gov/div898/handbook/pmd/section1/pmd141.htm",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/nist-least-squares.html",
+      "sha256": "6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+      "version": "captured content 6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+      "use": "Public documentation REFERENCE ONLY; no copied implementation or redistributed page text"
+    },
+    "ta-lib:src/ta_func/ta_CORREL.c": {
+      "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+      "repository": "https://github.com/TA-Lib/ta-lib",
+      "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+      "version": "v0.7.1",
+      "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_CORREL.c",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_CORREL.c",
+      "sha256": "1c49cb42ddaadf9175dbf91bc21f533e2cf520fdf8c3edb30082e85bb6c03fad",
+      "licence": "BSD-3-Clause",
+      "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+    },
+    "ta-lib:src/ta_func/ta_LINEARREG_SLOPE.c": {
+      "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+      "repository": "https://github.com/TA-Lib/ta-lib",
+      "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+      "version": "v0.7.1",
+      "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_SLOPE.c",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_SLOPE.c",
+      "sha256": "22536abd4e9b31b9296546ce2937ee3481efbdf6c251fa8380aab14262ed7a90",
+      "licence": "BSD-3-Clause",
+      "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+    },
+    "ta-lib:src/ta_func/ta_LINEARREG_INTERCEPT.c": {
+      "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+      "repository": "https://github.com/TA-Lib/ta-lib",
+      "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+      "version": "v0.7.1",
+      "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_INTERCEPT.c",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_INTERCEPT.c",
+      "sha256": "507fa74f0b7f843198f20d36deb5630a88f97f370392b959dbc651a3995c2357",
+      "licence": "BSD-3-Clause",
+      "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+    },
+    "ta-lib:LICENSE": {
+      "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+      "repository": "https://github.com/TA-Lib/ta-lib",
+      "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+      "version": "v0.7.1",
+      "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/LICENSE",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "sha256": "13f42bb183695b0c9b2e7c7282c1b0f5ac83c990bef37515df0639667f72a327",
+      "licence": "BSD-3-Clause",
+      "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+    }
+  },
+  "source_states": {
+    "new_upstream_retrieval_in_correction": false,
+    "new_upstream_retrieval_by_indexer": false,
+    "fresh_source_reading_claimed_by_indexer": false,
+    "metadata_hash_checked_at": "2026-08-28",
+    "original_capture_or_reading_dates": null,
+    "upstream_current_content_verified": false
+  },
+  "local_evidence": [
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/report.md",
+      "sha256": "83b6745681975e9e64901243f99feb3a9534afde5eacae5263af6579451f06f3",
+      "role": "local correction report",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/evidence.json",
+      "sha256": "04867c448fb44896bff53de914dbba98332ea94a033ade24ea9c1b5fbe943716",
+      "role": "local results and transitive artifact hashes",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/closure-seal.json",
+      "sha256": "417c9e7e5ca7cc6bad47b24f069c096cc20f76b7e830d3c4e4cb4136eeb83c00",
+      "role": "local F04 closure, pending independent assurance",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/source-proof.json",
+      "sha256": "cd86ad0597c69c2a8cdf3a24e1c8c78a5ec515c1254f2b9ee69600f06c41c48d",
+      "role": "candidate/source/contract proof",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/arithmetic-executor-receipt.json",
+      "sha256": "c97607eb05ad2e733af0982795ad3be389ffd7cb83ab7f9e546dce65ee602a85",
+      "role": "reverified existing arithmetic runtime",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/mutation-receipt.json",
+      "sha256": "65a801739b6524831b4c7162ffa3120a875d41424318ea2729816bf76e4a4165",
+      "role": "owner-reported isolated mutation evidence",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/resources-initial.json",
+      "sha256": "bc9b2317df5c3d137402d1ca35b03d76d0052f1685d999e6fd31ff983c7f188c",
+      "role": "owner-reported resource evidence",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    }
+  ],
+  "local_correction_verdict": "F04_LOCAL_CORRECTION_PASS_PENDING_INDEPENDENT_ASSURANCE",
+  "local_results_reported_not_rerun": {
+    "checks": {
+      "shared-consumer-impact-before": {
+        "tests": 144,
+        "failed": 76,
+        "errors": 0,
+        "skipped": 0
+      },
+      "shared-consumer-impact-green": {
+        "tests": 144,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "permanent-f04-regressions": {
+        "tests": 40,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "standalone-resource-checks": {
+        "tests": 58,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full-numerical-compatibility": {
+        "tests": 2425,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "resource_points": 525,
+    "mutations_killed_restored": 4,
+    "legacy_identities_unchanged": 125,
+    "source_contracts_unchanged": 58
+  },
+  "component_scope": [
+    "BETA_ADJUSTED_SPREAD",
+    "CORRELATION",
+    "COVARIANCE",
+    "LINEAR_REGRESSION_INTERCEPT",
+    "LINEAR_REGRESSION_SLOPE",
+    "ROLLING_HEDGE_RATIO",
+    "R_SQUARED"
+  ],
+  "runtime": {
+    "receipt": {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/arithmetic-executor-receipt.json",
+      "sha256": "c97607eb05ad2e733af0982795ad3be389ffd7cb83ab7f9e546dce65ee602a85",
+      "role": "existing arithmetic receipt reverified by correction owner",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    },
+    "version_reported": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]",
+    "executable_sha256_reported": "a1f6d9dc20d4787a84dc2fe782094a7bac5946f49a962aa0af48a02f0e8d5bc5",
+    "relation_to_previous_index": "Same recorded arithmetic receipt bytes as the previous correction; no new runtime execution by indexer",
+    "numerical_tests_executed_by_indexer": false
+  },
+  "independent_specification": {
+    "owner_task": "01a04883-7dc6-71a1-bb51-9e9dff45c450",
+    "prior_reject": {
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-correction-assurance/closure-seal.json",
+      "sha256": "c9cebd567443836e1537cf240dc620a728ba13b606d038083b616d80a17a1001",
+      "role": "original F04 independent REJECT",
+      "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+    }
+  },
+  "current_independent_assurance": {
+    "owner_task": "01a048c6-8031-7c93-9b05-2fef7b25c499",
+    "capsule": "paper-trader/docs/agent/tasks/post-phase5-indicator-accuracy-core-level-moment-assurance.md",
+    "status": "PENDING",
+    "independent_acceptance": false
+  },
+  "acceptance": false,
+  "publication": false,
+  "deployment": false,
+  "v0_complete": false,
+  "previous_index_preserved": {
+    "path": "paper-trader/docs/engineering-references/refresh-reports/2026-08-28-core-numerical-index.json",
+    "sha256": "8b591892c58d7ce9cee6b3f6367ca65806401356e26d88447d99ea1703ae1ca8",
+    "original_evidence_directories_immutable": true
+  },
+  "registry_delta": {
+    "sources_before": 33,
+    "sources_added": 3,
+    "sources_after": 36,
+    "claims_before": 6,
+    "claims_added": 4,
+    "claims_after": 10,
+    "source_registry_before_sha256": "414b165e02fb27bf821087b29de9034dfb37647665775ed1db76fa75cea21ced",
+    "source_registry_after_sha256": "662264abbfa734713362b49c3d46f4183cea185605d74dcc62cc01d4896ce497",
+    "claim_registry_before_sha256": "7a656f277a763252cdb7f194472af9b332451bb1d5ff907439d7712326fb5770",
+    "claim_registry_after_sha256": "5f9a57a4985fddeac122e71c26a037623caea6830ed44ae6daf2d74b95766b0d"
+  },
+  "verification_receipt": ".agent/runs/professional-reference-f04-index-20260828/root/validation.json",
+  "gaps": [
+    "Independent F04 numerical acceptance remains PENDING",
+    "Original captured-source reading/capture timestamps are not established by this index; no fresh-read date inferred",
+    "Captured bytes are verified locally, not against current upstream contents"
+  ],
+  "indexing_blocker": null,
+  "deployment_impact": "none",
+  "migration": "none",
+  "numerical_or_product_authority_granted": false
+}

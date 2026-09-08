@@ -1,0 +1,282 @@
+{
+  "schema": "phase5-source-coverage/1",
+  "phase": "phase5",
+  "status": "accepted_architecture_coverage",
+  "date": "2026-08-24",
+  "architecture_decision": "KEEP + HARDEN",
+  "source_map": {
+    "path": "paper-trader/docs/agent/programme/SOURCE_MAP.json",
+    "sha256": "07ea9683635a716464e122da6c1909de19b73e01654cfa78a442dec711aadfb0",
+    "phase_view": "phase5",
+    "expected_entries": 103
+  },
+  "audit_inputs": {
+    "existing_capability_audit": {"path": ".agent/runs/phase5-architecture/existing_capability_audit/report.md", "sha256": "c6784211611defcabebb61aaa3a7d638f85db3a1553c6047fdf2d3be3a4d2330"},
+    "source_coverage_audit": {"path": ".agent/runs/phase5-architecture/source_coverage_audit/report.md", "sha256": "30eb896d5bbbcc5403c6974fa796b6cf3df3e7d89f319e3cf6f74c1d48d7af10"}
+  },
+  "coverage_groups": [
+    {
+      "source_id": "product_architecture",
+      "headings": ["Strategy OS — Product Architecture Steer", "Purpose", "1. The five user-facing node families", "Type 1 — Execution & Position", "Type 2 — Indicators & Derived Features", "Type 3 — Market Structure, Derivatives & Cross-Instrument", "Type 4 — Price, Instrument & Market Data", "Type 5 — Logic, Math & State"],
+      "disposition": "DESIGN_NOW_AND_IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Architecture decision", "First-party node contract", "Closed V1 catalogue inventory"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-first-party-analytical-catalogue", "phase5-state-execution-derivatives-catalogue"],
+      "test_gate": "phase5-language-resource-assurance and catalogue complete-registry conformance",
+      "nonclaim_or_deferral": "Type 1 is execution intent only; no broker, order, or money authority"
+    },
+    {
+      "source_id": "product_architecture",
+      "headings": ["2. Hidden platform layers", "A. Instrument Resolver", "B. Point-in-Time Market Rulebook", "C. Data Contract Engine", "D. Causality Engine", "E. Provider Capability Matrix", "F. Subscription & Resource Planner", "G. Numeric Validity System", "H. Deployment Binding System"],
+      "disposition": "DESIGN_NOW_REUSE_ACCEPTED_AUTHORITIES",
+      "design_sections": ["Architecture decision", "Contracts retained from the foundation", "Canonical ResourcePlan schema"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-provider-evidence-compatibility"],
+      "test_gate": "duplicate-authority static check and exact addressed-input coverage",
+      "nonclaim_or_deferral": "Deployment binding remains phase6-deployment-binding-preflight"
+    },
+    {
+      "source_id": "product_architecture",
+      "headings": ["7. Position and strategy state"],
+      "disposition": "DESIGN_NOW_AND_TEST_GATE",
+      "design_sections": ["Research execution and cache boundary"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-state-execution-derivatives-catalogue", "phase5-research-execution"],
+      "test_gate": "state snapshot, reset-set, restart, and batch/stream prefix parity",
+      "nonclaim_or_deferral": "Position succession and takeover remain Phase 6 authority"
+    },
+    {
+      "source_id": "product_architecture",
+      "headings": ["9. V1 acceptance scenarios", "Scenario A — reusable equity strategy", "Scenario B — Indian options/order-flow strategy", "Scenario C — cross-market strategy"],
+      "disposition": "TEST_GATE",
+      "design_sections": ["Instrument roles and future bindings", "Verification and complete-universe gates"],
+      "capsules": ["phase5-canonical-scenario-gate", "phase5-scenario-assurance"],
+      "test_gate": "three complete architecture scenarios plus exact refusal paths",
+      "nonclaim_or_deferral": "Scenarios grant no deployment or provider breadth"
+    },
+    {
+      "source_id": "product_architecture",
+      "headings": ["10. Non-negotiable product rules"],
+      "disposition": "DESIGN_NOW_AND_NONCLAIM",
+      "design_sections": ["Contracts retained from the foundation", "Deployment impact and nonclaims"],
+      "capsules": ["all phase5 implementation capsules"],
+      "test_gate": "per-capsule refusal and mutation evidence",
+      "nonclaim_or_deferral": "No silent substitution, hidden provider data, rule drift, stale alignment, or invalidity collapse"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["Strategy Language & Node System Steer", "Goal", "1. Node contract required for every first-party node"],
+      "disposition": "DESIGN_NOW",
+      "design_sections": ["First-party node contract"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-language-resource-assurance"],
+      "test_gate": "exact 22-field closed schema and missing/extra/stale field mutations",
+      "nonclaim_or_deferral": "One registry only"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["2. First-party indicator starter pack", "Moving averages", "Trend", "Momentum", "Volatility", "Advanced realized-vol estimators", "Volume / participation", "Price transforms", "Statistics", "Regression / relative value", "Returns", "Market/session structure", "Pattern/event primitives"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_EXACT_DEFERRAL",
+      "design_sections": ["Closed V1 catalogue inventory"],
+      "capsules": ["phase5-first-party-analytical-catalogue", "phase5-catalogue-wave-2-scope"],
+      "test_gate": "complete registered inventory and shared mathematical conformance harness",
+      "nonclaim_or_deferral": "Exact WAVE_2_DEFERRED entries are outside V1 claim"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["3. Type 3 derivative/microstructure library", "Option structure", "Options analytics", "Futures", "Order book / ladder", "Trade-flow features where the provider truly supplies enough data"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_CAPABILITY_GATE",
+      "design_sections": ["Closed V1 catalogue inventory", "Canonical role and binding-input vocabulary"],
+      "capsules": ["phase5-provider-evidence-compatibility", "phase5-state-execution-derivatives-catalogue"],
+      "test_gate": "point-in-time selectors, supplied-versus-derived attribution, and unsupported capability refusal",
+      "nonclaim_or_deferral": "No real-provider conformance, credentials, fallback, or aggressor inference"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["4. Type 1 execution starter pack", "Entry/exit", "Order type", "Position sizing", "Protection", "Pyramiding / scaling", "Position/portfolio inputs"],
+      "disposition": "IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Closed V1 catalogue inventory"],
+      "capsules": ["phase5-state-execution-derivatives-catalogue"],
+      "test_gate": "intent lowering, typed capability refusal, no engine/broker imports, and risk-reducing exit continuity",
+      "nonclaim_or_deferral": "Intent nodes grant no execution authority or live semantic change"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["5. Type 5 logic, temporal and state pack", "Boolean / comparison", "Arithmetic", "Reducers", "Temporal", "Confirmation", "Noise/state control", "Scheduling", "Validity"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_TEST_GATE",
+      "design_sections": ["Closed V1 catalogue inventory", "Research execution and cache boundary"],
+      "capsules": ["phase5-state-execution-derivatives-catalogue", "phase5-research-execution"],
+      "test_gate": "truth tables, numeric validity, causal prefixes, reset/restart, and batch/stream parity",
+      "nonclaim_or_deferral": "Required invalid inputs block new entries unless explicit fallback is wired"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["6. Custom-node hierarchy", "Level 1 — Fork first-party node", "Level 2 — Formula node", "Level 3 — Sandboxed custom Python", "Level 4 — External signal"],
+      "disposition": "DESIGN_NOW_AND_OWNER_GATED_IMPLEMENTATION",
+      "design_sections": ["First-party node contract", "Closed V1 catalogue inventory"],
+      "capsules": ["phase5-custom-node-contracts"],
+      "test_gate": "declared-input, tenant, import, network, broker, CPU/memory/state/rate denial matrix",
+      "nonclaim_or_deferral": "Level 3 and 4 runtime disabled until separate security and owner gate"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["7. Numerical validity"],
+      "disposition": "DESIGN_NOW_AND_TEST_GATE",
+      "design_sections": ["First-party node contract", "Closed V1 catalogue inventory"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-first-party-analytical-catalogue", "phase5-state-execution-derivatives-catalogue"],
+      "test_gate": "all eight validity states and domain-error propagation/refusal",
+      "nonclaim_or_deferral": "No NaN collapse"
+    },
+    {
+      "source_id": "strategy_language",
+      "headings": ["8. Node versioning"],
+      "disposition": "DESIGN_NOW",
+      "design_sections": ["First-party node contract", "Contracts retained from the foundation"],
+      "capsules": ["phase5-language-resource-contracts"],
+      "test_gate": "old/new semantic version coexistence and no silent artifact migration",
+      "nonclaim_or_deferral": "Live migration remains separately reviewed"
+    },
+    {
+      "source_id": "market_truth",
+      "headings": ["12. Corporate actions", "13. Dataset provenance"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_RESULT_GATE",
+      "design_sections": ["Research execution and cache boundary", "Canonical ResourcePlan schema"],
+      "capsules": ["phase5-research-execution", "phase5-bounded-sweeps-cache-artifacts"],
+      "test_gate": "adjustment/rulebook/dataset/node-library identities in every result and cache key",
+      "nonclaim_or_deferral": "Phase 5 consumes accepted market truth; it does not reconstruct provider history"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["Runtime Economics & Provider Capability Steer", "Goal", "1. Compile a resource plan with every strategy", "Static", "Dynamic"],
+      "disposition": "DESIGN_NOW_AND_TEST_GATE",
+      "design_sections": ["Canonical ResourcePlan schema", "Five-family lowering and complexity accounting"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-language-resource-assurance"],
+      "test_gate": "complete ResourcePlan field and lowered-leaf mutation matrix",
+      "nonclaim_or_deferral": "Beta tiers are provisional and non-commercial"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["2. Incremental streaming runtime"],
+      "disposition": "IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Research execution and cache boundary"],
+      "capsules": ["phase5-research-execution", "phase5-research-parity-assurance"],
+      "test_gate": "dependency-aware prefix/state parity and no full-graph recompute claim without measurement",
+      "nonclaim_or_deferral": "Physical live capacity remains Phase 7"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["3. Batch/vector research runtime"],
+      "disposition": "IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Research execution and cache boundary"],
+      "capsules": ["phase5-research-execution"],
+      "test_gate": "verified dataset consumption, batch/prefix parity, causality, warmup, and deterministic replay",
+      "nonclaim_or_deferral": "Bar-based research, not HFT"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["4. Evaluation clocks/triggers"],
+      "disposition": "DESIGN_NOW_AND_IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Canonical ResourcePlan schema", "Research execution and cache boundary"],
+      "capsules": ["phase5-language-resource-contracts", "phase5-research-execution"],
+      "test_gate": "all trigger kinds, bounded rates, irrelevant-event non-evaluation, and causal ordering",
+      "nonclaim_or_deferral": "No provider event-rate claim without measured evidence"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["5. Shared calculations", "6. Cache identity"],
+      "disposition": "IMPLEMENTATION_CAPSULE",
+      "design_sections": ["Research execution and cache boundary"],
+      "capsules": ["phase5-bounded-sweeps-cache-artifacts"],
+      "test_gate": "tenant/data/licence scope, provenance-complete keys, stampede bounds, and no authority uplift",
+      "nonclaim_or_deferral": "No cross-customer licensed-feed redistribution"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["7. Order-book/ladder processing"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_CAPABILITY_GATE",
+      "design_sections": ["Closed V1 catalogue inventory", "Canonical ResourcePlan schema"],
+      "capsules": ["phase5-state-execution-derivatives-catalogue", "phase5-research-execution"],
+      "test_gate": "one book per instrument, derived-scalar attribution, bounded depth/rate, and raw-ladder explicit demand",
+      "nonclaim_or_deferral": "Strategy and UI evaluation rates remain separate; frontend implementation closed"
+    },
+    {
+      "source_id": "runtime_economics",
+      "headings": ["13. Cost telemetry"],
+      "disposition": "IMPLEMENTATION_CAPSULE_AND_DEFERRED_MEASUREMENT",
+      "design_sections": ["Canonical ResourcePlan schema", "Deployment impact and nonclaims"],
+      "capsules": ["phase5-bounded-sweeps-cache-artifacts", "phase5-research-runtime-packaging"],
+      "test_gate": "local structured metrics and bounded cardinality",
+      "nonclaim_or_deferral": "Calibrated physical capacity and commercial pricing remain Phase 7/owner gated"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["V1 Implementation Priorities & Verification Policy", "Goal", "1. Risk-weighted verification", "Critical", "Important", "Routine", "Trivial"],
+      "disposition": "DESIGN_NOW",
+      "design_sections": ["Verification and complete-universe gates"],
+      "capsules": ["all implementation and assurance capsules"],
+      "test_gate": "risk-tagged focused, subsystem, phase, mutation, concurrency, recovery, and independent evidence",
+      "nonclaim_or_deferral": "Verification remains proportional; counts are non-authoritative"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["2. Test rule", "3. Test cadence"],
+      "disposition": "TEST_GATE",
+      "design_sections": ["Verification and complete-universe gates"],
+      "capsules": ["all implementation capsules", "phase5-review"],
+      "test_gate": "realistic failure hypotheses, focused implementation, subsystem integration, one phase gate",
+      "nonclaim_or_deferral": "No exhaustive matrix for trivial work"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["4. First-party node conformance harness"],
+      "disposition": "TEST_GATE",
+      "design_sections": ["Closed V1 catalogue inventory", "Verification and complete-universe gates"],
+      "capsules": ["phase5-first-party-analytical-catalogue", "phase5-research-parity-assurance"],
+      "test_gate": "independent reference, batch, stream, parity, warmup, invalidity, causality, and complete registered inventory",
+      "nonclaim_or_deferral": "No per-node bespoke evidence language"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["5. V1 product priorities", "Must have", "Can be deferred"],
+      "disposition": "DESIGN_NOW_AND_EXACT_DEFERRAL",
+      "design_sections": ["Closed V1 catalogue inventory", "Deployment impact and nonclaims"],
+      "capsules": ["phase5-catalogue-wave-2-scope", "phase5-provider-evidence-compatibility", "phase5-custom-node-contracts"],
+      "test_gate": "all must-have rows mapped to a capsule and evidence gate",
+      "nonclaim_or_deferral": "Sharing UX phase8; marketplace/AI/confidential compute phase10; provider breadth phase9"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["6. Implementation sequencing"],
+      "disposition": "PROGRAMME_PLAN",
+      "design_sections": ["Required runtime ordering", "Architecture work completed for acceptance"],
+      "capsules": ["phase5 implementation sequence in PROGRAMME.json"],
+      "test_gate": "dependency graph and exclusive ownership validation",
+      "nonclaim_or_deferral": "No implementation before architecture acceptance"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["7. Canonical acceptance scenarios", "A. Reusable equity", "B. Weekly-options/order-flow", "C. Cross-market"],
+      "disposition": "TEST_GATE",
+      "design_sections": ["Instrument roles and future bindings", "Verification and complete-universe gates"],
+      "capsules": ["phase5-canonical-scenario-gate", "phase5-scenario-assurance"],
+      "test_gate": "three architecture scenarios without broker-specific hacks",
+      "nonclaim_or_deferral": "No deployment or real-provider authority"
+    },
+    {
+      "source_id": "verification_policy",
+      "headings": ["8. Guard against scope drift", "Core-abstraction issue", "Local implementation edge case"],
+      "disposition": "DESIGN_NOW",
+      "design_sections": ["Verification and complete-universe gates"],
+      "capsules": ["all phase5 capsules"],
+      "test_gate": "failure-learning record and exact successor/deferral owner before reroute",
+      "nonclaim_or_deferral": "Local defects cannot reopen accepted abstractions without evidence"
+    }
+  ],
+  "additional_required_coverage": [
+    {"source": "V1 master sequence Phase 5, global constraints, programme closure", "disposition": "DESIGN_AND_PROGRAMME_GATE", "capsules": ["all phase5 stages", "phase5-review"], "evidence": "accepted architecture artifacts, ordered programme, three scenario gate, separate SPEC and QUALITY review"},
+    {"source": "Post-Phase-7 derivatives assurance sections carried through Phase 5", "disposition": "DESIGN_NOW_AND_EXACT_DEFER", "capsules": ["phase5-language-resource-contracts", "phase5-canonical-scenario-gate", "post-phase7-derivatives-execution-assurance-audit"], "evidence": "roles, binding inputs, family/lowered/resource/provider dimensions and seed fixtures preserved without authority"},
+    {"source": "Deployability current verdict, obligations, Phase 5 ownership, V1 release gate", "disposition": "DEPLOYMENT_IMPACT_GATE", "capsules": ["phase5-graph-paper-attribution-schema", "phase5-research-runtime-packaging", "phase5-review", "v1-release-review"], "evidence": "per-slice impact, exact local evidence ceiling, locked packaging, and retained release/production nonclaims"},
+    {"source": "Defect-pattern status and evidence rules", "disposition": "DURABLE_FAILURE_LEARNING_GATE", "capsules": ["all phase5 implementation and assurance capsules"], "evidence": "root cause, invariant, complete search, permanent regression, mutation, transitive invalidation, and exact successor"}
+  ],
+  "hard_order": ["phase5-graph-paper-attribution-schema", "phase5-adv-006-runtime", "phase5-adv-006-runtime-assurance", "phase5-language-resource-contracts", "phase5-language-resource-assurance", "phase5-provider-evidence-compatibility", "phase5-first-party-analytical-catalogue", "phase5-state-execution-derivatives-catalogue", "phase5-custom-node-contracts", "phase5-research-execution", "phase5-research-parity-assurance", "phase5-bounded-sweeps-cache-artifacts", "phase5-research-runtime-packaging", "phase5-canonical-scenario-gate", "phase5-scenario-assurance", "phase5-implementation", "phase5-review"],
+  "exclusive_runtime_contract": {"contract_id": "P5-ADV-006-RUNTIME", "capsule": "phase5-adv-006-runtime", "depends_on": ["phase5-graph-paper-attribution-schema"], "must_precede": ["claim", "reclaim", "worker", "result", "cache", "broker", "order", "money"]},
+  "deployment_impact": "architecture-changing",
+  "evidence_ceiling": "architecture acceptance and locally runnable predecessor seams only",
+  "nonclaims": ["No implementation is accepted by this coverage matrix", "No frontend, provider, credential, deployment, production, live, order, money, or commercial authority is granted", "No full repository-wide single-process PASS or release deployability is claimed"]
+}

@@ -48,29 +48,29 @@ def _graph_document(version: int = 1) -> dict:
 
 
 def seed_graph(session, version: int = 1) -> GraphVersion:
-    if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
-    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
-        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                  display_name="mirror", draft_json="{}",
-                                  draft_revision=0))
-    session.flush()
     document = _graph_document(version)
-    row = GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
-                       artifact_json=canonical_json(document),
-                       content_address=content_address(document))
-    session.add(row)
-    session.flush()
-    return row
+    from tests.admitted_entry import persist_admitted_graph
+
+    artifact = persist_admitted_graph(
+        session, graph=document, owner_id="owner", project_id=PROJECT,
+        display_name="paper authority mirror",
+    )
+    return session.get(
+        GraphVersion, (artifact.owner_id, artifact.graph_identifier, artifact.graph_version))
 
 
 def approved_evidence(**overrides):
+    from tests.admitted_entry import admitted_artifact
+
+    version = overrides.get("graph_version", 1)
+    artifact = admitted_artifact(graph=_graph_document(version), owner_id="owner")
     return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
-            "graph_identifier": GRAPH, "graph_version": 1,
+            "graph_identifier": GRAPH, "graph_version": version,
             # Content, not name. The admission binding requires the address research
             # approved to be the address receiving authority, so a stub that invents an
             # address would be asserting a contract the service no longer offers.
-            "content_address": content_address(_graph_document(1)),
+            "content_address": content_address(_graph_document(version)),
+            "admission_address": artifact.admission_address,
             "decision": "approved",
             **overrides}
 
@@ -390,7 +390,10 @@ class TestRollback:
                 exit_spot=101.0, gross_pnl=1.0, charges_total=0.0, net_pnl=1.0,
                 return_pct=1.0, holding_minutes=60, win=True, exit_reason="TARGET",
                 mode="paper", strategy_key=f"ir.{GRAPH}",
-                strategy_version=row.graph_content_address))
+                strategy_version=str(row.graph_version),
+                graph_address=row.graph_content_address,
+                admission_address=row.admission_address,
+                attribution_state="VERIFIED_GRAPH"))
             s.commit()
 
             pa.retire(s, row.id, revision=1, restore_strategy_key="expanding_z_v4", owner_id="owner")
@@ -398,7 +401,8 @@ class TestRollback:
 
             trade = s.scalars(__import__("sqlalchemy").select(Trade)).one()
             assert trade.strategy_key == f"ir.{GRAPH}"
-            assert trade.strategy_version == row.graph_content_address
+            assert trade.strategy_version == str(row.graph_version)
+            assert trade.graph_address == row.graph_content_address
 
 
 # ── what the engine is handed ───────────────────────────────────────────────────

@@ -259,7 +259,7 @@ def test_no_options_instrument_returns_no_trades():
     assert m.trades == 0
 
 
-def test_no_options_cell_sets_premium_error_via_sweep():
+def test_no_options_cell_sets_premium_error_via_sweep(admitted_backtest_receipt):
     from sqlalchemy import select
 
     from app.backtest import sweep
@@ -279,7 +279,8 @@ def test_no_options_cell_sets_premium_error_via_sweep():
     inst_registry.load_universe()
     prov = MockProvider()
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
-                            instruments=["NOOPT_C6"], provider=prov)
+                            instruments=["NOOPT_C6"], provider=prov,
+                            **admitted_backtest_receipt())
     sweep._join()
     with SessionLocal() as s:
         row = s.scalars(select(BacktestResult).where(
@@ -290,7 +291,7 @@ def test_no_options_cell_sets_premium_error_via_sweep():
     assert row.premium_error != ""
 
 
-def test_options_cell_populates_premium_metrics_via_sweep():
+def test_options_cell_populates_premium_metrics_via_sweep(admitted_backtest_receipt):
     from sqlalchemy import select
 
     from app.backtest import sweep
@@ -301,7 +302,8 @@ def test_options_cell_populates_premium_metrics_via_sweep():
     init_db(reset=True)
     prov = MockProvider()
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
-                            instruments=["NIFTY"], provider=prov)
+                            instruments=["NIFTY"], provider=prov,
+                            **admitted_backtest_receipt())
     sweep._join()
     with SessionLocal() as s:
         row = s.scalars(select(BacktestResult).where(
@@ -317,9 +319,9 @@ def test_options_cell_populates_premium_metrics_via_sweep():
 
 # ── cache / schema (mirrors tests/test_backtest_cache_risk_model.py's style) ──
 
-def test_schema_version_is_8():
+def test_schema_version_is_9():
     from app.backtest.cache import SCHEMA_VERSION
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == 9
 
 
 def test_premium_param_changes_signature():
@@ -395,7 +397,8 @@ def test_bttrade_to_dict_is_json_safe_with_numpy_values():
     assert all(type(v).__module__ != "numpy" for v in d.values())
 
 
-def test_premium_json_failure_degrades_to_premium_error_not_sweep_abort():
+def test_premium_json_failure_degrades_to_premium_error_not_sweep_abort(
+        admitted_backtest_receipt):
     """Even if premium trade serialization raises, the spot cell must be stored
     and the failure surfaced as premium_error — never abort the whole sweep."""
     from unittest.mock import patch
@@ -423,7 +426,8 @@ def test_premium_json_failure_degrades_to_premium_error_not_sweep_abort():
     with patch("app.backtest.sweep.simulate_premium",
                return_value=([bad_trade], BTMetrics(trades=1))):
         rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], capital=50_000,
-                                instruments=["NIFTY"], provider=prov)
+                                instruments=["NIFTY"], provider=prov,
+                                **admitted_backtest_receipt())
         sweep._join()
     with SessionLocal() as s:
         run = s.get(BacktestRun, rid)

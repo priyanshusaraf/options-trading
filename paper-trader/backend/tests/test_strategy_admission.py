@@ -14,7 +14,7 @@ from app.ir.contributors.generated_blocks import BLOCK_COMPONENTS, REGISTRATIONS
 from app.ir.hashing import canonical_json, content_address
 from app.ir.library import REGISTRY
 from app.ir.registry import DependencyBoundary, KernelRegistration, PlatformRegistry
-from app.ir.resolve import BOUNDARY_INPUT, BOUNDARY_OUTPUT
+from app.ir.resolve import BOUNDARY_INPUT, BOUNDARY_OUTPUT, Library
 from app.ir.strategies.expanding_z import GRAPH
 from app.strategy.registry.expanding_z_v4 import ExpandingZImpulseV4
 from app.strategy.ir_adapter import IRGraphStrategy
@@ -33,6 +33,7 @@ from app.strategy.admission import (
     admitted_artifact,
     canonical_decisions,
     inspect_strategy,
+    matches_execution_identity,
     runtime_for_admitted,
 )
 
@@ -244,14 +245,21 @@ def test_reached_nested_body_must_validate_against_its_published_interface(neste
     nested = json.loads(canonical_json(
         registry.library.components[("nested.signal", 1)]))
     nested["body"]["ref"] = body_ref
-    changed = PlatformRegistry(
+    # Deliberately bypass the generic registry constructor so this reaches
+    # admission's independent resolver net rather than stopping at the first net.
+    changed = object.__new__(PlatformRegistry)
+    changed._library = Library(
         components={
             ("block.roc_gt", 1): BLOCK_COMPONENTS["roc_gt"].definition,
             ("nested.signal", 1): nested,
         },
         bodies={body_ref: body},
-        registrations={registration.body_ref: registration},
+        kernels={registration.body_ref: registration.spec},
     )
+    changed._registrations = {registration.body_ref: registration}
+    changed._implementations = {
+        registration.body_ref: registration.implementation,
+    }
 
     decision = inspect_strategy(
         owner_id="owner-a", source_input=IRGraphAdmissionInput(graph, {}, None),
@@ -483,4 +491,10 @@ def test_admitted_expanding_z_uses_ir_runtime_after_exact_adapter_parity():
     assert decision.artifact is not None, (decision.refusal_code, decision.detail)
     assert decision.artifact.source_evidence.adapter_decision_address == (
         decision.artifact.vector_decision_address)
+    assert matches_execution_identity(
+        decision.artifact, strategy_key=adapter.key, strategy_version=adapter.version,
+        graph_address=None, attribution_state="NON_GRAPH")
+    assert not matches_execution_identity(
+        decision.artifact, strategy_key=adapter.key, strategy_version="stale-version",
+        graph_address=None, attribution_state="NON_GRAPH")
     assert isinstance(runtime_for_admitted(decision.artifact, source, REGISTRY), IRGraphStrategy)

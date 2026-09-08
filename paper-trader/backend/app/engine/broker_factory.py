@@ -129,6 +129,16 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
         raise ConnectionCannotExecute(str(e)) from e
 
     from app.engine.live_broker import LiveBroker
+    broker = LiveBroker(provider, client, notifier=notifier,
+                        poll_seconds=s.order_poll_seconds,
+                        timeout_seconds=s.order_timeout_seconds,
+                        connection=conn, venue=venue,
+                        execution_lease_token=execution_lease_token, **book)
+    # Order matters: the pytest tripwire is the LAST-LINE SAFETY NET and must
+    # evaluate before any production authority refusal — a lease error must
+    # never preempt (or teach a future edit to skip) the guard that keeps real
+    # order clients out of test runs.
+    _refuse_live_broker_under_pytest(broker)
     if (execution_lease_token is None
             and getattr(LiveBroker, "__module__", "") == _LIVE_BROKER_MODULE
             and getattr(LiveBroker, "__name__", "") == _LIVE_BROKER_NAME):
@@ -136,12 +146,4 @@ def make_broker(provider, notifier=None, deployment_id=None, execution_connectio
     log.warn("🔴 LIVE EXECUTION ENABLED — the bot can place REAL orders on your "
              "account (still gated by ARM, daily-loss halt, routing, and the "
              "ownership guard).")
-    # The venue is passed rather than defaulted so the composition root, not the broker,
-    # decides which dialect the wire speaks.
-    broker = LiveBroker(provider, client, notifier=notifier,
-                        poll_seconds=s.order_poll_seconds,
-                        timeout_seconds=s.order_timeout_seconds,
-                        connection=conn, venue=venue,
-                        execution_lease_token=execution_lease_token, **book)
-    _refuse_live_broker_under_pytest(broker)
     return broker

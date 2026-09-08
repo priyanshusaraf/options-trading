@@ -1,0 +1,529 @@
+[
+  {
+    "url": "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html",
+    "tier": "TIER 0",
+    "domains": [
+      "jobs",
+      "execution"
+    ],
+    "reason": "Paused-worker writes and sink-side fences",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2014/11/25/hermitage-testing-the-i-in-acid.html",
+    "tier": "TIER 0",
+    "domains": [
+      "database",
+      "jobs"
+    ],
+    "reason": "Concrete anomalies, not isolation labels",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2020/11/18/distributed-systems-and-elliptic-curves.html",
+    "tier": "TIER 0",
+    "domains": [
+      "time",
+      "correctness"
+    ],
+    "reason": "First-party route to Cambridge causal/failure foundations",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2011/03/07/accounting-for-computer-scientists.html",
+    "tier": "TIER 0",
+    "domains": [
+      "numeric",
+      "ledger"
+    ],
+    "reason": "Exact units and conservation; existing financial objects only",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2015/05/27/logs-for-data-infrastructure.html",
+    "tier": "TIER 0",
+    "domains": [
+      "jobs",
+      "events"
+    ],
+    "reason": "Atomic source-of-truth change versus separate notification",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html",
+    "tier": "TIER 0",
+    "domains": [
+      "database"
+    ],
+    "reason": "Specify safety and liveness rather than CAP shorthand",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2015/07/08/attiya-welch-at-papers-we-love.html",
+    "tier": "TIER 0",
+    "domains": [
+      "consistency"
+    ],
+    "reason": "Ordering and stale-read contracts for authority",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2015/11/04/transactions-at-code-mesh.html",
+    "tier": "TIER 0",
+    "domains": [
+      "database"
+    ],
+    "reason": "Mixed transactions, retries, and real isolation",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2012/06/18/java-hashcode-unsafe-for-distributed-systems.html",
+    "tier": "TIER 0",
+    "domains": [
+      "identity"
+    ],
+    "reason": "Stable strategy/data/cache identity",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html",
+    "tier": "TIER 0",
+    "domains": [
+      "schema"
+    ],
+    "reason": "Old/new readers, semantic versioning, rollback",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2012/10/01/rethinking-caching-in-web-apps.html",
+    "tier": "TIER 0",
+    "domains": [
+      "cache"
+    ],
+    "reason": "Cache loss and rebuild without false results",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2017/01/26/data-loss-in-large-clusters.html",
+    "tier": "TIER 0",
+    "domains": [
+      "recovery"
+    ],
+    "reason": "Correlated loss and restore assumptions",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2016/05/24/making-sense-of-stream-processing.html",
+    "tier": "TIER 0",
+    "domains": [
+      "events"
+    ],
+    "reason": "Ordering, derived state and rebuildability",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2019/05/01/olep-cacm.html",
+    "tier": "TIER 0",
+    "domains": [
+      "events",
+      "jobs"
+    ],
+    "reason": "Atomic effects and multi-system boundary",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2025/12/08/ai-formal-verification.html",
+    "tier": "TIER 0",
+    "domains": [
+      "verification"
+    ],
+    "reason": "Bounded executable invariants and independent checks",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2014/03/26/six-things-about-scaling.html",
+    "tier": "TIER 0",
+    "domains": [
+      "capacity"
+    ],
+    "reason": "Measure actual bottlenecks before infrastructure",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2013/08/12/system-operations-over-seven-centuries.html",
+    "tier": "TIER 0",
+    "domains": [
+      "operations"
+    ],
+    "reason": "Recovery and long-term operator obligations",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2012/10/08/complexity-of-user-experience.html",
+    "tier": "TIER 0",
+    "domains": [
+      "ux"
+    ],
+    "reason": "Failure-state clarity and user-visible uncertainty",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2019/10/23/local-first-at-onward.html",
+    "tier": "TIER 0",
+    "domains": [
+      "portability",
+      "future_collaboration"
+    ],
+    "reason": "Export/restore now, collaboration semantics later",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2022/10/12/verifying-distributed-systems-isabelle.html",
+    "tier": "TIER 0",
+    "domains": [
+      "verification"
+    ],
+    "reason": "Proof/implementation correspondence; URL must be matched to inventory",
+    "scores": {
+      "irreversible_impact": null,
+      "research_validity": null,
+      "current_code_relevance": null,
+      "failure_probability": null,
+      "scale_recovery": null,
+      "ux_trust": null,
+      "source_rigor": null,
+      "actionability": null,
+      "novelty": null,
+      "release_urgency": null
+    },
+    "scoring_status": "Mandatory-priority seed from owner mandate; numeric relevance scoring pending full source/code screening, not fabricated from titles.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/2026/03/24/designing-data-intensive-applications-2e.html",
+    "tier": "TIER 0",
+    "domains": ["architecture", "operations", "governance", "future_seams"],
+    "reason": "Official route to the mandatory DDIA second-edition delta",
+    "scores": {
+      "irreversible_impact": 3,
+      "research_validity": 4,
+      "current_code_relevance": 4,
+      "failure_probability": 2,
+      "scale_recovery": 5,
+      "ux_trust": 4,
+      "source_rigor": 3,
+      "actionability": 3,
+      "novelty": 4,
+      "release_urgency": 4
+    },
+    "scoring_status": "Public author page, official publisher contents and exact licensed companion-reference artifact screened; book text unavailable and excluded from claim depth.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/papers/stream-processing.pdf",
+    "tier": "TIER 0",
+    "domains": ["events", "derived_state", "recovery", "realtime_ui"],
+    "reason": "Full treatment of dual writes, logs, CDC and rebuildable projections",
+    "scores": {
+      "irreversible_impact": 4,
+      "research_validity": 4,
+      "current_code_relevance": 5,
+      "failure_probability": 3,
+      "scale_recovery": 4,
+      "ux_trust": 4,
+      "source_rigor": 4,
+      "actionability": 5,
+      "novelty": 3,
+      "release_urgency": 5
+    },
+    "scoring_status": "All 183 pages and diagrams reviewed against the current outbox and monitoring contracts; implementation-specific infrastructure advice rejected.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/papers/olep-acm-queue.pdf",
+    "tier": "TIER 0",
+    "domains": ["events", "transactions", "derived_state", "recovery"],
+    "reason": "Exact cross-system write, ordering and lag limitations",
+    "scores": {
+      "irreversible_impact": 4,
+      "research_validity": 4,
+      "current_code_relevance": 5,
+      "failure_probability": 3,
+      "scale_recovery": 4,
+      "ux_trust": 3,
+      "source_rigor": 4,
+      "actionability": 5,
+      "novelty": 3,
+      "release_urgency": 5
+    },
+    "scoring_status": "All 21 pages and architecture diagrams reviewed; source limitations on lag and isolation retained.",
+    "inventory_match": true
+  },
+  {
+    "url": "https://martin.kleppmann.com/papers/local-first.pdf",
+    "tier": "TIER 0",
+    "domains": ["portability", "conflicts", "future_collaboration", "privacy"],
+    "reason": "User control and semantic conflict seam without current CRDT adoption",
+    "scores": {
+      "irreversible_impact": 2,
+      "research_validity": 2,
+      "current_code_relevance": 4,
+      "failure_probability": 2,
+      "scale_recovery": 3,
+      "ux_trust": 5,
+      "source_rigor": 4,
+      "actionability": 3,
+      "novelty": 4,
+      "release_urgency": 3
+    },
+    "scoring_status": "All 25 pages and visuals reviewed against immutable graph versions and optimistic draft conflicts; collaborative runtime remains future scope.",
+    "inventory_match": true
+  }
+]

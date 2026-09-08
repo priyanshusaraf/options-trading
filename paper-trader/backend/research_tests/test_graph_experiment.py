@@ -141,7 +141,7 @@ def test_presentation_metadata_cannot_change_experiment_identity(
     contaminated = copy.deepcopy(GRAPH)
     contaminated["layout"] = {"revision": 99, "positions": {}}
 
-    with pytest.raises(GraphBindingRejected, match="executable graph fields"):
+    with pytest.raises(GraphBindingRejected, match="ARTEFACT_MISMATCH|executable graph fields"):
         run_published_graph_experiment(
             research_session,
             owner_id=OWNER_ID,

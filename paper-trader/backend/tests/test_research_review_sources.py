@@ -1,5 +1,7 @@
 import contextlib
+import copy
 import json
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.core import research_read
 from app.core import review_aggregation
 from app.core.config import get_settings
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.editor.graph_artifacts import (
     CATALOGUE_PROJECT_ID,
     ProjectNotFound,
@@ -23,6 +25,7 @@ from research.domain.base import (
     make_sessionmaker,
 )
 from research.domain.models import PromotionCandidate
+from tests.admitted_entry import persist_admitted_graph
 
 
 IDENTIFIER = GRAPH["identifier"]
@@ -54,9 +57,27 @@ def _request():
 
 @pytest.fixture(autouse=True)
 def _databases(monkeypatch):
+    graph = copy.deepcopy(GRAPH)
+    graph["identifier"] = "test.route.expanding_z_impulse"
+    project_id = "project.review_sources_fixture"
     init_db(reset=True)
+    with SessionLocal.begin() as session:
+        persist_admitted_graph(session, graph=graph, owner_id="owner",
+                               project_id=project_id,
+                               display_name="Review source fixture")
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "CATALOGUE_PROJECT_ID", project_id)
+    monkeypatch.setattr(module, "IDENTIFIER", graph["identifier"])
+    monkeypatch.setattr(module, "VERSION", graph["version"])
+    monkeypatch.setattr(
+        module, "EXPERIMENT_URL",
+        f"/api/ir/projects/{project_id}/graphs/{graph['identifier']}/"
+        f"versions/{graph['version']}/experiments",
+    )
     engine = make_engine(research_db_path())
     ResearchBase.metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS research_schema_version")
     init_research_db(engine)
     engine.dispose()
     monkeypatch.setattr(get_settings(), "research_enabled", True)
@@ -74,13 +95,17 @@ def _seed_candidates(run_id: int) -> tuple[int, int]:
     engine = make_engine(research_db_path())
     Session = make_sessionmaker(engine)
     with Session.begin() as session:
+        from research.domain.models import ExperimentRun
+        admission_address = session.get(ExperimentRun, run_id).admission_address
         pending = PromotionCandidate(
             owner_id="owner", run_id=run_id, parameterization_hash="p" * 64,
             qualifying_universe_json="[]", scorecard_json="{}", status="pending",
+            admission_address=admission_address,
         )
         decided = PromotionCandidate(
             owner_id="owner", run_id=run_id, parameterization_hash="d" * 64,
             qualifying_universe_json="[]", scorecard_json="{}", status="pending",
+            admission_address=admission_address,
         )
         session.add_all([pending, decided])
         session.flush()

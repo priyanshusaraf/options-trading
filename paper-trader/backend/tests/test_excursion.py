@@ -12,6 +12,7 @@ import subprocess
 import sys
 
 import numpy as np
+from tests.admitted_entry import persist_admitted_entry
 import pytest
 
 from app.core.instruments import get_instrument
@@ -33,8 +34,10 @@ def _broker() -> PaperBroker:
 
 def test_options_long_mfe_mae_exact():
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_position(get_instrument("NIFTY"), "LONG",
-                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0)
+                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0,
+                          **admission)
     qty = pos.qty
     assert pos.mfe == 0.0 and pos.mae == 0.0   # seeded at entry
 
@@ -49,9 +52,10 @@ def test_options_long_mfe_mae_exact():
 
 def test_equity_long_mfe_mae_match_spot_excursion():
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_equity_position(get_instrument("NIFTY"), "LONG", price=100.0, qty=200,
                                  charge_segment="NSE_INTRADAY", reason="t", now=NOW,
-                                 params=PARAMS)
+                                 params=PARAMS, **admission)
     assert pos.mfe == 0.0 and pos.mae == 0.0
 
     b.mark(pos, 110.0, 110.0, NOW + dt.timedelta(minutes=1))  # up (favorable for LONG)
@@ -64,9 +68,10 @@ def test_equity_long_mfe_mae_match_spot_excursion():
 
 def test_equity_short_mfe_mae_are_direction_aware():
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_equity_position(get_instrument("NIFTY"), "SHORT", price=100.0, qty=200,
                                  charge_segment="NSE_INTRADAY", reason="t", now=NOW,
-                                 params=PARAMS)
+                                 params=PARAMS, **admission)
     assert pos.mfe == 0.0 and pos.mae == 0.0
 
     # favorable for a SHORT = price falls; adverse = price rises
@@ -81,8 +86,10 @@ def test_equity_short_mfe_mae_are_direction_aware():
 
 def test_trade_that_only_moved_against_you_has_zero_mfe():
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_position(get_instrument("NIFTY"), "LONG",
-                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0)
+                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0,
+                          **admission)
     b.mark(pos, 90.0, 19900.0, NOW + dt.timedelta(minutes=1))
     b.mark(pos, 70.0, 19800.0, NOW + dt.timedelta(minutes=2))
     tr = b.close_position(pos, 70.0, "STOP_LOSS", NOW + dt.timedelta(minutes=3), 19800.0)
@@ -95,8 +102,10 @@ def test_excursion_telemetry_does_not_perturb_ledger():
     """Same close as a plain round trip must reconcile identically whether or not
     MFE/MAE moved — telemetry must never touch cash/realized_pnl/entry_cost."""
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_position(get_instrument("NIFTY"), "LONG",
-                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0)
+                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0,
+                          **admission)
     b.mark(pos, 160.0, 20100.0, NOW + dt.timedelta(minutes=1))
     b.mark(pos, 80.0, 19900.0, NOW + dt.timedelta(minutes=2))
     tr = b.close_position(pos, 90.0, "STRATEGY_EXIT", NOW + dt.timedelta(minutes=3), 19950.0)
@@ -107,8 +116,10 @@ def test_excursion_telemetry_does_not_perturb_ledger():
 
 def test_partial_close_carries_excursion_so_far():
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_position(get_instrument("NIFTY"), "LONG",
-                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0)
+                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0,
+                          **admission)
     qty = pos.qty
     b.mark(pos, 150.0, 20050.0, NOW + dt.timedelta(minutes=1))
     b.mark(pos, 85.0, 19950.0, NOW + dt.timedelta(minutes=2))
@@ -131,8 +142,10 @@ def test_mark_stores_python_float_not_numpy():
     cast to a plain Python float before assigning.
     """
     b = _broker()
+    admission = persist_admitted_entry(b.s)
     pos = b.open_position(get_instrument("NIFTY"), "LONG",
-                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0)
+                          _quote(get_instrument("NIFTY"), 100.0), "t", NOW, spot=20000.0,
+                          **admission)
 
     b.mark(pos, np.float64(160.0), np.float64(20100.0), NOW + dt.timedelta(minutes=1))
     assert type(pos.mfe) is float

@@ -1,0 +1,28 @@
+.settings-workspace { max-width: 1080px; padding: 24px; display: grid; gap: 24px; }
+.settings-workspace h1, .settings-workspace h2 { margin: 0 0 10px; }
+.settings-workspace p { max-width: 78ch; line-height: 1.6; }
+.settings-workspace > section { padding: 20px 0; border: 0; border-top: 1px solid var(--slate-line); border-radius: 0; }
+.settings-workspace .research-settings-form { display: grid; gap: 16px; }
+.settings-workspace fieldset { margin: 0; border: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.settings-workspace fieldset label { display: flex; flex-direction: column; gap: 8px; }
+.settings-workspace input, .settings-workspace select { min-height: 40px; }
+.settings-workspace input[type="checkbox"] { min-height: auto; }
+.settings-workspace .research-settings-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.settings-workspace small { font-size: 12px; }
+@media (max-width: 700px) { .settings-workspace { padding: 16px; } .settings-workspace fieldset { grid-template-columns: 1fr; } }
+
+.settings-workspace .account-risk-field { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 8px 20px; padding-block: 16px; border-bottom: 1px solid var(--slate-line); }
+.settings-workspace .account-risk-field p { margin: 0; }
+.settings-workspace .account-risk-field button { grid-column: 2; }
+@media (max-width: 700px) { .settings-workspace .account-risk-field { grid-template-columns: 1fr; } .settings-workspace .account-risk-field button { grid-column: 1; } }
+
+.settings-workspace .signal-parameter-field { display: grid; gap: 8px; padding-block: 12px; }
+.settings-workspace .signal-parameter-field > label { font-weight: 600; }
+.settings-workspace .signal-parameter-field textarea { min-height: 80px; resize: vertical; }
+.settings-workspace .signal-parameter-field p { margin: 0; }
+.settings-workspace fieldset > legend { padding: 16px 0 8px; font-weight: 600; }
+
+.optimization-settings { display: grid; gap: 12px; }
+.optimization-settings h3, .optimization-settings p { margin: 0; }
+.optimization-axis { display: grid; gap: 10px; padding: 16px 0; border: 0; border-top: 1px solid var(--slate-line); }
+.optimization-axis label { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; }

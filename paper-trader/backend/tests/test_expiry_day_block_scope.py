@@ -21,9 +21,12 @@ import pytest
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.db.session import init_db
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from app.core import paper_authority
 from app.engine.risk_controls import intraday_blocked_for_expiry_day
 from app.engine.runner import EngineRunner
 from app.providers.factory import get_provider
+from tests.admitted_entry import persist_admitted_entry
 
 
 @pytest.fixture(autouse=True)
@@ -107,23 +110,43 @@ def _runner(key, product, bar, block_keys):
     r.params = {**r.params, "intraday_enabled": True,
                 "intraday_block_weekday": 1, "expiry_day_block_keys": block_keys}
     r.armed = True
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=key, interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    from unittest.mock import patch
+    with r._session() as session:
+        decision = {"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                    "graph_identifier": "test.strategy.expanding_z_impulse", "graph_version": 1,
+                    "content_address": admission["graph_address"],
+                    "admission_address": admission["admission_address"], "decision": "approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            paper_authority.activate(session, row.id, revision=row.revision,
+                                     owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     r.publish_signal(
         key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
                                    "time": ist_epoch(bar)})
     return r
 
 
-def _events():
-    return [e.get("event") for e in log.recent(80)]
+def _events(after=0):
+    return [e.get("event") for e in log.recent(80) if e.get("seq", 0) > after]
 
 
 def test_wiring_equity_name_opens_on_expiry_day_when_scoped_to_nifty():
+    before = log.recent(1)[-1]["seq"] if log.recent(1) else 0
     # NATURALGAS is affordable enough for the real-margin sizer to buy >=1 unit.
     r = _runner("NATURALGAS", "equity_intraday", dt.datetime(2026, 6, 30, 10, 30), "NIFTY")
     r.provider.now = lambda: dt.datetime(2026, 6, 30, 10, 46)    # Tuesday, mid-session
     r.process_entries()
     assert [p for p in r.broker.open_positions() if p.segment == "equity_intraday"] != []
-    assert "EXPIRY_DAY_SKIP" not in _events()
+    assert "EXPIRY_DAY_SKIP" not in _events(before)
 
 
 def test_wiring_nifty_still_blocked_on_expiry_day():

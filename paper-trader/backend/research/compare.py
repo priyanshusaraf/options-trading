@@ -4,6 +4,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from app.core.research_visualization_read import (
+    SCHEMA as VISUALIZATION_SCHEMA,
+    VisualizationRejected,
+    page_projection,
+)
+
 
 _INCOMPARABLE = {
     "datasets": "DATASET_IDENTITY_CHANGED",
@@ -15,6 +21,45 @@ _MISSING = object()
 
 def _reported(value: Any) -> Any:
     return {"state": "missing"} if value is _MISSING else value
+
+
+def _semantic_results(results: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove only run/spec envelope identity from the saved result comparison."""
+    evidence = dict(results)
+    if "visualization" not in evidence:
+        return evidence
+    visualization = evidence["visualization"]
+    if not isinstance(visualization, Mapping):
+        raise ValueError("comparison requires verified terminal evidence")
+    state = visualization.get("state")
+    if state == "UNAVAILABLE":
+        if set(visualization) != {"schema", "state", "reason_code"} \
+                or visualization.get("schema") != VISUALIZATION_SCHEMA \
+                or not isinstance(visualization.get("reason_code"), str) \
+                or not visualization["reason_code"]:
+            raise ValueError("comparison requires verified terminal evidence")
+        return evidence
+    if state != "AVAILABLE":
+        raise ValueError("comparison requires verified terminal evidence")
+    try:
+        page_projection(
+            visualization,
+            trade_after=0,
+            trade_limit=1,
+            terminal_evidence_address="sha256:" + "0" * 64,
+        )
+    except (VisualizationRejected, TypeError, ValueError, KeyError) as exc:
+        raise ValueError("comparison requires verified terminal evidence") from exc
+    normalized_visualization = dict(visualization)
+    normalized_visualization.pop("visualization_address", None)
+    identity = normalized_visualization.get("identity")
+    if isinstance(identity, Mapping):
+        normalized_identity = dict(identity)
+        normalized_identity.pop("run_id", None)
+        normalized_identity.pop("spec_id", None)
+        normalized_visualization["identity"] = normalized_identity
+    evidence["visualization"] = normalized_visualization
+    return evidence
 
 
 def _sections(evidence: Mapping[str, Any]) -> dict[str, Any]:
@@ -51,7 +96,7 @@ def _sections(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "results": {
             "status": run.get("status"),
             "decision": run.get("decision"),
-            "evidence": dict(results),
+            "evidence": _semantic_results(results),
         },
     }
 

@@ -212,6 +212,12 @@ def test_candidate_must_bind_to_its_own_run_and_receipt(session):
         require_candidate_admission(session, candidate, owner_id="owner-b")
 
 
+def connection_marker(engine) -> str:
+    with engine.connect() as connection:
+        return connection.execute(text(
+            "SELECT version FROM research_schema_version")).scalar_one()
+
+
 def test_fresh_research_schema_stamps_0005_and_keeps_new_rows_explicitly_unadmitted(tmp_path):
     """Migration 0005 leaves the nullable legacy state intact rather than inventing proof."""
     from research.domain import migrate
@@ -220,7 +226,10 @@ def test_fresh_research_schema_stamps_0005_and_keeps_new_rows_explicitly_unadmit
     init_research_db(engine)
     try:
         inspector = sa.inspect(engine)
-        assert migrate.HEAD_VERSION == "0005"
+        # A-04 refresh: pinned the constant when 0005 was head.  The intent —
+        # a fresh install stamps the CURRENT head and keeps new receipt rows
+        # explicitly unadmitted — is checked against the live marker.
+        assert connection_marker(engine) == migrate.HEAD_VERSION
         assert "research_strategy_admission" in inspector.get_table_names()
         for table in ("research_experiment_run", "research_promotion_candidate"):
             columns = {column["name"]: column for column in inspector.get_columns(table)}
@@ -291,9 +300,13 @@ def test_0005_upgrade_keeps_existing_run_and_candidate_addresses_null():
         engine.dispose()
 
 
-def test_real_0004_schema_upgrades_to_0005_without_rewriting_legacy_rows():
-    """The 0004 preflight uses its own contract before 0005 adds nullable proof fields."""
+def test_real_0004_schema_refuses_without_rewriting_legacy_rows():
+    """The active finite runner preserves and refuses a genuine 0004 input."""
     from research.domain import migrate
+    from research_tests.test_ir_v2_research_migration import (
+        _REFUSAL_PATTERN,
+        _sqlite_logical_digest,
+    )
 
     engine = create_engine("sqlite://", future=True)
     try:
@@ -345,16 +358,19 @@ def test_real_0004_schema_upgrades_to_0005_without_rewriting_legacy_rows():
             candidate_id = connection.execute(text(
                 "SELECT id FROM research_promotion_candidate WHERE owner_id='owner-a'")).scalar_one()
 
-        migrate.migrate_research_db(engine)
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(migrate.ResearchMigrationError, match=_REFUSAL_PATTERN):
+            migrate.migrate_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.execute(text(
-                "SELECT version FROM research_schema_version")).scalar_one() == "0005"
+                "SELECT version FROM research_schema_version")).scalar_one() == "0004"
             assert connection.execute(text(
-                "SELECT admission_address FROM research_experiment_run WHERE id=:id"),
-                {"id": run_id}).scalar_one() is None
+                "SELECT id FROM research_experiment_run WHERE id=:id"),
+                {"id": run_id}).scalar_one() == run_id
             assert connection.execute(text(
-                "SELECT admission_address FROM research_promotion_candidate WHERE id=:id"),
-                {"id": candidate_id}).scalar_one() is None
+                "SELECT id FROM research_promotion_candidate WHERE id=:id"),
+                {"id": candidate_id}).scalar_one() == candidate_id
     finally:
         engine.dispose()
 

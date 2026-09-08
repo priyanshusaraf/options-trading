@@ -94,25 +94,19 @@ def seed_graph(session, version: int = 1) -> GraphVersion:
 
 def approved_evidence(**overrides):
     """A verified research decision, as the read-only bridge would report it."""
+    version = overrides.get("graph_version", 1)
     return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
-            "graph_identifier": GRAPH, "graph_version": 1,
-            "content_address": content_address(_graph_document(1)),
-            "admission_address": _admission_address(1), "decision": "approved",
+            "graph_identifier": GRAPH, "graph_version": version,
+            "content_address": content_address(_graph_document(version)),
+            "admission_address": _admission_address(version), "decision": "approved",
             **overrides}
 
 
 def _admission_address(version: int) -> str:
-    from app.ir.library import REGISTRY
-    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+    from tests.admitted_entry import admitted_artifact
 
-    decision = admit_strategy(
-        owner_id="owner",
-        source_input=IRGraphAdmissionInput(
-            graph=_graph_document(version), parameters={}, risk_model=None),
-        registry=REGISTRY,
-    )
-    assert decision.artifact is not None
-    return decision.artifact.admission_address
+    return admitted_artifact(
+        graph=_graph_document(version), owner_id="owner").admission_address
 
 
 @pytest.fixture(autouse=True)
@@ -203,7 +197,7 @@ def test_a_staged_deployment_carries_every_identity_separately():
 def test_shadow_activation_refuses_a_missing_local_causal_receipt(evidence_bridge):
     """Hypothesis: a graph address alone can grant new shadow evaluation authority."""
     with SessionLocal() as session:
-        row = staged(session)
+        row = staged_without_local_receipt(session)
         evidence_bridge["value"] = approved_evidence(admission_address=row.admission_address)
         with pytest.raises(sd.NotAdmissible, match="RECEIPT_STALE"):
             sd.activate(session, row.id, revision=row.revision)

@@ -37,6 +37,7 @@ from app.engine.execution_lifecycle import (
     NewExecutionIntent,
 )
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 OWNER_A = "org-a"
@@ -44,6 +45,21 @@ OWNER_B = "org-b"
 ACCOUNT_A = "account.a"
 ACCOUNT_B = "account.b"
 NOW = dt.datetime(2026, 8, 11, 10, 0)
+
+
+_ADMISSIONS: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def _create_deployment(session, name, *, owner_id, broker_account_id, **kwargs):
+    admission = persist_admitted_entry(session, owner_id=owner_id)
+    _ADMISSIONS[(owner_id, broker_account_id)] = admission
+    return deployments.create_deployment(
+        session, name, owner_id=owner_id, broker_account_id=broker_account_id,
+        strategy_key=admission["strategy_key"],
+        strategy_version=admission["strategy_version"],
+        graph_address=admission["graph_address"],
+        attribution_state=admission["attribution_state"],
+        admission_address=admission["admission_address"], **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -114,11 +130,11 @@ def test_account_money_models_have_non_nullable_durable_account_and_tenant_index
 def test_same_deployment_name_is_local_to_owner_and_account_mutations_are_isolated():
     """Catches global name uniqueness or id-only getter/arm/disarm predicates."""
     with SessionLocal() as session:
-        a = deployments.create_deployment(
+        a = _create_deployment(
             session, "momentum", owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
             status=deployments.ACTIVE,
         )
-        b = deployments.create_deployment(
+        b = _create_deployment(
             session, "momentum", owner_id=OWNER_B, broker_account_id=ACCOUNT_B,
             status=deployments.ACTIVE,
         )
@@ -162,9 +178,11 @@ def _intent(owner_id: str, broker_account_id: str, deployment_id: int) -> NewExe
         limit_price=None,
         decision_price=100.0,
         signal_at=NOW,
-        strategy_key="momentum",
-        strategy_version="v1",
-        admission_address="sha256:" + "a" * 64,
+        strategy_key=_ADMISSIONS[(owner_id, broker_account_id)]["strategy_key"],
+        strategy_version=_ADMISSIONS[(owner_id, broker_account_id)]["strategy_version"],
+        graph_address=_ADMISSIONS[(owner_id, broker_account_id)]["graph_address"],
+        attribution_state=_ADMISSIONS[(owner_id, broker_account_id)]["attribution_state"],
+        admission_address=_ADMISSIONS[(owner_id, broker_account_id)]["admission_address"],
         owner_id=owner_id,
         broker_account_id=broker_account_id,
     )
@@ -173,9 +191,9 @@ def _intent(owner_id: str, broker_account_id: str, deployment_id: int) -> NewExe
 def test_lifecycle_guessed_id_and_recovery_are_owner_and_account_scoped():
     """Catches id-only state reads and recovery keyed only by external account labels."""
     with SessionLocal() as session:
-        dep_a = deployments.create_deployment(
+        dep_a = _create_deployment(
             session, "a", owner_id=OWNER_A, broker_account_id=ACCOUNT_A)
-        dep_b = deployments.create_deployment(
+        dep_b = _create_deployment(
             session, "b", owner_id=OWNER_B, broker_account_id=ACCOUNT_B)
         session.commit()
 
@@ -219,12 +237,99 @@ def _trade(owner_id: str, broker_account_id: str, deployment_id: int, net: float
     )
 
 
+def test_paper_portfolio_combines_owned_books_and_preserves_revisions(monkeypatch):
+    from app.core.paper_portfolio import read_paper_portfolio
+    from app.api.principal import Principal
+    from app.core.config import get_settings
+    from app.db.models import GraphArtifact
+    import app.main as main
+    from fastapi.testclient import TestClient
+
+    with SessionLocal() as session:
+        dep_a = _create_deployment(session, "portfolio", owner_id=OWNER_A,
+                                   broker_account_id=ACCOUNT_A)
+        dep_b = _create_deployment(session, "portfolio", owner_id=OWNER_B,
+                                   broker_account_id=ACCOUNT_B)
+        session.add(BrokerAccount(broker_account_id="account.extra", owner_id=OWNER_A,
+                                  broker="paper", external_account_id="extra", display_name="Extra"))
+        session.flush()
+        dep_extra = _create_deployment(session, "extra", owner_id=OWNER_A,
+                                       broker_account_id="account.extra")
+        for owner, label in ((OWNER_A, "My saved strategy"), (OWNER_B, "Private other strategy")):
+            graph = session.scalar(select(GraphArtifact).where(GraphArtifact.owner_id == owner))
+            graph.display_name = label
+        rows = [_trade(OWNER_A, ACCOUNT_A, dep_a.id, value)
+                for value in (10.25, -3.1, 2.0, 999.0)]
+        for index, row in enumerate(rows[:3]):
+            row.mode = "paper"
+            row.strategy_key = "trend_impulse_v3"
+            row.strategy_version = "first" if index < 2 else "second"
+        rows[1].exit_time = NOW + dt.timedelta(days=1)
+        rows[2].exit_time = NOW + dt.timedelta(days=1)
+        rows[2].broker_account_id = "account.extra"
+        rows[2].deployment_id = dep_extra.id
+        rows[0].gross_pnl = 12.25
+        rows[0].charges_total = 2.0
+        foreign = _trade(OWNER_B, ACCOUNT_B, dep_b.id, 800.0)
+        foreign.mode = "paper"
+        session.add_all([*rows, foreign])
+        session.commit()
+        result = read_paper_portfolio(session, owner_id=OWNER_A)
+        assert result["schema"] == "paper-portfolio/1"
+        assert result["currency"] == "INR"
+        assert result["realized_pnl"] == 9.15
+        assert result["closed_trades"] == 3
+        assert result["points"] == [
+            {"timestamp": "2026-08-11", "realized_pnl": 10.25},
+            {"timestamp": "2026-08-12", "realized_pnl": 9.15},
+        ]
+        assert [(item["strategy_version"], item["realized_pnl"], item["closed_trades"])
+                for item in result["strategies"]] == [("first", 7.15, 2), ("second", 2.0, 1)]
+        assert all(item["display_name"] == "Trend Impulse V3" for item in result["strategies"])
+        assert result["untraded_strategies"] == [{
+            "strategy_key": _ADMISSIONS[(OWNER_A, ACCOUNT_A)]["strategy_key"],
+            "strategy_version": "1", "display_name": "My saved strategy"}]
+        assert read_paper_portfolio(session, owner_id=OWNER_B)["realized_pnl"] == 800.0
+        empty = read_paper_portfolio(session, owner_id="absent-owner")
+        assert empty["points"] == empty["strategies"] == []
+        assert empty["closed_trades"] == empty["realized_pnl"] == 0
+    monkeypatch.setattr(get_settings(), "research_enabled", True)
+    monkeypatch.setattr(get_settings(), "browser_auth_enabled", False)
+    principal = Principal(id="reader", kind="user", scopes=frozenset({"read:portfolio"}),
+                          organization_id=OWNER_A, role="viewer")
+    monkeypatch.setattr(main, "resolve_http_principal", lambda request: principal)
+    client = TestClient(main.app)
+    response = client.get("/api/v1/paper-portfolio")
+    assert response.status_code == 200
+    assert response.json()["realized_pnl"] == 9.15
+    principal = Principal(id="other", kind="user", scopes=frozenset({"read:portfolio"}),
+                          organization_id=OWNER_B, role="viewer")
+    assert client.get("/api/paper-portfolio").json()["realized_pnl"] == 800.0
+    principal = Principal(id="denied", kind="user", scopes=frozenset(),
+                          organization_id=OWNER_A, role="viewer")
+    assert client.get("/api/v1/paper-portfolio").status_code == 403
+
+
+def test_paper_portfolio_keeps_unknown_attribution_and_owned_names():
+    from app.core.paper_portfolio import _display_name
+    from app.api.request_actions import classify_request
+
+    assert _display_name(None, {}) == "Unattributed strategy"
+    assert _display_name("ir.saved", {"ir.saved": "My strategy"}) == "My strategy"
+    assert _display_name("ir.saved.abcdef123456", {"ir.saved": "My strategy"}) == "My strategy"
+    assert _display_name("ir.saved.unknown", {"ir.saved": "My strategy"}) == "Saved strategy"
+    assert _display_name("ir.foreign", {}) == "Saved strategy"
+    assert _display_name("expanding_z_v4", {}) == "Expanding Z Impulse V4"
+    assert classify_request("GET", "/api/paper-portfolio") == "read:portfolio"
+    assert classify_request("POST", "/api/paper-portfolio") is None
+
+
 def test_analytics_money_queries_exclude_the_other_tenant():
     """Catches a missing owner or account predicate on Trade/EquitySnapshot/SignalEvent."""
     with SessionLocal() as session:
-        dep_a = deployments.create_deployment(
+        dep_a = _create_deployment(
             session, "analytics", owner_id=OWNER_A, broker_account_id=ACCOUNT_A)
-        dep_b = deployments.create_deployment(
+        dep_b = _create_deployment(
             session, "analytics", owner_id=OWNER_B, broker_account_id=ACCOUNT_B)
         session.add_all([
             _trade(OWNER_A, ACCOUNT_A, dep_a.id, 10.0),
@@ -287,9 +392,9 @@ def test_shadow_divergence_identity_is_local_to_an_owner_and_account():
 
 def test_runner_today_trade_count_excludes_the_other_account():
     with SessionLocal() as session:
-        dep_a = deployments.create_deployment(session, "count-a", owner_id=OWNER_A,
+        dep_a = _create_deployment(session, "count-a", owner_id=OWNER_A,
                                                broker_account_id=ACCOUNT_A)
-        dep_b = deployments.create_deployment(session, "count-b", owner_id=OWNER_B,
+        dep_b = _create_deployment(session, "count-b", owner_id=OWNER_B,
                                                broker_account_id=ACCOUNT_B)
         session.add_all([_trade(OWNER_A, ACCOUNT_A, dep_a.id, 1),
                          _trade(OWNER_B, ACCOUNT_B, dep_b.id, 1)])

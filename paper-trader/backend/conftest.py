@@ -42,7 +42,9 @@ Defence in depth, since env alone is a soft guarantee:
 """
 import atexit
 import os
+import secrets
 import shutil
+import sys
 import tempfile
 
 # Unique per run. It used to be a fixed path in $TMPDIR, which two concurrent pytest
@@ -76,6 +78,10 @@ SAFE_TEST_ENV = {
     "PT_DB_PATH": os.path.join(_TMP_DIR, "paper_trader.db"),
     "PT_LEDGER_DB_PATH": os.path.join(_TMP_DIR, "ledger.db"),
     "PT_RESEARCH_DB_PATH": os.path.join(_TMP_DIR, "research.db"),
+    # Semantic editor receipts use the deployment-stable event secret. Tests
+    # receive one process-local random value before any app import; child
+    # processes inherit it without the value entering logs or fixtures.
+    "PT_EVENT_CURSOR_SECRET": secrets.token_urlsafe(32),
     # The backtest dataset store is a DIRECTORY of candle blobs, and its default
     # is cwd-relative — a bare `pytest` would otherwise grow gigabytes of them
     # inside backend/. Same reasoning as the three databases above.
@@ -84,6 +90,56 @@ SAFE_TEST_ENV = {
 os.environ.update(SAFE_TEST_ENV)
 
 import pytest  # noqa: E402  — must not precede the env forcing above
+
+
+def pytest_sessionstart(session):
+    # Collection reads sealed vectors, so inputs must exist before importing tests.
+    from pathlib import Path
+    from tests.indicator_assurance_fixtures import restore_assurance_inputs
+    restore_assurance_inputs(Path(__file__).resolve().parents[2])
+
+
+@pytest.fixture
+def admitted_entry_identity():
+    """Persist one real current IR receipt for tests that intentionally open exposure.
+
+    Entry tests opt in explicitly. Refusal and legacy-recovery tests therefore keep
+    exercising absent/forged receipt behavior instead of inheriting authority from an
+    autouse fixture. Admission is cached as immutable Python evidence; each reset test
+    persists it into its fresh database before using the returned keyword arguments.
+    """
+    from app.db.session import SessionLocal
+    from tests.admitted_entry import persist_admitted_entry
+
+    def persist(session=None, *, owner_id="owner"):
+        owns_session = session is None
+        current = session or SessionLocal()
+        try:
+            result = persist_admitted_entry(current, owner_id=owner_id)
+            if owns_session:
+                current.commit()
+        finally:
+            if owns_session:
+                current.close()
+        return result
+
+    return persist
+
+
+@pytest.fixture
+def admitted_backtest_receipt(admitted_entry_identity):
+    """Persist and expose only the receipt accepted by backtest boundaries.
+
+    Backtests execute the graph bound by the receipt and must not pass a second,
+    caller-selected strategy identity alongside it.  Entry/broker tests retain
+    ``admitted_entry_identity`` because their intent boundary checks the complete
+    graph identity triple.
+    """
+    def persist(session=None, *, owner_id="owner"):
+        identity = admitted_entry_identity(session, owner_id=owner_id)
+        return {"admission_address": identity["admission_address"]}
+
+    return persist
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -135,59 +191,98 @@ def _forbid_live_execution():
 collect_ignore_glob = ["* [0-9].py", "* [0-9][0-9].py"]
 
 
+def _mapping_snapshot(owner, attribute):
+    mapping = getattr(owner, attribute, None)
+    if not isinstance(mapping, dict):
+        return None
+    return owner, attribute, mapping, dict(mapping)
+
+
+def _restore_mapping(snapshot):
+    if snapshot is None:
+        return
+    owner, attribute, original, values = snapshot
+    if getattr(owner, attribute, None) is not original:
+        setattr(owner, attribute, original)
+    original.clear()
+    original.update(values)
+
+
+def _restore_object_dict(snapshot):
+    if snapshot is None:
+        return
+    owner, original, values = snapshot
+    if owner.__dict__ is not original:
+        object.__setattr__(owner, "__dict__", original)
+    original.clear()
+    original.update(values)
+
+
 @pytest.fixture(autouse=True)
-def restore_the_shared_provider_clock():
-    """Undo any per-test override of the market clock on the shared provider.
+def restore_declared_process_state():
+    """Restore every declared process-wide test surface after each test.
 
-    `get_provider()` returns a **process-wide singleton**, so `r.provider.now = lambda:
-    <fixed datetime>` — the idiom sixteen call sites across five wiring tests use to pin a
-    session time — does not end with the test that wrote it. It stays for the rest of the
-    run, and the last writer wins.
+    Provider state generalizes the former clock/cursor fixture to the singleton's
+    complete attribute map. Values are shallow snapshots: immutable candle payloads
+    are not copied, while added methods, keys and scalar cursor changes are undone.
 
-    Nothing depended on that until an entry test needed the clock to be inside a trading
-    session: with `now` frozen at 09:20 by an unrelated file, every subsequent entry is
-    refused by the 09:30 entry-window gate and the failure reads as "no position opened",
-    pointing at the innocent test rather than the leak. Ten tests failed in the suite and
-    passed in isolation.
+    FastAPI and strategy modules are observed only when normal test collection has
+    already loaded them. This fixture never imports either module early. Both mapping
+    contents and the original mapping objects are restored, so a test may replace a
+    registry or overrides dictionary without leaking that replacement.
 
-    Restoring here rather than at the sixteen sites: the leak is the shape, not the site,
-    and a fixture makes the next one harmless too. Deletes the instance attribute when the
-    test added one, so the class's real `now` is what remains.
-
-    **The cursor is the same leak by a second mechanism, and it is not optional.**
-    `MockProvider.now()` is `self._times[self._cursor]` and `advance()` mutates that cursor
-    on the same singleton, so every test that steps the synthetic market moves the clock
-    for every test after it — permanently, and without ever touching the `now` attribute
-    this fixture originally guarded.
-
-    That is not theoretical. Measured on 2026-08-08, `test_notifies_on_auto_open` passed
-    under `pytest tests` and failed under `pytest tests research_tests` on a **one-position**
-    difference in the shared cursor:
-
-        cursor=1149 -> now = 2025-03-05 15:15   (after the 09:30 gate — entry taken)
-        cursor=1150 -> now = 2025-03-06 09:15   (before it — "ENTRY WINDOW closed")
-
-    The cursor sat exactly on a session boundary, so a single extra `advance()` anywhere
-    earlier in the run rolled the clock to the next morning and refused the entry. The
-    failure named the innocent test, and suite greenness became a function of which tests
-    ran before it — which is precisely what an exact-head CI contract cannot tolerate.
-
-    Restoring the cursor keeps `advance()` observable *within* a test (nothing here stops a
-    test stepping the market and asserting on it) while making it invisible *between* them.
+    The provider seam has already loaded app.core.config, so the canonical Settings
+    object can be snapshotted without changing import order. Its values stay in memory
+    and are never serialized. Replacing the LRU-cached object is refused: module-level
+    references and the provider would otherwise keep the old instance while later
+    get_settings() calls receive a different one.
     """
     from app.providers.factory import get_provider
 
     provider = get_provider()
-    had = "now" in provider.__dict__
-    was = provider.__dict__.get("now")
-    cursor = getattr(provider, "_cursor", None)
-    yield
-    if had:
-        provider.__dict__["now"] = was
-    else:
-        provider.__dict__.pop("now", None)
-    if cursor is not None and getattr(provider, "_cursor", None) != cursor:
-        provider._cursor = cursor
+    provider_snapshot = (provider, "__dict__", provider.__dict__, dict(provider.__dict__))
+
+    config_module = sys.modules.get("app.core.config")
+    get_settings = getattr(config_module, "get_settings", None)
+    settings = get_settings() if callable(get_settings) else None
+    settings_snapshot = (
+        settings, settings.__dict__, dict(settings.__dict__)
+    ) if settings is not None else None
+
+    app_snapshots = ()
+    main_module = sys.modules.get("app.main")
+    loaded_app = getattr(main_module, "app", None) if main_module is not None else None
+    if loaded_app is not None:
+        app_snapshots = (
+            _mapping_snapshot(loaded_app.state, "_state"),
+            _mapping_snapshot(loaded_app, "dependency_overrides"),
+        )
+
+    registry_snapshots = ()
+    registry_module = sys.modules.get("app.strategy.registry")
+    if registry_module is not None:
+        registry_snapshots = (
+            _mapping_snapshot(registry_module, "_REGISTRY"),
+            _mapping_snapshot(registry_module, "_GENERATED_REGISTRY"),
+        )
+
+    try:
+        yield
+    finally:
+        settings_identity_replaced = (
+            settings is not None and get_settings() is not settings
+        )
+        for snapshot in app_snapshots:
+            _restore_mapping(snapshot)
+        _restore_mapping(provider_snapshot)
+        for snapshot in registry_snapshots:
+            _restore_mapping(snapshot)
+        _restore_object_dict(settings_snapshot)
+        if settings_identity_replaced:
+            pytest.fail(
+                "SETTINGS_CACHE_IDENTITY_REPLACED: patch the cached Settings instance; "
+                "do not clear the process cache"
+            )
 
 
 @pytest.fixture

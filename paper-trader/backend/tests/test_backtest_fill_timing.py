@@ -37,6 +37,6 @@ def test_signal_on_t_cannot_fill_on_t():
 
 def test_same_bar_mutant_is_killed(monkeypatch):
     """Changing the production fill index to the signal index breaks the real guard."""
-    monkeypatch.setattr(engine, "_entry_fill_index", lambda signal_index: signal_index)
+    monkeypatch.setattr(engine.replay_decisions, "next_fill_index", lambda signal_index: signal_index)
     with pytest.raises(IndexError):
         _assert_next_bar_entry()

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit tenant isolation"
+  short_description: "Trace ownership across every affected surface"
+  default_prompt: "Use $tenant-isolation-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

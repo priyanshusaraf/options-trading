@@ -156,7 +156,7 @@ class _FakeKite:
         start = dt.datetime.combine(to_date.date() - dt.timedelta(days=2),
                                     dt.time(9, 15), tzinfo=ist)
         bars = []
-        for i in range(26):                       # 25 completed + the still-forming one
+        for i in range(26):                       # all bars from a completed prior session
             base = 24000 + i
             bars.append({"date": start + dt.timedelta(minutes=15 * i),
                          "open": float(base), "high": float(base + 6),
@@ -190,6 +190,7 @@ def _kite_provider() -> tuple[KiteProvider, _FakeKite]:
     from app.core.logging import WarnGate
 
     p = KiteProvider.__new__(KiteProvider)
+    p._strict_data_runtime = False
     fake = _FakeKite()
     p.kite = fake
     p.s = None
@@ -491,7 +492,7 @@ class _ConformantBase(MarketDataProvider):
         return 24010.5
 
     def get_candles(self, inst, interval, days) -> list[Candle]:
-        base = dt.datetime(2026, 8, 3, 9, 15)
+        base = (self.now() - dt.timedelta(days=2)).replace(hour=9, minute=15, second=0, microsecond=0)
         return [Candle(ts=base + dt.timedelta(minutes=15 * i), open=24000.0 + i,
                        high=24006.0 + i, low=23996.0 + i, close=24002.0 + i, volume=1000)
                 for i in range(10)]

@@ -20,10 +20,13 @@ VALID_STATUSES = RUNNABLE | {"active", "blocked", "accepted", "paused_owner_gate
 FORBIDDEN_EFFORTS = {"xhigh", "ultra", "max"}
 LEASE_MAX_SECONDS = 6 * 60 * 60
 STAGE_ROUTES = {
-    "correction": ("gpt-5.6-terra", "medium"),
-    "implementation_sequence": ("gpt-5.6-terra", "medium"),
+    "correction": ("gpt-5.6-sol", "medium"),
+    "implementation_sequence": ("gpt-5.6-sol", "medium"),
     "phase_architecture": ("gpt-5.6-sol", "medium"),
     "interphase_architecture": ("gpt-5.6-sol", "medium"),
+    "critical_runtime_lifecycle": ("gpt-5.6-sol", "medium"),
+    "independent_assurance": ("gpt-5.6-sol", "medium"),
+    "critical_architecture": ("gpt-5.6-sol", "medium"),
     "phase_review": ("gpt-5.6-sol", "high"),
     "release_review": ("gpt-5.6-sol", "high"),
 }

@@ -42,6 +42,27 @@ def _public_event(event: dict) -> dict:
             "payload": event["payload"]}
 
 
+def _private_not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail="research operation not found")
+
+
+def _owner_operation(operation_id: str, *, owner_id: str) -> dict:
+    engine = make_engine(research_database_url())
+    try:
+        init_research_db(engine)
+        Session = make_sessionmaker(engine)
+        with Session() as session:
+            repository = ResearchOperationRepository(session)
+            operation = repository.get(operation_id, owner_id=owner_id)
+            if operation is None:
+                raise _private_not_found()
+            events = repository.events(operation_id, owner_id=owner_id)
+            return {**_public(operation),
+                    "events": [_public_event(event) for event in events]}
+    finally:
+        engine.dispose()
+
+
 @router.get("/api/research/operations/status")
 def get_research_operation_status(principal: Principal = Depends(get_principal)):
     """Owner-local durable status; a receipt file is never consulted here."""
@@ -52,14 +73,47 @@ def get_research_operation_status(principal: Principal = Depends(get_principal))
         with Session() as session:
             repository = ResearchOperationRepository(session)
             owner_id = owner_id_for(principal)
-            active = repository.latest_active(owner_id=owner_id)
+            active_operations, active_complete = repository.active_for_recovery(owner_id=owner_id)
+            active = active_operations[0] if active_operations else None
             last = repository.latest_terminal(owner_id=owner_id)
             event_operation = active or last
             events = (repository.events(event_operation.operation_id, owner_id=owner_id)
                       if event_operation else [])
     finally:
         engine.dispose()
+    return _recovery_payload(active, last, active_operations, active_complete, events)
+
+
+def _recovery_payload(active, last, active_operations, active_complete, events):
     return {"state": "available" if active or last else "never_run",
             "active": _public(active) if active else None,
+            "active_operations": [_public(operation) for operation in active_operations],
+            "active_complete": active_complete,
             "last": _public(last) if last else None,
             "events": [_public_event(event) for event in events]}
+
+
+@router.get("/api/research/operations/{operation_id}")
+def get_research_operation(
+    operation_id: str, principal: Principal = Depends(get_principal),
+):
+    return _owner_operation(operation_id, owner_id=owner_id_for(principal))
+
+
+@router.post("/api/research/operations/{operation_id}/cancel")
+def cancel_research_operation(
+    operation_id: str, principal: Principal = Depends(get_principal),
+):
+    owner_id = owner_id_for(principal)
+    engine = make_engine(research_database_url())
+    try:
+        init_research_db(engine)
+        Session = make_sessionmaker(engine)
+        with Session() as session:
+            repository = ResearchOperationRepository(session)
+            if repository.get(operation_id, owner_id=owner_id) is None:
+                raise _private_not_found()
+            repository.request_cancel(operation_id, owner_id=owner_id)
+    finally:
+        engine.dispose()
+    return _owner_operation(operation_id, owner_id=owner_id)

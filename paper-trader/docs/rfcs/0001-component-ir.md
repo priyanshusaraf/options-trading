@@ -1,836 +1,169 @@
 # RFC 0001 — The Component IR
 
-**Status:** Accepted — Gates 1, 2 and 3 met
-**Version:** 1.0 · **Date:** 2026-08-02
-**Supersedes:** nothing · **Amended by:** nothing (one erratum — see §6.3)
-
-> **Gate 3 — acceptance.** Recorded 2026-08-02 on the owner's standing directive that "the
-> architectural phase is complete… the RFCs, roadmap, implementation plans and accepted design
-> documents define the architecture… do not redesign accepted architecture unless
-> implementation produces contradictory evidence that cannot be resolved within the existing
-> design." That is acceptance in substance: the document is treated as constitutional and
-> implementation, not redesign, is the default activity. Written down here rather than assumed,
-> so that if the owner meant something narrower there is one line to correct.
-
-> **§3 and §4 are both enforced.** As of 2026-08-02 the conformance suite is
-> `backend/app/ir/` plus
-> `backend/tests/test_ir_{conformance,corpus,contract_c13,resolution,runtime}.py`.
-> It mechanically validates artefacts against **F1–F13**, executes all five Appendix A
-> artefacts as real data rather than sketches, and enforces **all fifteen contract clauses**
-> against a real resolver (`app/ir/resolve.py`). Suppressing any single clause turns that suite
-> red — swept F1–F13 in the format phase and C1–C15 in the resolver phase — so the checks are
-> known to be load-bearing rather than merely present.
->
-> **F14 is enforced as of 2026-08-02**, and the note that used to sit here saying it was not is
-> gone. It binds experiments and findings to the versions that produced them, and an experiment
-> is not a component or a graph — so the answer was never to widen §3. The experiment system
-> defines the record (`app/ir/experiment.py`), and the binding is **derived from the resolved
-> graph rather than supplied**, because F14's real failure mode is a stale field, not a missing
-> one. `format_version` does not move.
->
-> One gap remains, recorded rather than glossed and asserted by a test so it cannot be mistaken
-> for coverage: **F7's edge type-matching needs a component library** — given one, exact matching
-> on all three axes is checked; given none, F7 is reported *unchecked* rather than passing
-> silently.
->
-> A **component runtime** now consumes the resolved graph (`app/ir/runtime.py`), which is what
-> turns C8, C9, C10 and C11 from declarations into measurements — in particular C11, where
-> lookahead is caught by evaluating a prefix of the bars and demanding the shared bars match,
-> rather than by trusting a component's author.
->
-> **Nothing in production executes IR graphs.** `app/ir/` is imported only by its own tests. C12
-> is enforced as the *absence* of a second resolver, which is what makes parity structural; the
-> question of when the live engine runs IR graphs is Appendix C(d) and stays open.
-
----
-
-## Preface (informative)
-
-### Why the Component IR exists
-
-Nine systems were read in full before a line of this document was written — ComfyUI, vectorbt,
-NautilusTrader, Node-RED, Blender, Langflow, xyflow, Airflow, Prefect — across four domains and
-three decades of combined history, plus an earlier teardown of OpenAlgo. The evidence and the
-per-system reviews live in `~/dev/multiverse-of-ideas/reviews/`; the distilled conclusions are in
-`_FINDINGS-component-ir.md` and `_PATTERNS.md`. This document cites them and does not reproduce
-them.
-
-The finding all nine converge on is an absence. **Not one of them has both a durable component
-and a real composition model.** Some compose but cannot say durably what they composed; some have
-reusable units but no graph. The table in `_FINDINGS-component-ir.md` §1 is the evidence. That
-gap is what this language exists to close.
-
-### Why we are introducing a language
-
-The platform is being rebuilt around Components → Graphs → Experiments → Deployments. Today it is
-built around strategies, and the cost of that is visible in the code: four sources of strategy —
-built-in, generated, visual, Python, marketplace — each reduce to the same four boolean columns
-and then run one hard-coded risk model. That is four skins on one strategy, not four strategies.
-
-A language is what lets a strategy say what it is: its parameters, its structure, its
-composition, its version. Without one, every subsystem invents its own private answer.
-
-### Why every subsystem speaks it
-
-The runtime, the research plane, the editor and the marketplace are **interfaces over one
-language**, not four abstractions that happen to cooperate. Each either produces the IR, consumes
-it, or is deterministically derived from it. Where two subsystems need to agree about a strategy,
-they agree in this language or they do not agree at all.
+Read the relevant section below. The content was split for bounded reading on 6 September 2026; technical decisions and historical evidence were not re-approved by this refactor. Earlier status, commands and permission wording apply only to their original scope.
 
-### Why this document distinguishes Format clauses from Contract clauses
+| Section | Words |
+| --- | ---: |
+| [RFC 0001 — The Component IR](0001-component-ir-sections/01-rfc-0001--the-component-ir.md) | 937 |
+| [1. Scope, principle, and planes](0001-component-ir-sections/02-1-scope-principle-and-planes.md) | 1537 |
+| [Continuation 3](0001-component-ir-sections/03-continuation-3.md) | 893 |
+| [4. Contract clauses (normative — free to add)](0001-component-ir-sections/04-4-contract-clauses-normative--free-to-add.md) | 1004 |
+| [5. Non-goals](0001-component-ir-sections/05-5-non-goals.md) | 1507 |
+| [A.4 A nested subgraph](0001-component-ir-sections/06-a4-a-nested-subgraph.md) | 885 |
+| [Appendix C — Open questions carried forward (informative)](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md) | 325 |
 
-Blender carries **44,246 lines** of version-migration code across releases 2.50→5.30 — rewrite
-passes that carry old files forward, forever, one per concept the format ever admitted. That is
-the true price of a language, and it is the reason §3 of this document is kept small.
+## Existing section links
 
-But that price is paid **only for what is serialised**. A guarantee costs nothing to migrate:
-"the executor never branches on a component's provenance" adds no bytes to a stored graph and
-will never need a rewrite pass. So this constitution has two kinds of normative clause and marks
-them apart:
+These anchors preserve incoming links. Follow the section link to read its content.
 
-- **§3 Format clauses** — what is written down and read back. Each is a permanent migration
-  liability. Minimised ruthlessly.
-- **§4 Contract clauses** — guarantees any conforming implementation must satisfy. Free.
-  Completed thoroughly.
+<a id="rfc-0001--the-component-ir"></a>
 
-The practical rule this yields, and the reason the split is structural rather than stylistic:
-*additions to §3 cost migrations forever; additions to §4 cost nothing.* A designer under time
-pressure can apply that rule without re-deriving the argument.
+[RFC 0001 — The Component IR](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#rfc-0001--the-component-ir)
 
----
+<a id="preface-informative"></a>
 
-## 1. Scope, principle, and planes
+[Preface (informative)](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#preface-informative)
 
-### 1.1 The central principle
+<a id="why-the-component-ir-exists"></a>
 
-> **The Component IR is the canonical representation of strategy intent.**
->
-> Not strategy execution. Not source code. Not UI state. Not runtime state.
->
-> Every other representation — Python, visual graphs, marketplace packages, runtime objects,
-> resolved graphs — either **produces** the IR, **consumes** the IR, or is **deterministically
-> derived** from it. The IR itself is the source of truth.
+[Why the Component IR exists](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#why-the-component-ir-exists)
 
-### 1.2 The five planes
+<a id="why-we-are-introducing-a-language"></a>
 
-| Plane | Concern | Relationship to the IR |
-|---|---|---|
-| **Language** | The IR itself | *is* the IR |
-| **Runtime** | How a resolved graph executes | consumes |
-| **Research Plane** | How graphs are generated and searched | produces and consumes |
-| **Editor** | How humans author graphs | produces |
-| **Marketplace** | How components are distributed | transports |
+[Why we are introducing a language](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#why-we-are-introducing-a-language)
 
-**A normative clause MUST NOT name a UI concern, a search algorithm, an optimisation strategy, or
-a marketplace workflow.** Such a clause is misfiled, and the presence of one is a defect in this
-document rather than a matter of taste.
+<a id="why-every-subsystem-speaks-it"></a>
 
-The IR knows nothing about how a graph is drawn, how one is searched for, how one is optimised, or
-how one is sold. It defines the language all four speak.
+[Why every subsystem speaks it](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#why-every-subsystem-speaks-it)
 
-### 1.3 Specification → Resolution → Execution
+<a id="why-this-document-distinguishes-format-clauses-from-contract-clauses"></a>
 
-Three stages, formally separated. The separation exists to prevent authoring concepts leaking into
-execution semantics.
+[Why this document distinguishes Format clauses from Contract clauses](0001-component-ir-sections/01-rfc-0001--the-component-ir.md#why-this-document-distinguishes-format-clauses-from-contract-clauses)
 
-| Stage | What it is | Governed by |
-|---|---|---|
-| **Specification** | The serialised form of a component or graph. The artefact. | §3 |
-| **Resolution** | Transforms a specification into a fully bound executable graph, resolving component references, versions, kernels and dependencies. | §4 |
-| **Execution** | The runtime evaluates the resolved graph. | §4; mechanism out of scope |
+<a id="1-scope-principle-and-planes"></a>
 
-> This RFC does **not** prescribe how resolution is performed. Graph rewriting, lazy expansion,
-> canonicalisation, optimisation passes, or a mechanism not yet invented are all conforming,
-> provided the observable properties in §4 hold.
+[1. Scope, principle, and planes](0001-component-ir-sections/02-1-scope-principle-and-planes.md#1-scope-principle-and-planes)
 
-### 1.4 What this RFC does not cover
+<a id="11-the-central-principle"></a>
 
-The runtime, the visual editor, Python component authoring, Research Plane Generation 2, the
-experiment system, the marketplace, deployment, and production adoption each require their own
-RFC or specification. See §5.
+[1.1 The central principle](0001-component-ir-sections/02-1-scope-principle-and-planes.md#11-the-central-principle)
 
----
+<a id="12-the-five-planes"></a>
 
-## 2. Terminology and conformance
+[1.2 The five planes](0001-component-ir-sections/02-1-scope-principle-and-planes.md#12-the-five-planes)
 
-### 2.1 Conformance language
+<a id="13-specification--resolution--execution"></a>
 
-The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are to be
-interpreted as described in RFC 2119. They are normative only when uppercase.
+[1.3 Specification → Resolution → Execution](0001-component-ir-sections/02-1-scope-principle-and-planes.md#13-specification--resolution--execution)
 
-### 2.2 Terms
+<a id="14-what-this-rfc-does-not-cover"></a>
 
-**Artefact** — a serialised component or graph, together with its envelope.
+[1.4 What this RFC does not cover](0001-component-ir-sections/02-1-scope-principle-and-planes.md#14-what-this-rfc-does-not-cover)
 
-**Component** — a named, versioned, reusable unit. Data first; a callable only after resolution.
+<a id="2-terminology-and-conformance"></a>
 
-**Specification** — the serialised form of a component or graph. What is stored.
+[2. Terminology and conformance](0001-component-ir-sections/02-1-scope-principle-and-planes.md#2-terminology-and-conformance)
 
-**Resolution** — the stage that transforms a specification into a fully bound executable graph.
+<a id="21-conformance-language"></a>
 
-**Lowering** — **one operation within resolution**: the deterministic structural expansion of
-nested references. Lowering is *part of* resolution and MUST NOT be used as a synonym for it.
+[2.1 Conformance language](0001-component-ir-sections/02-1-scope-principle-and-planes.md#21-conformance-language)
 
-**Execution** — evaluation of a resolved graph by a runtime.
+<a id="22-terms"></a>
 
-**Resolved graph** — the output of resolution. Never authored, never edited, never a source of
-truth.
+[2.2 Terms](0001-component-ir-sections/02-1-scope-principle-and-planes.md#22-terms)
 
-**Graph** — a set of nodes and edges, itself referenceable as a component.
+<a id="3-format-clauses-normative--every-clause-here-is-migrated-forever"></a>
 
-**Node** — one instance of a component within a graph.
+[3. Format clauses (normative — every clause here is migrated forever)](0001-component-ir-sections/02-1-scope-principle-and-planes.md#3-format-clauses-normative--every-clause-here-is-migrated-forever)
 
-**Socket** — a typed input or output on a component's interface.
+<a id="31-grammar"></a>
 
-**Parameter** — a tunable value on a component's interface, carrying a kind.
+[3.1 Grammar](0001-component-ir-sections/02-1-scope-principle-and-planes.md#31-grammar)
 
-**Identifier** — an immutable, opaque string used for reference. Never renamed, never reused.
+<a id="32-clauses"></a>
 
-**Display name** — a human-facing label. Freely editable. Never referenced.
+[3.2 Clauses](0001-component-ir-sections/02-1-scope-principle-and-planes.md#32-clauses)
 
-**Version** — an integer distinguishing bodies of one identifier.
+<a id="4-contract-clauses-normative--free-to-add"></a>
 
-**Kernel** — an opaque leaf implementation of a component body, supplied by a registry.
+[4. Contract clauses (normative — free to add)](0001-component-ir-sections/04-4-contract-clauses-normative--free-to-add.md#4-contract-clauses-normative--free-to-add)
 
-**Subgraph** — a component whose body is a graph.
+<a id="5-non-goals"></a>
 
-**Override** — a value supplied by a referencing graph for a parameter of a referenced component.
+[5. Non-goals](0001-component-ir-sections/05-5-non-goals.md#5-non-goals)
 
-**Plane** — one of the five domains in §1.2.
+<a id="6-amendment-procedure"></a>
 
----
+[6. Amendment procedure](0001-component-ir-sections/05-5-non-goals.md#6-amendment-procedure)
 
-## 3. Format clauses (normative — every clause here is migrated forever)
+<a id="61-change-classes"></a>
 
-Every clause in this section describes something written into an artefact and read back. Each one
-is a permanent migration liability: a concept admitted here is a concept whose rewrite pass we
-hand-write for as long as the format lives. Blender carries 44,246 lines of such passes.
+[6.1 Change classes](0001-component-ir-sections/05-5-non-goals.md#61-change-classes)
 
-**A clause belongs in §3 only if the guarantee it supports is impossible without serialising it.**
-If it can live in §4, it MUST live in §4.
+<a id="62-process"></a>
 
-### 3.1 Grammar
+[6.2 Process](0001-component-ir-sections/05-5-non-goals.md#62-process)
 
-The following EBNF is the normative structural definition. The clauses in §3.2 constrain it.
+<a id="63-errata"></a>
 
-```ebnf
-artefact       = envelope , ( component-def | graph-def ) ;
-envelope       = format-version , artefact-kind ;
-format-version = integer ;
-artefact-kind  = "component" | "graph" ;
+[6.3 Errata](0001-component-ir-sections/05-5-non-goals.md#63-errata)
 
-component-def  = identifier , version , display-name , interface , body ;
-identifier     = opaque-string ;          (* immutable; never reused, never renamed *)
-display-name   = human-string ;           (* freely editable; never referenced *)
-version        = integer , [ parent-version ] ;
-parent-version = integer ;                (* fork: records its parent *)
-body           = kernel-ref | graph-ref ; (* content-addressed; stored once *)
+<a id="appendix-a--worked-examples-informative"></a>
 
-interface      = { interface-item } ;
-interface-item = panel | socket | parameter ;
-panel          = identifier , display-name , { interface-item } ;   (* recursive *)
-socket         = identifier , display-name , direction , wire-type ,
-                 [ default-source ] ;
-direction      = "input" | "output" ;
-parameter      = identifier , display-name , kind , [ bounds ] , default ;
-kind           = "length" | "thr" | "pct" | "mult" | "choice"
-               | "minute" | "bool" | "secret" ;
+[Appendix A — Worked examples (informative)](0001-component-ir-sections/05-5-non-goals.md#appendix-a--worked-examples-informative)
 
-wire-type      = value-type , structure-type , domain ;
-structure-type = "scalar" | "series" | "auto" ;
-domain         = instrument-domain , timeframe-domain ;
+<a id="a1-the-ema-z-strategy-expanding_z_v4"></a>
 
-graph-def      = identifier , version , display-name , interface ,
-                 { node } , { edge } , { group } ;
-node           = instance-id , component-ref , { override } ;
-component-ref  = identifier , version ;   (* by reference; never inlined *)
-override       = parameter-identifier , value ;   (* value only *)
-edge           = socket-ref , socket-ref ;        (* source , target *)
-socket-ref     = instance-id , socket-identifier ;
-group          = identifier , display-name , { instance-id } ;  (* visual only *)
+[A.1 The EMA-z strategy (`expanding_z_v4`)](0001-component-ir-sections/05-5-non-goals.md#a1-the-ema-z-strategy-expanding_z_v4)
 
-(* Presentation state is deliberately absent from this grammar. See F13. *)
-```
+<a id="a2-a-decomposed-atr-indicator"></a>
 
-### 3.2 Clauses
+[A.2 A decomposed ATR indicator](0001-component-ir-sections/05-5-non-goals.md#a2-a-decomposed-atr-indicator)
 
-| # | Clause | Evidence |
-|---|---|---|
-| F1 | Artefact envelope: `format_version` and kind | D3, P3 |
-| F2 | Component identity: immutable identifier, version, content-addressed body, separate display name | D1, D2, P1, P2 |
-| F3 | A version MAY record a parent version | D1 |
-| F4 | The interface is declared, recursive, never inferred | D9, P10 |
-| F5 | Parameters carry identifier, display name, kind, bounds, default | D2, P1 |
-| F6 | `secret` is a kind whose value is a reference | D16, P12 |
-| F7 | Wire types: value × structure × domain, closed and exact-matched | D11, D12, D22, P8 |
-| F8 | Inputs MAY declare a default source | D19, P14 |
-| F9 | A graph is nodes and edges | D1, D2 |
-| F10 | Overrides carry values only | D15, P11 |
-| F11 | Nesting is by reference | D7, P5 |
-| F12 | Visual grouping is distinct from semantic reuse | D18, P9 |
-| F13 | Semantic content is hashed; presentation state is stored beside | D17, P13 |
-| F14 | Every experiment and finding binds to the versions that produced it | D4, P2, P3 |
+<a id="a3-a-generated-strategy-from-the-block-grammar"></a>
 
-**F1 — Artefact envelope.** Every artefact MUST record the `format_version` that wrote it and its
-kind. A reader MUST reject an artefact whose `format_version` it does not understand, and MUST NOT
-attempt to interpret it partially. This is the precondition for all future migration (P3); without
-it, no rewrite pass can know what it is rewriting.
+[A.3 A generated strategy from the block grammar](0001-component-ir-sections/05-5-non-goals.md#a3-a-generated-strategy-from-the-block-grammar)
 
-**F2 — Component identity.** A component MUST carry an `identifier` that is immutable, assigned at
-creation, and never reused for a different component. A component MUST carry a `version`
-distinguishing bodies under that identifier. The body MUST be stored once and content-addressed.
-A component MUST carry a `display-name` that is separate from the identifier, freely editable, and
-that **MUST NOT be referenced by anything**.
+<a id="a4-a-nested-subgraph"></a>
 
-The `identifier` ≠ `display-name` split (P1, Blender's `bNodeTreeInterfaceSocket`) is the cheapest
-high-value clause in this document. It costs one field now. Without it, the first rename by a
-component author breaks every graph and every stored experiment that referenced the renamed
-element — and in a forkable library, renames are routine.
+[A.4 A nested subgraph](0001-component-ir-sections/06-a4-a-nested-subgraph.md#a4-a-nested-subgraph)
 
-**F3 — Fork.** A version MAY record a parent version. Fork semantics beyond the parent pointer are
-out of scope; see Appendix C(a).
+<a id="a5-a-multi-timeframe-case"></a>
 
-**F4 — Declared interface.** A component's interface MUST be **declared** as a recursive tree of
-panel and socket items. It MUST NOT be inferred from the component's internals. An inferred
-interface changes whenever internals change, which is catastrophic for a published component; a
-declared one is a contract the internals must satisfy. Panels are structural, not decorative: at
-roughly thirty parameters a flat list is unusable, and the organisation belongs to the component's
-author rather than to whichever editor happens to render it (P10).
+[A.5 A multi-timeframe case](0001-component-ir-sections/06-a4-a-nested-subgraph.md#a5-a-multi-timeframe-case)
 
-**F5 — Parameters.** A parameter MUST carry an identifier, a display name, a kind drawn from the
-closed vocabulary in the grammar, optional bounds, and a default. The kind is required and is not
-redundant with the value's type: "it is a float" does not tell a consumer whether `0.8` means 80%
-or 0.8 ATR. Bounds are part of the contract rather than advice, because a published component's
-parameters are edited by someone who did not write it.
-
-**F6 — Secrets.** `secret` is a parameter kind whose value is a **reference**. A secret value
-MUST NOT appear in any artefact, under any circumstances. This makes the safe path the only
-representable one (P12).
-
-**F7 — Wire types.** A wire type MUST be the product of three axes: a **value type**, a
-**structure type**, and a **domain**. The structure axis MUST carry at least `scalar` and `series`,
-plus `auto` for inference. The domain MUST carry an instrument and a timeframe.
-
-The set of value types MUST be **closed, versioned, and exact-matched**. There MUST NOT be a
-wildcard type, overlap matching, or coercion by string comparison. This is the strictest and least
-extensible part of the IR, deliberately: ComfyUI's validator accepts comma-separated strings and
-`*` as Any, matches by overlap, and carries three compatibility shims — one of which depends on
-third-party code subclassing `str` to override `__ne__`. Their ecosystem froze their core. Blender
-makes a similar stringly-typed choice and survives it only because socket types are added by one
-closed team, which is a mitigation an open ecosystem does not get.
-
-The *inference rules* for the structure axis are a layer above this format and are not frozen
-here. The two-axis **shape** is what this clause fixes. See Appendix C(b).
-
-**F8 — Default input sources.** An input MAY declare a default **source**, not merely a default
-value. A graph whose unwired inputs all declare sources MUST be valid. This makes graph mutation a
-local edit rather than a constraint-satisfaction problem, and is an explicit Generation-2 enabler
-(P14).
-
-**F9 — Graph.** A graph MUST consist of nodes and edges. A node MUST carry an instance identifier,
-a component reference, and its overrides.
-
-**F10 — Overrides.** An override MUST carry a **value only**. It MUST NOT carry a kind, bounds, or
-a display name. The author's constraints are the only thing protecting a user of a component they
-did not write (P11). This also matches this platform's operating reality: deployment-level
-configuration overrides are deliberate value decisions, not redefinitions of what a knob means.
-
-**F11 — Nesting by reference.** A graph MUST reference a nested subgraph by `(identifier,
-version)`. A subgraph MUST NOT be inlined into a referencing graph. Inlining makes sharing,
-deduplication and fork-expression impossible — Langflow inlines full source per node, with the
-result that every graph is already a fork and the concept loses meaning (P2).
-
-**F12 — Visual grouping.** Visual grouping MUST be a construct distinct from semantic reuse. A
-group MUST NOT be versionable or publishable. If grouping-for-tidiness were also the reuse unit,
-every cosmetic box would become a versionable artefact and the version history would fill with
-noise (P9).
-
-**Format-v1 erratum.** The grammar above incorrectly placed the visual `group` production inside
-`graph-def`, while this clause and F13 require presentation state to live beside executable
-content. Existing format-v1 graph bytes and content addresses are retained: `groups` is a reserved
-compatibility field whose only conforming value is `[]`. Visual group records, labels, membership,
-frames and collapse state belong to revisioned presentation storage and MUST NOT be written to,
-published with, or hashed as executable graph JSON. The old `app.ir.edit.group()` entry point is
-therefore an explicit F12 refusal, not a semantic editing primitive.
-
-**F13 — Presentation state.** Semantic content MUST be hashed. Presentation state MUST persist
-**beside** the graph, keyed by stable identifier, and is not part of the artefact grammar.
-Ephemeral state MUST NOT be persisted. Without this separation, dragging a node changes its hash
-and silently defeats cache identity (C8).
-
-**F14 — Result binding.** Every experiment and every finding MUST record the exact graph version
-and every resolved component version that produced it.
-
-F14 carries the heaviest evidential weight in this document. Airflow needed `DagVersion` bound to
-**task instances** — execution history, not merely definitions — and reached it only after roughly
-a decade, by retrofit. Versioning's value is retrospective, so adding it late leaves every prior
-run permanently unattributable. **This platform has already paid that exact price**: every
-research finding recorded before 2026-08 is unusable as a baseline for this reason. The clause
-exists so it is not paid twice.
-
-> **Where F14 lives.** An experiment is not a component or a graph, so it has no artefact in the
-> §3 grammar and did not get one: widening §3 would have bought a migration liability forever for
-> a guarantee that does not need serialising into a *graph*. The experiment system defines the
-> record, and `app/ir/experiment.py` enforces the clause against it. The binding is **derived
-> from the `ResolvedGraph`** — `record()` has no parameter for the versions — because a record
-> that can be told its versions can be told last week's, and stale-not-missing is the failure
-> that has actually happened here. The record therefore reaches versions that appear nowhere in
-> the specification's node list, such as a `smoothing.wilder` reached only through the ATR's body.
-
----
-
-## 4. Contract clauses (normative — free to add)
-
-Every clause in this section states an **observable property** that a conforming implementation
-must exhibit. None prescribes a mechanism. These clauses are free: they add nothing to an artefact
-and therefore require no migration, so this section is completed thoroughly where §3 is minimised
-ruthlessly.
-
-> **All fifteen are enforced as of 2026-08-02**, against `backend/app/ir/resolve.py` and its
-> kernel registry, by `backend/tests/test_ir_resolution.py` (C1–C12, C14, C15) and
-> `test_ir_contract_c13.py` (C13). Each clause's own test was proven able to fail by suppressing
-> that clause's implementation one at a time. Two clauses are enforced as an **absence** rather
-> than a behaviour, which is the stronger form: C12 by there being exactly one construction of a
-> resolved graph anywhere in the tree, and C13 by no executor path having a provenance concept
-> to branch on.
-
-| # | Clause | Evidence |
-|---|---|---|
-| C1 | Resolution is deterministic | D5, P5, P7 |
-| C2 | Resolution is free of side effects | D5, P5 |
-| C3 | Resolution preserves semantics | D5, P7 |
-| C4 | Derived elements carry back-references | D8, P6 |
-| C5 | Resolution preserves and records version identity | D1, D4, P2 |
-| C6 | Resolution introduces no hidden state | D5 |
-| C7 | Resolution is reproducible; ids derive from the instance path | D7, P5 |
-| C8 | Cache identity is transitive by default, declarable per component | D13, P4 |
-| C9 | Components are pure; impurity is a declared policy | D14, P4 |
-| C10 | Warmup is derived per component and composes | D22 |
-| C11 | Lookahead is prevented structurally | D22 |
-| C12 | Research and live share one resolution | D6, P7 |
-| C13 | Execution is provenance-blind | D21 |
-| C14 | Components compute; searchers search | D20 |
-| C15 | Publishing a subgraph is a mechanical derivation | D10, P10 |
-
-**C1 — Determinism.** The resolved graph MUST be a deterministic function of the specification.
-
-**C2 — Side-effect freedom.** Resolution MUST NOT produce observable side effects.
-
-**C3 — Semantic preservation.** Resolution MUST preserve the semantics of the specification. The
-specification remains the source of truth; the resolved graph is derived and MUST NOT be authored,
-edited, or persisted as a source of truth.
-
-**C4 — Provenance preservation.** Every derived, expanded, or inserted element MUST carry a
-back-reference to the definition it came from. Diagnostics MUST speak the authored graph's
-vocabulary, not the resolved graph's. Node-RED's `_alias` and `path` are the model (P6). This
-clause MUST land together with nesting, never after it: retrofitting means every diagnostic path
-is wrong first.
-
-**C5 — Version identity preservation.** Resolution MUST preserve and record every resolved
-`(identifier, version)` pair.
-
-**C6 — No hidden state.** Resolution MUST NOT introduce state that is not derivable from the
-specification.
-
-**C7 — Reproducibility.** The same specification MUST resolve identically. Instance identifiers
-MUST derive from the instance path, and MUST NOT derive from clocks, counters, or randomness. If
-they did, re-resolution would not be byte-identical and replay would be impossible.
-
-**C8 — Cache identity.** Cache identity MUST be transitive over the upstream subgraph by default,
-and MAY be declared per component. Transitivity makes correctness automatic under composition —
-the property Prefect lacks, whose `TaskSource` explicitly excludes nested tasks. Declarability
-handles components whose identity genuinely is not their inputs. Neither ComfyUI nor Prefect has
-both; this clause takes both.
-
-**C9 — Purity.** Components MUST be pure. Impurity MUST be expressible only as a **declared
-policy**, and MUST NOT be available as an escape hatch. ComfyUI's `IS_CHANGED` is the
-counter-example: it makes the cache correct while destroying its value as a provenance claim. A
-declared policy keeps the claim intact.
-
-**C10 — Warmup.** Warmup MUST be derived per component and MUST compose through the graph.
-
-**C11 — Lookahead.** Lookahead MUST be prevented structurally. A component MUST NOT be able to
-violate it by convention. Nautilus obtains this property by identity — it is structurally
-impossible there — and this clause is the price of choosing whole-series wires instead (§2A of the
-findings).
-
-**C12 — Research/live parity.** Research and live MUST share **one** resolution.
-
-This is what makes parity structural rather than tested. The precedent is this project's own: the
-`candles.py` defect came from **two hand-written implementations** of one idea, not from a
-compilation step. Parity does not require interpreting the authored graph — that framing was a
-false dichotomy, disproven by Blender, the most mature node system in existence, which lowers.
-What parity requires is one resolution used by both planes.
-
-**C13 — Provenance-blind execution.** No executor path may branch on where a component came from.
-A component's source is display metadata and nothing else. ComfyUI achieves this *subtractively* —
-one registry, no plugin API — and the subtractive route is the one to copy. Given this codebase's
-documented history with mechanisms that exist and are wired to nothing, C13 is to be enforced by a
-test in the conformance phase rather than by review.
-
-**C14 — Searcher boundary.** Components compute; searchers search. Parameter sweeping MUST NOT be
-part of a component's contract.
-
-This clause names a trap the platform is currently inside. vectorbt builds parameter grids into
-the indicator contract itself, which silently defines *search = parameter sweeping* for everything
-downstream — and the research plane inherited that shape. Structure search is not reachable from a
-design where components sweep themselves.
-
-**C15 — Subgraph/component equivalence.** Publishing a subgraph as a component MUST be a
-mechanical derivation from its declared interface, introducing no information the interface does
-not already carry.
-
-C15 is what makes components **decomposable**: a subgraph and a component are the same kind of
-thing, so an indicator is itself a graph. This is the Generation-2 requirement the current block
-library fails — see Appendix A.2 — and it is a language clause rather than a marketplace concern,
-because distribution is a separate plane (§1.2).
-
----
-
-## 5. Non-goals
-
-Each is excluded deliberately, with its reason.
-
-1. **No runtime or execution mechanism.** §4 states properties; how they are achieved belongs to
-   the runtime's own RFC.
-2. **No migration machinery.** The preconditions are adopted now — F1's version stamp and F2's
-   stable identifiers. The machinery waits for the first real migration, because building rewrite
-   infrastructure before there is anything to rewrite is speculative.
-3. **No marketplace trust or sandboxing model.** Sandboxing constrains what a component *kernel*
-   may do. That is a property of the kernel registry, not of the graph language.
-4. **No editor or UI concepts.** A different plane (§1.2).
-5. **No search or optimisation strategy.** A different plane; C14 makes the boundary normative.
-6. **Forward compatibility is explicitly declined.** Backward compatibility is adopted: newer
-   readers MUST carry older artefacts forward. Forward compatibility — an older reader
-   interpreting a newer artefact — is **not** promised. Blender accepts that constraint because an
-   old binary must open a new file; that is not our situation, and assuming otherwise would
-   constrain the format permanently for no benefit.
-7. **No tick-level or intrabar semantics.** C10 and C11 rest on this platform acting on completed
-   candles only. `~/dev/multiverse-of-ideas/reviews/nautilus-trader.md` §10 is the recorded trigger
-   to revisit if that ever changes.
-
----
-
-## 6. Amendment procedure
-
-### 6.1 Change classes
-
-**Erratum** — corrects wording without changing any conforming artefact or implementation. No
-`format_version` increment.
-
-**Non-breaking amendment** — adds an optional construct, or a clause no existing artefact
-violates. `format_version` increments; older artefacts remain readable unchanged.
-
-**Breaking amendment** — changes or removes an existing construct, or adds a required one.
-`format_version` increments **and** a migration pass MUST ship with it. Per §5(6), no forward
-compatibility is promised: a reader of an older `format_version` MUST reject a newer artefact
-rather than guess at it.
-
-### 6.2 Process
-
-> Every new platform capability MUST either fit inside this IR unchanged, or be accompanied by an
-> RFC that amends it. There is no third path. A capability that quietly extends the language
-> without an amendment is architectural drift, and this section exists to make that
-> distinguishable from ordinary work rather than to forbid it in spirit only.
-
-An amendment is accepted by the owner. An amendment MUST pass the same expressiveness gate this
-document passed: every example in Appendix A MUST be re-expressed under the amended language, and
-a failure to express any of them is a defect in the amendment.
-
-### 6.3 Errata
-
-**E1 — 2026-08-02. An override MAY be a parameter reference.** No `format_version` change.
-
-Appendix A.2 writes `override length ← length`: the ATR component forwards its own `length`
-parameter into the `n_smooth` node inside its body. Building the resolver found that the §3
-validator rejected it, because it enforced F10 as *no mapping may be an override value* rather
-than as what F10 says — no **kind**, no **bounds**, no **display name**. A parameter reference
-carries none of those three, and the format already contains a reference-valued override: F6
-makes a secret's value one.
-
-This is an erratum and not an amendment because no conforming artefact changes meaning and no
-new construct is added — `{"param_ref": "length"}` was already a value the grammar's
-`override = parameter-identifier , value` admitted; the validator was narrower than the clause.
-The accepted forms are now a closed set (`schema.VALUE_REFERENCE_FORMS`), so "any mapping" is
-still refused. Without it, A.2 — the acceptance-set artefact that exists to prove
-decomposability — is inexpressible, and no component whose body is a graph can forward a
-parameter into it.
-
-**Two resolution conventions were added without touching §3, deliberately.** They are recorded
-here because a reader of the format will otherwise wonder where they live.
-
-- *Boundary nodes.* A body graph says which internal node an interface socket attaches to by
-  referencing two reserved component identifiers, `graph.input` and `graph.output`. Resolution
-  elides them and splices the connection through. A reserved identifier is a **value**, not a
-  grammar construct, so §3 stays the size it was and no migration pass is owed. Blender,
-  Node-RED and ComfyUI all converged on this shape.
-- *Kernel declarations.* C8's cache identity, C9's purity policy and C10's warmup are declared by
-  the **kernel registry** (`app/ir/kernels.py`), keyed by content address — not by the artefact.
-  §2 already defines a kernel as "supplied by a registry". Serialising them would have bought
-  nothing and cost a rewrite pass forever.
-
----
-
-## Appendix A — Worked examples (informative)
-
-These five artefacts are the **acceptance set**. A failure to express any one of them is a defect
-in this RFC, not in the example. Each uses real parameters from the running system, not plausible
-ones.
-
-### A.1 The EMA-z strategy (`expanding_z_v4`)
-
-Expressed as a `graph-def` whose interface declares the strategy's fifteen real parameters, and
-whose nodes reference indicator and predicate components. Abbreviated to its shape:
-
-```
-graph-def
-  identifier    "strategy.expanding_z_impulse"
-  version       4
-  display-name  "Expanding Z Impulse V4"
-  interface
-    panel "trend"      → parameter ema_length      length  default 50
-                       → parameter slope_lookback  length  default 5
-    panel "zscore"     → parameter z_length        length  default 50
-                       → parameter adapt_length    length  default 200
-                       → parameter entry_pct       pct     default 65.0
-                       → parameter exit_pct        pct     default 35.0
-                       → parameter min_abs_z       thr     default 0.60
-    panel "volatility" → parameter atr_length      length  default 14
-                       → parameter min_drift_atr   mult    default 0.08
-                       → parameter max_signal_atr  mult    default 2.75
-    panel "behaviour"  → parameter require_expansion         bool default true
-                       → parameter allow_reexpansion         bool default true
-                       → parameter use_absz_contraction_exit bool default false
-                       → parameter exit_on_drift_flip        bool default true
-                       → parameter exit_on_ema_cross         bool default true
-    socket longEntry   output  wire-type(bool, series, (instrument, timeframe))
-    socket shortEntry  output  wire-type(bool, series, (instrument, timeframe))
-    socket longExit    output  wire-type(bool, series, (instrument, timeframe))
-    socket shortExit   output  wire-type(bool, series, (instrument, timeframe))
-  node  n_ema   → component-ref (indicator.ema, 1)     override length ← ema_length
-  node  n_z     → component-ref (indicator.zscore, 1)  override length ← z_length
-  ...
-  edge  (n_ema.out) → (n_z.reference)
-```
-
-**Red state recorded and resolved.** The first attempt failed: the grammar's `kind` list omitted
-`bool`, and five of this strategy's fifteen parameters are booleans (`require_expansion`,
-`allow_reexpansion`, `use_absz_contraction_exit`, `exit_on_drift_flip`, `exit_on_ema_cross`). The
-real `KINDS` tuple in the running system already carries it. Resolved by adding `"bool"` to F5's
-vocabulary — a grammar correction, not a new clause, and therefore no new migration liability.
-
-**Observation, not a defect.** The four canonical output sockets are exactly the four boolean
-columns the current engine contract mandates. The IR expresses them as ordinary typed output
-sockets, which means the four-column contract becomes a convention of one component family rather
-than a property of the language. That is the intended direction and requires no clause.
-
-### A.2 A decomposed ATR indicator
-
-```
-component-def
-  identifier    "indicator.atr.wilder"
-  version       1
-  display-name  "ATR (Wilder)"
-  interface
-    socket    high    input  wire-type(float, series, (instrument, timeframe))
-    socket    low     input  wire-type(float, series, (instrument, timeframe))
-    socket    close   input  wire-type(float, series, (instrument, timeframe))
-    parameter length  length default 14
-    socket    atr     output wire-type(float, series, (instrument, timeframe))
-  body graph-ref →
-        node n_tr     → component-ref (indicator.true_range, 1)
-        node n_smooth → component-ref (smoothing.wilder, 1)  override length ← length
-        edge (n_tr.out) → (n_smooth.in)
-```
-
-**This is the example the acceptance set exists for.** Because the body is a graph rather than a
-kernel, "fork ATR, replace the smoothing" is a new version of `indicator.atr.wilder` whose
-`n_smooth` node references `smoothing.ema` instead — expressible as a component reference change,
-with F3 recording the parent.
-
-**Red state recorded — a defect in the current system, not in the RFC.** The running block library
-has no ATR *component* at all. Wilder's ATR is a private helper (`_atr`), and every public block
-returns `Series[bool]`: ATR appears only inside boolean predicates such as `atr_pct_lt(length,
-max_pct)` and `range_atr_lt(length, mult)`. There is no float-valued output anywhere in the
-vocabulary, so a value like ATR cannot be named, shared, or forked today. The IR expresses this
-artefact without amendment — F7's value axis already admits float-valued series. **The gap is in
-`blocks.py`, which is precisely the Generation-2 failure C15 exists to close.** No clause was
-added.
-
-### A.3 A generated strategy from the block grammar
-
-A generated strategy composes named blocks with bounded numeric arguments. Each block becomes a
-`component-ref` with overrides; the composition becomes edges:
-
-```
-graph-def
-  identifier   "generated.<content-hash>"
-  version      1
-  node n_1 → component-ref (block.atr_pct_lt, 1)    override length ← 14, max_pct ← 3.0
-  node n_2 → component-ref (block.range_atr_lt, 1)  override length ← 14, mult   ← 0.8
-  node n_3 → component-ref (logic.and, 1)
-  edge (n_1.out) → (n_3.a)
-  edge (n_2.out) → (n_3.b)
-```
-
-**Observation.** Each block's `BlockSpec` already declares `(param_name, kind)` pairs drawn from
-the same bounded vocabulary as F5 — `length`, `pct`, `mult`. The block registry is therefore
-already most of a component interface; what it lacks is F2's version and F4's declared panels.
-
-**Red state recorded and resolved without a clause.** Generated strategies currently identify
-themselves by a content hash over their source. Under F2 that is the *body's* content address, not
-the identity: identity is `(identifier, version)`. Expressible as written above — the hash becomes
-the identifier's suffix and the version starts at 1. This is the concrete case D-disproof (d) in
-the findings warned about: identity MUST NOT be the definition, because reformatting would
-otherwise be a semantic change.
-
-### A.4 A nested subgraph
-
-A graph referencing A.2 twice, at two lengths:
-
-```
-graph-def
-  identifier "strategy.dual_atr_filter"
-  node n_fast → component-ref (indicator.atr.wilder, 1)  override length ← 7
-  node n_slow → component-ref (indicator.atr.wilder, 1)  override length ← 21
-  edge (n_fast.atr) → (n_cmp.a)
-  edge (n_slow.atr) → (n_cmp.b)
-```
-
-This exercises F11, C4 and C7 together. After resolution, an observer MUST be able to see:
-
-- every node expanded from `indicator.atr.wilder` traceable to its definition, and to *which*
-  instance it came from — `n_fast` and `n_slow` expand from the same definition and MUST remain
-  distinguishable (C4);
-- identical instance identifiers on a second resolution of the same specification, because they
-  derive from the instance path — `n_fast/n_smooth`, `n_slow/n_smooth` — rather than from a
-  counter (C7);
-- an error inside the smoothing node reported against the authored graph's vocabulary, naming
-  `n_fast`, not against a generated node the author never placed (C4).
-
-No mechanism is prescribed for how any of this is achieved.
-
-### A.5 A multi-timeframe case
-
-```
-node n_5m  → component-ref (indicator.ema, 1)  override length ← 20
-             domain (NIFTY, 5m)
-node n_15m → component-ref (indicator.ema, 1)  override length ← 20
-             domain (NIFTY, 15m)
-node n_cmp → component-ref (compare.gt, 1)
-edge (n_5m.out)  → (n_cmp.a)     -- domain (NIFTY, 5m)
-edge (n_15m.out) → (n_cmp.b)     -- domain (NIFTY, 15m)   ✗ ill-typed
-```
-
-The final edge is **ill-typed under F7**: both wires carry `float` values with `series` structure,
-and would connect under a one-axis type system, but their domains differ. Comparing a 5-minute
-series to a 15-minute series is exactly the class of error that produces a plausible backtest and
-an unreproducible live result. Making it a *type* error rather than a runtime surprise is the
-purpose of the domain axis.
-
-Expressing this requires an explicit resampling component whose declared interface changes the
-timeframe domain — which the language already admits, because the domain is part of the wire type
-and a component's interface declares its sockets' wire types.
-
----
-
-## Appendix B — Traceability (informative)
-
-**A clause with no traceable decision or pattern is a preference, not a finding, and MUST be cut.**
-Decisions `D#` refer to `~/dev/multiverse-of-ideas/reviews/_FINDINGS-component-ir.md` §4; patterns
-`P#` to `_PATTERNS.md`.
-
-| Clause | Statement | Decision | Pattern |
-|---|---|---|---|
-| F1 | Artefact records format version and kind | D3 | P3 |
-| F2 | Immutable identifier, version, content-addressed body | D1, D2 | P1, P2 |
-| F3 | A version may record its parent | D1 | P2 |
-| F4 | Interface is declared, not inferred | D9 | P10 |
-| F5 | Parameters carry a kind from a closed vocabulary | D2 | P1 |
-| F6 | Secrets are references, never values | D16 | P12 |
-| F7 | Two-axis typing plus domain, closed and exact | D11, D12, D22 | P8 |
-| F8 | Inputs declare a default source | D19 | P14 |
-| F9 | A graph is nodes and edges | D1 | P2 |
-| F10 | Overrides carry values only | D15 | P11 |
-| F11 | Nesting by reference, never inlined | D7 | P5 |
-| F12 | Visual grouping ≠ semantic reuse | D18 | P9 |
-| F13 | Semantic hashed; presentation stored beside | D17 | P13 |
-| F14 | Results bind to the versions that produced them | D4 | P2, P3 |
-| C1 | Resolution is deterministic | D5 | P5, P7 |
-| C2 | Resolution has no side effects | D5 | P5 |
-| C3 | Resolution preserves semantics | D5 | P7 |
-| C4 | Derived elements carry back-references | D8 | P6 |
-| C5 | Version identity preserved and recorded | D1, D4 | P2 |
-| C6 | No hidden state introduced | D5 | P5 |
-| C7 | Reproducible; ids from the instance path | D7 | P5 |
-| C8 | Transitive by default, declarable per component | D13 | P4 |
-| C9 | Pure components; impurity declared as policy | D14 | P4 |
-| C10 | Warmup derived per component, composes | D22 | P8 |
-| C11 | Lookahead prevented structurally | D22 | P8 |
-| C12 | One resolution shared by research and live | D6 | P7 |
-| C13 | Executor never branches on provenance | D21 | P2 |
-| C14 | Sweeping belongs to the searcher | D20 | P4 |
-| C15 | Publishing a subgraph is mechanical | D10 | P10 |
-
-### B.1 Terminology mapping
-
-The findings and patterns use different words for the same things. A reader moving between the two
-documents needs this table.
-
-| This RFC | The findings / patterns | Note |
-|---|---|---|
-| **Resolution** | "lowering" (P5, P7, D5, D6) | the whole stage |
-| **Lowering** | part of "lowering" | one operation within resolution: deterministic structural expansion of nested references |
-| **Specification** | "the recorded graph", "the authored graph" | |
-| **Resolved graph** | "the executed graph", "the evaluation graph" | |
-
-The narrowing of "lowering" is deliberate. Two names for one concept is the shape of the
-`candles.py` defect — two hand-written implementations of one idea — and a constitution is the
-worst place to seed it.
-
----
-
-## Appendix C — Open questions carried forward (informative)
-
-These are carried **inside** the constitution deliberately. A frozen architecture that hides its
-own soft spots is how drift begins. Each names the trigger that would reopen it.
-
-### C(a) Fork semantics beyond a parent pointer
-
-No system studied has a real fork relation — Langflow makes every graph a fork, the rest have
-none. The parent-pointer model in F3 is therefore *derived* rather than *observed*.
-**Trigger:** the first request for merge, rebase, or divergence display. Additive metadata on a
-version record; not a change to how graphs reference components.
-
-### C(b) Field and structure inference rules in our domain
-
-Blender's `Auto` inference proves inference works, but their rules concern geometry domains, not
-bars and instruments. Ours must be derived from our own semantics. F7 freezes the two-axis
-**shape**; the inference algorithm sits above the format.
-**Trigger:** the first component that cannot declare its structure.
-
-### C(c) Migration machinery
-
-The preconditions (F1, F2) are adopted; the machinery is deferred.
-**Trigger:** the first breaking amendment.
-
-### C(d) Whether and when the live engine executes IR graphs
-
-C12 says it eventually must. That is a production change to a real-money path and needs its own
-phase with its own parity evidence, in the compile-first / adopt-second order this platform already
-uses for the decision kernel and the strategy specification. **This is a migration question, not a
-language question.**
-**Trigger:** its own phase.
-
-### C(e) Tick-level and intrabar strategies
-
-C10 and C11 rest on this platform acting on completed candles only.
-**Trigger:** any intrabar strategy. `~/dev/multiverse-of-ideas/reviews/nautilus-trader.md` §10 is
-the note to whoever revisits it.
-
-### C(f) Marketplace trust and sandboxing at scale
-
-The existing AST allow-list is stronger than anything in the nine systems studied — none of them
-sandbox user code at all. Sandboxing constrains what a *kernel* may do, which is a property of the
-kernel registry rather than of the graph language.
-**Trigger:** third-party component distribution.
+<a id="appendix-b--traceability-informative"></a>
+
+[Appendix B — Traceability (informative)](0001-component-ir-sections/06-a4-a-nested-subgraph.md#appendix-b--traceability-informative)
+
+<a id="b1-terminology-mapping"></a>
+
+[B.1 Terminology mapping](0001-component-ir-sections/06-a4-a-nested-subgraph.md#b1-terminology-mapping)
+
+<a id="appendix-c--open-questions-carried-forward-informative"></a>
+
+[Appendix C — Open questions carried forward (informative)](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#appendix-c--open-questions-carried-forward-informative)
+
+<a id="ca-fork-semantics-beyond-a-parent-pointer"></a>
+
+[C(a) Fork semantics beyond a parent pointer](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#ca-fork-semantics-beyond-a-parent-pointer)
+
+<a id="cb-field-and-structure-inference-rules-in-our-domain"></a>
+
+[C(b) Field and structure inference rules in our domain](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#cb-field-and-structure-inference-rules-in-our-domain)
+
+<a id="cc-migration-machinery"></a>
+
+[C(c) Migration machinery](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#cc-migration-machinery)
+
+<a id="cd-whether-and-when-the-live-engine-executes-ir-graphs"></a>
+
+[C(d) Whether and when the live engine executes IR graphs](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#cd-whether-and-when-the-live-engine-executes-ir-graphs)
+
+<a id="ce-tick-level-and-intrabar-strategies"></a>
+
+[C(e) Tick-level and intrabar strategies](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#ce-tick-level-and-intrabar-strategies)
+
+<a id="cf-marketplace-trust-and-sandboxing-at-scale"></a>
+
+[C(f) Marketplace trust and sandboxing at scale](0001-component-ir-sections/07-appendix-c--open-questions-carried-forward-informative.md#cf-marketplace-trust-and-sandboxing-at-scale)

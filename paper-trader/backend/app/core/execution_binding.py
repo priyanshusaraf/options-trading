@@ -39,6 +39,9 @@ from app.strategy.registry import (
     StrategyNotFound,
     resolve_strategy,
 )
+from app.strategy.admission import (
+    GraphAttributionRefused, NON_GRAPH, VERIFIED_GRAPH, require_attribution_tuple,
+)
 
 #: Where a strategy's logic comes from.
 SOURCE_HANDWRITTEN = "handwritten"
@@ -146,6 +149,8 @@ class ExecutionBinding:
     owner_id: str | None = None
     #: Immutable causal-admission receipt. None is explicit legacy quarantine.
     admission_address: str | None = None
+    graph_address: str | None = None
+    attribution_state: str = NON_GRAPH
 
 
 def source_of(strategy_key: str | None) -> str:
@@ -220,11 +225,25 @@ def _require_paper_authority(binding, strategy, mode) -> None:
     """
     if binding.origin != ORIGIN_PAPER_AUTHORITY:
         raise AuthorityNotGranted(binding.strategy_key, SOURCE_IR_GRAPH)
-    if not binding.strategy_version or binding.strategy_version != strategy.version:
+    try:
+        require_attribution_tuple(
+            strategy_key=binding.strategy_key,
+            strategy_version=binding.strategy_version,
+            graph_address=binding.graph_address,
+            admission_address=binding.admission_address,
+            attribution_state=binding.attribution_state,
+        )
+    except GraphAttributionRefused as exc:
+        raise AuthorityNotGranted(binding.strategy_key, exc.code) from exc
+    if (binding.strategy_version != strategy.graph_version_label
+            or binding.graph_address != strategy.version):
         raise AuthorityNotGranted(binding.strategy_key, SOURCE_IR_GRAPH)
 
 
-def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None) -> None:
+def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None,
+                       session=None, broker_account_id: str | None = None,
+                       admission_address: str | None = None,
+                       instrument_keys: tuple[str, ...] = ()) -> None:
     """Refuse, at the moment somebody asks, to record an assignment that could never
     execute. `None` means "the platform default", which is not a claim about a source.
 
@@ -234,6 +253,23 @@ def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None)
     if strategy_key is None:
         return
     source = source_of(strategy_key)
+    if source == SOURCE_IR_GRAPH and session is not None and broker_account_id and \
+            admission_address and instrument_keys:
+        # A graph key is not generally authoritative.  This narrow write-time query is
+        # the counterpart of the runtime paper-authority binding: every affected
+        # instrument must already have an active, owner/account-scoped authority record
+        # for this exact receipt.  It does not promote the key or manufacture authority.
+        from app.core.paper_authority import active_bindings
+
+        records = active_bindings(session, owner_id=owner_id,
+                                  broker_account_id=broker_account_id)
+        authorised = {
+            record.instrument_key for record in records
+            if record.strategy_key == strategy_key
+            and record.admission_address == admission_address
+        }
+        if set(instrument_keys).issubset(authorised):
+            return
     if AUTHORITY_BY_SOURCE.get(source, SHADOW) != AUTHORITATIVE:
         raise AuthorityNotGranted(strategy_key, source)
     if source == SOURCE_GENERATED:
@@ -244,22 +280,29 @@ def assert_may_execute(strategy_key: str | None, *, owner_id: str | None = None)
 
 def _describe(*, deployment_id, instrument_key, strategy, origin, reason,
               enforce_authority=True, owner_id: str | None = None,
-              admission_address: str | None = None) -> ExecutionBinding:
+              admission_address: str | None = None,
+              graph_address: str | None = None,
+              attribution_state: str = NON_GRAPH) -> ExecutionBinding:
     source = source_of(strategy.key)
     authority = AUTHORITY_BY_SOURCE.get(source, SHADOW)
     if enforce_authority and authority != AUTHORITATIVE:
         raise AuthorityNotGranted(strategy.key, source)
     return ExecutionBinding(
         deployment_id=deployment_id, instrument_key=instrument_key,
-        strategy_key=strategy.key, strategy_version=strategy.version, source=source,
+        strategy_key=strategy.key,
+        strategy_version=(strategy.graph_version_label
+                          if source == SOURCE_IR_GRAPH else strategy.version), source=source,
         authority=authority, origin=origin, reason=reason,
         execution_mode=configured_execution_mode(), owner_id=owner_id,
-        admission_address=admission_address)
+        admission_address=admission_address, graph_address=graph_address,
+        attribution_state=attribution_state)
 
 
 def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
          assigned_key: str | None, paper_authority=None, owner_id: str | None = None,
-         admission_address: str | None = None) -> ExecutionBinding:
+         admission_address: str | None = None,
+         graph_address: str | None = None,
+         attribution_state: str = NON_GRAPH) -> ExecutionBinding:
     """The decision, with the reads already done — what executes, and on whose say-so.
 
     Split out from `resolve_binding` because the engine resolves a strategy per instrument
@@ -284,8 +327,10 @@ def bind(*, deployment_id: int, instrument_key: str, deployment_pin,
                          strategy=deployment_pin, origin=ORIGIN_DEPLOYMENT,
                          reason=(f"deployment {deployment_id} pins "
                                  f"{deployment_pin.key!r}, which overrides any "
-                                 f"per-instrument assignment"), owner_id=owner_id,
-                         admission_address=admission_address)
+                         f"per-instrument assignment"), owner_id=owner_id,
+                         admission_address=admission_address,
+                         graph_address=graph_address,
+                         attribution_state=attribution_state)
     return _bind_assigned(deployment_id, instrument_key, assigned_key, owner_id=owner_id,
                           admission_address=admission_address)
 
@@ -312,11 +357,13 @@ def _describe_paper_authority(deployment_id, instrument_key,
     something else.
     """
     strategy = resolve_strategy(record.strategy_key, owner_id=owner_id)
-    if not record.content_address or strategy.version != record.content_address:
+    if (not record.content_address or strategy.version != record.content_address
+            or getattr(strategy, "graph_version_label", None) != str(record.graph_version)):
         raise AuthorityNotGranted(record.strategy_key, SOURCE_IR_GRAPH)
     return ExecutionBinding(
         deployment_id=deployment_id, instrument_key=instrument_key,
-        strategy_key=record.strategy_key, strategy_version=record.content_address,
+        strategy_key=record.strategy_key, strategy_version=str(record.graph_version),
+        graph_address=record.content_address, attribution_state=VERIFIED_GRAPH,
         source=SOURCE_IR_GRAPH, authority=AUTHORITATIVE,
         execution_mode=PAPER, origin=ORIGIN_PAPER_AUTHORITY,
         reason=(f"paper deployment {record.deployment_row_id} makes "
@@ -340,7 +387,10 @@ def resolve_binding(session, *, deployment_id: int, instrument_key: str,
                     broker_account_id=broker_account_id),
                 assigned_key=_assigned_strategy_key(session, instrument_key, owner_id=owner_id),
                 owner_id=owner_id,
-                admission_address=(deployment.admission_address if deployment is not None else None))
+                admission_address=(deployment.admission_address if deployment is not None else None),
+                graph_address=(deployment.graph_address if deployment is not None else None),
+                attribution_state=(deployment.attribution_state
+                                   if deployment is not None else NON_GRAPH))
 
 
 def _bind_assigned(deployment_id, instrument_key, assigned, *, owner_id: str | None = None,

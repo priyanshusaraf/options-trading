@@ -2,7 +2,7 @@
 {
   "id": "phase3-task12-review-2",
   "phase": "phase3-causal-strategy-admission",
-  "status": "blocked",
+  "status": "ready",
   "goal": "Independently accept or reject corrected Phase 3 Task 12 using the final integrated diff and current evidence, then record the next programme state.",
   "goal_contract": {
     "create_before_work": true,
@@ -16,6 +16,15 @@
     "migrations"
   ],
   "required_docs": [
+    {
+      "path": "paper-trader/docs/agent/DEPLOYABILITY.md",
+      "sections": [
+        "Current verdict",
+        "Proven foundations",
+        "Open obligations",
+        "V1 release gate"
+      ]
+    },
     {
       "path": "paper-trader/docs/agent/tasks/phase3-task12-correction-1.md",
       "sections": [
@@ -77,6 +86,7 @@
   "parallel_budget": 0,
   "assignments": [],
   "acceptance": [
+    "The review records Phase 3's deployment-impact level, rejects any production-readiness overclaim, and leaves each remaining deployment obligation with an exact phase or release owner.",
     "The review package fingerprint matches the current complete dirty tree and its evidence hashes verify.",
     "Every correction acceptance claim has direct current evidence.",
     "Separate SPEC and QUALITY verdicts are explicit and supported by findings.",

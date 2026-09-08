@@ -14,7 +14,9 @@ from typing import Any, Callable, Mapping, Sequence
 import pandas as pd
 
 from app.ir.kernels import PURE
-from app.ir.resolve import ResolvedGraph, ResolvedNode, topological_order
+from app.ir.formats.dispatch import UnsupportedFormatVersion, require_resolved_v1
+from app.ir.resolve import ResolvedGraph, ResolvedNode, ResolvedV2Graph, ResolvedV2Bundle, topological_order
+from app.ir.validity import NumericValue, ValidityState, invalid, propagate
 
 Kernel = Callable[
     [Mapping[str, Any], Mapping[str, pd.Series], Mapping[str, pd.Series]],
@@ -58,6 +60,10 @@ def evaluate(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
              implementations: Mapping[str, Kernel],
              cache: Cache | None = None) -> EvaluationResult:
     """Evaluate `graph` over `inputs`, one series per declared graph input."""
+    try:
+        require_resolved_v1(graph.format_version)
+    except UnsupportedFormatVersion as exc:
+        raise EvaluationError("F1", "$", str(exc)) from exc
     cache = cache if cache is not None else Cache()
     hits_before = len(cache.hits)
 
@@ -66,10 +72,18 @@ def evaluate(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
 
     wiring: dict[tuple[str, str], tuple[str, str]] = {}
     for edge in graph.edges:
+        if edge.target in wiring:
+            raise EvaluationError(
+                "C3", edge.target[0],
+                f"input {edge.target[1]!r} has more than one source")
         wiring[edge.target] = edge.source
     interface: dict[tuple[str, str], str] = {}
     for name, consumers in graph.inputs.items():
         for consumer in consumers:
+            if consumer in wiring or consumer in interface:
+                raise EvaluationError(
+                    "C3", consumer[0],
+                    f"input {consumer[1]!r} has more than one source")
             interface[consumer] = name
 
     produced: dict[str, Mapping[str, pd.Series]] = {}
@@ -108,6 +122,154 @@ def evaluate(graph: ResolvedGraph, inputs: Mapping[str, pd.Series],
         warmup=graph.warmup,
         cache_hits=tuple(cache.hits[hits_before:]),
     )
+
+
+def evaluate_v2(
+    graph: ResolvedV2Graph,
+    inputs: Mapping[str, Any],
+    registry: Any,
+    *,
+    evaluation_context_resolver: Callable[[ResolvedV2Node, Mapping[str, Any]], Any]
+    | None = None,
+) -> Mapping[str, Any]:
+    """Evaluate fixed v2 topology using resolved input bundles only.
+
+    The v2 calling convention gives a component its canonical parameter values
+    and assembly-shaped inputs.  It cannot obtain a registry, provider, clock,
+    or mutable topology from this API.
+    """
+    nodes = {node.node_id: node for node in graph.nodes}
+    dependencies = {node_id: set() for node_id in nodes}
+    for (target, _), bundle in graph.bundles.items():
+        for member in bundle.members:
+            if member.source["scope"] == "node":
+                dependencies[target].add(member.source["node_id"])
+    ready = sorted(node_id for node_id, needs in dependencies.items() if not needs)
+    values: dict[str, Mapping[str, Any]] = {}
+    while ready:
+        node_id = ready.pop(0)
+        node = nodes[node_id]
+        implementation = registry.v2_implementations.get(node.component)
+        if implementation is None:
+            raise EvaluationError("V2", node_id, "no declared v2 implementation")
+        node_inputs = {
+            port_id: _v2_bundle_value(bundle, inputs, values)
+            for (target, port_id), bundle in graph.bundles.items() if target == node_id
+        }
+        declaration = registry.v2_components[node.component].get("numeric_validity")
+        if declaration is not None:
+            node_inputs, short_circuit = _v2_numeric_inputs(node_id, node_inputs, declaration)
+            if short_circuit is not None:
+                values[node_id] = MappingProxyType({port["port_id"]: short_circuit for port in registry.v2_components[node.component]["ports"] if port["direction"] == "output"})
+                for downstream, needs in dependencies.items():
+                    if node_id in needs:
+                        needs.remove(node_id)
+                        if not needs:
+                            ready.append(downstream)
+                ready.sort()
+                continue
+        frozen_inputs = MappingProxyType(node_inputs)
+        evaluation_context = (
+            evaluation_context_resolver(node, frozen_inputs)
+            if evaluation_context_resolver is not None else None
+        )
+        produced = (
+            implementation(
+                node.parameters, frozen_inputs,
+                evaluation_context=evaluation_context,
+            )
+            if evaluation_context is not None
+            else implementation(node.parameters, frozen_inputs)
+        )
+        if not isinstance(produced, Mapping):
+            raise EvaluationError("V2", node_id, "v2 implementation must return an output mapping")
+        if declaration is not None:
+            produced = _v2_numeric_outputs(node_id, produced)
+        values[node_id] = MappingProxyType(dict(produced))
+        for downstream, needs in dependencies.items():
+            if node_id in needs:
+                needs.remove(node_id)
+                if not needs:
+                    ready.append(downstream)
+        ready.sort()
+    if len(values) != len(nodes):
+        raise EvaluationError("V2", "$", "v2 topology is not acyclic")
+    outputs: dict[str, Any] = {}
+    for name, member in graph.outputs.items():
+        outputs[name] = _v2_member_value(member, inputs, values)
+    return MappingProxyType(outputs)
+
+
+def _v2_numeric_inputs(node_id: str, inputs: Mapping[str, Any], declaration: Mapping[str, Any]) -> tuple[dict[str, Any], NumericValue | None]:
+    if not inputs:
+        return {}, None
+    envelopes = tuple(_v2_numeric_envelopes(inputs))
+    if not envelopes:
+        raise EvaluationError("V2", node_id, "numeric-validity component received an unwrapped input")
+    refused = propagate(envelopes)
+    if refused is not None and declaration["input_policy"] == "propagate":
+        return {}, refused
+    if declaration["input_policy"] == "explicit_fallback":
+        # The component receives the envelopes themselves and must choose an
+        # explicit, registry-identified fallback.  The runtime never fills.
+        return dict(inputs), None
+    return {name: _v2_unwrap_numeric(value) for name, value in inputs.items()}, None
+
+
+def _v2_numeric_outputs(node_id: str, produced: Mapping[str, Any]) -> Mapping[str, NumericValue]:
+    if not all(isinstance(value, NumericValue) for value in produced.values()):
+        raise EvaluationError("V2", node_id, "numeric-validity component must return NumericValue outputs")
+    return produced
+
+
+def _v2_numeric_envelopes(values: Any) -> list[NumericValue]:
+    if isinstance(values, NumericValue):
+        return [values]
+    if isinstance(values, Mapping):
+        nested = values.values()
+    elif isinstance(values, tuple):
+        nested = values
+    else:
+        raise EvaluationError("V2", "$", "numeric-validity component received an unwrapped input")
+    result: list[NumericValue] = []
+    for value in nested:
+        result.extend(_v2_numeric_envelopes(value))
+    return result
+
+
+def _v2_unwrap_numeric(value: Any) -> Any:
+    if isinstance(value, NumericValue):
+        return value.value
+    if isinstance(value, tuple):
+        return tuple(_v2_unwrap_numeric(item) for item in value)
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _v2_unwrap_numeric(item) for key, item in value.items()})
+    raise EvaluationError("V2", "$", "numeric-validity component received an unwrapped input")
+
+
+def _v2_bundle_value(bundle: ResolvedV2Bundle, graph_inputs: Mapping[str, Any], values: Mapping[str, Mapping[str, Any]]) -> Any:
+    if not bundle.members:
+        return bundle.default
+    pairs = [(member, _v2_member_value(member, graph_inputs, values)) for member in bundle.members]
+    if bundle.assembly == "single":
+        return pairs[0][1]
+    if bundle.assembly == "ordered":
+        return tuple(value for _, value in pairs)
+    if bundle.assembly == "keyed":
+        return MappingProxyType({member.binding["key"]: value for member, value in pairs})
+    return tuple(value for _, value in pairs)
+
+
+def _v2_member_value(member: Any, graph_inputs: Mapping[str, Any], values: Mapping[str, Mapping[str, Any]]) -> Any:
+    source = member.source
+    if source["scope"] == "graph_input":
+        if source["port_id"] not in graph_inputs:
+            raise EvaluationError("V2", "$", f"missing graph input {source['port_id']!r}")
+        return graph_inputs[source["port_id"]]
+    outputs = values.get(source["node_id"], {})
+    if source["port_id"] not in outputs:
+        raise EvaluationError("V2", source["node_id"], f"missing output {source['port_id']!r}")
+    return outputs[source["port_id"]]
 
 
 def _inputs_for(node: ResolvedNode, graph: ResolvedGraph,

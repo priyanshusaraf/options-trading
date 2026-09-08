@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.concurrency import (append_unique_json_integer,
@@ -20,7 +21,7 @@ from app.ir.hashing import canonical_json, content_address
 from research.domain.models import (ExperimentRun, ResearchOperation,
                                     ResearchOperationEvent, ResearchOperationItem)
 
-_TRIGGERS = frozenset(("nightly", "manual", "generated"))
+_TRIGGERS = frozenset(("nightly", "manual", "generated", "v2_graph"))
 _STAGES = frozenset(("startup", "planning", "collection", "experiments", "reports", "generation", "completed"))
 _ACTIVE = frozenset(("pending", "running"))
 _MAX_PLAN_BYTES = 65536
@@ -81,121 +82,144 @@ def _error_payload(value: dict[str, Any]) -> dict[str, str]:
     return result
 
 
-def _plan_payload(value: dict[str, Any]) -> dict[str, Any]:
-    """Accept only the durable, secret-free plan descriptor contract.
+def _plan_text(value: Any, limit: int) -> bool:
+    return isinstance(value, str) and bool(value) and len(value) <= limit
 
-    `{}` and `{\"items\": []}` remain intentional compatibility descriptors for
-    historical/no-op work, but arbitrary caller-supplied maps never enter the
-    status API or restart record.
-    """
-    if not isinstance(value, dict):
-        raise ValueError("operation plan payload is invalid")
-    if value == {} or value == {"items": []}:
-        return value
+
+def _plan_integer(value: Any, minimum: int, maximum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and minimum <= value <= maximum
+
+
+def _plan_number(value: Any, minimum: float, maximum: float, *, positive: bool = False) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    number = float(value)
+    return math.isfinite(number) and (number > minimum if positive else number >= minimum) and number <= maximum
+
+
+def _plan_instruments(value: Any, minimum: int) -> bool:
+    return isinstance(value, list) and minimum <= len(value) <= 64 and all(_plan_text(key, 48) for key in value)
+
+
+def _plan_parameters(value: Any) -> bool:
+    if not isinstance(value, dict) or len(value) > 64:
+        return False
+    return all(isinstance(key, str) and len(key) <= 64
+               and isinstance(option, (str, int, float, bool, type(None)))
+               for key, option in value.items())
+
+
+def _legacy_plan_shape(value: dict[str, Any]) -> None:
     expected = {"content_address", "experiment_count", "items"}
-    allowed = expected | {"generated"}
-    if set(value) not in (expected, allowed) or not isinstance(value["content_address"], str):
+    if set(value) not in (expected, expected | {"generated"}) or not isinstance(value["content_address"], str):
         raise ValueError("operation plan payload is invalid")
-    if (not isinstance(value["experiment_count"], int)
-            or isinstance(value["experiment_count"], bool)
-            or value["experiment_count"] < 0 or value["experiment_count"] > 64
-            or not isinstance(value["items"], list)
-            or not isinstance(value.get("generated", []), list)
-            or len(value["items"]) + len(value.get("generated", [])) != value["experiment_count"]):
+    if not _plan_integer(value["experiment_count"], 0, 64):
         raise ValueError("operation plan payload is invalid")
-    fields = {"program", "hypothesis", "strategy_key", "instrument_keys", "interval",
-              "days", "optimize_search", "params", "seed", "min_trades", "n_folds",
-              "min_positive_fold_frac", "capital"}
-    for item in value["items"]:
-        if not isinstance(item, dict) or set(item) != fields:
-            raise ValueError("operation plan payload is invalid")
-        if any(not isinstance(item[name], str) or not item[name] or len(item[name]) > limit
-               for name, limit in (("program", 80), ("hypothesis", 4000),
-                                   ("strategy_key", 80), ("interval", 24))):
-            raise ValueError("operation plan payload is invalid")
-        if (not isinstance(item["instrument_keys"], list)
-                or len(item["instrument_keys"]) > 64
-                or any(not isinstance(key, str) or not key or len(key) > 48
-                       for key in item["instrument_keys"])
-                or not isinstance(item["days"], int) or isinstance(item["days"], bool)
-                or not 0 <= item["days"] <= _MAX_DAYS
-                or not isinstance(item["optimize_search"], bool)
-                or not isinstance(item["params"], dict) or len(item["params"]) > 64
-                or any(not isinstance(key, str) or len(key) > 64
-                       or not isinstance(option, (str, int, float, bool, type(None)))
-                       for key, option in item["params"].items())
-                or not isinstance(item["seed"], int) or isinstance(item["seed"], bool)
-                or not 0 <= item["seed"] <= _MAX_SEED
-                or not isinstance(item["min_trades"], int) or isinstance(item["min_trades"], bool)
-                or not 1 <= item["min_trades"] <= _MAX_MIN_TRADES
-                or not isinstance(item["n_folds"], int) or isinstance(item["n_folds"], bool)
-                or not 2 <= item["n_folds"] <= _MAX_FOLDS
-                or not isinstance(item["min_positive_fold_frac"], (int, float))
-                or isinstance(item["min_positive_fold_frac"], bool)
-                or not math.isfinite(float(item["min_positive_fold_frac"]))
-                or not 0.0 <= float(item["min_positive_fold_frac"]) <= 1.0
-                or not isinstance(item["capital"], (int, float)) or isinstance(item["capital"], bool)
-                or not math.isfinite(float(item["capital"]))
-                or not 0.0 < float(item["capital"]) <= _MAX_CAPITAL):
-            raise ValueError("operation plan payload is invalid")
-    generated_fields = {"admission_address", "build", "composition", "composition_identity",
-                        "graph", "graph_content_address", "interval", "limit",
-                        "min_positive_fold_frac", "min_trades", "n_folds", "owner_universe",
-                        "program", "provider_mode", "seed"}
-    for descriptor in value.get("generated", []):
-        if not isinstance(descriptor, dict) or set(descriptor) != generated_fields:
+    if not isinstance(value["items"], list) or not isinstance(value.get("generated", []), list):
+        raise ValueError("operation plan payload is invalid")
+    if len(value["items"]) + len(value.get("generated", [])) != value["experiment_count"]:
+        raise ValueError("operation plan payload is invalid")
+
+
+def _experiment_limits(item: dict[str, Any]) -> bool:
+    return (_plan_integer(item["min_trades"], 1, _MAX_MIN_TRADES)
+            and _plan_integer(item["n_folds"], 2, _MAX_FOLDS)
+            and _plan_number(item["min_positive_fold_frac"], 0.0, 1.0))
+
+
+def _handwritten_item(item: Any) -> None:
+    fields = {"program", "hypothesis", "strategy_key", "instrument_keys", "interval", "days",
+              "optimize_search", "params", "seed", "min_trades", "n_folds", "min_positive_fold_frac", "capital"}
+    if not isinstance(item, dict) or set(item) != fields:
+        raise ValueError("operation plan payload is invalid")
+    labels = (("program", 80), ("hypothesis", 4000), ("strategy_key", 80), ("interval", 24))
+    if not all(_plan_text(item[name], limit) for name, limit in labels):
+        raise ValueError("operation plan payload is invalid")
+    _handwritten_bounds(item)
+
+
+def _handwritten_bounds(item: dict[str, Any]) -> None:
+    if not (_plan_instruments(item["instrument_keys"], 0)
+            and _plan_integer(item["days"], 0, _MAX_DAYS)
+            and isinstance(item["optimize_search"], bool)
+            and _plan_parameters(item["params"])
+            and _plan_integer(item["seed"], 0, _MAX_SEED)
+            and _experiment_limits(item)
+            and _plan_number(item["capital"], 0.0, _MAX_CAPITAL, positive=True)):
+        raise ValueError("operation plan payload is invalid")
+
+
+def _generated_item(descriptor: Any) -> None:
+    fields = {"admission_address", "build", "composition", "composition_identity", "graph",
+              "graph_content_address", "interval", "limit", "min_positive_fold_frac", "min_trades",
+              "n_folds", "owner_universe", "program", "provider_mode", "seed"}
+    if not isinstance(descriptor, dict) or set(descriptor) != fields:
+        raise ValueError("operation generated descriptor is invalid")
+    labels = (("build", 40), ("provider_mode", 80), ("program", 80), ("interval", 24))
+    if not all(_plan_text(descriptor[name], limit) for name, limit in labels):
+        raise ValueError("operation generated descriptor is invalid")
+    _generated_bounds(descriptor)
+    _generated_identity(descriptor)
+    _generated_grammar(descriptor)
+
+
+def _generated_bounds(descriptor: dict[str, Any]) -> None:
+    if not (_plan_integer(descriptor["limit"], 1, 64)
+            and _plan_instruments(descriptor["owner_universe"], 1)
+            and (descriptor["seed"] is None or _plan_integer(descriptor["seed"], 0, _MAX_SEED))
+            and _experiment_limits(descriptor)):
+        raise ValueError("operation generated descriptor is invalid")
+
+
+def _generated_identity(descriptor: dict[str, Any]) -> None:
+    for name, address_key in (("composition", "composition_identity"), ("graph", "graph_content_address")):
+        if not isinstance(descriptor[name], dict) or descriptor[address_key] != content_address(descriptor[name]):
             raise ValueError("operation generated descriptor is invalid")
-        if (not isinstance(descriptor["build"], str) or not descriptor["build"]
-                or len(descriptor["build"]) > 40
-                or not isinstance(descriptor["provider_mode"], str) or not descriptor["provider_mode"]
-                or len(descriptor["provider_mode"]) > 80
-                or not isinstance(descriptor["program"], str) or not descriptor["program"]
-                or len(descriptor["program"]) > 80
-                or not isinstance(descriptor["interval"], str) or not descriptor["interval"]
-                or len(descriptor["interval"]) > 24
-                or not isinstance(descriptor["limit"], int) or isinstance(descriptor["limit"], bool)
-                or not 1 <= descriptor["limit"] <= 64
-                or not isinstance(descriptor["owner_universe"], list)
-                or not 1 <= len(descriptor["owner_universe"]) <= 64
-                or any(not isinstance(key, str) or not key or len(key) > 48
-                       for key in descriptor["owner_universe"])
-                or (descriptor["seed"] is not None and (not isinstance(descriptor["seed"], int)
-                                                         or isinstance(descriptor["seed"], bool)
-                                                         or not 0 <= descriptor["seed"] <= _MAX_SEED))
-                or not isinstance(descriptor["min_trades"], int) or isinstance(descriptor["min_trades"], bool)
-                or not 1 <= descriptor["min_trades"] <= _MAX_MIN_TRADES
-                or not isinstance(descriptor["n_folds"], int) or isinstance(descriptor["n_folds"], bool)
-                or not 2 <= descriptor["n_folds"] <= _MAX_FOLDS
-                or not isinstance(descriptor["min_positive_fold_frac"], (int, float))
-                or isinstance(descriptor["min_positive_fold_frac"], bool)
-                or not math.isfinite(float(descriptor["min_positive_fold_frac"]))
-                or not 0 <= float(descriptor["min_positive_fold_frac"]) <= 1
-                or not isinstance(descriptor["composition"], dict)
-                or descriptor["composition_identity"] != content_address(descriptor["composition"])
-                or not isinstance(descriptor["graph"], dict)
-                or descriptor["graph_content_address"] != content_address(descriptor["graph"])
-                or not isinstance(descriptor["admission_address"], str)
-                or re.fullmatch(r"sha256:[0-9a-f]{64}", descriptor["admission_address"]) is None):
-            raise ValueError("operation generated descriptor is invalid")
-        # Parse the public grammar now, before admission.  This rejects a
-        # syntactically hashed but semantically invalid composition without
-        # importing a provider or postponing the error to replay.
-        try:
-            from research.strategy.builder.composition_ir import composition_to_ir
-            from research.strategy.builder.grammar import Composition
-            composition = Composition.from_dict(descriptor["composition"])
-            if composition.to_dict() != descriptor["composition"]:
-                raise ValueError("non-canonical generated composition")
-            if canonical_json(composition_to_ir(
-                    composition, identifier=f"generated.{composition.key}")) != canonical_json(descriptor["graph"]):
-                raise ValueError("non-mechanical generated graph")
-        except (TypeError, ValueError, KeyError) as exc:
-            raise ValueError("operation generated descriptor is invalid") from exc
+    address = descriptor["admission_address"]
+    if not isinstance(address, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", address) is None:
+        raise ValueError("operation generated descriptor is invalid")
+
+
+def _generated_grammar(descriptor: dict[str, Any]) -> None:
+    # Validate mechanical graph derivation before any provider can be opened.
+    try:
+        from research.strategy.builder.composition_ir import composition_to_ir
+        from research.strategy.builder.grammar import Composition
+        composition = Composition.from_dict(descriptor["composition"])
+        if composition.to_dict() != descriptor["composition"]:
+            raise ValueError("non-canonical generated composition")
+        if canonical_json(composition_to_ir(composition, identifier=f"generated.{composition.key}")) != canonical_json(descriptor["graph"]):
+            raise ValueError("non-mechanical generated graph")
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("operation generated descriptor is invalid") from exc
+
+
+def _legacy_plan_address(value: dict[str, Any]) -> None:
     payload = {"experiment_count": value["experiment_count"], "items": value["items"]}
     if "generated" in value:
         payload["generated"] = value["generated"]
     if value["content_address"] != content_address(payload):
         raise ValueError("operation plan content address is invalid")
+
+
+def _plan_payload(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate each supported workload before admitting provider or data work."""
+    if not isinstance(value, dict):
+        raise ValueError("operation plan payload is invalid")
+    if value.get("schema") in {"v2-graph-research-operation/2", "v2-graph-research-operation/3", "v2-graph-research-operation/4"}:
+        from research.orchestrator.v2_preparation import parse_public_preparation_plan
+        return parse_public_preparation_plan(value)
+    if value.get("schema") == "v2-graph-research-operation/1":
+        from research.orchestrator.v2_operation import parse_v2_operation_plan
+        return parse_v2_operation_plan(value)
+    if value in ({}, {"items": []}):
+        return value
+    _legacy_plan_shape(value)
+    for item in value["items"]:
+        _handwritten_item(item)
+    for descriptor in value.get("generated", []):
+        _generated_item(descriptor)
+    _legacy_plan_address(value)
     return value
 
 
@@ -209,6 +233,11 @@ def operation_item_keys(plan: dict[str, Any], *, trigger: str) -> list[str]:
     safe = _plan_payload(plan)
     if safe in ({}, {"items": []}):
         return []
+    if safe.get("schema") in {"v2-graph-research-operation/1", "v2-graph-research-operation/2", "v2-graph-research-operation/3", "v2-graph-research-operation/4"}:
+        if trigger != "v2_graph":
+            raise ValueError("V2 graph plans require the v2_graph trigger")
+        descriptor = safe["v2_graphs"][0]
+        return [f"v2_graph:000:{descriptor['descriptor_address'].split(':', 1)[1][:32]}"]
     handwritten = [
         f"{trigger}:{ordinal:03d}:{hashlib.sha256(_json(item, limit=_MAX_PLAN_BYTES).encode()).hexdigest()[:32]}"
         for ordinal, item in enumerate(safe["items"])
@@ -249,6 +278,50 @@ def _load(value: str | None, expected, default):
     except (TypeError, ValueError):
         return default
     return decoded if isinstance(decoded, expected) else default
+
+
+def _enqueue_identifier(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise ValueError(f"{label} is invalid")
+    return value
+
+
+def _enqueue_provenance(plan, *, owner_id, trigger, operation_id, build, provider_mode):
+    if trigger == "v2_graph":
+        from research.orchestrator.v2_operation import V2_PROVIDER_MODE, operation_id_for_request
+        descriptor = plan["v2_graphs"][0]
+        expected_id = operation_id_for_request(owner_id=owner_id, request_id=descriptor["request_id"])
+        declared_owner = descriptor.get("owner_id", descriptor.get("phase4_binding", {}).get("owner_id"))
+        if operation_id != expected_id or provider_mode != V2_PROVIDER_MODE or declared_owner != owner_id:
+            raise ValueError("V2 graph operation identity or mode is invalid")
+    if any(item["build"] != build or item["provider_mode"] != provider_mode for item in plan.get("generated", [])):
+        raise ValueError("generated descriptor provenance does not match operation")
+
+
+def _queued_operation(*, owner_id, trigger, plan, build, provider_mode, operation_id, now):
+    owner_id = _enqueue_identifier(owner_id, "owner_id")
+    if trigger not in _TRIGGERS:
+        raise ValueError("operation trigger is invalid")
+    identifier = _enqueue_identifier(operation_id or uuid.uuid4().hex, "operation_id")
+    plan = _plan_payload(plan)
+    build = str(build)[:40] or "unknown"
+    provider_mode = str(provider_mode)[:80] or "unknown"
+    _enqueue_provenance(plan, owner_id=owner_id, trigger=trigger, operation_id=identifier,
+                        build=build, provider_mode=provider_mode)
+    instant = _instant(now)
+    return ResearchOperation(owner_id=owner_id, operation_id=identifier, trigger=trigger,
+        plan_json=_json(plan, limit=_MAX_PLAN_BYTES), build=build, provider_mode=provider_mode,
+        created_at=instant, queued_at=instant), plan
+
+
+def _same_queued_operation(existing, candidate) -> bool:
+    return existing is not None and all(getattr(existing, name) == getattr(candidate, name)
+        for name in ("trigger", "plan_json", "build", "provider_mode"))
+
+
+def _request_id_reused():
+    from research.orchestrator.v2_operation import V2OperationRefusal
+    raise V2OperationRefusal("REQUEST_ID_REUSED", "request_id was reused with changed operation content")
 
 
 @dataclass(frozen=True)
@@ -333,73 +406,88 @@ class ResearchOperationRepository:
                          **({"code": safe_payload["code"]} if "code" in safe_payload else {})},
                 producer_key=f"operation:{owner_id}:{operation_id}:{sequence}")
 
+    def _queued_retry(self, row):
+        existing = self.session.scalar(select(ResearchOperation).where(
+            ResearchOperation.owner_id == row.owner_id,
+            ResearchOperation.operation_id == row.operation_id))
+        if existing is None:
+            return None
+        same = _same_queued_operation(existing, row)
+        self.session.commit()
+        if same and row.trigger == "v2_graph":
+            return _view(existing)
+        if row.trigger == "v2_graph":
+            _request_id_reused()
+        raise ValueError("operation_id already exists")
+
+    def _pending_capacity_counts(self, owner_id):
+        pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
+            ResearchOperation.owner_id == owner_id, ResearchOperation.status == "pending")) or 0
+        host_pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
+            ResearchOperation.status == "pending")) or 0
+        owner_items = self.session.scalar(select(func.count()).select_from(ResearchOperationItem).join(ResearchOperation).where(
+            ResearchOperation.owner_id == owner_id, ResearchOperation.status == "pending")) or 0
+        host_items = self.session.scalar(select(func.count()).select_from(ResearchOperationItem).join(ResearchOperation).where(
+            ResearchOperation.status == "pending")) or 0
+        return pending, host_pending, owner_items, host_items
+
+    def _require_pending_capacity(self, owner_id, item_count):
+        pending, host_pending, owner_items, host_items = self._pending_capacity_counts(owner_id)
+        if (pending >= _MAX_PENDING_PER_OWNER or host_pending >= _MAX_PENDING_HOST
+                or owner_items + item_count > _MAX_PENDING_ITEMS_PER_OWNER
+                or host_items + item_count > _MAX_PENDING_ITEMS_HOST):
+            with _admission_rejections_lock:
+                _admission_rejections[owner_id] = _admission_rejections.get(owner_id, 0) + 1
+            raise RuntimeError("research operation admission capacity is exhausted")
+
+    def _insert_queued_operation(self, row, item_keys):
+        self.session.add(row)
+        self.session.flush()
+        for ordinal, item_key in enumerate(item_keys):
+            self.session.add(ResearchOperationItem(owner_id=row.owner_id, operation_id=row.operation_id,
+                item_key=item_key, ordinal=ordinal, status="pending"))
+        from app.events.planes import research_outbox
+        outbox = research_outbox()
+        with outbox.writer(self.session):
+            outbox.append(self.session, classification="private", owner_id=row.owner_id,
+                broker_account_id=None, aggregate_type="research_operation", aggregate_id=row.operation_id,
+                event_type="research.operation.changed", schema_version=1,
+                payload={"projection": "research_operation", "state": "queued", "stage": "startup", "audit_sequence": 0},
+                producer_key=f"operation:{row.owner_id}:{row.operation_id}:queued")
+        self.session.commit()
+
+    def _raced_v2_enqueue(self, row):
+        existing = self.session.scalar(select(ResearchOperation).where(
+            ResearchOperation.owner_id == row.owner_id,
+            ResearchOperation.operation_id == row.operation_id))
+        if _same_queued_operation(existing, row):
+            return _view(existing)
+        _request_id_reused()
+
     def enqueue(self, *, owner_id: str, trigger: str, plan: dict[str, Any], build: str,
                 provider_mode: str, operation_id: str | None = None,
                 now: dt.datetime | None = None) -> OperationView:
-        if not isinstance(owner_id, str) or not owner_id or len(owner_id) > 64:
-            raise ValueError("owner_id is invalid")
-        if trigger not in _TRIGGERS:
-            raise ValueError("operation trigger is invalid")
-        value = operation_id or uuid.uuid4().hex
-        if not isinstance(value, str) or not value or len(value) > 64:
-            raise ValueError("operation_id is invalid")
-        plan = _plan_payload(plan)
-        admitted_build = str(build)[:40] or "unknown"
-        admitted_provider = str(provider_mode)[:80] or "unknown"
-        if any(item["build"] != admitted_build or item["provider_mode"] != admitted_provider
-               for item in plan.get("generated", [])):
-            raise ValueError("generated descriptor provenance does not match operation")
-        instant = _instant(now)
-        row = ResearchOperation(owner_id=owner_id, operation_id=value, trigger=trigger,
-            plan_json=_json(plan, limit=_MAX_PLAN_BYTES), build=admitted_build,
-            provider_mode=admitted_provider, created_at=instant, queued_at=instant)
-        # One transaction admits the exact already-sanitized workload under both
-        # host and owner ceilings before a caller can construct a provider.
-        # SQLite serializes writers, so competing admissions cannot both observe
-        # the same spare slot.
+        row, plan = _queued_operation(owner_id=owner_id, trigger=trigger, plan=plan, build=build,
+            provider_mode=provider_mode, operation_id=operation_id, now=now)
         try:
+            # Reserve owner and host capacity in the same transaction as items and outbox.
             begin_after_clean_reads(self.session, scope="research:admission")
-            pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
-                ResearchOperation.owner_id == owner_id, ResearchOperation.status == "pending")) or 0
-            host_pending = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
-                ResearchOperation.status == "pending")) or 0
-            item_count = len(operation_item_keys(plan, trigger=trigger))
-            owner_pending_items = self.session.scalar(select(func.count()).select_from(
-                ResearchOperationItem).join(ResearchOperation).where(
-                ResearchOperation.owner_id == owner_id,
-                ResearchOperation.status == "pending")) or 0
-            host_pending_items = self.session.scalar(select(func.count()).select_from(
-                ResearchOperationItem).join(ResearchOperation).where(
-                ResearchOperation.status == "pending")) or 0
-            if (pending >= _MAX_PENDING_PER_OWNER
-                    or host_pending >= _MAX_PENDING_HOST
-                    or owner_pending_items + item_count > _MAX_PENDING_ITEMS_PER_OWNER
-                    or host_pending_items + item_count > _MAX_PENDING_ITEMS_HOST):
-                with _admission_rejections_lock:
-                    _admission_rejections[owner_id] = _admission_rejections.get(owner_id, 0) + 1
-                raise RuntimeError("research operation admission capacity is exhausted")
-            self.session.add(row)
-            self.session.flush()
-            for ordinal, item_key in enumerate(operation_item_keys(plan, trigger=trigger)):
-                self.session.add(ResearchOperationItem(
-                    owner_id=owner_id, operation_id=value, item_key=item_key,
-                    ordinal=ordinal, status="pending"))
-            from app.events.planes import research_outbox
-            outbox = research_outbox()
-            with outbox.writer(self.session):
-                outbox.append(
-                    self.session, classification="private", owner_id=owner_id,
-                    broker_account_id=None, aggregate_type="research_operation",
-                    aggregate_id=value, event_type="research.operation.changed",
-                    schema_version=1,
-                    payload={"projection": "research_operation", "state": "queued",
-                             "stage": "startup", "audit_sequence": 0},
-                    producer_key=f"operation:{owner_id}:{value}:queued")
-            self.session.commit()
+            existing = self._queued_retry(row)
+            if existing is not None:
+                return existing
+            item_keys = operation_item_keys(plan, trigger=trigger)
+            self._require_pending_capacity(owner_id, len(item_keys))
+            self._insert_queued_operation(row, item_keys)
+        except IntegrityError:
+            self.session.rollback()
+            if trigger != "v2_graph":
+                raise
+            return self._raced_v2_enqueue(row)
         except Exception:
             self.session.rollback()
             raise
         return _view(row)
+
 
     def get(self, operation_id: str, *, owner_id: str) -> OperationView | None:
         row = self.session.scalar(select(ResearchOperation).where(
@@ -438,6 +526,16 @@ class ResearchOperationRepository:
                    ResearchOperation.operation_id.desc()).limit(1))
         return _view(row) if row else None
 
+    def active_for_recovery(self, *, owner_id: str) -> tuple[list[OperationView], bool]:
+        """Return the bounded active set; overflow never proves job absence."""
+        capacity = _MAX_PENDING_PER_OWNER + _MAX_RUNNING_PER_OWNER
+        rows = self.session.scalars(select(ResearchOperation).where(
+            ResearchOperation.owner_id == owner_id,
+            ResearchOperation.status.in_(tuple(_ACTIVE)),
+        ).order_by(ResearchOperation.queued_at.desc(),
+                   ResearchOperation.operation_id.desc()).limit(capacity + 1)).all()
+        return [_view(row) for row in rows], len(rows) <= capacity
+
     def latest_terminal(self, *, owner_id: str) -> OperationView | None:
         row = self.session.scalar(select(ResearchOperation).where(
             ResearchOperation.owner_id == owner_id,
@@ -445,6 +543,17 @@ class ResearchOperationRepository:
         ).order_by(ResearchOperation.completed_at.desc(),
                    ResearchOperation.operation_id.desc()).limit(1))
         return _view(row) if row else None
+
+    def running_v2_count(self, *, owner_id: str) -> int:
+        """Actual owner-local active predicate used by V2 resource admission."""
+        # Findings stay pending while evaluation runs; flushing would block the watchdog.
+        with self.session.no_autoflush:
+            return int(self.session.scalar(select(func.count()).select_from(
+                ResearchOperation).where(
+                    ResearchOperation.owner_id == owner_id,
+                    ResearchOperation.trigger == "v2_graph",
+                    ResearchOperation.status == "running",
+                )) or 0)
 
     def claim_next(self, *, owner_id: str, worker_id: str, triggers: tuple[str, ...] | None = None,
                    now: dt.datetime | None = None, lease_seconds: int = 60) -> OperationView | None:
@@ -484,6 +593,7 @@ class ResearchOperationRepository:
         """
         try:
             begin_after_clean_reads(self.session, scope="research:active-admission")
+            targeted = operation_id is not None
             filters = [
                 ResearchOperation.owner_id == owner_id,
                 ResearchOperation.cancel_requested_at.is_(None),
@@ -501,6 +611,31 @@ class ResearchOperationRepository:
             if row is None:
                 self.session.rollback()
                 return None
+            if row.trigger == "v2_graph":
+                owner_v2_active = self.session.scalar(
+                    select(func.count()).select_from(ResearchOperation).where(
+                        ResearchOperation.owner_id == owner_id,
+                        ResearchOperation.trigger == "v2_graph",
+                        ResearchOperation.status == "running",
+                        ResearchOperation.operation_id != row.operation_id,
+                    )
+                ) or 0
+                if owner_v2_active >= 1:
+                    if targeted:
+                        self.session.rollback()
+                        return None
+                    alternate = select(ResearchOperation).where(
+                        *filters, ResearchOperation.trigger != "v2_graph",
+                    ).order_by(
+                        ResearchOperation.queued_at,
+                        ResearchOperation.operation_id,
+                    ).limit(1)
+                    row = self.session.scalar(locked_rows(
+                        alternate, self.session, skip_locked=True,
+                    ))
+                    if row is None:
+                        self.session.rollback()
+                        return None
             operation_id = row.operation_id
             owner_active = self.session.scalar(select(func.count()).select_from(ResearchOperation).where(
                 ResearchOperation.owner_id == owner_id,
@@ -589,6 +724,76 @@ class ResearchOperationRepository:
             # evict the last stage/authority evidence from bounded history.
             event_type=None)
 
+    def claim_active(self, operation_id: str, *, owner_id: str, token: str,
+                     now: dt.datetime | None = None) -> bool:
+        """Read the current durable fence without extending its lease."""
+        instant = _instant(now)
+        return bool(self.session.scalar(select(func.count()).select_from(
+            ResearchOperation).where(
+                ResearchOperation.owner_id == owner_id,
+                ResearchOperation.operation_id == operation_id,
+                ResearchOperation.status == "running",
+                ResearchOperation.claim_token == token,
+                ResearchOperation.claim_expires_at >= instant,
+                ResearchOperation.cancel_requested_at.is_(None),
+            )))
+
+    def fail_bound_v2_replay(self, operation_id: str, *, owner_id: str,
+                             token: str, item_key: str,
+                             now: dt.datetime | None = None) -> int | None:
+        """Terminalize an abandoned bound V2 run and its operation atomically."""
+        instant = _instant(now)
+        try:
+            operation = self.session.scalar(locked_rows(select(ResearchOperation).where(
+                ResearchOperation.owner_id == owner_id,
+                ResearchOperation.operation_id == operation_id,
+                ResearchOperation.trigger == "v2_graph",
+                ResearchOperation.status == "running",
+                ResearchOperation.claim_token == token,
+                ResearchOperation.claim_expires_at >= instant,
+                ResearchOperation.cancel_requested_at.is_(None),
+            ), self.session))
+            if operation is None:
+                self.session.rollback()
+                return None
+            item = self.session.scalar(locked_rows(select(ResearchOperationItem).where(
+                ResearchOperationItem.owner_id == owner_id,
+                ResearchOperationItem.operation_id == operation_id,
+                ResearchOperationItem.item_key == item_key,
+                ResearchOperationItem.status == "running",
+                ResearchOperationItem.run_id.is_not(None),
+            ), self.session))
+            if item is None:
+                self.session.rollback()
+                return None
+            run_id = int(item.run_id)
+            changed = self.session.execute(update(ExperimentRun).where(
+                ExperimentRun.owner_id == owner_id,
+                ExperimentRun.id == run_id,
+                ExperimentRun.status.in_(("pending", "running")),
+            ).values(status="failed", decision="needs_review", completed_at=instant,
+                     error="V2_BOUND_RUN_REPLAY_REFUSED"))
+            if changed.rowcount != 1:
+                self.session.rollback()
+                return None
+            error = {"code": "V2_BOUND_RUN_REPLAY_REFUSED",
+                     "message": "bound V2 research run cannot be replayed",
+                     "stage": "experiments"}
+            operation.status = "failed"
+            operation.completed_at = instant
+            operation.heartbeat_at = instant
+            operation.error_json = _json(error, limit=_MAX_ERROR_BYTES)
+            operation.claim_token = None
+            operation.claimed_by = None
+            operation.claim_expires_at = None
+            self._append_event(operation_id, owner_id=owner_id, event_type="failed",
+                               stage="experiments", now=instant, payload=error)
+            self.session.commit()
+            return run_id
+        except Exception:
+            self.session.rollback()
+            raise
+
     def metrics(self, *, owner_id: str, now: dt.datetime | None = None) -> dict[str, int]:
         """Owner-local bounded operational counters; never label with tenant id."""
         instant = _instant(now)
@@ -637,6 +842,43 @@ class ResearchOperationRepository:
                 # unbounded tenant history.
                 "admission_rejections": _admission_rejections.get(owner_id, 0),
         }
+
+    def lock_preparation(self, operation_id: str, *, owner_id: str, token: str) -> None:
+        """Hold the current operation fence in the caller's research transaction."""
+        instant = _instant(None)
+        changed = self.session.execute(update(ResearchOperation).where(
+            ResearchOperation.owner_id == owner_id,
+            ResearchOperation.operation_id == operation_id,
+            ResearchOperation.trigger == "v2_graph",
+            ResearchOperation.status == "running",
+            ResearchOperation.claim_token == token,
+            ResearchOperation.claim_expires_at >= instant,
+            ResearchOperation.cancel_requested_at.is_(None),
+        ).values(heartbeat_at=instant)).rowcount
+        if changed != 1:
+            raise RuntimeError("research operation claim was lost")
+
+    def preparation_evidence(self, operation_id: str, *, owner_id: str):
+        from research.orchestrator.v2_preparation import decode_preparation_evidence
+        row = self.session.get(ResearchOperation, (owner_id, operation_id), populate_existing=True)
+        if row is None:
+            raise ValueError("research operation is unavailable")
+        if row.preparation_evidence_json is None:
+            return None
+        descriptor = _plan_payload(json.loads(row.plan_json))["v2_graphs"][0]
+        return decode_preparation_evidence(row.preparation_evidence_json, descriptor)
+
+    def store_preparation_evidence(self, operation_id: str, *, owner_id: str,
+                                  token: str, evidence: dict[str, Any]) -> None:
+        from research.orchestrator.v2_preparation import validate_preparation_evidence
+        self.lock_preparation(operation_id, owner_id=owner_id, token=token)
+        row = self.session.get(ResearchOperation, (owner_id, operation_id), populate_existing=True)
+        descriptor = _plan_payload(json.loads(row.plan_json))["v2_graphs"][0]
+        encoded = canonical_json(validate_preparation_evidence(evidence, descriptor))
+        if row.preparation_evidence_json not in (None, encoded):
+            raise ValueError("preparation evidence conflicts with the recorded computation")
+        row.preparation_evidence_json = encoded
+        self.session.commit()
 
     def transition(self, operation_id: str, *, owner_id: str, token: str, stage: str, now: dt.datetime | None = None) -> bool:
         if stage not in _STAGES - {"completed"}: raise ValueError("operation stage is invalid")
@@ -918,6 +1160,79 @@ class ResearchOperationRepository:
                                stage=None, now=instant)
         return completed
 
+    def finalize_v2_operation_in_transaction(
+        self, operation_id: str, *, owner_id: str, token: str,
+        item_key: str, run_id: int, now: dt.datetime | None = None,
+    ) -> bool:
+        """Terminalize the one-item V2 run, item, operation, and events atomically.
+
+        The caller owns the transaction that already contains the completed
+        ``ExperimentRun`` and its terminal evidence.  This method never commits or
+        rolls back.  Its first conditional operation update both verifies and locks
+        the owner/token/lease/cancel fence, so cancellation either wins before any
+        terminal item fact or waits until the completed operation is visible.
+        """
+        if (not isinstance(item_key, str) or not item_key or len(item_key) > 128
+                or not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 1):
+            raise ValueError("V2 operation terminal binding is invalid")
+        instant = _instant(now)
+        predicate = and_(
+            ResearchOperation.owner_id == owner_id,
+            ResearchOperation.operation_id == operation_id,
+            ResearchOperation.trigger == "v2_graph",
+            ResearchOperation.status == "running",
+            ResearchOperation.claim_token == token,
+            ResearchOperation.claim_expires_at >= instant,
+            ResearchOperation.cancel_requested_at.is_(None),
+        )
+        # This conditional write acquires the operation row under the same fence
+        # used by the final transition.  No item or event mutation precedes it.
+        with self.session.no_autoflush:
+            fenced = self.session.execute(update(ResearchOperation).where(
+                predicate).values(heartbeat_at=instant)).rowcount
+        if fenced != 1:
+            return False
+        item_count = self.session.scalar(select(func.count()).select_from(
+            ResearchOperationItem).where(
+                ResearchOperationItem.owner_id == owner_id,
+                ResearchOperationItem.operation_id == operation_id,
+            )) or 0
+        if item_count != 1:
+            return False
+        completed_item = self.session.execute(update(ResearchOperationItem).where(
+            ResearchOperationItem.owner_id == owner_id,
+            ResearchOperationItem.operation_id == operation_id,
+            ResearchOperationItem.item_key == item_key,
+            ResearchOperationItem.status == "running",
+            ResearchOperationItem.run_id == run_id,
+        ).values(status="completed", completed_at=instant)).rowcount == 1
+        if not completed_item:
+            return False
+        run = self.session.get(ExperimentRun, run_id)
+        if (run is None or run.owner_id != owner_id or run.status != "completed"
+                or run.completed_at is None):
+            return False
+        completed_operation = self.session.execute(update(ResearchOperation).where(
+            predicate,
+        ).values(
+            status="completed", stage="completed", completed_at=instant,
+            heartbeat_at=instant,
+            completed_run_ids_json=append_unique_json_integer(
+                ResearchOperation.completed_run_ids_json, run_id, self.session),
+            claim_token=None, claimed_by=None, claim_expires_at=None,
+        )).rowcount == 1
+        if not completed_operation:
+            return False
+        self._append_event(
+            operation_id, owner_id=owner_id, event_type="item_completed",
+            stage=None, now=instant,
+        )
+        self._append_event(
+            operation_id, owner_id=owner_id, event_type="completed",
+            stage="completed", now=instant,
+        )
+        return True
+
     def fail(self, operation_id: str, *, owner_id: str, token: str, error: dict[str, Any],
              now: dt.datetime | None = None) -> bool:
         instant = _instant(now)
@@ -1043,6 +1358,14 @@ class DurableOperationRecorder:
         """Public guard for stages that perform their own bounded item loop."""
         self._assert_claim()
 
+    def assert_durable_claim(self) -> None:
+        """Check both watchdog state and the current database fence."""
+        self._assert_claim()
+        if not self.repository.claim_active(
+                self.operation_id, owner_id=self.owner_id, token=self.token):
+            self._claim_lost.set()
+            raise RuntimeError("research operation claim was lost")
+
     def start_watchdog(self, heartbeat, *, interval_seconds: float = 15.0) -> None:
         """Heartbeat through an independent DB session while a provider blocks."""
         if self._watchdog is not None:
@@ -1115,6 +1438,13 @@ class DurableOperationRecorder:
         return self.repository.finalize_item_in_transaction(
             self.operation_id, owner_id=self.owner_id, token=self.token,
             item_key=item_key, run_id=run_id)
+
+    def finalize_v2_operation_in_transaction(self, item_key: str, run_id: int) -> bool:
+        self._assert_claim()
+        return self.repository.finalize_v2_operation_in_transaction(
+            self.operation_id, owner_id=self.owner_id, token=self.token,
+            item_key=item_key, run_id=run_id,
+        )
 
     def complete(self) -> None:
         self._assert_claim()

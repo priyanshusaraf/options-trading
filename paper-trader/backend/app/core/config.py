@@ -66,6 +66,13 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8", extra="ignore",
     )
 
+    # Public capability/reachability profile. `standard` preserves the existing
+    # application. `v0_research_signal` is fail-closed to execution authority.
+    release_profile: str = "standard"
+    # Current process role inside the V0 release profile. This is distinct from
+    # `service_role`, which is the legacy auth/deployment posture.
+    release_service_role: str = "api"
+
     # provider selection
     provider: str = "mock"  # "mock" | "kite" | "replay" | "upstox" (data only)
     # Which connection places the ORDERS. Empty (the default, and what production
@@ -302,6 +309,7 @@ class Settings(BaseSettings):
     # offloaded off the event loop, but a short ceiling keeps the worst case small).
     order_poll_seconds: float = 0.5            # gap between order-status polls
     order_timeout_seconds: float = 10.0        # give up polling after this; reconcile, never assume filled
+    max_daily_profit: float = 0.0              # halt NEW entries at this session realized NET profit in INR (0 = off)
     max_daily_loss: float = 5000.0             # halt NEW entries for the day past this REALIZED loss (0 = off)
     max_round_trips_per_day: int = 9           # halt NEW entries after this many completed round trips today (0 = off)
     max_open_drawdown: float = 2_500.0         # halt NEW entries once today's REALIZED + UNREALIZED (open MTM) loss breaches this (0 = off; H15, enabled 2026-07-17 — half the ₹5k daily-loss halt since open MTM bleeds faster than realized)
@@ -458,6 +466,9 @@ class Settings(BaseSettings):
     # PT_API_TOKEN enables auth and an empty one disables it in development.
     # New production deployments must set this explicitly to false.
     auth_disabled: bool | None = None
+    browser_auth_enabled: bool = False
+    browser_auth_origin: str = ""
+    browser_auth_counter_secret: str = Field(default="", repr=False)
     # env PT_CORS_ORIGINS, comma-separated browser origins allowed with credentials.
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
@@ -583,6 +594,11 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
         from app.core.logging import log
         warn = lambda m: log.warn(m, event="BOOT_CONFIG")  # noqa: E731
 
+    if settings.browser_auth_enabled:
+        from app.accounts.browser_auth import validate_configuration
+        if not validate_configuration(settings):
+            raise BootConfigError("browser authentication requires V0 API, effective auth, exact HTTPS origin and dedicated 32-byte counter key")
+
     if settings.service_role not in {"development", "test"} and not effective_auth_enabled(settings):
         raise BootConfigError(
             "REFUSING TO START: authentication is disabled for a production-like service role. "
@@ -593,6 +609,12 @@ def assert_boot_config(settings: Settings, *, env_file=_UNSET, under_test=_UNSET
         raise BootConfigError(
             "PT_EVENT_CURSOR_SECRET must contain at least 32 characters for a production "
             "deployment so every API replica verifies the same resume cursor")
+    from app.core.release_profile import ReleaseProfileConfigurationError, validate_boot
+    try:
+        validate_boot(settings)
+    except ReleaseProfileConfigurationError as exc:
+        raise BootConfigError(str(exc)) from exc
+
     role = settings.execution_worker.strip().lower()
     if role not in {"auto", "api", "worker"}:
         raise BootConfigError("PT_EXECUTION_WORKER must be exactly auto, api, or worker")

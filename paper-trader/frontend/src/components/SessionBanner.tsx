@@ -1,5 +1,13 @@
 import { useLive } from '../state/LiveContext'
 
+export function V0ReleaseBanner() {
+  return (
+    <div className="border-b border-sky-500/30 bg-sky-500/10 px-3 py-2 text-center text-xs text-sky-200">
+      V0 research workspace · strategy construction and evidence surfaces only
+    </div>
+  )
+}
+
 // Presentational only. Turns the classified health flags (C1) into an honest,
 // prominent strip so a Kite session expiry is a 10-second re-auth instead of a
 // buried 1-in-30 log line. Two distinct states:

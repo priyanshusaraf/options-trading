@@ -1,0 +1,72 @@
+{
+  "schema": "professional-reference-refresh/1",
+  "date": "2026-08-29",
+  "capsule": "kleppmann-corpus-artifacts-and-ddia2e",
+  "trigger": "owner-requested continuation of the Kleppmann and professional-engineering corpus",
+  "authority": {
+    "controlling_composite": [
+      "V2 Kleppmann prompt",
+      "29 August V4 corpus-review brief",
+      "Professional Engineering Reference Programme",
+      "accepted V0-V6 reconciliation"
+    ],
+    "unavailable_not_read": [
+      "V3 Kleppmann simplicity-guarded prompt",
+      "standalone simplicity directive"
+    ]
+  },
+  "inventory": {
+    "first_party_records_before": 373,
+    "first_party_records_after": 373,
+    "html_crawl_rerun": false,
+    "one_hop_records_triaged": 2016,
+    "bounded_candidates": 117,
+    "deferred_other_artifacts": 454,
+    "deferred_bibliography_or_context": 1445
+  },
+  "deep_review": {
+    "pdfs": 4,
+    "pages": 320,
+    "all_pages_directly_inspected": true,
+    "first_party_records_fully_read": 7,
+    "exact_artifact_commits": {
+      "HERMITAGE_F029BEC8": "f029bec8e32af6a9506508638fdf74ef61286225",
+      "DDIA2_REFERENCES_1752CBD0": "1752cbd0cfbab5515f1606b48123b7c0d6103c51"
+    }
+  },
+  "claims_added": [
+    "KCA-001",
+    "KCA-002",
+    "KCA-003",
+    "KCA-004",
+    "KCA-005",
+    "KCA-006",
+    "KCA-007",
+    "KCA-008",
+    "KCA-009"
+  ],
+  "findings": {
+    "confirmed_observability_gap": ["KCA-001"],
+    "keep_existing_contracts": ["KCA-002", "KCA-003", "KCA-004", "KCA-009"],
+    "adoption_or_future_gates": ["KCA-005", "KCA-006", "KCA-007", "KCA-008"]
+  },
+  "rejected_adoptions": [
+    "Kafka or event bus",
+    "universal event sourcing/CQRS",
+    "Temporal/DBOS/Restate",
+    "Redis/Redlock",
+    "V0 CRDT collaboration",
+    "pre-emptive sharding",
+    "microservices/Kubernetes/multi-region",
+    "formal specification for routine features"
+  ],
+  "implementation": false,
+  "deployment": false,
+  "migration": "none",
+  "full_mandate_complete": false,
+  "residual_limits": [
+    "DDIA 2e book text unavailable",
+    "unselected PDFs/slides/transcripts remain unread",
+    "all-domain code audits and final synthesis remain open"
+  ]
+}

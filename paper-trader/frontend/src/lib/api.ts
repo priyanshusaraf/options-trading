@@ -1,3 +1,5 @@
+import type { ReleaseProfileManifest } from './types'
+
 const TOKEN = import.meta.env.VITE_PT_TOKEN as string | undefined
 
 export type IrPurity = 'pure' | 'account_state' | 'broker_state' | 'wall_clock'
@@ -514,6 +516,86 @@ export const del = (path: string) =>
     if (!r.ok) throw new Error(`${r.status}`)
     return r.json()
   })
+
+const RELEASE_CAPABILITY_STATES = new Set([
+  'ENABLED', 'ENABLED_WITH_LIMIT', 'INTERNAL', 'UNAVAILABLE', 'BLOCKED',
+])
+const V0_SERVICE_ROLES = new Set(['api', 'research_worker', 'monitor', 'scheduler'])
+
+export function parseReleaseProfileManifest(value: unknown): ReleaseProfileManifest {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('release profile response is invalid')
+  }
+  const body = value as Record<string, unknown>
+  if (
+    body.schema !== 'strategy-os-release-profile/1'
+    || !['standard', 'v0_research_signal'].includes(String(body.release_profile))
+    || typeof body.research_enabled !== 'boolean'
+    || body.capabilities === null
+    || typeof body.capabilities !== 'object'
+    || Array.isArray(body.capabilities)
+    || !Array.isArray(body.route_rules)
+    || !Array.isArray(body.allowed_service_roles)
+    || !Array.isArray(body.required_readiness_planes)
+  ) {
+    throw new Error('release profile response is invalid')
+  }
+  const capabilities = body.capabilities as Record<string, unknown>
+  for (const capability of Object.values(capabilities)) {
+    if (capability === null || typeof capability !== 'object' || Array.isArray(capability)) {
+      throw new Error('release profile response is invalid')
+    }
+    const state = capability as Record<string, unknown>
+    if (!RELEASE_CAPABILITY_STATES.has(String(state.state))) {
+      throw new Error('release profile response is invalid')
+    }
+    if ('ui_navigation' in state && typeof state.ui_navigation !== 'boolean') {
+      throw new Error('release profile response is invalid')
+    }
+  }
+  for (const rule of body.route_rules) {
+    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) {
+      throw new Error('release profile response is invalid')
+    }
+    const current = rule as Record<string, unknown>
+    if (
+      typeof current.method !== 'string'
+      || typeof current.template !== 'string'
+      || current.state !== 'UNAVAILABLE'
+      || typeof current.capability !== 'string'
+      || typeof current.reason !== 'string'
+    ) {
+      throw new Error('release profile response is invalid')
+    }
+  }
+  if (body.release_profile === 'v0_research_signal') {
+    if (
+      body.execution_authority !== false
+      || !V0_SERVICE_ROLES.has(String(body.service_role))
+      || body.route_rules.length === 0
+      || body.required_readiness_planes.length === 0
+    ) {
+      throw new Error('release profile response is invalid')
+    }
+    for (const required of ['execution', 'orders', 'positions', 'execution_stream']) {
+      const capability = capabilities[required] as Record<string, unknown> | undefined
+      if (capability?.state !== 'UNAVAILABLE') {
+        throw new Error('release profile response is invalid')
+      }
+    }
+  } else if (body.execution_authority !== null || body.service_role !== null) {
+    throw new Error('release profile response is invalid')
+  }
+  return value as ReleaseProfileManifest
+}
+
+export const getReleaseProfile = async (): Promise<ReleaseProfileManifest> => {
+  const response = await fetch('/api/release-profile', {
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  })
+  if (!response.ok) throw new Error(`release profile unavailable (${response.status})`)
+  return parseReleaseProfileManifest(await response.json())
+}
 
 export const getStatus = () => j('/api/status')
 /** DB size + growth. Null on failure so the UI shows "unknown", never a stale size. */

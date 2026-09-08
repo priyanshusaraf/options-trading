@@ -233,3 +233,46 @@ def test_oversized_receipt_fails_before_unbounded_decode(tmp_path):
     path.write_bytes(b"x" * 256_001)
     with pytest.raises(OperationStateCorrupt, match="size limit"):
         ResearchOperationRecorder.load(path)
+
+
+def test_interrupted_file_mirror_replace_preserves_previous_canonical_receipt(tmp_path, monkeypatch):
+    """An interrupted optional mirror write cannot leave a torn authority hint."""
+    from research import operations
+    path = tmp_path / "mirror.json"
+    recorder = ResearchOperationRecorder.start(path, trigger="nightly", build="b", provider_mode="mock",
+                                              now=lambda: "2026-08-29T00:00:00Z")
+    before = path.read_bytes()
+
+    def interrupted_replace(*_):
+        raise OSError("injected local mirror interruption")
+
+    monkeypatch.setattr(operations.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="injected local mirror interruption"):
+        recorder.transition("planning")
+    assert path.read_bytes() == before
+    assert ResearchOperationRecorder.load(path)["active"]["stage"] == "startup"
+    assert list(tmp_path.glob(".*.tmp")) == []
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_file_mirror_cannot_restore_cancelled_database_claim(tmp_path):
+    from research.domain.base import init_research_db, make_engine, make_sessionmaker
+    from research.domain.operations import DurableOperationRecorder, ResearchOperationRepository
+    engine = make_engine(str(tmp_path / "authority.db"))
+    init_research_db(engine)
+    try:
+        with make_sessionmaker(engine)() as session:
+            repo = ResearchOperationRepository(session)
+            durable = DurableOperationRecorder.start(repo, owner_id="owner", operation_id="mirror",
+                trigger="nightly", plan={}, build="b", provider_mode="mock", worker_id="worker")
+            path = tmp_path / "mirror.json"
+            mirror = ResearchOperationRecorder.start(path, trigger="nightly", build="b", provider_mode="mock",
+                operation_id="mirror", now=lambda: "2026-08-29T00:00:00Z")
+            assert repo.request_cancel("mirror", owner_id="owner")
+            mirror.complete(now=lambda: "2026-08-29T00:00:01Z")
+            assert ResearchOperationRecorder.load(path)["last"]["state"] == "completed"
+            with pytest.raises(RuntimeError, match="claim was lost"):
+                durable.complete()
+            assert repo.get("mirror", owner_id="owner").status == "cancelled"
+    finally:
+        engine.dispose()

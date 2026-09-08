@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Interactive Strategy OS V0 research workbench concept using example data only.">
+  <title>Strategy OS · Research folio concept</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to workbench</a>
+  <div class="concept-bar"><span class="pulse" aria-hidden="true"></span><strong>Interactive concept</strong><span>• example data</span><span class="concept-rule">No API, signals, or orders</span></div>
+  <div class="app-shell">
+    <aside class="rail" aria-label="Product navigation">
+      <a class="brand" href="#welcome" aria-label="Strategy OS home"><span aria-hidden="true">S/</span><b>Strategy OS</b></a>
+      <nav aria-label="Research journey">
+        <button class="rail-link is-active" data-view="welcome"><span>01</span>Start</button>
+        <button class="rail-link" data-view="compose"><span>02</span>Compose</button>
+        <button class="rail-link" data-view="compatibility"><span>03</span>Data check</button>
+        <button class="rail-link" data-view="backtest"><span>04</span>Backtest</button>
+        <button class="rail-link" data-view="challenge"><span>05</span>Challenge</button>
+        <button class="rail-link" data-view="evidence"><span>06</span>Evidence</button>
+        <button class="rail-link" data-view="monitor"><span>07</span>Monitor</button>
+      </nav>
+      <div class="rail-foot"><span>V0</span><p>Research + alerts</p><small>Invited access</small></div>
+    </aside>
+
+    <main id="workspace" tabindex="-1">
+      <header class="topline">
+        <div><span class="crumb">Research folio</span><strong id="view-title">Welcome</strong></div>
+        <label class="mobile-nav">Research step<select id="mobile-nav" aria-label="Research step"><option value="welcome">Start</option><option value="compose">Compose</option><option value="compatibility">Data check</option><option value="backtest">Backtest</option><option value="challenge">Challenge</option><option value="evidence">Evidence</option><option value="monitor">Monitor</option></select></label>
+        <div class="identity"><span class="mode">EXAMPLE</span><button id="account-button" class="text-button">Sign in</button></div>
+      </header>
+
+      <section class="view is-active" id="welcome" data-title="Welcome" aria-labelledby="welcome-heading">
+        <div class="welcome-grid">
+          <div class="welcome-copy">
+            <p class="kicker">A workbench for a testable idea</p>
+            <h1 id="welcome-heading">Read the rule.<br>Question the result.<br><em>Keep the evidence.</em></h1>
+            <p class="lede">Start with a worked example or a blank strategy. Every screen stays tied to one revision, one data scope, and one research record.</p>
+            <div class="action-line"><button class="primary" data-preset>Use opening-range preset</button><button class="secondary" data-new>Start empty</button></div>
+          </div>
+          <form class="signin-sheet" id="signin-form">
+            <span class="folio-no">INVITE / 024</span><h2>Enter your research desk</h2>
+            <label>Email<input type="email" required autocomplete="email" placeholder="trader@example.com"></label>
+            <label>Invite code<input required autocomplete="one-time-code" inputmode="text" placeholder="Eight characters"></label>
+            <button class="primary">Continue to workspace</button><p id="signin-status" role="status">Concept access accepts any valid-looking entry.</p>
+          </form>
+        </div>
+      </section>
+
+      <section class="view" id="compose" data-title="Compose · Revision 04" aria-labelledby="compose-heading">
+        <header class="view-head"><div><p class="kicker" id="compose-kicker">Equity opening range · Revision 04</p><h1 id="compose-heading">The strategy, as a rule sheet</h1></div><div class="revision-stamp"><span id="revision-name">Opening range · Revision 04</span><small id="revision-state">Saved preset</small></div></header>
+        <div class="rule-workbench">
+          <aside class="rule-index" aria-label="Rule sections">
+            <p>RULE INDEX</p>
+            <button class="rule-tab is-active" data-rule="observe">A · Observe <span>2</span></button>
+            <button class="rule-tab" data-rule="enter">B · Enter <span>3</span></button>
+            <button class="rule-tab" data-rule="protect">C · Protect <span>2</span></button>
+            <button class="rule-tab" data-rule="exit">D · Exit <span>2</span></button>
+          </aside>
+          <article class="rule-sheet">
+            <div class="sheet-margin" aria-hidden="true" id="sheet-revision">04<br>—<br>A</div>
+            <div class="rule-content" id="rule-content"></div>
+            <div class="rule-note"><span>WHY IT EXISTS</span><p id="rule-explanation">Define the completed market data that the remaining rules may use.</p></div>
+            <details class="technical-details"><summary>Technical rule details</summary><pre id="rule-technical"></pre></details>
+          </article>
+          <aside class="context-strip"><p class="kicker">Draft controls</p><h2 id="change-title">No unsaved edits</h2><label class="field-label" for="window-select">Opening range<select id="window-select"><option value="10">10 minutes</option><option value="15" selected>15 minutes</option><option value="20">20 minutes</option><option value="25">25 minutes</option></select></label><dl><dt>Current value</dt><dd id="current-window">15 minutes</dd><dt>Proposed revision</dt><dd id="proposed-revision">None</dd><dt>Effect</dt><dd id="change-effect">Results remain tied to revision 04.</dd></dl><button class="primary" id="stage-change" disabled>Stage selected value</button><button class="secondary compact" id="load-preset" hidden>Load opening-range preset</button><p id="compose-status" role="status">No unsaved edits.</p></aside>
+        </div>
+        <div class="next-line"><span>Next: prove that each instrument can supply the required fields.</span><button class="secondary" data-next="compatibility" id="to-compatibility">Check OHLCV compatibility →</button></div>
+      </section>
+
+      <section class="view" id="compatibility" data-title="Data compatibility" aria-labelledby="compatibility-heading">
+        <header class="view-head"><div><p class="kicker">Preflight · completed candles only</p><h1 id="compatibility-heading">Can the rule run on this data?</h1></div><span class="state-badge warn" id="compat-badge">1 dataset blocked</span></header>
+        <div class="compat-layout">
+          <div class="matrix-wrap" tabindex="0" role="region" aria-label="Scrollable OHLCV compatibility table">
+            <table><caption id="compat-caption">Required fields for revision 04</caption><thead><tr><th>Instrument</th><th>Role</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>Result</th></tr></thead><tbody>
+              <tr><th>RELIANCE · 5m</th><td>Trade study</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td><span class="state-badge good">Compatible</span></td></tr>
+              <tr class="blocked" id="hdfc-row"><th>HDFCBANK · 5m</th><td>Trade study</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td id="hdfc-volume"><strong>Missing</strong></td><td id="hdfc-result"><span class="state-badge bad">Blocked</span></td></tr>
+              <tr><th>NIFTY 50 · 5m</th><td>Price filter</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>Not required</td><td><span class="state-badge good">Compatible</span></td></tr>
+            </tbody></table>
+          </div>
+          <aside class="diagnosis"><span class="diagnosis-code">MISSING FIELD · VOLUME</span><h2 id="diagnosis-title">HDFCBANK cannot be tested with this dataset</h2><p id="diagnosis-copy">This example HDFCBANK dataset has no volume values from 01 Aug to 29 Aug 2026. The equity rule needs volume to confirm entry conditions. NIFTY is only a price filter, so its volume is not required.</p><div class="resolution"><b>Next useful action</b><p id="resolution-copy">Choose the complete example dataset before running the test. No missing value will be guessed.</p></div><button class="primary" id="replace-dataset">Use complete example dataset</button><p id="compat-status" role="status">Backtest and later results are blocked.</p></aside>
+        </div>
+        <div class="next-line"><span id="scope-summary">2 equities + 1 price-only index filter · 1 dataset blocked</span><button class="secondary" data-next="backtest" disabled id="to-backtest">Run scoped backtest →</button></div>
+      </section>
+
+      <section class="view" id="backtest" data-title="Backtest · Run 118" aria-labelledby="backtest-heading">
+        <header class="view-head"><div><p class="kicker" id="backtest-kicker">Example run 118 · revision 04 · net of example charges</p><h1 id="backtest-heading">A plausible result, ready to challenge</h1></div><button class="secondary" data-next="challenge">Challenge result →</button></header>
+        <div class="chart-band">
+          <div class="chart-summary"><span>NET RETURN</span><strong>+14.8%</strong><small>01 Aug 2021—29 Aug 2026</small></div>
+          <svg class="equity-chart" role="img" aria-labelledby="equity-title equity-desc" viewBox="0 0 760 230" preserveAspectRatio="none"><title id="equity-title">Example backtest equity curve</title><desc id="equity-desc">Equity generally rises from 100 to 114.8, with a major drawdown near the middle and a smaller late drawdown.</desc><g class="grid"><path d="M0 45H760M0 115H760M0 185H760"/></g><path class="area" d="M0 184 L55 171 106 175 158 142 210 128 260 151 306 105 350 84 398 132 448 91 500 72 550 79 604 43 656 62 710 31 760 37 V230 H0Z"/><path class="curve" d="M0 184 L55 171 106 175 158 142 210 128 260 151 306 105 350 84 398 132 448 91 500 72 550 79 604 43 656 62 710 31 760 37"/></svg>
+          <div class="chart-axis" aria-hidden="true"><span>2021</span><span>2023</span><span>2024</span><span>2026</span></div>
+        </div>
+        <details class="data-alternative"><summary>Open chart data summary</summary><p>Starting equity 100.0. Ending equity 114.8. Lowest post-peak value 106.1 in October 2024. Values use example data.</p></details>
+        <div class="metric-ledger"><div><span>MAX DRAWDOWN</span><b>−8.6%</b><small>Oct 2024</small></div><div><span>NET SHARPE</span><b>1.21</b><small>After charges</small></div><div><span>TRADES</span><b>186</b><small>62% profitable</small></div><div><span>OUT OF SAMPLE</span><b>31%</b><small>Held apart</small></div></div>
+      </section>
+
+      <section class="view" id="challenge" data-title="Challenge the result" aria-labelledby="challenge-heading">
+        <header class="view-head"><div><p class="kicker">Parameter neighborhood · 12 controlled example runs</p><h1 id="challenge-heading">The best candidate is not the stable choice</h1></div><span class="state-badge warn">Revision 04 retained</span></header>
+        <div class="challenge-layout">
+          <div class="heatmap" role="img" aria-label="Parameter neighborhood. The candidate at 20 minutes and 1.5 ATR performs best, but adjacent values are materially worse. The 15-minute and 2 ATR baseline has more stable neighboring results.">
+            <div class="heat-head"><span>ATR →</span><b>1.5</b><b>2.0</b><b>2.5</b></div>
+            <div class="heat-row"><b>10 min</b><span class="heat-cell" style="--v:.35">0.84</span><span class="heat-cell" style="--v:.56">1.03</span><span class="heat-cell" style="--v:.45">0.92</span></div>
+            <div class="heat-row"><b>15 min</b><span class="heat-cell" style="--v:.68">1.14</span><span class="heat-cell baseline" style="--v:.76">1.21<small>BASELINE</small></span><span class="heat-cell" style="--v:.64">1.11</span></div>
+            <div class="heat-row"><b>20 min</b><span class="heat-cell candidate" style="--v:1">1.42<small>CANDIDATE</small></span><span class="heat-cell" style="--v:.28">0.78</span><span class="heat-cell" style="--v:.18">0.67</span></div>
+            <div class="heat-row"><b>25 min</b><span class="heat-cell" style="--v:.22">0.71</span><span class="heat-cell" style="--v:.41">0.89</span><span class="heat-cell" style="--v:.31">0.81</span></div>
+          </div>
+          <aside class="challenge-note"><span class="diagnosis-code">ROBUSTNESS / UNSTABLE_NEIGHBORHOOD</span><h2>20 min × 1.5 ATR is a development clue</h2><p>It improves example Sharpe to <strong>1.42</strong>, but five neighboring runs fall sharply. Keep it as a candidate for further study. Revision 04 remains on <strong>15 min × 2.0 ATR</strong>.</p><button class="secondary" id="compare-toggle" aria-expanded="false" aria-controls="revision-compare">Compare revisions</button></aside>
+        </div>
+        <div id="revision-compare" class="revision-compare" hidden><div><span>REVISION 04 · BASELINE</span><strong>15 min / 2.0 ATR</strong><small>Stable neighborhood · selected</small></div><div><span>CANDIDATE 04-A</span><strong>20 min / 1.5 ATR</strong><small>Higher peak · unstable neighbors</small></div></div>
+        <div class="next-line"><span>Decision: retain revision 04; record candidate 04-A as a finding.</span><button class="primary" data-next="evidence">Record decision →</button></div>
+      </section>
+
+      <section class="view" id="evidence" data-title="Evidence record" aria-labelledby="evidence-heading">
+        <header class="view-head"><div><p class="kicker">Immutable research receipt · pending save</p><h1 id="evidence-heading">One record connects the claim to its inputs</h1></div><button class="primary" id="save-evidence">Save evidence record</button></header>
+        <div class="evidence-spine">
+          <div><span>STRATEGY</span><strong>Opening range · Revision 04</strong><small>15 min · 2.0 ATR</small></div><i aria-hidden="true"></i><div><span>DATA</span><strong>Equities + market filter</strong><small>RELIANCE · HDFCBANK · NIFTY</small></div><i aria-hidden="true"></i><div><span>TEST</span><strong>Example backtest 118</strong><small>Held-apart period included</small></div><i aria-hidden="true"></i><div><span>DECISION</span><strong>Retain revision 04</strong><small>Candidate 04-A recorded</small></div>
+        </div>
+        <details class="data-alternative"><summary>Technical evidence details</summary><p>Strategy graph 7ac…91e · dataset c41…2bd · run 118 · charges version 03 · finding 04-A.</p></details>
+        <article class="research-note"><span class="folio-no">RESEARCH NOTE / 118</span><h2>Opening-range revision 04 remains the retained revision</h2><p>Candidate 04-A improved the headline result but did not survive its immediate parameter neighborhood. Revision 04 remains the documented basis for example alerts on the two equities.</p><dl><dt>Known limitation</dt><dd>Example fixtures cannot establish expected future performance.</dd><dt>Next experiment</dt><dd>Test candidate 04-A across a later held-apart period.</dd></dl><p id="evidence-status" role="status">Evidence has not been saved.</p></article>
+        <div class="next-line"><span>Alerts can use only conditions supported by the saved evidence.</span><button class="secondary" data-next="monitor" disabled id="to-monitor">Open alert monitor →</button></div>
+      </section>
+
+      <section class="view" id="monitor" data-title="Alert monitor" aria-labelledby="monitor-heading">
+        <header class="view-head"><div><p class="kicker">Example alerts · revision 04</p><h1 id="monitor-heading">Attention with attribution</h1></div><span class="state-badge good">2 equities monitored</span></header>
+        <div class="monitor-layout">
+          <section class="condition-tape" aria-labelledby="conditions-title"><h2 id="conditions-title">Conditions in this record</h2><div><span>RELIANCE</span><b>Opening range intact</b><small>Volume confirmation pending · 10:05 IST</small></div><div><span>HDFCBANK</span><b>Range break observed</b><small>Close and volume confirmed · example alert only</small></div><div class="filter"><span>NIFTY 50</span><b>Market filter passed</b><small>Price-only context · completed 5m candle</small></div></section>
+          <section class="alert-ledger" aria-labelledby="alerts-title"><div class="ledger-head"><h2 id="alerts-title">Attributable alerts</h2><span>2 unread</span></div>
+            <button class="alert-row" data-alert="hdfc"><time>10:06:12</time><span><b>HDFCBANK range break confirmed</b><small>Research condition met on completed 5m candle</small></span><i>Open evidence →</i></button>
+            <button class="alert-row" data-alert="reliance"><time>10:05:00</time><span><b>RELIANCE awaiting volume confirmation</b><small>Price crossed the range; volume condition is still false</small></span><i>Open evidence →</i></button>
+          </section>
+          <aside class="lineage-drawer" id="lineage" tabindex="-1" aria-labelledby="lineage-title"><span class="diagnosis-code">ALERT EVIDENCE</span><h2 id="lineage-title">Select an alert</h2><div id="lineage-body"><p>Open an alert to see its rule, completed candle, and supporting research decision.</p></div></aside>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

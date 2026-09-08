@@ -44,6 +44,10 @@ ACCEPTED = {
     # (the bus lives as long as the process), but removing half a pair invites a
     # leak the day someone does.
     "unsubscribe",
+    # 2026-08-22 owner correction: `find_reusable_phase4`, `peek_next_claimable_run`,
+    # and `typed_row_digest` were REMOVED as obsolete duplication rather than
+    # kept on this list. An exception entry means deferred, not resolved; all
+    # three had zero production consumers.
 }
 
 

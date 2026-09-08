@@ -73,7 +73,10 @@ def test_remove_inverse_restores_the_exact_node_and_all_incident_edges(graph):
         (("n_ema_slow", "out"), ("n_long_exit", "reference")),
         (("n_ema_slow", "out"), ("n_short_exit", "reference")),
     ):
-        prepared = connect(prepared, source, target)
+        if target[0] != "n_ema_slow":
+            prepared = apply_batch(prepared, (Disconnect(SocketRef("n_ema", "out"), SocketRef(*target)), Connect(SocketRef(*source), SocketRef(*target))), LIBRARY.components).graph
+        else:
+            prepared = connect(prepared, source, target)
 
     removed = apply_batch(
         prepared, (RemoveNode("n_ema"),), LIBRARY.components

@@ -179,6 +179,8 @@ class LiveBroker(PaperBroker):
         strategy_key: str | None,
         strategy_version: str | None,
         admission_address: str | None = None,
+        graph_address: str | None = None,
+        attribution_state: str = "NON_GRAPH",
     ):
         """Persist an entry identity before submitting exactly one real order.
 
@@ -200,7 +202,8 @@ class LiveBroker(PaperBroker):
         # the exact strategy identity stamped into the durable intent.
         self._require_current_entry_receipt(
             admission_address=admission_address, strategy_key=strategy_key,
-            strategy_version=strategy_version)
+            strategy_version=strategy_version, graph_address=graph_address,
+            attribution_state=attribution_state)
 
         store = ExecutionLifecycleStore(
             self.s, owner_id=self.owner_id,
@@ -228,6 +231,8 @@ class LiveBroker(PaperBroker):
                 strategy_key=strategy_key,
                 strategy_version=strategy_version,
                 admission_address=admission_address,
+                graph_address=graph_address,
+                attribution_state=attribution_state,
                 context=durable_context,
             ),
             durable_context,
@@ -761,6 +766,9 @@ class LiveBroker(PaperBroker):
             "params": ctx.get("params"),
             "strategy_key": ctx.get("strategy_key"),
             "strategy_version": ctx.get("strategy_version"),
+            "admission_address": ctx.get("admission_address"),
+            "graph_address": ctx.get("graph_address"),
+            "attribution_state": ctx.get("attribution_state", "NON_GRAPH"),
             "client_intent_id": client_intent_id,
             "broker_tag": broker_tag,
             "row_id": row_id,
@@ -1309,8 +1317,9 @@ class LiveBroker(PaperBroker):
     def open_position(self, inst, direction, q, reason, now, spot,
                       params=None, plan=None, strategy_key=None,
                       strategy_version=None, entry_intent_id=None,
-                      admission_address=None):
-        if entry_intent_id is not None:
+                      admission_address=None, graph_address=None,
+                      attribution_state="NON_GRAPH", recovery_intent=None):
+        if entry_intent_id is not None or recovery_intent is not None:
             raise ValueError("LiveBroker creates and commits its own entry intent")
         protection_preflight = self._entry_protection_preflight(
                 kind="options", direction=direction, price=q.ltp,
@@ -1342,6 +1351,8 @@ class LiveBroker(PaperBroker):
                    "spot": spot, "params": params, "q": self._quote_to_ctx(q),
                    "strategy_key": strategy_key, "strategy_version": strategy_version,
                    "admission_address": admission_address,
+                   "graph_address": graph_address,
+                   "attribution_state": attribution_state,
                    "protection_preflight": dict(
                        protection_preflight, qty=q.lot_size)}
         decision_price = ((q.bid + q.ask) / 2.0
@@ -1353,7 +1364,8 @@ class LiveBroker(PaperBroker):
             request,
             kind="options", context=context, now=now, decision_price=decision_price,
             strategy_key=strategy_key, strategy_version=strategy_version,
-            admission_address=admission_address)
+            admission_address=admission_address, graph_address=graph_address,
+            attribution_state=attribution_state)
         # L1 — ADOPT whatever actually filled (partial fills and buzzer fills too),
         # never silently drop a real position. Only a genuine zero-fill records nothing.
         self._note_order_outcome(filled)
@@ -1370,6 +1382,9 @@ class LiveBroker(PaperBroker):
                     "direction": direction, "q": q, "reason": reason, "spot": spot,
                     "params": params, "strategy_key": strategy_key,
                     "strategy_version": strategy_version,
+                    "admission_address": admission_address,
+                    "graph_address": graph_address,
+                    "attribution_state": attribution_state,
                     "client_intent_id": client_intent_id,
                     "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
                     "booked_qty": 0}
@@ -1385,6 +1400,8 @@ class LiveBroker(PaperBroker):
                                     strategy_version=strategy_version,
                                     entry_intent_id=client_intent_id,
                                     admission_address=admission_address,
+                                    graph_address=graph_address,
+                                    attribution_state=attribution_state,
                                     recovery_intent=self.s.get(
                                         ExecutionIntent, client_intent_id))
         pos.lot_size = q.lot_size   # qty reflects the real fill; lot_size stays the true lot
@@ -1402,6 +1419,9 @@ class LiveBroker(PaperBroker):
                 "direction": direction, "q": q, "reason": reason, "spot": spot,
                 "params": params, "strategy_key": strategy_key,
                 "strategy_version": strategy_version,
+                "admission_address": admission_address,
+                "graph_address": graph_address,
+                "attribution_state": attribution_state,
                 "client_intent_id": client_intent_id,
                 "broker_tag": make_broker_tag(client_intent_id), "row_id": row_id,
                 "booked_qty": filled}
@@ -1420,7 +1440,8 @@ class LiveBroker(PaperBroker):
                              now, params=None, strategy_key=None,
                              strategy_version=None, margin=None,
                              sl_pct=None, tp_pct=None, entry_intent_id=None, plan=None,
-                             admission_address=None):
+                             admission_address=None, graph_address=None,
+                             attribution_state="NON_GRAPH", recovery_intent=None):
         """Place a REAL intraday-equity (MIS) order and book the ACTUAL fill. Mirrors
         the options open path but direction-aware: LONG buys to open, SHORT sells to
         open (Kite MIS allows real intraday shorts). A direction-aware GTT backstops it.
@@ -1428,7 +1449,7 @@ class LiveBroker(PaperBroker):
         `sl_pct`/`tp_pct` (purple tiering) are forwarded to PaperBroker so the live row
         freezes the same band a paper row would, and are carried on `_pending_entries`
         so a late fill adopted on the reconcile sweep keeps its purple band too."""
-        if entry_intent_id is not None:
+        if entry_intent_id is not None or recovery_intent is not None:
             raise ValueError("LiveBroker creates and commits its own entry intent")
         tsym = getattr(inst, "spot_symbol", None) or inst.key
         protection_preflight = self._entry_protection_preflight(
@@ -1455,6 +1476,8 @@ class LiveBroker(PaperBroker):
                    "params": params, "strategy_key": strategy_key,
                    "strategy_version": strategy_version, "sl_pct": sl_pct,
                    "admission_address": admission_address,
+                   "graph_address": graph_address,
+                   "attribution_state": attribution_state,
                    "tp_pct": tp_pct, "margin": margin,
                    "requested_qty": qty,
                    "protection_preflight": dict(
@@ -1467,7 +1490,8 @@ class LiveBroker(PaperBroker):
             request,
             kind="equity", context=context, now=now, decision_price=price,
             strategy_key=strategy_key, strategy_version=strategy_version,
-            admission_address=admission_address)
+            admission_address=admission_address, graph_address=graph_address,
+            attribution_state=attribution_state)
         self._note_order_outcome(filled)
         if filled <= 0:
             self._record_inflight(tsym, res)
@@ -1480,6 +1504,9 @@ class LiveBroker(PaperBroker):
                     "order_id": res.order_id, "inst": inst, "direction": direction,
                     "charge_segment": charge_segment, "reason": reason, "params": params,
                     "strategy_key": strategy_key, "strategy_version": strategy_version,
+                    "admission_address": admission_address,
+                    "graph_address": graph_address,
+                    "attribution_state": attribution_state,
                     "sl_pct": sl_pct, "tp_pct": tp_pct,
                     "margin": margin, "requested_qty": qty,
                     "client_intent_id": client_intent_id,
@@ -1497,6 +1524,8 @@ class LiveBroker(PaperBroker):
                                            margin=fill_margin, sl_pct=sl_pct, tp_pct=tp_pct,
                                            entry_intent_id=client_intent_id,
                                            admission_address=admission_address,
+                                           graph_address=graph_address,
+                                           attribution_state=attribution_state,
                                            recovery_intent=self.s.get(
                                                ExecutionIntent, client_intent_id))
         protected = self._ensure_entry_protected(pos, avg, client_intent_id)
@@ -1512,6 +1541,9 @@ class LiveBroker(PaperBroker):
                 "direction": direction, "charge_segment": charge_segment,
                 "reason": reason, "params": params, "strategy_key": strategy_key,
                 "strategy_version": strategy_version, "sl_pct": sl_pct,
+                "admission_address": admission_address,
+                "graph_address": graph_address,
+                "attribution_state": attribution_state,
                 "tp_pct": tp_pct, "margin": margin, "requested_qty": qty,
                 "client_intent_id": client_intent_id,
                 "broker_tag": make_broker_tag(client_intent_id),
@@ -2234,7 +2266,12 @@ class LiveBroker(PaperBroker):
                             pos = super().open_position(
                                 inst, ctx["direction"],
                                 replace(q, ltp=avg, lot_size=filled),
-                                ctx["reason"], now, ctx["spot"], ctx["params"])
+                                ctx["reason"], now, ctx["spot"], ctx["params"],
+                                strategy_key=ctx.get("strategy_key"),
+                                strategy_version=ctx.get("strategy_version"),
+                                admission_address=ctx.get("admission_address"),
+                                graph_address=ctx.get("graph_address"),
+                                attribution_state=ctx.get("attribution_state", "NON_GRAPH"))
                             pos.lot_size = q.lot_size
                             self.s.commit()
                             self._place_gtt(pos, avg)
@@ -2245,7 +2282,10 @@ class LiveBroker(PaperBroker):
                                 ctx["params"], ctx.get("strategy_key"),
                                 ctx.get("strategy_version"),
                                 margin=ctx.get("margin"),
-                                sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"))
+                                sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"),
+                                admission_address=ctx.get("admission_address"),
+                                graph_address=ctx.get("graph_address"),
+                                attribution_state=ctx.get("attribution_state", "NON_GRAPH"))
                             self._place_equity_stop(pos, avg)
                     if ((status == "COMPLETE" or status in _DEAD_STATUSES)
                             and protective_order_id(pos)):
@@ -2300,6 +2340,8 @@ class LiveBroker(PaperBroker):
                             strategy_version=ctx.get("strategy_version"),
                             entry_intent_id=ctx.get("client_intent_id"),
                             admission_address=intent_receipt,
+                            graph_address=intent.graph_address,
+                            attribution_state=intent.attribution_state,
                             recovery_intent=intent)
                         pos.lot_size = q.lot_size
                         self.s.commit()
@@ -2319,6 +2361,8 @@ class LiveBroker(PaperBroker):
                             sl_pct=ctx.get("sl_pct"), tp_pct=ctx.get("tp_pct"),
                             entry_intent_id=ctx.get("client_intent_id"),
                             admission_address=intent_receipt,
+                            graph_address=intent.graph_address,
+                            attribution_state=intent.attribution_state,
                             recovery_intent=intent)
                     log.warn(f"ADOPTED late fill {sym} {filled}@{avg:.2f} — was untracked; "
                              f"now managed + stopped", instrument=inst.key, event="ADOPT_FILL")

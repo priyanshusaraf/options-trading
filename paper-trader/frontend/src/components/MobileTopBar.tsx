@@ -14,6 +14,45 @@ function MStat({ label, v, cls = '' }: { label: string; v: string; cls?: string 
   )
 }
 
+export function V0MobileTopBar({ tab, setTab, tabs }: {
+  tab: string
+  setTab: (tab: string) => void
+  tabs: readonly (readonly [string, string])[]
+}) {
+  const [open, setOpen] = useState(false)
+  const select = (id: string) => { setTab(id); setOpen(false) }
+  return (
+    <header className="w-full max-w-full overflow-hidden border-b border-edge bg-panel sticky top-0 z-40">
+      <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2">
+        <button onClick={() => setOpen(true)} aria-label="Open research menu"
+          className="btn shrink-0 px-2 py-1 text-base leading-none">☰</button>
+        <span className="min-w-0 truncate font-semibold text-zinc-100 text-sm">⟁ Strategy OS</span>
+        <span className="ml-auto shrink-0 badge bg-sky-500/15 text-sky-300 border border-sky-500/30">
+          V0 Research
+        </span>
+      </div>
+      <div onClick={() => setOpen(false)}
+        className={`fixed inset-0 z-50 transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div className="absolute inset-0 bg-black/60" />
+        <nav onClick={(event) => event.stopPropagation()} aria-label="V0 research navigation"
+          className={`absolute top-0 left-0 h-full w-64 max-w-[80%] bg-panel border-r border-edge p-3 flex flex-col gap-1 overflow-y-auto transform transition-transform duration-200 ease-out ${open ? 'translate-x-0' : '-translate-x-full'}`}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-semibold text-zinc-100">Research</span>
+            <button onClick={() => setOpen(false)} className="btn px-2 py-1" aria-label="Close menu">✕</button>
+          </div>
+          {tabs.map(([id, label]) => (
+            <button key={id} onClick={() => select(id)}
+              className={`text-left px-3 py-2 rounded text-sm transition-colors ${tab === id
+                ? 'bg-panel2 text-zinc-100 border border-edge' : 'text-muted hover:text-zinc-300'}`}>
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+    </header>
+  )
+}
+
 // Phone-only header (rendered below md in App). The desktop TopBar is unchanged;
 // this mirrors its controls in a stacked, thumb-friendly layout with a slide-out
 // drawer for navigation. Backtests is intentionally omitted — desktop-only.

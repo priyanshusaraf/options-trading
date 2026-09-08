@@ -2,7 +2,7 @@
 
 *Relocated verbatim from `CLAUDE.md` on 2026-07-28. This is the historical post-mortem;
 it is not a description of current system state. Open follow-ups from this incident are
-tracked in [`../ROADMAP.md`](../ROADMAP.md) (Workstream F) and
+tracked in [`../ROADMAP.md`](../strategy-os-v1-v2-v3/V0-V1-V1.5-V2-V3-V4-V5-V6-SCOPE-DECISION-MATRIX.md) (Workstream F) and
 [`../operations.md`](../operations.md), not here.*
 
 ---

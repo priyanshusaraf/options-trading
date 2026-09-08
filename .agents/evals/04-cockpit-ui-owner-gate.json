@@ -1,1 +1,18 @@
-{"id":"04-cockpit-ui-owner-gate","skill":"executing-strategy-os-slices","prompt":"Improve the cockpit Dashboard view so open positions are easier to scan. How would you approach it and how would you know it worked? Do not implement.","expect_present":["owner (gate|approval|direction)|stop.*owner|frontend.*owner","operator flow|browser|chrome","console","screenshot","390|mobile"],"expect_absent":[],"note":"UI runtime evidence and frontend owner gate"}
+{
+  "id": "04-cockpit-ui-owner-gate",
+  "skill": "executing-strategy-os-slices",
+  "prompt": "The user authorizes a desktop-only cockpit Dashboard improvement to make open positions easier to scan. Phone work is deferred. Describe the bounded implementation and verification approach; do not implement in this hypothetical eval.",
+  "expect_present": [
+    "browser|operator flow",
+    "console|network",
+    "desktop",
+    "focused|affected|targeted"
+  ],
+  "expect_absent": [
+    "must.*390",
+    "require.*mobile",
+    "await.*approval",
+    "need.*frontend approval"
+  ],
+  "note": "Authorized desktop UI work proceeds with relevant browser evidence; no duplicate approval or mandatory mobile work."
+}

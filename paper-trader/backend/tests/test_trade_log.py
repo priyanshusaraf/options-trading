@@ -5,6 +5,7 @@ from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.providers.mock import MockProvider
+from tests.admitted_entry import persist_admitted_entry
 
 
 def test_trade_to_dict_exposes_spots_and_moves():
@@ -14,7 +15,9 @@ def test_trade_to_dict_exposes_spots_and_moves():
     chain = b.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    pos = b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot)
+    admission = persist_admitted_entry(b.s)
+    pos = b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot,
+                          **admission)
     tr = b.close_position(pos, q.ltp * 1.5, "TARGET", b.provider.now(), chain.spot * 1.02)
     d = tr.to_dict()
     assert d["entry_spot"] == round(chain.spot, 2)

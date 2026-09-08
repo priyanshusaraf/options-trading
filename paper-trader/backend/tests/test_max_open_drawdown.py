@@ -7,3 +7,4 @@ def test_max_open_drawdown_default_is_no_longer_zero():
     than realized P&L."""
     s = Settings()
     assert s.max_open_drawdown == 2500.0
+    assert s.max_daily_profit == 0.0, "fixed account profit target is opt-in"

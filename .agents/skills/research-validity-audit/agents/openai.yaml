@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit research validity"
+  short_description: "Check trial lineage, bias, costs and reproduction"
+  default_prompt: "Use $research-validity-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

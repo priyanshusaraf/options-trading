@@ -4,6 +4,7 @@ from __future__ import annotations
 import dataclasses
 import dis
 import ast
+import functools
 import hashlib
 import importlib.metadata
 import inspect
@@ -151,21 +152,14 @@ class _IdentityBuilder:
     def _function(
         self, fn: types.FunctionType, path: str, *, module_local: bool
     ) -> Mapping[str, Any]:
-        _reject_dynamic_code(fn)
+        instructions, source, closure = _reject_dynamic_code(fn)
         if self.mode == "defining_module" and fn.__closure__:
             raise ImplementationUnidentified(
                 f"{path} uses closures under defining_module"
             )
-        try:
-            source = textwrap.dedent(inspect.getsource(fn))
-        except (OSError, TypeError) as exc:
-            raise ImplementationUnidentified(
-                f"{path} has no readable source; repr and names are not identities"
-            ) from exc
-
-        closure = inspect.getclosurevars(fn)
+        source, closure = _complete_function_observations(fn, path, source, closure)
         loaded_globals = {
-            instruction.argval for instruction in dis.get_instructions(fn)
+            instruction.argval for instruction in instructions
             if instruction.opname in {"LOAD_GLOBAL", "LOAD_NAME"}
         }
         unresolved_globals = set(closure.unbound) & loaded_globals
@@ -247,7 +241,47 @@ class _IdentityBuilder:
         )
 
 
-def _reject_dynamic_code(fn: types.FunctionType) -> None:
+def _complete_function_observations(fn, path, source, closure):
+    # Preserve the prior source-error fallback after the defining-module guard.
+    if source is None:
+        try:
+            source = textwrap.dedent(inspect.getsource(fn))
+        except (OSError, TypeError) as exc:
+            raise ImplementationUnidentified(
+                f"{path} has no readable source; repr and names are not identities"
+            ) from exc
+    if closure is None:
+        closure = inspect.getclosurevars(fn)
+    return source, closure
+
+
+def _dynamic_attribute_target(node):
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        return None
+    if node.func.id != "getattr" or not node.args:
+        return None
+    if not isinstance(node.args[0], ast.Name):
+        return None
+    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) \
+            and isinstance(node.args[1].value, str):
+        return None
+    return node.args[0].id
+
+
+def _reject_dynamic_attributes(fn, tree, closure):
+    module_bindings = {
+        name for name, value in {**closure.globals, **closure.nonlocals}.items()
+        if inspect.ismodule(value)
+    }
+    for node in ast.walk(tree):
+        if _dynamic_attribute_target(node) in module_bindings:
+            raise ImplementationUnidentified(
+                f"{fn.__qualname__} performs dynamic attribute lookup"
+            )
+
+
+def _reject_dynamic_code(fn: types.FunctionType):
+    """Return fresh per-visit observations after the existing dynamic-code guards."""
     instructions = tuple(dis.get_instructions(fn))
     for instruction in instructions:
         if instruction.opname in {"IMPORT_NAME", "IMPORT_FROM"}:
@@ -260,24 +294,13 @@ def _reject_dynamic_code(fn: types.FunctionType) -> None:
                 f"{fn.__qualname__} performs dynamic global lookup via {instruction.argval}"
             )
     try:
-        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        source = textwrap.dedent(inspect.getsource(fn))
+        tree = ast.parse(source)
     except (OSError, TypeError, SyntaxError):
-        return
+        return instructions, None, None
     closure = inspect.getclosurevars(fn)
-    module_bindings = {
-        name for name, value in {**closure.globals, **closure.nonlocals}.items()
-        if inspect.ismodule(value)
-    }
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id == "getattr" \
-                and node.args and isinstance(node.args[0], ast.Name) \
-                and node.args[0].id in module_bindings \
-                and (len(node.args) < 2 or not isinstance(node.args[1], ast.Constant)
-                     or not isinstance(node.args[1].value, str)):
-            raise ImplementationUnidentified(
-                f"{fn.__qualname__} performs dynamic attribute lookup"
-            )
+    _reject_dynamic_attributes(fn, tree, closure)
+    return instructions, source, closure
 
 
 def _defined_in(value: object, module_name: str | None) -> bool:
@@ -300,10 +323,26 @@ def _module_file(module: types.ModuleType) -> pathlib.Path:
     return path.resolve()
 
 
+@functools.cache
+def _distribution_packages() -> Mapping[str, tuple[str, ...]]:
+    """Freeze the process's installed-package ownership map for identity reads.
+
+    Package discovery walks every installed distribution's metadata. The installed
+    environment is immutable for a running process, whereas implementation identity
+    must remain repeatable within that process, so discovering it for every recursive
+    module identity is needless bootstrap work. Versions are still looked up for every
+    identity payload and remain part of the content-addressed bytes.
+    """
+    return types.MappingProxyType({
+        package: tuple(sorted(distributions))
+        for package, distributions in importlib.metadata.packages_distributions().items()
+    })
+
+
 def _module_identity(module: types.ModuleType) -> Mapping[str, Any]:
     path = _module_file(module)
     top_level = module.__name__.split(".", 1)[0]
-    distributions = importlib.metadata.packages_distributions().get(top_level, ())
+    distributions = _distribution_packages().get(top_level, ())
     if distributions:
         names = sorted(distributions)
         return {

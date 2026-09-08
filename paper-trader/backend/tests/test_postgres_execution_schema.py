@@ -7,15 +7,113 @@ mock engine proves server behaviour.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shutil
+import subprocess
+import uuid
 from copy import deepcopy
 
 import pytest
 import sqlalchemy as sa
+from alembic import command
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.db import migrate
 from app.db.models import Base, UniversePreference
+
+
+P5_ATTRIBUTION_TABLES = (
+    "deployments", "execution_intents", "positions", "trades", "backtest_results",
+)
+P5_CAPITAL_TABLES = {
+    "sizing_policies", "sizing_decisions", "target_position_requests",
+    "candidate_intents", "capital_reservation_heads", "decision_batches",
+    "portfolio_admission_decisions", "capital_reservations",
+    "capital_reservation_events", "position_campaigns", "position_tranches",
+    "fill_allocations",
+}
+
+
+def _install_repository_0037_catalog(connection) -> None:
+    """Construct the accepted pre-authority catalogue without any 0040 object.
+
+    This is the same repository-owned historical projection used by the accepted
+    Phase 4 PostgreSQL 0037-to-0039 migration test. Revisions 0038 and 0039 then
+    build their own tables, functions, triggers, and constraints through Alembic.
+    """
+    from app.db.models import _PHASE4_SECRET_FUNCTION
+    from tests.test_phase4_authority_execution_migration import (
+        AUTHORITY_TABLES, LEGACY_TABLES,
+    )
+
+    historical = sa.MetaData()
+    for table in Base.metadata.sorted_tables:
+        if table.name in AUTHORITY_TABLES or table.name in P5_CAPITAL_TABLES:
+            continue
+        copied = table.to_metadata(historical)
+        if copied.name in LEGACY_TABLES:
+            copied._columns.remove(copied.c.authority_state)
+        if copied.name in P5_ATTRIBUTION_TABLES:
+            for constraint in tuple(copied.constraints):
+                if {column.name for column in constraint.columns} & {
+                        "graph_address", "attribution_state"}:
+                    copied.constraints.remove(constraint)
+            copied._columns.remove(copied.c.graph_address)
+            copied._columns.remove(copied.c.attribution_state)
+    connection.execute(sa.text(_PHASE4_SECRET_FUNCTION.replace("%%", "%")))
+    historical.create_all(connection)
+
+
+def _postgres_p5_snapshot(connection) -> dict[str, object]:
+    owner = "owner.p5.legacy"
+    rows = {}
+    for table in P5_ATTRIBUTION_TABLES:
+        order = "client_intent_id" if table == "execution_intents" else "id"
+        rows[table] = [tuple(row) for row in connection.execute(sa.text(
+            f"SELECT * FROM {table} WHERE owner_id=:owner ORDER BY {order}"),
+            {"owner": owner}).all()]
+    sequences = {}
+    for table in ("deployments", "positions", "trades", "backtest_results"):
+        sequence = connection.execute(sa.text(
+            "SELECT pg_get_serial_sequence(:table, 'id')"), {"table": table}).scalar_one()
+        assert sequence is not None
+        sequences[table] = tuple(connection.exec_driver_sql(
+            f"SELECT last_value,is_called FROM {sequence}").one())
+    tables = tuple(P5_ATTRIBUTION_TABLES)
+    return {
+        "head": connection.execute(sa.text(
+            "SELECT version_num FROM alembic_version")).scalar_one(),
+        "rows": rows,
+        "sequences": sequences,
+        "columns": [tuple(row) for row in connection.execute(sa.text("""
+            SELECT table_name,column_name,data_type,character_maximum_length,is_nullable,column_default
+            FROM information_schema.columns
+            WHERE table_schema='public' AND table_name = ANY(:tables)
+            ORDER BY table_name,ordinal_position
+        """), {"tables": list(tables)}).all()],
+        "constraints": [tuple(row) for row in connection.execute(sa.text("""
+            SELECT c.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true)
+            FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relname = ANY(:tables)
+            ORDER BY c.relname,con.conname
+        """), {"tables": list(tables)}).all()],
+        "triggers": [tuple(row) for row in connection.execute(sa.text("""
+            SELECT c.relname,t.tgname,pg_get_triggerdef(t.oid,true)
+            FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+            JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND NOT t.tgisinternal AND c.relname = ANY(:tables)
+            ORDER BY c.relname,t.tgname
+        """), {"tables": list(tables)}).all()],
+        "functions": [tuple(row) for row in connection.execute(sa.text("""
+            SELECT p.proname,pg_get_functiondef(p.oid)
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE n.nspname='public' AND (p.proname LIKE '%graph_attribution%'
+                 OR p.proname LIKE '%legacy_attribution%')
+            ORDER BY p.proname
+        """)).all()],
+    }
 
 
 class _Dialect:
@@ -423,13 +521,15 @@ def test_optional_postgres_fresh_schema_is_complete_and_idempotent():
     """Live PostgreSQL proof, intentionally opt-in for developer and CI services."""
     from app.db.models import Base
 
-    url = os.environ["PT_TEST_POSTGRES_URL"]
+    base_url = os.environ["PT_TEST_POSTGRES_URL"]
+    schema = f"phase3_execution_{uuid.uuid4().hex}"
+    admin = sa.create_engine(base_url, future=True)
+    with admin.begin() as connection:
+        connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
+    url = str(sa.engine.make_url(base_url).update_query_dict(
+        {"options": f"-csearch_path={schema}"}))
     engine = sa.create_engine(url, future=True)
     try:
-        with engine.begin() as conn:
-            for table in reversed(Base.metadata.sorted_tables):
-                conn.execute(sa.text(f'DROP TABLE IF EXISTS "{table.name}" CASCADE'))
-            conn.execute(sa.text("DROP TABLE IF EXISTS alembic_version CASCADE"))
         migrate.init_schema(engine, create_all=lambda: Base.metadata.create_all(engine),
                             legacy_migrate=lambda: pytest.fail("legacy migration ran"),
                             expected_tables=Base.metadata.tables)
@@ -442,10 +542,10 @@ def test_optional_postgres_fresh_schema_is_complete_and_idempotent():
             collapsed_default = conn.execute(sa.text("""
                 SELECT column_default
                 FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = :schema
                   AND table_name = 'ir_graph_layout_groups'
                   AND column_name = 'collapsed'
-            """)).scalar_one()
+            """), {"schema": schema}).scalar_one()
         assert collapsed_default.lower().startswith("false")
 
         with engine.begin() as conn:
@@ -471,3 +571,124 @@ def test_optional_postgres_fresh_schema_is_complete_and_idempotent():
                 """))
     finally:
         engine.dispose()
+        with admin.begin() as connection:
+            connection.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
+        admin.dispose()
+
+
+def test_p5_graph_attribution_fresh_exact_0039_interruption_and_restore_postgresql16(
+        pg_sandbox, tmp_path):
+    """History-built 0039, transactional 0040, and clean restore retain exact facts."""
+    from tests.test_phase5_graph_paper_attribution_schema import (
+        _seed_0039_attribution_corpus,
+    )
+
+    fresh = pg_sandbox.engine("p5_fresh")
+    upgraded = pg_sandbox.engine("p5_upgrade")
+    restored = pg_sandbox.engine("p5_restore")
+    with fresh.connect() as connection:
+        assert connection.execute(sa.text("SHOW server_version")).scalar_one().startswith("16.14")
+    assert migrate.init_schema(
+        fresh, create_all=lambda: Base.metadata.create_all(fresh),
+        legacy_migrate=lambda: pytest.fail("legacy migration ran"),
+        expected_tables=Base.metadata.tables) == migrate.head_revision()
+
+    # Build the accepted prior catalogue at 0037, then run the repository's 0038
+    # and 0039 migrations. No current-schema object is dropped to synthesize history.
+    with upgraded.begin() as connection:
+        _install_repository_0037_catalog(connection)
+        command.stamp(migrate.alembic_config(connection), "0037")
+        command.upgrade(migrate.alembic_config(connection), "0039")
+        corpus = _seed_0039_attribution_corpus(connection)
+        for table in ("deployments", "positions", "trades", "backtest_results"):
+            connection.execute(sa.text(
+                "SELECT setval(pg_get_serial_sequence(:table,'id'), "
+                f"(SELECT MAX(id) FROM {table}), true)"), {"table": table})
+    assert migrate.schema_version(upgraded) == "0039"
+    with upgraded.connect() as connection:
+        before_0039 = _postgres_p5_snapshot(connection)
+        assert before_0039["head"] == "0039"
+        assert all(not any(value == "graph_address" for value in column)
+                   for column in before_0039["columns"])
+        assert all(rows[0][next(index for index, item in enumerate(
+            sa.inspect(connection).get_columns(table)) if item["name"] == "strategy_version")]
+            == corpus["strategy_version"]
+            for table, rows in before_0039["rows"].items())
+
+    interrupted = False
+    def interrupt_0040(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal interrupted
+        normalized = " ".join(statement.split())
+        if (not interrupted
+                and normalized.startswith("CREATE TRIGGER positions_validate_graph_attribution")):
+            interrupted = True
+            raise RuntimeError("injected 0040 migration interruption")
+
+    sa.event.listen(upgraded, "after_cursor_execute", interrupt_0040)
+    try:
+        with pytest.raises(RuntimeError, match="0040 migration interruption"):
+            with upgraded.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0040")
+    finally:
+        sa.event.remove(upgraded, "after_cursor_execute", interrupt_0040)
+    assert interrupted and migrate.schema_version(upgraded) == "0039"
+    with upgraded.connect() as connection:
+        assert _postgres_p5_snapshot(connection) == before_0039
+
+    # A fresh connection represents process restart after the interrupted command.
+    upgraded.dispose()
+    upgraded = sa.create_engine(pg_sandbox.url("p5_upgrade"), future=True)
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0040")
+    assert migrate.schema_version(upgraded) == "0040"
+    with upgraded.connect() as connection:
+        source_0040 = _postgres_p5_snapshot(connection)
+        assert source_0040["head"] == "0040"
+        for table, rows in source_0040["rows"].items():
+            assert len(rows) == 1, table
+        assert len(source_0040["triggers"]) == 9
+        assert len(source_0040["functions"]) == 9
+
+    tool_directories = (
+        Path("/opt/homebrew/opt/postgresql@16/bin"),
+        Path("/usr/local/opt/postgresql@16/bin"),
+        Path("/opt/local/lib/postgresql16/bin"),
+    )
+    pg_dump = shutil.which("pg_dump") or next(
+        (str(path / "pg_dump") for path in tool_directories
+         if (path / "pg_dump").is_file()), None)
+    pg_restore = shutil.which("pg_restore") or next(
+        (str(path / "pg_restore") for path in tool_directories
+         if (path / "pg_restore").is_file()), None)
+    assert pg_dump and pg_restore
+    assert "16.14" in subprocess.run(
+        [pg_dump, "--version"], check=True, capture_output=True, text=True).stdout
+    assert "16.14" in subprocess.run(
+        [pg_restore, "--version"], check=True, capture_output=True, text=True).stdout
+    backup = tmp_path / "p5-0040.dump"
+    dump_url = str(sa.engine.make_url(pg_sandbox.url("p5_upgrade")).set(
+        drivername="postgresql"))
+    restore_url = str(sa.engine.make_url(pg_sandbox.url("p5_restore")).set(
+        drivername="postgresql"))
+    subprocess.run([
+        pg_dump, "--format=custom", "--no-owner", "--no-acl",
+        f"--file={backup}", dump_url,
+    ], check=True, capture_output=True, text=True)
+    assert backup.stat().st_size > 0
+    subprocess.run([
+        pg_restore, "--no-owner", "--no-acl", "--exit-on-error",
+        f"--dbname={restore_url}", str(backup),
+    ], check=True, capture_output=True, text=True)
+    with restored.connect() as connection:
+        restored_0040 = _postgres_p5_snapshot(connection)
+    assert restored_0040 == source_0040
+
+    with restored.begin() as connection:
+        with pytest.raises(sa.exc.DBAPIError, match="GRAPH_ATTRIBUTION_UNVERIFIED"):
+            connection.execute(sa.text(
+                "INSERT INTO deployments "
+                "(id,owner_id,name,strategy_key,strategy_version,broker_account_id,"
+                "universe_mode,params_json,status,armed,notes,created_at,updated_at) VALUES "
+                "(9999,:owner,'stale','ir.graph','1',:account,'explicit','{}',"
+                "'draft',false,'',NOW(),NOW())"),
+                {"owner": corpus["owner_id"], "account": corpus["account_id"]})

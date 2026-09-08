@@ -49,6 +49,8 @@ data/reports/
 *.sqlite3
 *.parquet
 *.log
+.coverage
+.coverage.*
 
 # ───────────────────────── Tooling / OS ─────────────────────────
 .playwright-mcp/

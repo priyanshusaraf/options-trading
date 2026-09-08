@@ -1,12 +1,10 @@
 """Optimization — the stage that runs ONLY after qualification, and always as nested
 walk-forward so it cannot overfit its own out-of-sample record.
 
-For each fold: search the (bounded, constrained) grid on the fold's in-sample window,
-select the winner by an in-sample objective, then evaluate that winner on the fold's
-UNTOUCHED out-of-sample window. Pool the OOS trades across folds — that pooled record
-(never used for selection) is what validation and scoring see. Every trial is
-recorded; `n_trials` (folds x grid size) feeds the Deflated Sharpe deflation, so
-searching harder correctly raises the significance bar.
+The bounded grid and all nested folds stay inside the development window. Their
+complete trial record supplies the PBO and DSR selection diagnostics. One parameter
+set is then selected over the complete development window; the orchestrator freezes
+that set before it evaluates the later holdout.
 
 Signals for each candidate are computed once over the full series (causal) and sliced
 per fold via the `run_trades` seam, so a fold's IS/OOS split never shifts the
@@ -18,6 +16,7 @@ import dataclasses
 import math
 
 from research.evaluation import kernels
+from research.evaluation.walkforward import signal_window
 from research.strategy.spec import grid, is_valid, param_space
 
 # In-sample selection must reward a *repeatable* edge, not a lucky one. A candidate
@@ -43,6 +42,15 @@ class Trial:
 
 
 @dataclasses.dataclass
+class FinalSelectionTrial:
+    params: dict
+    objective: float | None
+    trades: int
+    selected: bool
+    role: str = "final_development_selection"
+
+
+@dataclasses.dataclass
 class OptimizationResult:
     trials: list
     per_fold_selected: list   # the winning override dict per fold
@@ -54,6 +62,8 @@ class OptimizationResult:
     # was too little data or only one candidate — PBO is a statement about
     # SELECTION, so it is undefined with nothing to select between.
     perf_matrix: list = dataclasses.field(default_factory=list)
+    selected_params: dict = dataclasses.field(default_factory=dict)
+    final_trials: list = dataclasses.field(default_factory=list)
 
     @property
     def var_sr(self) -> float:
@@ -96,7 +106,7 @@ def _key(params: dict):
     return tuple(sorted(params.items()))
 
 
-def _performance_matrix(sigs, candidates, inst, seg, capital, rm, n_blocks: int) -> list:
+def _performance_matrix(sigs, candidates, inst, seg, capital, rm, n_blocks: int, *, replay_policy=None, exit_kwargs=None) -> list:
     """(sub-period x candidate) net P&L — the CSCV input for PBO.
 
     Deliberately computed over CONTIGUOUS equal blocks of the whole series rather
@@ -113,62 +123,148 @@ def _performance_matrix(sigs, candidates, inst, seg, capital, rm, n_blocks: int)
         row = []
         for c in candidates:
             sl = sigs[_key(c)].iloc[b * block:(b + 1) * block].reset_index(drop=True)
-            trades = kernels.run_trades(sl, inst, seg, capital, rm)
+            trades = kernels.run_trades(sl, inst, seg, capital, rm, replay_policy=replay_policy, **(exit_kwargs or {}))
             row.append(float(sum(t.net_pnl for t in trades)))
         matrix.append(row)
     return matrix
 
 
+def _candidate_signals(candles, strategy, base, candidates, *,
+                       development_end, development_bars):
+    return {
+        _key(candidate): signal_window(
+            kernels.compute_signals(
+                candles, strategy, {**base, **candidate},
+            ),
+            stop_before=development_end, expected_bars=development_bars,
+        )
+        for candidate in candidates
+    }
+
+
+def _nested_trials(sigs, candidates, inst, seg, capital, rm, n_folds, seg_size, *, replay_policy=None, exit_kwargs=None, progress=None):
+    exit_kwargs = exit_kwargs or {}
+    trials, selected_params, per_fold_oos, pooled_oos = [], [], [], []
+    for fold_index in range(n_folds):
+        is_end = (fold_index + 1) * seg_size
+        oos_end = len(next(iter(sigs.values()))) \
+            if fold_index == n_folds - 1 else (fold_index + 2) * seg_size
+        best, best_key, best_objective = (
+            candidates[0], _key(candidates[0]), float("-inf")
+        )
+        fold_records = []
+        for candidate in candidates:
+            is_trades = kernels.run_trades(
+                sigs[_key(candidate)].iloc[:is_end].reset_index(drop=True),
+                inst, seg, capital, rm, replay_policy=replay_policy, **exit_kwargs,
+            )
+            metrics = kernels.compute_metrics(is_trades, capital)
+            objective = _objective(metrics)
+            sharpe = metrics.consistency if metrics.trades >= _MIN_IS_TRADES else None
+            fold_records.append((candidate, objective, metrics.trades, sharpe))
+            _observe_trial(progress, "nested_trials", candidate, objective, metrics.trades, fold_index, sharpe)
+            if objective > best_objective:
+                best, best_key, best_objective = candidate, _key(candidate), objective
+        oos = kernels.run_trades(
+            sigs[best_key].iloc[is_end:oos_end].reset_index(drop=True),
+            inst, seg, capital, rm, replay_policy=replay_policy, **exit_kwargs,
+        )
+        pooled_oos.extend(oos)
+        per_fold_oos.append(oos)
+        selected_params.append(best)
+        _observe_selection(progress, "nested_trials", best, fold_index)
+        trials.extend(
+            Trial(
+                fold_index, candidate, objective, is_trades,
+                len(oos) if _key(candidate) == best_key else 0,
+                _key(candidate) == best_key, is_sharpe=sharpe,
+            )
+            for candidate, objective, is_trades, sharpe in fold_records
+        )
+    return trials, selected_params, per_fold_oos, pooled_oos
+
+
+def _select_params(sigs, candidates, inst, seg, capital, rm, base, *, replay_policy=None, exit_kwargs=None, progress=None):
+    evaluated = []
+    for candidate in candidates:
+        trades = kernels.run_trades(
+            sigs[_key(candidate)], inst, seg, capital, rm, replay_policy=replay_policy, **(exit_kwargs or {}),
+        )
+        metrics = kernels.compute_metrics(trades, capital)
+        objective = _objective(metrics)
+        evaluated.append((candidate, objective, len(trades)))
+        sharpe = metrics.consistency if metrics.trades >= _MIN_IS_TRADES else None
+        _observe_trial(progress, "final_development_trials", candidate, objective, len(trades), -1, sharpe)
+    selected = max(evaluated, key=lambda row: row[1])[0]
+    _observe_selection(progress, "final_development_trials", selected, -1)
+    trials = [FinalSelectionTrial(
+        params={**base, **candidate},
+        objective=objective if math.isfinite(objective) else None, trades=trades,
+        selected=_key(candidate) == _key(selected),
+    ) for candidate, objective, trades in evaluated]
+    return selected, trials
+
+
 def optimize(candles, inst, strategy, *, space=None, n_folds: int = 3,
              capital: float = 50_000.0, base_params=None,
-             pbo_blocks: int = 8) -> OptimizationResult:
+             pbo_blocks: int = 8, development_end=None,
+             development_bars: int | None = None) -> OptimizationResult:
     base = dict(base_params if base_params is not None else strategy.default_params)
     space = space if space is not None else param_space(strategy.key)
     candidates = [c for c in grid(space) if is_valid(strategy.key, {**base, **c})] or [{}]
+    sigs = _candidate_signals(
+        candles, strategy, base, candidates,
+        development_end=development_end, development_bars=development_bars,
+    )
+    return optimize_signal_frames(sigs, candidates, inst, strategy, n_folds=n_folds,
+        capital=capital, base=base, pbo_blocks=pbo_blocks)
+
+
+def _observe_trial(progress, role, candidate, objective, trades, fold_index, sharpe):
+    if progress is not None:
+        progress[role].append({"params": dict(candidate), "fold_index": fold_index,
+            "objective": objective if math.isfinite(objective) else None,
+            "trades": trades, "is_sharpe": sharpe, "selected": False})
+
+
+def _observe_selection(progress, role, selected, fold_index):
+    if progress is not None:
+        for row in progress[role]:
+            if row["fold_index"] == fold_index:
+                row["selected"] = _key(row["params"]) == _key(selected)
+
+
+def optimize_signal_frames(sigs, candidates, inst, strategy, *, n_folds=3,
+                           capital=50_000.0, base=None, pbo_blocks=8, progress=None):
+    """Shared nested/final selection over already development-clipped candidate frames."""
+    base = {} if base is None else base
     seg = kernels.backtest_charge_segment(inst)
     rm = getattr(strategy, "risk_model", None)
-
-    # one signal frame per candidate, over the full series
-    sigs = {_key(c): kernels.compute_signals(candles, strategy, {**base, **c})
-            for c in candidates}
+    replay_policy = getattr(strategy, "replay_policy", None)
+    exit_kwargs = kernels.replay_exit_kwargs(strategy)
     n = min((len(s) for s in sigs.values()), default=0)
     seg_size = n // (n_folds + 1)
-    empty = OptimizationResult([], [], [], [], kernels.compute_metrics([], capital), 0)
+    empty = OptimizationResult(
+        [], [], [], [], kernels.compute_metrics([], capital), 0,
+        selected_params=base,
+    )
     if seg_size < 1:
         return empty
 
-    trials: list[Trial] = []
-    per_fold_selected: list = []
-    per_fold_oos: list = []
-    pooled_oos: list = []
-    for k in range(n_folds):
-        is_end = (k + 1) * seg_size
-        oos_end = n if k == n_folds - 1 else (k + 2) * seg_size
-        best, best_key, best_obj = candidates[0], _key(candidates[0]), float("-inf")
-        fold_records = []
-        for c in candidates:
-            is_trades = kernels.run_trades(
-                sigs[_key(c)].iloc[:is_end].reset_index(drop=True), inst, seg, capital, rm)
-            m = kernels.compute_metrics(is_trades, capital)
-            obj = _objective(m)
-            # metrics.consistency IS the per-trade Sharpe (_objective is it x sqrt(n)).
-            sharpe = m.consistency if m.trades >= _MIN_IS_TRADES else None
-            fold_records.append((c, obj, m.trades, sharpe))
-            if obj > best_obj:
-                best, best_key, best_obj = c, _key(c), obj
-        oos = kernels.run_trades(
-            sigs[best_key].iloc[is_end:oos_end].reset_index(drop=True), inst, seg, capital, rm)
-        pooled_oos.extend(oos)
-        per_fold_oos.append(oos)
-        per_fold_selected.append(best)
-        for c, obj, is_n, sharpe in fold_records:
-            sel = _key(c) == best_key
-            trials.append(Trial(k, c, obj, is_n, len(oos) if sel else 0, sel,
-                                is_sharpe=sharpe))
-
+    trials, per_fold_selected, per_fold_oos, pooled_oos = _nested_trials(
+        sigs, candidates, inst, seg, capital, rm, n_folds, seg_size, replay_policy=replay_policy, exit_kwargs=exit_kwargs, progress=progress,
+    )
+    selected, final_trials = _select_params(
+        sigs, candidates, inst, seg, capital, rm, base, replay_policy=replay_policy, exit_kwargs=exit_kwargs, progress=progress,
+    )
     return OptimizationResult(
         trials=trials, per_fold_selected=per_fold_selected, per_fold_oos=per_fold_oos,
         oos_trades=pooled_oos, oos_metrics=kernels.compute_metrics(pooled_oos, capital),
         n_trials=n_folds * len(candidates),
-        perf_matrix=_performance_matrix(sigs, candidates, inst, seg, capital, rm,
-                                        pbo_blocks))
+        perf_matrix=_performance_matrix(
+            sigs, candidates, inst, seg, capital, rm, pbo_blocks,
+            replay_policy=replay_policy, exit_kwargs=exit_kwargs,
+        ),
+        selected_params={**base, **selected},
+        final_trials=final_trials,
+    )

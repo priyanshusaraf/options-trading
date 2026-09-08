@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit public discovery and private-app protection"
+  short_description: "Review public indexing and private-app protection"
+  default_prompt: "Use $seo-and-metadata-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

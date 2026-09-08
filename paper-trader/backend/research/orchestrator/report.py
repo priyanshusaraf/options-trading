@@ -26,6 +26,67 @@ def _render_explanation(ex: dict) -> list[str]:
     return lines
 
 
+def _render_validated(validated: list[dict]) -> list[str]:
+    lines = [f"## Validated candidates ({len(validated)})"]
+    if not validated:
+        return lines + ["- none cleared the validation gates", ""]
+    for candidate in sorted(validated, key=lambda row: row.get("dsr", 0), reverse=True):
+        lines.append(
+            f"- **{candidate['instrument']}** — DSR {candidate['dsr']:.3f} · "
+            f"breadth-adjusted {candidate.get('dsr_breadth_deflated', candidate['dsr']):.3f} · "
+            f"trades {candidate['scorecard'].get('trades')} · "
+            f"return {candidate['scorecard'].get('return_pct')}% · "
+            f"maxDD {candidate['scorecard'].get('max_drawdown_pct')}%"
+        )
+    return lines + [""]
+
+
+def _render_promotion(promotion: dict | None) -> list[str]:
+    if promotion is None:
+        return ["## Promotion proposal", "- none", ""]
+    adjusted = promotion.get("dsr_breadth_deflated", promotion["dsr"])
+    return [
+        "## Promotion proposal",
+        f"- {promotion['instrument']} (raw holdout DSR {promotion['dsr']:.3f}; "
+        f"breadth-adjusted {adjusted:.3f}) — selected on this holdout, so this "
+        "estimate is selection-affected; queued for an untouched shadow period, "
+        "not treated as independent confirmation",
+        "",
+    ]
+
+
+def _render_context(report: dict) -> list[str]:
+    lines = []
+    regimes = report.get("regimes") or {}
+    if regimes:
+        lines.extend([
+            "## Market regimes in this sample",
+            "Which conditions the result was measured in. An edge that lives in one "
+            "regime is invisible in an aggregate statistic — and is a good strategy "
+            "with a missing filter, not a mediocre one.", "",
+            "| instrument | trend_hi | trend_lo | chop_hi | chop_lo | unknown |",
+            "|---|---|---|---|---|---|",
+        ])
+        for key in sorted(regimes):
+            distribution = regimes[key]
+            lines.append(f"| {key} | " + " | ".join(
+                str(distribution.get(role, 0)) for role in
+                ("trend_hi", "trend_lo", "chop_hi", "chop_lo", "unknown")) + " |")
+        lines.append("")
+    edge = report.get("edge_map", "")
+    if edge:
+        lines.extend(["## Block edge map — which idea works where", edge, ""])
+    suppressed = report.get("suppressed_blocks") or []
+    if suppressed:
+        lines.extend([
+            f"## Suppressed this run ({len(suppressed)})",
+            "Families with a well-powered negative record on this universe. Skipped, "
+            "never banned — later evidence lets them back in.",
+            ", ".join(sorted(suppressed)), "",
+        ])
+    return lines
+
+
 def render_markdown(report: dict) -> str:
     lines: list[str] = []
     lines.append("# Research report")
@@ -41,23 +102,8 @@ def render_markdown(report: dict) -> str:
     if report.get("explanation"):
         lines.extend(_render_explanation(report["explanation"]))
 
-    validated = report.get("validated", [])
-    lines.append(f"## Validated candidates ({len(validated)})")
-    if validated:
-        for v in sorted(validated, key=lambda x: x.get("dsr", 0), reverse=True):
-            lines.append(f"- **{v['instrument']}** — DSR {v['dsr']:.3f} · "
-                         f"trades {v['scorecard'].get('trades')} · "
-                         f"return {v['scorecard'].get('return_pct')}% · "
-                         f"maxDD {v['scorecard'].get('max_drawdown_pct')}%")
-    else:
-        lines.append("- none cleared the validation gates")
-    lines.append("")
-
-    prom = report.get("promotion")
-    lines.append("## Promotion proposal")
-    lines.append(f"- {prom['instrument']} (DSR {prom['dsr']:.3f}) — queued for human review"
-                 if prom else "- none")
-    lines.append("")
+    lines.extend(_render_validated(report.get("validated", [])))
+    lines.extend(_render_promotion(report.get("promotion")))
 
     rejected = report.get("rejected", [])
     lines.append(f"## Rejected ({len(rejected)}) — negative evidence")
@@ -69,39 +115,7 @@ def render_markdown(report: dict) -> str:
     lines.append(", ".join(report.get("qualified", [])) or "- none")
     lines.append("")
 
-    # "Which idea works where" — the accumulated block-family x instrument record.
-    # Rendered here because a reinforcement loop nobody can read is a reinforcement
-    # loop nobody can debug: this is the table that explains why tonight's search
-    # avoided something last night tried.
-    regimes = report.get("regimes") or {}
-    if regimes:
-        lines.append("## Market regimes in this sample")
-        lines.append("Which conditions the result was measured in. An edge that lives "
-                     "in one regime is invisible in an aggregate statistic — and is a "
-                     "good strategy with a missing filter, not a mediocre one.")
-        lines.append("")
-        lines.append("| instrument | " + " | ".join(
-            ["trend_hi", "trend_lo", "chop_hi", "chop_lo", "unknown"]) + " |")
-        lines.append("|---|---|---|---|---|---|")
-        for key in sorted(regimes):
-            d = regimes[key]
-            lines.append(f"| {key} | " + " | ".join(
-                str(d.get(r, 0)) for r in
-                ("trend_hi", "trend_lo", "chop_hi", "chop_lo", "unknown")) + " |")
-        lines.append("")
-
-    edge = report.get("edge_map", "")
-    if edge:
-        lines.append("## Block edge map — which idea works where")
-        lines.append(edge)
-        lines.append("")
-    suppressed = report.get("suppressed_blocks") or []
-    if suppressed:
-        lines.append(f"## Suppressed this run ({len(suppressed)})")
-        lines.append("Families with a well-powered negative record on this "
-                     "universe. Skipped, never banned — later evidence lets them back in.")
-        lines.append(", ".join(sorted(suppressed)))
-        lines.append("")
+    lines.extend(_render_context(report))
     return "\n".join(lines)
 
 

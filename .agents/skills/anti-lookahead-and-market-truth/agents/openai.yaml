@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit causal data and market truth"
+  short_description: "Reject future leakage and false market identity"
+  default_prompt: "Use $anti-lookahead-and-market-truth for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

@@ -58,11 +58,16 @@ def a_fresh_database():
 @pytest.fixture(autouse=True)
 def evidence_bridge(monkeypatch):
     def bridge(**asked):
+        from tests.admitted_entry import admitted_artifact
+
+        artifact = admitted_artifact(
+            graph=_graph_document(asked["graph_version"]), owner_id="owner")
         return {"run_id": 7, "candidate_id": 3, "project_id": PROJECT,
                 "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
                 # The address research approved MUST be the address receiving
                 # authority — the admission binding is on content, not on the name.
                 "content_address": content_address(_graph_document(asked["graph_version"])),
+                "admission_address": artifact.admission_address,
                 "decision": "approved"}
 
     monkeypatch.setattr(pa, "verified_decision", bridge)
@@ -81,18 +86,13 @@ def a_clean_registry():
 
 
 def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeployment:
-    if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
-    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
-        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                  display_name="mirror", draft_json="{}",
-                                  draft_revision=0))
-    session.flush()
     document = _graph_document(version)
-    session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
-                             artifact_json=canonical_json(document),
-                             content_address=content_address(document)))
-    session.flush()
+    from tests.admitted_entry import persist_admitted_graph
+
+    persist_admitted_graph(
+        session, graph=document, owner_id="owner", project_id=PROJECT,
+        display_name="paper authority engine mirror",
+    )
     row = pa.stage(session, project_id=PROJECT, graph_identifier=GRAPH,
                    graph_version=version, deployment_id=LEGACY_DEPLOYMENT_ID,
                    instrument_key=INSTRUMENT, interval=INTERVAL)
@@ -151,20 +151,14 @@ class TestBindingThroughTheRunner:
         """Safety proof 3, end to end. A shadow record for the same graph on the same
         instrument leaves the instrument resolving to its ordinary strategy."""
         from app.core import shadow_deployments as sd
+        from tests.admitted_entry import persist_admitted_graph
 
         with SessionLocal() as s:
-            if s.get(Project, PROJECT) is None:
-                s.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
-            if s.get(GraphArtifact, ("owner", GRAPH)) is None:
-                s.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                    display_name="mirror", draft_json="{}",
-                                    draft_revision=0))
-            s.flush()
             document = _graph_document(1)
-            s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
-                               artifact_json=canonical_json(document),
-                               content_address=content_address(document)))
-            s.flush()
+            artifact = persist_admitted_graph(
+                s, graph=document, owner_id="owner", project_id=PROJECT,
+                display_name="shadow-only engine mirror",
+            )
             shadow = sd.stage(s, project_id=PROJECT, graph_identifier=GRAPH,
                               graph_version=1, deployment_id=LEGACY_DEPLOYMENT_ID,
                               instrument_key=INSTRUMENT, interval=INTERVAL,
@@ -176,7 +170,8 @@ class TestBindingThroughTheRunner:
             monkeypatch.setattr(sd, "verified_decision", lambda **asked: {
                 "run_id": 7, "candidate_id": 3, "project_id": PROJECT,
                 "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
-                "content_address": "sha256:" + "e" * 64, "decision": "approved"})
+                "content_address": artifact.graph_address,
+                "admission_address": artifact.admission_address, "decision": "approved"})
             sd.activate(s, shadow.id, revision=shadow.revision, **LEGACY_SCOPE)
             s.commit()
         r = _runner()
@@ -215,15 +210,19 @@ class TestExactVersion:
         with SessionLocal() as s:
             row = _deploy(s, version=1)
             document = _graph_document(2)
-            s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=2,
-                               artifact_json=canonical_json(document),
-                               content_address=content_address(document)))
+            from tests.admitted_entry import persist_admitted_graph
+
+            persist_admitted_graph(
+                s, graph=document, owner_id="owner", project_id=PROJECT,
+                display_name="paper authority engine mirror",
+            )
             s.commit()
             approved = row.graph_content_address
         r = _runner()
         try:
             assert r.paper_authority[INSTRUMENT].graph_version == 1
-            assert r._binding_for(INSTRUMENT).strategy_version == approved
+            assert r._binding_for(INSTRUMENT).strategy_version == "1"
+            assert r._binding_for(INSTRUMENT).graph_address == approved
         finally:
             r.broker.close()
 
@@ -276,13 +275,15 @@ class TestRestart:
             approved = row.graph_content_address
         first = _runner()
         try:
-            assert first._binding_for(INSTRUMENT).strategy_version == approved
+            assert first._binding_for(INSTRUMENT).strategy_version == "1"
+            assert first._binding_for(INSTRUMENT).graph_address == approved
         finally:
             first.broker.close()
 
         second = _runner()
         try:
-            assert second._binding_for(INSTRUMENT).strategy_version == approved
+            assert second._binding_for(INSTRUMENT).strategy_version == "1"
+            assert second._binding_for(INSTRUMENT).graph_address == approved
         finally:
             second.broker.close()
 
@@ -344,6 +345,8 @@ class TestNoLiveOrderSeamIsReached:
 
 class TestBooksStayApartWhileAGraphTrades:
     def _paper_position(self, session, *, mode):
+        authority = session.query(IrPaperDeployment).filter_by(
+            graph_identifier=GRAPH).one()
         session.add(Position(owner_id='owner', broker_account_id='account.default',
             instrument_key=INSTRUMENT, direction="LONG", option_type="CE",
             tradingsymbol=f"{INSTRUMENT}{mode}", exchange="MCX",
@@ -352,7 +355,11 @@ class TestBooksStayApartWhileAGraphTrades:
             entry_time=dt.datetime(2026, 1, 1, 10, 0), entry_spot=100.0,
             stop_price=0.0, target_price=0.0, high_water_premium=100.0,
             last_premium=100.0, mfe=0.0, mae=0.0, mode=mode,
-            strategy_key=IR_KEY if mode == PAPER else "expanding_z_v4"))
+            strategy_key=IR_KEY if mode == PAPER else "expanding_z_v4",
+            strategy_version=str(authority.graph_version) if mode == PAPER else "v1",
+            graph_address=authority.graph_content_address if mode == PAPER else None,
+            admission_address=authority.admission_address if mode == PAPER else None,
+            attribution_state="VERIFIED_GRAPH" if mode == PAPER else "NON_GRAPH"))
         session.commit()
 
     def test_an_ir_paper_position_never_appears_in_a_live_query(self):
@@ -380,7 +387,7 @@ class TestBooksStayApartWhileAGraphTrades:
         from app.engine import analytics
 
         with SessionLocal() as s:
-            _deploy(s)
+            row = _deploy(s)
             s.add(Trade(owner_id='owner', broker_account_id='account.default',
                 instrument_key=INSTRUMENT, direction="LONG", option_type="CE",
                 tradingsymbol="X", exchange="MCX", segment="equity_intraday",
@@ -390,7 +397,11 @@ class TestBooksStayApartWhileAGraphTrades:
                 exit_time=dt.datetime(2026, 1, 1, 11, 0), entry_spot=100.0,
                 exit_spot=150.0, gross_pnl=50.0, charges_total=0.0, net_pnl=50.0,
                 return_pct=50.0, holding_minutes=60, win=True, exit_reason="TARGET",
-                mode=PAPER, strategy_key=IR_KEY))
+                mode=PAPER, strategy_key=IR_KEY,
+                strategy_version=str(row.graph_version),
+                graph_address=row.graph_content_address,
+                admission_address=row.admission_address,
+                attribution_state="VERIFIED_GRAPH"))
             s.commit()
             day = dt.date(2026, 1, 1)
             assert analytics.realized_on(s, day, book=LIVE, **LEGACY_SCOPE) == 0.0
@@ -433,7 +444,8 @@ class TestAttributionOnARealPaperFill:
                                 "attribution is asserted on the binding instead")
                 assert pos.mode == PAPER
                 assert pos.strategy_key == IR_KEY
-                assert pos.strategy_version == approved
+                assert pos.strategy_version == "1"
+                assert pos.graph_address == approved
         finally:
             r.broker.close()
 
@@ -451,7 +463,8 @@ class TestAttributionOnARealPaperFill:
             executed = r._executed_binding(INSTRUMENT)
             assert executed is not None
             assert executed.strategy_key == IR_KEY
-            assert executed.strategy_version == approved
+            assert executed.strategy_version == "1"
+            assert executed.graph_address == approved
             assert executed.origin == pa_origin()
             assert executed.execution_mode == PAPER
         finally:

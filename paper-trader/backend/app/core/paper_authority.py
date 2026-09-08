@@ -147,6 +147,7 @@ class PaperBinding:
     graph_identifier: str
     graph_version: int
     content_address: str
+    admission_address: str
     evidence_run_id: int | None
     evidence_candidate_id: int | None
     evidence_content_address: str
@@ -352,6 +353,7 @@ def active_bindings(session, *, owner_id: str, broker_account_id: str,
             deployment_row_id=row.id, owner_id=row.owner_id, project_id=row.project_id,
             graph_identifier=row.graph_identifier, graph_version=row.graph_version,
             content_address=row.graph_content_address,
+            admission_address=row.admission_address,
             evidence_run_id=row.evidence_run_id,
             evidence_candidate_id=row.evidence_candidate_id,
             evidence_content_address=row.evidence_content_address,

@@ -12,8 +12,11 @@ import datetime as dt
 from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.db.session import init_db
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from app.core import paper_authority
 from app.engine.live_broker import LiveBroker
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _armed_runner(streak: int, threshold: int = 3, key="NIFTY"):
@@ -25,6 +28,25 @@ def _armed_runner(streak: int, threshold: int = 3, key="NIFTY"):
                 "order_failure_disarm_count": threshold}
     r.armed = True
     r.broker.order_fail_streak = streak
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=key, interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    from unittest.mock import patch
+    with r._session() as session:
+        decision = {"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                    "graph_identifier": "test.strategy.expanding_z_impulse", "graph_version": 1,
+                    "content_address": admission["graph_address"],
+                    "admission_address": admission["admission_address"], "decision": "approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            paper_authority.activate(session, row.id, revision=row.revision,
+                                     owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     bar = dt.datetime(2026, 7, 3, 10, 45)                     # completes 11:00 — fresh
     r.publish_signal(
         key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,

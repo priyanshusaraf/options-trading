@@ -84,3 +84,19 @@ def research_session(tmp_path):
     Session = make_sessionmaker(engine)
     with Session() as s:
         yield s
+
+
+@pytest.fixture
+def pg_sandbox():
+    """One private set of disposable PostgreSQL databases; skips without harness."""
+    import os
+
+    if not os.environ.get("PT_TEST_POSTGRES_URL"):
+        pytest.skip("disposable PostgreSQL 16 harness not configured")
+    from tests.postgres_sandbox import PostgresSandbox
+
+    sandbox = PostgresSandbox()
+    try:
+        yield sandbox
+    finally:
+        sandbox.close()

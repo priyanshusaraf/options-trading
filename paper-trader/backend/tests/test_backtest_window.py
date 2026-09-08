@@ -38,12 +38,12 @@ def test_clip_to_window_filters_by_date():
     assert sweep._clip_to_window(candles, None, None) == candles  # no window = passthrough
 
 
-def test_sweep_restricted_to_chosen_instruments_records_window():
+def test_sweep_restricted_to_chosen_instruments_records_window(admitted_backtest_receipt):
     init_db(reset=True)
     prov = MockProvider()
     # mock universe = curated seed list; restrict to NIFTY only, 1-year window
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], instruments=["NIFTY"],
-                            lookback_days=365, provider=prov)
+                            lookback_days=365, provider=prov, **admitted_backtest_receipt())
     sweep._join()
     with SessionLocal() as s:
         run = s.get(BacktestRun, rid)
@@ -104,14 +104,15 @@ def test_custom_window_end_date_is_honored():
     assert all_candles[-1].ts.date() > mid
 
 
-def test_out_of_range_window_gets_distinct_status():
+def test_out_of_range_window_gets_distinct_status(admitted_backtest_receipt):
     """A custom window entirely older than Kite's per-interval ceiling (a 2018
     window) must yield a result row whose status string explains 'older than Kite
     max', NOT the generic, silently-hidden 'insufficient history'."""
     init_db(reset=True)
     prov = MockProvider()
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"], instruments=["NIFTY"],
-                            start_date="2018-01-01", end_date="2018-06-01", provider=prov)
+                            start_date="2018-01-01", end_date="2018-06-01", provider=prov,
+                            **admitted_backtest_receipt())
     sweep._join()
     with SessionLocal() as s:
         rows = list(s.scalars(select_results(rid)))
@@ -132,7 +133,7 @@ def test_window_out_of_range_helper():
     assert sweep._window_out_of_range("day", None, None) is False
 
 
-def test_per_interval_results_record_true_span():
+def test_per_interval_results_record_true_span(admitted_backtest_receipt):
     """One sweep across two intervals under the SAME lookback must record TRUE
     per-cell coverage (first_ts/last_ts/effective_days) derived from each cell's
     actual candles via ist_epoch, plus a PER-INTERVAL clamp flag — so a trader is
@@ -145,7 +146,8 @@ def test_per_interval_results_record_true_span():
     prov = MockProvider()
     # lookback 100d: 'minute' caps at 60d (CLAMPED), 'day' caps at 2000d (not clamped)
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["minute", "day"],
-                            instruments=["NIFTY"], lookback_days=100, provider=prov)
+                            instruments=["NIFTY"], lookback_days=100, provider=prov,
+                            **admitted_backtest_receipt())
     sweep._join()
     c = TestClient(app)
     d = c.get(f"/api/backtest/results?run_id={rid}&min_trades=0").json()
@@ -182,12 +184,13 @@ def test_all_presets_offered():
     assert d["preset_days"]["max"] is None       # max => entire available history
 
 
-def test_sweep_restricted_to_commodities():
+def test_sweep_restricted_to_commodities(admitted_backtest_receipt):
     """An instruments-only sweep runs EXACTLY the chosen keys, nothing else."""
     init_db(reset=True)
     prov = MockProvider()
     rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"],
-                            instruments=["GOLDM", "SILVERM", "COPPERM"], provider=prov)
+                            instruments=["GOLDM", "SILVERM", "COPPERM"], provider=prov,
+                            **admitted_backtest_receipt())
     sweep._join()
     with SessionLocal() as s:
         keys = {r.instrument_key for r in s.scalars(select_results(rid))}
@@ -205,12 +208,13 @@ def test_instruments_endpoint_lists_universe_and_presets():
     assert d["max_days"]["15minute"] == 200       # disclosed Kite ceiling
 
 
-def test_sweep_rejects_unknown_instrument():
+def test_sweep_rejects_unknown_instrument(admitted_backtest_receipt):
     init_db(reset=True)
     prov = MockProvider()
     try:
         sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["day"],
-                          instruments=["NOT_A_REAL_INSTRUMENT"], provider=prov)
+                          instruments=["NOT_A_REAL_INSTRUMENT"], provider=prov,
+                          **admitted_backtest_receipt())
         assert False, "expected a failure for an unknown instrument"
     except RuntimeError as e:
         assert "none of the requested instruments" in str(e).lower()

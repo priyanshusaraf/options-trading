@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 
 from research.evaluation import kernels
+from research.evaluation.walkforward import signal_window
 from research.stats.evidence import bootstrap_mean_lower_bound
 
 
@@ -41,10 +42,25 @@ def qualification_gate(net_pnls, *, min_trades: int, seed: int = 0) -> tuple[boo
 
 def qualify_instrument(candles, inst, interval, strategy, params, *,
                        min_trades: int = 20, seed: int = 0,
-                       capital: float = 50_000.0) -> InstrumentEvaluation:
-    trades, metrics = kernels.simulate(candles, inst, interval,
-                                       strategy=strategy, params=params,
-                                       capital=capital)
+                       capital: float = 50_000.0, development_end=None,
+                       development_bars: int | None = None) -> InstrumentEvaluation:
+    if development_end is None and development_bars is None:
+        trades, metrics = kernels.simulate(
+            candles, inst, interval, strategy=strategy, params=params,
+            capital=capital,
+        )
+    else:
+        signals = signal_window(
+            kernels.compute_signals(candles, strategy, params),
+            stop_before=development_end, expected_bars=development_bars,
+        )
+        trades = kernels.run_trades(
+            signals, inst, kernels.backtest_charge_segment(inst), capital,
+            getattr(strategy, "risk_model", None),
+            replay_policy=getattr(strategy, "replay_policy", None),
+            **kernels.replay_exit_kwargs(strategy),
+        )
+        metrics = kernels.compute_metrics(trades, capital)
     net = [t.net_pnl for t in trades]
     ok, reason = qualification_gate(net, min_trades=min_trades, seed=seed)
     return InstrumentEvaluation(getattr(inst, "key", ""), interval, len(net),

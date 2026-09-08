@@ -18,6 +18,7 @@ from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.providers.kite import KiteProvider as _KiteForCaps
+from tests.admitted_entry import persist_admitted_entry
 
 
 @pytest.fixture
@@ -125,7 +126,8 @@ def test_a_sized_position_can_actually_be_opened(runner):
     import datetime as dt
     sizer = runner._futures_margin_sizer()
     qty, margin = sizer(_inst(), "LONG", 24_000.0, 50, 200_000.0)
+    admission = persist_admitted_entry(runner.broker.s)
     pos = runner.broker.open_futures_position(
         _inst(), "LONG", 24_000.0, qty, "NFO_FUT", "TEST",
-        dt.datetime(2026, 8, 3, 10, 0), dt.date(2026, 8, 27), margin=margin)
+        dt.datetime(2026, 8, 3, 10, 0), dt.date(2026, 8, 27), margin=margin, **admission)
     assert pos.qty == qty

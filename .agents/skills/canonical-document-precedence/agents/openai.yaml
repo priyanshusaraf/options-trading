@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Resolve canonical document precedence"
+  short_description: "Resolve canonical scope and version conflicts"
+  default_prompt: "Use $canonical-document-precedence for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

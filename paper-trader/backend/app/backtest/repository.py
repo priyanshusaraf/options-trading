@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass, replace
+import hashlib
 import json
 import uuid
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 
-from app.db.concurrency import locked_rows
-from app.db.models import BacktestResult, BacktestRun
+from app.db.concurrency import caller_owned_savepoint, locked_rows
+from app.db.models import BacktestResult, BacktestRun, StrategyAdmission
 
 
 class AdmissionRequired(RuntimeError):
@@ -29,30 +30,159 @@ class VerifiedBacktestAdmission:
     artifact: Any
     graph: dict[str, Any]
     strategy: Any
+    strategy_key: str
+    strategy_version: str
+    graph_address: str | None
+    attribution_state: str
+    phase4_binding: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class VerifiedV2LifecycleAdmission:
+    """Exact current Phase 4 authority exposed only to P5's lifecycle seam."""
+
+    admission_address: str
+    artifact: Any
+    strategy_key: str
+    strategy_version: str
+    graph_address: str
+    attribution_state: str
+    phase4_binding: Mapping[str, Any]
+
+
+def _reconstruct_phase4_artifact(document: Mapping[str, Any], *, owner_id: str,
+                                 registry: Any) -> Any:
+    """Compatibility name for the shared durable Phase 4 verifier."""
+    from app.strategy.admission import reconstruct_phase4_artifact
+
+    return reconstruct_phase4_artifact(document, owner_id=owner_id, registry=registry)
 
 
 def _admission_refusal(code: str = "RECEIPT_STALE") -> AdmissionRequired:
     return AdmissionRequired(code)
 
 
+def _load_result_attribution_artifact(session, *, owner_id: str,
+                                      admission_address: str):
+    """Reconstruct the durable receipt/graph tuple at the fenced result write.
+
+    Full runtime/parity admission is performed before worker/provider execution.
+    Persistence needs the immutable receipt and canonical GraphVersion facts again,
+    not another evaluation of the strategy over the parity corpus per ten-row batch.
+    """
+    from app.core import strategy_admissions
+    from app.db.models import GraphVersion
+    from app.ir.hashing import canonical_json, content_address
+    from app.strategy.admission import artifact_from_dict
+
+    receipt = strategy_admissions.get(
+        session, owner_id=owner_id, admission_address=admission_address)
+    if receipt is None:
+        raise _admission_refusal()
+    try:
+        document = json.loads(receipt.artifact_json)
+        artifact = artifact_from_dict(document)
+        strategy_admissions.require_current(session, artifact)
+        version = session.get(
+            GraphVersion,
+            (owner_id, artifact.graph_identifier, artifact.graph_version))
+        if (version is None or version.content_address != artifact.graph_address
+                or (version.admission_address is not None
+                    and version.admission_address != admission_address)
+                or artifact.owner_id != owner_id
+                or artifact.admission_address != admission_address):
+            raise _admission_refusal("GRAPH_ATTRIBUTION_MISMATCH")
+        graph = json.loads(version.artifact_json)
+        if (canonical_json(graph) != version.artifact_json
+                or content_address(graph) != artifact.graph_address):
+            raise _admission_refusal("GRAPH_ATTRIBUTION_MISMATCH")
+        return artifact
+    except AdmissionRequired:
+        raise
+    except (TypeError, ValueError, json.JSONDecodeError,
+            strategy_admissions.AdmissionPersistenceError) as exc:
+        raise _admission_refusal("GRAPH_ATTRIBUTION_MISMATCH") from exc
+
+
+def load_verified_v2_lifecycle_admission(
+        session, *, owner_id: str, admission_address: str | None,
+        authority_context: Any, research_session: Any,
+        at_time: dt.datetime) -> VerifiedV2LifecycleAdmission:
+    """Run the sole persisted Phase 4 authority chain and return immutable facts.
+
+    The generic backtest loader calls this function and still terminates at
+    ``V2_RUNTIME_UNAVAILABLE``.  Only ``app.backtest.v2_lifecycle`` may consume
+    the successful value, and only with an explicitly supplied test executor.
+    """
+    from app.backtest.reclaim_authority import ReclaimAuthorityContext
+    from app.core import strategy_admissions
+    from app.ir.registry import PlatformRegistry
+    from app.ir.v2_graph_versions import PHASE4_SCHEME
+    from sqlalchemy.orm import Session
+
+    if not isinstance(admission_address, str) or not admission_address:
+        raise _admission_refusal("ADMISSION_REQUIRED")
+    if (not isinstance(authority_context, ReclaimAuthorityContext)
+            or not isinstance(authority_context.registry, PlatformRegistry)
+            or not callable(authority_context.research_sessionmaker)
+            or not isinstance(research_session, Session)
+            or not isinstance(at_time, dt.datetime)
+            or at_time.tzinfo is None
+            or at_time.utcoffset() is None):
+        raise _admission_refusal("PHASE4_CONTEXT_REQUIRED")
+    receipt = strategy_admissions.get(
+        session, owner_id=owner_id, admission_address=admission_address)
+    if receipt is None:
+        raise _admission_refusal()
+    try:
+        artifact = strategy_admissions.load_current_phase4_artifact(
+            session, owner_id=owner_id, admission_address=admission_address,
+            registry=authority_context.registry, research_session=research_session,
+        )
+        strategy_admissions.require_phase4_current(
+            session, artifact, research_session=research_session,
+            plan=artifact.plan, at_time=at_time)
+        binding = artifact.document.get("phase4_data_binding")
+        if not isinstance(binding, Mapping):
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        return VerifiedV2LifecycleAdmission(
+            admission_address=admission_address,
+            artifact=artifact,
+            strategy_key=f"ir.{artifact.graph_identifier}",
+            strategy_version=str(artifact.graph_version),
+            graph_address=artifact.graph_address,
+            attribution_state="VERIFIED_GRAPH",
+            phase4_binding=binding,
+        )
+    except AdmissionRequired:
+        raise
+    except (TypeError, ValueError, json.JSONDecodeError,
+            strategy_admissions.AdmissionPersistenceError) as exc:
+        raise _admission_refusal() from exc
+
+
 def load_verified_admission(session, *, owner_id: str,
-                            admission_address: str | None) -> VerifiedBacktestAdmission:
+                            admission_address: str | None,
+                            authority_context: Any | None = None,
+                            research_session: Any | None = None,
+                            at_time: dt.datetime | None = None,
+                            registry: Any | None = None) -> VerifiedBacktestAdmission:
     """Load and freshly verify one exact owner-local graph receipt.
 
     A durable address by itself is never authority.  This reconstructs canonical
     receipt bytes, binds them to the immutable graph version bytes, and verifies
     them against the current platform registry before a backtest can obtain a
-    strategy or touch a provider.
+    strategy or touch a provider.  A Phase 4 receipt requires explicit context,
+    a lifecycle-owned research Session, and an aware cutoff; its plan comes from
+    the exact persisted receipt and current registry.
     """
     from app.core import strategy_admissions
-    from app.db.models import GraphVersion
-    from app.ir.hashing import canonical_json, content_address
-    from app.ir.library import REGISTRY
+    from app.ir.v2_graph_versions import PHASE4_SCHEME, V2_RUNTIME_UNAVAILABLE
     from app.strategy.admission import (
-        AdmissionRefused, IRGraphAdmissionInput, artifact_from_dict,
+        AdmissionRefused, HandwrittenAdapterInput, IRGraphAdmissionInput,
+        artifact_from_dict,
         verify_admission,
     )
-    from app.strategy.ir_adapter import IRGraphStrategy
 
     if not isinstance(admission_address, str) or not admission_address:
         raise _admission_refusal("ADMISSION_REQUIRED")
@@ -61,8 +191,24 @@ def load_verified_admission(session, *, owner_id: str,
     if receipt is None:
         raise _admission_refusal()
     try:
-        artifact = artifact_from_dict(json.loads(receipt.artifact_json))
+        document = json.loads(receipt.artifact_json)
+        if not isinstance(document, dict):
+            raise _admission_refusal("RECEIPT_STALE")
+        if document.get("scheme") == PHASE4_SCHEME:
+            load_verified_v2_lifecycle_admission(
+                session, owner_id=owner_id, admission_address=admission_address,
+                authority_context=authority_context, research_session=research_session,
+                at_time=at_time)
+            raise _admission_refusal(V2_RUNTIME_UNAVAILABLE)
+
+        # The v1 seam retains its established optional caller registry.  Phase
+        # 4 never reaches this import or its process-global fallback.
+        from app.ir.library import REGISTRY
+        active_registry = REGISTRY if registry is None else registry
+        artifact = artifact_from_dict(document)
         strategy_admissions.require_current(session, artifact)
+        from app.db.models import GraphVersion
+        from app.ir.hashing import canonical_json, content_address
         version = session.get(
             GraphVersion,
             (owner_id, artifact.graph_identifier, artifact.graph_version),
@@ -78,10 +224,24 @@ def load_verified_admission(session, *, owner_id: str,
             raise _admission_refusal("ARTEFACT_MISMATCH")
         if artifact.owner_id != owner_id or artifact.admission_address != admission_address:
             raise _admission_refusal("ARTEFACT_MISMATCH")
-        source = IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None)
+        equivalent_ir = IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None)
+        if artifact.source == "handwritten_adapter":
+            from scripts.backfill_strategy_admissions import expanding_z_adapter_input
+            source = expanding_z_adapter_input(
+                strategy_key=artifact.source_evidence.strategy_key,
+                strategy_version=artifact.source_evidence.strategy_version,
+                graph=graph,
+            )
+            if not isinstance(source, HandwrittenAdapterInput):
+                raise _admission_refusal("ARTEFACT_MISMATCH")
+        else:
+            source = equivalent_ir
         verify_admission(
-            artifact=artifact, owner_id=owner_id, source_input=source, registry=REGISTRY)
-        strategy = IRGraphStrategy(graph, (REGISTRY.library, REGISTRY.implementations))
+            artifact=artifact, owner_id=owner_id,
+            source_input=source, registry=active_registry)
+        from app.strategy.ir_adapter import IRGraphStrategy
+        strategy = IRGraphStrategy(
+            graph, (active_registry.library, active_registry.implementations))
     except AdmissionRequired:
         raise
     except AdmissionRefused as exc:
@@ -89,13 +249,25 @@ def load_verified_admission(session, *, owner_id: str,
     except (TypeError, ValueError, json.JSONDecodeError,
             strategy_admissions.AdmissionPersistenceError) as exc:
         raise _admission_refusal() from exc
-    return VerifiedBacktestAdmission(admission_address, artifact, graph, strategy)
+    if artifact.source == "ir_graph":
+        strategy_key = f"ir.{artifact.graph_identifier}"
+        strategy_version = str(artifact.graph_version)
+        graph_address = artifact.graph_address
+        attribution_state = "VERIFIED_GRAPH"
+    else:
+        strategy_key = artifact.source_evidence.strategy_key
+        strategy_version = artifact.source_evidence.strategy_version
+        graph_address = None
+        attribution_state = "NON_GRAPH"
+    return VerifiedBacktestAdmission(
+        admission_address, artifact, graph, strategy,
+        strategy_key, strategy_version, graph_address, attribution_state)
 
 
 def _verify_enqueue_admission(session, *, owner_id: str,
-                              admission_address: str | None) -> None:
+                              admission_address: str | None) -> VerifiedBacktestAdmission:
     """Named enqueue seam kept separate so the authority mutation is isolated."""
-    load_verified_admission(
+    return load_verified_admission(
         session, owner_id=owner_id, admission_address=admission_address)
 
 
@@ -110,8 +282,23 @@ def enqueue_run(session, *, owner_id: str, scope: str, intervals: str,
                 now: dt.datetime | None = None,
                 **values) -> BacktestRun:
     """Create durable pending work before any provider read or worker launch."""
-    _verify_enqueue_admission(
+    admitted = _verify_enqueue_admission(
         session, owner_id=owner_id, admission_address=admission_address)
+    if admitted is not None and admitted.phase4_binding is not None:
+        try:
+            descriptor = json.loads(values.get("request_json", ""))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise _admission_refusal("ARTEFACT_MISMATCH") from exc
+        if not isinstance(descriptor, dict):
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        supplied = descriptor.get("_phase4_binding")
+        canonical = dict(admitted.phase4_binding)
+        canonical["declaration_addresses"] = list(canonical["declaration_addresses"])
+        if supplied is not None and supplied != canonical:
+            raise _admission_refusal("ARTEFACT_MISMATCH")
+        descriptor["_phase4_binding"] = canonical
+        values["request_json"] = json.dumps(
+            descriptor, sort_keys=True, separators=(",", ":"))
     queued_at = _clock(now)
     run = BacktestRun(owner_id=owner_id, scope=scope, intervals=intervals,
                       capital=capital, total=total, status="pending",
@@ -176,6 +363,174 @@ def claim_next_run(session, *, owner_id: str, claimed_by: str,
         return None
     return claim_run(session, owner_id=owner_id, run_id=int(candidate),
                      claimed_by=claimed_by, now=moment, lease_seconds=lease_seconds)
+
+
+@dataclass(frozen=True)
+class FrozenReclaimRun:
+    """Immutable scalar facts from one locked owner reclaim enumeration."""
+    id: int
+    owner_id: str
+    status: str
+    admission_address: str | None
+    cancel_requested_at: dt.datetime | None
+    claim_token: str | None
+    claim_expires_at: dt.datetime | None
+
+
+@dataclass(frozen=True)
+class FrozenClaimedRun:
+    """Committed scalar claim facts safe after the claiming Session closes."""
+
+    id: int
+    owner_id: str
+    attempt_count: int
+    queued_at: dt.datetime | None
+    claim_token: str
+    request_json: str
+    total: int
+    requested_workers: int
+    capital: float
+    admission_address: str | None
+
+
+def _freeze_reclaim_run(row) -> FrozenReclaimRun:
+    return FrozenReclaimRun(row.id, row.owner_id, row.status, row.admission_address,
+                            row.cancel_requested_at, row.claim_token,
+                            row.claim_expires_at)
+
+
+def freeze_claimed_run(row: BacktestRun) -> FrozenClaimedRun:
+    """Freeze one successful claim before commit expires its ORM attributes."""
+    if (row.status != "running" or not isinstance(row.claim_token, str)
+            or not row.claim_token):
+        raise ValueError("cannot freeze a row without one active claim")
+    return FrozenClaimedRun(
+        row.id, row.owner_id, row.attempt_count, row.queued_at,
+        row.claim_token, row.request_json, row.total, row.requested_workers,
+        row.capital, row.admission_address)
+
+
+def snapshot_claimable_runs(session, *, owner_id: str,
+                            now: dt.datetime | None = None) -> list[FrozenReclaimRun]:
+    """Return the closed owner-local mutation set under the caller's lock."""
+    moment = _clock(now)
+    statement = select(BacktestRun).where(
+        BacktestRun.owner_id == owner_id,
+        or_(and_(BacktestRun.status == "pending",
+                 BacktestRun.cancel_requested_at.is_(None)),
+            and_(BacktestRun.status == "running",
+                 BacktestRun.claim_token.is_not(None),
+                 BacktestRun.claim_expires_at.is_not(None),
+                 BacktestRun.claim_expires_at <= moment),
+            and_(BacktestRun.status == "running",
+                 BacktestRun.claim_token.is_(None),
+                 BacktestRun.claim_expires_at.is_(None)))).order_by(
+            BacktestRun.queued_at, BacktestRun.id)
+    return [_freeze_reclaim_run(row) for row in session.scalars(locked_rows(statement, session))]
+
+
+def _frozen_run_predicates(frozen: FrozenReclaimRun) -> list[Any]:
+    """Bind a reclaim transition to exactly the row observed in its snapshot."""
+    def exact(column, value):
+        return column.is_(None) if value is None else column == value
+    return [BacktestRun.owner_id == frozen.owner_id, BacktestRun.id == frozen.id,
+            BacktestRun.status == frozen.status,
+            exact(BacktestRun.admission_address, frozen.admission_address),
+            exact(BacktestRun.cancel_requested_at, frozen.cancel_requested_at),
+            exact(BacktestRun.claim_token, frozen.claim_token),
+            exact(BacktestRun.claim_expires_at, frozen.claim_expires_at)]
+
+
+def reconcile_frozen_run(session, *, frozen: FrozenReclaimRun,
+                         now: dt.datetime | None = None) -> tuple[bool, FrozenReclaimRun | None]:
+    """Reconcile only one locked legacy ID and report a transition race."""
+    moment = _clock(now)
+    predicates = _frozen_run_predicates(frozen)
+    if (frozen.status == "running" and frozen.claim_token is None
+            and frozen.claim_expires_at is None):
+        result = session.execute(update(BacktestRun).where(*predicates).values(
+            status="error", completed_at=moment,
+            done=select(func.count()).select_from(BacktestResult).where(
+                BacktestResult.owner_id == BacktestRun.owner_id,
+                BacktestResult.run_id == BacktestRun.id).scalar_subquery(),
+            note="interrupted legacy run without a durable worker claim"))
+        return result.rowcount == 1, None
+    if (frozen.status == "running" and frozen.claim_token is not None
+            and frozen.claim_expires_at is not None
+            and frozen.claim_expires_at <= moment):
+        cancelled = frozen.cancel_requested_at is not None
+        values = {
+            "status": "cancelled" if cancelled else "pending",
+            "claim_token": None,
+            "claimed_by": None,
+            "claim_expires_at": None,
+            "heartbeat_at": None,
+            "note": ("cancelled: worker claim expired after cancellation request; durable progress retained"
+                     if cancelled else "interrupted: expired worker claim; durable progress retained"),
+        }
+        # Reconciliation must leave the original completion time alone unless a
+        # cancellation makes this the terminal transition.
+        if cancelled:
+            values["completed_at"] = moment
+        result = session.execute(update(BacktestRun).where(*predicates).values(**values))
+        if result.rowcount != 1:
+            return False, None
+        if cancelled:
+            return True, None
+        # The conditional update itself is the transition authority.  Construct
+        # its known scalar successor without selecting candidate state again.
+        return True, replace(frozen, status="pending", claim_token=None,
+                             claim_expires_at=None)
+    return True, frozen
+
+
+def claim_frozen_run(session, *, frozen: FrozenReclaimRun, claimed_by: str,
+                     now: dt.datetime | None = None,
+                     lease_seconds: int = 30) -> BacktestRun | None:
+    """Claim an enumerated legacy row only if every frozen predicate survives."""
+    moment = _clock(now)
+    token = uuid.uuid4().hex
+    expires = moment + dt.timedelta(seconds=max(1, int(lease_seconds)))
+    predicates = [*_frozen_run_predicates(frozen),
+                  BacktestRun.cancel_requested_at.is_(None), _claimable(moment)]
+    result = session.execute(update(BacktestRun).where(*predicates).values(
+        status="running", claim_token=token, claimed_by=claimed_by,
+        claim_expires_at=expires, heartbeat_at=moment,
+        started_at=func.coalesce(BacktestRun.started_at, moment),
+        attempt_count=BacktestRun.attempt_count + 1))
+    if result.rowcount != 1:
+        return None
+    return get_run(session, owner_id=frozen.owner_id, run_id=frozen.id)
+
+
+def reclaim_admission_format(session, *, owner_id: str,
+                             admission_address: str | None) -> int | None:
+    """Classify a frozen receipt; only exact persisted versions are actionable."""
+    if not admission_address:
+        return None
+    artifact_json = session.scalar(select(StrategyAdmission.artifact_json).where(
+        StrategyAdmission.owner_id == owner_id,
+        StrategyAdmission.admission_address == admission_address))
+    if not isinstance(artifact_json, str):
+        return None
+    try:
+        document = json.loads(artifact_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    from app.ir.v2_graph_versions import PHASE4_SCHEME
+    if document.get("scheme") == PHASE4_SCHEME:
+        return 2
+    # V1's canonical durable receipt has the required graph/artifact facts but
+    # no additive Phase 4 scheme. Parsing it is stricter than treating a null
+    # database column or unknown receipt as legacy work.
+    try:
+        from app.strategy.admission import AdmissionRefused, artifact_from_dict
+        artifact_from_dict(document)
+    except (TypeError, ValueError, KeyError, AdmissionRefused):
+        return None
+    return 1
 
 
 def _active_claim(owner_id: str, run_id: int, token: str, now: dt.datetime,
@@ -349,23 +704,25 @@ def _cell_key(value: dict) -> str:
     but reject malformed ones rather than silently creating an unresumable row.
     """
     parts = (value.get("instrument_key"), value.get("interval"),
-             value.get("strategy_key"), value.get("strategy_version"))
-    if not all(isinstance(part, str) and part for part in parts):
+             value.get("strategy_key"), value.get("strategy_version"),
+             value.get("graph_address") or "", value.get("attribution_state"))
+    if not all(isinstance(part, str) for part in parts) or not all(parts[index] for index in (0, 1, 2, 3, 5)):
         raise ValueError("backtest result lacks a stable cell identity")
-    return "\x1f".join(parts)
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
                                 claim_token: str, values: list[dict],
                                 now: dt.datetime | None = None,
-                                lease_seconds: int = 30) -> bool:
+                                lease_seconds: int = 30,
+                                verified_v2_admission: VerifiedV2LifecycleAdmission | None = None) -> bool:
     """Insert a bounded result batch and its progress under one fenced savepoint.
 
     A false result has no side effect, including no pending ORM rows that a caller
     might accidentally commit after a lost lease.
     """
     moment = _clock(now)
-    with session.begin_nested():
+    with caller_owned_savepoint(session, scope="backtest_claimed_result_batch"):
         # Check before inserting so a cancellation/replacement cannot make a
         # stale process create rows. The same predicate is repeated after flush
         # to fence a takeover that wins while this worker computes its count.
@@ -384,6 +741,42 @@ def append_claimed_result_batch(session, *, owner_id: str, run_id: int,
             raise AdmissionRequired("ADMISSION_REQUIRED")
         if any(value.get("admission_address") != expected_admission for value in values):
             raise AdmissionRequired("ARTEFACT_MISMATCH")
+        from app.strategy.admission import (
+            matches_execution_identity, require_attribution_tuple,
+        )
+        submitted_tuples = set()
+        for value in values:
+            require_attribution_tuple(
+                strategy_key=value.get("strategy_key"),
+                strategy_version=value.get("strategy_version"),
+                graph_address=value.get("graph_address"),
+                admission_address=value.get("admission_address"),
+                attribution_state=value.get("attribution_state"))
+            submitted_tuples.add((
+                value.get("strategy_key"), value.get("strategy_version"),
+                value.get("graph_address"), value.get("attribution_state")))
+        if submitted_tuples:
+            if verified_v2_admission is not None:
+                if (not isinstance(verified_v2_admission, VerifiedV2LifecycleAdmission)
+                        or verified_v2_admission.artifact.owner_id != owner_id
+                        or verified_v2_admission.admission_address != expected_admission):
+                    raise AdmissionRequired("GRAPH_ATTRIBUTION_MISMATCH")
+                expected_tuple = (
+                    verified_v2_admission.strategy_key,
+                    verified_v2_admission.strategy_version,
+                    verified_v2_admission.graph_address,
+                    verified_v2_admission.attribution_state,
+                )
+                if any(value != expected_tuple for value in submitted_tuples):
+                    raise AdmissionRequired("GRAPH_ATTRIBUTION_MISMATCH")
+            else:
+                artifact = _load_result_attribution_artifact(
+                    session, owner_id=owner_id, admission_address=expected_admission)
+                if any(not matches_execution_identity(
+                        artifact, strategy_key=key, strategy_version=version,
+                        graph_address=address, attribution_state=state)
+                        for key, version, address, state in submitted_tuples):
+                    raise AdmissionRequired("GRAPH_ATTRIBUTION_MISMATCH")
         # Resume/replacement re-computes cells after a process death.  The first
         # claimant may already have committed part of a batch, so append only
         # identities not yet durable.  The DB constraint makes this invariant
@@ -429,7 +822,7 @@ def complete_claim(session, *, owner_id: str, run_id: int, claim_token: str,
                               allow_cancel=status == "cancelled")
     if status == "cancelled":
         predicate = and_(predicate, BacktestRun.cancel_requested_at.is_not(None))
-    with session.begin_nested():
+    with caller_owned_savepoint(session, scope="backtest_complete_claim"):
         done = durable_result_count(session, owner_id=owner_id, run_id=run_id)
         result = session.execute(update(BacktestRun).where(predicate).values(
             status=status, done=done, note=note[:400] if note else BacktestRun.note,
@@ -491,44 +884,3 @@ def is_cancel_requested(session, *, owner_id: str, run_id: int,
     return session.scalar(select(BacktestRun.id).where(
         _active_claim(owner_id, run_id, claim_token, moment, allow_cancel=True),
         BacktestRun.cancel_requested_at.is_not(None)).limit(1)) is not None
-
-
-def reconcile_expired_claims(session, *, owner_id: str,
-                             now: dt.datetime | None = None) -> int:
-    """Resolve only expired leases; a live process is never inferred dead."""
-    moment = _clock(now)
-    result = session.execute(update(BacktestRun).where(
-        BacktestRun.owner_id == owner_id, BacktestRun.status == "running",
-        BacktestRun.claim_token.is_not(None), BacktestRun.claim_expires_at.is_not(None),
-        BacktestRun.claim_expires_at <= moment).values(
-            status=case((BacktestRun.cancel_requested_at.is_not(None), "cancelled"),
-                        else_="pending"),
-            completed_at=case((BacktestRun.cancel_requested_at.is_not(None), moment),
-                              else_=BacktestRun.completed_at),
-            claim_token=None, claimed_by=None,
-            claim_expires_at=None, heartbeat_at=None,
-            cancel_requested_at=case(
-                (BacktestRun.cancel_requested_at.is_not(None),
-                 BacktestRun.cancel_requested_at), else_=None),
-            note=case(
-                (BacktestRun.cancel_requested_at.is_not(None),
-                 "cancelled: worker claim expired after cancellation request; durable progress retained"),
-                else_="interrupted: expired worker claim; durable progress retained")))
-    reclaimed = int(result.rowcount or 0)
-    # A pre-0025 row cannot name any worker or lease. It is historical phantom
-    # state, not an expired live claim; preserve its results but make its outcome
-    # explicit once so legacy status APIs do not report an immortal worker.
-    legacy = session.execute(update(BacktestRun).where(
-        BacktestRun.owner_id == owner_id, BacktestRun.status == "running",
-        BacktestRun.claim_token.is_(None), BacktestRun.claim_expires_at.is_(None)).values(
-            status="error", completed_at=moment,
-            done=select(func.count()).select_from(BacktestResult).where(
-                BacktestResult.owner_id == BacktestRun.owner_id,
-                BacktestResult.run_id == BacktestRun.id).scalar_subquery(),
-            note="interrupted legacy run without a durable worker claim"))
-    return reclaimed + int(legacy.rowcount or 0)
-
-
-def reconcile_stale_runs(session, *, owner_id: str) -> int:
-    """Compatibility repository boundary with the same explicit owner contract."""
-    return reconcile_expired_claims(session, owner_id=owner_id)

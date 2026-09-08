@@ -1,0 +1,86 @@
+{
+  "schema": "kleppmann-licensed-artifact-review/1",
+  "reviewed_on": "2026-08-29",
+  "artifacts": [
+    {
+      "url": "https://www.cl.cam.ac.uk/teaching/2122/ConcDisSys/dist-sys-notes.pdf",
+      "exact_identity": "sha256:4a754e36358948d4f98cb26fb8ecd44d868024d3bb0f26db30851158ddea3064",
+      "retrieval_status": "fetched_public_primary",
+      "review_status": "fully_read_page_by_page",
+      "visuals_inspected": true,
+      "licence_status": "CC BY-SA 4.0 through source page; PDF page 1 states CC BY-SA",
+      "reuse_disposition": "citation and analysis; share-alike applies to derivatives",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "https://github.com/ept/hermitage",
+      "exact_identity": "git:f029bec8e32af6a9506508638fdf74ef61286225",
+      "retrieval_status": "cloned_public_primary_to_ignored_evidence",
+      "review_status": "selected_artifact_sections_read",
+      "visuals_inspected": false,
+      "licence_status": "CC BY 4.0 in README",
+      "reuse_disposition": "reference only; no code copied or executed",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "https://github.com/ept/ddia2-references",
+      "exact_identity": "git:1752cbd0cfbab5515f1606b48123b7c0d6103c51",
+      "retrieval_status": "cloned_public_primary_to_ignored_evidence",
+      "review_status": "readme_and_chapter_index_reviewed",
+      "visuals_inspected": false,
+      "licence_status": "CC BY-NC 4.0 in README",
+      "reuse_disposition": "bibliographic analysis only; not a substitute for book text",
+      "notes_path": "12-DDIA-2E-DELTA-FOR-STRATEGY-OS.md"
+    },
+    {
+      "url": "https://martin.kleppmann.com/papers/stream-processing.pdf",
+      "exact_identity": "sha256:13793a2c25d6f707e91dfc17884eebc8cc9fc69473156c3ab851ca73117572b2",
+      "retrieval_status": "existing_cached_first_party_pdf",
+      "review_status": "fully_read_page_by_page",
+      "visuals_inspected": true,
+      "licence_status": "Copyright 2016 O'Reilly Media; all rights reserved",
+      "reuse_disposition": "analysis/citation only; no vendoring",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "https://martin.kleppmann.com/papers/olep-acm-queue.pdf",
+      "exact_identity": "sha256:f4b10a04ab4408e99d317ec2ee1d44efa991af1396856f12c8b188c8393fde79",
+      "retrieval_status": "existing_cached_first_party_pdf",
+      "review_status": "fully_read_page_by_page",
+      "visuals_inspected": true,
+      "licence_status": "Copyright 2019 owner/authors; publication rights licensed to ACM",
+      "reuse_disposition": "analysis/citation only; no vendoring",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "https://martin.kleppmann.com/papers/local-first.pdf",
+      "exact_identity": "sha256:60c6e47c3b648fbe73c1613f28251bd5c3f4c3ecd534127653684ee3194c9aa2",
+      "retrieval_status": "existing_cached_first_party_pdf",
+      "review_status": "fully_read_page_by_page",
+      "visuals_inspected": true,
+      "licence_status": "ACM personal/classroom copying notice; other reuse requires permission",
+      "reuse_disposition": "analysis/citation only; no vendoring",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "http://antirez.com/news/101",
+      "exact_identity": "sha256:32fe7cc1e6e757b45af5991fb0cb2ea4bba6c548a0525da3297d07f6af553b86",
+      "retrieval_status": "fetched_public_primary",
+      "review_status": "fully_read",
+      "visuals_inspected": false,
+      "licence_status": "no reuse licence verified",
+      "reuse_disposition": "argument/citation only",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    },
+    {
+      "url": "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/",
+      "exact_identity": "sha256:66446de34d311ca74c9ac901319088ff01baa49bd85b3bbda4e405e2db61d848",
+      "retrieval_status": "fetched_current_official_documentation",
+      "review_status": "selected_sections_read",
+      "visuals_inspected": false,
+      "licence_status": "documentation terms not treated as code-reuse permission",
+      "reuse_disposition": "current implementation guidance only; no Redis adoption",
+      "notes_path": "source-notes/2026-08-29-artifacts-and-ddia2e.md"
+    }
+  ]
+}

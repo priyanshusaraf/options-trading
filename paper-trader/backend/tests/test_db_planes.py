@@ -27,6 +27,43 @@ from app.db.planes import (
 )
 
 
+PHASE5_CAPITAL_TABLES = frozenset({
+    "sizing_policies",
+    "sizing_decisions",
+    "target_position_requests",
+    "candidate_intents",
+    "capital_reservation_heads",
+    "decision_batches",
+    "portfolio_admission_decisions",
+    "capital_reservations",
+    "capital_reservation_events",
+    "position_campaigns",
+    "position_tranches",
+    "fill_allocations",
+})
+
+V0_MONITORING_TABLES = frozenset({
+    "monitoring_assignments",
+    "monitoring_state_snapshots",
+    "monitoring_signal_events",
+    "monitoring_signal_alerts",
+    "monitoring_alert_delivery_attempts",
+    "monitoring_alert_attention_events",
+    "monitoring_latest_state",
+    "monitoring_alert_attention_state",
+    "monitoring_signal_reviews",
+})
+
+V0_OPERATIONS_TABLES = frozenset({
+    "platform_plan_versions", "platform_coupon_definitions", "platform_coupon_redemptions",
+    "platform_billing_bindings", "platform_billing_event_receipts",
+    "platform_entitlement_events", "platform_current_entitlements",
+    "platform_complimentary_entitlement_grants", "platform_analytics_subjects",
+    "platform_analytics_events", "platform_support_requests", "platform_support_replies",
+    "platform_operator_bindings", "platform_operator_audit_events",
+})
+
+
 def test_every_table_has_a_plane():
     """Enumerated from the metadata, not from a hand-written list. A hardcoded list passes
     vacuously on exactly the tables it was written for."""
@@ -34,6 +71,32 @@ def test_every_table_has_a_plane():
     assert not missing, (
         f"these tables have no plane: {missing}. Assign them in app/db/planes.py. Classifying "
         f"forty tables under incident pressure is how the money plane ends up holding a cache.")
+
+
+def test_static_scopes_are_user_facts_with_market_addresses_only_by_value():
+    for name in ('static_instrument_scopes', 'static_instrument_scope_revisions'):
+        assert plane_of(name) is Plane.USER
+        assert all(plane_of(fk.column.table.name) is Plane.USER
+                   for fk in Base.metadata.tables[name].foreign_keys)
+
+
+def test_v2_editor_presentation_is_user_plane_and_references_only_user_lineage():
+    table = Base.metadata.tables["ir_v2_editor_presentations"]
+    assert plane_of(table.name) is Plane.USER
+    assert {(fk.column.table.name, plane_of(fk.column.table.name))
+            for fk in table.foreign_keys} == {("graph_artifacts", Plane.USER)}
+
+
+def test_account_commerce_bridge_is_user_plane_with_only_user_plane_fks():
+    expected = {
+        "account_profile_evidence": {"memberships"},
+        "account_trial_uses": {"memberships", "account_profile_evidence"},
+    }
+    for name, targets in expected.items():
+        table = Base.metadata.tables[name]
+        assert plane_of(name) is Plane.USER
+        assert {fk.column.table.name for fk in table.foreign_keys} == targets
+        assert all(plane_of(fk.column.table.name) is Plane.USER for fk in table.foreign_keys)
 
 
 def test_the_map_has_no_tables_that_do_not_exist():
@@ -81,6 +144,51 @@ def test_the_money_plane_holds_the_ledger_and_the_credentials():
         assert table in money, f"{table} must be money-plane (ADR 0015 §1, §2)"
 
 
+def test_all_twelve_capital_tables_are_one_money_plane_fk_component():
+    """Capital decisions and their effects must copy and restore as one authority chain."""
+    assert {table: TABLE_PLANES[table] for table in PHASE5_CAPITAL_TABLES} == {
+        table: Plane.MONEY for table in PHASE5_CAPITAL_TABLES
+    }
+    crossings = {
+        (table_name, fk.parent.name, fk.column.table.name)
+        for table_name in PHASE5_CAPITAL_TABLES
+        for fk in Base.metadata.tables[table_name].foreign_keys
+        if plane_of(fk.column.table.name) is not Plane.MONEY
+    }
+    assert crossings == set(), (
+        "Phase 5 capital foreign keys must stay inside MONEY: "
+        f"{sorted(crossings)}"
+    )
+
+
+def test_all_nine_v0_monitoring_tables_are_one_user_plane_fk_component():
+    assert {table: TABLE_PLANES[table] for table in V0_MONITORING_TABLES} == {
+        table: Plane.USER for table in V0_MONITORING_TABLES
+    }
+    crossings = {
+        (table_name, fk.parent.name, fk.column.table.name)
+        for table_name in V0_MONITORING_TABLES
+        for fk in Base.metadata.tables[table_name].foreign_keys
+        if plane_of(fk.column.table.name) is not Plane.USER
+    }
+    assert crossings == set(), (
+        "V0 monitoring foreign keys must stay inside USER: "
+        f"{sorted(crossings)}"
+    )
+
+
+def test_all_platform_operations_tables_are_one_blind_plane_fk_component():
+    assert {table: TABLE_PLANES[table] for table in V0_OPERATIONS_TABLES} == {
+        table: Plane.OPERATIONS for table in V0_OPERATIONS_TABLES
+    }
+    assert {
+        (table_name, fk.parent.name, fk.column.table.name)
+        for table_name in V0_OPERATIONS_TABLES
+        for fk in Base.metadata.tables[table_name].foreign_keys
+        if plane_of(fk.column.table.name) is not Plane.OPERATIONS
+    } == set()
+
+
 def test_the_market_plane_holds_nothing_whose_loss_is_permanent():
     """Market-plane data is defined by being re-fetchable. A table here whose loss is permanent
     is a mis-assignment, and the consequence is that it gets the cheapest durability in the
@@ -119,7 +227,11 @@ def test_the_grandfathered_crossings_are_all_real():
 
 
 def test_every_grandfathered_crossing_has_an_explicitly_reviewed_plane_shape():
-    """The finite debt set names known provenance/auth/preference links, never a new mystery."""
+    """The finite debt set names known provenance/auth/preference links, never a new mystery.
+
+    The six entries below predate the Phase 5 capital tables. Assigning the complete
+    capital component to MONEY must not expand this debt set.
+    """
     expected = {
         ("ir_paper_deployments", "project_id"): (Plane.MONEY, Plane.USER),
         ("ir_shadow_deployments", "project_id"): (Plane.MONEY, Plane.USER),

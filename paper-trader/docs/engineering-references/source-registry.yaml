@@ -1,0 +1,2211 @@
+{
+  "format_note": "JSON syntax is valid YAML 1.2; kept dependency-free and validated with the standard library.",
+  "schema_version": 1,
+  "sources": [
+    {
+      "source_id": "KLEPPMANN",
+      "name": "Martin Kleppmann / Cambridge / DDIA",
+      "canonical_root": "https://martin.kleppmann.com/",
+      "author_or_organisation": "Martin Kleppmann and collaborators",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "distributed correctness",
+        "causality",
+        "evidence",
+        "governance"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5",
+        "V2",
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "Review mandate \u00a74.1 and \u00a716.3; archive/talks/publications and public DDIA 2e delta"
+      ],
+      "current_version_or_date": "Seven first-party records fully read through 2026-08-29; 373-record first-party inventory preserved; bounded PDF/DDIA 2e continuation recorded in exact child sources",
+      "last_checked": "2026-08-29",
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Bounded packet only: four selected PDFs and visuals, official DDIA 2e table of contents/reference artifact, Hermitage and the Redlock counteranalysis. Remaining first-party and admitted one-hop sources are not represented as read.",
+      "status": "bounded_artifact_and_ddia2e_delta_review",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "AWS",
+      "name": "AWS Builders Library",
+      "canonical_root": "https://aws.amazon.com/builders-library/",
+      "author_or_organisation": "Amazon Web Services",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "timeouts",
+        "retries",
+        "idempotency",
+        "overload",
+        "queues"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Idempotent APIs; retries/backoff/jitter; leader election; queue backlogs; avoiding fallback"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "SRE",
+      "name": "Google SRE",
+      "canonical_root": "https://sre.google/books/",
+      "author_or_organisation": "Google",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "SLOs",
+        "monitoring",
+        "incidents",
+        "recovery",
+        "capacity"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "SLOs/error budgets; overload/cascading failures; reliable pipelines; incident response"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "JEPSEN",
+      "name": "Jepsen",
+      "canonical_root": "https://jepsen.io/consistency",
+      "author_or_organisation": "Jepsen",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "consistency",
+        "anomalies",
+        "fault injection"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Consistency models and analyses relevant to the actual database"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "POSTGRESQL",
+      "name": "PostgreSQL documentation",
+      "canonical_root": "https://www.postgresql.org/docs/16/",
+      "author_or_organisation": "PostgreSQL Global Development Group",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "transactions",
+        "locking",
+        "recovery"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "MVCC; transaction isolation \u00a713.2; explicit locking; verify actual target version",
+        "Backup transport follow-up: https://www.postgresql.org/docs/16/libpq-connect.html and https://www.postgresql.org/docs/16/libpq-envars.html"
+      ],
+      "current_version_or_date": "PostgreSQL 16: prior section 13.2.1 review; bounded libpq connection/SSL/environment sections checked 2026-09-05",
+      "last_checked": "2026-09-05",
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Selected sections read; pure process-spec defect reproduced. No production database, remote TLS handshake or full restore was inspected in this review.",
+      "status": "selected_section_review",
+      "owner": "Root reconciliation; see reading-packets/2026-09-05-planetscale-database-failures.md"
+    },
+    {
+      "source_id": "STRIPE",
+      "name": "Stripe Engineering",
+      "canonical_root": "https://stripe.com/blog/engineering",
+      "author_or_organisation": "Stripe",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "ledger",
+        "idempotency",
+        "migrations"
+      ],
+      "product_versions": [
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Ledger; idempotency; zero-downtime migrations"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "MODERN_TREASURY",
+      "name": "Modern Treasury",
+      "canonical_root": "https://www.moderntreasury.com/journal",
+      "author_or_organisation": "Modern Treasury",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "ledger",
+        "reconciliation",
+        "balances"
+      ],
+      "product_versions": [
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Ledger concurrency; pending/posted/available balances; reconciliation"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "TIGERBEETLE",
+      "name": "TigerBeetle",
+      "canonical_root": "https://docs.tigerbeetle.com/",
+      "author_or_organisation": "TigerBeetle",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "financial state machines",
+        "serializability"
+      ],
+      "product_versions": [
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Guarantees; transfers; independent Jepsen analysis"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "FOUNDATIONDB",
+      "name": "FoundationDB testing",
+      "canonical_root": "https://apple.github.io/foundationdb/testing.html",
+      "author_or_organisation": "FoundationDB / Apple",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "deterministic simulation",
+        "faults",
+        "replay"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Seeded simulation and recovery testing; extract only bounded test seams"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "OWASP",
+      "name": "OWASP ASVS and Cheat Sheets",
+      "canonical_root": "https://owasp.org/www-project-application-security-verification-standard/",
+      "author_or_organisation": "OWASP",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "application security",
+        "tenancy",
+        "sessions"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Versioned ASVS scope; auth, secrets, upload, logging and tenancy cheat sheets"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "CISA",
+      "name": "CISA Secure by Design",
+      "canonical_root": "https://www.cisa.gov/securebydesign",
+      "author_or_organisation": "CISA",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "secure development"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Customer-security outcomes and secure product defaults"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "NIST_SSDF",
+      "name": "NIST SSDF",
+      "canonical_root": "https://csrc.nist.gov/projects/ssdf",
+      "author_or_organisation": "NIST",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "secure development",
+        "supply chain"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Versioned SSDF requirements matched to release evidence"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "SLSA",
+      "name": "SLSA",
+      "canonical_root": "https://slsa.dev/spec/",
+      "author_or_organisation": "SLSA project",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "artifact provenance",
+        "supply chain"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Traceable baseline; no assumed certification level"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "OPENTELEMETRY",
+      "name": "OpenTelemetry specifications",
+      "canonical_root": "https://opentelemetry.io/docs/",
+      "author_or_organisation": "OpenTelemetry",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "observability",
+        "correlation",
+        "redaction"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Signals, semantic conventions, redaction and export boundaries"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "TEMPORAL",
+      "name": "Temporal",
+      "canonical_root": "https://docs.temporal.io/",
+      "author_or_organisation": "Temporal",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "durable workflows",
+        "replay",
+        "cancellation"
+      ],
+      "product_versions": [
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "Compare current jobs; replay/versioning; external-effect boundaries"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "DBOS",
+      "name": "DBOS",
+      "canonical_root": "https://docs.dbos.dev/",
+      "author_or_organisation": "DBOS",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "durable workflows",
+        "retries"
+      ],
+      "product_versions": [
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "Compare current jobs; resumability; versioning; exactly-once limits"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "RESTATE",
+      "name": "Restate",
+      "canonical_root": "https://docs.restate.dev/",
+      "author_or_organisation": "Restate",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "durable execution",
+        "key coordination"
+      ],
+      "product_versions": [
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "Compare current jobs; cancellation; replay/versioning"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "TLA",
+      "name": "TLA+",
+      "canonical_root": "https://lamport.azurewebsites.net/tla/tla.html",
+      "author_or_organisation": "Leslie Lamport",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "formal state machines"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Bounded claim/admission/lifecycle models with implementation correspondence"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "WAYNE",
+      "name": "Applied formal methods",
+      "canonical_root": "https://www.hillelwayne.com/",
+      "author_or_organisation": "Hillel Wayne",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "formal methods"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Select directly relevant applied modeling articles"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "HYPOTHESIS",
+      "name": "Hypothesis",
+      "canonical_root": "https://hypothesis.works/articles/",
+      "author_or_organisation": "Hypothesis authors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "property and stateful testing"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Rule-based state machines; reproducible counterexamples"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "FOWLER",
+      "name": "Distributed systems patterns",
+      "canonical_root": "https://martinfowler.com/articles/patterns-of-distributed-systems/",
+      "author_or_organisation": "Martin Fowler and contributors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "evolutionary migration",
+        "patterns"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "Incremental replacement; patterns only after repository failure proof"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "CLOUDFLARE",
+      "name": "Cloudflare postmortems",
+      "canonical_root": "https://blog.cloudflare.com/tag/post-mortem/",
+      "author_or_organisation": "Cloudflare",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "incidents",
+        "config",
+        "retries",
+        "rollback"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Initiator, enabling conditions, detection and recovery in exact incidents"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "GITHUB",
+      "name": "GitHub Engineering",
+      "canonical_root": "https://github.blog/engineering/",
+      "author_or_organisation": "GitHub",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "incidents",
+        "migrations",
+        "operations"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Only incidents with applicable failure models"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "SHOPIFY",
+      "name": "Shopify Engineering",
+      "canonical_root": "https://shopify.engineering/",
+      "author_or_organisation": "Shopify",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "tenancy",
+        "migrations",
+        "job retention"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Targeted incidents and implementation case studies"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "NAUTILUS",
+      "name": "NautilusTrader",
+      "canonical_root": "https://nautilustrader.io/docs/latest/",
+      "author_or_organisation": "NautilusTrader",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "research/live semantics",
+        "reconciliation"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "Event/replay semantics; exact-commit and licence gate before reuse"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "LEAN",
+      "name": "QuantConnect LEAN",
+      "canonical_root": "https://www.quantconnect.com/docs/v2/",
+      "author_or_organisation": "QuantConnect",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "research",
+        "fees",
+        "fills",
+        "warmup"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "Causality, corporate actions, configurable cost/fill models"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "FREQTRADE",
+      "name": "Freqtrade",
+      "canonical_root": "https://docs.freqtrade.io/",
+      "author_or_organisation": "Freqtrade contributors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "lookahead",
+        "recursive startup drift"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "required_articles_or_sections": [
+        "Lookahead and recursive-analysis methods"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "HFTBACKTEST",
+      "name": "hftbacktest",
+      "canonical_root": "https://hftbacktest.readthedocs.io/",
+      "author_or_organisation": "hftbacktest contributors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "queue/fill/latency simulation"
+      ],
+      "product_versions": [
+        "V1.5",
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "Later data- and horizon-specific models; not a V0 dependency"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "JANE_STREET",
+      "name": "Jane Street Engineering",
+      "canonical_root": "https://blog.janestreet.com/",
+      "author_or_organisation": "Jane Street",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "types",
+        "testing",
+        "performance"
+      ],
+      "product_versions": [
+        "V0",
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "Domain modeling and testing; performance only with profiling"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "MECHANICAL_SYMPATHY",
+      "name": "Mechanical Sympathy",
+      "canonical_root": "https://mechanical-sympathy.blogspot.com/",
+      "author_or_organisation": "Martin Thompson and contributors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "queues",
+        "latency",
+        "backpressure"
+      ],
+      "product_versions": [
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "Measured needs only; no low-latency rewrite"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "source_id": "AERON",
+      "name": "Aeron",
+      "canonical_root": "https://aeron.io/docs/",
+      "author_or_organisation": "Aeron authors",
+      "authority_type": "first-party documentation or author case study; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "sequencing",
+        "archive",
+        "replay"
+      ],
+      "product_versions": [
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "Demand-led performance work only"
+      ],
+      "current_version_or_date": null,
+      "last_checked": null,
+      "license": "Per-artifact verification required before reuse",
+      "vendor_incentive_or_bias": "Vendor/author perspective; verify actual dependency behavior independently",
+      "known_limitations": "Registered from owner mandate; registration does not mean fetched, read, current, or accepted",
+      "status": "registered_not_reviewed",
+      "owner": "owner-authorized bounded reference capsule"
+    },
+    {
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "numeric semantics",
+        "research validity",
+        "precision and context isolation"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "last_checked": "2026-08-28",
+      "owner": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "last_checked_by": "correction owner, as reported in reference-claims.md",
+      "indexed_by": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "indexing_basis": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/reference-claims.md",
+        "sha256": "16ce66e26b31ffc8b75d0294650a42381c797da0536677a44717401f9fa857f1",
+        "role": "correction-owner source/claim application receipt",
+        "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+      },
+      "indexer_read_state": "receipt and provenance metadata read; upstream source content not reread",
+      "index_note": "source-notes/2026-08-28-core-numerical-reference-index.md",
+      "independent_acceptance": false,
+      "assurance_status": "PENDING",
+      "assurance_owner_task": "01a04883-7dc6-71a1-bb51-9e9dff45c450",
+      "source_id": "PYTHON_STDLIB_3_13",
+      "name": "Official Python 3.13 math and Decimal documentation",
+      "canonical_root": "https://docs.python.org/3.13/",
+      "author_or_organisation": "Python Software Foundation / Python documentation contributors",
+      "authority_type": "official implementation documentation; imported source-reading receipt",
+      "required_articles_or_sections": [
+        "https://docs.python.org/3.13/library/math.html#math.log1p",
+        "https://docs.python.org/3.13/library/decimal.html#decimal.Decimal",
+        "https://docs.python.org/3.13/library/decimal.html#decimal.Context"
+      ],
+      "current_version_or_date": "3.13 maintenance documentation 3.13.15, reported by correction owner on 2026-08-28; not rechecked by indexer",
+      "executed_runtime_version": "3.13.5",
+      "runtime_receipt": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/arithmetic-executor-receipt.json",
+        "sha256": "c97607eb05ad2e733af0982795ad3be389ffd7cb83ab7f9e546dce65ee602a85",
+        "role": "actual local arithmetic executor; separate from documentation version",
+        "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+      },
+      "source_content_sha256": null,
+      "license": "Upstream licence not reassessed by indexer; no code reuse or dependency adoption",
+      "vendor_incentive_or_bias": "Official API behavior documentation is not independent numerical acceptance",
+      "known_limitations": "No per-page content digest is supplied in the indexed reference receipt. Upstream pages not reread; local execution and independent acceptance remain distinct.",
+      "status": "source_checked_by_correction_owner_receipt_indexed_assurance_pending",
+      "owner_role": "professional-reference registry indexer",
+      "requested_by_coordinator_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+      "correction_owner_task": null,
+      "correction_owner_attribution": "Implementation/correction owner of the sealed F02/F03 package; the indexed reference receipt does not name a task ID."
+    },
+    {
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "numeric semantics",
+        "research validity",
+        "precision and context isolation"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "last_checked": "2026-08-28",
+      "owner": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "last_checked_by": "correction owner, as reported in reference-claims.md",
+      "indexed_by": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "indexing_basis": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-return-stability-correction/reference-claims.md",
+        "sha256": "16ce66e26b31ffc8b75d0294650a42381c797da0536677a44717401f9fa857f1",
+        "role": "correction-owner source/claim application receipt",
+        "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+      },
+      "indexer_read_state": "receipt and provenance metadata read; upstream source content not reread",
+      "index_note": "source-notes/2026-08-28-core-numerical-reference-index.md",
+      "independent_acceptance": false,
+      "assurance_status": "PENDING",
+      "assurance_owner_task": "01a04883-7dc6-71a1-bb51-9e9dff45c450",
+      "source_id": "STRATEGY_OS_CORE_MATH_SPEC",
+      "name": "Independent core-math specification and retained assurance counterexamples",
+      "canonical_root": ".agent/runs/post-phase5-indicator-accuracy-core-math-assurance/",
+      "author_or_organisation": "Different-owner original core-math assurance and accepted Strategy OS mathematical specifications",
+      "authority_type": "internal independent specification evidence; original assurance REJECT retained",
+      "required_articles_or_sections": [
+        "Original immutable assurance oracle and REJECT",
+        "Exact Fraction counterchecks and accepted definitions named by the correction receipt"
+      ],
+      "current_version_or_date": "Sealed original REJECT and accepted definitions referenced by 2026-08-28 correction receipt",
+      "license": "Internal repository evidence; no third-party code adoption",
+      "vendor_incentive_or_bias": "Specification, implementation and new acceptance owners are distinct",
+      "known_limitations": "Indexer does not read oracle implementations or author expected values; new independent acceptance remains pending. Original REJECT is not superseded by local correction tests.",
+      "status": "independent_specification_receipt_indexed_not_new_assurance",
+      "prior_reject": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-math-assurance/closure-seal.json",
+        "sha256": "ece95de4fa793cae8f86ffb2ac30367a79b0d76b147a715e27ed216fb2ecac0d",
+        "role": "historical independent REJECT; immutable negative evidence",
+        "read_state": "receipt_metadata_only; no numerical re-verification by indexer"
+      },
+      "owner_role": "professional-reference registry indexer",
+      "requested_by_coordinator_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+      "correction_owner_task": null,
+      "correction_owner_attribution": "Implementation/correction owner of the sealed F02/F03 package; the indexed reference receipt does not name a task ID."
+    },
+    {
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "level moments",
+        "covariance/correlation/OLS",
+        "research validity"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "last_checked": null,
+      "indexed_at": "2026-08-28",
+      "metadata_hash_checked_at": "2026-08-28",
+      "fresh_source_reading_at": null,
+      "new_upstream_retrieval_in_correction": false,
+      "new_upstream_retrieval_by_indexer": false,
+      "fresh_reading_claimed_by_indexer": false,
+      "owner": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "owner_role": "professional-reference registry indexer",
+      "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+      "requested_by_coordinator_task": "01a048c2-42d6-7850-94e9-af0f2ed5e0e1",
+      "indexed_from": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/reference-application.md",
+        "sha256": "e4a4a0fd34c546f3eca88b095de02b940f1aca14e4a3db8750a39d304ac9b045",
+        "role": "F04 correction-owner source application",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification",
+        "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af"
+      },
+      "source_authority_receipt": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-authority.json",
+        "sha256": "e5f2864f8ac3daec0ff054f55600ecd7a16d5d8f9138000746413cf495395a6e",
+        "role": "existing captured-source authority, reused without new retrieval",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+      },
+      "index_note": "source-notes/2026-08-28-f04-reference-index.md",
+      "independent_acceptance": false,
+      "assurance_status": "PENDING",
+      "assurance_owner_task": "01a048c6-8031-7c93-9b05-2fef7b25c499",
+      "source_id": "NIST_LEAST_SQUARES_CAPTURE",
+      "name": "Captured NIST least-squares documentation",
+      "canonical_root": "https://www.itl.nist.gov/div898/handbook/pmd/section1/pmd141.htm",
+      "author_or_organisation": "NIST",
+      "authority_type": "reused captured public primary documentation",
+      "required_articles_or_sections": [
+        "nist-least-squares, existing source-authority record"
+      ],
+      "current_version_or_date": "captured content 6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+      "source_content_sha256": "6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+      "captured_source": {
+        "kind": "PUBLIC_PRIMARY_DOCUMENTATION",
+        "url": "https://www.itl.nist.gov/div898/handbook/pmd/section1/pmd141.htm",
+        "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/nist-least-squares.html",
+        "sha256": "6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+        "version": "captured content 6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+        "use": "Public documentation REFERENCE ONLY; no copied implementation or redistributed page text"
+      },
+      "license": "Reference-only use as recorded by source authority; no new licensing assessment or copied implementation",
+      "vendor_incentive_or_bias": "Conceptual/statistical reference, not certification of Strategy OS arithmetic",
+      "known_limitations": "Captured bytes identify the reused source; current upstream contents and original reading/capture timestamp are not established by this index.",
+      "status": "REUSED_CAPTURED_PRIMARY_REFERENCE_METADATA_INDEXED"
+    },
+    {
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "level moments",
+        "covariance/correlation/OLS",
+        "research validity"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "last_checked": null,
+      "indexed_at": "2026-08-28",
+      "metadata_hash_checked_at": "2026-08-28",
+      "fresh_source_reading_at": null,
+      "new_upstream_retrieval_in_correction": false,
+      "new_upstream_retrieval_by_indexer": false,
+      "fresh_reading_claimed_by_indexer": false,
+      "owner": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "owner_role": "professional-reference registry indexer",
+      "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+      "requested_by_coordinator_task": "01a048c2-42d6-7850-94e9-af0f2ed5e0e1",
+      "indexed_from": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/reference-application.md",
+        "sha256": "e4a4a0fd34c546f3eca88b095de02b940f1aca14e4a3db8750a39d304ac9b045",
+        "role": "F04 correction-owner source application",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification",
+        "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af"
+      },
+      "source_authority_receipt": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-authority.json",
+        "sha256": "e5f2864f8ac3daec0ff054f55600ecd7a16d5d8f9138000746413cf495395a6e",
+        "role": "existing captured-source authority, reused without new retrieval",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+      },
+      "index_note": "source-notes/2026-08-28-f04-reference-index.md",
+      "independent_acceptance": false,
+      "assurance_status": "PENDING",
+      "assurance_owner_task": "01a048c6-8031-7c93-9b05-2fef7b25c499",
+      "source_id": "TA_LIB_0_7_1_LEVEL_REFERENCES",
+      "name": "Pinned TA-Lib 0.7.1 CORREL and LINEARREG slope/intercept references",
+      "canonical_root": "https://github.com/TA-Lib/ta-lib",
+      "author_or_organisation": "TA-Lib maintainers",
+      "authority_type": "reused captured official implementation reference, not runtime adoption",
+      "required_articles_or_sections": [
+        "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_CORREL.c",
+        "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_SLOPE.c",
+        "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_INTERCEPT.c"
+      ],
+      "current_version_or_date": "v0.7.1 / commit 2247d599bddf37ed37e3a709371517e46efc66f6",
+      "captured_sources": [
+        {
+          "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+          "repository": "https://github.com/TA-Lib/ta-lib",
+          "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+          "version": "v0.7.1",
+          "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_CORREL.c",
+          "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_CORREL.c",
+          "sha256": "1c49cb42ddaadf9175dbf91bc21f533e2cf520fdf8c3edb30082e85bb6c03fad",
+          "licence": "BSD-3-Clause",
+          "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+          "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+        },
+        {
+          "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+          "repository": "https://github.com/TA-Lib/ta-lib",
+          "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+          "version": "v0.7.1",
+          "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_SLOPE.c",
+          "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_SLOPE.c",
+          "sha256": "22536abd4e9b31b9296546ce2937ee3481efbdf6c251fa8380aab14262ed7a90",
+          "licence": "BSD-3-Clause",
+          "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+          "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+        },
+        {
+          "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+          "repository": "https://github.com/TA-Lib/ta-lib",
+          "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+          "version": "v0.7.1",
+          "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/src/ta_func/ta_LINEARREG_INTERCEPT.c",
+          "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_INTERCEPT.c",
+          "sha256": "507fa74f0b7f843198f20d36deb5630a88f97f370392b959dbc651a3995c2357",
+          "licence": "BSD-3-Clause",
+          "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+          "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+        }
+      ],
+      "license": "BSD-3-Clause as recorded in the captured authority; no new code reuse",
+      "license_record": {
+        "kind": "PINNED_OFFICIAL_IMPLEMENTATION_REFERENCE",
+        "repository": "https://github.com/TA-Lib/ta-lib",
+        "commit": "2247d599bddf37ed37e3a709371517e46efc66f6",
+        "version": "v0.7.1",
+        "url": "https://raw.githubusercontent.com/TA-Lib/ta-lib/2247d599bddf37ed37e3a709371517e46efc66f6/LICENSE",
+        "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+        "sha256": "13f42bb183695b0c9b2e7c7282c1b0f5ac83c990bef37515df0639667f72a327",
+        "licence": "BSD-3-Clause",
+        "licence_path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+        "use": "REFERENCE ONLY; not a runtime/test dependency adoption"
+      },
+      "vendor_incentive_or_bias": "Implementation behavior is not a universal mathematical or parity guarantee",
+      "known_limitations": "No generic ta_LINEARREG.c capture is asserted. Only recorded CORREL, LINEARREG_SLOPE and LINEARREG_INTERCEPT bytes are indexed; raw native limitations remain in the local evidence.",
+      "status": "REUSED_PINNED_IMPLEMENTATION_REFERENCE_METADATA_INDEXED"
+    },
+    {
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "level moments",
+        "covariance/correlation/OLS",
+        "research validity"
+      ],
+      "product_versions": [
+        "V0"
+      ],
+      "last_checked": null,
+      "indexed_at": "2026-08-28",
+      "metadata_hash_checked_at": "2026-08-28",
+      "fresh_source_reading_at": null,
+      "new_upstream_retrieval_in_correction": false,
+      "new_upstream_retrieval_by_indexer": false,
+      "fresh_reading_claimed_by_indexer": false,
+      "owner": "01a04855-b00a-7cc1-b783-767ae026d5e5",
+      "owner_role": "professional-reference registry indexer",
+      "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af",
+      "requested_by_coordinator_task": "01a048c2-42d6-7850-94e9-af0f2ed5e0e1",
+      "indexed_from": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/reference-application.md",
+        "sha256": "e4a4a0fd34c546f3eca88b095de02b940f1aca14e4a3db8750a39d304ac9b045",
+        "role": "F04 correction-owner source application",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification",
+        "correction_owner_task": "01a0487e-b73b-76a0-bffd-870f6f6bc6af"
+      },
+      "source_authority_receipt": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-authority.json",
+        "sha256": "e5f2864f8ac3daec0ff054f55600ecd7a16d5d8f9138000746413cf495395a6e",
+        "role": "existing captured-source authority, reused without new retrieval",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+      },
+      "index_note": "source-notes/2026-08-28-f04-reference-index.md",
+      "independent_acceptance": false,
+      "assurance_status": "PENDING",
+      "assurance_owner_task": "01a048c6-8031-7c93-9b05-2fef7b25c499",
+      "source_id": "STRATEGY_OS_F04_SPEC",
+      "name": "Independent F04 rational specification and retained REJECT",
+      "canonical_root": ".agent/runs/post-phase5-indicator-accuracy-core-correction-assurance/",
+      "author_or_organisation": "Independent task 01a04883-7dc6-71a1-bb51-9e9dff45c450 and accepted seven semantic definitions",
+      "authority_type": "internal independent specification and counterexamples, separate from new acceptance",
+      "required_articles_or_sections": [
+        "Sealed F04 REJECT; pre-inspection rational oracle; accepted seven definitions, as identified by the F04 source application"
+      ],
+      "current_version_or_date": "F04 REJECT seal c9cebd567443836e1537cf240dc620a728ba13b606d038083b616d80a17a1001",
+      "prior_reject": {
+        "path": ".agent/runs/post-phase5-indicator-accuracy-core-correction-assurance/closure-seal.json",
+        "sha256": "c9cebd567443836e1537cf240dc620a728ba13b606d038083b616d80a17a1001",
+        "role": "original F04 independent REJECT",
+        "indexer_read_state": "receipt/metadata/hash check only; no formula/oracle inspection or numerical verification"
+      },
+      "independent_specification_owner_task": "01a04883-7dc6-71a1-bb51-9e9dff45c450",
+      "license": "Internal evidence; no external code adoption",
+      "vendor_incentive_or_bias": "Original oracle, correction owner, coordinator, indexer and new assurer are distinct roles",
+      "known_limitations": "Indexer reads no oracle implementation or expected vectors. Historical REJECT remains immutable; current corrected candidate is not independently accepted.",
+      "status": "INDEPENDENT_SPECIFICATION_RECEIPT_INDEXED_NEW_ASSURANCE_PENDING"
+    },
+    {
+      "source_id": "OWASP_BROWSER_AUTH_20260829",
+      "name": "OWASP authentication/session/CSRF/password-storage selected sections",
+      "canonical_root": "https://github.com/OWASP/CheatSheetSeries",
+      "current_version_or_date": "c735a6edc4c645eb975754cd908296686a5b3049",
+      "primary_or_secondary": "primary",
+      "last_checked": "2026-08-29",
+      "owner": "01a04a5b-40f5-73a0-a443-7fa8ea67a348",
+      "required_articles_or_sections": [
+        "Authentication",
+        "Session Management",
+        "CSRF Prevention",
+        "Password Storage"
+      ],
+      "status": "BOUNDED_SOURCE_APPLICATION_PENDING_PRODUCT_REVIEW",
+      "source_receipt": ".agent/runs/strategy-os-v0-auth-dataset-parallel-materialization/references/receipt.json",
+      "source_receipt_sha256": "942c3ba61df4280e5b63730ff659e3fb2840d5ee8b063369885bfc9ab00c5c3c",
+      "independent_acceptance": false,
+      "known_limitations": "Bounded inspection and primitive reuse probe only; exact nonclaims in source note."
+    },
+    {
+      "source_id": "PYCA_CRYPTOGRAPHY_50_0_0_AUTH",
+      "name": "Existing pyca Argon2id implementation",
+      "canonical_root": "https://github.com/pyca/cryptography",
+      "current_version_or_date": "dcb7050b807b00392fa9fe2eac7cb362fcf355cc",
+      "primary_or_secondary": "primary",
+      "last_checked": "2026-08-29",
+      "owner": "01a04a5b-40f5-73a0-a443-7fa8ea67a348",
+      "required_articles_or_sections": [
+        "argon2.py",
+        "backend/kdf.rs constructor/derive/verify/PHC",
+        "test_argon2.py verification and vectors",
+        "LICENSE/BSD terms"
+      ],
+      "status": "BOUNDED_SOURCE_APPLICATION_PENDING_PRODUCT_REVIEW",
+      "source_receipt": ".agent/runs/strategy-os-v0-auth-dataset-parallel-materialization/references/receipt.json",
+      "source_receipt_sha256": "942c3ba61df4280e5b63730ff659e3fb2840d5ee8b063369885bfc9ab00c5c3c",
+      "independent_acceptance": false,
+      "known_limitations": "Bounded inspection and primitive reuse probe only; exact nonclaims in source note."
+    },
+    {
+      "source_id": "RFC9106_AUTH_VECTOR",
+      "name": "RFC9106 Argon2id known-answer test",
+      "canonical_root": "https://www.rfc-editor.org/rfc/rfc9106.html",
+      "current_version_or_date": "RFC9106 2021-09",
+      "primary_or_secondary": "primary",
+      "last_checked": "2026-08-29",
+      "owner": "01a04a5b-40f5-73a0-a443-7fa8ea67a348",
+      "required_articles_or_sections": [
+        "5.3 Argon2id Test Vectors"
+      ],
+      "status": "BOUNDED_SOURCE_APPLICATION_PENDING_PRODUCT_REVIEW",
+      "source_receipt": ".agent/runs/strategy-os-v0-auth-dataset-parallel-materialization/references/receipt.json",
+      "source_receipt_sha256": "942c3ba61df4280e5b63730ff659e3fb2840d5ee8b063369885bfc9ab00c5c3c",
+      "independent_acceptance": false,
+      "known_limitations": "Bounded inspection and primitive reuse probe only; exact nonclaims in source note."
+    },
+    {
+      "source_id": "CAMBRIDGE_DISTSYS_2022",
+      "name": "Cambridge Distributed Systems lecture notes",
+      "canonical_root": "https://www.cl.cam.ac.uk/teaching/2122/ConcDisSys/dist-sys-notes.pdf",
+      "author_or_organisation": "Martin Kleppmann / University of Cambridge",
+      "authority_type": "primary public course material; not Strategy OS authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "partial failure",
+        "clocks",
+        "causality",
+        "replication",
+        "consensus",
+        "consistency"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5",
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "91 pages; especially pages 17-23, 25-43, 50, 58, 66-78"
+      ],
+      "current_version_or_date": "Michaelmas 2021/22; PDF created 2022-02-27",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "4a754e36358948d4f98cb26fb8ecd44d868024d3bb0f26db30851158ddea3064",
+      "license": "CC BY-SA, as stated on page 1 and the author course page; exact version linked by the source page is CC BY-SA 4.0",
+      "vendor_incentive_or_bias": "Educational synthesis; verify actual dependency behavior and repository invariants directly",
+      "known_limitations": "The packet inspected the 91-page 2021/22 notes, not every later course edition or video demonstration.",
+      "status": "fully_read_page_by_page_visuals_inspected",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "KLEPPMANN_STREAM_PROCESSING_2016",
+      "name": "Making Sense of Stream Processing",
+      "canonical_root": "https://martin.kleppmann.com/papers/stream-processing.pdf",
+      "author_or_organisation": "Martin Kleppmann / O'Reilly Media",
+      "authority_type": "author technical book; not Strategy OS authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "event logs",
+        "dual writes",
+        "change data capture",
+        "derived state",
+        "materialized views"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "183 pages; especially pages 32, 49, 56-64, 82-100, 152-178"
+      ],
+      "current_version_or_date": "First edition, March 2016",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "13793a2c25d6f707e91dfc17884eebc8cc9fc69473156c3ab851ca73117572b2",
+      "license": "Copyright 2016 O'Reilly Media; all rights reserved. Analysis/citation only; no vendoring or reuse permission inferred.",
+      "vendor_incentive_or_bias": "The text discusses Kafka/Confluent-era implementations; durable principles require current repository evidence and do not imply adoption.",
+      "known_limitations": "Historical product examples and performance claims were not treated as current implementation specifications.",
+      "status": "fully_read_page_by_page_visuals_inspected",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "KLEPPMANN_OLEP_2019",
+      "name": "Online Event Processing",
+      "canonical_root": "https://martin.kleppmann.com/papers/olep-acm-queue.pdf",
+      "author_or_organisation": "Martin Kleppmann, Alastair R. Beresford and Boerge Svingen / ACM Queue",
+      "authority_type": "primary author paper; not Strategy OS authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "heterogeneous writes",
+        "ordering",
+        "event logs",
+        "derived views",
+        "recovery"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V2"
+      ],
+      "required_articles_or_sections": [
+        "All 21 pages and three architecture/payment diagrams"
+      ],
+      "current_version_or_date": "January-February 2019",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "f4b10a04ab4408e99d317ec2ee1d44efa991af1396856f12c8b188c8393fde79",
+      "license": "Copyright 2019 owner/authors; publication rights licensed to ACM. No broad reuse licence identified.",
+      "vendor_incentive_or_bias": "Architecture argument; source explicitly records isolation and unbounded-lag limitations.",
+      "known_limitations": "OLEP is not a universal replacement for transactions and does not provide cross-store read isolation by itself.",
+      "status": "fully_read_page_by_page_visuals_inspected",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "KLEPPMANN_LOCAL_FIRST_2019",
+      "name": "Local-First Software: You Own Your Data, in spite of the Cloud",
+      "canonical_root": "https://martin.kleppmann.com/papers/local-first.pdf",
+      "author_or_organisation": "Martin Kleppmann, Adam Wiggins, Peter van Hardenberg and Mark McGranaghan",
+      "authority_type": "primary research paper; future-seam input only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "offline work",
+        "collaboration",
+        "conflicts",
+        "portability",
+        "privacy",
+        "user control"
+      ],
+      "product_versions": [
+        "V0",
+        "V2",
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "All 25 pages; especially pages 4-5, 9, 14-15 and 22"
+      ],
+      "current_version_or_date": "Onward! 2019",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "60c6e47c3b648fbe73c1613f28251bd5c3f4c3ecd534127653684ee3194c9aa2",
+      "license": "ACM personal/classroom copying notice on page 1; other reuse requires permission. No repository vendoring.",
+      "vendor_incentive_or_bias": "Research and prototype perspective; product demand and executable semantic safety remain separate gates.",
+      "known_limitations": "The paper does not prove that arbitrary executable strategy graphs can merge safely or that Strategy OS needs CRDTs.",
+      "status": "fully_read_page_by_page_visuals_inspected",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "HERMITAGE_F029BEC8",
+      "name": "Hermitage transaction isolation artifact",
+      "canonical_root": "https://github.com/ept/hermitage",
+      "author_or_organisation": "Martin Kleppmann and contributors",
+      "authority_type": "primary executable/manual anomaly catalogue; reference only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "database isolation",
+        "concurrency anomalies",
+        "direct experiments"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "README caveats and PostgreSQL histories"
+      ],
+      "current_version_or_date": "commit f029bec8e32af6a9506508638fdf74ef61286225",
+      "last_checked": "2026-08-29",
+      "license": "CC BY 4.0 in README",
+      "vendor_incentive_or_bias": "Manual histories are probes, not exhaustive database certification or performance results.",
+      "known_limitations": "No code was adopted or executed; repository-specific exact-engine concurrency remains the required proof.",
+      "status": "exact_commit_and_license_reviewed",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "DDIA2_OFFICIAL_TOC_2026",
+      "name": "Designing Data-Intensive Applications, second edition official publisher contents",
+      "canonical_root": "https://www.oreilly.com/library/view/designing-data-intensive-applications/9781098119058/",
+      "author_or_organisation": "Martin Kleppmann, Chris Riccomini / O'Reilly Media",
+      "authority_type": "official publisher metadata and table of contents; book text unavailable to this capsule",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "architecture trade-offs",
+        "NFRs",
+        "workflows",
+        "multitenancy",
+        "formal testing",
+        "privacy",
+        "feedback loops"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5",
+        "V2",
+        "V3",
+        "V4",
+        "V5",
+        "V6"
+      ],
+      "required_articles_or_sections": [
+        "What's New; chapter and section titles for chapters 1-14"
+      ],
+      "current_version_or_date": "Second edition, February/March 2026; ISBN 9781098119065 / 9781098119027",
+      "last_checked": "2026-08-29",
+      "license": "Copyright book material; no lawful full-book copy was supplied or accessed. Metadata/TOC analysis only.",
+      "vendor_incentive_or_bias": "Publisher metadata describes scope, not proof of chapter arguments or Strategy OS applicability.",
+      "known_limitations": "Direct shell retrieval returned HTTP 403; the official indexed contents and author page were reviewed. No gated book text is claimed read.",
+      "status": "official_public_delta_metadata_reviewed_book_text_unavailable",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "DDIA2_REFERENCES_1752CBD0",
+      "name": "DDIA second-edition literature references",
+      "canonical_root": "https://github.com/ept/ddia2-references",
+      "author_or_organisation": "Martin Kleppmann and Chris Riccomini",
+      "authority_type": "official companion bibliography; not a substitute for book text",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "chapter provenance",
+        "public primary sources",
+        "refreshable bibliography"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5",
+        "V2",
+        "V3"
+      ],
+      "required_articles_or_sections": [
+        "README and chapter 1-14 reference files"
+      ],
+      "current_version_or_date": "commit 1752cbd0cfbab5515f1606b48123b7c0d6103c51",
+      "last_checked": "2026-08-29",
+      "license": "CC BY-NC 4.0 in README",
+      "vendor_incentive_or_bias": "Bibliographic links identify further reading; they do not establish the claims of the unavailable book or referenced sources.",
+      "known_limitations": "Inventory and selected-term inspection only; no claim that every reference was read.",
+      "status": "exact_commit_and_license_reviewed",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "REDLOCK_COUNTERANALYSIS_2016_CURRENT",
+      "name": "Redlock counteranalysis and current Redis distributed-lock documentation",
+      "canonical_root": "https://antirez.com/news/101",
+      "author_or_organisation": "Salvatore Sanfilippo and Redis documentation maintainers",
+      "authority_type": "author counteranalysis plus current official implementation guidance",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "leases",
+        "fencing",
+        "clock assumptions",
+        "lock safety"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Counteranalysis; Redis Safety and Liveness Guarantees; clock-drift and current fencing notes"
+      ],
+      "current_version_or_date": "Counteranalysis 2016; Redis documentation captured 2026-08-29",
+      "last_checked": "2026-08-29",
+      "captured_sha256": [
+        "32fe7cc1e6e757b45af5991fb0cb2ea4bba6c548a0525da3297d07f6af553b86",
+        "66446de34d311ca74c9ac901319088ff01baa49bd85b3bbda4e405e2db61d848"
+      ],
+      "license": "No reuse licence verified for the counteranalysis; Redis documentation terms were not treated as code-reuse permission.",
+      "vendor_incentive_or_bias": "The counteranalysis defends Redlock and Redis documentation describes its own algorithm; Strategy OS must use direct sink behavior and repository evidence.",
+      "known_limitations": "No Redis deployment or Redlock implementation exists in the reviewed Strategy OS boundary; neither source establishes a need to add one.",
+      "status": "selected_sections_reviewed_no_adoption",
+      "owner": "kleppmann-corpus-artifacts-and-ddia2e"
+    },
+    {
+      "source_id": "RFC8785_JCS_2020",
+      "name": "RFC 8785 JSON Canonicalization Scheme",
+      "canonical_root": "https://www.rfc-editor.org/rfc/rfc8785.html",
+      "author_or_organisation": "A. Rundgren, B. Jordan, S. Erdtman / RFC Editor",
+      "authority_type": "independent public canonicalization specification; comparison input only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "canonical JSON",
+        "content addressing",
+        "numeric serialization",
+        "negative zero"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "3.2.2.3 Serialization of Numbers",
+        "Appendix B Number Serialization Samples",
+        "Appendix D Dealing with Big Numbers"
+      ],
+      "current_version_or_date": "RFC 8785, June 2020",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "63d52294eb0e3f0014174288186d388b4ddbf2c67d1ce8af1d9726eb0c3ab240",
+      "license": "IETF Trust legal provisions stated in the RFC; analysis and citation only; no implementation copied",
+      "access_status": "public RFC text retrieved without authentication",
+      "vendor_incentive_or_bias": "Informational RFC; Strategy OS is not declared JCS-conformant and must use direct repository behavior",
+      "known_limitations": "The RFC defines representation, not which Strategy OS domain facts belong in an identity.",
+      "status": "selected_sections_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "PYTHON_DECIMAL_3_13_15",
+      "name": "Python Decimal fixed-point and floating-point arithmetic",
+      "canonical_root": "https://docs.python.org/3.13/library/decimal.html",
+      "author_or_organisation": "Python Software Foundation",
+      "authority_type": "official implementation documentation for the existing language runtime",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "decimal arithmetic",
+        "rounding modes",
+        "quantization",
+        "monetary values"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Decimal construction",
+        "Context",
+        "Rounding modes",
+        "Decimal.quantize"
+      ],
+      "current_version_or_date": "Python 3.13.15 documentation",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "af64c18f9b57328647ac6890c829f423d6fca4a70be5cf39d2f2ba253c618c61",
+      "license": "Public Python documentation; no source code copied and no new dependency; documentation terms not treated as reuse permission",
+      "access_status": "public official HTML retrieved without authentication",
+      "vendor_incentive_or_bias": "Runtime documentation explains mechanisms but does not select Strategy OS financial rounding policy.",
+      "known_limitations": "Decimal does not justify replacing finite analytical binary64 calculations.",
+      "status": "selected_sections_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "PANDAS_MERGE_ASOF_3_0_5",
+      "name": "pandas merge_asof backward alignment",
+      "canonical_root": "https://pandas.pydata.org/docs/reference/api/pandas.merge_asof.html",
+      "author_or_organisation": "pandas development team",
+      "authority_type": "official implementation documentation; semantic comparison only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "as-of alignment",
+        "backward joins",
+        "tolerance",
+        "sorted time series"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "backward search",
+        "direction",
+        "tolerance",
+        "sorted input requirement"
+      ],
+      "current_version_or_date": "pandas 3.0.5; tag commit e68db09ecf6427d1b62e565bacf17f2e525a3032",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "1e80cb2752a42018c674989c3813eadafce1cc97b0e6ca1358898ccc80369e13",
+      "license": "Public official API documentation; no code copied or dependency change",
+      "access_status": "public official HTML retrieved without authentication",
+      "vendor_incentive_or_bias": "Library API semantics do not establish market availability, session truth or Strategy OS policy.",
+      "known_limitations": "Backward matching is necessary but not sufficient; freshness, completion, session and instrument identity remain separate.",
+      "status": "selected_section_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "FREQTRADE_LOOKAHEAD_2023_6",
+      "name": "Freqtrade lookahead analysis",
+      "canonical_root": "https://github.com/freqtrade/freqtrade/blob/2023.6/docs/lookahead-analysis.md",
+      "author_or_organisation": "Freqtrade contributors",
+      "authority_type": "official trading-runtime implementation documentation; comparison tool only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "lookahead bias",
+        "backtest counterchecks",
+        "future candles",
+        "signal slicing"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Introduction",
+        "How does the command work",
+        "Caveats"
+      ],
+      "current_version_or_date": "tag 2023.6, commit eea95f79aac8a77758dfbde52f681c7d86a7d7b7",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "e2b946cbf71f3dbd615033890f14409a9ad8ab3ff7febae71e6001c44b2d5d6e",
+      "license": "GPL-3.0 licence artifact SHA-256 589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2; reference behavior only; no code copied",
+      "access_status": "public exact GitHub tag retrieved without authentication",
+      "vendor_incentive_or_bias": "A tool can detect exercised biases but cannot prove untriggered paths or Strategy OS correctness.",
+      "known_limitations": "The 2023.6 page is a stable selected version, not a claim that Freqtrade and Strategy OS share runtime semantics.",
+      "status": "selected_sections_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "ZERODHA_KITE_INSTRUMENTS_V3_20260829",
+      "name": "Kite Connect 3 market quotes and instruments",
+      "canonical_root": "https://kite.trade/docs/connect/v3/market-quotes/",
+      "author_or_organisation": "Zerodha / Kite Connect",
+      "authority_type": "official provider documentation; public contract input only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "instrument master",
+        "provider token reuse",
+        "expiry",
+        "lot size",
+        "tick size"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "Instruments",
+        "CSV response columns",
+        "token-reuse note"
+      ],
+      "current_version_or_date": "Kite Connect API version 3; captured 2026-08-29",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "63c947c4c6c1f32fe64c2bca1e127efa10d864b74bbcad86b4298d3a3282a453",
+      "license": "No documentation reuse licence verified; analysis and citation only; no provider data or API response copied",
+      "access_status": "public documentation retrieved without credentials; no provider endpoint called",
+      "vendor_incentive_or_bias": "Provider documentation describes its own identifiers and may change; exchange history and Strategy OS identity require independent evidence.",
+      "known_limitations": "Current public documentation does not prove historical contract masters, entitlement, real conformance or private account behavior.",
+      "status": "selected_sections_reviewed_no_provider_connection",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "ZERODHA_CHARGES_20260829",
+      "name": "Zerodha public charges schedule",
+      "canonical_root": "https://zerodha.com/charges/",
+      "author_or_organisation": "Zerodha",
+      "authority_type": "official public broker schedule; current comparison only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "brokerage",
+        "tax",
+        "transaction charges",
+        "stamp duty",
+        "GST"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Equity",
+        "F&O",
+        "Commodity",
+        "Charges explained"
+      ],
+      "current_version_or_date": "dynamic public page captured 2026-08-29",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "a93bf79732b9b6d4f6df7f6e7df756f14d05bb4a94d08a5951a20439d874aafb",
+      "license": "No documentation reuse licence verified; analysis and citation only",
+      "access_status": "public page retrieved without authentication; no account or contract note accessed",
+      "vendor_incentive_or_bias": "Broker schedule may change and does not prove historical rates, contract-note rounding or every private-account fee.",
+      "known_limitations": "One dated current capture cannot be used as a point-in-time historical charge series.",
+      "status": "current_public_schedule_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "UNICODE_LDML_NUMBERS_48_2",
+      "name": "Unicode LDML Part 3 Numbers",
+      "canonical_root": "https://www.unicode.org/reports/tr35/tr35-78/tr35-numbers.html",
+      "author_or_organisation": "Unicode Consortium / CLDR committee",
+      "authority_type": "stable public locale and currency-format specification; presentation input only",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "locale",
+        "number formatting",
+        "currency formatting",
+        "decimal separators",
+        "currency identity"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "Number Format Patterns",
+        "Parsing Numbers",
+        "Currencies"
+      ],
+      "current_version_or_date": "Unicode Technical Standard 35, LDML Part 3, version 48.2",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "43aed410d67e349c0550b0d5fb36a36636e60ee7324efa57f068d8c668d2860a",
+      "license": "Unicode Technical Reports governed by Unicode Terms of Use; no CLDR data vendored",
+      "access_status": "public stable specification retrieved without authentication",
+      "vendor_incentive_or_bias": "Formatting specification does not define Strategy OS storage, conversion rates or product scope.",
+      "known_limitations": "V0 is INR-only; global locale and DST import behavior remains future scope.",
+      "status": "selected_sections_reviewed_presentation_only",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "ISO_4217_2015_PUBLIC",
+      "name": "ISO 4217 currency codes public overview",
+      "canonical_root": "https://www.iso.org/iso-4217-currency-codes.html",
+      "author_or_organisation": "International Organization for Standardization / SIX Financial Information",
+      "authority_type": "official public standard overview; full standard text unavailable",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "currency codes",
+        "minor units",
+        "currency identity"
+      ],
+      "product_versions": [
+        "V0",
+        "V1",
+        "V1.5"
+      ],
+      "required_articles_or_sections": [
+        "Alphabetic code",
+        "Maintaining ISO 4217",
+        "Using ISO Codes"
+      ],
+      "current_version_or_date": "ISO 4217:2015 Edition 8; public page captured 2026-08-29",
+      "last_checked": "2026-08-29",
+      "access_receipt_sha256": "dd11db406ba29c9af00e1a02accacebcf7c5a2654b4162ef12e709fec8e5688a",
+      "license": "ISO public page states free-of-charge use of ISO 4217 codes; full standard text was not accessed or reused",
+      "access_status": "official public indexed overview inspected; direct shell retrieval returned HTTP 403 and was not bypassed",
+      "vendor_incentive_or_bias": "Standards overview defines codes and scope, not application arithmetic or conversion policy.",
+      "known_limitations": "No claim that the full ISO standard was read; only public overview statements support this packet.",
+      "status": "official_public_overview_reviewed_full_standard_unavailable",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "NASA_MCO_PHASE2_2000",
+      "name": "Mars Climate Orbiter Phase II report",
+      "canonical_root": "https://discovery.larc.nasa.gov/discovery/PDF_FILES/mars_climate_orbiter_phaseII.pdf",
+      "author_or_organisation": "NASA",
+      "authority_type": "official public mishap report; independent interface-units failure case",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "units",
+        "interface contracts",
+        "verification",
+        "end-to-end testing"
+      ],
+      "product_versions": [
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "Mars Climate Orbiter root cause and recommendations"
+      ],
+      "current_version_or_date": "Phase II report, 2000",
+      "last_checked": "2026-08-29",
+      "artifact_sha256": "a533a8acd3637446d238dd55c8509ec30a9ecf29e552527820192087569d154d",
+      "license": "Public NASA report; analysis and citation only; no artifact text vendored",
+      "access_status": "public PDF retrieved without authentication; digest recorded",
+      "vendor_incentive_or_bias": "Aerospace mishap evidence shows an interface failure class, not a mandate for a specific Strategy OS type system.",
+      "known_limitations": "No current Strategy OS wrong-result path was reproduced for unit mismatch; the application remains a future contract decision.",
+      "status": "selected_root_cause_section_reviewed_directly_counterchecked",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "STRATEGY_OS_NUMERIC_MARKET_TRUTH_PROBES_20260829",
+      "name": "Strategy OS numeric and market-truth direct probes",
+      "canonical_root": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner",
+      "author_or_organisation": "Strategy OS repository evidence",
+      "authority_type": "direct read-only repository experiment; not independent product acceptance",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "snapshot identity",
+        "negative zero",
+        "availability",
+        "charges",
+        "units",
+        "full addresses"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "six probe logs listed in the dated refresh report"
+      ],
+      "current_version_or_date": "repository HEAD de6faae3e97cf5537338bee2143350e53f70da1c on 2026-08-29",
+      "last_checked": "2026-08-29",
+      "license": "Internal repository evidence; no third-party code or data adoption",
+      "access_status": "local pure constructors and imports only; no provider, runtime, database migration, live, order or money access",
+      "vendor_incentive_or_bias": "Focused probes prove only the exercised hypotheses and do not replace product tests or independent acceptance.",
+      "known_limitations": "No product test was counted as new assurance; findings remain unimplemented under exact future owners.",
+      "status": "direct_counterchecks_complete_product_verification_pending",
+      "owner": "kleppmann-numeric-and-market-truth-audit"
+    },
+    {
+      "source_id": "KLEPPMANN_LOGS_2015_V5",
+      "title": "Using logs to build a solid data infrastructure (or: why dual writes are a bad idea)",
+      "name": "Kleppmann logs and dual-writes transcript",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Craft Conference / personal website",
+      "canonical_url": "https://martin.kleppmann.com/2015/05/27/logs-for-data-infrastructure.html",
+      "canonical_root": "https://martin.kleppmann.com/2015/05/27/logs-for-data-infrastructure.html",
+      "publication_or_update_date": "2015-05-27",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author talk transcript",
+      "license_or_reuse_note": "Website default CC BY 3.0; linked video and original publication separate",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full edited transcript",
+        "dual writes",
+        "partial failure",
+        "logs",
+        "CDC",
+        "lag and derived stores"
+      ],
+      "figures_tables_inspected": [
+        "logs-10",
+        "logs-13",
+        "logs-34",
+        "logs-35"
+      ],
+      "system_problem_context": "Multiple representations of one fact, race-prone dual writes, ordered change, replay, and derived stores",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for principles; Kafka/Samza examples are dated and solution-specific",
+      "notes_path": "../research/professional-engineering-v5/02-KLEPPMANN-PASS-A-DATA-TIME-TRUTH.md",
+      "artifact_sha256": "0e5835b4a90b281d8e41c4838883109ae4da8e10de4f44aeb2b11b6569740eca",
+      "status": "v5_full_text_and_selected_figures_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_HASHCODE_2012_V5",
+      "title": "Java's hashCode is not safe for distributed systems",
+      "name": "Kleppmann stable cross-process hash analysis",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Martin Kleppmann personal website",
+      "canonical_url": "https://martin.kleppmann.com/2012/06/18/java-hashcode-unsafe-for-distributed-systems.html",
+      "canonical_root": "https://martin.kleppmann.com/2012/06/18/java-hashcode-unsafe-for-distributed-systems.html",
+      "publication_or_update_date": "2012-06-18",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author analysis",
+      "license_or_reuse_note": "Website default CC BY 3.0",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full article",
+        "cross-process guarantee",
+        "stable serialization before hashing"
+      ],
+      "figures_tables_inspected": [
+        "none material"
+      ],
+      "system_problem_context": "Runtime-local hash behavior cannot serve as stable content identity",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for principle; Java examples are dated",
+      "notes_path": "../research/professional-engineering-v5/03-TEMPORAL-AND-IDENTITY-MODEL-AUDIT.md",
+      "artifact_sha256": "69b6f1a89c3587931bb7f10915b000bdde2b049c79bcbba13da3b03a43284c76",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_SCHEMA_EVOLUTION_2012_V5",
+      "title": "Schema evolution in Avro, Protocol Buffers and Thrift",
+      "name": "Kleppmann schema evolution analysis",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Martin Kleppmann personal website",
+      "canonical_url": "https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html",
+      "canonical_root": "https://martin.kleppmann.com/2012/12/05/schema-evolution-in-avro-protocol-buffers-thrift.html",
+      "publication_or_update_date": "2012-12-05",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author technical analysis",
+      "license_or_reuse_note": "Website default CC BY 3.0",
+      "availability_status": "public_fetched_full_text_reviewed_figures_pending",
+      "locations_inspected": [
+        "full article",
+        "Protocol Buffers",
+        "Avro writer/reader schemas",
+        "schema registry",
+        "Thrift"
+      ],
+      "figures_tables_inspected": [
+        "binary layouts described in text; original figures not independently rendered"
+      ],
+      "system_problem_context": "Compatibility order, immutable tag identity, writer/reader schema binding, and rolling changes",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for general evolution rules; dated library details",
+      "notes_path": "../research/professional-engineering-v5/03-TEMPORAL-AND-IDENTITY-MODEL-AUDIT.md",
+      "artifact_sha256": "557777e86ea8bbf09d94f6ccdbdf4cbd9852d167144b7e297d8eea24308c1e4b",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_CACHE_2012_V5",
+      "title": "Rethinking caching in web apps",
+      "name": "Kleppmann explicit data-dependency and cache analysis",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Martin Kleppmann personal website",
+      "canonical_url": "https://martin.kleppmann.com/2012/10/01/rethinking-caching-in-web-apps.html",
+      "canonical_root": "https://martin.kleppmann.com/2012/10/01/rethinking-caching-in-web-apps.html",
+      "publication_or_update_date": "2012-10-01",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author exploratory analysis",
+      "license_or_reuse_note": "Website default CC BY 3.0",
+      "availability_status": "public_fetched_full_text_reviewed_figures_pending",
+      "locations_inspected": [
+        "full article",
+        "precomputed caches",
+        "data dependencies",
+        "cache invalidation"
+      ],
+      "figures_tables_inspected": [
+        "architecture figures described in text; not independently rendered"
+      ],
+      "system_problem_context": "Explicit answer-changing inputs, deterministic evaluation, staleness policy, and rebuildable output",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for principles; LOW for Hadoop/Storm/Flowquery prescriptions",
+      "notes_path": "../research/professional-engineering-v5/04-SOURCE-OF-TRUTH-AND-DERIVED-STATE-MAP.md",
+      "artifact_sha256": "b793a5fb19c4ba68d64ead7d9b250488ff125ae9729b8a2878dd437d713fc200",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_DB_INSIDE_OUT_2015_V5",
+      "title": "Turning the database inside-out with Apache Samza",
+      "name": "Kleppmann immutable facts and materialized views transcript",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Strange Loop / personal website",
+      "canonical_url": "https://martin.kleppmann.com/2015/03/04/turning-the-database-inside-out.html",
+      "canonical_root": "https://martin.kleppmann.com/2015/03/04/turning-the-database-inside-out.html",
+      "publication_or_update_date": "2015-03-04",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author talk transcript",
+      "license_or_reuse_note": "Website default CC BY 3.0; linked project and video terms separate",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full transcript",
+        "immutable facts",
+        "indexes",
+        "materialized views",
+        "recovery",
+        "UI subscriptions"
+      ],
+      "figures_tables_inspected": [
+        "overlapping reviewed stream-processing figures; HTML figure set not fully opened"
+      ],
+      "system_problem_context": "Immutable facts, derived indexes/views, online rebuild, recovery, and subscriptions",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for principles; dated and solution-specific machinery",
+      "notes_path": "../research/professional-engineering-v5/04-SOURCE-OF-TRUTH-AND-DERIVED-STATE-MAP.md",
+      "artifact_sha256": "7d7eac0b89975cca133e626f192d702b6e2a233c7b470c0c4f2fb8670725364e",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_CP_AP_2015_V5",
+      "title": "Please stop calling databases CP or AP",
+      "name": "Kleppmann operation-specific consistency analysis",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Martin Kleppmann personal website",
+      "canonical_url": "https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html",
+      "canonical_root": "https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html",
+      "publication_or_update_date": "2015-05-11",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author analysis",
+      "license_or_reuse_note": "Website default CC BY 3.0",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full article",
+        "CAP definitions",
+        "linearizability",
+        "availability",
+        "ZooKeeper",
+        "false dichotomy"
+      ],
+      "figures_tables_inspected": [
+        "none needed for retained claim"
+      ],
+      "system_problem_context": "Operation-specific consistency, latency, and failure guarantees rather than product labels",
+      "strategy_os_relevance_score": 4,
+      "confidence": "HIGH for concept; dated implementation examples",
+      "notes_path": "../research/professional-engineering-v5/06-COORDINATION-CONSISTENCY-AND-IDEMPOTENCY-MAP.md",
+      "artifact_sha256": "5e6c2e719fc11b0d429bff60c0a4ca1eb4865acd0220411ebf1d24b7c45afd72",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_ISABELLE_2022_V5",
+      "title": "Verifying distributed systems with Isabelle/HOL",
+      "name": "Kleppmann Isabelle/HOL distributed-system tutorial",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "TU Munich / personal website",
+      "canonical_url": "https://martin.kleppmann.com/2022/10/12/verifying-distributed-systems-isabelle.html",
+      "canonical_root": "https://martin.kleppmann.com/2022/10/12/verifying-distributed-systems-isabelle.html",
+      "publication_or_update_date": "2022-10-12",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author technical tutorial",
+      "license_or_reuse_note": "Website default CC BY 3.0; linked code/video separate",
+      "availability_status": "public_fetched_article_reviewed_video_unreviewed",
+      "locations_inspected": [
+        "full article",
+        "unreliable communication",
+        "linear steps",
+        "crash recovery",
+        "valid events",
+        "invariant proof"
+      ],
+      "figures_tables_inspected": [
+        "Isabelle snippets in article; two-hour video not reviewed"
+      ],
+      "system_problem_context": "Loss, duplication, reordering, timeouts, crash, and stable/volatile state safety models",
+      "strategy_os_relevance_score": 4,
+      "confidence": "HIGH for model; LOW for automatic adoption",
+      "notes_path": "../research/professional-engineering-v5/06-COORDINATION-CONSISTENCY-AND-IDEMPOTENCY-MAP.md",
+      "artifact_sha256": "ceba59a8821cf8c351276b664fca511cac24207f8af627c0d36c1c41e5fb2e5b",
+      "status": "v5_full_article_and_code_snippets_reviewed"
+    },
+    {
+      "source_id": "KLEPPMANN_EVENT_ORDER_2018_V5",
+      "title": "Should you put several event types in the same Kafka topic?",
+      "name": "Kleppmann entity ordering and compound-event identity analysis",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Confluent guest publication / personal website",
+      "canonical_url": "https://martin.kleppmann.com/2018/01/18/event-types-in-kafka-topic.html",
+      "canonical_root": "https://martin.kleppmann.com/2018/01/18/event-types-in-kafka-topic.html",
+      "publication_or_update_date": "2018-01-18",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author technical analysis",
+      "license_or_reuse_note": "Website default CC BY 3.0; Kafka/Confluent details separate",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full article",
+        "ordering problems",
+        "split/combine rules",
+        "compound events",
+        "schema management"
+      ],
+      "figures_tables_inspected": [
+        "none material"
+      ],
+      "system_problem_context": "Entity-scoped ordering, raw compound identity, provenance, and timestamp insufficiency",
+      "strategy_os_relevance_score": 4,
+      "confidence": "HIGH for ordering principle; dated Kafka details",
+      "notes_path": "../research/professional-engineering-v5/06-COORDINATION-CONSISTENCY-AND-IDEMPOTENCY-MAP.md",
+      "artifact_sha256": "536a7c4393a10d109d0a73117f31231caad4e1617f3118d5bae299983b741ceb",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "STRATEGY_OS_V5_PASS_A_PROBES_20260831",
+      "title": "Strategy OS Kleppmann V5 Pass A direct characterizations",
+      "name": "V5 Pass A direct repository evidence",
+      "author_or_presenter": "Strategy OS V5 Chat 1 audit",
+      "author_or_organisation": "Strategy OS repository evidence",
+      "organisation_or_institution": "Strategy OS",
+      "canonical_url": "repository://.agent/runs/kleppmann-reaudit-v5/pass-a/",
+      "canonical_root": ".agent/runs/kleppmann-reaudit-v5/pass-a/",
+      "publication_or_update_date": "2026-08-31",
+      "access_date": "2026-08-31",
+      "content_type": "application/x-test-evidence",
+      "primary_or_secondary": "primary direct experiment",
+      "license_or_reuse_note": "Internal repository evidence; no third-party code or data adopted",
+      "availability_status": "local_characterization_complete_expected_red",
+      "locations_inspected": [
+        "experiment spec collision",
+        "qualification/OOS span",
+        "V0 legacy sweep policy"
+      ],
+      "figures_tables_inspected": [
+        "not applicable"
+      ],
+      "system_problem_context": "Forced identity collision, research-selection contamination, and release route reachability",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for the exercised branches only",
+      "notes_path": "../research/professional-engineering-v5/02-KLEPPMANN-PASS-A-DATA-TIME-TRUTH.md",
+      "status": "direct_counterchecks_complete_product_correction_not_authorized"
+    },
+    {
+      "source_id": "KLEPPMANN_SCALING_2014_V5",
+      "title": "Six things I wish we had known about scaling",
+      "name": "Kleppmann stateful scaling and operational complexity retrospective",
+      "author_or_presenter": "Martin Kleppmann",
+      "author_or_organisation": "Martin Kleppmann",
+      "organisation_or_institution": "Martin Kleppmann personal website",
+      "canonical_url": "https://martin.kleppmann.com/2014/03/26/six-things-about-scaling.html",
+      "canonical_root": "https://martin.kleppmann.com/2014/03/26/six-things-about-scaling.html",
+      "publication_or_update_date": "2014-03-26",
+      "access_date": "2026-08-31",
+      "content_type": "text/html",
+      "primary_or_secondary": "primary author retrospective",
+      "license_or_reuse_note": "Website default CC BY 3.0",
+      "availability_status": "public_fetched_full_text_reviewed",
+      "locations_inspected": [
+        "full article",
+        "connections",
+        "databases",
+        "replication",
+        "schema evolution",
+        "load testing"
+      ],
+      "figures_tables_inspected": [
+        "none material"
+      ],
+      "system_problem_context": "Stateful scaling, operational complexity, realistic load tests, replication, and schema evolution",
+      "strategy_os_relevance_score": 3,
+      "confidence": "HIGH for retrospective facts; LOW as a current architecture prescription",
+      "notes_path": "../research/professional-engineering-v5/05-KLEPPMANN-PASS-B-FAILURE-RUNTIME-RECOVERY.md",
+      "artifact_sha256": "d0226e2c986a293085d37d157e5799c8562f73ccf18c902413483f6fdcb6da36",
+      "status": "v5_full_text_reviewed"
+    },
+    {
+      "source_id": "STRATEGY_OS_V5_PASS_B_PROBES_20260831",
+      "title": "Strategy OS Kleppmann V5 Pass B direct characterizations and focused suites",
+      "name": "V5 Pass B direct repository evidence",
+      "author_or_presenter": "Strategy OS V5 Chat 1 audit",
+      "author_or_organisation": "Strategy OS repository evidence",
+      "organisation_or_institution": "Strategy OS",
+      "canonical_url": "repository://.agent/runs/kleppmann-reaudit-v5/pass-b-runtime/",
+      "canonical_root": ".agent/runs/kleppmann-reaudit-v5/pass-b-runtime/",
+      "publication_or_update_date": "2026-08-31",
+      "access_date": "2026-08-31",
+      "content_type": "application/x-test-evidence",
+      "primary_or_secondary": "primary direct experiment",
+      "license_or_reuse_note": "Internal repository evidence; no third-party code or data adopted",
+      "availability_status": "local_characterization_complete_expected_red_and_focused_suites",
+      "locations_inspected": [
+        "graph ResourcePlan boundary",
+        "terminal order conflict",
+        "execution lifecycle",
+        "capital admission",
+        "job claims",
+        "tenant realtime",
+        "V0 negative authority"
+      ],
+      "figures_tables_inspected": [
+        "not applicable"
+      ],
+      "system_problem_context": "Partial failure, idempotency, coordination, resource admission, recovery, tenancy, and release reachability",
+      "strategy_os_relevance_score": 5,
+      "confidence": "HIGH for exercised branches; PostgreSQL, provider, restore and live behavior unavailable",
+      "notes_path": "../research/professional-engineering-v5/05-KLEPPMANN-PASS-B-FAILURE-RUNTIME-RECOVERY.md",
+      "status": "direct_counterchecks_complete_product_correction_not_authorized"
+    },
+    {
+      "source_id": "STRATEGY_OS_CHAT2_V5_BROADER_SOURCES_20260831",
+      "title": "Strategy OS Chat 2 V5 broader professional and academic source registry",
+      "name": "Chat 2 reviewed-source bundle",
+      "author_or_presenter": "Strategy OS V5 Chat 2 audit",
+      "author_or_organisation": "Strategy OS repository evidence",
+      "organisation_or_institution": "Strategy OS",
+      "canonical_url": "repository://paper-trader/docs/research/professional-engineering-v5/13-BROADER-SOURCE-REGISTRY.json",
+      "canonical_root": "paper-trader/docs/research/professional-engineering-v5/",
+      "publication_or_update_date": "2026-08-31",
+      "access_date": "2026-08-31",
+      "content_type": "application/json",
+      "primary_or_secondary": "machine-readable registry of 52 separately identified primary/official source reviews",
+      "license_or_reuse_note": "Per-source rights recorded by link/status; no external code or data adopted",
+      "availability_status": "local_registry_complete_sources_reviewed_to_declared_depth",
+      "locations_inspected": [
+        "52 source records across database, reliability, money, quant, security, workflows and scale"
+      ],
+      "figures_tables_inspected": [
+        "DSR/PBO equation screenshots; SQL:2011 text pages with later screenshot timeouts recorded"
+      ],
+      "system_problem_context": "Broader source-to-failure synthesis and technology rejection/adoption triggers",
+      "strategy_os_relevance_score": 5,
+      "confidence": "Per-source confidence and limitations are recorded in the bundle and reports 13-18",
+      "notes_path": "../research/professional-engineering-v5/13-BROADER-SOURCE-CATALOG.md",
+      "status": "chat2_v5_reviewed_source_bundle_no_product_authority"
+    },
+    {
+      "source_id": "PLANETSCALE_DATABASE_FAILURES_2026_09",
+      "name": "PlanetScale database failure reading list (eight articles)",
+      "canonical_root": "https://planetscale.com/blog",
+      "author_or_organisation": "PlanetScale engineering authors; Sam Lambert curated thread",
+      "authority_type": "first-party engineering case studies; not project authority",
+      "primary_or_secondary": "primary",
+      "technical_domains": [
+        "database recovery",
+        "transactions",
+        "connection pools",
+        "capacity",
+        "routing and topology"
+      ],
+      "product_versions": [
+        "V0",
+        "V1"
+      ],
+      "required_articles_or_sections": [
+        "What is a Neki router? \u2014 https://planetscale.com/blog/what-is-a-neki-router",
+        "How one connection kills a database \u2014 https://planetscale.com/blog/debugging-live-database-connections",
+        "Problems with large tables in Postgres \u2014 https://planetscale.com/blog/dealing-with-large-tables-in-postgres",
+        "The history of Postgres sharding \u2014 https://planetscale.com/blog/the-history-of-postgres-sharding",
+        "Poisoned Postgres connection pools \u2014 https://planetscale.com/blog/postgres-poisoned-connection-pools",
+        "What is a data topology? \u2014 https://planetscale.com/blog/what-is-a-data-topology",
+        "The dangers of Postgres subtransactions \u2014 https://planetscale.com/blog/the-dangers-of-postgres-subtransactions",
+        "Concurrency vs. Throughput: why more parallelism can make databases slower \u2014 https://planetscale.com/blog/concurrency-vs-throughput-vitess-mysql"
+      ],
+      "current_version_or_date": "Eight linked articles published 2026-08-07 through 2026-09-01; visible thread final post checked",
+      "last_checked": "2026-09-05",
+      "license": "Article copyright retained; no upstream code copied or dependency adopted",
+      "vendor_incentive_or_bias": "Database vendor; routing/sharding examples may promote its products",
+      "known_limitations": "MySQL and newer PostgreSQL examples need PG16 verification; no production database settings or load measured",
+      "status": "READ_AND_APPLICABILITY_CHECKED",
+      "owner": "Root reconciliation; user-requested Astra-low independent reading",
+      "evidence": "reading-packets/2026-09-05-planetscale-database-failures.md"
+    }
+  ]
+}

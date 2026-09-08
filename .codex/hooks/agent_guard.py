@@ -364,86 +364,115 @@ def validate_review_package(repo: Path, data: dict, review: dict) -> Tuple[Optio
         return None, None, f"review package is invalid: {exc}"
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-        repo = git_root()
-        tool_input = payload.get("tool_input", {})
-        task_name = tool_input.get("task_name") if isinstance(tool_input, dict) else None
-        data = capsule(active_capsule(repo, task_name))
-    except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
-        deny(f"invalid capsule: {exc}")
-        return 0
-    trace_error = trace_payload(repo, payload)
-    if trace_error:
-        deny(trace_error)
-        return 0
-    if payload.get("tool_name") not in {"Agent", "spawn_agent", "collaborationspawn_agent"}:
-        return 0
+def reject(reason: str) -> int:
+    deny(reason)
+    return 0
+
+
+def request_context(capsule_override: bool) -> Tuple[dict, Path, Optional[dict]]:
+    payload = json.load(sys.stdin)
+    repo = git_root()
     tool = payload.get("tool_input", {})
-    if not isinstance(tool, dict):
-        deny("agent tool input must be an object")
-        return 0
-    task = tool.get("task_name")
+    task = tool.get("task_name") if isinstance(tool, dict) else None
+    try:
+        data = capsule(active_capsule(repo, task))
+    except (KeyError, OSError, ValueError, json.JSONDecodeError):
+        if capsule_override:
+            raise
+        data = None
+    return payload, repo, data
+
+
+def capsule_contract(data: dict) -> Tuple[List[dict], dict, int]:
     assignments, review = data.get("assignments", []), data.get("review", {})
     if not isinstance(assignments, list) or not isinstance(review, dict):
-        deny("capsule assignments or review contract is invalid")
-        return 0
+        raise ValueError("capsule assignments or review contract is invalid")
     identifiers = [item.get("id") for item in assignments if isinstance(item, dict)]
     if len(identifiers) != len(assignments) or len(identifiers) != len(set(identifiers)):
-        deny("capsule has duplicate or invalid assignment IDs")
-        return 0
+        raise ValueError("capsule has duplicate or invalid assignment IDs")
     budget = data.get("parallel_budget")
     if not isinstance(budget, int) or not 0 <= budget <= 5:
-        deny("parallel budget must be between 0 and 5")
-        return 0
+        raise ValueError("parallel budget must be between 0 and 5")
+    return assignments, review, budget
 
-    if task == review.get("assignment_id"):
-        updated, route_error = validate_route(
-            tool,
-            str(review.get("agent", "")),
-            str(review.get("model", "")),
-            str(review.get("reasoning_effort", "")),
-            "declared critical review",
-        )
-        if route_error:
-            deny(route_error)
-            return 0
-        _, base_sha, package_error = validate_review_package(repo, data, review)
-        if package_error or base_sha is None:
-            deny(package_error or "review package is invalid")
-            return 0
-        state_key = safe_key(f"review:{data.get('id')}:{base_sha}")
 
-        def record_review(state: Dict[str, object]) -> Optional[str]:
-            launches = state.get("critical_review_launches", 0)
-            if not isinstance(launches, int) or launches < 0:
-                return "agent guard state is invalid; stop and inspect it"
-            if launches >= 2:
-                return "critical review is limited to initial review plus one recheck"
-            state["critical_review_launches"] = launches + 1
-            return None
+def record_review(state: Dict[str, object]) -> Optional[str]:
+    launches = state.get("critical_review_launches", 0)
+    if not isinstance(launches, int) or launches < 0:
+        return "agent guard state is invalid; stop and inspect it"
+    if launches >= 2:
+        return "critical review is limited to initial review plus one recheck"
+    state["critical_review_launches"] = launches + 1
+    return None
 
-        state_error = update_state(state_directory(repo), state_key, record_review)
-        if state_error:
-            deny(state_error)
-            return 0
-        if updated is not None:
-            allow_updated(updated)
-        return 0
 
-    assignment = next((item for item in assignments if item.get("id") == task), None)
-    if assignment is None:
-        deny("assignment is not declared in capsule")
-        return 0
+def finish_dispatch(updated: Optional[dict], state_error: Optional[str]) -> int:
+    if state_error:
+        return reject(state_error)
+    if updated is not None:
+        allow_updated(updated)
+    return 0
+
+
+def dispatch_review(repo: Path, data: dict, review: dict, tool: dict) -> int:
+    updated, route_error = validate_route(
+        tool,
+        str(review.get("agent", "")),
+        str(review.get("model", "")),
+        str(review.get("reasoning_effort", "")),
+        "declared critical review",
+    )
+    if route_error:
+        return reject(route_error)
+    _, base_sha, package_error = validate_review_package(repo, data, review)
+    if package_error or base_sha is None:
+        return reject(package_error or "review package is invalid")
+    key = safe_key(f"review:{data.get('id')}:{base_sha}")
+    return finish_dispatch(updated, update_state(state_directory(repo), key, record_review))
+
+
+def dependency_error(repo: Path, assignment: dict, assignments: List[dict]) -> Optional[str]:
     for dependency_id in assignment.get("depends_on", []):
         dependency = next((item for item in assignments if item.get("id") == dependency_id), None)
         output = dependency.get("output") if isinstance(dependency, dict) else None
         try:
             contained_file(repo, output, f"dependency report {dependency_id}")
         except ValueError:
-            deny(f"dependency report is missing: {dependency_id}")
-            return 0
+            return f"dependency report is missing: {dependency_id}"
+    return None
+
+
+def has_overlapping_ownership(assignment: dict, assignments: List[dict]) -> bool:
+    paths = [str(path) for path in assignment.get("write_paths", [])]
+    return any(
+        any(overlaps(path, other_path) for path in paths for other_path in other.get("write_paths", []))
+        for other in assignments
+        if other is not assignment
+    )
+
+
+def record_assignment(state: Dict[str, object], task: object, budget: int) -> Optional[str]:
+    dispatched = state.setdefault("dispatched", [])
+    if not isinstance(dispatched, list) or not all(isinstance(item, str) for item in dispatched):
+        return "agent guard state is invalid; stop and inspect it"
+    if task in dispatched:
+        return "assignment was already dispatched"
+    if len(dispatched) >= budget:
+        return "parallel budget exceeded"
+    dispatched.append(task)
+    return None
+
+
+def dispatch_assignment(
+    repo: Path,
+    data: dict,
+    assignment: dict,
+    assignments: List[dict],
+    budget: int,
+    tool: dict,
+) -> int:
+    if error := dependency_error(repo, assignment, assignments):
+        return reject(error)
     declared_model = assignment.get("model", data.get("model_route", {}).get("owner"))
     updated, route_error = validate_route(
         tool,
@@ -453,36 +482,43 @@ def main() -> int:
         str(assignment.get("escalation_reason", "")),
     )
     if route_error:
-        deny(route_error)
-        return 0
-    paths = [str(path) for path in assignment.get("write_paths", [])]
-    if any(
-        any(overlaps(path, other_path) for path in paths for other_path in other.get("write_paths", []))
-        for other in assignments
-        if other is not assignment
-    ):
-        deny("overlapping write ownership in capsule; collapse it under one assignment before dispatch")
-        return 0
-    state_key = safe_key(f"assignments:{data.get('id')}")
+        return reject(route_error)
+    if has_overlapping_ownership(assignment, assignments):
+        return reject("overlapping write ownership in capsule; collapse it under one assignment before dispatch")
+    task = tool.get("task_name")
+    key = safe_key(f"assignments:{data.get('id')}")
+    update = lambda state: record_assignment(state, task, budget)
+    return finish_dispatch(updated, update_state(state_directory(repo), key, update))
 
-    def record_assignment(state: Dict[str, object]) -> Optional[str]:
-        dispatched = state.setdefault("dispatched", [])
-        if not isinstance(dispatched, list) or not all(isinstance(item, str) for item in dispatched):
-            return "agent guard state is invalid; stop and inspect it"
-        if task in dispatched:
-            return "assignment was already dispatched"
-        if len(dispatched) >= budget:
-            return "parallel budget exceeded"
-        dispatched.append(task)
-        return None
 
-    state_error = update_state(state_directory(repo), state_key, record_assignment)
-    if state_error:
-        deny(state_error)
+def main() -> int:
+    capsule_override = bool(os.environ.get("STRATEGY_OS_CAPSULE_PATH"))
+    try:
+        payload, repo, data = request_context(capsule_override)
+    except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return reject(f"invalid capsule: {exc}")
+    if error := trace_payload(repo, payload):
+        return reject(error)
+    if payload.get("tool_name") not in {"Agent", "spawn_agent", "collaborationspawn_agent"}:
         return 0
-    if updated is not None:
-        allow_updated(updated)
-    return 0
+    tool = payload.get("tool_input", {})
+    if not isinstance(tool, dict):
+        return reject("agent tool input must be an object")
+    if data is None:
+        return 0
+    try:
+        assignments, review, budget = capsule_contract(data)
+    except ValueError as exc:
+        return reject(str(exc))
+
+    task = tool.get("task_name")
+    if task == review.get("assignment_id"):
+        return dispatch_review(repo, data, review, tool)
+
+    assignment = next((item for item in assignments if item.get("id") == task), None)
+    if assignment is None:
+        return reject("assignment is not declared in capsule") if capsule_override else 0
+    return dispatch_assignment(repo, data, assignment, assignments, budget, tool)
 
 
 if __name__ == "__main__":

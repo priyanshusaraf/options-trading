@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit execution and reconciliation"
+  short_description: "Verify order recovery and exact position truth"
+  default_prompt: "Use $execution-safety-and-reconciliation for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

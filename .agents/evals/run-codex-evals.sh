@@ -7,7 +7,7 @@ repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 eval_dir="$repo_root/.agents/evals"
 out_dir="$repo_root/.agent/evals"
-model="${CODEX_EVAL_MODEL:-gpt-5.6-terra}"
+model="${CODEX_EVAL_MODEL:-gpt-5.6-sol}"
 if [ -n "${CODEX_BIN:-}" ]; then
   codex_bin="$CODEX_BIN"
 elif command -v codex >/dev/null 2>&1; then

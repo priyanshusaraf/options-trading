@@ -18,6 +18,9 @@ import pytest
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from tests.admitted_entry import persist_admitted_entry
 
 NOW = dt.datetime(2026, 8, 3, 11, 0)
 
@@ -36,6 +39,19 @@ def runner(monkeypatch, give_futures_price_feed):
     cap.initial_capital = 1_000_000.0
     cap.cash = 1_000_000.0
     r.broker.s.commit()
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as s:
+        row = paper_authority.stage(s, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id); s.commit()
+    with r._session() as s:
+        from unittest.mock import patch
+        d={"project_id":"test.admission.4c1029697ee358715d3a14a2","graph_identifier":"test.strategy.expanding_z_impulse","graph_version":1,"content_address":admission["graph_address"],"admission_address":admission["admission_address"],"decision":"approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=d):
+            paper_authority.activate(s, row.id, revision=row.revision, owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        s.commit()
+    r.refresh_paper_authority()
     r.publish_signal(
         "NIFTY", r._binding_for("NIFTY"), {"long_entry": True, "short_entry": False, "close": 24_000.0})
     give_futures_price_feed(r.provider,

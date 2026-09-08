@@ -1,0 +1,54 @@
+{
+  "first_party_content_records": 373,
+  "external_direct_links_recorded": 2016,
+  "external_direct_links_triaged": 2016,
+  "external_direct_links_pending_triage": 0,
+  "assets_inventoried": 459,
+  "all_discovered_urls": 2848,
+  "crawl_statuses": {
+    "fetched": 368,
+    "download_deferred": 4,
+    "fetch_error": 1
+  },
+  "review_statuses": {
+    "not_read": 366,
+    "fully_read": 7
+  },
+  "tiers": {
+    "UNSCREENED": 349,
+    "TIER 0": 24
+  },
+  "content_types": {
+    "text/html": 339,
+    "unknown": 5,
+    "application/pdf": 29
+  },
+  "byte_duplicates": 6,
+  "first_party_html_frontier_pending": 0,
+  "one_hop_categories": {
+    "supporting_web_reference": 1445,
+    "paper_or_pdf": 224,
+    "official_book_material": 7,
+    "video": 127,
+    "course_material": 7,
+    "slide_deck": 134,
+    "code_or_research_artifact": 71,
+    "transcript": 1
+  },
+  "one_hop_dispositions": {
+    "DEFER_BIBLIOGRAPHY_OR_CONTEXT": 1445,
+    "ADMIT_BOUNDED_ONE_HOP_CANDIDATE": 117,
+    "DEFER_OTHER_ONE_HOP_ARTIFACT": 454
+  },
+  "selected_pdf_pages_directly_inspected": 320,
+  "selected_pdf_count_directly_inspected": 4,
+  "html_crawl_rerun_for_continuation": false,
+  "all_mandate_coverage_complete": false,
+  "limits": [
+    "Triage is complete, but deferred one-hop artifacts are not retrieved or read",
+    "PDF annotation links were not recursively traversed",
+    "Unselected high-priority PDFs, slide decks and video transcripts remain incomplete",
+    "The DDIA 2e book text was unavailable; official TOC and licensed companion references only",
+    "All-domain code audits and final review remain incomplete"
+  ]
+}

@@ -20,6 +20,7 @@ The mutation that turns each red is recorded on the test.
 from __future__ import annotations
 
 import ast
+import copy
 import dataclasses
 import pathlib
 
@@ -110,6 +111,70 @@ def test_platform_registry_rejects_missing_or_forged_graph_body():
             components={(graph_component["identifier"], 1): graph_component},
             bodies={ref: {**expanding_z.ATR_BODY, "display_name": "forged"}},
             registrations={},
+        )
+
+
+def test_platform_registry_rejects_graph_component_interface_drift():
+    graph_component = dict(expanding_z.ATR)
+    graph_component["interface"] = tuple(graph_component["interface"][:-1])
+    ref = graph_component["body"]["ref"]
+
+    with pytest.raises(ValueError, match="public interface differs"):
+        PlatformRegistry(
+            components={(graph_component["identifier"], 1): graph_component},
+            bodies={ref: expanding_z.ATR_BODY}, registrations={},
+        )
+
+
+@pytest.mark.parametrize("mutation", ["input_as_source", "missing_output"])
+def test_platform_registry_enforces_graph_body_socket_contract(mutation):
+    body = copy.deepcopy(expanding_z.ATR_BODY)
+    if mutation == "input_as_source":
+        body["edges"][3]["source"]["socket"] = "high"
+        expected = "declared output"
+    else:
+        body["edges"].pop()
+        expected = "exactly one producer"
+    old_ref = expanding_z.ATR["body"]["ref"]
+    new_ref = content_address(body)
+    component = copy.deepcopy(expanding_z.ATR)
+    component["body"]["ref"] = new_ref
+    components = dict(REGISTRY.library.components)
+    components[(component["identifier"], component["version"])] = component
+    bodies = dict(REGISTRY.library.bodies)
+    bodies.pop(old_ref)
+    bodies[new_ref] = body
+
+    with pytest.raises(ValueError, match=expected):
+        PlatformRegistry(
+            components=components,
+            bodies=bodies,
+            registrations=REGISTRY.registrations,
+        )
+
+
+def test_platform_registry_preserves_graph_body_cycle_error_priority():
+    body = copy.deepcopy(expanding_z.ATR_BODY)
+    body["edges"].append({
+        "source": {"instance": "n_smooth", "socket": "out"},
+        "target": {"instance": "n_tr", "socket": "high"},
+    })
+    old_ref = expanding_z.ATR["body"]["ref"]
+    new_ref = content_address(body)
+    component = copy.deepcopy(expanding_z.ATR)
+    component["interface"] = component["interface"][:-1]
+    component["body"]["ref"] = new_ref
+    components = dict(REGISTRY.library.components)
+    components[(component["identifier"], component["version"])] = component
+    bodies = dict(REGISTRY.library.bodies)
+    bodies.pop(old_ref)
+    bodies[new_ref] = body
+
+    with pytest.raises(ValueError, match="C10"):
+        PlatformRegistry(
+            components=components,
+            bodies=bodies,
+            registrations=REGISTRY.registrations,
         )
 
 

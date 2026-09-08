@@ -1,0 +1,131 @@
+.market-context {
+  --context-ink: var(--slate-text);
+  --context-muted: var(--slate-muted);
+  --context-line: var(--slate-line);
+  --context-paper: var(--slate-top);
+  --context-up: var(--slate-green);
+  --context-down: var(--slate-red);
+  --context-playhead: var(--slate-gold);
+  display: grid;
+  gap: 1rem;
+  color: var(--slate-text);
+}
+
+.market-context-heading,
+.market-chart > header,
+.annotation-studio,
+.replay-deck {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.market-context-heading h3,
+.annotation-studio h3,
+.market-chart h3 { margin: .15rem 0; }
+.market-context-heading p { margin: 0; color: var(--slate-muted); }
+.annotation-copy p,
+.market-chart header p { margin: 0; color: var(--context-muted); }
+.market-context-heading h3 { color: var(--slate-text); }
+
+.market-source-mark {
+  min-width: 19rem;
+  border-left: 3px solid var(--context-playhead);
+  padding: .45rem 0 .45rem 1rem;
+  display: grid;
+  gap: .15rem;
+  font-variant-numeric: tabular-nums;
+}
+.market-source-mark span { color: var(--slate-muted); font-size: .78rem; letter-spacing: .045em; text-transform: uppercase; }
+.market-source-mark strong { color: var(--slate-text); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: .88rem; }
+
+.replay-deck {
+  padding: .65rem .75rem;
+  border: 1px solid var(--context-line);
+  border-radius: 0;
+  background: var(--context-paper);
+  color: var(--context-ink);
+}
+.replay-deck button { white-space: nowrap; }
+.replay-deck input[type="range"] { min-width: 12rem; flex: 1; accent-color: var(--context-playhead); }
+
+.market-chart {
+  border: 1px solid var(--context-line);
+  border-radius: 0;
+  background: var(--context-paper);
+  overflow: hidden;
+  color: var(--context-ink);
+}
+.market-chart > header { padding: .85rem 1rem; border-bottom: 1px solid var(--context-line); }
+.market-chart-key { display: flex; flex-wrap: wrap; gap: .65rem 1rem; font-size: .78rem; color: var(--context-muted); }
+.market-chart-key span { display: inline-flex; align-items: center; gap: .35rem; }
+.market-chart-key i { width: 1rem; height: .42rem; display: inline-block; border: 1px solid currentColor; }
+.key-up { color: var(--context-up); background: color-mix(in srgb, var(--context-up) 35%, transparent); }
+.key-down { color: var(--context-down); background: color-mix(in srgb, var(--context-down) 35%, transparent); }
+.key-review { color: var(--slate-gold); border-style: dashed !important; }
+.market-chart-frame { min-height: 26rem; background: var(--context-paper); }
+.market-chart-frame svg { display: block; width: 100%; height: 31rem; }
+.market-grid { stroke: var(--slate-line); stroke-width: 1; fill: none; }
+.market-axis text { fill: var(--slate-muted); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 13px; font-weight: 650; paint-order: stroke; stroke: var(--slate-top); stroke-width: 4px; stroke-linejoin: round; }
+.candle line { stroke-width: 1.25; }
+.candle--up { stroke: var(--context-up); fill: var(--context-up); }
+.candle--down { stroke: var(--context-down); fill: var(--context-down); }
+.candle .volume { opacity: .28; stroke: none; }
+.causal-playhead line { stroke: var(--context-playhead); stroke-width: 2.4; stroke-dasharray: 4 4; }
+.causal-playhead path { fill: var(--context-playhead); stroke: var(--slate-bg); stroke-width: 1.5; }
+.review-level,
+.review-line line,
+.review-fibonacci line { stroke: var(--slate-gold); stroke-width: 2; stroke-dasharray: 7 4; fill: none; vector-effect: non-scaling-stroke; }
+.review-zone { fill: color-mix(in srgb, var(--slate-gold) 17%, transparent); stroke: var(--slate-gold); stroke-width: 1.5; stroke-dasharray: 7 4; vector-effect: non-scaling-stroke; }
+.market-trade--entry { fill: var(--slate-green); stroke: var(--slate-bg); stroke-width: 1; }
+.market-trade--exit { fill: var(--slate-red); stroke: var(--slate-bg); stroke-width: 1; }
+.market-chart .chart-table { margin: .75rem 1rem 1rem; }
+
+.annotation-studio {
+  align-items: flex-start;
+  padding: 1rem;
+  border: 1px solid var(--context-line);
+  border-top: 4px solid var(--slate-gold);
+  border-radius: 0;
+  background: var(--context-paper);
+  color: var(--context-ink);
+}
+.annotation-copy { max-width: 23rem; }
+.annotation-studio form { display: grid; grid-template-columns: repeat(3, minmax(10rem, 1fr)); gap: .75rem; flex: 1; max-width: 58rem; }
+.annotation-studio label { display: grid; gap: .3rem; font-size: .82rem; font-weight: 650; }
+.annotation-studio input {
+  min-height: 2.65rem;
+  width: 100%;
+  color: var(--slate-text);
+  background: var(--slate-raised);
+  border: 1px solid var(--slate-line);
+  border-radius: 0;
+  padding: .45rem .6rem;
+  opacity: 1;
+}
+.annotation-studio input:disabled {
+  color: var(--slate-muted);
+  background: var(--slate-raised);
+  border-color: var(--slate-line);
+  cursor: not-allowed;
+  -webkit-text-fill-color: var(--slate-muted);
+  opacity: 1;
+}
+.annotation-actions { display: flex; align-items: end; gap: .5rem; }
+.annotation-studio form > p { margin: .2rem 0 0; align-self: center; }
+.annotation-empty { margin: 0; color: var(--slate-muted); }
+.market-context-state { padding: 2rem; border: 1px dashed var(--slate-line); border-radius: 0; color: var(--slate-text); }
+
+.market-context :focus-visible { outline: 3px solid var(--context-playhead); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .market-context *, .market-context *::before, .market-context *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+@media (max-width: 1100px) {
+  .market-context-heading,
+  .annotation-studio { align-items: stretch; flex-direction: column; }
+  .market-source-mark { min-width: 0; }
+  .annotation-studio form { max-width: none; grid-template-columns: repeat(2, minmax(12rem, 1fr)); }
+  .replay-deck { flex-wrap: wrap; }
+  .replay-deck input[type="range"] { order: 10; flex-basis: 100%; }
+}
+
+.market-source-note { margin: 0; color: var(--slate-muted); font-size: .8rem; }

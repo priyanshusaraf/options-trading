@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Verify provider adapter conformance"
+  short_description: "Test capabilities, mappings and recovery limits"
+  default_prompt: "Use $provider-adapter-conformance for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

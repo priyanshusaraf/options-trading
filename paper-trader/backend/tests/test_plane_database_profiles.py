@@ -96,7 +96,7 @@ def test_database_authority_label_redacts_credentials_and_query_secrets():
 
 
 def test_manual_research_startup_never_prints_raw_database_urls(monkeypatch, capsys):
-    from app.core.config import get_settings
+    from app.core import config as app_config
     from research import guards as research_guards
     from scripts import research_run
 
@@ -112,11 +112,9 @@ def test_manual_research_startup_never_prints_raw_database_urls(monkeypatch, cap
     )
     monkeypatch.setenv("PT_LEDGER_DATABASE_URL", "postgresql+psycopg://app@db/ledger")
     monkeypatch.setattr(research_guards, "enforce", lambda **_kwargs: None)
-    get_settings.cache_clear()
-    try:
-        research_run._enforce_isolation()
-    finally:
-        get_settings.cache_clear()
+    isolated_settings = app_config.Settings()
+    monkeypatch.setattr(app_config, "get_settings", lambda: isolated_settings)
+    research_run._enforce_isolation()
 
     output = capsys.readouterr().out
     assert "postgresql://db/research" in output

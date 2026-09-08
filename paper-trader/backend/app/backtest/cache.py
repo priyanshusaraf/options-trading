@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import datetime
 
 from sqlalchemy import select
 
 from app.db.models import BacktestResult
+from app.backtest.artifacts import (
+    ResearchCacheIdentity,
+    research_cache_identity,
+    research_cache_identity_document,
+)
 
 # v2: return%/equity/CAGR switched from a flat ₹50k base to compounding return on
 #     the position's own notional (leverage-free, comparable across instruments).
@@ -28,7 +35,75 @@ from app.db.models import BacktestResult
 # v8: cache identity binds the complete ordered candle dataset, execution source,
 #     strategy version, instrument economics, and every simulation policy.  Full
 #     SHA-256 addresses replace the old timestamp-plus-truncated-params key.
-SCHEMA_VERSION = 8
+# v9: cache identity also binds the verified Phase 4 authority chain: owner, authored
+#     IR, registry snapshot, resolved graph, implementation closure, declarations,
+#     plan, capability assessment, dataset manifest, market truth, evaluation policy
+#     and admission. A v8 artifact cannot prove that authority and must not be reused.
+SCHEMA_VERSION = 9
+
+
+def phase4_cache_identity(*, owner_id: str, authored_ir_address: str, manifest_address: str, registry_snapshot_address: str,
+                          resolved_graph_address: str, implementation_closure_address: str,
+                          declaration_addresses: tuple[str, ...], plan_address: str,
+                          capability_assessment_address: str, market_truth_address: str,
+                          evaluation_policy_address: str, admission_address: str) -> str:
+    """Return a complete Phase 4 cache key; incomplete legacy facts fail closed."""
+    from app.backtest.identity import phase4_binding_payload, require_content_address
+    payload = phase4_binding_payload({
+        "owner_id": owner_id, "authored_ir_address": authored_ir_address,
+        "registry_snapshot_address": registry_snapshot_address,
+        "resolved_graph_address": resolved_graph_address,
+        "implementation_closure_address": implementation_closure_address,
+        "declaration_addresses": declaration_addresses, "plan_address": plan_address,
+        "capability_assessment_address": capability_assessment_address,
+        "dataset_manifest_address": manifest_address,
+        "market_truth_snapshot_address": market_truth_address,
+        "evaluation_policy_address": evaluation_policy_address,
+    })
+    payload = {"scheme": "phase4-cache/1",
+               "admission_address": require_content_address(admission_address),
+               **payload}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def verified_phase4_cache_identity(
+    *, research_session, execution_session, owner_id: str, authored_ir_address: str,
+    manifest_address: str, registry_snapshot_address: str, resolved_graph_address: str,
+    implementation_closure_address: str, declaration_addresses: tuple[str, ...],
+    plan_address: str, capability_assessment_address: str, market_truth_address: str,
+    evaluation_policy_address: str, admission_address: str, plan, at_time: datetime,
+) -> str:
+    """Rebuild both-plane authority before minting a reusable result identity."""
+    from app.market_data.authority import load_capability_assessment
+    from research.domain.strategy_admissions import load_verified_dataset_authority
+
+    dataset = load_verified_dataset_authority(
+        research_session, owner_id=owner_id, manifest_address=manifest_address,
+        execution_session=execution_session, at_time=at_time)
+    assessment = load_capability_assessment(
+        execution_session, capability_assessment_address, plan=plan, at_time=at_time)
+    manifest = dataset.manifest
+    if (manifest.owner_id != owner_id or manifest.manifest_address != manifest_address
+            or assessment.authority_address != capability_assessment_address
+            or assessment.owner_id != owner_id
+            or assessment.dataset_manifest_address != manifest_address
+            or assessment.plan_address != plan_address
+            or assessment.registry_snapshot_address != registry_snapshot_address
+            or assessment.market_truth_snapshot_address != market_truth_address
+            or assessment.evaluation_policy_address != evaluation_policy_address):
+        raise ValueError("Phase 4 cache authority chain is stale or mismatched")
+    return phase4_cache_identity(
+        owner_id=owner_id, authored_ir_address=authored_ir_address,
+        manifest_address=manifest.manifest_address,
+        registry_snapshot_address=registry_snapshot_address,
+        resolved_graph_address=resolved_graph_address,
+        implementation_closure_address=implementation_closure_address,
+        declaration_addresses=declaration_addresses, plan_address=plan_address,
+        capability_assessment_address=assessment.authority_address,
+        market_truth_address=market_truth_address,
+        evaluation_policy_address=evaluation_policy_address,
+        admission_address=admission_address,
+    )
 
 RUN_LOCAL_FIELDS = frozenset({"id", "owner_id", "run_id", "from_cache"})
 CACHED_RESULT_FIELDS = tuple(
@@ -84,6 +159,9 @@ def find_reusable(session, key: str, interval: str, params_hash: str,
                   expected_premium_error: str = "") \
         -> BacktestResult | None:
     """Most recent successful result with an identical content key, or None."""
+    from app.backtest.identity import is_legacy_result_compatibility_alias
+    if is_legacy_result_compatibility_alias(params_hash):
+        return None
     if last_candle_ts <= 0:
         return None
     q = (select(BacktestResult)

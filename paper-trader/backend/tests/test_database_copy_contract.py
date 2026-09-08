@@ -98,6 +98,62 @@ def test_typed_row_digest_canonicalizes_a_non_null_sql_date():
     assert _row_digest(table, row) != first
 
 
+def test_coupon_copy_digest_binds_fixed_dynamic_discriminator_and_duration():
+    from app.db.copy_contract import _row_digest
+    from app.db.models import Base
+
+    table = Base.metadata.tables["platform_coupon_definitions"]
+    row = {column.name: None for column in table.columns}
+    row.update({
+        "coupon_id": "coupon.dynamic",
+        "coupon_digest": "a" * 64,
+        "plan_version_id": "plan.dynamic",
+        "policy_address": "sha256:" + "b" * 64,
+        "trial_policy_address": "sha256:" + "c" * 64,
+        "entitlement_code": "PRODUCT_ACCESS",
+        "entitlement_transition": "GRANT",
+        "valid_from": dt.datetime(2026, 9, 2),
+        "per_owner_limit": 1,
+        "status": "ACTIVE",
+        "created_at": dt.datetime(2026, 9, 2),
+        "entitlement_effect_timing": "DYNAMIC_DURATION",
+        "entitlement_duration_seconds": 1_296_000,
+    })
+    dynamic = _row_digest(table, row)
+    row.update({
+        "entitlement_effect_timing": "FIXED_ABSOLUTE",
+        "entitlement_duration_seconds": None,
+        "entitlement_valid_from": dt.datetime(2026, 9, 2, 1),
+        "entitlement_valid_until": dt.datetime(2026, 9, 17, 1),
+    })
+    fixed = _row_digest(table, row)
+    assert dynamic != fixed
+    row["entitlement_valid_until"] = dt.datetime(2026, 9, 18, 1)
+    assert _row_digest(table, row) != fixed
+
+
+def test_oauth_copy_digest_binds_session_completion_fact():
+    from app.db.copy_contract import _row_digest
+    from app.db.models import Base
+
+    table = Base.metadata.tables["oauth_callback_states"]
+    now = dt.datetime(2026, 9, 2, 10, 0)
+    row = {column.name: None for column in table.columns}
+    row.update({
+        "state_digest": "a" * 64,
+        "connection_id": 1,
+        "session_id": "session-a",
+        "user_id": "user-a",
+        "organization_id": "org-a",
+        "created_at": now,
+        "expires_at": now + dt.timedelta(minutes=10),
+        "consumed_at": now + dt.timedelta(minutes=1),
+    })
+    consumed_only = _row_digest(table, row)
+    row["credential_stored_at"] = now + dt.timedelta(minutes=2)
+    assert _row_digest(table, row) != consumed_only
+
+
 def _execution_relationship_fixture():
     from app.db.models import Base
 
@@ -518,6 +574,10 @@ def test_live_copy_preserves_two_tenant_rows_and_refuses_second_invocation(
                 "label": suffix, "capabilities_json": '["orders"]',
                 "credential_ciphertext": ciphertext, "credential_key_id": key_id,
                 "status": "active", "created_at": now, "updated_at": now})
+            if suffix == "a":
+                connection.execute(sa.text(
+                    "UPDATE broker_connections SET last_authenticated_at=:now WHERE id=1"
+                ), {"now": now})
             deployment_id = 1 if suffix == "a" else 2
             connection.execute(Base.metadata.tables["deployments"].insert(), {
                 "id": deployment_id, "owner_id": owner, "name": f"book-{suffix}",
@@ -546,7 +606,8 @@ def test_live_copy_preserves_two_tenant_rows_and_refuses_second_invocation(
                 "connection_id": deployment_id, "session_id": f"session-{suffix}",
                 "user_id": user, "organization_id": owner, "created_at": now,
                 "expires_at": now + dt.timedelta(minutes=5),
-                "consumed_at": now if suffix == "b" else None})
+                "consumed_at": now,
+                "credential_stored_at": now if suffix == "a" else None})
             run_id = 10 + deployment_id
             connection.execute(Base.metadata.tables["backtest_runs"].insert(), {
                 "id": run_id, "owner_id": owner, "created_at": now,
@@ -680,6 +741,15 @@ def test_live_copy_preserves_two_tenant_rows_and_refuses_second_invocation(
         assert "secret-artifact" not in serialized
         assert "same-local-id" not in serialized
         verify_planes(planes, report)
+        completion_destination = sa.create_engine(url("execution"))
+        with completion_destination.connect() as connection:
+            completion = connection.execute(sa.text(
+                "SELECT o.credential_stored_at,b.last_authenticated_at "
+                "FROM oauth_callback_states o JOIN broker_connections b "
+                "ON b.id=o.connection_id WHERE o.organization_id='org-a'"
+            )).one()
+        completion_destination.dispose()
+        assert completion.credential_stored_at == completion.last_authenticated_at == now
         ledger_destination = sa.create_engine(url("ledger"))
         with ledger_destination.begin() as connection:
             connection.execute(sa.text(
@@ -882,6 +952,45 @@ def test_live_copy_refuses_later_plane_change_after_all_plane_preflight(
             for schema in schemas:
                 connection.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
         admin.dispose()
+
+
+def test_copy_validation_accepts_only_canonical_closed_v2_presentation(tmp_path):
+    from app.db.copy_contract import CopyRefusal, validate_content_addresses
+    from app.db.models import Base
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'v2-presentation-copy.db'}", future=True)
+    Base.metadata.create_all(engine)
+    document = {
+        "schema": "strategy-os-v2-presentation/1", "positions": {}, "groups": {},
+        "viewport": None, "selection": {"nodes": [], "edges": [], "outputs": []},
+    }
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    now = dt.datetime.now()
+    with engine.begin() as connection:
+        connection.execute(Base.metadata.tables["organizations"].insert(), {
+            "organization_id": "copy-owner", "name": "Copy", "created_at": now,
+            "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["projects"].insert(), {
+            "project_id": "copy-project", "owner_id": "copy-owner", "name": "Copy",
+            "description": "", "status": "active", "created_at": now, "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["graph_artifacts"].insert(), {
+            "owner_id": "copy-owner", "identifier": "copy-graph", "project_id": "copy-project",
+            "display_name": "Copy", "draft_json": "{}", "draft_revision": 0,
+            "published_revision": None, "current_version": None,
+            "created_at": now, "updated_at": now,
+        })
+        connection.execute(Base.metadata.tables["ir_v2_editor_presentations"].insert(), {
+            "owner_id": "copy-owner", "graph_identifier": "copy-graph", "format_version": 2,
+            "presentation_json": encoded, "revision": 0, "updated_at": now,
+        })
+        validate_content_addresses(connection, Base.metadata)
+        connection.execute(sa.text(
+            "UPDATE ir_v2_editor_presentations SET presentation_json = :value"),
+            {"value": json.dumps(document, indent=2)})
+        with pytest.raises(CopyRefusal, match="canonical closed JSON"):
+            validate_content_addresses(connection, Base.metadata)
 
 
 @pytest.mark.skipif(not os.environ.get("PT_TEST_POSTGRES_URL"),

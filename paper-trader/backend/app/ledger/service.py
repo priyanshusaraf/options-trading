@@ -11,6 +11,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.db.concurrency import caller_owned_savepoint
 from app.ledger.models import LedgerArtifact, LedgerManualFill, LedgerSnapshot
 from app.events.planes import ledger_outbox
 
@@ -47,7 +48,7 @@ def write_snapshot(sm, payload: str, base_version: int | None, *, owner_id: str,
                LedgerSnapshot.id == 1)
         if base_version is None:
             try:
-                with s.begin_nested():
+                with caller_owned_savepoint(s, scope="ledger_snapshot"):
                     s.add(LedgerSnapshot(
                         owner_id=owner_id, broker_account_id=broker_account_id,
                         id=1, version=1, payload=payload, updated_at=_now()))

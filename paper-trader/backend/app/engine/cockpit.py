@@ -105,6 +105,9 @@ class InstrumentExecutionView:
     #: What executes here and on whose say-so — straight from the canonical binding.
     strategy_key: str | None
     strategy_version: str | None
+    graph_address: str | None
+    attribution_state: str | None
+    admission_address: str | None
     source: str | None
     authority: str | None
     origin: str | None
@@ -204,7 +207,9 @@ def _binding_view(runner, key: str) -> dict[str, Any]:
     try:
         binding = runner._binding_for(key)
     except Exception as exc:
-        return {"strategy_key": None, "strategy_version": None, "source": None,
+        return {"strategy_key": None, "strategy_version": None,
+                "graph_address": None, "attribution_state": None,
+                "admission_address": None, "source": None,
                 "authority": None, "origin": None, "reason": None,
                 "binding_error": f"{type(exc).__name__}: {exc}"}
     error = None
@@ -214,6 +219,9 @@ def _binding_view(runner, key: str) -> dict[str, Any]:
         error = f"{type(exc).__name__}: {exc}"
     return {"strategy_key": binding.strategy_key,
             "strategy_version": binding.strategy_version,
+            "graph_address": binding.graph_address,
+            "attribution_state": binding.attribution_state,
+            "admission_address": binding.admission_address,
             "source": binding.source, "authority": binding.authority,
             "origin": binding.origin, "reason": binding.reason,
             "binding_error": error}

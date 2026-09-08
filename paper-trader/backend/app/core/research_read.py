@@ -123,6 +123,45 @@ def _candidate_for_run(session, run_id: int, *, owner_id: str) -> dict | None:
     }
 
 
+def _verify_search_trial_ledger(session, run, evidence):
+    if run.status != "completed":
+        return
+    from research.domain.models import OptimizationTrial
+    progress = evidence["results"]["canonical_optimization"]
+    expected = progress["nested_trials"] + progress["final_development_trials"]
+    stored = (session.query(OptimizationTrial).filter(OptimizationTrial.owner_id == run.owner_id,
+        OptimizationTrial.run_id == run.id).order_by(OptimizationTrial.id).all())
+    if len(stored) != len(expected):
+        raise EvidenceRejected("Canonical search trial population differs from its immutable ledger")
+    for row, trial in zip(stored, expected):
+        _verify_search_trial_row(row, trial)
+
+
+def _verify_search_trial_row(row, trial):
+    actual = {"fold_index": row.fold_index, "params": json.loads(row.params_json),
+              "objective": row.is_objective, "trades": row.is_trades, "selected": row.selected}
+    expected = {key: trial[key] for key in ("fold_index", "params", "trades", "selected")}
+    expected["objective"] = trial["objective"] if trial["objective"] is not None else -1e12
+    if canonical_json(actual) != canonical_json(expected):
+        raise EvidenceRejected("Canonical development trial differs from its immutable ledger")
+
+
+def _verify_search_evidence(session, run, recipe, evidence):
+    if "canonical_optimization" not in recipe:
+        if "canonical_optimization" in evidence.get("results", {}):
+            raise EvidenceRejected("Canonical search has no immutable experiment recipe")
+        return
+    from research.pipeline.v2_parameter_search import verify_canonical_search_evidence
+    try:
+        verify_canonical_search_evidence(recipe, evidence)
+        expected_run = {"id": run.id, "status": run.status, "decision": run.decision}
+        if canonical_json(evidence["run"]) != canonical_json(expected_run) or evidence["spec_id"] != run.spec_id:
+            raise EvidenceRejected("Canonical search names a different persisted experiment run")
+        _verify_search_trial_ledger(session, run, evidence)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise EvidenceRejected("Stored canonical development search failed semantic verification") from exc
+
+
 def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> dict | None:
     recipe = _recipe_for(session, run.id, owner_id=run.owner_id)
     graph = _graph_for_recipe(recipe)
@@ -131,6 +170,7 @@ def _graph_run_view(session, run: ExperimentRun, *, include_evidence: bool) -> d
     evidence = None
     try:
         evidence = decode_terminal_evidence(run.checkpoint_json)
+        _verify_search_evidence(session, run, recipe, evidence)
         evidence_state = "verified"
     except EvidenceMissing:
         if run.status in {"pending", "running"}:
@@ -442,6 +482,23 @@ def project_review_source(project_id: str, *, owner_id: str) -> dict:
     return result
 
 
+def _verify_finding_identity(evidence, run, spec, graph):
+    evidence_run = evidence.get("run")
+    evidence_provenance = evidence.get("provenance")
+    evidence_graph = (
+        evidence_provenance.get("graph_provenance", {}).get("graph")
+        if isinstance(evidence_provenance, dict) else None
+    )
+    if (
+        evidence.get("spec_id") != spec.id
+        or not isinstance(evidence_run, dict)
+        or evidence_run.get("id") != run.id
+        or evidence_run.get("status") != "completed"
+        or evidence_graph != graph
+    ):
+        raise StoredEvidenceCorrupt(run.id)
+
+
 def _verified_finding_run(session, project_id: str, run_id: int, *, owner_id: str) -> dict | None:
     run = (session.query(ExperimentRun)
            .filter(ExperimentRun.owner_id == owner_id, ExperimentRun.id == run_id)
@@ -457,24 +514,12 @@ def _verified_finding_run(session, project_id: str, run_id: int, *, owner_id: st
         raise FindingEvidenceUnavailable(run_id)
     try:
         evidence = decode_terminal_evidence(run.checkpoint_json)
+        _verify_search_evidence(session, run, recipe, evidence)
     except EvidenceMissing as exc:
         raise FindingEvidenceUnavailable(run_id) from exc
     except EvidenceRejected as exc:
         raise StoredEvidenceCorrupt(run_id) from exc
-    evidence_run = evidence.get("run")
-    evidence_provenance = evidence.get("provenance")
-    evidence_graph = (
-        evidence_provenance.get("graph_provenance", {}).get("graph")
-        if isinstance(evidence_provenance, dict) else None
-    )
-    if (
-        evidence.get("spec_id") != spec.id
-        or not isinstance(evidence_run, dict)
-        or evidence_run.get("id") != run.id
-        or evidence_run.get("status") != "completed"
-        or evidence_graph != graph
-    ):
-        raise StoredEvidenceCorrupt(run_id)
+    _verify_finding_identity(evidence, run, spec, graph)
     return {
         "run": run,
         "spec": spec,

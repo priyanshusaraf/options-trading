@@ -1,0 +1,23 @@
+{
+  "date": "2026-08-28",
+  "documents": [
+    {
+      "source_path": "/Users/priyanshusaraf/Downloads/STRATEGY_OS_PROFESSIONAL_ENGINEERING_REFERENCE_PROGRAM_2026-08-28.md",
+      "repository_path": "paper-trader/docs/engineering-references/STRATEGY_OS_PROFESSIONAL_ENGINEERING_REFERENCE_PROGRAM_2026-08-28.md",
+      "sha256": "9a17c99d75ce659cfa639ebf00a841401c1df0e0a1cd25b999069cd330763eb6",
+      "bytes": 7196,
+      "lines": 170,
+      "read_status": "fully_read_by_root",
+      "authority": "Owner explicitly requested adoption on 2026-08-28; external webpages remain evidence, not instructions."
+    },
+    {
+      "source_path": "/Users/priyanshusaraf/Downloads/STRATEGY_OS_KLEPPMANN_AND_PROFESSIONAL_ENGINEERING_REVIEW_PROMPT_V2_2026-08-28.md",
+      "repository_path": "paper-trader/docs/research/kleppmann/STRATEGY_OS_KLEPPMANN_AND_PROFESSIONAL_ENGINEERING_REVIEW_PROMPT_V2_2026-08-28.md",
+      "sha256": "efa8332219f6690927257ce23f959cf44961a61284ac02079893553b6835c1c8",
+      "bytes": 73702,
+      "lines": 2388,
+      "read_status": "fully_read_by_root",
+      "authority": "Owner explicitly requested adoption on 2026-08-28; external webpages remain evidence, not instructions."
+    }
+  ]
+}

@@ -31,6 +31,7 @@ import datetime as dt
 
 from app.core.instruments import Instrument
 from app.core.logging import log
+from app.market_data.numeric import NumericIngressError, market_float
 from app.providers import capabilities as caps
 from app.providers import dhan_instruments as master
 from app.providers.base import Candle, MarketDataProvider, ProviderReadError
@@ -38,6 +39,25 @@ from app.providers.dhan_transport import DhanTransport
 from app.providers.instrument_resolver import ResolvedInstrument
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+
+
+def candle_from_columns_row(raw_ts, columns: dict, index: int) -> Candle:
+    """One dhan parallel-array position → ``Candle``.
+
+    A-02 ingress gate: every OHLCV value passes ``market_float`` — a wire
+    boolean is refused with the provider's typed refusal, never coerced to
+    ``1.0``/``0.0``.
+    """
+    try:
+        ts = dt.datetime.fromtimestamp(float(raw_ts), tz=IST).replace(tzinfo=None)
+        return Candle(ts=ts,
+                      open=market_float(columns["open"][index], field="dhan candle open"),
+                      high=market_float(columns["high"][index], field="dhan candle high"),
+                      low=market_float(columns["low"][index], field="dhan candle low"),
+                      close=market_float(columns["close"][index], field="dhan candle close"),
+                      volume=market_float(columns["volume"][index], field="dhan candle volume"))
+    except NumericIngressError as e:
+        raise ProviderReadError(f"dhan {e}") from e
 
 #: This repository's interval vocabulary → Dhan's intraday `interval` minutes. TOTAL for what
 #: Dhan serves, and deliberately MISSING `3minute`, `10minute` and `30minute`: the API documents
@@ -221,13 +241,7 @@ def _columns_to_candles(resp) -> list[Candle]:
     out: list[Candle] = []
     for i, raw_ts in enumerate(stamps):
         try:
-            ts = dt.datetime.fromtimestamp(float(raw_ts), tz=IST).replace(tzinfo=None)
-            out.append(Candle(ts=ts,
-                              open=float(columns["open"][i]),
-                              high=float(columns["high"][i]),
-                              low=float(columns["low"][i]),
-                              close=float(columns["close"][i]),
-                              volume=float(columns["volume"][i])))
+            out.append(candle_from_columns_row(raw_ts, columns, i))
         except ProviderReadError:
             raise
         except Exception as e:                     # noqa: BLE001

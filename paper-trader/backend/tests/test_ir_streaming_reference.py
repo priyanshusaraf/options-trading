@@ -13,7 +13,7 @@ from app.ir.causal import (
 from app.ir.hashing import content_address
 from app.ir.library import REGISTRY
 from app.ir.registry import DependencyBoundary, PlatformRegistry, registered_kernel
-from app.ir.resolve import ResolvedGraph, ResolvedNode, resolve
+from app.ir.resolve import ResolvedEdge, ResolvedGraph, ResolvedNode, resolve
 from app.ir.runtime import evaluate
 from app.ir.strategies.expanding_z import GRAPH
 from app.ir.streaming_reference import ReferenceEvaluationError, evaluate_prefix_stream
@@ -87,6 +87,20 @@ def test_reference_does_not_call_vector_runtime(monkeypatch) -> None:
     result = evaluate_prefix_stream(graph, _inputs(), REGISTRY)
 
     assert len(result.outputs["longEntry"]) == 8
+
+
+def test_reference_refuses_duplicate_target_collapse_in_a_forged_resolved_graph() -> None:
+    graph = resolve(GRAPH, REGISTRY.library)
+    forged = ResolvedGraph(
+        graph.identifier, graph.version, graph.nodes,
+        (*graph.edges, ResolvedEdge(
+            source=graph.edges[0].source, target=graph.edges[0].target,
+            declared_in=graph.edges[0].declared_in)),
+        graph.versions, graph.inputs, graph.outputs, graph.components,
+    )
+
+    with pytest.raises(ReferenceEvaluationError, match="more than one source"):
+        evaluate_prefix_stream(forged, _inputs(), REGISTRY)
 
 
 def test_bounded_kernel_receives_only_its_declared_history() -> None:
@@ -206,3 +220,64 @@ def test_fixture_identity_normalizes_timestamp_resolution(unit: str) -> None:
     manifest = canonical_fixture_manifest(suite)
     assert manifest["fixtures"][0]["inputs"]["close"]["index_utc_ns"] == [
         1786579200000000000, 1786665600000000000]
+
+
+def test_v2_reference_slices_nested_canonical_fields_and_keeps_legacy_state_sequences():
+    from types import SimpleNamespace
+    from app.ir.streaming_reference import _v2_causal_index, _v2_prefix_value
+    index = pd.date_range("2026-01-01", periods=3, tz="UTC")
+    values = pd.Series([10., 11., 12.], index=index)
+    graph = SimpleNamespace(nodes=(SimpleNamespace(component=("probe", 2)),))
+    registry = SimpleNamespace(node_contracts={("probe", 2): {"execution_form": "RECURSIVE"}})
+    inputs = {"market": {"nested": {"close": values}},
+              "state": {"event_times": tuple(index), "series": (True, False, True)}}
+    assert _v2_causal_index(graph, inputs, registry).equals(index)
+    assert _v2_causal_index(graph, {"market": {"close": values}}, registry).equals(index)
+    prefix = _v2_prefix_value(inputs, 2, index)
+    assert prefix["market"]["nested"]["close"].tolist() == [10., 11.]
+    assert prefix["state"] == {"event_times": tuple(index[:2]), "series": (True, False)}
+    assert len(inputs["market"]["nested"]["close"]) == 3
+    wrong = {"market": {"close": values}, "other": {"close": values.set_axis(index + pd.Timedelta(seconds=1))}}
+    with pytest.raises(ReferenceEvaluationError, match="share one aware index"):
+        _v2_causal_index(graph, wrong, registry)
+    with pytest.raises(ReferenceEvaluationError, match="different causal clocks"):
+        _v2_causal_index(graph, {"market": {"close": values},
+            "state": {"event_times": tuple(index + pd.Timedelta(seconds=1))}}, registry)
+
+
+def test_v2_nested_clock_rejects_incomplete_legacy_and_unknown_causal_inputs():
+    from types import SimpleNamespace
+    from app.ir.streaming_reference import _v2_causal_index
+    graph = SimpleNamespace(nodes=(SimpleNamespace(component=("probe", 2)),))
+    recursive = SimpleNamespace(node_contracts={("probe", 2): {"execution_form": "RECURSIVE"}})
+    stateless = SimpleNamespace(node_contracts={("probe", 2): {"execution_form": "STATELESS"}})
+    index = pd.date_range("2026-01-01", periods=2, tz="UTC")
+    assert _v2_causal_index(graph, {}, stateless) is None
+    assert _v2_causal_index(graph, {"close": pd.Series([1., 2.], index=index)}, stateless).equals(index)
+    cases = [({}, "lacks event_times"),
+             ({"market": {"close": pd.Series([], index=index[:0])}}, "lacks event_times"),
+             ({"state": {"event_times": list(index)}}, "must be immutable"),
+             ({"state": {"event_times": tuple(index.tz_localize(None))}}, "one causal sequence"),
+             ({"state": {"event_times": tuple(index[::-1])}}, "one causal sequence"),
+             ({"state": {"event_times": (index[0], index[0])}}, "one causal sequence"),
+             ({"state": {"event_times": tuple(index), "series": (True,)}}, "length differs"),
+             ({"market": {"close": pd.Series([1., 2.])}}, "aware index"),
+             ({"market": {"close": pd.Series([1., 2.], index=index.tz_localize(None))}}, "aware index")]
+    for inputs, reason in cases:
+        with pytest.raises(ReferenceEvaluationError, match=reason):
+            _v2_causal_index(graph, inputs, recursive)
+
+
+@pytest.mark.parametrize("fault", ["reverse", "duplicate", "nat"])
+@pytest.mark.parametrize("recursive", [False, True])
+def test_v2_nested_series_rejects_noncausal_clocks(fault, recursive):
+    from types import SimpleNamespace
+    from app.ir.streaming_reference import _v2_causal_index
+    index = pd.date_range("2026-01-01", periods=2, tz="UTC")
+    if fault == "reverse": index = index[::-1]
+    elif fault == "duplicate": index = pd.DatetimeIndex([index[0], index[0]])
+    else: index = pd.DatetimeIndex([index[0], pd.NaT])
+    graph = SimpleNamespace(nodes=(SimpleNamespace(component=("probe", 2)),))
+    registry = SimpleNamespace(node_contracts={("probe", 2): {"execution_form": "RECURSIVE" if recursive else "STATELESS"}})
+    with pytest.raises(ReferenceEvaluationError, match="share one aware index"):
+        _v2_causal_index(graph, {"frame": {"close": pd.Series([1., 2.], index=index)}}, registry)

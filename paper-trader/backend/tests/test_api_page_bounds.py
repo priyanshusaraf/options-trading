@@ -27,13 +27,12 @@ BOUNDED_READS = [
     ("/api/backtest/results", "limit"),
 ]
 
-# `/api/ir-shadow` reads `app.state.runner`, which only exists once the engine lanes are
-# running. Serving it here would mean `with TestClient(app)` and a real engine start —
-# which these assertions do not need and must not provoke. Its *refusal* assertions are
-# unaffected and still run above: FastAPI validates `limit` before the handler is entered,
-# so the bound is proven on exactly the path that matters, and the 200-side coverage is
-# left to the route's own tests rather than faked with a stub runner here.
-NEEDS_ENGINE = {"/api/ir-shadow"}
+# `/api/trades` and `/api/ir-shadow` require an owner-scoped local execution cell. Serving
+# either here would mean constructing a runner or starting lifespan/engine lanes, which these
+# bounds-only assertions do not need and must not provoke. Their *refusal* assertions remain
+# in BOUNDED_READS: FastAPI validates `limit` before the handler is entered, so the bounds are
+# proven on the exact paths that matter. Route-owned tests retain the positive 200 coverage.
+NEEDS_ENGINE = {"/api/trades", "/api/ir-shadow"}
 SERVEABLE_READS = [(p, q) for p, q in BOUNDED_READS if p not in NEEDS_ENGINE]
 
 

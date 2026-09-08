@@ -12,7 +12,9 @@ from app.core import strategy_admissions
 from app.core import strategy_archive as arch
 from app.core import watchlists as wl
 from app.core.deploy_bridge import DeployRequest, deploy, preview_deploy
-from app.db.models import Deployment, GraphArtifact, GraphVersion, Project, Watchlist
+from app.db.models import Deployment, GraphArtifact, GraphVersion, Project, Watchlist, LEGACY_DEPLOYMENT_ID
+from app.core import paper_authority
+from app.core.execution_binding import AuthorityNotGranted
 from app.db.session import SessionLocal, init_db
 from app.ir.hashing import canonical_json, content_address
 from app.ir.library import REGISTRY
@@ -24,7 +26,7 @@ _CACHED_ADMISSION = None
 arch = LegacyUserScope(arch, "get", "record_strategy", "set_status", "by_status", "list_archive")
 wl = LegacyUserScope(wl, "create_watchlist", "get_watchlist", "assign_instrument",
                      "unassign_instrument", "watchlist_of", "effective_strategy_map",
-                     "membership_map", "in_watchlist_keys", "write_research_snapshot",
+                     "membership_map", "active_member_keys", "in_watchlist_keys", "write_research_snapshot",
                      "list_watchlists", "apply_resolution")
 
 _deploy, _preview_deploy = deploy, preview_deploy
@@ -74,6 +76,29 @@ def _admitted_request(session, name: str, proposals, *, account_id: str = ACCOUN
             artifact_json=canonical_json(document), content_address=content_address(document),
             admission_address=_CACHED_ADMISSION.admission_address))
     session.flush()
+    if account_id != ACCOUNT:
+        return DeployRequest(
+            watchlist_name=name, strategy_key=f"ir.{GRAPH}", proposals=proposals,
+            admission_address=_CACHED_ADMISSION.admission_address,
+            broker_account_id=account_id, source="ir")
+    from unittest.mock import patch
+    staged = []
+    for instrument_key, _weight in proposals:
+        row = paper_authority.stage(
+            session, project_id=PROJECT, graph_identifier=GRAPH, graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=instrument_key,
+            interval="30minute", owner_id="owner", broker_account_id=account_id)
+        staged.append(row)
+    session.commit()
+    for row in staged:
+        decision = {"project_id": PROJECT, "graph_identifier": GRAPH,
+                    "graph_version": 1, "content_address": _CACHED_ADMISSION.graph_address,
+                    "admission_address": _CACHED_ADMISSION.admission_address,
+                    "decision": "approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            paper_authority.activate(session, row.id, revision=row.revision,
+                                     owner_id="owner", broker_account_id=account_id)
+        session.commit()
     return DeployRequest(
         watchlist_name=name, strategy_key=f"ir.{GRAPH}", proposals=proposals,
         admission_address=_CACHED_ADMISSION.admission_address,
@@ -137,7 +162,8 @@ def test_deploy_bridge_receipt_check_bypass_mutant_is_killed(monkeypatch):
             "app.core.deployments._require_current_deployment_admission",
             lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
                 admission_address=req.admission_address,
-                strategy=__import__("types").SimpleNamespace(version="mutant")))
+                strategy=__import__("types").SimpleNamespace(
+                    version=req.admission_address, graph_version_label="1")))
         with pytest.raises(pytest.fail.Exception):
             with pytest.raises(ValueError, match="RECEIPT_STALE"):
                 deploy(s, req)
@@ -190,6 +216,57 @@ def test_deploy_blocks_incumbents_in_other_watchlists():
         assert any(r["instrument"] == "SILVERM" and r["reason"] == "incumbent"
                    for r in res.rejected)
         assert wl.watchlist_of(s, "SILVERM").name == "A"   # incumbent untouched
+
+
+def test_deploy_refuses_omitted_active_target_member_before_any_write():
+    """A reused target assigns its strategy to every active member, so every member
+    needs exact paper authority even if it was omitted from this request."""
+    _fresh()
+    with SessionLocal() as s:
+        target = wl.create_watchlist(s, "existing-target", "expanding_z_v4")
+        wl.assign_instrument(s, "SILVERM", target.id)
+        s.commit()
+        req = _admitted_request(s, "existing-target", [("GOLDM", 1.0)])
+
+        with pytest.raises(AuthorityNotGranted):
+            deploy(s, req)
+
+        assert wl.watchlist_of(s, "GOLDM") is None
+        assert wl.effective_strategy_map(s)["SILVERM"] == "expanding_z_v4"
+        assert not list(s.query(Deployment).filter(Deployment.name.like("watchlist:%")))
+        assert arch.get(s, req.strategy_key) is None
+
+
+def test_deploy_reused_target_accepts_only_when_every_affected_member_is_authorised():
+    _fresh()
+    with SessionLocal() as s:
+        target = wl.create_watchlist(s, "existing-target", "expanding_z_v4")
+        wl.assign_instrument(s, "SILVERM", target.id)
+        s.commit()
+        req = _admitted_request(s, "existing-target", [("GOLDM", 1.0), ("SILVERM", 1.0)])
+        req.proposals = [("GOLDM", 1.0)]
+
+        result = deploy(s, req)
+        s.commit()
+
+        assert result.assigned == ["GOLDM"]
+        assert wl.effective_strategy_map(s) == {
+            "GOLDM": req.strategy_key, "SILVERM": req.strategy_key}
+
+
+def test_deploy_complete_affected_set_guard_mutant_is_killed(monkeypatch):
+    """Deliberately omitting existing target members makes the refusal regression red."""
+    _fresh()
+    with SessionLocal() as s:
+        target = wl.create_watchlist(s, "existing-target", "expanding_z_v4")
+        wl.assign_instrument(s, "SILVERM", target.id)
+        s.commit()
+        req = _admitted_request(s, "existing-target", [("GOLDM", 1.0)])
+        monkeypatch.setattr("app.core.watchlists.active_member_keys", lambda *_args, **_kwargs: set())
+
+        with pytest.raises(pytest.fail.Exception):
+            with pytest.raises(AuthorityNotGranted):
+                deploy(s, req)
 
 
 def test_preview_writes_nothing():

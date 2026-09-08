@@ -47,3 +47,16 @@ def test_explanation_for_dispatches_on_generated_strategies():
     hand = kernels.get_strategy("trend_impulse_v3")
     ex2 = explanation_for(hand, dict(hand.default_params))
     assert ex2.strategy_key == "trend_impulse_v3"
+
+
+def test_unregistered_runtime_explanation_uses_its_actual_display_name(monkeypatch):
+    from types import SimpleNamespace
+    from research.evaluation import kernels
+    from research.strategy.builder.describe import explanation_for
+    calls = []
+    monkeypatch.setattr(kernels, "get_strategy", lambda key: calls.append(key))
+    strategy = SimpleNamespace(key="v2.research.saved", display_name="Saved V2 graph")
+    result = explanation_for(strategy, {})
+    assert result.strategy_key == strategy.key
+    assert result.display_name == strategy.display_name
+    assert calls == []

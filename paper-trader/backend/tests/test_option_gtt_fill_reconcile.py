@@ -19,6 +19,7 @@ from app.core.instruments import get_instrument
 from app.db.models import Trade
 from app.db.session import SessionLocal
 from app.engine.broker import PaperBroker
+from tests.admitted_entry import persist_admitted_entry
 from tests.test_live_broker import FakeClient, _broker
 
 REAL_FILL = {"avg_price": 42.5, "filled_qty": 75}
@@ -48,7 +49,9 @@ def _open_option_orphan(b, gid="GTT-9"):
     chain = b.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    pos = PaperBroker.open_position(b, inst, "LONG", q, "t", b.provider.now(), chain.spot)
+    admission = persist_admitted_entry(b.s)
+    pos = PaperBroker.open_position(b, inst, "LONG", q, "t", b.provider.now(), chain.spot,
+                                    **admission)
     pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # past the 60s guard
     pos.gtt_trigger_id = gid
     b.commit()

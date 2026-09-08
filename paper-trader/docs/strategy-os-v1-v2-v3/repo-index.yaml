@@ -1,0 +1,350 @@
+schema_version: 1
+reviewed_at: 2026-08-22
+score_weights:
+  relevance: 25
+  maturity_and_failure_history: 20
+  architecture_clarity: 15
+  verification_quality: 15
+  extractability: 10
+  licence_compatibility: 10
+  maintenance: 5
+score_interpretation:
+  deep_read_priority: "80-100"
+  targeted_triage: "65-79"
+  defer: "0-64"
+notes:
+  - Scores measure value for a named Strategy OS risk, not fame.
+  - Stars are not an input.
+  - Review claims remain source-read unless a review explicitly records a run.
+  - OpenAlgo lives outside multiverse-of-ideas but remains indexed because the prior-art rule names it.
+repositories:
+  - name: airflow
+    upstream: https://github.com/apache/airflow.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/airflow
+    commit: acb4dde004fa
+    licence: Apache-2.0
+    categories: [workflow, versioning]
+    review_depth: deep
+    score: {relevance: 18, maturity_and_failure_history: 20, architecture_clarity: 13, verification_quality: 13, extractability: 8, licence_compatibility: 10, maintenance: 5, total: 87}
+    verdict: REFERENCE_ONLY
+    decision: "Use late graph-versioning history as evidence; reject definition by Python execution."
+  - name: backtrader
+    upstream: https://github.com/mementum/backtrader.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/backtrader
+    commit: b853d7c90b67
+    licence: GPL-3.0
+    categories: [trading, multi-series, warmup]
+    review_depth: targeted_source_and_tests
+    score: {relevance: 14, maturity_and_failure_history: 16, architecture_clarity: 10, verification_quality: 10, extractability: 7, licence_compatibility: 2, maintenance: 1, total: 60}
+    verdict: REFERENCE_ONLY
+    decision: "Keep its multi-series clock and derived warmup lessons; copy no code."
+  - name: blender
+    upstream: https://github.com/blender/blender.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/blender
+    commit: a3afe6326e5f
+    licence: GPL-2.0-or-later
+    categories: [graph, migrations, interaction]
+    review_depth: deep
+    score: {relevance: 19, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 14, extractability: 10, licence_compatibility: 2, maintenance: 5, total: 85}
+    verdict: REFERENCE_ONLY
+    decision: "Keep stable identifiers, declared interfaces, deterministic lowering, and topology-migration discipline."
+  - name: casbin
+    upstream: https://github.com/apache/casbin.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/casbin
+    commit: 0936f2c3ff49
+    licence: Apache-2.0
+    categories: [authorization, tenancy]
+    review_depth: deep
+    score: {relevance: 12, maturity_and_failure_history: 18, architecture_clarity: 13, verification_quality: 13, extractability: 7, licence_compatibility: 10, maintenance: 5, total: 78}
+    verdict: REFERENCE_ONLY
+    decision: "Keep domain-scoped roles as future reference; current centralized typed actions are sufficient."
+  - name: ccxt
+    upstream: https://github.com/ccxt/ccxt.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/ccxt
+    commit: 2ed38d053a7d
+    licence: MIT
+    categories: [providers, capabilities, identity]
+    review_depth: deep
+    score: {relevance: 19, maturity_and_failure_history: 20, architecture_clarity: 13, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 89}
+    verdict: REFERENCE_ONLY
+    decision: "Adapt native, absent, emulated, and constrained capability states; do not add crypto scope."
+  - name: comfyui
+    upstream: https://github.com/comfyanonymous/ComfyUI.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/comfyui
+    commit: f06a187f50f8
+    licence: GPL-3.0
+    categories: [graph, registry, cache]
+    review_depth: deep
+    score: {relevance: 19, maturity_and_failure_history: 18, architecture_clarity: 14, verification_quality: 11, extractability: 10, licence_compatibility: 2, maintenance: 5, total: 79}
+    verdict: REFERENCE_ONLY
+    decision: "Keep one registry and transitive cache identity; reject string types and runtime graph expansion."
+  - name: dagster
+    upstream: https://github.com/dagster-io/dagster.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/dagster
+    commit: d5e6340f51b9
+    licence: Apache-2.0
+    categories: [workflow, graph, validation]
+    review_depth: deep
+    score: {relevance: 16, maturity_and_failure_history: 19, architecture_clarity: 14, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 86}
+    verdict: REFERENCE_ONLY
+    decision: "Keep definition-versus-invocation and compile-before-execute lessons."
+  - name: dbos-transact-py
+    upstream: https://github.com/dbos-inc/dbos-transact-py.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/dbos-transact-py
+    commit: bfb1d785a609
+    licence: MIT
+    categories: [workflow, durable-work, queues]
+    review_depth: deep_plus_current_issues
+    score: {relevance: 23, maturity_and_failure_history: 15, architecture_clarity: 13, verification_quality: 13, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 89}
+    verdict: REQUIRES_BOUNDED_SPIKE
+    decision: "Compare a non-money kill-and-restart spike against current research operations; never make DBOS domain authority."
+  - name: dbos-transact-ts
+    upstream: https://github.com/dbos-inc/dbos-transact-ts.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/dbos-transact-ts
+    commit: 460ab6de7fe1
+    licence: MIT
+    categories: [workflow, durable-work]
+    review_depth: deep
+    score: {relevance: 17, maturity_and_failure_history: 15, architecture_clarity: 13, verification_quality: 12, extractability: 8, licence_compatibility: 10, maintenance: 5, total: 80}
+    verdict: REFERENCE_ONLY
+    decision: "Python is the closer fit; retain TypeScript findings as a cross-language control."
+  - name: dhanhq-py
+    upstream: https://github.com/dhan-oss/DhanHQ-py.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/dhanhq-py
+    commit: 1670f818f4a6
+    licence: MIT
+    categories: [broker, sdk, realtime]
+    review_depth: deep
+    score: {relevance: 22, maturity_and_failure_history: 15, architecture_clarity: 12, verification_quality: 12, extractability: 9, licence_compatibility: 10, maintenance: 4, total: 84}
+    verdict: ADAPT_WRAP
+    decision: "Wrap official transport and correlation lookup; keep event-loop ownership and domain models in Strategy OS."
+  - name: dvc-data
+    upstream: https://github.com/treeverse/dvc-data.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/dvc-data
+    commit: 56af66a26d8c
+    licence: Apache-2.0
+    categories: [data, content-addressing, manifests]
+    review_depth: deep
+    score: {relevance: 18, maturity_and_failure_history: 18, architecture_clarity: 14, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 87}
+    verdict: REFERENCE_ONLY
+    decision: "Keep child-first artifact publication and immutable object addresses; Strategy OS retains semantic manifests."
+  - name: freqtrade
+    upstream: https://github.com/freqtrade/freqtrade.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/freqtrade
+    commit: 0a9b55dd8393
+    licence: GPL-3.0
+    categories: [trading, dynamic-universe, backtest]
+    review_depth: targeted_source_tests_docs_and_issues
+    score: {relevance: 22, maturity_and_failure_history: 20, architecture_clarity: 12, verification_quality: 14, extractability: 9, licence_compatibility: 2, maintenance: 5, total: 84}
+    verdict: REFERENCE_ONLY
+    decision: "Use its explicit dynamic-pairlist bias warnings as negative evidence; copy no code."
+  - name: hftbacktest
+    upstream: https://github.com/nkaz001/hftbacktest.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/hftbacktest
+    commit: 5f3ec40b2afb
+    licence: MIT
+    categories: [trading, event-time, market-depth]
+    review_depth: deep
+    score: {relevance: 14, maturity_and_failure_history: 15, architecture_clarity: 13, verification_quality: 13, extractability: 8, licence_compatibility: 10, maintenance: 5, total: 78}
+    verdict: REFERENCE_ONLY
+    decision: "Reserve exchange and local timestamps for future tick work; keep V1 bar runtime."
+  - name: hummingbot
+    upstream: https://github.com/hummingbot/hummingbot.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/hummingbot
+    commit: 2bfaccc48dd4
+    licence: Apache-2.0
+    categories: [execution, recovery, orders]
+    review_depth: deep
+    score: {relevance: 21, maturity_and_failure_history: 20, architecture_clarity: 13, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 91}
+    verdict: REFERENCE_ONLY
+    decision: "Keep active, cached, and lost order distinctions and policy-versus-executor separation."
+  - name: kestra
+    upstream: https://github.com/kestra-io/kestra.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/kestra
+    commit: 1c48e517dd45
+    licence: Apache-2.0
+    categories: [workflow, registry, execution]
+    review_depth: deep
+    score: {relevance: 14, maturity_and_failure_history: 18, architecture_clarity: 13, verification_quality: 12, extractability: 8, licence_compatibility: 10, maintenance: 5, total: 80}
+    verdict: REFERENCE_ONLY
+    decision: "Keep definition, plan, execution, and pinned nested-call separation."
+  - name: langflow
+    upstream: https://github.com/langflow-ai/langflow.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/langflow
+    commit: 873d5585929f
+    licence: MIT
+    categories: [graph, components]
+    review_depth: deep
+    score: {relevance: 12, maturity_and_failure_history: 15, architecture_clarity: 10, verification_quality: 10, extractability: 7, licence_compatibility: 10, maintenance: 5, total: 69}
+    verdict: REFERENCE_ONLY
+    decision: "Keep reconstructibility requirement; reject source code embedded per graph node."
+  - name: lean
+    upstream: https://github.com/QuantConnect/Lean.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/lean
+    commit: d2c3659f877b
+    licence: Apache-2.0
+    categories: [universe, trading, identity, portfolio]
+    review_depth: deep_plus_official_docs
+    score: {relevance: 24, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 14, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 98}
+    verdict: REFERENCE_ONLY
+    decision: "Primary Universe and portfolio-stage reference; do not replace Strategy OS."
+  - name: lumibot
+    upstream: https://github.com/Lumiwealth/lumibot.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/lumibot
+    commit: 07b2514700f4
+    licence: GPL-3.0
+    categories: [options, execution, replay]
+    review_depth: deep
+    score: {relevance: 17, maturity_and_failure_history: 16, architecture_clarity: 11, verification_quality: 10, extractability: 8, licence_compatibility: 2, maintenance: 4, total: 68}
+    verdict: REFERENCE_ONLY
+    decision: "Keep typed chain and option-lifecycle lessons; reject mutable provider-shaped assets."
+  - name: nautilus_trader
+    upstream: https://github.com/nautechsystems/nautilus_trader.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/nautilus_trader
+    commit: d16b3462a117
+    licence: LGPL-3.0
+    categories: [trading, causality, incremental-runtime]
+    review_depth: deep
+    score: {relevance: 23, maturity_and_failure_history: 19, architecture_clarity: 15, verification_quality: 14, extractability: 10, licence_compatibility: 6, maintenance: 5, total: 92}
+    verdict: REFERENCE_ONLY
+    decision: "Keep event-time, reset, warmup, and parity disciplines; do not rewrite V1 runtime."
+  - name: node-red
+    upstream: https://github.com/node-red/node-red.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/node-red
+    commit: 773f72c51ca5
+    licence: Apache-2.0
+    categories: [graph, nesting, interaction]
+    review_depth: deep
+    score: {relevance: 18, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 14, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 92}
+    verdict: REFERENCE_ONLY
+    decision: "Keep deterministic pre-execution expansion and visual-versus-semantic grouping."
+  - name: openfga
+    upstream: https://github.com/openfga/openfga.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/openfga
+    commit: 5ee24da94a89
+    licence: Apache-2.0
+    categories: [authorization, tenancy]
+    review_depth: deep
+    score: {relevance: 13, maturity_and_failure_history: 19, architecture_clarity: 14, verification_quality: 14, extractability: 7, licence_compatibility: 10, maintenance: 5, total: 82}
+    verdict: REFERENCE_ONLY
+    decision: "Keep versioned relation-model lessons; do not add a policy service now."
+  - name: openfga-sample-stores
+    upstream: https://github.com/openfga/sample-stores.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/openfga-sample-stores
+    commit: b3d4d60c73fe
+    licence: Apache-2.0
+    categories: [authorization, test-fixtures]
+    review_depth: deep
+    score: {relevance: 10, maturity_and_failure_history: 15, architecture_clarity: 10, verification_quality: 13, extractability: 7, licence_compatibility: 10, maintenance: 4, total: 69}
+    verdict: REFERENCE_ONLY
+    decision: "Use model, tuples, context, grants, and denials as future policy-test shape."
+  - name: optuna
+    upstream: https://github.com/optuna/optuna.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/optuna
+    commit: 9bac52b5fa2c
+    licence: MIT
+    categories: [optimization, trials, storage]
+    review_depth: deep
+    score: {relevance: 21, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 15, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 96}
+    verdict: ADAPT_WRAP
+    decision: "Use ask-and-tell behind Strategy OS evidence only after a bounded sampler adapter."
+  - name: prefect
+    upstream: https://github.com/PrefectHQ/prefect.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/prefect
+    commit: ef4286181588
+    licence: Apache-2.0
+    categories: [workflow, cache]
+    review_depth: deep
+    score: {relevance: 15, maturity_and_failure_history: 20, architecture_clarity: 14, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 86}
+    verdict: REFERENCE_ONLY
+    decision: "Keep declarative cache-policy lesson; reject graph discovery by code execution."
+  - name: pykiteconnect
+    upstream: https://github.com/zerodha/pykiteconnect.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/pykiteconnect
+    commit: 58187c4d3a6b
+    licence: MIT
+    categories: [broker, sdk, realtime]
+    review_depth: deep
+    score: {relevance: 24, maturity_and_failure_history: 18, architecture_clarity: 13, verification_quality: 13, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 93}
+    verdict: ADAPT_WRAP
+    decision: "Keep official transport behind narrow market-data and execution adapters."
+  - name: riskfolio-lib
+    upstream: https://github.com/dcajasn/Riskfolio-Lib.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/riskfolio-lib
+    commit: 632a9e48fbaf
+    licence: BSD-3-Clause
+    categories: [portfolio, risk, optimization]
+    review_depth: deep
+    score: {relevance: 16, maturity_and_failure_history: 18, architecture_clarity: 13, verification_quality: 12, extractability: 9, licence_compatibility: 10, maintenance: 5, total: 83}
+    verdict: REQUIRES_BOUNDED_SPIKE
+    decision: "Keep policy compilation and allocation receipts; do not route solver output directly to orders."
+  - name: superalgos
+    upstream: https://github.com/Superalgos/Superalgos.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/superalgos
+    commit: 9f0fb59edd4b
+    licence: Apache-2.0
+    categories: [visual-product, execution, operations]
+    review_depth: deep
+    score: {relevance: 16, maturity_and_failure_history: 17, architecture_clarity: 11, verification_quality: 10, extractability: 7, licence_compatibility: 10, maintenance: 4, total: 75}
+    verdict: REFERENCE_ONLY
+    decision: "Use operator-visible state and episode lessons; reject its mutable global hierarchy."
+  - name: upstox-python
+    upstream: https://github.com/upstox/upstox-python.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/upstox-python
+    commit: deeadef82820
+    licence: permissive_with_notice
+    categories: [broker, sdk, realtime]
+    review_depth: deep
+    score: {relevance: 24, maturity_and_failure_history: 17, architecture_clarity: 12, verification_quality: 12, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 90}
+    verdict: ADAPT_WRAP
+    decision: "Wrap generated clients and separate market and private streams; execution remains a V1 gap."
+  - name: vectorbt
+    upstream: https://github.com/polakowo/vectorbt.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/vectorbt
+    commit: 34b6d5935e3e
+    licence: Apache-2.0-plus-Commons-Clause
+    categories: [research, vectorization, components]
+    review_depth: deep
+    score: {relevance: 20, maturity_and_failure_history: 17, architecture_clarity: 13, verification_quality: 12, extractability: 9, licence_compatibility: 0, maintenance: 2, total: 73}
+    verdict: REFERENCE_ONLY
+    decision: "Ideas only. Never use as a hosted-product dependency under the checked licence."
+  - name: vnpy
+    upstream: https://github.com/vnpy/vnpy.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/vnpy
+    commit: fa5206fe6383
+    licence: MIT
+    categories: [execution, gateway, orders]
+    review_depth: deep
+    score: {relevance: 19, maturity_and_failure_history: 18, architecture_clarity: 14, verification_quality: 13, extractability: 9, licence_compatibility: 10, maintenance: 4, total: 87}
+    verdict: REFERENCE_ONLY
+    decision: "Keep request, update, and fill separation plus explicit venue lowering."
+  - name: xstate
+    upstream: https://github.com/statelyai/xstate.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/xstate
+    commit: 8d878b3bed7c
+    licence: MIT
+    categories: [state-machine, interaction, workflow]
+    review_depth: deep
+    score: {relevance: 12, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 15, extractability: 8, licence_compatibility: 10, maintenance: 5, total: 85}
+    verdict: REFERENCE_ONLY
+    decision: "Keep pure transition and effect separation; do not replace Component IR."
+  - name: xyflow
+    upstream: https://github.com/xyflow/xyflow.git
+    local_path: /Users/priyanshusaraf/dev/multiverse-of-ideas/repos/xyflow
+    commit: 360f5b13e2bc
+    licence: MIT
+    categories: [graph-editor, interaction]
+    review_depth: deep_plus_standalone_prototype
+    score: {relevance: 18, maturity_and_failure_history: 20, architecture_clarity: 15, verification_quality: 14, extractability: 10, licence_compatibility: 10, maintenance: 5, total: 92}
+    verdict: DIRECT_REUSE
+    decision: "Approved as a future frontend dependency after the owner frontend gate; never copy its view model into semantic identity."
+  - name: openalgo
+    upstream: https://github.com/marketcalls/openalgo.git
+    local_path: /Users/priyanshusaraf/dev/openalgo
+    commit: 947581b450a4
+    licence: AGPL-3.0
+    categories: [broker, visual-builder, execution, competitor]
+    review_depth: deep_plus_official_docs
+    score: {relevance: 23, maturity_and_failure_history: 19, architecture_clarity: 12, verification_quality: 12, extractability: 10, licence_compatibility: 0, maintenance: 5, total: 81}
+    verdict: REFERENCE_ONLY
+    decision: "Behavior and product reference only. Copying code is forbidden for the hosted product."

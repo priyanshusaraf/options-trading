@@ -2,16 +2,38 @@
 it, it keeps managing/alerting open positions either way, and a KILL switch
 instantly disarms and squares everything off."""
 from app.core.instruments import get_instrument
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.execution.leases import LeaseRepository
 from app.notify.notifier import Notifier
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner():
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     r.params["entry_min_days_to_expiry"] = 0   # mock NIFTY chain is ~1-DTE; these tests aren't the DTE guard
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    with r._session() as session:
+        from unittest.mock import patch
+        decision = {"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                    "graph_identifier": "test.strategy.expanding_z_impulse",
+                    "graph_version": 1, "content_address": admission["graph_address"],
+                    "admission_address": admission["admission_address"], "decision": "approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            paper_authority.activate(session, row.id, revision=row.revision,
+                                     owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     return r
 
 
@@ -26,7 +48,9 @@ def _open_nifty(r):
     chain = r.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    return r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot, r.params)
+    admission = persist_admitted_entry(r.broker.s)
+    return r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot,
+                                  r.params, **admission)
 
 
 def test_disarmed_by_default_no_auto_open():
@@ -46,7 +70,7 @@ def test_armed_opens():
     assert r.broker.position_for("NIFTY") is not None
 
 
-def test_disarmed_still_exits_existing_position():
+def test_disarmed_still_exits_existing_position(monkeypatch):
     r = _runner()
     pos = _open_nifty(r)                                # opened manually while disarmed
     r.publish_signal(
@@ -57,7 +81,7 @@ def test_disarmed_still_exits_existing_position():
         return {p.instrument_key: {"time": "t", "spot": 100.0,
                                    "option_premium": pos.stop_price * 0.9,
                                    "tradingsymbol": p.tradingsymbol} for p in positions}
-    r.provider.live_snapshot = fake
+    monkeypatch.setattr(r.provider, "live_snapshot", fake)
     r.mark_and_exit_positions()
     assert r.broker.position_for("NIFTY") is None       # protective stop still fires when disarmed
 

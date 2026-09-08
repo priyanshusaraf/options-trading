@@ -147,6 +147,8 @@ def _artifact_identity(artifact: Any) -> tuple[str, int, str, str, str]:
 
 
 def _executed_identity(artifact: Any) -> tuple[str, str]:
+    if getattr(artifact, "source", None) == "ir_graph":
+        return f"ir.{artifact.graph_identifier}", str(artifact.graph_version)
     source = getattr(artifact, "source_evidence", None)
     if source is None:
         return f"ir.{artifact.graph_identifier}", artifact.graph_address
@@ -327,12 +329,11 @@ def _graph_artifact(session: Any, row: Any, registry: Any, admit: Callable[..., 
 
 def _durable_graph_address(consumer: str, row: Any) -> str | None:
     """Extract a graph address only from that row's immutable historical record."""
+    if getattr(row, "attribution_state", None) == "LEGACY_UNVERIFIED":
+        return None
     direct = _row_graph_address(row)
     if isinstance(direct, str) and direct:
         return direct
-    if consumer == "Deployment":
-        # IRGraphStrategy pins its immutable graph content address as version.
-        return getattr(row, "strategy_version", None)
     if consumer == "BacktestRun":
         request = _canonical_json_object(getattr(row, "request_json", None))
         return request.get("graph_address") if request else None
@@ -374,6 +375,11 @@ def run_backfill(session: Any, *, registry: Any, apply: bool,
 
     for consumer, row in rows:
         if consumer == "GraphVersion":
+            continue
+        if getattr(row, "attribution_state", None) == "LEGACY_UNVERIFIED":
+            report.append(BackfillRow(
+                consumer, _identity(consumer, row),
+                BackfillDecision("quarantined", None, "LEGACY_UNVERIFIED")))
             continue
         artifact = None
         # These are immutable row identities, not deployment joins.  Consumers with

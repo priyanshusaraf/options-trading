@@ -100,9 +100,14 @@ def _broker(client, account=None):
     init_db(reset=True)
     prov = MockProvider()
     prov.account_positions = lambda: (account or [])
-    return LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0,
-                      owner_id=LEGACY_OWNER_ID,
-                      broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
+    broker = LiveBroker(prov, client, poll_seconds=0.0, timeout_seconds=0.0,
+                        owner_id=LEGACY_OWNER_ID,
+                        broker_account_id=LEGACY_BROKER_ACCOUNT_ID)
+    from tests.admitted_entry import persist_admitted_entry
+    broker._test_admission = persist_admitted_entry(
+        broker.s, owner_id=LEGACY_OWNER_ID)
+    broker.s.commit()
+    return broker
 
 
 def _open(b, client):
@@ -111,7 +116,7 @@ def _open(b, client):
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
     return b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot,
-                           params={}, plan=MKT), q, chain
+                           params={}, plan=MKT, **b._test_admission), q, chain
 
 
 def test_reconcile_books_equity_via_the_equity_path_not_options():
@@ -126,7 +131,8 @@ def test_reconcile_books_equity_via_the_equity_path_not_options():
     inst = get_instrument("NIFTY")
     # a pre-existing intraday-equity SHORT in the ledger (booked via PaperBroker)
     pos = PaperBroker.open_equity_position(b, inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
-                                           "t", b.provider.now(), params={})
+                                           "t", b.provider.now(), params={},
+                                           **b._test_admission)
     pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s guard
     pos.last_premium = 99.0          # short entered 100, now 99 -> a small real profit
     b.commit()
@@ -151,7 +157,8 @@ def _open_equity_orphan(b, gtt_trigger_id="SLM-9"):
     from app.engine.broker import PaperBroker
     inst = get_instrument("NIFTY")
     pos = PaperBroker.open_equity_position(b, inst, "SHORT", 100.0, 10, "NSE_INTRADAY",
-                                           "t", b.provider.now(), params={})
+                                           "t", b.provider.now(), params={},
+                                           **b._test_admission)
     pos.entry_time = b.provider.now() - dt.timedelta(minutes=5)   # aged past the 60s guard
     pos.last_premium = 99.0
     pos.gtt_trigger_id = gtt_trigger_id      # a resting exchange-side SL-M stop order id
@@ -322,7 +329,7 @@ def test_reconcile_paper_broker_unaffected():
 def _open_eq(b, direction="LONG", price=100.0, qty=10):
     inst = get_instrument("NIFTY")   # the NSE_INTRADAY charge-segment forces the equity path
     return b.open_equity_position(inst, direction, price, qty, "NSE_INTRADAY",
-                                  "t", b.provider.now(), params={})
+                                  "t", b.provider.now(), params={}, **b._test_admission)
 
 
 def test_open_equity_long_places_a_mis_buy_and_books_the_fill():
@@ -561,7 +568,7 @@ def test_option_setting_selects_limit_without_an_explicit_runner_plan():
     params = {**effective(b.settings, owner_id="owner"), "entry_order_mode": "LIMIT"}
 
     pos = b.open_position(inst, "LONG", q, "t", b.provider.now(), chain.spot,
-                          params=params)
+                          params=params, **b._test_admission)
 
     assert pos is not None
     assert c.placed[0].order_type == "LIMIT"
@@ -584,7 +591,8 @@ def test_limit_price_is_tick_normalized_before_intent_commit_and_placement():
 
     pos = b.open_position(
         inst, "LONG", q, "t", b.provider.now(), chain.spot, params={},
-        plan=OrderPlan("LIMIT", 100.4, "forced test limit", 0.01))
+        plan=OrderPlan("LIMIT", 100.4, "forced test limit", 0.01),
+        **b._test_admission)
 
     assert pos is not None
     assert c.placed[0].limit_price == 100.0
@@ -601,7 +609,8 @@ def test_equity_long_entry_accepts_a_limit_plan():
     inst = get_instrument("NIFTY")
     pos = b.open_equity_position(
         inst, "LONG", 100.0, 10, "NSE_INTRADAY", "t", b.provider.now(), params={},
-        plan=OrderPlan("LIMIT", 101.0, "forced test limit", 0.0))
+        plan=OrderPlan("LIMIT", 101.0, "forced test limit", 0.0),
+        **b._test_admission)
     assert pos is not None
     assert (c.placed[0].side, c.placed[0].order_type, c.placed[0].limit_price) == \
         ("BUY", "LIMIT", 101.0)
@@ -613,7 +622,8 @@ def test_equity_short_entry_accepts_a_side_aware_limit_plan():
     inst = get_instrument("NIFTY")
     pos = b.open_equity_position(
         inst, "SHORT", 100.0, 10, "NSE_INTRADAY", "t", b.provider.now(), params={},
-        plan=OrderPlan("LIMIT", 99.0, "forced test limit", 0.0))
+        plan=OrderPlan("LIMIT", 99.0, "forced test limit", 0.0),
+        **b._test_admission)
     assert pos is not None
     assert (c.placed[0].side, c.placed[0].order_type, c.placed[0].limit_price) == \
         ("SELL", "LIMIT", 99.0)
@@ -1050,7 +1060,8 @@ def test_adoption_does_not_double_book_an_existing_position():
     # a position for the key already exists (e.g. adopted on a prior pass / re-entered)
     b.provider.account_positions = lambda: []
     existing = super(LiveBroker, b).open_equity_position(
-        get_instrument("NIFTY"), "LONG", 100.0, 13, "NSE_INTRADAY", "t", b.provider.now(), params={})
+        get_instrument("NIFTY"), "LONG", 100.0, 13, "NSE_INTRADAY", "t",
+        b.provider.now(), params={}, **b._test_admission)
     c._status, c._filled_qty, c.fill_price = "COMPLETE", 13, 100.0
     b.adopt_pending_entries(b.provider.now())
     assert len([p for p in b.open_positions() if p.instrument_key == "NIFTY"]) == 1  # no duplicate

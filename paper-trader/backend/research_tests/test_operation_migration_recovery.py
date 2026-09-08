@@ -4,7 +4,35 @@ import pytest
 from sqlalchemy import text
 
 from research.domain.base import ResearchBase, init_research_db, make_engine
+from research.domain import migrate as migrate_module
 from research.domain.migrate import ResearchMigrationError
+from research_tests.test_ir_v2_research_migration import (
+    _REFUSAL_PATTERN,
+    _sqlite_logical_digest,
+)
+
+
+
+def _synthetic_current_metadata_0002_refusal_fixture(engine):
+    """Synthetic current-metadata projection labelled 0002 for refusal tests.
+
+    This is not a frozen historical catalog and grants no 0002 support claim.
+    Lower-level module-unit tests may consume its current-metadata table subset;
+    the active runner must refuse it without writes.
+    """
+    from sqlalchemy import MetaData
+    tables = migrate_module._tables_through_0002()
+    metadata = MetaData()
+    for table in tables:
+        table.to_metadata(metadata)
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        for name, sql in migrate_module._expected_triggers(tables=tables).items():
+            connection.exec_driver_sql(sql)
+        migrate_module._create_current_marker(connection)
+        connection.exec_driver_sql(
+            "INSERT INTO research_schema_version (version, schema_cookie) VALUES ('0002', 0)")
+    return engine
 
 
 def test_0002_rejects_malformed_existing_table_before_it_can_be_stamped(tmp_path):
@@ -25,15 +53,19 @@ def test_0002_rejects_malformed_existing_table_before_it_can_be_stamped(tmp_path
 def test_0002_empty_cleanup_and_nonempty_refusal(tmp_path):
     engine = make_engine(str(tmp_path / "research.db"))
     try:
-        init_research_db(engine)
+        _synthetic_current_metadata_0002_refusal_fixture(engine)
         migration = importlib.import_module("research.domain.migrations.0002_owner_operations")
         table = ResearchBase.metadata.tables["research_operation"]
         with engine.begin() as connection:
             migration.downgrade(connection, table)
             assert connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE name='research_operation'").first() is None
             connection.exec_driver_sql("UPDATE research_schema_version SET version='0001'")
-        init_research_db(engine)
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.begin() as connection:
+            migration.upgrade(connection, table)
             connection.exec_driver_sql("INSERT INTO research_operation (owner_id,operation_id,trigger,plan_json,status,stage,build,provider_mode,completed_run_ids_json,created_at,queued_at,attempt_count) VALUES ('a','b','manual','{}','pending','startup','b','m','[]',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)")
             with pytest.raises(RuntimeError, match="refuses"):
                 migration.downgrade(connection, table)
@@ -67,8 +99,10 @@ def test_full_initializer_never_promotes_an_unproven_0002_temp(tmp_path):
         with engine.begin() as connection:
             connection.exec_driver_sql("DROP TABLE research_operation")
             connection.exec_driver_sql("CREATE TABLE research_operation__owner_tmp (forged TEXT)")
-        with pytest.raises((ResearchMigrationError, RuntimeError), match="unproven"):
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
             init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE name='research_operation'"
@@ -97,8 +131,10 @@ def test_head_marker_cannot_bless_relaxed_operation_item_check(tmp_path):
                 f"INSERT INTO research_operation_item ({columns}) SELECT {columns} FROM item_old"
             )
             connection.exec_driver_sql("DROP TABLE item_old")
-        with pytest.raises(ResearchMigrationError, match="check-constraint drift"):
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
             init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
     finally:
         engine.dispose()
 
@@ -118,12 +154,13 @@ def test_0002_recovers_only_a_proven_source_absent_temp(tmp_path):
         engine.dispose()
 
 
-def test_0003_upgrades_a_complete_0002_database_without_rewriting_operations(tmp_path):
-    """The checkpoint migration is additive and preserves durable job history."""
+def test_active_runner_refuses_complete_0002_without_rewriting_operations(tmp_path):
+    """0003 remains module history; the active finite runner refuses 0002."""
     engine = make_engine(str(tmp_path / "research.db"))
     try:
-        init_research_db(engine)
+        _synthetic_current_metadata_0002_refusal_fixture(engine)
         with engine.begin() as connection:
+            # Synthetic 0002-labelled projection: item/event tables are absent.
             connection.exec_driver_sql(
                 "INSERT INTO research_operation "
                 "(owner_id,operation_id,trigger,plan_json,status,stage,build,provider_mode,"
@@ -131,22 +168,23 @@ def test_0003_upgrades_a_complete_0002_database_without_rewriting_operations(tmp
                 "VALUES ('owner','op','manual','{}','pending','startup','b','mock','[]',"
                 "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,0)"
             )
-            connection.exec_driver_sql("DROP TABLE research_operation_item")
-            connection.exec_driver_sql("UPDATE research_schema_version SET version='0002'")
-        init_research_db(engine)
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT owner_id, operation_id FROM research_operation"
             ).one() == ("owner", "op")
             assert connection.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE name='research_operation_item'"
-            ).first() is not None
+            ).first() is None
             assert connection.exec_driver_sql(
                 "SELECT name FROM sqlite_master WHERE name='research_operation_event'"
-            ).first() is not None
+            ).first() is None
             assert connection.exec_driver_sql(
                 "SELECT version FROM research_schema_version"
-            ).scalar_one() == "0005"
+            ).scalar_one() == "0002"
     finally:
         engine.dispose()
 
@@ -154,15 +192,16 @@ def test_0003_upgrades_a_complete_0002_database_without_rewriting_operations(tmp
 def test_0003_refuses_forged_event_table_without_advancing_marker(tmp_path):
     engine = make_engine(str(tmp_path / "research.db"))
     try:
-        init_research_db(engine)
+        _synthetic_current_metadata_0002_refusal_fixture(engine)
         with engine.begin() as connection:
-            connection.exec_driver_sql("DROP TABLE research_operation_event")
+            # Forge the event table at the 0002 era, before 0003 would create it.
             connection.exec_driver_sql(
                 "CREATE TABLE research_operation_event (owner_id VARCHAR(64), operation_id VARCHAR(64))"
             )
-            connection.exec_driver_sql("UPDATE research_schema_version SET version='0002'")
-        with pytest.raises((ResearchMigrationError, RuntimeError), match="event schema contract"):
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
             init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT version FROM research_schema_version"
@@ -175,8 +214,15 @@ def test_0003_refuses_nonempty_exact_event_table_from_pre_event_revision(tmp_pat
     """0002 could not write events, so exact-shaped rows are forged evidence."""
     engine = make_engine(str(tmp_path / "research.db"))
     try:
-        init_research_db(engine)
+        _synthetic_current_metadata_0002_refusal_fixture(engine)
         with engine.begin() as connection:
+            # 0002 could not write events: an EXACT-shaped (model-DDL) event
+            # table with a row at this era is forged evidence, and the
+            # preexisting-rows refusal must fire before anything else.
+            from sqlalchemy.schema import CreateTable
+            event_model = ResearchBase.metadata.tables["research_operation_event"]
+            connection.exec_driver_sql(str(CreateTable(event_model).compile(
+                dialect=connection.dialect)))
             connection.exec_driver_sql(
                 "INSERT INTO research_operation "
                 "(owner_id,operation_id,trigger,plan_json,status,stage,build,provider_mode,"
@@ -189,10 +235,10 @@ def test_0003_refuses_nonempty_exact_event_table_from_pre_event_revision(tmp_pat
                 "(owner_id,operation_id,sequence,event_type,stage,payload_json,created_at) "
                 "VALUES ('owner','op',1,'takeover','startup','{}',CURRENT_TIMESTAMP)"
             )
-            connection.exec_driver_sql("DROP TABLE research_operation_item")
-            connection.exec_driver_sql("UPDATE research_schema_version SET version='0002'")
-        with pytest.raises(RuntimeError, match="event preexists"):
+        before = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
             init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT version FROM research_schema_version"
@@ -213,9 +259,11 @@ def test_0003_refuses_malformed_checkpoint_table_without_advancing_marker(tmp_pa
                 "(owner_id VARCHAR(64), operation_id VARCHAR(64), item_key VARCHAR(128))"
             )
             connection.exec_driver_sql("UPDATE research_schema_version SET version='0002'")
+        before = _sqlite_logical_digest(engine)
         for _ in range(2):
-            with pytest.raises((ResearchMigrationError, RuntimeError), match="contract"):
+            with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
                 init_research_db(engine)
+            assert _sqlite_logical_digest(engine) == before
         with engine.connect() as connection:
             assert connection.exec_driver_sql(
                 "SELECT version FROM research_schema_version"

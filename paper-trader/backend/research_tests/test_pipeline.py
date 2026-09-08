@@ -6,7 +6,7 @@ end-to-end over synthetic candles.
 import dataclasses
 
 from research.evaluation import kernels
-from research.pipeline.qualify import qualification_gate, qualify
+from research.pipeline.qualify import qualification_gate, qualify, qualify_instrument
 from research.pipeline.score import build_scorecard, pareto_front, rank
 from research.pipeline.validate import slippage_stressed_nets, validate
 
@@ -84,3 +84,46 @@ def test_qualify_and_validate_run_end_to_end(fake_inst, candles_factory):
     assert isinstance(v.passed, bool)
     assert {"min_oos_trades", "temporal_stability", "confident_edge",
             "slippage_stress_2x"} <= set(v.gates)
+
+
+def test_qualification_is_independent_of_locked_validation_prices(
+        fake_inst, candles_factory):
+    candles = candles_factory(400)
+    cutoff = 280
+    changed = candles[:cutoff] + [
+        dataclasses.replace(
+            candle, open=candle.open * 10, high=candle.high * 10,
+            low=candle.low * 10, close=candle.close * 10,
+        )
+        for candle in candles[cutoff:]
+    ]
+    strategy = kernels.get_strategy("trend_impulse_v3")
+    kwargs = {
+        "min_trades": 1,
+        "development_end": candles[cutoff].ts,
+        "development_bars": cutoff,
+    }
+
+    original = qualify_instrument(
+        candles, fake_inst, "day", strategy, dict(strategy.default_params), **kwargs,
+    )
+    altered = qualify_instrument(
+        changed, fake_inst, "day", strategy, dict(strategy.default_params), **kwargs,
+    )
+
+    assert original.qualified == altered.qualified
+    assert original.net_pnls == altered.net_pnls
+
+
+def test_qualification_preserves_explicit_replay_policy(monkeypatch, fake_inst, candles_factory):
+    strategy = kernels.get_strategy("trend_impulse_v3")
+    monkeypatch.setattr(strategy, "replay_policy", "pine-reversal-fixed-unit/1", raising=False)
+    seen = []
+    def replay(*args, **kwargs):
+        seen.append(kwargs["replay_policy"])
+        return []
+    monkeypatch.setattr(kernels, "run_trades", replay)
+    candles = candles_factory(100)
+    qualify_instrument(candles, fake_inst, "day", strategy, dict(strategy.default_params),
+                       development_end=candles[80].ts, min_trades=1)
+    assert seen == ["pine-reversal-fixed-unit/1"]

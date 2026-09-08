@@ -1,0 +1,51 @@
+{
+  "schema": "phase5-architecture-validation/1",
+  "status": "PASS",
+  "date": "2026-08-24",
+  "decision": "ACCEPT_PHASE5_ARCHITECTURE_AND_AUTHORIZE_FIRST_HANDOFF_ONLY",
+  "architecture_decision": "KEEP + HARDEN",
+  "artifacts": {
+    "design": {"path": "paper-trader/docs/superpowers/specs/phase5-strategy-os-design.md", "sha256": "600781eacf2d3059d92561ff9337e517ca00033452c3df4a0a79236ab2f77d08"},
+    "plan": {"path": "paper-trader/docs/superpowers/plans/phase5-strategy-os.md", "sha256": "ec826a5310c0d6002801b3f6ffc56710d33bfb97b1b5f52bf194f3522713bba1"},
+    "source_coverage": {"path": "paper-trader/docs/reports/phase5-source-coverage.json", "sha256": "d9493574d291d13dcfa705f2c02b9acd3fd7e2df52e0a1a99efc29fbe5892790"},
+    "catalogue": {"path": "paper-trader/docs/reports/phase5-v1-catalogue.json", "sha256": "427116bd7664366dcd11c8c4d96139f7c9841c176527950c7b59e64e11d0e4d0"},
+    "existing_capability_audit": {"path": ".agent/runs/phase5-architecture/existing_capability_audit/report.md", "sha256": "c6784211611defcabebb61aaa3a7d638f85db3a1553c6047fdf2d3be3a4d2330"},
+    "source_coverage_audit": {"path": ".agent/runs/phase5-architecture/source_coverage_audit/report.md", "sha256": "30eb896d5bbbcc5403c6974fa796b6cf3df3e7d89f319e3cf6f74c1d48d7af10"}
+  },
+  "structured_checks": {
+    "log": ".agent/runs/phase5-architecture/root/structured-architecture-validation-final.log",
+    "programme_stages": 95,
+    "phase5_stages_including_architecture": 18,
+    "phase5_capsules_including_exact_deferral": 19,
+    "source_map_entries": 103,
+    "catalogue_entries": 332,
+    "exclusive_runtime_contract_owner": "phase5-adv-006-runtime",
+    "future_deferral_capsules": 10,
+    "serialized_shared_write_paths": [
+      {"path": "paper-trader/backend/app/backtest/repository.py", "first": "phase5-graph-paper-attribution-schema", "second": "phase5-adv-006-runtime"},
+      {"path": "paper-trader/backend/app/ir/library.py", "first": "phase5-first-party-analytical-catalogue", "second": "phase5-state-execution-derivatives-catalogue"}
+    ]
+  },
+  "tooling_checks": {
+    "architecture_validator": {"log": ".agent/runs/phase5-architecture/root/architecture-validator-final.log", "exit": 0, "checked_files": 239},
+    "codex_architecture_suite": {"log": ".agent/runs/phase5-architecture/root/codex-architecture-suite-final.log", "exit": 0, "tests_passed": 42, "subtests_passed": 26}
+  },
+  "protected_hashes": {
+    "paper-trader/backend/app/engine/kite_venue.py": "2fd450b6fd433129a543df8d5f04670251e9c3796feb159b138481a9a5a99240",
+    "paper-trader/backend/app/engine/venue.py": "c8a39f0e8986e2484fe4b4b3d3cbe4bb829302896b288ba5e22a8fa51f525dae",
+    "paper-trader/backend/app/providers/brokers.py": "d5e6b8367a4703311e0fad4562911f8a37f7ead9d8e438bfb8b18f215d691d38",
+    "paper-trader/backend/tests/test_broker_registry.py": "13a174e3e15c24ec174eb198eeea86dd2f263f9b09f00582b7b96224527491e3"
+  },
+  "first_handoff": {
+    "stage": "phase5-graph-paper-attribution-schema",
+    "capsule": "paper-trader/docs/agent/tasks/phase5-graph-paper-attribution-schema.md",
+    "deployment_impact": "migration-required",
+    "runtime_authority": "none; necessary but non-enabling"
+  },
+  "nonclaims": [
+    "Architecture acceptance does not accept any Phase 5 implementation",
+    "Only the first handoff becomes ready; later stages remain blocked on serial dependencies",
+    "No frontend, real provider, credential, deployment, production, live, order, money, commercial pricing, legal or regulatory authority is granted",
+    "Release deployability and production rehearsal remain rejected or unproven"
+  ]
+}

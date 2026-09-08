@@ -17,6 +17,8 @@ from app.db.models import LEGACY_OWNER_ID, GraphArtifact, GraphVersion, Project
 from app.db.session import SessionLocal
 from app.editor import layouts
 from app.ir.hashing import canonical_json, content_address
+from app.ir.formats.dispatch import select_format
+from app.ir.formats.v2 import canonical_document as canonical_v2_document
 from app.ir.library import LIBRARY, REGISTRY
 from app.ir.resolve import ResolutionError, resolve
 from app.ir.strategies.expanding_z import GRAPH
@@ -169,13 +171,14 @@ def _project_record(project: Project) -> ProjectRecord:
 
 
 def _draft_record(artifact: GraphArtifact) -> GraphDraft:
+    graph = json.loads(artifact.draft_json)
     return GraphDraft(
         project_id=artifact.project_id,
         identifier=artifact.identifier,
         display_name=artifact.display_name,
         revision=artifact.draft_revision,
         current_version=artifact.current_version,
-        graph=json.loads(artifact.draft_json),
+        graph=graph,
     )
 
 
@@ -233,6 +236,22 @@ def _normalise_graph(
         document = json.loads(canonical_json(graph))
     except (TypeError, ValueError) as exc:
         raise GraphRejected(f"graph is not canonical JSON: {exc}") from exc
+    try:
+        format_version = select_format(document)
+    except ValueError as exc:
+        raise GraphRejected(f"unsupported format_version: {exc}") from exc
+
+    if format_version == 2:
+        if document.get("strategy_id") != identifier:
+            raise GraphRejected("strategy_id does not match its artefact lineage")
+        try:
+            canonical = dict(canonical_v2_document(document, REGISTRY))
+        except ValueError as exc:
+            raise GraphRejected(f"invalid v2 document: {exc}") from exc
+        if current_version is not None:
+            raise InvalidTransition("v2 document already has an immutable published version")
+        return canonical, canonical_json(canonical)
+
     if document.get("identifier") != identifier:
         raise GraphRejected("graph identifier does not match its artefact lineage")
 
@@ -317,7 +336,10 @@ def create_artifact(
             owner_id=owner_id,
             identifier=identifier,
             project_id=project_id,
-            display_name=str(document["display_name"]),
+            display_name=str(
+                document["metadata"]["name"]
+                if document.get("format_version") == 2 else document["display_name"]
+            ),
             draft_json=encoded,
             draft_revision=0,
             published_revision=None,
@@ -451,6 +473,10 @@ def publish_draft(
     owner_id: str,
 ) -> PublishedGraph:
     with SessionLocal.begin() as session:
+        from app.db.concurrency import begin_reservation
+        begin_reservation(
+            session, scope=f"graph-publish:{owner_id}:{identifier}"
+        )
         _active_project(session, project_id, owner_id)
         artifact = _owned_artifact(session, project_id, identifier, owner_id)
         if artifact.draft_revision != base_revision:
@@ -463,10 +489,16 @@ def publish_draft(
             json.loads(artifact.draft_json),
             current_version=artifact.current_version,
         )
-        _require_resolvable(document)
-        admission = _admit_for_publication(
-            session, owner_id=owner_id, document=document
-        )
+        is_v2 = document.get("format_version") == 2
+        if is_v2:
+            raise GraphRejected(
+                "v2 documents use the explicit document API and are not legacy published graphs"
+            )
+        if not is_v2:
+            _require_resolvable(document)
+            admission = _admit_for_publication(
+                session, owner_id=owner_id, document=document
+            )
         version = GraphVersion(
             owner_id=owner_id,
             graph_identifier=identifier,
@@ -517,6 +549,10 @@ def apply_and_publish(
     deferred_refusal: GraphAdmissionRefused | None = None
     result: T | None = None
     with SessionLocal.begin() as session:
+        from app.db.concurrency import begin_reservation
+        begin_reservation(
+            session, scope=f"graph-publish:{owner_id}:{identifier}"
+        )
         _active_project(session, project_id, owner_id)
         artifact = _owned_artifact(session, project_id, identifier, owner_id)
         if artifact.draft_revision != base_revision:

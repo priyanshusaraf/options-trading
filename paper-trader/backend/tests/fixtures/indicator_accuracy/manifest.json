@@ -1,0 +1,1735 @@
+{
+  "archive_sha256": "5e18797eac9a771af40cddafc2e1c5144bb5eb932342c005753a39f2f383d28b",
+  "files": [
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-audit/complete-universe-audit.json",
+      "sha256": "e83da220d7eb2416cc780504c346f7f5abd6dffecb54b3a01ea014d643bc9418",
+      "size": 67482
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-contract-assurance/starting-sources/paper-trader/backend/app/market_data/candles.py",
+      "sha256": "81347698c248c117633915d2b5ce7b50f37777632e4cf417d0bd8c20a53c4017",
+      "size": 12305
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-contract-assurance/starting-sources/paper-trader/backend/app/market_data/observations.py",
+      "sha256": "3d069a0216a18bb39f0b72646d8f49bd25dc7e8cae1c918b60687add90972c82",
+      "size": 34400
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-contract-assurance/starting-sources/paper-trader/backend/app/market_truth/rulebook.py",
+      "sha256": "ba2d5b0d8ad1b2e686b36501c18c16e7e3d7341a11f95b9428ae1fd16857933f",
+      "size": 11206
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-assurance/fresh-vectors.json",
+      "sha256": "6f5c05769b03c5846ee2aa54e55e8749ec34c3aef9108b63d6dd48d2f6300655",
+      "size": 1489005
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-assurance/oracle-preinspection-seal.json",
+      "sha256": "b3e70d47f482ad1445e85bca2ab7337f750b2afdbf8f0267bae2ee1776e1f018",
+      "size": 463
+    },
+    {
+      "kind": "immutable_identity_proof",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-level-moment-correction/source-proof.json",
+      "sha256": "cd86ad0597c69c2a8cdf3a24e1c8c78a5ec515c1254f2b9ee69600f06c41c48d",
+      "size": 22658
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-math-assurance/native-results.json",
+      "sha256": "07de3d5bfc11386ba1edce7c4adcfe57043b9ca12a43d43fe0114f5f1e7fbd51",
+      "size": 258696
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-math-assurance/reference-cases.json",
+      "sha256": "816fc13d91f2f6ea986611d108d3e92dd17e099fe303ebfaeda053ebce66a82c",
+      "size": 2712918
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-core-math-assurance/semantic-specification.json",
+      "sha256": "5085784aae288e1f3131c862d789573ba7c8e5db5bf63255f5a5c4268c7270c2",
+      "size": 84124
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/architecture-decision.md",
+      "sha256": "54aef745882dc8c5e2394f29ebb963a2d164d8779c26595022fe96173c525482",
+      "size": 11742
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/binding-contract-spec.json",
+      "sha256": "20be62fd2d0ab8f5af6009712c1b98bcb903cecb5bae97673645cdc244a45925",
+      "size": 5372
+    },
+    {
+      "kind": "immutable_source_authority",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/component-matrix.json",
+      "sha256": "95050aec6ab623e9f0fb606a0f5547f90dce93fc20a9d9944c128152c1394959",
+      "size": 1073958
+    },
+    {
+      "kind": "immutable_source_authority",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/current-catalogue.json",
+      "sha256": "f0be00e88ca9b1c3799ec98ab14fe16359b0ccf0bd2d1c2a32f422075e17cb6f",
+      "size": 1039854
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-access-policy.md",
+      "sha256": "c248e7cf9bb290d2a8aacb0bc7e000027ba461f77ccf97f65e526cf8baf86994",
+      "size": 4720
+    },
+    {
+      "kind": "immutable_source_authority",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/source-authority.json",
+      "sha256": "e5f2864f8ac3daec0ff054f55600ecd7a16d5d8f9138000746413cf495395a6e",
+      "size": 43928
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/nist-least-squares.html",
+      "sha256": "6646a579694dd7ebe304c8d281c46f60d6b038f1b4626691c4381742853edd98",
+      "size": 13601
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/nist-scale.html",
+      "sha256": "bad33742f059fe2dfee9b2d26139b525dbedf7a6d702d8a1e7ccabc6c71eccfe",
+      "size": 17737
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/numpy-percentile-2.3.html",
+      "sha256": "c9da6dc7224868b9bd40f241503f28698168be09e8b0555ff65659753042a802",
+      "size": 48592
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/rogers-satchell-1991.pdf",
+      "sha256": "22d07345c6b50edfafe30cc0efd2d06b72e277957c0857a154e05d17fe2e678b",
+      "size": 99607
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/LICENSE",
+      "sha256": "13f42bb183695b0c9b2e7c7282c1b0f5ac83c990bef37515df0639667f72a327",
+      "size": 1483
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/VERSION",
+      "sha256": "902311c7bb38fa1658ff403def6158ee7378fe9d6e2e284fa1c38735c31bd30b",
+      "size": 6
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_common/ta_global.c",
+      "sha256": "91c18070b376e71a562155dcebb7f4f16f40d991ec42b66be41fb90bbe4c3619",
+      "size": 7236
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_AD.c",
+      "sha256": "68c9e46064aa3a9db2e1d71997285b5f09d3d6a9d2264481fe8c84d62f5216c0",
+      "size": 8230
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_ADOSC.c",
+      "sha256": "051f690c4ef9c61c38287419dfeda989d9166d771dc14a87075daaffa46deb9e",
+      "size": 16477
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_ADX.c",
+      "sha256": "a5c154b5268ef4e2b83dbac4932482870bfc7a70dba7d0c21b6e53a09395127f",
+      "size": 35130
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_ATR.c",
+      "sha256": "e458e16023e92ecf67193af669d4142abf251c9da0be59bea2870cb0e217b637",
+      "size": 13560
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_AVGPRICE.c",
+      "sha256": "bfa28cdfa6f15ee7f3b403d1af2f3c1ff03de9cce940661176ac53a0eed6acd5",
+      "size": 6276
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_BBANDS.c",
+      "sha256": "8c88ba4cf4bb14ea67813de42e4d8e7f8735a1d885f8ffa931eaa9b99f244866",
+      "size": 25210
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_BETA.c",
+      "sha256": "b9cc2c51cd2eed59ff722b0223094260ed3449dc6cfbe0622245628d6976ba55",
+      "size": 19203
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_CCI.c",
+      "sha256": "4cb6da9516007df6473f0d135e9ba8ccc7b050487a6479bd0e935d3cb8353ded",
+      "size": 15236
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_CORREL.c",
+      "sha256": "1c49cb42ddaadf9175dbf91bc21f533e2cf520fdf8c3edb30082e85bb6c03fad",
+      "size": 13722
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_EMA.c",
+      "sha256": "75249d5cd3475c21c1c87827e27cbddff6d841c2ada495138541a44f6571602b",
+      "size": 11908
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_KAMA.c",
+      "sha256": "7fe1133b315bda5e5e3e36a8b5ac1d35cd423787c69c5d7d1e47ac4f5f81e77d",
+      "size": 20397
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_INTERCEPT.c",
+      "sha256": "507fa74f0b7f843198f20d36deb5630a88f97f370392b959dbc651a3995c2357",
+      "size": 10573
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_LINEARREG_SLOPE.c",
+      "sha256": "22536abd4e9b31b9296546ce2937ee3481efbdf6c251fa8380aab14262ed7a90",
+      "size": 10169
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MACD.c",
+      "sha256": "f994e846f8eede929155c223cf15305bd8cd7064a788a55de50c339012cfae79",
+      "size": 24014
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MAX.c",
+      "sha256": "34130d95f31f3374bc6a2a0270d3a8df834c568ec81cb372cc7fb0f91e026a03",
+      "size": 10211
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MEDPRICE.c",
+      "sha256": "f49f07ae503b4db492f8231b5f300abde33d0eaa64a01907e8535aa5211be7b0",
+      "size": 5680
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MFI.c",
+      "sha256": "d13e838df7bbbe37820bf033384521bea4d5b02a16fc459642b7557fe3d66805",
+      "size": 25643
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MIN.c",
+      "sha256": "81358779e0696431b17dad0b2cc5d3e3fad22f3e8615b1ea2122a7b8a9ae7b81",
+      "size": 10147
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MINUS_DI.c",
+      "sha256": "6a5cb6ec74162b4ca996f0f0dadc6b2c4a0f191624c63ad95661d613a641a933",
+      "size": 31353
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_MOM.c",
+      "sha256": "e8cead934756816c1ac11da8c8116c559b30cad4f954abcc2d7c332017af6e0c",
+      "size": 8567
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_NATR.c",
+      "sha256": "3f20f409ce05334ec5d5441b7981455182a38ff39af571f63680703b01506be0",
+      "size": 15365
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_OBV.c",
+      "sha256": "d127644132af3f5453b8e77507f6dd924df2864a47f4a553608d753a6ed4b2c6",
+      "size": 6666
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_PLUS_DI.c",
+      "sha256": "301eae5460813f8bce3653632f5432775348ebedd2c6cad96110fe4c41c904fa",
+      "size": 31228
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_PPO.c",
+      "sha256": "dfac225a821e7d6ec9c1c53bbd534d481b8f5edd8c8bc4f1dcd54d6f6ab4fede",
+      "size": 11737
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_ROCP.c",
+      "sha256": "ca513529cb17af56621698d58903cf245cbf84d2860c3eba2be4e2c81649d7d0",
+      "size": 9259
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_RSI.c",
+      "sha256": "43845aa0e206e12551ee087a4d34a212cac8c5827eb9949f25e3e7772dfaa9a8",
+      "size": 24267
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_SAR.c",
+      "sha256": "b025f526992ba240b329d2ef5124cc73dcb9c4e5970a12e812ad2f863ec8ea5a",
+      "size": 24291
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_SMA.c",
+      "sha256": "7110c2fe33f4b8a1d109282ab4d9ece1cf3440ef0bd529c8f73f59a3d1ab53e8",
+      "size": 9192
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_STDDEV.c",
+      "sha256": "0e96ed15ff11ea97cc24646097afd6c0ec3054ab373db38ea686feeb9d75c897",
+      "size": 9108
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_STOCH.c",
+      "sha256": "772d667ede29289e03d72e5e5a92752528bb65c07e2e49063d83e28d58f6c9ce",
+      "size": 25919
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_STOCHF.c",
+      "sha256": "8006c7a38c9d6ef6be467801157a3d5cedb557a68c5ba9061d81445014927572",
+      "size": 23403
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_STOCHRSI.c",
+      "sha256": "d483ff9874e436b2499c10a8db3690491594588bdd9ed940dc327f7e375b079c",
+      "size": 14323
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_TRANGE.c",
+      "sha256": "b8f31b1a93d9809da4588c567030a831c4df7c16d468f1af385e4ddefc3bc580",
+      "size": 8858
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_TYPPRICE.c",
+      "sha256": "a1ae63259ac9c35718357afe36daa2e09a9216e991dae8a3259a4f9de85091cb",
+      "size": 5910
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_VAR.c",
+      "sha256": "8663c800e9c364f7f636215d91f4fd605ada013c38fd6000a922509a19cee71a",
+      "size": 11317
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_WCLPRICE.c",
+      "sha256": "4ab4cecfa2ffad4a22eb1536a5e6ee78329a5ef0583d77759cfad6fd071ca44f",
+      "size": 5945
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_WILLR.c",
+      "sha256": "dd8684edbf0e86df54dd95457ae00445887998f3e4481cc49fd2b1eb467f6571",
+      "size": 14540
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_WMA.c",
+      "sha256": "01bcc74a5ac4ce27c2e058928cadcd04d3b7d0fd47662ac0d98da181fd238f90",
+      "size": 12240
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/ta_func/ta_utility.h",
+      "sha256": "3da109e187d4cc5f5da932f6c2615d1ff4ab4975ad8e18fec55d727bd4bb7d11",
+      "size": 14917
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/tools/ta_regtest/ta_test_func/test_ma.c",
+      "sha256": "296392fbc7eb85dabc3344f8a3cfb953cc023fd1165cc34bd654dc995dd825b1",
+      "size": 36943
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/tools/ta_regtest/ta_test_func/test_macd.c",
+      "sha256": "1fb22c833c9f01aed0174fa364dad9de989144e370ed3ae6dda258c392624ba8",
+      "size": 22140
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/tools/ta_regtest/ta_test_func/test_rsi.c",
+      "sha256": "0ef1bd2f8d12f00975094845a1ee50d548db2cbaa45c99d4f3c16fccef3539c6",
+      "size": 18064
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/ta-lib/src/tools/ta_regtest/ta_test_func/test_sar.c",
+      "sha256": "32fa4560982aced43153a09e9c5d842d5af28bd2b4451b79d191774ac06d7b69",
+      "size": 9525
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/sources/yang-zhang-2000.pdf",
+      "sha256": "3cffec0643654ca22db333f6fdf4688ab6be836d53942b5cfd04643588e44911",
+      "size": 137223
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/specification.py",
+      "sha256": "09ec1f15fd915a6f6ae14af24b77532224cbf28c15456734a775d95c9637cdcb",
+      "size": 39132
+    },
+    {
+      "kind": "immutable_source_authority_bytes",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-correction-replan/verification-contract.md",
+      "sha256": "5642ea3231ab5ee55b491c8b875b91ac5ea821e1b7247d84c06e3188a6039bd3",
+      "size": 4206
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/expected-math.json",
+      "sha256": "ddcdddcdc7d0096469de23523676cde6671cdb552cfae5b7d092ce17811ceca6",
+      "size": 10075561
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/expected-native.json",
+      "sha256": "3b05a52835b9390b90b4052761cfe4147e8b28cabb54d0ebe5d07c37708cea67",
+      "size": 2027426
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/expected-rational-stochrsi.json",
+      "sha256": "e45bdfc9cbae4647ff4a415865b16e16cb57f0125f8e1189570a1d383e0b918c",
+      "size": 54449
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/expected-seal.json",
+      "sha256": "71cbba98b2398ddd22d29f92fdf966b225525cbe62555f997c655eeb4e63b26d",
+      "size": 1576
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/generate_expected.py",
+      "sha256": "80ad830d066abe87c0535a77d0d8985de7244e85a8e0a747c3840058ef4c1cdf",
+      "size": 3675
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/generate_native.py",
+      "sha256": "0ad88ffc58d421c8fba74dd06860f54b96c2774c65e7062664890ca2b7ac1d83",
+      "size": 4089
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/native-environment.json",
+      "sha256": "2cf98b010515f8dc2115a765f19f6d5f935ffae4c4470fb671baaa8bb9ba2d8f",
+      "size": 325
+    },
+    {
+      "kind": "immutable_oracle_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/rational_stochrsi.py",
+      "sha256": "3d8bb1c368a49fc452b6dfe47b0ca133cff7c3e64186b67cf3fe9a687d692680",
+      "size": 2674
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/source-receipt.json",
+      "sha256": "37b9068bca47f5e1dda1bcb2202bc077886360e1904a44e4da18f59b0407e843",
+      "size": 9032
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/adjudicated/fresh-expectation-seal.json",
+      "sha256": "8a285479be6130c026c8ce087fbd05dd04735a9bad01db0669b41f7c2adf9836",
+      "size": 1103
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/adjudicated/fresh-expected-vectors.json",
+      "sha256": "e031b156081a0ae5be915b9cee03349f2f57b76fdb50cc14ae94c65b5e90c473",
+      "size": 4771422
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/fresh-expectation-seal.json",
+      "sha256": "f9a1e51d66f0021b8b5daf13c16ddc64da965adf1a41e52996533c40357ce293",
+      "size": 1093
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/fresh-expected-vectors.json",
+      "sha256": "703b1616dbf9cbdba7bbc9de8853f7aea406c00fad7b5a9c7f42846c67ba673c",
+      "size": 4769791
+    },
+    {
+      "kind": "immutable_historical_verdict",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/historical-red-recheck.json",
+      "sha256": "3949b1c6ce87d28151eb9baa914cc898f91cd24a74dd92b20b3c635ff0742803",
+      "size": 5284
+    },
+    {
+      "kind": "immutable_oracle_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/initial-oracle.py",
+      "sha256": "0bc8c0de3dbbce3106992b09a0fa9e16865356ec81abb7e3a110b3009a55b656",
+      "size": 28054
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/oracle-adjudication.json",
+      "sha256": "ca9c3de2ab30822db5bdfafc2cb650a90f90e794d8a76691d92dab60faf365db",
+      "size": 1757
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/BOLLINGER_BANDS.json",
+      "sha256": "509ced90ca9b4b2e3d30b34445f01e1dab7abeed8c74075230e3feb46759c692",
+      "size": 327188
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/BOLLINGER_BANDWIDTH.json",
+      "sha256": "294c69297a2d7bdd73780e0280403d44eb66e29d643422d2819a2ef19a46468c",
+      "size": 222113
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/BOLLINGER_PERCENT_B.json",
+      "sha256": "3d146e1675a0fbc52ce4f629e9fe5acd26a514bd0ee9f33b047d1a72d636bafb",
+      "size": 222204
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/DONCHIAN_CHANNELS.json",
+      "sha256": "c8b42287b1f0cb5091233c5e903684a3c49e6354d7ff36da162d52c9b12da33c",
+      "size": 329844
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/KELTNER_CHANNELS.json",
+      "sha256": "2f4e7467f1041513a9bbf042b07b93576fa4ef5b4f629bf0100b31b52750ef24",
+      "size": 367344
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/MACD.json",
+      "sha256": "44dd231b392f5238f09ab3a7e7c9df7c6ca690bc9b31df62028989e15ce1643c",
+      "size": 364861
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/PPO.json",
+      "sha256": "d8bfb4ba5174e3298a9230ba565b70f49ca5982428f72448a25df5779bf14f19",
+      "size": 236701
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/STOCHASTIC.json",
+      "sha256": "04af2d2cedaf707dfad4fa01aae5fe7742438142556958248108b2b86c924cc6",
+      "size": 351275
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/STOCH_RSI.json",
+      "sha256": "acc1fa4414f7f5465f4fc92ba69702d8d9ed7f983d8e90438183275ed93fd755",
+      "size": 439780
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/before/identities.json",
+      "sha256": "3b65677580209668216b0a6dcfa8e57b3472209516613b1b3589c104181beb14",
+      "size": 163616
+    },
+    {
+      "kind": "immutable_prechange_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-correction/multi_output.before.py",
+      "sha256": "376fa6c30bab8656751272532496b28fb3e331f80485d15797338cc1e70d1457",
+      "size": 64589
+    },
+    {
+      "kind": "immutable_source_decision",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-replan/decision.json",
+      "sha256": "2ca3e31e074984d1545af8a0a98ea718fbaf2ad093552ec651672df8ae6213f1",
+      "size": 6871
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/baseline-replay/expected-rational-stochrsi.json",
+      "sha256": "e45bdfc9cbae4647ff4a415865b16e16cb57f0125f8e1189570a1d383e0b918c",
+      "size": 54449
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/baseline-replay/expected-seal.json",
+      "sha256": "71cbba98b2398ddd22d29f92fdf966b225525cbe62555f997c655eeb4e63b26d",
+      "size": 1576
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected-seal.json",
+      "sha256": "e94f1bb6bcf825b4e702ecb14ca6a1032ed92ed3a84db178e66499364c1db2e0",
+      "size": 18326
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-flat.json",
+      "sha256": "c3f17a44cf3f8b38919c93f9a9976f69a3550d6dd10f5e104aa11908105920da",
+      "size": 11107
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-gaps.json",
+      "sha256": "5aedd3f83fb6badc3bdea600f192619e28bd14aff7ca8076df3a10b56f8b8ea6",
+      "size": 21041
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-impulse.json",
+      "sha256": "59747add109c34be2119f09fc2899dce064e8d46dc0a9259cbda574f92c2fa21",
+      "size": 11642
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-large.json",
+      "sha256": "d2dab202c672b1f225f8d4547b7e1caf2ebb726ae04c16a4958bfc0399c2e0b3",
+      "size": 31527
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-near_flat.json",
+      "sha256": "7260116fa1d0fd072fa9f23db8dbf5e7aae4b14a30c063424c3a9b4ddc65099d",
+      "size": 32420
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-noisy.json",
+      "sha256": "f4f9232c41bf015a4135bd7a6c7ac688eb0acb4c4b873db82889ee84c6c521d1",
+      "size": 22743
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-ramp.json",
+      "sha256": "60cf1eebb974160a4f4f049a70a7acea13f9dd429ced718a0bc216582e549438",
+      "size": 17867
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-reversal.json",
+      "sha256": "2ca9b14aadfc7802108d5fa68dc23cd287c0acc8ae54b634e67909bc4878a814",
+      "size": 17890
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-tiny_impulse.json",
+      "sha256": "eec838282c627fbdb0b138c1a26ab2f75b0ddf280aae6ff5de4e1ebf5e7d5572",
+      "size": 12255
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-default-zero.json",
+      "sha256": "e0d834f8c6cda5bcdf47161b75c1a3e247f871ae7b96c44d5300bae36a66a018",
+      "size": 7545
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-deviations-1e-06.json",
+      "sha256": "d57dc32753e6a46d5cc28691931a81920d0026bea594d7deb621f9c1966557e9",
+      "size": 22777
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-deviations-20.0.json",
+      "sha256": "1c38658227686580f8412dd9b642cd3ab7c351daff367e5c03b577d165934d4e",
+      "size": 23116
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-maximum-flat.json",
+      "sha256": "8c0bfe4c69e2d21666bb57ec7af129ec8e50f3408a5eac8f54b6359e085a1620",
+      "size": 160691
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-maximum-varied.json",
+      "sha256": "92e092472a4478e773fe764c4c46f6c867ff53751e583f6b2f78c59036fcf99b",
+      "size": 203437
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-minimum-flat.json",
+      "sha256": "b85d429556ae2cada3a5bd3b6b34a37687d349b6068336dad7a26696ad5011e4",
+      "size": 11141
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDS-minimum.json",
+      "sha256": "108e0b331e8ab3766761e18c0580d7f5691c3b53ff521ec5046fb48d2693c0a8",
+      "size": 16507
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-flat.json",
+      "sha256": "7ecf13205f157fc97746b3e6161b776400ce9bf60027f695b6044c66180cc928",
+      "size": 7506
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-gaps.json",
+      "sha256": "790ed74dfa56fefab6b075e1956a5d512705826bd17e48a6047095705f6c42a1",
+      "size": 13144
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-impulse.json",
+      "sha256": "4774d8faee601f4def9a05fad58f57bcce0ae6d84ead3eefc4719a9e557fccbc",
+      "size": 7719
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-large.json",
+      "sha256": "e867c17bbdda59a01942fa928a6776db43e23fa56c5050d04045d895ee2c52b9",
+      "size": 23166
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-near_flat.json",
+      "sha256": "d00c422289a0a903ac46e7abacffaa29f784666da6444d4f87d79415364f9346",
+      "size": 24128
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-noisy.json",
+      "sha256": "4d2f2e6e3b6651f5e66f4cb6c71e8ef61e66003d440ce1530028f2cdb45e541f",
+      "size": 13749
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-ramp.json",
+      "sha256": "071be4784302a1230c80208cd44cb2a64124e35bffeed77603f26a1aa9d12ccd",
+      "size": 11274
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-reversal.json",
+      "sha256": "e1c71435bbe852faef6b1f45aab116ae48cddb3a34cb12d3562749b07b651fc4",
+      "size": 11365
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-tiny_impulse.json",
+      "sha256": "3a631aef4ab7cd2132b7833810c216be36cf6d8a71c746f413eed3e76c930858",
+      "size": 8136
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-default-zero.json",
+      "sha256": "4c224f3e7bb649cf44d9cf5186110f626e9a86a53f6a3769778d73bd24115617",
+      "size": 5673
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-deviations-1e-06.json",
+      "sha256": "01f1d5ab8b8196631133b05cc75f2ac8050025d001eb0e73d8db29b3d8d1b401",
+      "size": 14836
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-deviations-20.0.json",
+      "sha256": "7511a7f73d5647ead51520152c52244fe42b96857228bd1af7c804745123c4ec",
+      "size": 13693
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-maximum-flat.json",
+      "sha256": "2b2482238b2074266320fb78d2e1ee3e2c697f44ed479f6dec40638366391c68",
+      "size": 119476
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-maximum-varied.json",
+      "sha256": "003336986b798045897d94a8dceb669b3f68ada7258b981c193a0beaeb53aff0",
+      "size": 161811
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-minimum-flat.json",
+      "sha256": "b06d5544e37e2b640c52033154c2e22a430f250c7b4e61c59f2b7088835f5c1f",
+      "size": 7492
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_BANDWIDTH-minimum.json",
+      "sha256": "885d3fb728093760252bd41e09ca0e5a76461e2a67a7284e48f4dd3c8ee66b48",
+      "size": 13918
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-flat.json",
+      "sha256": "d6f85a198cfed2d5926f6d3a2ccb7c6df58ab195c9cd4f78508f8b14a66bbb03",
+      "size": 7753
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-gaps.json",
+      "sha256": "3d22d2d20585d7e9aa887faf46b891aac75c2bd501b001dff195bc335a7dfddd",
+      "size": 13355
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-impulse.json",
+      "sha256": "0e4128fad1ebeacd73fb6e8a3813aba35ae71a596e6c2cdd29a314d459bd521d",
+      "size": 7952
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-large.json",
+      "sha256": "d9abb34cbab78d2516d3dae7da17c28a6383feee8c48a0de9022cadd44f5a20c",
+      "size": 22512
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-near_flat.json",
+      "sha256": "7e1ca58067abaff4ba312eb0af05c9b561d831d52602621e297939410c989f19",
+      "size": 23391
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-noisy.json",
+      "sha256": "2492441d2f336c457d8a85f530e0960d85a4b1fcb826750e5b24819bc8f904f1",
+      "size": 14007
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-ramp.json",
+      "sha256": "a73d4709fc7f68f74c52fd1e71354f2d366230e20c8a3b2f3ecef2d450cad6f9",
+      "size": 11467
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-reversal.json",
+      "sha256": "6017b96e19b887f3eb26a12a32b3aedfe31de17044b2d65278c76e3f14541340",
+      "size": 11602
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-tiny_impulse.json",
+      "sha256": "9b8f88ebddcec583ed2c5b494fa5ffa9b1852ab41408763c79188d5fd212425c",
+      "size": 8257
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-default-zero.json",
+      "sha256": "817c352557a3e8bfbedd502478f6196c03fa5489cc5a5f9ad9891c04d865f1f7",
+      "size": 5673
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-deviations-1e-06.json",
+      "sha256": "3485deb8960694084390d6ad8229ab9f8b7970e8efdbac9d0e64e04e75b7bf51",
+      "size": 13902
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-deviations-20.0.json",
+      "sha256": "3037a42319b77adf2a672f19ab60d498de1e437915c209c3d57aacb5d99b06fd",
+      "size": 13986
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-maximum-flat.json",
+      "sha256": "4f1eb83d181c43d01ac84dd49673a3089a87d09e14ba19a50e6566fe4ae76853",
+      "size": 119494
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-maximum-varied.json",
+      "sha256": "480ce4e37f0ebdd69bf101e3b83c95bbc6a70d63abcd0bcb8c4b217a402114ff",
+      "size": 161824
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-minimum-flat.json",
+      "sha256": "728ecc068092786f884351feafe4bee26727c3ad0acd0bbc034f025610856906",
+      "size": 7751
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/BOLLINGER_PERCENT_B-minimum.json",
+      "sha256": "737ea4523a7fa567569254cd350dc223f0fe16bff20aba9bbdac59eaf576fb36",
+      "size": 10482
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-flat.json",
+      "sha256": "8e477241948b553d30bad1ee466443bf94f3a0f175fbfb4613b067c67534ed64",
+      "size": 11096
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-gaps.json",
+      "sha256": "7211194f9e834e0ea4479d379094ade1d1a33f847aa14934df4013d968c1fcfd",
+      "size": 15422
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-impulse.json",
+      "sha256": "31cf618dba7ee3863efc4d19d5ab46ac1cae54f2ac230753a057c1f5e28f61e0",
+      "size": 11099
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-large.json",
+      "sha256": "989851084cb2c9aa7ec01b8f8aeb8817131a617aaf7fb02abc3a875e1a59d465",
+      "size": 30585
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-near_flat.json",
+      "sha256": "78248bfc71eb0fd28e51ae74e4959deffd940db07f4c4e2cc6eead6160b96c95",
+      "size": 31030
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-noisy.json",
+      "sha256": "8f6766b7678d357a9fcf8240c2c9c34f1fec414dc4443366d335ce3d71a745c4",
+      "size": 15978
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-ramp.json",
+      "sha256": "fb7e5f3f78b15f1fab33aebea6d9f61006eb842a8fa22ae1d1ec99d43f76fab2",
+      "size": 11965
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-reversal.json",
+      "sha256": "1113ff6be4b080d0f20abc06b74d1b1dbf26d4437fc63ad9064237ddfdec11ee",
+      "size": 11955
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-tiny_impulse.json",
+      "sha256": "63f527f0db3342675b840270739afa119129dfceecf1e8b47aaa53c448216d16",
+      "size": 11936
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-default-zero.json",
+      "sha256": "4607db59ca91504d931d8bb28748e9f94f121b219c15f6d038140448d81fe34a",
+      "size": 7534
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-maximum-flat.json",
+      "sha256": "bcd4d647d190ef17ae4689d0305675d13b9d985b0beea81973fc0995faa27db4",
+      "size": 160680
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-maximum-varied.json",
+      "sha256": "1d32f9e5c5d84e87d5dcf22d587d8b6b25fac2e99f973ef7e8f1898f5a1fffbc",
+      "size": 202791
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-minimum-flat.json",
+      "sha256": "4f1bc1729474a3f2499e6a4130cca776552d76982d6e164c20777c9f8fe527d0",
+      "size": 11130
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/DONCHIAN_CHANNELS-minimum.json",
+      "sha256": "890c17ed1d110282437f4f0e9cc1b307be5fd672bd1d362340d6487b2d53be9a",
+      "size": 16113
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-SMA.json",
+      "sha256": "fe6d528fa4eb1c895b332343b287ec12064353808af78da0e001bddf7bc181b9",
+      "size": 22750
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-flat.json",
+      "sha256": "07c3b1c82c90989985f9a3a6b824b7590277d13b444561f585c31e0ca7a8ca43",
+      "size": 11141
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-gaps.json",
+      "sha256": "33bee73630d5c94495b58e5f335516b809f2f01511c9df4b482d98409b6dccb0",
+      "size": 21142
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-impulse.json",
+      "sha256": "22aa1ea93877bbd1c081469ef48133a010d4e1ab04cb2997a7768014176229e0",
+      "size": 19215
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-large.json",
+      "sha256": "8ccf6cdff14aa1552cad0faf110555b8b6e6e986138173b008c1593149d4b88a",
+      "size": 31518
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-near_flat.json",
+      "sha256": "d1eb8c087c80050ef4145b013b377cfb9bab0d9d3efa21e3e0f7d3f4bea36348",
+      "size": 32356
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-noisy.json",
+      "sha256": "0b3c3eb67b860b989a788b25b2f9903c5007b6b5e172c1c8927d38d5f4f22977",
+      "size": 23001
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-ramp.json",
+      "sha256": "78b719f235c52f1cac88abce1a1f065b7a02557f776a0360bc1e9bd817b12472",
+      "size": 12860
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-reversal.json",
+      "sha256": "0e01090b2395c5946293e57bfecefde552eea1ad65b12138b6cec8a14c693176",
+      "size": 16828
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-tiny_impulse.json",
+      "sha256": "b9f1c856447a895de753bc7ddf3e43cb98d47d7222ce642a77e54e79f20b4cd2",
+      "size": 13650
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-default-zero.json",
+      "sha256": "feb47230627eca1ead0c28c2b47d9b628ee5cfa983f8de37d52be84451e9946d",
+      "size": 7585
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-maximum-flat.json",
+      "sha256": "b57f16deb9f35702599eb23095b11f60365d73955727ea16d16db70a42239c63",
+      "size": 160769
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-maximum-varied.json",
+      "sha256": "247bb4592dfa0b92439bb122a4381a0c85ee6c6329eea79e5c623f2d1994202e",
+      "size": 203509
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-minimum-flat.json",
+      "sha256": "09d2b7ba2c9db1d54b840b0d51f607364f7b6fd6f814af79b070d15d4ff53e0f",
+      "size": 11174
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-minimum.json",
+      "sha256": "6a9b87e32ac782a27dd753ebed05f2c2d9ae6b7f4edf7b99c62389949274b7a0",
+      "size": 23492
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-multiplier-1e-06.json",
+      "sha256": "011cbe7c4a0aaa8bd43daf36d3cacb6df0c3fd223a72cde1a6f55667c80bc244",
+      "size": 23017
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/KELTNER_CHANNELS-multiplier-20.0.json",
+      "sha256": "d212788e9318f3857914fda874be38306945d03e905691a801f2ffd7bb4a5f73",
+      "size": 23307
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-flat.json",
+      "sha256": "defdfc06d18c40a44172c9f14b5b0f396bdb2419e2fc7b5e01b39a4d1377cc0e",
+      "size": 9708
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-gaps.json",
+      "sha256": "4a57970f33a90c06c60e3303c2cc764c235a317f7de5f1592b45713f8a7d7661",
+      "size": 18528
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-impulse.json",
+      "sha256": "b4ba11cc695b17bb8621c12c35ff8f3d291265c814347712cf6e4dc4d9b1431f",
+      "size": 21798
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-large.json",
+      "sha256": "0a8b6d62e497d8936799e488cc603d796efbf78e9a504cbfe12c20b527711e33",
+      "size": 31359
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-near_flat.json",
+      "sha256": "7c56df74bc2e8d875a556982063f534fa28c8a4fa6e6cfb71a1046d73a987ffd",
+      "size": 34799
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-noisy.json",
+      "sha256": "aa223342d94ea83ca264e97ecde383c14b580dd44a59a61a1597d4ae2e07b45b",
+      "size": 23032
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-ramp.json",
+      "sha256": "aa9cb093e4aed9cc2ac91902b484e2fcbda082103d2b92582c3f0484933e9c3c",
+      "size": 10872
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-reversal.json",
+      "sha256": "af9c61a976d6439dde7274469588255127e3b09971e47532989b41ad6124a996",
+      "size": 16770
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-tiny_impulse.json",
+      "sha256": "6dcf1230d749a77b989a0854063d8180930a3473e168f02fa8085c357ce252b1",
+      "size": 22084
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-default-zero.json",
+      "sha256": "f0cb89eedc51fb46ca6c1ecea6b2e7c237a99f329d520a96e762988c7deb1ef5",
+      "size": 7628
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-maximum-flat.json",
+      "sha256": "e5414ff321590923534bd6c0497c10553d3d7de83eae2dee84e79a7b9ea563fe",
+      "size": 320316
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-maximum-varied.json",
+      "sha256": "a99fa71a11e4389219c78e8cb313ac0c7f48f318622fdc2861a20db3541c82c4",
+      "size": 203325
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-minimum-flat.json",
+      "sha256": "97dea79e770c3af39d90bf8662e4070364a0424d062841aa623edd96485b47cb",
+      "size": 9612
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-minimum.json",
+      "sha256": "29488d8e84f9ca13602f09df87a54c2a31873624e1e99c96364500a8e00cc6ca",
+      "size": 20139
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-signal-one.json",
+      "sha256": "6c683b2490406bed75dd6d4ce933ab246144370ef8df2570c6269d2b7ccf3108",
+      "size": 19680
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-high.json",
+      "sha256": "b5b327f322da983d18b15ee86d0c0de379a74b49e8126ed300064840cc1c5d29",
+      "size": 23029
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-hl2.json",
+      "sha256": "ff80888f7913cdf272b6aef2eebe468af5854103ad11d1a428f81d2aeedf6132",
+      "size": 23027
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-hlc3.json",
+      "sha256": "8ca5a5fe4d78ab65f03c6c3b7f4d5e60eed2039f7ba528ac02bea9814a097628",
+      "size": 23029
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-low.json",
+      "sha256": "57307b5861dbe0df6394d4a69f5c6a79e77ac450d284283c57c4f53a843defd6",
+      "size": 23027
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-ohlc4.json",
+      "sha256": "f7902f35dd4c6f2e6b538783f6bf6d28c6b78ca3bc39e3bd23ce99aac4856c52",
+      "size": 23031
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/MACD-source-open.json",
+      "sha256": "f6a98d2fb1b32f9ba2338ddaea892f902e8ca8ab142764aa2418efa60d88c405",
+      "size": 23029
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-SMA.json",
+      "sha256": "dd1a134e3c73527ad5cae6f583cc81fd5326698600d0f0574afe01ec52b89f89",
+      "size": 13825
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-flat.json",
+      "sha256": "6f13aaa2ca67dd5478fb68f03f1b58e4cdf36bc724215c7cfcb8c4655e7c8a44",
+      "size": 7521
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-gaps.json",
+      "sha256": "9902f83927b1fc3a2b5678f0658479b8c4351e79ccc09b07ef4674e4dab6ebf4",
+      "size": 12707
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-impulse.json",
+      "sha256": "b1156bc24c303c0926b588c87507a4a1d3644ad56917f5f938ecd74f11e6c65c",
+      "size": 11596
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-large.json",
+      "sha256": "ce1998b3b0266c956960095b2012b3f7321370c7691c98799cf0239114903c6d",
+      "size": 23202
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-near_flat.json",
+      "sha256": "9f89477f62dfd12ff5bed46bef8504f0f4daabca1a0813ee0aa586ae47cb1d72",
+      "size": 24152
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-noisy.json",
+      "sha256": "dcec0336910f49c84779dcb137da772dde28f529f03049b071a581a85ce57025",
+      "size": 13876
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-ramp.json",
+      "sha256": "b64e83678fba41c317e5997e6faa37902ecd4e805fb877a6408e2b0fb3013895",
+      "size": 11119
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-reversal.json",
+      "sha256": "43304734df847c3c6b4f4b52b681ec29cf2fe3cf6189f40db516fa1ec6f250e3",
+      "size": 11349
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-tiny_impulse.json",
+      "sha256": "f20e9289e40e7268888bd11ccf8d67142b15ffc8f8b90d53a1287761ff9da0db",
+      "size": 11784
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-default-zero.json",
+      "sha256": "d5d79b31ec18bd9ccb85542fe9c864f2da256c049641e64ca763260523f2cacf",
+      "size": 5676
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-maximum-flat.json",
+      "sha256": "1cdee02eb56c8a43108b90053ff88c714b6d6ba2a57cdee1b90df8a1f99a7e4f",
+      "size": 119481
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-maximum-varied.json",
+      "sha256": "4078a7f40d749ba9d27fd24c3b49edc9d7a4e587fe23a0e5191c0f5f0b97b5c7",
+      "size": 161882
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-minimum-flat.json",
+      "sha256": "c3262f8ec71393ae51874adc02c8b63a9f150b6ffcf8a144344eacd3b3a500ee",
+      "size": 7495
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/PPO-minimum.json",
+      "sha256": "37d92b39730f9281fa5a2478fe723c5d5c007369d20dcafdfbadf42cbdcc439a",
+      "size": 14137
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-flat.json",
+      "sha256": "c99b0ca6cb5f7dda354bd5494cf6db4d87675632dd44ef82fbbed94e8b82151a",
+      "size": 8570
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-gaps.json",
+      "sha256": "3d949dc8a5ac967d618297d0e7579262cb373dd4a957363bd108b33539674210",
+      "size": 16728
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-impulse.json",
+      "sha256": "a5ffa27e5a6534e5bc37430477c63632e6fb2cc0b3423206423324fcec903574",
+      "size": 8689
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-large.json",
+      "sha256": "08fc0d26baa1b0d55da2184e7e3d74cdf5ccba890ca4a2d59483b49ec37671fc",
+      "size": 26690
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-near_flat.json",
+      "sha256": "16bab1858040e4a1e3b858310d1f6971e943b6bd2df8dac632dcdb64ab2d6fdb",
+      "size": 27149
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-noisy.json",
+      "sha256": "14d122bb2754180f369db0a1dea1e979a561ca8bdeb2433a546c93c5f884db03",
+      "size": 18191
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-ramp.json",
+      "sha256": "4285cfcdf61e8bebb8a76ce5235749bd1184cf3fdecc091cbac43a48489fa066",
+      "size": 15630
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-reversal.json",
+      "sha256": "1771946a06a10e8aee9aa2eedf6ff5612a26fe341469fb03f9b2a3e9bad22a75",
+      "size": 15882
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-tiny_impulse.json",
+      "sha256": "4573e948502cb7d6fd10a9e61c28762d6c85f4d487a14f25b689561c5b37140c",
+      "size": 8914
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-default-zero.json",
+      "sha256": "63c3e42a22f1dfe3765d03562cea9affc38a41a7e5d6b0bdff43d4113ee04882",
+      "size": 6490
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-maximum-flat.json",
+      "sha256": "c34d8b3c2ad75740e5097a9f128843551481cef2504e39060cf958a71b1633ac",
+      "size": 418493
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-maximum-varied.json",
+      "sha256": "900a7a39a88980088528da12ea98b98eb368b0c2448d11281f00e5f3e17171de",
+      "size": 182611
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-minimum-flat.json",
+      "sha256": "cc629812b3f5db104d4b17a3f5cfddc24e39c8dc53b7c5548e4b28d885ff6865",
+      "size": 8536
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCHASTIC-minimum.json",
+      "sha256": "bc51fb7a32f2ee6a44815407dc05e3d5d5bbb7617a263c902631245f54dc1bdd",
+      "size": 18351
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-flat.json",
+      "sha256": "048811781ee1683d432ae4c3cce8c3c46a55289c4a4709775d4cd90ef513f493",
+      "size": 8621
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-gaps.json",
+      "sha256": "2d6ffd61cfaad8462992ba70c66e9f7cb475c5e0dfdbbe4dc7d9c123a01bde7d",
+      "size": 15273
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-impulse.json",
+      "sha256": "6b23b07bfe0c65e213efc5146bffaa58595076d8d8af6433889810b8c2c54b9d",
+      "size": 9096
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-large.json",
+      "sha256": "a6644a10df78ec039eb54101ceac9e3891a37fbf814d423652b95bbf5c3b5311",
+      "size": 26328
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-near_flat.json",
+      "sha256": "e2edc5b4e6404e5816c424275c86a798e0d3eacedd39e886ec682ecc2c0b38fe",
+      "size": 27291
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-noisy.json",
+      "sha256": "6ef1a72a58f10172200402c51b18a84361f94660f66044cc8489e39a53b1cd6a",
+      "size": 17851
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-ramp.json",
+      "sha256": "020e1bca61ea5ace12117ffb3396d0e94058381f7bbde1a3613b3a8a8740be4f",
+      "size": 8877
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-reversal.json",
+      "sha256": "b669c3a0ddf4b263d18b7feb230165781d7066cf75e9b911d382e6efabfc8fe3",
+      "size": 8886
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-tiny_impulse.json",
+      "sha256": "e536880553eec19d09ba3731359b35ec1907320870278a4133d69fe53d51e051",
+      "size": 9321
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-default-zero.json",
+      "sha256": "c813566473298d48c76ac6e41df09a9fff7b05f3029478013decefbb7a6c4fd3",
+      "size": 6541
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-maximum-flat.json",
+      "sha256": "54b95e04e3efcc7621837781d13585b8c156470df6611d4e8ef8aba50e10a628",
+      "size": 557782
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-maximum-rsi-impulse.json",
+      "sha256": "17f36b268de35420821ffd4876b222eb932e8c589b5a790d18ba63b1a64c225b",
+      "size": 141243
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-maximum-varied.json",
+      "sha256": "4a2073f6d723489c7f3ce0d2815c80bc7becaa713fbac9f4fe37b41c5b6650cb",
+      "size": 182251
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-minimum-flat.json",
+      "sha256": "a3b3d2ba60da5c47fad527621bacc30e930951bec634ab6becdeac317c64260d",
+      "size": 8562
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-minimum.json",
+      "sha256": "18435dd1f31dc3fa0ba0ecef567dbc3aad4d5da2c4e7c34bf69ae1293506f7d2",
+      "size": 11817
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/expected/STOCH_RSI-unsmoothed.json",
+      "sha256": "b98bc5436df906d7e5fc6379fb15e4c5b5ebe5afba80cc0bec49767bcdb8344b",
+      "size": 17135
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/BOLLINGER_BANDS.json",
+      "sha256": "6cf2a259ff7daa9c01aed7ba854e907d71f3d7056cb05b134b8c3dc617277789",
+      "size": 327188
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/BOLLINGER_BANDWIDTH.json",
+      "sha256": "bad1eb22df23629fdd5e1892fb2e2d2a732f8bea0ea30d282c4def260834d234",
+      "size": 222113
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/BOLLINGER_PERCENT_B.json",
+      "sha256": "d0dc483b5e5b69962f7a359289e3dd3138828adfdb89c62e5d031cead2ec8449",
+      "size": 222204
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/DONCHIAN_CHANNELS.json",
+      "sha256": "4f79afb6fd548eb874a21cc39d5f83b00c6ed516a3ecfbed8b7bad1540934c22",
+      "size": 329844
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/KELTNER_CHANNELS.json",
+      "sha256": "075d816eabc48aa048dc33f3dbfad6fdd17f89e68172c1c56a862befe7add2bd",
+      "size": 367344
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/MACD.json",
+      "sha256": "0dc99247d571e4d4b39dd136a9c25dbc47a231c16c5502100dacf6067f703b21",
+      "size": 364237
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/PPO.json",
+      "sha256": "c754e39905e8a04332dd89221ba8fe5be096e6a3e651c30b8e2ed8fb3ba50290",
+      "size": 236701
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/STOCHASTIC.json",
+      "sha256": "99152252a17cb2588a45f3b6f21989e649ce6b85fb026c61dd90e37a3d44430a",
+      "size": 351275
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/STOCH_RSI.json",
+      "sha256": "0c3caade110f000755d358c1d34ff212aa92415aa1292e985020e31fe37ae853",
+      "size": 439780
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction/before/identities.json",
+      "sha256": "edd937a7b515a503ac7eed6fcc8fb407f686f63e938fe8729ee604cabc4bcfa0",
+      "size": 162863
+    },
+    {
+      "kind": "immutable_source_decision",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-multi-output-source-replan/decision.json",
+      "sha256": "f954430f5b7981078faf609fba47a0754187f3923f2ae2dc596368a18c3e271a",
+      "size": 6672
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-sar-source-assurance/exact-vectors.json",
+      "sha256": "29c184004536b2cb6574a4e326c3066d9b18c2c408aaeed42526cf3b7e7815e9",
+      "size": 1365069
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-sar-source-assurance/oracle-authorship-seal.json",
+      "sha256": "e3247a58032b4294ad3866b0e193501fb84f78603662a761feb6bea3b58e6dc5",
+      "size": 486
+    },
+    {
+      "kind": "immutable_prechange_state",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-sar-source-correction/before-consumers.json",
+      "sha256": "dccad44c7b83890ad420960f58f2e509a336d42f3571a5dca68f1d5a58bb8c84",
+      "size": 389399
+    },
+    {
+      "kind": "immutable_prechange_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-sar-source-correction/recursive_state-before.py",
+      "sha256": "a7cb21314c4930a8165dd02e7448b3f1d680d404aa7b8834303e04423eb4c828",
+      "size": 79233
+    },
+    {
+      "kind": "immutable_source_decision",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-sar-source-replan/decision.json",
+      "sha256": "4d5d654326d8665fc94f44aaf08736305d59843e2cd9ecbd726de143ebec5e0e",
+      "size": 10761
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/expected-vectors.json",
+      "sha256": "1cabc1074a568fae9cabbbab2b75c0b24a93ecdd25241a270b313ed2c956da76",
+      "size": 7972176
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/generate_expectations.py",
+      "sha256": "664f88b0a4f4034049fe9927c3e85b562f8e12a55c590580ac0846cd214f87a9",
+      "size": 946
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/intermediate-seeds.json",
+      "sha256": "1549aa67e3f38949d654ad1e03739105171573536c3c6a3bc47c8ef53b82d4d1",
+      "size": 66717
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/long-adosc-reference.json",
+      "sha256": "8b49f8496195ac6530018a0b5e3460b067463f79e779584fb8ed2e44c71032ae",
+      "size": 2257932
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/native-runtime.json",
+      "sha256": "88c6ba6e1fecff46d837e55b5ea98aaf2e80562c0fe1650534d538728e4ac106",
+      "size": 390
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/native-vectors.json",
+      "sha256": "fa33d6b794605d0d62641ed9470d31de2826bfd4e764df0b0ee3f1e8e2eb1289",
+      "size": 996776
+    },
+    {
+      "kind": "immutable_seal_dependency",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/native_reference.py",
+      "sha256": "3683860bc8839518bb29cace5f0559ad65479fbf086e473141c315bd887910e9",
+      "size": 2000
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/oracle-seal.json",
+      "sha256": "24b5eca49bae7811784f7687cc14cc5df91ee530365289d6f01fb3d18d5a9456",
+      "size": 12048
+    },
+    {
+      "kind": "immutable_expected_vectors",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/precision-supplement.json",
+      "sha256": "c9969beab333bb5af8a0d20f06b9593d2f22d49dcd76a618c688d0705068e42e",
+      "size": 3370
+    },
+    {
+      "kind": "immutable_historical_measurement",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-recursive-state-assurance/resource-measurements.json",
+      "sha256": "264fd5cad3d6fa11f96784dfb96a76ec61b3137ee65266517c2e0b525191c4fc",
+      "size": 30418
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-context-binding-assurance/closure-seal.json",
+      "sha256": "4c04161d7d390914981f8f8fe56eee549faf0cca854267d4fbcb61e21e2b91ef",
+      "size": 3213
+    },
+    {
+      "kind": "immutable_identity_proof",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-context-binding-correction/identity-transition.json",
+      "sha256": "62fa9b273a863eae011c1f209651aeced059d3810be7ccd510c3e0da76b771e7",
+      "size": 113526
+    },
+    {
+      "kind": "immutable_identity_proof",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-context-binding-correction/pre-mutation.json",
+      "sha256": "b4fcd4633352e9baabaa1aaee37b03d24b22c18187448461f597c77963c9ac25",
+      "size": 102788
+    },
+    {
+      "kind": "immutable_historical_verdict_review_privacy",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data-assurance/findings.json",
+      "sha256": "44ee328a8218044b31c66da37fa6c1c179db1e82e4531cccee31aba58cf9ddf0",
+      "size": 2136
+    },
+    {
+      "kind": "immutable_historical_verdict_review_privacy",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data-assurance/report.md",
+      "sha256": "747e0ec93508e18a21ccf1685f9411e9cf7121533154a0804fab47be1949bfb4",
+      "size": 2974
+    },
+    {
+      "kind": "immutable_identity_proof",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data-fresh-assurance/candidate-identities.json",
+      "sha256": "163b2c9cbdd00506752ac4dea428ea818ba3a450e3e7c3f823c5ae8f60b81a72",
+      "size": 13311
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data-fresh-assurance/closure-seal.json",
+      "sha256": "0f7b86f8b4f1124c56073adb80bb730d702a7a0adcaffb0871beea300f1d2361",
+      "size": 3529
+    },
+    {
+      "kind": "immutable_historical_verdict_review_privacy",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data-fresh-assurance/report.md",
+      "sha256": "0dd77b7b138419b815bbd4b7d44b24d5d14cc4bd2cd9edb3550928f22f4a71ec",
+      "size": 3072
+    },
+    {
+      "kind": "immutable_generator_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data/build_product.py",
+      "sha256": "c865f8d58a9e2e4404d75a8d6bd94e35995e51f170a31378074a2f71f4952321",
+      "size": 2866
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data/closure-seal.json",
+      "sha256": "6de01a2b59e4a07eee68bd5c58777d8d0152d3f62063f5e7c36d6e35750454ec",
+      "size": 6926
+    },
+    {
+      "kind": "immutable_generator_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-data/session_data_body.py",
+      "sha256": "8fc337d04e5992b2d080864a153e2c7c5839bf3308d67131be44d47a1d73a56a",
+      "size": 36162
+    },
+    {
+      "kind": "immutable_generator_source",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-prefix-correction/build_product.py",
+      "sha256": "a600da53065943c8bed84a2826a0410b9922e1924060ac776ec282b3f3af5e9b",
+      "size": 8518
+    },
+    {
+      "kind": "immutable_seal",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-prefix-correction/closure-seal.json",
+      "sha256": "fba09d80ed688718524a4d7797adc58ab6e9a29b6b9f16ecf777a52a1217a380",
+      "size": 5448
+    },
+    {
+      "kind": "immutable_identity_proof",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-prefix-correction/identity-transition.json",
+      "sha256": "7c674e3be8a8b134333fd2df3cca0a15354cb10acc6f514143172238dd169725",
+      "size": 28571
+    },
+    {
+      "kind": "immutable_historical_verdict_review_privacy",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-prefix-correction/report.md",
+      "sha256": "4076e85c867bb1e65b2878f4f4cce1fca846a753dd9a660cb6e9c36878167ecf",
+      "size": 1852
+    },
+    {
+      "kind": "generated_receipt_read_by_test",
+      "path": ".agent/runs/post-phase5-indicator-accuracy-session-prefix-correction/source-receipt.json",
+      "sha256": "6b3ef3c891cd77cf9f859a565b63c3822c3d45169ab0f51cfa3a360b3ead7620",
+      "size": 1262
+    }
+  ],
+  "output_directories": [
+    ".agent/runs/post-phase5-indicator-accuracy-multi-output-assurance/comparisons",
+    ".agent/runs/post-phase5-indicator-accuracy-multi-output-band-ppo-source-assurance/comparisons",
+    ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/actual-arrays",
+    ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/baseline-replay/comparisons",
+    ".agent/runs/post-phase5-indicator-accuracy-multi-output-correction-assurance/comparisons"
+  ],
+  "schema": "indicator-assurance-fixtures/1"
+}

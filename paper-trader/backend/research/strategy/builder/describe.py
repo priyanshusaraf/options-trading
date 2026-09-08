@@ -108,4 +108,4 @@ def explanation_for(strategy, params: dict) -> StrategyExplanation:
             ),
         )
     from research.strategy.explain import explain
-    return explain(strategy.key, params)
+    return explain(strategy.key, params, display_name=getattr(strategy, "display_name", None) or strategy.key)

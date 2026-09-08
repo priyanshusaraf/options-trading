@@ -13,6 +13,9 @@ from app.core.logging import log
 from app.core.market_hours import ist_epoch
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner(key="NIFTY", product="equity_intraday", bar: dt.datetime | None = None,
@@ -24,6 +27,24 @@ def _runner(key="NIFTY", product="equity_intraday", bar: dt.datetime | None = No
     r.params = {**r.params, "intraday_enabled": True,
                 "intraday_block_weekday": block_weekday}
     r.armed = True
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=key, interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    with r._session() as session:
+        from unittest.mock import patch
+        decision = {"project_id":"test.admission.4c1029697ee358715d3a14a2",
+                    "graph_identifier":"test.strategy.expanding_z_impulse", "graph_version":1,
+                    "content_address":admission["graph_address"],
+                    "admission_address":admission["admission_address"], "decision":"approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            paper_authority.activate(session, row.id, revision=row.revision,
+                                     owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     r.publish_signal(
         key, r._binding_for(key), {"signal": "LONG_ENTRY", "z": 2.5, "slope": 1.0, "close": 100.0,
                                    "time": ist_epoch(bar) if bar else None})

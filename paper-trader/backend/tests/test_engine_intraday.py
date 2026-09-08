@@ -10,6 +10,27 @@ from app.db.models import InstrumentState, Trade
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.providers.mock import MockProvider
+from tests.admitted_entry import persist_admitted_entry
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+
+
+def _admit(r, keys):
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as s:
+        rows = [paper_authority.stage(s, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=k, interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id) for k in keys]
+        s.commit()
+    with r._session() as s:
+        from unittest.mock import patch
+        d={"project_id":"test.admission.4c1029697ee358715d3a14a2","graph_identifier":"test.strategy.expanding_z_impulse","graph_version":1,"content_address":admission["graph_address"],"admission_address":admission["admission_address"],"decision":"approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=d):
+            for row in rows:
+                paper_authority.activate(s, row.id, revision=row.revision, owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        s.commit()
+    r.refresh_paper_authority()
 
 
 def _cheap_keys(n: int = 3, lo: float = 100.0, hi: float = 1500.0) -> list[str]:
@@ -43,6 +64,7 @@ def test_intraday_equity_trades_end_to_end():
     r.armed = True
     r.params["intraday_enabled"] = True
     r.params["notify_enabled"] = False
+    _admit(r, keys)
 
     saw_open = False
     max_open = 0
@@ -95,6 +117,7 @@ def test_intraday_entry_prices_at_live_spot_not_stale_candle_close():
     r.params["intraday_enabled"] = True
     r.params["notify_enabled"] = False
     r.params["entry_order_mode"] = "LIMIT"
+    _admit(r, [key])
 
     candle_close = r.provider._candles[key][r.provider._cursor].close
     live_spot = round(candle_close * 0.90, 2)        # a 10% gap down since the candle closed
@@ -132,8 +155,9 @@ def test_equity_intraday_equity_uses_margin_not_notional():
     inst = get_instrument(_cheap_keys(1)[0])
     price = r.provider._candles[inst.key][r.provider._cursor].close
     qty = int(50000 / price)                      # ~₹50k notional -> ~₹10k margin at 5x
+    admission = persist_admitted_entry(r.broker.s)
     r.broker.open_equity_position(inst, "SHORT", price, qty, "NSE_INTRADAY",
-                                  "t", r.provider.now(), params=r.params)
+                                  "t", r.provider.now(), params=r.params, **admission)
     cap = r.capital_dict()
     # cash (~₹40k) + margin (~₹10k) + ~0 unrealized ≈ ₹50k — NOT ₹50k + full notional
     assert abs(cap["equity"] - 50000.0) < 2000.0
@@ -151,8 +175,9 @@ def test_lockstep_ratchets_both_sl_and_tp_on_an_open_position():
     inst = get_instrument(_cheap_keys(1)[0])
     price = r.provider._candles[inst.key][r.provider._cursor].close
     qty = int(50000 / price)
+    admission = persist_admitted_entry(r.broker.s)
     pos = r.broker.open_equity_position(inst, "LONG", price, qty, "NSE_INTRADAY",
-                                        "t", r.provider.now(), params=r.params)
+                                        "t", r.provider.now(), params=r.params, **admission)
     base_stop, base_target = pos.stop_price, pos.target_price
     margin = pos.entry_cost - pos.entry_charges
     pos.last_premium = price + (0.06 * margin) / qty    # +6% of margin = 3 lockstep steps

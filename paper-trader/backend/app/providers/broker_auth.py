@@ -90,20 +90,14 @@ class KiteAuthenticator:
     """
 
     def _client(self, api_key: str):
-        """`SafePaperKite`, not a bare `KiteConnect`.
+        """Use the dedicated DATA transport, never a broad provider client.
 
-        Caught by `tests/test_safe_kite_construction_invariant.py`, which is right: this class
-        calls only `login_url` and `generate_session` and places no order, but a raw
-        `KiteConnect` *could*, and that invariant is about the type rather than the call. The
-        live order path uses `LiveExecutionKite`, a named subclass reviewed as an execution
-        seam; an authenticator is not one and must not hold an object that can trade.
-
-        Nothing is given up. `api.token` is on `safe_kite.ALLOWED_ROUTES` — the session exchange
-        is a legitimate read of the auth lifecycle — so the login flow works while the object
-        refuses `place_order` at both the named-method and transport layers.
+        The login URL is local string construction. The one-time exchange may use
+        only ``api.token``. Every account, portfolio, order, GTT, margin,
+        mutation and unknown route is refused at the transport chokepoint.
         """
-        from app.providers.safe_kite import SafePaperKite
-        return SafePaperKite(api_key=api_key)
+        from app.providers.zerodha_data_runtime import ZerodhaDataKite
+        return ZerodhaDataKite(api_key=api_key)
 
     def login_url(self, secrets: dict) -> str:
         (api_key,) = _required(secrets, "api_key")

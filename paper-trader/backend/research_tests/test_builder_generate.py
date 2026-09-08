@@ -129,6 +129,23 @@ def test_generated_enqueue_persists_owner_scoped_receipts_before_worker_io(
     assert receipt.graph_address == descriptors[0]["graph_content_address"]
 
 
+def test_generated_descriptors_do_not_commit_or_rollback_caller_writes(
+        research_session, inst_factory):
+    """Descriptor durability must not claim ownership of the caller's unit of work."""
+    from research.domain.models import ResearchProgram
+    from research.orchestrator.generate import generated_descriptors
+
+    pending = ResearchProgram(owner_id=OWNER_ID, name="caller-owned", status="draft")
+    research_session.add(pending)
+    with pytest.raises(RuntimeError, match="caller session without pending writes"):
+        generated_descriptors(
+            research_session, [inst_factory("GOLDM")], "day", owner_id=OWNER_ID,
+            limit=1, seed=7, git_commit="build-a", provider_mode="mock",
+        )
+
+    assert pending in research_session.new
+
+
 def test_completed_generated_operation_items_need_no_provider_read(
         research_session, inst_factory):
     """A reclaimed generated operation may finish from receipts without data I/O."""
@@ -235,9 +252,12 @@ def test_generated_work_does_not_execute_legacy_build_strategy(
     assert len(reports) == 1
 
 
-@pytest.mark.parametrize("field", ("graph", "admission_address"))
+@pytest.mark.parametrize(("field", "expected_refusal"), (
+    ("graph", "graph|identity"),
+    ("admission_address", "RECEIPT_STALE"),
+))
 def test_durable_generated_authority_mismatch_refuses_before_provider_io(
-        research_session, inst_factory, field):
+        research_session, inst_factory, field, expected_refusal):
     """Hypothesis 5: a forged durable graph or receipt reaches provider-backed research."""
     from research.orchestrator.generate import generated_descriptors
 
@@ -252,7 +272,7 @@ def test_durable_generated_authority_mismatch_refuses_before_provider_io(
         descriptors[0]["graph"] = {**descriptors[0]["graph"], "identifier": "forged.graph"}
     else:
         descriptors[0]["admission_address"] = "sha256:" + "0" * 64
-    with pytest.raises(RuntimeError, match="graph|admission|identity"):
+    with pytest.raises(RuntimeError, match=expected_refusal):
         run_generated(
             research_session, PoisonSource(), [inst_factory("GOLDM")], "day",
             owner_id=OWNER_ID, limit=1, git_commit="build-a", claim_guard=lambda: None,

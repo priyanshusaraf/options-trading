@@ -20,6 +20,9 @@ from app.core.instruments import get_instrument
 from app.db.models import Trade
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from tests.admitted_entry import persist_admitted_entry
 
 NOW = dt.datetime(2026, 8, 3, 11, 0)
 
@@ -33,6 +36,19 @@ def runner(monkeypatch, give_futures_price_feed):
     cap.initial_capital = 1_000_000.0
     cap.cash = 1_000_000.0
     r.broker.s.commit()
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as s:
+        row = paper_authority.stage(s, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id); s.commit()
+    with r._session() as s:
+        from unittest.mock import patch
+        d={"project_id":"test.admission.4c1029697ee358715d3a14a2","graph_identifier":"test.strategy.expanding_z_impulse","graph_version":1,"content_address":admission["graph_address"],"admission_address":admission["admission_address"],"decision":"approved"}
+        with patch.object(paper_authority, "verified_decision", return_value=d):
+            paper_authority.activate(s, row.id, revision=row.revision, owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        s.commit()
+    r.refresh_paper_authority()
     r.params = {**r.params, "index_futures_enabled": True,
                 "index_futures_max_positions": 1,
                 "index_futures_max_margin": 250_000.0,
@@ -73,6 +89,7 @@ def test_the_full_lifecycle_keeps_the_ledger_exact(runner, monkeypatch, give_fut
     assert _drift(runner) == pytest.approx(0.0, abs=1e-6), "entry broke the invariant"
 
     pos = _futs(runner)[0]
+    assert pos.entry_intent_id is not None
     give_futures_price_feed(runner.provider,
                            lambda inst, expiry: 24_120.0)
     runner._mark_exit_futures(pos, "NIFTY", NOW, {}, {"NIFTY": pos})

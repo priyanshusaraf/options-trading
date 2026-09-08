@@ -14,6 +14,7 @@ import pytest
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _live_runner(monkeypatch, minutes_to_close: int = 5):
@@ -35,7 +36,8 @@ def _open_small_holdable(r):
     chain = r.provider.get_option_chain(inst)
     q = chain.quotes[0]
     day0 = dt.datetime(2026, 6, 1, 10, 0)
-    pos = r.broker.open_position(inst, "LONG", q, "t", day0, chain.spot)
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(inst, "LONG", q, "t", day0, chain.spot, **admission)
     pos.entry_cost = 2000.0                       # ~4% of capital -> auto-hold
     pos.expiry = dt.date(2026, 7, 1)              # far from any expiry cliff
     r.broker.commit()

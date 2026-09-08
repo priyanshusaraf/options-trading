@@ -1,0 +1,57 @@
+{
+  "schema": "kleppmann-pdf-review-ledger/1",
+  "reviewed_on": "2026-08-29",
+  "review_owner": "kleppmann-corpus-artifacts-and-ddia2e",
+  "sources": [
+    {
+      "source_id": "kh-07e6b7529f7d28e0",
+      "url": "https://www.cl.cam.ac.uk/teaching/2122/ConcDisSys/dist-sys-notes.pdf",
+      "title": "Distributed Systems",
+      "pages": 91,
+      "sha256": "4a754e36358948d4f98cb26fb8ecd44d868024d3bb0f26db30851158ddea3064",
+      "license": "CC BY-SA 4.0 through the author course page; page 1 states CC BY-SA",
+      "text_review": "all pages",
+      "direct_visual_review": "all page-ordered renders, including 34 embedded image objects",
+      "receipt": ".agent/runs/kleppmann-corpus-artifacts-and-ddia2e/root/pdf-review/cambridge-distributed-systems-notes/page-inspection.json"
+    },
+    {
+      "source_id": "k-96f7338d6426dbcd",
+      "url": "https://martin.kleppmann.com/papers/stream-processing.pdf",
+      "title": "Making Sense of Stream Processing",
+      "pages": 183,
+      "sha256": "13793a2c25d6f707e91dfc17884eebc8cc9fc69473156c3ab851ca73117572b2",
+      "license": "Copyright 2016 O'Reilly Media; all rights reserved",
+      "text_review": "all pages",
+      "direct_visual_review": "all page-ordered renders, including 130 embedded image objects",
+      "receipt": ".agent/runs/kleppmann-corpus-artifacts-and-ddia2e/root/pdf-review/making-sense-stream-processing/page-inspection.json"
+    },
+    {
+      "source_id": "k-c2f74626fea7463a",
+      "url": "https://martin.kleppmann.com/papers/olep-acm-queue.pdf",
+      "title": "Online Event Processing",
+      "pages": 21,
+      "sha256": "f4b10a04ab4408e99d317ec2ee1d44efa991af1396856f12c8b188c8393fde79",
+      "license": "Copyright 2019 owner/authors; publication rights licensed to ACM",
+      "text_review": "all pages",
+      "direct_visual_review": "all page-ordered renders, including 48 embedded image objects",
+      "receipt": ".agent/runs/kleppmann-corpus-artifacts-and-ddia2e/root/pdf-review/online-event-processing/page-inspection.json"
+    },
+    {
+      "source_id": "k-65b4d75bfc743a27",
+      "url": "https://martin.kleppmann.com/papers/local-first.pdf",
+      "title": "Local-First Software: You Own Your Data, in spite of the Cloud",
+      "pages": 25,
+      "sha256": "60c6e47c3b648fbe73c1613f28251bd5c3f4c3ecd534127653684ee3194c9aa2",
+      "license": "ACM personal/classroom copying notice; other reuse requires permission",
+      "text_review": "all pages",
+      "direct_visual_review": "all page-ordered renders, including 25 embedded image objects",
+      "receipt": ".agent/runs/kleppmann-corpus-artifacts-and-ddia2e/root/pdf-review/local-first-software/page-inspection.json"
+    }
+  ],
+  "totals": {
+    "pdfs": 4,
+    "pages": 320,
+    "embedded_image_objects": 237
+  },
+  "nonclaim": "Rendered, extracted and inspected are distinct states. This ledger records direct review only for these four PDFs and does not close the remaining corpus."
+}

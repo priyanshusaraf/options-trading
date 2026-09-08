@@ -32,6 +32,8 @@ class StrategyExplanation:
 def _display_name(strategy_key: str) -> str:
     try:
         from research.evaluation import kernels
+        if strategy_key not in kernels.strategy_keys():
+            return strategy_key
         return kernels.get_strategy(strategy_key).display_name or strategy_key
     except Exception:
         return strategy_key
@@ -105,20 +107,21 @@ _AUTHORED = {
 }
 
 
-def explain(strategy_key: str, params: dict | None) -> StrategyExplanation:
+def explain(strategy_key: str, params: dict | None, *, display_name: str | None = None) -> StrategyExplanation:
     """Build a faithful explanation for `strategy_key` with `params` interpolated."""
     params = params or {}
+    name = _display_name(strategy_key) if display_name is None else display_name
     primitives = list(definition(strategy_key).primitives)
     authored = _AUTHORED.get(strategy_key)
     if authored is None:
         detail = (f"Parameters used: {params}." if params
                   else "No parameters were recorded for this run.")
         return StrategyExplanation(
-            strategy_key=strategy_key, display_name=_display_name(strategy_key),
+            strategy_key=strategy_key, display_name=name,
             thesis="No structured explanation is registered for this strategy yet.",
             primitives=primitives, rules=[detail],
             caveats="Add an entry to research/strategy/explain.py to describe this strategy.")
     return StrategyExplanation(
-        strategy_key=strategy_key, display_name=_display_name(strategy_key),
+        strategy_key=strategy_key, display_name=name,
         thesis=authored["thesis"], primitives=primitives,
         rules=authored["rules"](params), caveats=authored["caveats"])

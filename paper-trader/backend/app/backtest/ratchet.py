@@ -17,13 +17,51 @@ import math
 import pandas as pd
 
 
-def wilder_atr(df: pd.DataFrame, n: int) -> pd.Series:
-    """Wilder's ATR (RMA of true range) — identical math to the v4 port's _atr."""
+class RiskDataRefusal(ValueError):
+    code = "RISK_ATR_UNAVAILABLE"
+
+
+def require_risk_atr(frame: pd.DataFrame) -> None:
+    entries = frame["longEntry"] | frame["shortEntry"]
+    atr = frame["_ratchet_atr"]
+    usable = atr.gt(0) & atr.map(math.isfinite)
+    if (entries & ~usable).any():
+        raise RiskDataRefusal(
+            "This risk policy requires a positive ATR at entry. "
+            "Use enough complete price history or change the risk policy."
+        )
+
+
+def wilder_atr(df: pd.DataFrame, n: int, *, seed_policy: str = "first_observation") -> pd.Series:
+    """ATR with an explicit seed; the historical default remains unchanged."""
     prev_close = df["close"].shift(1)
     tr = pd.concat([(df["high"] - df["low"]).abs(),
                     (df["high"] - prev_close).abs(),
                     (df["low"] - prev_close).abs()], axis=1).max(axis=1)
-    return tr.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+    if seed_policy == "first_observation":
+        return tr.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+    if seed_policy != "sma":
+        raise ValueError("unsupported ATR seed policy")
+    return _sma_seeded_rma(tr, n)
+
+
+def _sma_seeded_rma(values: pd.Series, n: int) -> pd.Series:
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise ValueError("ATR length must be a positive whole number")
+    result = pd.Series(float("nan"), index=values.index, dtype=float)
+    first = values.iloc[:n].tolist()
+    if len(first) < n or not all(math.isfinite(value) for value in first):
+        return result
+    previous = math.fsum(first) / n
+    result.iloc[n - 1] = previous
+    alpha = 1.0 / n
+    for index in range(n, len(values)):
+        current = values.iloc[index]
+        if not math.isfinite(current):
+            break
+        previous = alpha * current + (1.0 - alpha) * previous
+        result.iloc[index] = previous
+    return result
 
 
 class RatchetState:

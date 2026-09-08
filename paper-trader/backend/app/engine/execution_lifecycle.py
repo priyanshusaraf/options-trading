@@ -92,6 +92,8 @@ class NewExecutionIntent:
     broker_account_id: str
     #: Immutable receipt copied by the final pre-entry boundary. None is legacy only.
     admission_address: str
+    graph_address: str | None = None
+    attribution_state: str = "NON_GRAPH"
     context: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -358,6 +360,14 @@ class ExecutionLifecycleStore:
         from app.ir.schema import is_content_address
         if not is_content_address(request.admission_address):
             raise ValueError("ADMISSION_REQUIRED")
+        from app.strategy.admission import require_attribution_tuple
+        require_attribution_tuple(
+            strategy_key=request.strategy_key,
+            strategy_version=request.strategy_version,
+            graph_address=request.graph_address,
+            admission_address=request.admission_address,
+            attribution_state=request.attribution_state,
+        )
         for attempt in range(3):
             client_intent_id = make_intent_id()
             row = ExecutionIntent(
@@ -383,6 +393,8 @@ class ExecutionLifecycleStore:
                 strategy_key=request.strategy_key,
                 strategy_version=request.strategy_version,
                 admission_address=request.admission_address,
+                graph_address=request.graph_address,
+                attribution_state=request.attribution_state,
                 context_json=_canonical_json(context),
                 fence_epoch=self.fence_epoch,
                 created_at=now,

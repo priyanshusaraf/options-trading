@@ -23,7 +23,8 @@ from app.db.models import (Base, BacktestRun, BrokerAccount, CapitalState,
 from app.ledger import service as ledger_service
 from app.ledger.db import LedgerBase
 from app.ledger.models import LedgerManualFill
-from research.domain.models import ResearchOperation, ResearchOperationEvent
+from research.domain.models import (RESEARCH_OUTBOX_MODELS, ResearchOperation,
+                                    ResearchOperationEvent)
 from research.domain import operations as research_operations
 from research.domain.operations import ResearchOperationRepository
 
@@ -55,6 +56,12 @@ def portable_database(request, tmp_path):
         LedgerBase.metadata.create_all(engine)
         ResearchOperation.__table__.create(engine)
         ResearchOperationEvent.__table__.create(engine)
+        for model in (RESEARCH_OUTBOX_MODELS.StreamHead,
+                      RESEARCH_OUTBOX_MODELS.Event,
+                      RESEARCH_OUTBOX_MODELS.ConsumerCursor,
+                      RESEARCH_OUTBOX_MODELS.ConsumerReceipt,
+                      RESEARCH_OUTBOX_MODELS.RetentionWatermark):
+            model.__table__.create(engine)
         with engine.begin() as connection:
             connection.execute(sa.text("""
                 CREATE TABLE research_operation_item (
@@ -83,12 +90,14 @@ def portable_database(request, tmp_path):
             admin.dispose()
 
 
-def _pending_run(sessions, *, total: int = 1) -> int:
-    with sessions() as session, session.begin():
-        run = repository.enqueue_run(
-            session, owner_id=OWNER, scope="liquid", intervals="day",
-            capital=1.0, total=total)
-        return run.id
+def _pending_run(sessions, admitted_backtest_receipt, *, total: int = 1) -> int:
+    with sessions() as session:
+        receipt = admitted_backtest_receipt(session, owner_id=OWNER)
+        with session.begin():
+            run = repository.enqueue_run(
+                session, owner_id=OWNER, scope="liquid", intervals="day",
+                capital=1.0, total=total, **receipt)
+            return run.id
 
 
 def _race(function):
@@ -112,9 +121,9 @@ def _race(function):
     return outcomes
 
 
-def test_two_sessions_have_one_claim_winner(portable_database):
+def test_two_sessions_have_one_claim_winner(portable_database, admitted_backtest_receipt):
     _dialect, _engine, sessions = portable_database
-    run_id = _pending_run(sessions)
+    run_id = _pending_run(sessions, admitted_backtest_receipt)
     now = dt.datetime(2026, 8, 12, 10)
 
     def claim(label):
@@ -132,9 +141,10 @@ def test_two_sessions_have_one_claim_winner(portable_database):
     assert len({value for _, value in outcomes if value is not None}) == 1
 
 
-def test_takeover_fences_old_token_and_cancellation_fences_new_token(portable_database):
+def test_takeover_fences_old_token_and_cancellation_fences_new_token(
+        portable_database, admitted_backtest_receipt):
     _dialect, _engine, sessions = portable_database
-    run_id = _pending_run(sessions)
+    run_id = _pending_run(sessions, admitted_backtest_receipt)
     started = dt.datetime(2026, 8, 12, 10)
     with sessions() as session:
         begin_reservation(session, scope="backtest:admission")
@@ -324,13 +334,16 @@ def test_research_transactional_receipt_append_is_portable(portable_database):
         assert row.completed_run_ids_json == "[42]"
 
 
-def test_bounded_admission_has_one_winner(portable_database, monkeypatch):
+def test_bounded_admission_has_one_winner(portable_database, monkeypatch,
+                                          admitted_backtest_receipt):
     _dialect, _engine, sessions = portable_database
     limits = SimpleNamespace(
         backtest_host_active_jobs=10, backtest_owner_active_jobs=10,
         backtest_owner_queued_jobs=1, backtest_host_requested_cells=10,
         backtest_host_worker_slots=10)
     monkeypatch.setattr(sweep, "get_settings", lambda: limits)
+    with sessions() as session:
+        receipt = admitted_backtest_receipt(session, owner_id=OWNER)
 
     def admit(label):
         with sessions() as session:
@@ -339,7 +352,7 @@ def test_bounded_admission_has_one_winner(portable_database, monkeypatch):
                 owner_id=OWNER, total=1, workers=1, session=session)
             repository.enqueue_run(
                 session, owner_id=OWNER, scope="liquid", intervals="day",
-                capital=1.0, total=1, note=label)
+                capital=1.0, total=1, note=label, **receipt)
             session.commit()
             return True
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import threading
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -86,6 +85,23 @@ def test_public_payload_rejects_owner_or_run_provenance():
                 session, execution_address="f" * 64, dataset_address="c" * 64,
                 strategy_key="trend_impulse_v3", strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
             policy_address="f" * 64, payload=_payload("f" * 64) | {"owner_id": "a"})
+
+
+@pytest.mark.parametrize("compatibility", [False, True])
+def test_publication_rejects_legacy_identity_and_compatibility_alias(compatibility):
+    from app.backtest.identity import legacy_v1_result_compatibility_receipt
+
+    golden = "0858bfd935682389979abc90658974c93631f29d4263b751e4aa9d1f74bfc166"
+    address = (legacy_v1_result_compatibility_receipt(golden)["compatibility_address"][7:]
+               if compatibility else golden)
+    with pytest.raises(public_computation.PublicComputationIntegrityError, match="legacy"):
+        public_computation.put_immutable(
+            object(), execution_address=address, dataset_address="c" * 64,
+            strategy_key="trend_impulse_v3",
+            strategy_version=public_computation.PUBLIC_STRATEGY_CATALOG["trend_impulse_v3"]["version"],
+            policy_address=address, payload=_payload(address))
+    assert public_computation.maybe_materialize(
+        object(), **_expected(address)) is None
 
 
 def test_concurrent_identical_public_writers_converge_to_one_immutable_payload():
@@ -301,38 +317,43 @@ def test_checked_in_public_catalog_matches_only_checked_in_registry_modules():
         assert public_computation._module_source_digest(strategy) == expected["source_digest"]
 
 
-def test_parallel_admitted_runs_keep_public_payloads_neutral_and_receipt_scoped(monkeypatch):
-    """Admitted runs cannot turn a neutral public payload into a cross-receipt hit."""
+def test_parallel_public_payloads_are_neutral_and_receipt_scoped():
+    """Parallel arithmetic keeps public bytes neutral and receipt-separated.
+
+    This calculation-only seam receives receipt identity after admission.  It
+    deliberately does not fabricate a receipt or replace the persistence gate.
+    """
+    from app.core.instruments import get_instrument
     from app.providers.mock import MockProvider
-    from app.db.models import Organization
+    from app.strategy.registry import get_strategy
+
     init_db(reset=True)
-    with SessionLocal() as session:
-        session.add_all([Organization(organization_id="parallel-a", name="Parallel A"),
-                         Organization(organization_id="parallel-b", name="Parallel B")])
-        session.commit()
     provider = MockProvider()
-    def admitted(_session, *, owner_id, admission_address, **_kwargs):
-        return SimpleNamespace(
-            admission_address=admission_address,
-            strategy=__import__("app.strategy.registry", fromlist=["get_strategy"]).get_strategy(None),
-        )
-    monkeypatch.setattr(sweep.repository, "load_verified_admission", admitted)
+    strategy = get_strategy(None)
+    specs = [get_instrument("NIFTY")]
+    win = {"lookback_days": None, "start": None, "end": None, "label": "max"}
+    attribution = {
+        "strategy_key": strategy.key,
+        "strategy_version": strategy.version,
+        "graph_address": None,
+        "attribution_state": "NON_GRAPH",
+    }
+
+    def compute(owner_id: str, admission_address: str):
+        return list(sweep._cell_values(
+            provider, specs, ["15minute"], 50_000, win, [strategy], None, 2,
+            owner_id=owner_id, admission_address=admission_address,
+            attribution=attribution))
+
     first_receipt = "sha256:" + "3" * 64
     second_receipt = "sha256:" + "4" * 64
-    first = sweep.start_sweep(owner_id="parallel-a", scope="liquid", intervals=["15minute"],
-                              instruments=["NIFTY"], capital=50_000, provider=provider,
-                              workers=2, admission_address=first_receipt)
-    sweep._join()
+    first = compute("parallel-a", first_receipt)
+    assert len(first) == 1 and first[0]["from_cache"] is False
     with SessionLocal() as session:
         rows = list(session.scalars(select(BacktestComputation)))
         assert len(rows) == 1
-    second = sweep.start_sweep(owner_id="parallel-b", scope="liquid", intervals=["15minute"],
-                               instruments=["NIFTY"], capital=50_000, provider=provider,
-                               workers=2, admission_address=second_receipt)
-    sweep._join()
-    from app.db.models import BacktestResult
+    second = compute("parallel-b", second_receipt)
+    assert len(second) == 1 and second[0]["from_cache"] is False
+    assert second[0]["admission_address"] == second_receipt
     with SessionLocal() as session:
-        rows = list(session.scalars(select(BacktestResult).where(BacktestResult.run_id == second)))
-        assert len(rows) == 1 and rows[0].from_cache is False
-        assert rows[0].admission_address == second_receipt
         assert len(list(session.scalars(select(BacktestComputation)))) == 2

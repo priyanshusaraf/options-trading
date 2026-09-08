@@ -20,6 +20,9 @@ from research.domain.admissions import load_admission, store_admission
 from research.orchestrator.run import run_experiment
 from research.strategy.builder.ir_components import BAR_INPUTS
 from research.strategy.builder.ir_strategy import IRGraphStrategy
+from research.data.canonical_dataset import (
+    CanonicalDataset, CanonicalDatasetRefused, canonical_provenance,
+)
 
 
 class GraphBindingRejected(Exception):
@@ -71,6 +74,16 @@ def build_graph_provenance(
             raise
         raise GraphBindingRejected(f"published graph cannot be resolved: {exc}") from exc
 
+    canonical = [isinstance(dataset, CanonicalDataset) for _, dataset in datasets]
+    canonical_binding = None
+    if any(canonical):
+        if not all(canonical):
+            raise GraphBindingRejected("mixed canonical and legacy datasets")
+        try:
+            canonical_binding = canonical_provenance(strategy, datasets)
+        except CanonicalDatasetRefused as exc:
+            raise GraphBindingRejected(str(exc)) from exc
+
     bindings: dict[str, dict[str, str]] = {}
     for _, dataset in datasets:
         bound = record(
@@ -90,7 +103,7 @@ def build_graph_provenance(
             "binding": bound.binding,
         }
 
-    return strategy, {
+    provenance = {
         "graph": {
             "project_id": project_id,
             "identifier": str(graph["identifier"]),
@@ -105,6 +118,9 @@ def build_graph_provenance(
         },
         "dataset_bindings": bindings,
     }
+    if canonical_binding is not None:
+        provenance["canonical_dataset_bindings"] = canonical_binding
+    return strategy, provenance
 
 
 def require_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
@@ -131,13 +147,15 @@ def require_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
         )
     except AdmissionRefused as exc:
         raise GraphAdmissionRejected(exc.code.value) from exc
+    except (ValueError, TypeError, KeyError):
+        raise GraphAdmissionRejected("ARTEFACT_MISMATCH") from None
     return artifact
 
 
-def enqueue_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
-                            graph_content_address: str,
-                            admission_address: str | None):
-    """Copy only a freshly verified owner-local receipt into the research plane."""
+def _prepare_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
+                             graph_content_address: str,
+                             admission_address: str | None):
+    """Verify exact admission without writing; reject a bad existing mirror."""
     decision = admit_strategy(
         owner_id=owner_id,
         source_input=IRGraphAdmissionInput(graph=graph, parameters={}, risk_model=None),
@@ -145,13 +163,30 @@ def enqueue_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
     )
     if decision.artifact is None:
         raise GraphAdmissionRejected(
-            (decision.refusal_code.value if decision.refusal_code else "RECEIPT_STALE")
-        )
+            decision.refusal_code.value if decision.refusal_code else "RECEIPT_STALE")
     artifact = decision.artifact
     if (admission_address != artifact.admission_address
-            or artifact.graph_address != graph_content_address):
+            or artifact.graph_address != graph_content_address
+            or graph_content_address != content_address(graph)):
         raise GraphAdmissionRejected("RECEIPT_STALE")
-    store_admission(session, artifact)
+    if load_admission(session, owner_id=owner_id, admission_address=admission_address) is not None:
+        return require_graph_admission(session, owner_id=owner_id, graph=graph,
+            graph_content_address=graph_content_address, admission_address=admission_address)
+    return artifact
+
+
+def enqueue_graph_admission(session, *, owner_id: str, graph: Mapping[str, Any],
+                            graph_content_address: str,
+                            admission_address: str | None, persist: bool = True):
+    """Prepare exactly one receipt; persistence defaults to the existing behavior."""
+    artifact = _prepare_graph_admission(session, owner_id=owner_id, graph=graph,
+        graph_content_address=graph_content_address, admission_address=admission_address)
+    if not persist:
+        return artifact
+    try:
+        store_admission(session, artifact)
+    except ValueError as exc:
+        raise GraphAdmissionRejected("RECEIPT_STALE") from exc
     return artifact
 
 
@@ -187,10 +222,22 @@ def run_published_graph_experiment(
     )
 
 
+def run_saved_v2_graph_experiment(**operation_context: Any) -> dict[str, Any]:
+    """Run only the closed durable V2 operation path.
+
+    Kept as a distinct entry point so the legacy request/loader/strategy remains
+    observable and cannot fall through into V2 behavior.
+    """
+    from research.orchestrator.v2_operation import execute_v2_graph_operation
+
+    return execute_v2_graph_operation(**operation_context)
+
+
 __all__ = [
     "GraphBindingRejected",
     "GraphAdmissionRejected",
     "build_graph_provenance",
     "enqueue_graph_admission",
     "run_published_graph_experiment",
+    "run_saved_v2_graph_experiment",
 ]

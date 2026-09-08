@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review the dependencies actually shipped"
+  short_description: "Audit shipped dependencies, licences and provenance"
+  default_prompt: "Use $dependency-license-sbom for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

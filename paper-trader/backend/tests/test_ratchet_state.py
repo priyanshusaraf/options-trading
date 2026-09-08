@@ -82,3 +82,27 @@ def test_wilder_atr_matches_v4_port_atr():
     expected = _atr(df["high"], df["low"], df["close"], 3)
     got = wilder_atr(df, 3)
     pd.testing.assert_series_equal(got, expected, check_names=False)
+
+
+
+def test_explicit_sma_atr_policy_preserves_the_historical_default():
+    frame = pd.DataFrame({"high": [12., 14., 18., 20.], "low": [10., 10., 10., 10.], "close": [11., 11., 11., 11.]})
+    legacy = wilder_atr(frame, 3)
+    pine = wilder_atr(frame, 3, seed_policy="sma")
+    assert pine.iloc[:2].isna().all()
+    assert pine.iloc[2] == pytest.approx(14. / 3.)
+    assert pine.iloc[3] == pytest.approx((2. / 3.) * (14. / 3.) + 10. / 3.)
+    assert legacy.iloc[2] == pytest.approx(40. / 9.)
+    assert legacy.iloc[2] != pytest.approx(pine.iloc[2])
+    pd.testing.assert_series_equal(pine.iloc[:3], wilder_atr(frame.iloc[:3], 3, seed_policy="sma"))
+    with pytest.raises(ValueError, match="seed policy"):
+        wilder_atr(frame, 3, seed_policy="unknown")
+
+
+def test_sma_risk_policy_refuses_entry_without_positive_atr():
+    from app.backtest.ratchet import RiskDataRefusal, require_risk_atr
+    frame = pd.DataFrame({"longEntry": [False, True], "shortEntry": [False, False], "_ratchet_atr": [float('nan'), 0.]})
+    with pytest.raises(RiskDataRefusal, match="positive ATR"):
+        require_risk_atr(frame)
+    frame.loc[1, "_ratchet_atr"] = 2.
+    require_risk_atr(frame)

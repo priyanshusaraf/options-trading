@@ -15,9 +15,9 @@ def _strat(rm):
                            default_params={"ema_length": 50}, risk_model=rm)
 
 
-def test_schema_version_is_8():
-    # v8 makes the exact dataset and execution manifest the reusable identity.
-    assert SCHEMA_VERSION == 8
+def test_schema_version_is_9():
+    # v9 also binds the verified Phase 4 authority chain to reusable identity.
+    assert SCHEMA_VERSION == 9
 
 
 def test_risk_model_changes_signature():

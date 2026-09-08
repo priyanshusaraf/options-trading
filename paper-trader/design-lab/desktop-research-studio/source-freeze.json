@@ -1,0 +1,20 @@
+{
+  "sha256": {
+    "index.html": "7bf5c5d2cd73d9eb7f809d968463e7eab3c66e9ac946438ba0b56361dd7bec4a",
+    "studio.css": "480717e35026b342cfa575c082fa2eb19d16ad624e1dadbca2ba414262605cb1",
+    "studio.js": "a1c52841f60ac458ffc3e8b99e179c7394ad2b8c68e5bce2934729736dd9185b",
+    "history.js": "3cac3fa50a5197975990767af0e6eceed5ec01597298eb9e2e85ece039a5da29",
+    "check.cjs": "b3a5cd6f03e6377bda67b876d22b2ac147ab4fad9a474497fd3c63a06fe88a56",
+    "README.md": "f7db2cf79cb91262839a42ae88126c3c76f5168c6f64dd532a4e98fa65a1f278",
+    "vendor/lightweight-charts-4.2.3.js": "c7dda807d662a95b3d257119ed315cec669e3bdf5aaece75c480a39307f23540",
+    "vendor/LICENSE": "70c9d5382506dd184465425c08a99ad9bd6d9ac1313c252968ba0b585e5ef823",
+    "vendor/NOTICE": "abc27138c4ede6cd6d5cdebffb36ad211f8252d2f83ddb5c7aa9cc3a3101a5e2"
+  },
+  "lightweightCharts": {
+    "version": "4.2.3",
+    "resolved": "https://registry.npmjs.org/lightweight-charts/-/lightweight-charts-4.2.3.tgz",
+    "integrity": "sha512-5kS/2hY3wNYNzhnS8Gb+GAS07DX8GPF2YVDnd2NMC85gJVQ6RLU6YrXNgNJ6eg0AnWPwCnvaGtYmGky3HiLQEw==",
+    "localSource": "paper-trader/frontend/node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js",
+    "localSourceSha256": "c7dda807d662a95b3d257119ed315cec669e3bdf5aaece75c480a39307f23540"
+  }
+}

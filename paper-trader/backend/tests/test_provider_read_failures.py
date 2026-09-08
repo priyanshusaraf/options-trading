@@ -60,6 +60,7 @@ def _provider(**kw) -> KiteProvider:
     from app.core.logging import WarnGate
 
     p = KiteProvider.__new__(KiteProvider)
+    p._strict_data_runtime = False
     p.kite = _Kite(**kw)
     p.s = None
     p.api_key = p.api_secret = p.access_token = "fake"
@@ -109,7 +110,9 @@ def test_a_resolvable_instrument_with_bars_is_unaffected():
     rows = [{"date": start + dt.timedelta(minutes=15 * i), "open": 24000.0 + i,
              "high": 24006.0 + i, "low": 23996.0 + i, "close": 24002.0 + i,
              "volume": 15000} for i in range(6)]
-    bars = _provider(history=rows).get_candles(NIFTY, "15minute", 30)
+    provider = _provider(history=rows)
+    provider.now = lambda: dt.datetime(2026, 8, 3, 10, 30)
+    bars = provider.get_candles(NIFTY, "15minute", 30)
     assert len(bars) == 5, "the still-forming bar is still dropped"
     assert all(b.ts.tzinfo is None for b in bars), "IST wall-clock is still stripped"
 

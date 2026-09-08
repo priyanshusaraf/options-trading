@@ -24,8 +24,9 @@ becomes tempting.
 """
 from __future__ import annotations
 
+import io
 import pathlib
-import re
+import tokenize
 
 import pandas as pd
 import pytest
@@ -53,6 +54,13 @@ PROVENANCE_NAMES = (
 
 # Where execution happens. The clause is about *executor* paths.
 EXECUTOR_DIRS = ("engine", "backtest", "strategy")
+# The admission AUTHORITY GATE lives under app/strategy since Phase 3 but is
+# not an executor path: examining provenance is its entire job, and the engine
+# consumes only its verdict (the same perimeter decision the L1 wiring recorded
+# for app/core/execution_binding).  It is excluded by name, and the exclusion
+# is compensated below by a direction check: admission must never import the
+# engine, so no provenance concept can leak INTO execution through it.
+AUTHORITY_GATES = {"strategy/admission.py"}
 
 
 def _python_files():
@@ -61,8 +69,12 @@ def _python_files():
 
 
 def _provenance_hits(text: str) -> list[str]:
-    return [name for name in PROVENANCE_NAMES
-            if re.search(rf"\b{re.escape(name)}\b", text)]
+    identifiers = {
+        token.string
+        for token in tokenize.generate_tokens(io.StringIO(text).readline)
+        if token.type == tokenize.NAME
+    }
+    return [name for name in PROVENANCE_NAMES if name in identifiers]
 
 
 # ── the subtractive property: there is nothing to branch on ───────────────
@@ -72,9 +84,12 @@ def test_no_executor_module_names_a_provenance_concept():
     the allowlist — it is to ask why execution needs to know."""
     offenders = {}
     for path in _python_files():
+        rel = str(path.relative_to(APP))
+        if rel in AUTHORITY_GATES:
+            continue
         hits = _provenance_hits(path.read_text())
         if hits:
-            offenders[str(path.relative_to(APP))] = hits
+            offenders[rel] = hits
     assert offenders == {}, (
         f"C13: executor paths must not branch on provenance — {offenders}")
 
@@ -84,7 +99,13 @@ def test_the_provenance_detector_can_go_red(tmp_path):
     a guard. Prove the detector fires before trusting that it did not."""
     assert _provenance_hits("if strategy.is_marketplace:\n    fee = 0.1\n") == [
         "is_marketplace"]
+    assert _provenance_hits("if strategy.provenance:\n    fee = 0.1\n") == [
+        "provenance"]
     assert _provenance_hits("source = compose(blocks)\n") == []
+    assert _provenance_hits(
+        "# input provenance is authority evidence\n"
+        "detail = 'provenance cycle'\n"
+    ) == []
 
 
 def test_the_strategy_contract_declares_no_provenance_field():
@@ -95,11 +116,28 @@ def test_the_strategy_contract_declares_no_provenance_field():
 
 
 def test_there_is_exactly_one_registry():
-    """ComfyUI's subtractive route: one registry, no plugin API. Two registries
-    is how a second resolution path — and therefore a branch — gets in."""
-    stores = [n for n, v in vars(registry).items()
-              if isinstance(v, dict) and n.upper().endswith("REGISTRY")]
-    assert stores == ["_REGISTRY"]
+    """ComfyUI's subtractive route: one registry, no plugin API. The invariant
+    is ONE RESOLUTION PATH, not one dict: multi-tenant generated strategies
+    need an owner-partitioned store, so exactly two DECLARED containers are
+    allowed — the static registry and the (owner, key) generated partition —
+    and any third container fails here.  The path itself is pinned by the
+    sweep below: nothing outside the registry package may touch either
+    container directly, so every lookup flows through resolve_strategy."""
+    stores = sorted(n for n, v in vars(registry).items()
+                    if isinstance(v, dict) and n.upper().endswith("REGISTRY"))
+    assert set(stores) == {"_GENERATED_REGISTRY", "_REGISTRY"}, stores
+
+    offenders = {}
+    for path in _python_files():
+        text = path.read_text()
+        for container in ("_GENERATED_REGISTRY", "_REGISTRY"):
+            if container in text:
+                rel = str(path.relative_to(APP))
+                if not rel.startswith("strategy/registry"):
+                    offenders.setdefault(rel, []).append(container)
+    assert offenders == {}, (
+        "a second resolution path: containers touched outside the registry "
+        f"package — {offenders}")
 
 
 # ── the behavioural property: origin changes nothing observable ───────────

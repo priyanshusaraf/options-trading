@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -9,11 +10,22 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENT_GUARD = ROOT / ".codex" / "hooks" / "agent_guard.py"
 COMPACTION_GUARD = ROOT / ".codex" / "hooks" / "compaction_guard.py"
+PONYTAIL_GUARD = ROOT / ".codex" / "hooks" / "ponytail_review_guard.py"
+
+
+def load_ponytail_guard():
+    spec = importlib.util.spec_from_file_location("ponytail_review_guard", PONYTAIL_GUARD)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load Ponytail guard")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def capsule_text(assignments: list[dict], *, budget: int | None = None) -> str:
@@ -138,6 +150,79 @@ class HookTestCase(unittest.TestCase):
         self.assertIn(phrase.lower(), decision["permissionDecisionReason"].lower())
 
 
+class PonytailReviewGuardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.guard = load_ponytail_guard()
+
+    def test_commit_diff_contains_only_staged_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            path = repo / "sample.txt"
+            path.write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "sample.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+            path.write_text("staged\n", encoding="utf-8")
+            subprocess.run(["git", "add", "sample.txt"], cwd=repo, check=True)
+            path.write_text("unstaged\n", encoding="utf-8")
+
+            diff, scope = self.guard.commit_diff(repo)
+
+            self.assertIn(b"+staged", diff)
+            self.assertNotIn(b"unstaged", diff)
+            self.assertIn("staged changes", scope)
+
+    def test_review_runner_uses_ephemeral_read_only_codex_and_reads_result(self) -> None:
+        def fake_runner(command, **kwargs):
+            result_path = Path(command[command.index("-o") + 1])
+            result_path.write_text(self.guard.LEAN, encoding="utf-8")
+            self.assertIn("--ephemeral", command)
+            self.assertIn("read-only", command)
+            self.assertIn(b"diff", kwargs["input"])
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        with (
+            mock.patch.object(self.guard, "codex_path", return_value="/bin/echo"),
+            mock.patch.object(self.guard.subprocess, "run", side_effect=fake_runner),
+        ):
+            review = self.guard.run_review(b"diff", "test scope")
+
+        self.assertEqual(review, self.guard.LEAN)
+
+    def test_native_git_hooks_call_the_shared_guard(self) -> None:
+        for name, action in (("pre-commit", "commit"), ("pre-push", "push")):
+            hook = ROOT / ".githooks" / name
+            self.assertTrue(hook.is_file())
+            content = hook.read_text(encoding="utf-8")
+            self.assertIn("ponytail_review_guard.py", content)
+            self.assertIn(action, content)
+
+    def test_git_hooks_skip_ai_review_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fake_git = Path(directory) / "git"
+            fake_git.write_text('#!/bin/sh\n[ "$*" = "diff --cached --check" ]\n')
+            fake_git.chmod(0o755)
+            for name in ("pre-commit", "pre-push"):
+                result = subprocess.run(
+                    ["/bin/sh", str(ROOT / ".githooks" / name)],
+                    env={"PATH": directory}, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+
+    def test_finding_denies_commit_before_git_runs(self) -> None:
+        with (
+            mock.patch.object(self.guard.sys, "argv", [str(PONYTAIL_GUARD), "commit"]),
+            mock.patch.object(self.guard, "git_root", return_value=ROOT),
+            mock.patch.object(self.guard, "commit_diff", return_value=(b"diff", "staged changes")),
+            mock.patch.object(self.guard, "run_review", return_value="L1: shrink: extra layer. Inline it.\nnet: -3 lines possible."),
+        ):
+            self.assertEqual(self.guard.main(), 1)
+
+
 class AgentGuardTests(HookTestCase):
     def test_script_exists(self) -> None:
         self.assertTrue(AGENT_GUARD.is_file(), f"missing {AGENT_GUARD}")
@@ -157,6 +242,57 @@ class AgentGuardTests(HookTestCase):
         result = subprocess.run([sys.executable, str(AGENT_GUARD)], input=json.dumps(self.agent_payload("worker-1")), text=True, capture_output=True, env=env, cwd=repo, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
+
+    def test_implicit_historical_capsule_does_not_veto_direct_assignment(self) -> None:
+        repo = self.base / "repo"
+        capsule = repo / "paper-trader" / "docs" / "agent" / "capsules" / "slice.md"
+        capsule.parent.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        capsule.write_text(capsule_text([assignment("capsule-worker", "src/one")]))
+        self.capsule.write_text(capsule.read_text())
+        current = repo / "paper-trader" / "docs" / "agent" / "CURRENT.md"
+        current.write_text("---\n" + json.dumps({"active_capsule": "paper-trader/docs/agent/capsules/slice.md"}) + "\n---\n")
+
+        direct = self.run_hook(
+            AGENT_GUARD,
+            self.agent_payload("direct-parent-workstream"),
+            repo=repo,
+            capsule_override=False,
+        )
+        explicit = self.run_hook(
+            AGENT_GUARD,
+            self.agent_payload("direct-parent-workstream", session="explicit"),
+            repo=repo,
+        )
+
+        self.assertEqual(direct.returncode, 0, direct.stderr)
+        self.assertEqual(direct.stdout, "")
+        self.assert_denied(explicit, "assignment is not declared in capsule")
+
+        capsule.unlink()
+        missing = self.run_hook(
+            AGENT_GUARD,
+            self.agent_payload("direct-parent-workstream", session="missing"),
+            repo=repo,
+            capsule_override=False,
+        )
+        current.write_text("invalid current metadata")
+        malformed = self.run_hook(
+            AGENT_GUARD,
+            self.agent_payload("direct-parent-workstream", session="malformed"),
+            repo=repo,
+            capsule_override=False,
+        )
+        self.capsule.unlink()
+        explicit_missing = self.run_hook(
+            AGENT_GUARD,
+            self.agent_payload("direct-parent-workstream", session="explicit-missing"),
+            repo=repo,
+        )
+
+        self.assertEqual(missing.stdout, "", missing.stderr)
+        self.assertEqual(malformed.stdout, "", malformed.stderr)
+        self.assert_denied(explicit_missing, "invalid capsule")
 
     def test_allows_five_declared_clean_workers_and_rejects_a_sixth(self) -> None:
         if not AGENT_GUARD.exists():
@@ -737,7 +873,7 @@ class CompactionGuardTests(HookTestCase):
     def test_script_exists(self) -> None:
         self.assertTrue(COMPACTION_GUARD.is_file(), f"missing {COMPACTION_GUARD}")
 
-    def test_warns_on_first_auto_compaction_and_stops_second(self) -> None:
+    def test_repeated_auto_compaction_allows_work_without_state(self) -> None:
         if not COMPACTION_GUARD.exists():
             self.skipTest("compaction guard not implemented")
         payload = {
@@ -747,14 +883,13 @@ class CompactionGuardTests(HookTestCase):
         }
         first = self.run_hook(COMPACTION_GUARD, payload)
         self.assertEqual(first.returncode, 0, first.stderr)
-        first_body = json.loads(first.stdout)
-        self.assertTrue(first_body["continue"])
-        self.assertIn("first automatic compaction", first_body["systemMessage"].lower())
-
         second = self.run_hook(COMPACTION_GUARD, payload)
-        second_body = json.loads(second.stdout)
-        self.assertFalse(second_body["continue"])
-        self.assertIn("fresh task", second_body["stopReason"].lower())
+        for result in (first, second):
+            body = json.loads(result.stdout)
+            self.assertTrue(body["continue"])
+            self.assertIn("working-plan", body["systemMessage"].lower())
+            self.assertIn("actual state", body["systemMessage"].lower())
+        self.assertEqual(list(self.state.iterdir()), [])
 
     def test_manual_compaction_does_not_consume_auto_budget(self) -> None:
         if not COMPACTION_GUARD.exists():
@@ -770,15 +905,17 @@ class CompactionGuardTests(HookTestCase):
         first_auto = self.run_hook(COMPACTION_GUARD, automatic)
         self.assertTrue(json.loads(first_auto.stdout)["continue"])
 
-    def test_defaults_state_under_discovered_git_root(self) -> None:
-        repo = self.base / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        env = os.environ.copy()
-        env.pop("STRATEGY_OS_AGENT_STATE_DIR", None)
-        result = subprocess.run([sys.executable, str(COMPACTION_GUARD)], input=json.dumps({"session_id": "default", "trigger": "auto"}), text=True, capture_output=True, cwd=repo, env=env, check=False)
-        self.assertTrue(json.loads(result.stdout)["continue"])
-        self.assertTrue((repo / ".git" / "codex-agent-state").is_dir())
+    def test_malformed_payload_is_a_no_op(self) -> None:
+        for payload in ("not json", "[]"):
+            result = subprocess.run(
+                [sys.executable, str(COMPACTION_GUARD)],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":

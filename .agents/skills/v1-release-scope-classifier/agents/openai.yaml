@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Classify release scope"
+  short_description: "Classify release scope without granting authority"
+  default_prompt: "Use $v1-release-scope-classifier for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

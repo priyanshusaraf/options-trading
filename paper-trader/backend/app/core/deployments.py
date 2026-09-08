@@ -178,6 +178,8 @@ def active_deployments(session, *, owner_id: str,
 
 def create_deployment(session, name: str, *, strategy_key: str | None = None,
                       strategy_version: str | None = None,
+                      graph_address: str | None = None,
+                      attribution_state: str | None = None,
                       admission_address: str | None = None,
                       owner_id: str, broker_account_id: str,
                       universe_mode: str = "explicit",
@@ -194,8 +196,17 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     admitted = _require_current_deployment_admission(
         session, owner_id=owner_id, strategy_key=strategy_key,
         admission_address=admission_address, params=params)
-    if strategy_version is not None and strategy_version != admitted.strategy.version:
-        raise ValueError("ARTEFACT_MISMATCH")
+    from app.strategy.admission import (
+        GRAPH_ATTRIBUTION_MISMATCH, VERIFIED_GRAPH, require_attribution_tuple,
+    )
+    require_attribution_tuple(
+        strategy_key=strategy_key, strategy_version=strategy_version,
+        graph_address=graph_address, admission_address=admission_address,
+        attribution_state=attribution_state)
+    if (strategy_version != admitted.strategy.graph_version_label
+            or graph_address != admitted.strategy.version
+            or attribution_state != VERIFIED_GRAPH):
+        raise ValueError(GRAPH_ATTRIBUTION_MISMATCH)
     if not _account_belongs_to_owner(
             session, owner_id=owner_id, broker_account_id=broker_account_id):
         raise ValueError("broker account is not available to this owner")
@@ -210,7 +221,8 @@ def create_deployment(session, name: str, *, strategy_key: str | None = None,
     row = Deployment(
         owner_id=owner_id, broker_account_id=broker_account_id,
         name=name, strategy_key=strategy_key,
-        strategy_version=(admitted.strategy.version if admitted else strategy_version),
+        strategy_version=strategy_version,
+        graph_address=graph_address, attribution_state=attribution_state,
         admission_address=(admitted.admission_address if admitted else None),
         universe_mode=universe_mode, watchlist_id=watchlist_id,
         params_json=json.dumps(params or {}), allocation=allocation,
@@ -334,15 +346,17 @@ def resolve_deployment_strategy(session, deployment_id: int, *, owner_id: str,
     failing open means a strategy that fails to load trades the platform's default
     with the customer's capital, while the trade rows claim it was theirs.
 
-    So a deployment that pins a strategy resolves it strictly and raises
-    `StrategyNotFound` if it is not registered. The caller's job is to halt that
-    deployment, not to substitute something else.
+    So a deployment that pins a handwritten or generated strategy resolves it strictly
+    and raises `StrategyNotFound` if it is not registered. An IR deployment instead
+    reconstructs its exact owner-scoped immutable admission. The caller's job is to halt
+    either deployment when its named identity cannot be verified, never to substitute
+    something else.
 
     Returns None for `strategy_key=None` — that is the legacy deployment, which
     resolves per instrument by design and pins nothing. None here means "not
     applicable", never "not found"; the two are separate outcomes on purpose.
     """
-    from app.strategy.registry import resolve_strategy
+    from app.strategy.registry import IR_NAMESPACE, resolve_strategy
 
     row = get_deployment(session, deployment_id, owner_id=owner_id,
                          broker_account_id=broker_account_id)
@@ -350,6 +364,28 @@ def resolve_deployment_strategy(session, deployment_id: int, *, owner_id: str,
         raise ValueError(f"no deployment with id {deployment_id}")
     if row.strategy_key is None:
         return None
+    if row.strategy_key.startswith(IR_NAMESPACE):
+        # A generic deployment names an immutable receipt, not a module that happens
+        # to have been imported at process start. Reconstruct and verify that exact
+        # owner-scoped graph. The verified object is the execution binding; publishing
+        # it under an owner-blind process-global key would let one owner's receipt
+        # replace another owner's strategy.
+        from app.backtest.repository import AdmissionRequired, load_verified_admission
+        from app.strategy.admission import matches_execution_identity
+
+        try:
+            admitted = load_verified_admission(
+                session, owner_id=owner_id,
+                admission_address=row.admission_address)
+        except AdmissionRequired as exc:
+            raise ValueError(exc.code) from exc
+        if not matches_execution_identity(
+                admitted.artifact, strategy_key=row.strategy_key,
+                strategy_version=row.strategy_version,
+                graph_address=row.graph_address,
+                attribution_state=row.attribution_state):
+            raise ValueError("GRAPH_ATTRIBUTION_MISMATCH")
+        return admitted.strategy
     return resolve_strategy(row.strategy_key, owner_id=owner_id)  # raises StrategyNotFound
 
 

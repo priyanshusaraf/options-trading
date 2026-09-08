@@ -195,6 +195,24 @@ def test_unidentified_strategy_is_explicitly_non_reusable(version):
     assert _execution(strategy=replace(_Strategy(), version=version)) is None
 
 
+@pytest.mark.parametrize('module_name', ['app.strategy.replay_decisions', 'app.engine.equity_entry'])
+def test_shared_replay_source_change_makes_cached_results_cold(monkeypatch, module_name):
+    from app.backtest import identity
+    original = _execution()
+    assert original is not None
+    read = identity._module_bytes
+    observed = []
+    def changed(module):
+        payload = read(module)
+        if module.__name__ == module_name:
+            observed.append(module_name)
+            return payload + b'\n# changed replay implementation\n'
+        return payload
+    monkeypatch.setattr(identity, '_module_bytes', changed)
+    assert _execution() != original
+    assert observed
+
+
 def test_transitive_source_digest_changes_when_a_helper_module_changes(tmp_path):
     from app.backtest.identity import transitive_module_source_digest
 
@@ -233,15 +251,68 @@ def test_charge_and_event_policy_changes_make_the_result_cold(monkeypatch):
     from app.engine import charges, event_risk
 
     original = _execution()
-    monkeypatch.setitem(charges.CHARGE_SCHEDULE["NFO_FUT"], "gst_pct", 0.19)
-    assert _execution() != original
-    monkeypatch.undo()
+    historical = _execution(charge_schedule_id=charges.ZERODHA_CHARGES_V1)
+    assert historical is not None and historical != original
+    assert charges.charge_schedule_address(charges.ZERODHA_CHARGES_V1) != (
+        charges.charge_schedule_address(charges.ZERODHA_CHARGES_V2)
+    )
 
-    original = _execution()
     changed_rule = replace(event_risk.DEFAULT_RULES[0], before_minutes=31)
     monkeypatch.setattr(event_risk, "DEFAULT_RULES",
                         (changed_rule, *event_risk.DEFAULT_RULES[1:]))
     assert _execution() != original
+
+
+def test_pre_correction_v1_result_cache_address_maps_without_aliasing_v2():
+    from app.backtest.identity import legacy_v1_result_compatibility_receipt
+
+    golden = "0858bfd935682389979abc90658974c93631f29d4263b751e4aa9d1f74bfc166"
+    receipt = legacy_v1_result_compatibility_receipt(golden)
+    assert receipt["legacy_result_cache_address"] == golden
+    assert receipt["charge_schedule_id"] == "zerodha_charges_v1"
+    assert receipt["legs"][0]["total_minor"] == 2_936
+    assert receipt["compatibility_address"].startswith("sha256:")
+    assert receipt["compatibility_address"] != "sha256:" + golden
+    assert golden != _execution()
+
+
+def test_legacy_compatibility_accepts_identity_only_and_one_frozen_answer():
+    from app.backtest.identity import legacy_v1_result_compatibility_receipt
+
+    golden = "0858bfd935682389979abc90658974c93631f29d4263b751e4aa9d1f74bfc166"
+    first = legacy_v1_result_compatibility_receipt(golden)
+    second = legacy_v1_result_compatibility_receipt(golden)
+    assert first == second
+    assert first["total_minor"] == 2_936
+    with pytest.raises(TypeError):
+        legacy_v1_result_compatibility_receipt(
+            golden, legacy_base_sha="de6faae3e97cf5537338bee2143350e53f70da1c")
+    with pytest.raises(ValueError, match="unknown"):
+        legacy_v1_result_compatibility_receipt("f" * 64)
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "base", "preimage", "answer", "incomplete"])
+def test_legacy_manifest_registry_refuses_non_one_to_one_authority(mutation):
+    from app.backtest import identity
+
+    original = dict(identity._LEGACY_V1_RESULT_MANIFESTS[0])
+    manifests = [original]
+    if mutation == "duplicate":
+        manifests.append(dict(original))
+    elif mutation == "base":
+        original["legacy_base_sha"] = "0" * 40
+    elif mutation == "preimage":
+        original["canonical_preimage_b85"] = original["canonical_preimage_b85"][:-1] + "0"
+    elif mutation == "answer":
+        original["total_minor"] += 1
+    else:
+        original.pop("charge_schedule_address")
+    with pytest.raises(ValueError):
+        identity._validated_legacy_v1_result_manifests(tuple(manifests))
+
+
+def test_unverified_bfo_futures_has_no_v2_result_cache_identity():
+    assert _execution(instrument=replace(_Instrument(), segment="BFO_FUT")) is None
 
 
 @pytest.mark.parametrize(

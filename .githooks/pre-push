@@ -1,0 +1,5 @@
+#!/bin/sh
+# Request an AI review explicitly when useful.
+if [ "${STRATEGY_OS_AI_REVIEW:-0}" = "1" ]; then
+    exec /usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/ponytail_review_guard.py" push "$@"
+fi

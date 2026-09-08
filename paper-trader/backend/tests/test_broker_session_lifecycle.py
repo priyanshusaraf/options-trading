@@ -72,7 +72,17 @@ def test_shutdown_closes_the_session_after_cancelling_the_lanes():
     import app.main as main_mod
     src = inspect.getsource(main_mod.lifespan)
     assert "runner.broker.close()" in src
-    assert src.index("risk_task.cancel()") < src.index("runner.broker.close()"), \
+    # Anchor the SHUTDOWN close, not the first occurrence: the lease/recovery
+    # work added a legitimate startup-failure close earlier in the source.
+    close_at = src.rindex("runner.broker.close()")
+    assert src.rindex("risk_task.cancel()") < close_at, \
         "the session is closed before the lanes are cancelled"
-    assert src.index("await asyncio.gather") < src.index("runner.broker.close()"), \
+    # Drain is the exact multi-lane gather of the shutdown path, not the
+    # delivery-tasks gather that appears earlier in the source.
+    shutdown_gather = src.rindex("signal_task, risk_task")
+    assert shutdown_gather < close_at, \
         "the session is closed before cancelled lane workers are drained"
+    # Lease authority is released only after the money session is closed —
+    # never while a final write could still be in flight.
+    assert src.rindex("lease_repository.release(lease_token)") > close_at, \
+        "the execution lease is released before the broker session closes"

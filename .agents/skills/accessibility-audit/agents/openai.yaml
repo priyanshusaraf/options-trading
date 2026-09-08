@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit complete accessible journeys"
+  short_description: "Test keyboard, charts and dense interface access"
+  default_prompt: "Use $accessibility-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

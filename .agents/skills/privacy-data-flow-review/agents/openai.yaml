@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review data through its full lifecycle"
+  short_description: "Map data use, processors, retention and exposure"
+  default_prompt: "Use $privacy-data-flow-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

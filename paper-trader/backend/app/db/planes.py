@@ -1,6 +1,6 @@
 """Which plane each table belongs to — ADR 0015, enforced rather than described.
 
-The three planes are distinguished by **what it costs to lose them**, not by what it costs to
+The logical planes are distinguished by authority and recovery boundaries, not by what it costs to
 serve them:
 
   * **MARKET** — re-fetchable. Losing it costs money and rate limit, never correctness.
@@ -31,11 +31,29 @@ class Plane(str, enum.Enum):
     MARKET = "market"
     USER = "user"
     MONEY = "money"
+    OPERATIONS = "operations"
 
 
 #: Table name → plane. Total over `Base.metadata`; `tests/test_db_planes.py` fails the build on
 #: any table missing from here, which is what stops the map decaying into a partial one.
 TABLE_PLANES: dict[str, Plane] = {
+    # Platform commerce, access, analytics, structured support and founder
+    # operations are physically colocated but structurally blind to product
+    # content and money/execution state. All relationships stay inside this set.
+    "platform_plan_versions": Plane.OPERATIONS,
+    "platform_coupon_definitions": Plane.OPERATIONS,
+    "platform_coupon_redemptions": Plane.OPERATIONS,
+    "platform_billing_bindings": Plane.OPERATIONS,
+    "platform_billing_event_receipts": Plane.OPERATIONS,
+    "platform_entitlement_events": Plane.OPERATIONS,
+    "platform_current_entitlements": Plane.OPERATIONS,
+    "platform_complimentary_entitlement_grants": Plane.OPERATIONS,
+    "platform_analytics_subjects": Plane.OPERATIONS,
+    "platform_analytics_events": Plane.OPERATIONS,
+    "platform_support_requests": Plane.OPERATIONS,
+    "platform_support_replies": Plane.OPERATIONS,
+    "platform_operator_bindings": Plane.OPERATIONS,
+    "platform_operator_audit_events": Plane.OPERATIONS,
     # ── money: the ledger and everything that decides or records a real trade ──
     "deployments": Plane.MONEY,
     "execution_intents": Plane.MONEY,
@@ -65,6 +83,23 @@ TABLE_PLANES: dict[str, Plane] = {
     "execution_outbox_consumer_cursor": Plane.MONEY,
     "execution_outbox_consumer_receipt": Plane.MONEY,
     "execution_outbox_retention_watermark": Plane.MONEY,
+    # Phase 5 capital admission remains one money authority.  The first two rows are
+    # immutable, content-addressed capital decisions; the remaining rows either carry
+    # an explicit owner/account scope or inherit it through a money-plane parent.  Keeping
+    # the complete chain together creates no new cross-plane foreign key and makes a future
+    # physical money-plane copy/restore preserve the decisions with the facts they authorize.
+    "sizing_policies": Plane.MONEY,
+    "sizing_decisions": Plane.MONEY,
+    "target_position_requests": Plane.MONEY,
+    "candidate_intents": Plane.MONEY,
+    "capital_reservation_heads": Plane.MONEY,
+    "decision_batches": Plane.MONEY,
+    "portfolio_admission_decisions": Plane.MONEY,
+    "capital_reservations": Plane.MONEY,
+    "capital_reservation_events": Plane.MONEY,
+    "position_campaigns": Plane.MONEY,
+    "position_tranches": Plane.MONEY,
+    "fill_allocations": Plane.MONEY,
     # ADR 0015 §2: a connection is money-plane on BLAST RADIUS, not on recovery cost. A row
     # here is the authority to place real orders on a real account. The encryption key is not
     # in any plane — it comes from the environment, so a database compromise alone is not a
@@ -77,8 +112,16 @@ TABLE_PLANES: dict[str, Plane] = {
 
     # ── user: irreplaceable creative work ──
     "projects": Plane.USER,
+    "owner_provider_instrument_selections": Plane.USER,
+    "static_instrument_scopes": Plane.USER,
+    "static_instrument_scope_revisions": Plane.USER,
+    "watchlist_monitoring_revisions": Plane.USER,
     "graph_artifacts": Plane.USER,
     "graph_versions": Plane.USER,
+    "ir_v2_editor_presentations": Plane.USER,
+    "chart_context_annotations": Plane.USER,
+    "workspace_research_settings_revisions": Plane.USER,
+    "strategy_research_settings_revisions": Plane.USER,
     "strategy_admissions": Plane.USER,
     "ir_graph_layouts": Plane.USER,
     "ir_graph_layout_positions": Plane.USER,
@@ -98,6 +141,25 @@ TABLE_PLANES: dict[str, Plane] = {
     "users": Plane.USER,
     "memberships": Plane.USER,
     "user_sessions": Plane.USER,
+    "browser_credentials": Plane.USER,
+    "enrollment_invites": Plane.USER,
+    "browser_sessions": Plane.USER,
+    "browser_auth_attempts": Plane.USER,
+    # Privacy-minimised account attestations and prior-use facts are durable
+    # owner-authored USER facts. Their only FKs remain within this plane.
+    "account_profile_evidence": Plane.USER,
+    "account_trial_uses": Plane.USER,
+    # V0 monitoring is owner-authored evidence only. These tables intentionally
+    # have no deployment, broker-account, execution, position or money link.
+    "monitoring_assignments": Plane.USER,
+    "monitoring_state_snapshots": Plane.USER,
+    "monitoring_signal_events": Plane.USER,
+    "monitoring_signal_alerts": Plane.USER,
+    "monitoring_alert_delivery_attempts": Plane.USER,
+    "monitoring_alert_attention_events": Plane.USER,
+    "monitoring_latest_state": Plane.USER,
+    "monitoring_alert_attention_state": Plane.USER,
+    "monitoring_signal_reviews": Plane.USER,
     # `runtime_config` is a genuinely awkward one and is called out rather than smoothed over:
     # its rows are the owner's hand-set trading decisions, so they *behave* like money, but
     # losing one restores a documented code default rather than corrupting a ledger. It is
@@ -112,6 +174,55 @@ TABLE_PLANES: dict[str, Plane] = {
     "backtest_runs": Plane.USER,
     "backtest_results": Plane.USER,
     "backtest_computations": Plane.MARKET,
+    # ── Phase 4 authority chain: canonical, non-tenant, re-derivable ──
+    # These are GLOBAL canonical facts, not tenant rows (no owner column by
+    # design), so money-plane ownership accounting does not apply. The
+    # execution-side copies are re-derivable from the research plane's
+    # content-addressed admissions (FND-11's two-plane verification is exactly
+    # that reconstruction), which makes them MARKET under this module's own
+    # definition: losing them costs re-derivation and rate limit, never the
+    # correctness of an already-admitted artifact. The one authored artifact —
+    # ir_v2_graph_versions — is USER.
+    "ir_v2_graph_versions": Plane.USER,   # irreplaceable authored graph versions
+    "authority_canonical_instruments": Plane.MARKET,
+    "authority_market_truth_snapshots": Plane.MARKET,
+    "market_truth_snapshots": Plane.MARKET,
+    "authority_missing_data_policies": Plane.MARKET,
+    "authority_adjustment_policies": Plane.MARKET,
+    "authority_alignment_policies": Plane.MARKET,
+    "authority_roll_policies": Plane.MARKET,
+    "authority_normalization_transforms": Plane.MARKET,
+    "authority_raw_schemas": Plane.MARKET,
+    "authority_normalized_observation_inputs": Plane.MARKET,
+    "authority_normalized_observations": Plane.MARKET,
+    "authority_raw_segments": Plane.MARKET,
+    "authority_deterministic_algorithms": Plane.MARKET,
+    "authority_dataset_creation_evidence": Plane.MARKET,
+    "authority_dataset_corrections": Plane.MARKET,
+    "authority_capability_profiles": Plane.MARKET,
+    "market_data_capability_profiles": Plane.MARKET,
+    "authority_capability_assessments": Plane.MARKET,
+    "authority_provider_contracts": Plane.MARKET,
+    "authority_provider_conformance": Plane.MARKET,
+    # REVERTED 2026-08-22: a loss-review reclassification to MONEY was tried
+    # inside the PostgreSQL-isolation correction and reverted on review — it
+    # expanded ADR 0015's grandfather list, which requires its own architecture
+    # capsule. The loss concern is real (owner-scoped accepted evidence:
+    # creation evidence, corrections, capability assessments, provider
+    # contracts/conformance) and is recorded as a pending architecture
+    # decision; until that capsule lands, these keep their pre-correction
+    # MARKET assignments.
+    # Provider catalog: contracts/observations/aliases all resolve THROUGH
+    # products/entities/canonical-instruments, so any catalog split would
+    # manufacture cross-plane crossings inside one authority domain.
+    "authority_provider_entities": Plane.MARKET,
+    "authority_provider_products": Plane.MARKET,
+    "authority_provider_aliases": Plane.MARKET,
+    "authority_provider_observations": Plane.MARKET,
+    # Isolated pair: today's instrument master + its provider mapping. Nothing
+    # on the money plane references them; they are re-fetchable dumps.
+    "market_truth_instruments": Plane.MARKET,
+    "market_truth_provider_mappings": Plane.MARKET,
 }
 
 

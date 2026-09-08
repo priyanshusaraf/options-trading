@@ -13,7 +13,9 @@ Nothing here asserts a docstring. Each test compares the real class dictionaries
 """
 from __future__ import annotations
 
+import ast
 import inspect
+from pathlib import Path
 
 from app.engine.broker import PaperBroker
 from app.engine.broker_protocol import (
@@ -118,6 +120,14 @@ def test_both_brokers_satisfy_the_broker_protocol():
 _CONTRACT = ("open_position", "open_equity_position", "close_position",
              "close_equity_position", "ensure_stop_protection",
              "update_stop_protection", "reconcile_orphans")
+_PAPER_RUNTIME_ONLY_PARAMETERS = frozenset({"runtime_context_json"})
+
+
+def _paper_shared_parameters(method) -> list[str]:
+    return [
+        name for name in inspect.signature(method).parameters
+        if name not in _PAPER_RUNTIME_ONLY_PARAMETERS
+    ]
 
 
 def test_broker_protocol_signatures_match_the_paper_implementation():
@@ -125,7 +135,7 @@ def test_broker_protocol_signatures_match_the_paper_implementation():
     lie that type checkers believe. Compare the actual signatures."""
     for name in _CONTRACT:
         proto = list(inspect.signature(getattr(Broker, name)).parameters)
-        impl = list(inspect.signature(getattr(PaperBroker, name)).parameters)
+        impl = _paper_shared_parameters(getattr(PaperBroker, name))
         assert proto == impl, (
             f"Broker.{name}{tuple(proto)} does not match "
             f"PaperBroker.{name}{tuple(impl)}")
@@ -144,14 +154,51 @@ def test_the_live_broker_accepts_everything_the_paper_broker_does():
     from app.engine.live_broker import LiveBroker
 
     for name in _CONTRACT:
-        paper = inspect.signature(getattr(PaperBroker, name)).parameters
-        live = inspect.signature(getattr(LiveBroker, name)).parameters
+        paper = _paper_shared_parameters(getattr(PaperBroker, name))
+        live = list(inspect.signature(getattr(LiveBroker, name)).parameters)
         if getattr(LiveBroker, name) is getattr(PaperBroker, name):
             continue   # inherited unchanged — nothing to drift
-        missing = [n for n in paper if n not in live]
-        assert not missing, (
-            f"LiveBroker.{name} cannot accept {missing} — the runner passes them to "
-            f"whichever broker it built, so this is a TypeError on a real order")
+        assert live == paper, (
+            f"LiveBroker.{name}{tuple(live)} does not exactly match the shared "
+            f"PaperBroker parameters {tuple(paper)}")
+
+
+def test_runtime_context_is_concrete_paper_runtime_authority_not_shared_broker_api():
+    root = Path(__file__).resolve().parents[1]
+    runner_source = (root / "app/engine/runner.py").read_text()
+    live_source = (root / "app/engine/live_broker.py").read_text()
+    protocol_source = (root / "app/engine/broker_protocol.py").read_text()
+    paper_service_source = (root / "app/paper_runtime/service.py").read_text()
+    assert "runtime_context_json" not in runner_source
+    assert "runtime_context_json" not in live_source
+    assert "runtime_context_json" not in protocol_source
+    assert paper_service_source.count("runtime_context_json=context_json") == 1
+    for cls in (Broker, LiveBroker):
+        for name, value in vars(cls).items():
+            if callable(value):
+                assert "runtime_context_json" not in inspect.signature(value).parameters, (
+                    f"{cls.__name__}.{name} exposes paper-only runtime context")
+    paper_methods = {
+        name for name, value in vars(PaperBroker).items()
+        if callable(value)
+        and "runtime_context_json" in inspect.signature(value).parameters
+    }
+    assert paper_methods == {
+        "_prepare_paper_entry_intent", "open_position", "open_equity_position",
+        "open_futures_position",
+    }
+    external_keyword_call_sites = set()
+    for path in (root / "app").rglob("*.py"):
+        relative = path.relative_to(root).as_posix()
+        if relative == "app/engine/broker.py":
+            continue
+        tree = ast.parse(path.read_text())
+        if any(
+                isinstance(node, ast.Call)
+                and any(keyword.arg == "runtime_context_json" for keyword in node.keywords)
+                for node in ast.walk(tree)):
+            external_keyword_call_sites.add(relative)
+    assert external_keyword_call_sites == {"app/paper_runtime/service.py"}
 
 
 # ── neutral vocabulary ────────────────────────────────────────────────────

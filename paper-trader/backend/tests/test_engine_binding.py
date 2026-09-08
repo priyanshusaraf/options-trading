@@ -375,14 +375,18 @@ def test_deploying_a_graph_strategy_onto_an_existing_watchlist_is_refused(monkey
     passes through `create_watchlist`. A gate on the constructor alone would miss it."""
     from app.core import deploy_bridge
     from app.core import watchlists as wl
+    from tests.admitted_entry import persist_admitted_entry
 
     strategy = graph_strategy(monkeypatch)
     with SessionLocal() as session:
         wl.create_watchlist(session, "momentum", "expanding_z_v4", owner_id="owner")
         session.commit()
-        req = deploy_bridge.DeployRequest(watchlist_name="momentum",
-                                          strategy_key=strategy.key,
-                                          proposals=[("NIFTY", 1.0)])
+        receipt = persist_admitted_entry(session)
+        req = deploy_bridge.DeployRequest(
+            watchlist_name="momentum", strategy_key=receipt["strategy_key"],
+            proposals=[("NIFTY", 1.0)],
+            admission_address=receipt["admission_address"],
+            broker_account_id="account.default")
         with pytest.raises(binding.AuthorityNotGranted):
             deploy_bridge.deploy(session, req, owner_id="owner")
 

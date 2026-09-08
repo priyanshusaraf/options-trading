@@ -31,6 +31,41 @@ def _checked_out() -> int:
     return engine.pool.checkedout()
 
 
+def test_mock_reset_clears_linked_monitoring_history_and_restores_foreign_keys():
+    from tests.test_v0_monitoring_persistence import _seed_two_owners
+    from tests.test_v0_monitoring_inbox_query import _seed
+
+    init_db(reset=True)
+    _seed_two_owners(engine)
+    _seed(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM monitoring_state_snapshots").scalar_one() > 1
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+    init_db(reset=True)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM monitoring_state_snapshots").scalar_one() == 0
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+
+
+def test_failed_mock_reset_restores_foreign_keys(monkeypatch):
+    from app.db.models import Base
+
+    init_db(reset=True)
+
+    def fail_drop(connection):
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 0
+        connection.exec_driver_sql("DROP TABLE organizations")
+        raise RuntimeError("reset failure probe")
+
+    monkeypatch.setattr(Base.metadata, "drop_all", fail_drop)
+    with pytest.raises(RuntimeError, match="reset failure probe"):
+        init_db(reset=True)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM organizations").scalar_one() > 0
+
+
 # ── the leak ────────────────────────────────────────────────────────────────
 
 def test_a_failed_write_does_not_leak_a_connection(runner, monkeypatch):

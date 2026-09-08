@@ -23,6 +23,9 @@ from app.db.models import (
     AccountExecutionLease,
     AccountExecutionLeaseHistory,
     BrokerAccount,
+    CandidateIntentRecord,
+    CapitalReservationEventRecord,
+    CapitalReservationRecord,
     Deployment,
 )
 
@@ -104,6 +107,11 @@ class LeaseRepository:
     def bind_money_session(session: Session, token: LeaseToken) -> None:
         """Require this exact token at every subsequent ORM money/evidence flush."""
         session.info["execution_lease_token"] = token
+
+    @staticmethod
+    def database_time(session: Session) -> dt.datetime:
+        """Expose the same database-clock contract used by lease expiry checks."""
+        return _db_now(session)
 
     def claim(self, *, owner_id: str, broker_account_id: str, cell_id: str,
               worker_id: str, ttl_seconds: int = 30, host_diagnostic: str = "") -> LeaseToken:
@@ -246,20 +254,31 @@ class LeaseRepository:
             return _token(lease)
 
     def _current(self, session: Session, token: LeaseToken, *, allow_blocked: bool = False,
-                 require_unexpired: bool = True) -> tuple[AccountExecutionLease, dt.datetime]:
+                 require_unexpired: bool = True,
+                 lock: bool = False) -> tuple[AccountExecutionLease, dt.datetime]:
         now = _db_now(session)
         states = {"recovering", "active"} | ({"blocked"} if allow_blocked else set())
-        lease = session.scalar(select(AccountExecutionLease).where(
+        statement = select(AccountExecutionLease).where(
             AccountExecutionLease.owner_id == token.owner_id,
             AccountExecutionLease.broker_account_id == token.broker_account_id,
             AccountExecutionLease.fence_epoch == token.fence_epoch,
             AccountExecutionLease.cell_id == token.cell_id,
             AccountExecutionLease.worker_id == token.worker_id,
             AccountExecutionLease.state.in_(states),
-        ))
+        )
+        lease = session.scalar(locked_rows(statement, session) if lock else statement)
         if lease is None or (require_unexpired and (lease.expires_at is None or lease.expires_at <= now)):
             raise StaleLease("execution lease token is stale or expired")
         return lease, now
+
+    def require_current_in_session(
+            self, session: Session, token: LeaseToken, *, active: bool = False,
+            lock: bool = False) -> AccountExecutionLease:
+        """Verify one caller-owned transaction against the exact durable fence."""
+        lease, _ = self._current(session, token, lock=lock)
+        if active and lease.state != "active":
+            raise RecoveryRequired("execution lease has not completed recovery")
+        return lease
 
     def assert_current(self, token: LeaseToken, *, active: bool = False) -> None:
         with self.sessions() as session:
@@ -617,7 +636,8 @@ class LeaseRepository:
                         idempotency_key: str, request_digest: str,
                         actor_user_id: str = "", broker_tag: str = "",
                         requested_qty: int | None = None, requested_side: str = "",
-                        requested_trigger: float | None = None) -> AccountExecutionCommand:
+                        requested_trigger: float | None = None,
+                        capital_reservation_id: str | None = None) -> AccountExecutionCommand:
         if not kind or len(kind) > 32 or not target_id or len(target_id) > 96:
             raise ValueError("bounded command kind and target are required")
         if not idempotency_key or len(idempotency_key) > 96:
@@ -629,9 +649,18 @@ class LeaseRepository:
             raise ValueError("actor identity is too long")
         if len(broker_tag) > 32:
             raise ValueError("broker tag is too long")
+        if capital_reservation_id is not None and (
+                not capital_reservation_id or len(capital_reservation_id) > 64):
+            raise ValueError("bounded capital reservation identity is required")
+        if capital_reservation_id is not None and kind != "place_order":
+            raise ValueError("capital reservations bind only new order preparation")
+        if capital_reservation_id is not None and (
+                type(requested_qty) is not int or requested_qty <= 0):
+            raise RecoveryRequired(
+                "command quantity does not match capital reservation")
         with self.sessions() as session:
             begin_after_clean_reads(session, scope=_scope(token.owner_id, token.broker_account_id))
-            lease, now = self._current(session, token)
+            lease, now = self._current(session, token, lock=capital_reservation_id is not None)
             if lease.state != "active" and not kind.startswith("recovery_"):
                 raise RecoveryRequired("new broker mutation denied during recovery")
             existing = session.scalar(select(AccountExecutionCommand).where(
@@ -645,6 +674,36 @@ class LeaseRepository:
                 if existing.state == "sent_unknown":
                     raise AmbiguousBrokerOutcome("ambiguous command requires reconciliation")
                 raise LeaseUnavailable("command identity was already submitted")
+            reservation = None
+            if capital_reservation_id is not None:
+                reservation = session.scalar(locked_rows(select(CapitalReservationRecord).where(
+                    CapitalReservationRecord.reservation_id == capital_reservation_id,
+                    CapitalReservationRecord.owner_id == token.owner_id,
+                    CapitalReservationRecord.broker_account_id == token.broker_account_id,
+                    CapitalReservationRecord.fence_epoch == token.fence_epoch,
+                    CapitalReservationRecord.state == "held",
+                    CapitalReservationRecord.command_id.is_(None),
+                ), session))
+                if reservation is None or reservation.expires_at <= now:
+                    raise RecoveryRequired(
+                        "exact active capital reservation is unavailable for command preparation")
+                candidate = session.get(
+                    CandidateIntentRecord, reservation.candidate_intent_id)
+                if candidate is None or (
+                        candidate.owner_id, candidate.broker_account_id,
+                        candidate.book, candidate.fence_epoch) != (
+                        token.owner_id, token.broker_account_id,
+                        reservation.book, reservation.fence_epoch) \
+                        or target_id != candidate.target_position_request_id:
+                    raise RecoveryRequired("command target does not match capital reservation")
+                if requested_qty is None or requested_qty != abs(
+                        reservation.admitted_quantity):
+                    raise RecoveryRequired("command quantity does not match capital reservation")
+                expected_side = "BUY" if candidate.requested_quantity > 0 else "SELL"
+                expected_direction = "LONG" if expected_side == "BUY" else "SHORT"
+                if candidate.direction != expected_direction \
+                        or requested_side != expected_side:
+                    raise RecoveryRequired("command side does not match capital reservation")
             command = AccountExecutionCommand(
                 command_id=uuid.uuid4().hex,
                 idempotency_key=idempotency_key, owner_id=token.owner_id,
@@ -657,6 +716,45 @@ class LeaseRepository:
                 state="prepared", actor_user_id=actor_user_id,
                 created_at=now, updated_at=now)
             session.add(command)
+            if reservation is not None:
+                from app.ir.hashing import content_address
+
+                previous_state = reservation.state
+                reservation.state = "submission_pending"
+                reservation.command_id = command.command_id
+                reservation.revision += 1
+                event_id = hashlib.sha256(
+                    (f"reservation-event\0{reservation.reservation_id}\0"
+                     f"{reservation.revision}").encode("utf-8")).hexdigest()
+                evidence_address = f"sha256:{request_digest}"
+                event_document = {
+                    "schema": "strategy-os.capital-reservation-event/v1",
+                    "event_id": event_id,
+                    "reservation_address": reservation.reservation_address,
+                    "revision": reservation.revision,
+                    "from_state": previous_state,
+                    "to_state": reservation.state,
+                    "consumed_minor": reservation.consumed_minor,
+                    "consumed_quantity": reservation.consumed_quantity,
+                    "fence_epoch": token.fence_epoch,
+                    "evidence_address": evidence_address,
+                    "reason_code": "COMMAND_PREPARED",
+                    "occurred_at": now.isoformat(timespec="microseconds"),
+                }
+                session.add(CapitalReservationEventRecord(
+                    event_id=event_id,
+                    event_address=content_address(event_document),
+                    reservation_id=reservation.reservation_id,
+                    revision=reservation.revision,
+                    from_state=previous_state,
+                    to_state=reservation.state,
+                    consumed_minor=reservation.consumed_minor,
+                    consumed_quantity=reservation.consumed_quantity,
+                    fence_epoch=token.fence_epoch,
+                    evidence_address=evidence_address,
+                    reason_code="COMMAND_PREPARED",
+                    occurred_at=now,
+                ))
             _append_execution_change(
                 session, owner_id=token.owner_id,
                 broker_account_id=token.broker_account_id,
@@ -665,6 +763,23 @@ class LeaseRepository:
                 producer_key=f"command:{command.command_id}:prepared",
                 payload={"projection": "execution_status", "state": "prepared",
                          "fence_epoch": token.fence_epoch})
+            if reservation is not None:
+                _append_execution_change(
+                    session, owner_id=token.owner_id,
+                    broker_account_id=token.broker_account_id,
+                    aggregate_type="capital_reservation",
+                    aggregate_id=reservation.reservation_id,
+                    event_type="execution.money.changed",
+                    producer_key=(f"capital-reservation:{reservation.reservation_id}:"
+                                  f"{reservation.revision}"),
+                    payload={
+                        "projection": "capital_reservation",
+                        "state": reservation.state,
+                        "revision": reservation.revision,
+                        "fence_epoch": token.fence_epoch,
+                        "command_id": command.command_id,
+                    },
+                )
             session.commit()
             return command
 

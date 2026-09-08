@@ -15,11 +15,17 @@ two things stay true forever, and neither is checked by any other test:
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
 import hashlib
 import json
 import importlib.util
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import sqlalchemy as sa
 import pytest
@@ -34,7 +40,539 @@ from app.db.models import Base
 #: `migrate.head_revision()`. Deriving it would make every assertion below compare the head to
 #: itself and pass for any value — the vacuous shape. Bumping this by hand when a migration
 #: lands is the point: it is the moment someone states that the new head is intended.
-HEAD = "0034"
+# Static research scopes: 0042 adds USER facts without altering 0041 money semantics.
+# landed; the pin moves with them, deliberately by hand.
+# Coupon validity: 0049 separates fixed definition dates from the one closed
+# server-resolved 15-day duration without changing existing fixed facts.
+HEAD = "0056"
+
+
+def _seed_0050_callback(connection, *, digest: str = "a" * 64) -> None:
+    connection.execute(sa.text(
+        "INSERT INTO organizations (organization_id,name,status,created_at,updated_at) "
+        "VALUES ('org-0050','Org','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO users (user_id,email_normalized,display_name,status,created_at,updated_at) "
+        "VALUES ('user-0050','user-0050@example.test','User','active',"
+        "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO memberships (organization_id,user_id,role,status,created_at,updated_at) "
+        "VALUES ('org-0050','user-0050','owner','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO user_sessions "
+        "(session_id,token_digest,user_id,organization_id,issued_at,expires_at) VALUES "
+        "('session-0050',:token,'user-0050','org-0050',CURRENT_TIMESTAMP,'2030-01-01')"),
+        {"token": "b" * 64})
+    connection.execute(sa.text(
+        "INSERT INTO broker_accounts "
+        "(broker_account_id,owner_id,broker,external_account_id,display_name,status,created_at,updated_at) "
+        "VALUES ('account-0050','org-0050','kite','external-0050','Account','active',"
+        "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO broker_connections "
+        "(owner_id,broker_account_id,broker,scope,label,capabilities_json,status,created_at,updated_at) "
+        "VALUES ('org-0050','account-0050','kite','strategy-os-v0:data:1','','[]','active',"
+        "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+    connection.execute(sa.text(
+        "INSERT INTO oauth_callback_states "
+        "(state_digest,connection_id,session_id,user_id,organization_id,created_at,expires_at,consumed_at) "
+        "VALUES (:digest,1,'session-0050','user-0050','org-0050',CURRENT_TIMESTAMP,"
+        "'2030-01-01',CURRENT_TIMESTAMP)"), {"digest": digest})
+
+
+def test_revision_0050_adds_unbackfilled_completion_fact_and_all_null_downgrades(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0050-upgrade.db", "0049")
+    with engine.begin() as connection:
+        _seed_0050_callback(connection)
+        assert "credential_stored_at" not in {
+            column["name"] for column in sa.inspect(connection).get_columns(
+                "oauth_callback_states")}
+        command.upgrade(migrate.alembic_config(connection), "0050")
+        assert connection.scalar(sa.text(
+            "SELECT credential_stored_at FROM oauth_callback_states")) is None
+        command.downgrade(migrate.alembic_config(connection), "0049")
+    assert migrate.schema_version(engine) == "0049"
+    assert "credential_stored_at" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("oauth_callback_states")}
+
+
+def test_revision_0050_refuses_lossy_downgrade_after_completion(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0050-downgrade-refusal.db", "0049")
+    with engine.begin() as connection:
+        _seed_0050_callback(connection)
+        command.upgrade(migrate.alembic_config(connection), "0050")
+        connection.execute(sa.text(
+            "UPDATE oauth_callback_states SET credential_stored_at=CURRENT_TIMESTAMP"))
+        with pytest.raises(RuntimeError, match="refuses to discard successful"):
+            command.downgrade(migrate.alembic_config(connection), "0049")
+    assert migrate.schema_version(engine) == "0050"
+
+
+def test_revision_0050_refuses_partial_column_at_0049(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0050-partial.db", "0049")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE oauth_callback_states ADD COLUMN credential_stored_at DATETIME")
+        with pytest.raises(RuntimeError, match="partial pre-existing"):
+            command.upgrade(migrate.alembic_config(connection), "0050")
+    assert migrate.schema_version(engine) == "0049"
+
+
+def test_postgresql16_revision_0050_upgrades_exact_0049_and_restarts(pg_sandbox):
+    engine = pg_sandbox.engine("data_connection_receipt_0050")
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE oauth_callback_states DROP COLUMN credential_stored_at")
+        command.stamp(migrate.alembic_config(connection), "0049")
+    migrated = migrate.init_schema(
+        engine, create_all=lambda: pytest.fail("0050 must migrate exact PostgreSQL 0049"),
+        legacy_migrate=lambda: pytest.fail("managed PostgreSQL must not use legacy migration"),
+        expected_tables=Base.metadata.tables,
+    )
+    assert migrated == "0050"
+    assert migrate.init_schema(
+        engine, create_all=lambda: pytest.fail("repeated startup must not rebuild"),
+        legacy_migrate=lambda: pytest.fail("repeated startup must not migrate legacy"),
+        expected_tables=Base.metadata.tables,
+    ) == "0050"
+    column = next(column for column in sa.inspect(engine).get_columns(
+        "oauth_callback_states") if column["name"] == "credential_stored_at")
+    assert column["nullable"] is True and column["default"] is None
+
+
+def _postgresql_0049_without_completion(engine) -> None:
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE oauth_callback_states DROP COLUMN credential_stored_at")
+        command.stamp(migrate.alembic_config(connection), "0049")
+
+
+def test_postgresql16_revision_0050_concurrent_owners_serialize_and_refuse(pg_sandbox):
+    engine = pg_sandbox.engine("data_connection_receipt_0050_concurrent")
+    _postgresql_0049_without_completion(engine)
+    owner_thread: dict[str, int | None] = {"id": None}
+    contender_seen = threading.Event()
+    owner_lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def before_execute(_connection, _cursor, statement, _parameters, _context, _many):
+        if "pg_advisory_xact_lock(4200050)" not in statement:
+            return
+        current = threading.get_ident()
+        with owner_lock:
+            if owner_thread["id"] is None:
+                owner_thread["id"] = current
+            elif owner_thread["id"] != current:
+                contender_seen.set()
+
+    def after_execute(_connection, _cursor, statement, _parameters, _context, _many):
+        if ("pg_advisory_xact_lock(4200050)" in statement
+                and owner_thread["id"] == threading.get_ident()):
+            assert contender_seen.wait(timeout=10), "second 0050 migration owner never contended"
+
+    sa.event.listen(engine, "before_cursor_execute", before_execute)
+    sa.event.listen(engine, "after_cursor_execute", after_execute)
+
+    def migrate_once():
+        barrier.wait(timeout=10)
+        try:
+            return "RETURNED", migrate.upgrade_to_head(engine)
+        except RuntimeError as exc:
+            return "REFUSED", str(exc)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _item: migrate_once(), range(2)))
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", before_execute)
+        sa.event.remove(engine, "after_cursor_execute", after_execute)
+    assert sorted(result[0] for result in results) == ["REFUSED", "RETURNED"]
+    assert ("RETURNED", "0050") in results
+    assert any("concurrent migration owner" in detail for kind, detail in results
+               if kind == "REFUSED")
+    assert migrate.schema_version(engine) == "0050"
+
+
+def test_postgresql16_revision_0050_all_null_downgrade_and_fact_refusal(pg_sandbox):
+    engine = pg_sandbox.engine("data_connection_receipt_0050_downgrade")
+    _postgresql_0049_without_completion(engine)
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0050")
+        command.downgrade(migrate.alembic_config(connection), "0049")
+        command.upgrade(migrate.alembic_config(connection), "0050")
+        _seed_0050_callback(connection)
+        connection.execute(sa.text(
+            "UPDATE oauth_callback_states SET credential_stored_at=CURRENT_TIMESTAMP"))
+        with pytest.raises(RuntimeError, match="refuses to discard successful"):
+            command.downgrade(migrate.alembic_config(connection), "0049")
+    assert migrate.schema_version(engine) == "0050"
+
+
+def _postgresql16_tool(name: str) -> str:
+    candidate = shutil.which(name) or f"/opt/homebrew/opt/postgresql@16/bin/{name}"
+    if not os.path.isfile(candidate):
+        pytest.skip(f"PostgreSQL 16 {name} is not installed")
+    version = subprocess.run(
+        [candidate, "--version"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    ).stdout
+    if " 16." not in version:
+        pytest.skip(f"{name} is not PostgreSQL 16: {version.strip()}")
+    return candidate
+
+
+def _postgres_cli(url: str) -> tuple[list[str], dict[str, str]]:
+    parsed = sa.engine.make_url(url)
+    args = ["-h", parsed.host or "127.0.0.1", "-p", str(parsed.port or 5432)]
+    if parsed.username:
+        args += ["-U", parsed.username]
+    args += ["-d", str(parsed.database)]
+    environment = dict(os.environ)
+    if parsed.password:
+        environment["PGPASSWORD"] = parsed.password
+    return args, environment
+
+
+def test_postgresql16_revision_0050_clean_target_dump_restore_preserves_completion(
+        pg_sandbox, tmp_path):
+    source_url = pg_sandbox.url("data_connection_receipt_0050_restore_source")
+    target_url = pg_sandbox.url("data_connection_receipt_0050_restore_target")
+    source = pg_sandbox.engine("data_connection_receipt_0050_restore_source")
+    Base.metadata.create_all(source)
+    stored_at = dt.datetime(2026, 9, 2, 12, 34, 56, 123456)
+    with source.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0050")
+        _seed_0050_callback(connection)
+        connection.execute(sa.text(
+            "UPDATE broker_connections SET last_authenticated_at=:stored WHERE id=1"),
+            {"stored": stored_at})
+        connection.execute(sa.text(
+            "UPDATE oauth_callback_states SET credential_stored_at=:stored"),
+            {"stored": stored_at})
+    dump = tmp_path / "0050-completion.dump"
+    pg_dump = _postgresql16_tool("pg_dump")
+    pg_restore = _postgresql16_tool("pg_restore")
+    source_args, source_env = _postgres_cli(source_url)
+    target_args, target_env = _postgres_cli(target_url)
+    subprocess.run(
+        [pg_dump, "--format=custom", "--file", str(dump), *source_args],
+        check=True, env=source_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    subprocess.run(
+        [pg_restore, "--exit-on-error", "--no-owner", "--no-privileges", *target_args,
+         str(dump)],
+        check=True, env=target_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    restored = pg_sandbox.engine("data_connection_receipt_0050_restore_target")
+    with restored.connect() as connection:
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0050"
+        receipt = connection.execute(sa.text(
+            "SELECT o.credential_stored_at,b.last_authenticated_at "
+            "FROM oauth_callback_states o JOIN broker_connections b "
+            "ON b.id=o.connection_id WHERE o.state_digest=:digest"),
+            {"digest": "a" * 64}).one()
+    assert receipt == (stored_at, stored_at)
+
+
+@pytest.mark.parametrize("markers,accepted", [
+    (("0045",), True), (("0046",), True), (("0044",), False),
+    (("0047",), True), (("0048",), True), (("0049",), True), (("0050",), True),
+    (("0045", "0046"), False),
+])
+def test_paper_entry_lifecycle_accepts_only_closed_additive_marker_set(
+        tmp_path, markers, accepted):
+    from sqlalchemy.orm import Session
+    from app.engine.broker import PaperBroker
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / ('marker-' + '-'.join(markers) + '.db')}",
+                              future=True)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0046")
+        connection.execute(sa.text("DELETE FROM alembic_version"))
+        for marker in markers:
+            connection.execute(sa.text(
+                "INSERT INTO alembic_version(version_num) VALUES (:marker)"),
+                {"marker": marker})
+    with Session(engine) as session:
+        broker = object.__new__(PaperBroker)
+        broker.s = session
+        broker.MODE = "paper"
+        broker.deployment_id = 1
+        broker.owner_id = "owner"
+        broker.broker_account_id = "account"
+        call = lambda: broker._prepare_paper_entry_intent(
+            entry_intent_id="missing", recovery_intent=None,
+            instrument_key="NIFTY", tradingsymbol="NIFTY", exchange="NFO",
+            side="BUY", segment="options", qty=1, decision_price=1.0,
+            now=dt.datetime(2026, 8, 30, 9, 0), strategy_key=None,
+            strategy_version=None, admission_address=None, graph_address=None,
+            attribution_state="LEGACY")
+        if accepted:
+            with pytest.raises(ValueError, match="ENTRY_INTENT_SCOPE_MISMATCH"):
+                call()
+        else:
+            with pytest.raises(RuntimeError, match="PAPER_ENTRY_LIFECYCLE_SCHEMA_STALE"):
+                call()
+
+
+def test_paper_entry_lifecycle_0046_still_requires_both_0045_triggers(tmp_path):
+    from sqlalchemy.orm import Session
+    from app.engine.broker import PaperBroker
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'marker-trigger-drift.db'}", future=True)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0046")
+        connection.exec_driver_sql("DROP TRIGGER trades_refuse_entry_intent_id_rebind")
+    with Session(engine) as session:
+        broker = object.__new__(PaperBroker)
+        broker.s = session
+        broker.MODE = "paper"
+        with pytest.raises(RuntimeError, match="PAPER_ENTRY_LIFECYCLE_SCHEMA_STALE"):
+            broker._prepare_paper_entry_intent(
+                entry_intent_id="missing", recovery_intent=None,
+                instrument_key="NIFTY", tradingsymbol="NIFTY", exchange="NFO",
+                side="BUY", segment="options", qty=1, decision_price=1.0,
+                now=dt.datetime(2026, 8, 30, 9, 0), strategy_key=None,
+                strategy_version=None, admission_address=None, graph_address=None,
+                attribution_state="LEGACY")
+
+
+def test_paper_entry_lifecycle_refuses_same_name_noop_trigger_before_effect(tmp_path):
+    from sqlalchemy.orm import Session
+    from app.engine.broker import PaperBroker
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'marker-trigger-noop.db'}", future=True)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0046")
+        connection.exec_driver_sql("DROP TRIGGER trades_refuse_entry_intent_id_rebind")
+        connection.exec_driver_sql(
+            "CREATE TRIGGER trades_refuse_entry_intent_id_rebind BEFORE UPDATE ON trades "
+            "BEGIN SELECT 1; END")
+    with Session(engine) as session:
+        broker = object.__new__(PaperBroker)
+        broker.s = session
+        broker.MODE = "paper"
+        with pytest.raises(RuntimeError, match="PAPER_ENTRY_LIFECYCLE_SCHEMA_STALE"):
+            broker._prepare_paper_entry_intent(
+                entry_intent_id="missing", recovery_intent=None,
+                instrument_key="NIFTY", tradingsymbol="NIFTY", exchange="NFO",
+                side="BUY", segment="options", qty=1, decision_price=1.0,
+                now=dt.datetime(2026, 8, 30, 9, 0), strategy_key=None,
+                strategy_version=None, admission_address=None, graph_address=None,
+                attribution_state="LEGACY")
+
+
+def test_revision_0045_is_additive_preserves_historical_null_and_refuses_downgrade(tmp_path):
+    """FH-08/FH-10: 0044 money stays unknown and cutover is forward-only."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0045-upgrade.db", "0044")
+    with engine.connect() as connection:
+        assert not ({"paper_entry_charge_schedule_id",
+                     "paper_entry_charge_schedule_address"}
+                    & {column["name"] for column in sa.inspect(connection).get_columns("positions")})
+        raw = connection.connection.driver_connection
+        raw.execute("PRAGMA foreign_keys=OFF")
+        raw.execute(
+            "INSERT OR IGNORE INTO organizations (organization_id,name,status,created_at,updated_at) "
+            "VALUES ('owner','Owner','active','2026-08-30 09:00:00','2026-08-30 09:00:00')")
+        raw.execute(
+            "INSERT OR IGNORE INTO broker_accounts (broker_account_id,owner_id,broker,external_account_id,"
+            "display_name,status,created_at,updated_at) VALUES "
+            "('account.default','owner','mock','default','Default','active',"
+            "'2026-08-30 09:00:00','2026-08-30 09:00:00')")
+        raw.execute(
+            "INSERT OR IGNORE INTO deployments (id,owner_id,name,broker_account_id,universe_mode,"
+            "params_json,status,armed,notes,created_at,updated_at) VALUES "
+            "(1,'owner','historical','account.default','legacy','{}','active',0,'',"
+            "'2026-08-30 09:00:00','2026-08-30 09:00:00')")
+        raw.execute(
+            "INSERT OR IGNORE INTO capital_state (broker_account_id,book,initial_capital,cash,"
+            "realized_pnl,updated_at) VALUES "
+            "('account.default','paper',100000,98389.44,0,'2026-08-30 09:15:00')")
+        raw.execute(
+            "UPDATE capital_state SET initial_capital=100000,cash=98389.44,realized_pnl=0 "
+            "WHERE broker_account_id='account.default' AND book='paper'")
+        raw.execute(
+            "INSERT INTO positions (id,instrument_key,direction,option_type,tradingsymbol,"
+            "exchange,segment,strike,expiry,lot_size,qty,entry_premium,entry_charges,"
+            "entry_cost,entry_spot,entry_time,entry_reason,stop_price,target_price,"
+            "last_premium,last_spot,high_water_premium,mfe,mae,reinforcement_count,"
+            "held_overnight,overnight_pnl,session_close_premium,manual_target,"
+            "no_take_profit,mode,owner_id,broker_account_id) VALUES "
+            "(4501,'NIFTY','LONG','CE','NIFTY-HIST','NFO','options',24000,"
+            "'2026-09-03',75,75,21.15,24.31,1610.56,24000,'2026-08-30 09:15:00',"
+            "'historical',15,30,21.15,24000,21.15,0,0,0,0,0,0,0,0,'paper',"
+            "'owner','account.default')")
+        raw.execute(
+            "INSERT INTO trades (id,instrument_key,direction,option_type,tradingsymbol,"
+            "exchange,segment,strike,expiry,qty,entry_premium,entry_cost,entry_spot,"
+            "entry_time,exit_premium,exit_charges,exit_spot,exit_time,exit_reason,"
+            "gross_pnl,charges_total,net_pnl,return_pct,holding_minutes,win,"
+            "held_overnight,overnight_pnl,intraday_pnl,reinforcements,mode,"
+            "exit_price_estimated,mfe,mae,owner_id,broker_account_id) VALUES "
+            "(4502,'NIFTY','LONG','CE','NIFTY-HIST','NFO','options',24000,"
+            "'2026-09-03',75,21.15,1610.56,24000,'2026-08-30 09:15:00',22,25,"
+            "24010,'2026-08-30 09:16:00','historical',63.75,49.31,14.44,0.9,1,1,"
+            "0,0,14.44,0,'paper',0,0,0,'owner','account.default')")
+        raw.commit()
+        raw.execute("PRAGMA foreign_keys=ON")
+
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0045")
+        position = connection.execute(sa.text(
+            "SELECT entry_intent_id,paper_entry_charge_schedule_id,"
+            "paper_entry_charge_schedule_address "
+            "FROM positions WHERE id=4501")).one()
+        trade = connection.execute(sa.text(
+            "SELECT entry_intent_id,paper_entry_charge_schedule_id,"
+            "paper_entry_charge_schedule_address,"
+            "paper_exit_charge_schedule_id,paper_exit_charge_schedule_address "
+            "FROM trades WHERE id=4502")).one()
+        assert position == (None, None, None)
+        assert trade == (None, None, None, None, None)
+        checks = {
+            table: {item["name"] for item in sa.inspect(connection).get_check_constraints(table)}
+            for table in ("positions", "trades")
+        }
+        assert "ck_positions_paper_entry_intent_required" in checks["positions"]
+        assert "ck_trades_paper_entry_intent_required" in checks["trades"]
+        triggers = {name for (name,) in connection.execute(sa.text(
+            "SELECT name FROM sqlite_master WHERE type='trigger'"))}
+        assert {
+            "positions_refuse_entry_intent_id_rebind",
+            "trades_refuse_entry_intent_id_rebind",
+        } <= triggers
+        for table, row_id in (("positions", 4501), ("trades", 4502)):
+            with pytest.raises(IntegrityError, match="entry_intent_id is immutable"):
+                connection.execute(sa.text(
+                    f"UPDATE {table} SET entry_intent_id='rebound' WHERE id=:id"),
+                    {"id": row_id})
+            assert connection.execute(sa.text(
+                f"SELECT entry_intent_id FROM {table} WHERE id=:id"),
+                {"id": row_id}).scalar_one_or_none() is None
+        with pytest.raises(IntegrityError):
+            connection.execute(sa.text(
+                "UPDATE positions SET paper_entry_charge_schedule_id='schedule', "
+                "paper_entry_charge_schedule_address=:address WHERE id=4501"),
+                {"address": "sha256:" + "a" * 64})
+
+    from sqlalchemy.orm import Session
+    from app.db.models import Position, Trade
+    from app.engine.broker import PaperBroker
+    from app.providers.mock import MockProvider
+    with Session(engine, expire_on_commit=False) as session:
+        broker = object.__new__(PaperBroker)
+        broker.s = session
+        broker.owner_id = "owner"
+        broker.broker_account_id = "account.default"
+        broker.deployment_id = 1
+        broker.book = "paper"
+        broker.provider = MockProvider()
+        historical = session.get(Position, 4501)
+        closed = broker.close_position(
+            historical, 22.0, "UPGRADED_NULL_EXIT",
+            dt.datetime(2026, 8, 30, 9, 30), 24010.0)
+        receipt = broker.charge_result_receipt(closed)
+        assert closed.paper_entry_charge_schedule_id is None
+        assert closed.entry_intent_id is None
+        assert closed.paper_exit_charge_schedule_id is not None
+        assert receipt["entry_authority_state"] == "LEGACY_ENTRY_AUTHORITY_UNKNOWN"
+        assert receipt["exit_authority_state"] == "KNOWN"
+        assert session.get(Position, 4501) is None
+        assert session.get(Trade, closed.id) is closed
+        assert broker.reconcile()["diff"] == 0.0
+
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="destructive downgrade"):
+            command.downgrade(migrate.alembic_config(connection), "0044")
+    assert migrate.schema_version(engine) == "0045"
+
+
+def test_revision_0045_refuses_a_partial_catalog_and_rolls_back_interruption(tmp_path):
+    """FH-09: half-shaped authority never becomes a stamped current schema."""
+    engine = _build_from_baseline_at_revision(tmp_path, "0045-partial.db", "0044")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE positions ADD COLUMN paper_entry_charge_schedule_id VARCHAR(96)")
+    with pytest.raises(RuntimeError, match="partial/unproven"):
+        with engine.begin() as connection:
+            command.upgrade(migrate.alembic_config(connection), "0045")
+    assert migrate.schema_version(engine) == "0044"
+    assert "paper_entry_charge_schedule_address" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("positions")}
+
+
+def test_revision_0045_sqlite_interruption_rolls_back_and_retry_converges(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "0045-interrupted.db", "0044")
+    interrupted = False
+
+    def interrupt(_connection, _cursor, statement, _parameters, _context, _many):
+        nonlocal interrupted
+        if (not interrupted
+                and "ALTER TABLE trades ADD COLUMN paper_exit_charge_schedule_id"
+                in statement):
+            interrupted = True
+            raise RuntimeError("injected 0045 interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", interrupt)
+    try:
+        with pytest.raises(RuntimeError, match="injected 0045 interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0045")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", interrupt)
+    assert interrupted
+    assert migrate.schema_version(engine) == "0044"
+    assert "paper_entry_charge_schedule_id" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("positions")}
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0045")
+    assert migrate.schema_version(engine) == "0045"
+
+
+def test_rejected_same_number_0045_catalog_refuses_before_paper_entry(tmp_path):
+    """A stale 0045 marker cannot make the rejected constraint set current."""
+    from sqlalchemy.orm import Session
+
+    from app.engine.broker import PaperBroker
+
+    engine = _build_from_baseline_at_revision(tmp_path, "0045-stale.db", "0044")
+    with engine.begin() as connection:
+        for table, columns in {
+            "positions": (
+                "paper_entry_charge_schedule_id VARCHAR(96)",
+                "paper_entry_charge_schedule_address VARCHAR(71)",
+            ),
+            "trades": (
+                "paper_entry_charge_schedule_id VARCHAR(96)",
+                "paper_entry_charge_schedule_address VARCHAR(71)",
+                "paper_exit_charge_schedule_id VARCHAR(96)",
+                "paper_exit_charge_schedule_address VARCHAR(71)",
+            ),
+        }.items():
+            for column in columns:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column}")
+        connection.exec_driver_sql(
+            "UPDATE alembic_version SET version_num='0045'")
+
+    with Session(engine) as session:
+        broker = object.__new__(PaperBroker)
+        broker.s = session
+        broker.MODE = "paper"
+        with pytest.raises(RuntimeError, match="PAPER_ENTRY_LIFECYCLE_SCHEMA_STALE"):
+            broker._prepare_paper_entry_intent(
+                entry_intent_id=None, recovery_intent=None,
+                instrument_key="NIFTY", tradingsymbol="NIFTY 50",
+                exchange="NSE_INTRADAY", side="BUY", segment="equity_intraday",
+                qty=1, decision_price=100.0, now=dt.datetime(2026, 8, 30, 10, 0),
+                strategy_key="s", strategy_version="v",
+                admission_address="sha256:" + "a" * 64,
+                graph_address="sha256:" + "b" * 64,
+                attribution_state="ATTRIBUTED")
 
 
 def test_revision_0034_adds_immutable_admissions_and_nullable_consumer_references(tmp_path):
@@ -1157,7 +1695,7 @@ def test_revision_0024_discards_source_present_stale_temp(tmp_path, table):
 
 
 def test_revision_0024_legacy_only_downgrade_is_lossless_and_reupgradeable(tmp_path):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(tmp_path, "0024-legacy-only-downgrade.db", "0024")
     with engine.begin() as connection:
         command.downgrade(migrate.alembic_config(connection), "0023")
         assert "owner_id" not in {c["name"] for c in sa.inspect(connection).get_columns("backtest_runs")}
@@ -1357,7 +1895,9 @@ def test_revision_0024_retries_after_final_cleanup_before_stamp(tmp_path):
 
 @pytest.mark.parametrize("table", ("backtest_runs", "backtest_results"))
 def test_revision_0024_downgrade_recovers_after_rename_before_proof_delete(tmp_path, table):
-    engine = _build_from_baseline(tmp_path)
+    engine = _build_from_baseline_at_revision(
+        tmp_path, f"0024-downgrade-retry-{table}.db", "0024"
+    )
     stopped = False
     def interrupt(_conn, _cursor, statement, params, _context, _many):
         nonlocal stopped
@@ -1497,7 +2037,7 @@ def test_revision_0022_populated_upgrade_preserves_review_bytes_and_schema_parit
             assert [row[1:] for row in actual] == list(rows)
             assert {row[0] for row in actual} == {"owner"}
 
-    fresh = _build_from_models(tmp_path)
+    fresh = _build_from_baseline_at_revision(tmp_path, "0022-populated-fresh.db", "0022")
     for table in REVIEW_0022_TABLES:
         assert _semantic_contract(_revision_0020_contract(upgraded, table)) == _semantic_contract(
             _revision_0020_contract(fresh, table)
@@ -2711,10 +3251,10 @@ AFFECTED_0021_TABLES = (
 
 def test_revision_0021_fresh_and_upgraded_contracts_match_for_every_affected_table(tmp_path):
     """Fresh and historical 0020 upgrades expose the same complete 0021 schema."""
-    fresh = _build_from_models(tmp_path)
+    fresh = _build_from_baseline_at_revision(tmp_path, "0021-complete-contract-fresh.db", "0021")
     upgraded = _at_revision_0020(tmp_path, "0021-complete-contract-upgrade.db")
     with upgraded.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
 
     for table in AFFECTED_0021_TABLES:
         assert _semantic_contract(_revision_0021_contract(upgraded, table)) == _semantic_contract(
@@ -2727,7 +3267,7 @@ def test_revision_0021_preserves_a_populated_0020_graph_layout_and_money_lineage
     engine = _at_revision_0020(tmp_path, "0021-populated-preservation.db")
     with engine.begin() as connection:
         before = _insert_populated_0020_graph_lineage(connection)
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0021")
         after = {
             table: tuple(connection.execute(sa.text(f"SELECT * FROM {table} WHERE " + (
                 "project_id='project.legacy'" if table == "projects" else
@@ -3063,10 +3603,10 @@ def test_revision_0020_upgrade_preserves_real_0019_project_and_graph_payloads(tm
 
 def test_revision_0020_fresh_and_upgraded_contracts_match_completely(tmp_path):
     """0020 owns its historical DDL; parity includes defaults, guards and index SQL."""
-    fresh = _build_from_models(tmp_path)
+    fresh = _build_from_baseline_at_revision(tmp_path, "0020-contract-fresh.db", "0020")
     upgraded = _at_revision_0019(tmp_path, "0020-contract-upgrade.db")
     with upgraded.begin() as connection:
-        command.upgrade(migrate.alembic_config(connection), HEAD)
+        command.upgrade(migrate.alembic_config(connection), "0020")
 
     for table in ("projects", "graph_versions"):
         assert _revision_0020_contract(upgraded, table) == _revision_0020_contract(fresh, table)
@@ -3997,11 +4537,11 @@ def _seed_0023_strategy_config_payload(connection):
 
 
 def test_revision_0023_fresh_and_upgraded_strategy_configuration_contracts_match(tmp_path):
-    """Rows, constraints, keys, indexes, checks and triggers converge at head."""
+    """Rows, constraints, keys, indexes, checks and triggers converge at 0023."""
     upgraded = _at_revision_0020(tmp_path, "0023-contract-upgraded.db")
     with upgraded.begin() as connection:
         command.upgrade(migrate.alembic_config(connection), "0023")
-    fresh = _build_from_models(tmp_path)
+    fresh = _build_from_baseline_at_revision(tmp_path, "0023-contract-fresh.db", "0023")
     for table in STRATEGY_CONFIG_0023_TABLES:
         assert _semantic_contract(_revision_0020_contract(upgraded, table)) == _semantic_contract(
             _revision_0020_contract(fresh, table)
@@ -4378,3 +4918,344 @@ def test_revision_0023_retry_refuses_a_promoted_source_mutated_before_proof_clea
         )).all()) == before
         assert tuple(connection.execute(sa.text(f"SELECT * FROM {table} ORDER BY rowid")).all()) == payload
         assert connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one() == foreign_keys
+
+
+def test_revision_0037_fresh_and_0036_upgrade_have_identical_graph_contract(tmp_path):
+    """The additive graph table is present only at 0037 and matches the ORM exactly."""
+    fresh = _build_from_models(tmp_path)
+    upgraded = _build_from_baseline_at_revision(tmp_path, "upgrade-0037.db", "0036")
+    assert migrate.schema_version(fresh) == HEAD
+    assert migrate.schema_version(upgraded) == "0036"
+    assert "ir_v2_graph_versions" not in sa.inspect(upgraded).get_table_names()
+
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+    assert migrate.schema_version(upgraded) == HEAD
+
+    fresh_graph = _schema(fresh)["ir_v2_graph_versions"]
+    upgraded_graph = _schema(upgraded)["ir_v2_graph_versions"]
+    assert upgraded_graph == fresh_graph
+
+
+def test_revision_0037_preserves_legacy_receipt_bytes_and_refuses_downgrade(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "legacy-0037.db", "0036")
+    document = {
+        "owner_id": "legacy-owner",
+        "graph_identifier": "legacy.graph",
+        "graph_version": 1,
+        "graph_address": "sha256:" + "1" * 64,
+        "scheme": "phase3-causal",
+        "contract_suite": "v1",
+        "parity_suite": "v1",
+    }
+    before = json.dumps(document, separators=(",", ":"))
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO strategy_admissions "
+            "(owner_id, admission_address, graph_identifier, graph_version, graph_address, "
+            "artifact_json, scheme, contract_suite, parity_suite, created_at) "
+            "VALUES ('legacy-owner', :address, 'legacy.graph', 1, :graph, :artifact, "
+            "'phase3-causal', 'v1', 'v1', CURRENT_TIMESTAMP)"), {
+                "address": "sha256:" + "2" * 64,
+                "graph": document["graph_address"],
+                "artifact": before,
+            })
+        command.upgrade(migrate.alembic_config(connection), HEAD)
+        with pytest.raises(RuntimeError, match="refuses"):
+            command.downgrade(migrate.alembic_config(connection), "0036")
+    with engine.connect() as connection:
+        row = connection.execute(sa.text(
+            "SELECT artifact_json, format_version, content_address "
+            "FROM strategy_admissions WHERE owner_id='legacy-owner'")).one()
+        assert row.artifact_json == before
+        assert row.format_version is None
+        assert row.content_address is None
+        # Empty additive 0047 rolls back losslessly before the older 0037
+        # durable-receipt downgrade refusal stops the chain.
+        assert migrate.schema_version(engine) == "0046"
+
+
+def test_revision_0047_is_linear_from_0046_and_matches_fresh_model(tmp_path):
+    fresh = _build_from_models(tmp_path)
+    upgraded = _build_from_baseline_at_revision(tmp_path, "upgrade-0047.db", "0046")
+    assert migrate.schema_version(upgraded) == "0046"
+    assert "ir_v2_editor_presentations" not in sa.inspect(upgraded).get_table_names()
+    with upgraded.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0047")
+    assert migrate.schema_version(upgraded) == "0047"
+    assert _schema(upgraded)["ir_v2_editor_presentations"] == (
+        _schema(fresh)["ir_v2_editor_presentations"])
+
+
+def test_revision_0047_refuses_nonempty_downgrade_but_empty_downgrade_is_lossless(tmp_path):
+    populated = _build_from_baseline_at_revision(tmp_path, "populated-0047.db", "0047")
+    encoded = json.dumps({
+        "schema": "strategy-os-v2-presentation/1", "positions": {}, "groups": {},
+        "viewport": None, "selection": {"nodes": [], "edges": [], "outputs": []},
+    }, sort_keys=True, separators=(",", ":"))
+    with populated.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO organizations (organization_id,name,created_at,updated_at) "
+            "VALUES ('owner-0047','Owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO projects (project_id,owner_id,name,description,status,created_at,updated_at) "
+            "VALUES ('project-0047','owner-0047','Project','','active',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO graph_artifacts "
+            "(owner_id,identifier,project_id,display_name,draft_json,draft_revision,"
+            "published_revision,current_version,created_at,updated_at) VALUES "
+            "('owner-0047','graph-0047','project-0047','Graph','{}',0,NULL,NULL,"
+            "CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"))
+        connection.execute(sa.text(
+            "INSERT INTO ir_v2_editor_presentations "
+            "(owner_id,graph_identifier,format_version,presentation_json,revision,updated_at) "
+            "VALUES ('owner-0047','graph-0047',2,:encoded,0,CURRENT_TIMESTAMP)"),
+            {"encoded": encoded})
+        with pytest.raises(RuntimeError, match="refuses to drop nonempty"):
+            command.downgrade(migrate.alembic_config(connection), "0046")
+    assert migrate.schema_version(populated) == "0047"
+
+    empty = _build_from_baseline_at_revision(tmp_path, "empty-0047.db", "0047")
+    with empty.begin() as connection:
+        command.downgrade(migrate.alembic_config(connection), "0046")
+    assert migrate.schema_version(empty) == "0046"
+    assert "ir_v2_editor_presentations" not in sa.inspect(empty).get_table_names()
+
+
+def test_managed_current_upgrade_refuses_any_source_other_than_exact_0054(tmp_path):
+    engine = _build_from_models(tmp_path)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE ir_v2_editor_presentations")
+        command.stamp(migrate.alembic_config(connection), "0045", purge=True)
+    with pytest.raises(RuntimeError, match="requires exact accepted 0055 source"):
+        migrate.upgrade_to_head(engine)
+    assert migrate.schema_version(engine) == "0045"
+
+
+def test_revision_0047_interruption_rolls_back_then_retries_cleanly(tmp_path):
+    engine = _build_from_baseline_at_revision(tmp_path, "interrupted-0047.db", "0046")
+    interrupted = False
+
+    def stop_create(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal interrupted
+        if not interrupted and "CREATE TABLE ir_v2_editor_presentations" in statement:
+            interrupted = True
+            raise RuntimeError("synthetic 0047 interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", stop_create)
+    try:
+        with pytest.raises(RuntimeError, match="synthetic 0047 interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0047")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_create)
+    assert interrupted
+    assert migrate.schema_version(engine) == "0046"
+    assert "ir_v2_editor_presentations" not in sa.inspect(engine).get_table_names()
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0047")
+    assert migrate.schema_version(engine) == "0047"
+    assert "ir_v2_editor_presentations" in sa.inspect(engine).get_table_names()
+
+
+def test_postgresql16_revision_0047_interruption_and_presentation_least_privilege(
+        pg_sandbox):
+    engine = pg_sandbox.engine("v2_editor_0047_interruption")
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE ir_v2_editor_presentations")
+        command.stamp(migrate.alembic_config(connection), "0046")
+    interrupted = False
+
+    def stop_create(_connection, _cursor, statement, _params, _context, _many):
+        nonlocal interrupted
+        if not interrupted and "CREATE TABLE ir_v2_editor_presentations" in statement:
+            interrupted = True
+            raise RuntimeError("synthetic PG16 0047 interruption")
+
+    sa.event.listen(engine, "before_cursor_execute", stop_create)
+    try:
+        with pytest.raises(RuntimeError, match="synthetic PG16 0047 interruption"):
+            with engine.begin() as connection:
+                command.upgrade(migrate.alembic_config(connection), "0047")
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", stop_create)
+    assert interrupted
+    assert migrate.schema_version(engine) == "0046"
+    assert "ir_v2_editor_presentations" not in sa.inspect(engine).get_table_names()
+    with engine.begin() as connection:
+        command.upgrade(migrate.alembic_config(connection), "0047")
+    assert migrate.schema_version(engine) == "0047"
+
+    suffix = __import__("uuid").uuid4().hex[:12]
+    editor_role = f"v2_editor_{suffix}"
+    operator_role = f"v2_operator_{suffix}"
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f'CREATE ROLE "{editor_role}" NOLOGIN')
+        connection.exec_driver_sql(f'CREATE ROLE "{operator_role}" NOLOGIN')
+        connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{editor_role}"')
+        connection.exec_driver_sql(
+            f'GRANT SELECT,INSERT,UPDATE ON ir_v2_editor_presentations TO "{editor_role}"')
+    try:
+        with engine.connect() as connection:
+            editor = connection.execute(sa.text(
+                "SELECT has_table_privilege(:role,'ir_v2_editor_presentations','SELECT'),"
+                "has_table_privilege(:role,'ir_v2_editor_presentations','INSERT'),"
+                "has_table_privilege(:role,'ir_v2_editor_presentations','UPDATE'),"
+                "has_table_privilege(:role,'ir_v2_editor_presentations','DELETE'),"
+                "has_table_privilege(:role,'graph_artifacts','SELECT')"),
+                {"role": editor_role}).one()
+            operator = connection.scalar(sa.text(
+                "SELECT has_table_privilege(:role,'ir_v2_editor_presentations','SELECT')"),
+                {"role": operator_role})
+        assert editor == (True, True, True, False, False)
+        assert operator is False
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP OWNED BY "{editor_role}"')
+            connection.exec_driver_sql(f'DROP OWNED BY "{operator_role}"')
+            connection.exec_driver_sql(f'DROP ROLE "{editor_role}"')
+            connection.exec_driver_sql(f'DROP ROLE "{operator_role}"')
+
+
+def test_research_settings_0052_empty_prior_upgrade_and_immutable_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0052")
+    from sqlalchemy.orm import Session
+    from app.db.models import WorkspaceResearchSettingsRevision, StrategyResearchSettingsRevision, Organization, User
+    from research.domain.settings import ResearchSettingsRepository, PLATFORM_DEFAULTS
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'settings-0052.db'}")
+    Base.metadata.create_all(engine)
+    StrategyResearchSettingsRevision.__table__.drop(engine)
+    WorkspaceResearchSettingsRevision.__table__.drop(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0051", purge=True)
+    assert migrate.upgrade_to_head(engine) == "0052"
+    assert migrate.upgrade_to_head(engine) == "0052"
+    migrate._validate_current_schema(engine, Base.metadata.tables)
+    with Session(engine) as session:
+        session.add(Organization(organization_id="settings-migration", name="Owner"))
+        session.add(User(user_id="settings-migration-user", email_normalized="migration-settings@example.test", display_name="User"))
+        session.commit()
+        ResearchSettingsRepository(session).update(owner_id="settings-migration", created_by="settings-migration-user",
+            expected_revision=0, request_id="00000000-0000-4000-8000-000000000001", values=PLATFORM_DEFAULTS)
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="refuses to discard"):
+            command.downgrade(migrate.alembic_config(connection), "0051")
+    assert migrate.schema_version(engine) == "0052"
+    engine.dispose()
+
+
+@pytest.mark.parametrize("partial", (False, True))
+def test_research_settings_0052_refuses_wrong_or_partial_source(tmp_path, partial, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0052")
+    from app.db.models import WorkspaceResearchSettingsRevision, StrategyResearchSettingsRevision
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'settings-refusal.db'}")
+    Base.metadata.create_all(engine)
+    StrategyResearchSettingsRevision.__table__.drop(engine)
+    if not partial:
+        WorkspaceResearchSettingsRevision.__table__.drop(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0051" if partial else "0050", purge=True)
+    with pytest.raises(RuntimeError, match="partial|exact accepted"):
+        migrate.upgrade_to_head(engine)
+    assert migrate.schema_version(engine) == ("0051" if partial else "0050")
+    engine.dispose()
+
+
+def test_research_settings_0052_empty_downgrade_preserves_prior_schema(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0052")
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'settings-empty.db'}")
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0052", purge=True)
+        command.downgrade(migrate.alembic_config(connection), "0051")
+    assert "workspace_research_settings_revisions" not in sa.inspect(engine).get_table_names()
+    assert "chart_context_annotations" in sa.inspect(engine).get_table_names()
+    assert migrate.upgrade_to_head(engine) == "0052"
+    engine.dispose()
+
+
+def _publication_receipt_migration_engine(tmp_path):
+    from sqlalchemy.orm import Session
+    from app.db.models import IrV2GraphVersion
+    from app.ir.formats.v2 import canonical_document, content_address_for, graph_address_for
+    from app.ir.hashing import canonical_json
+    from app.ir.registry import PlatformRegistry
+    registry = PlatformRegistry(components={}, bodies={}, registrations={}, v2_types={}, v2_components={})
+    document = dict(canonical_document({"format_version": 2, "strategy_id": "legacy.pub", "strategy_version": 1,
+        "metadata": {"metadata_version": 1, "name": "Legacy", "description": None, "tags": []},
+        "graph_inputs": [], "graph_outputs": [], "nodes": [], "edges": []}, registry))
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'publication-0053.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(IrV2GraphVersion(owner_id="owner-a", graph_identifier="legacy.pub", graph_version=1,
+            artifact_json=canonical_json(document), format_version=2,
+            content_address=content_address_for(document, registry), graph_address=graph_address_for(document, registry),
+            registry_snapshot_address=registry.registry_snapshot_address))
+        session.commit()
+    return engine, registry
+
+
+def test_publication_receipt_0053_upgrade_preserves_null_rows_and_empty_downgrade(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0053")
+    engine, _ = _publication_receipt_migration_engine(tmp_path)
+    fields = "artifact_json,content_address,graph_address,registry_snapshot_address"
+    with engine.begin() as connection:
+        original = connection.execute(sa.text(f"SELECT {fields} FROM ir_v2_graph_versions")).one()
+        connection.exec_driver_sql("ALTER TABLE ir_v2_graph_versions DROP COLUMN publication_receipt_json")
+        command.stamp(migrate.alembic_config(connection), "0052", purge=True)
+    assert migrate.upgrade_to_head(engine) == "0053"
+    assert migrate.upgrade_to_head(engine) == "0053"
+    migrate._validate_current_schema(engine, Base.metadata.tables)
+    with engine.begin() as connection:
+        assert connection.execute(sa.text(f"SELECT {fields} FROM ir_v2_graph_versions")).one() == original
+        assert connection.scalar(sa.text("SELECT publication_receipt_json FROM ir_v2_graph_versions")) is None
+        command.downgrade(migrate.alembic_config(connection), "0052")
+        assert connection.execute(sa.text(f"SELECT {fields} FROM ir_v2_graph_versions")).one() == original
+    assert "publication_receipt_json" not in {item["name"] for item in sa.inspect(engine).get_columns("ir_v2_graph_versions")}
+    assert migrate.upgrade_to_head(engine) == "0053"
+    engine.dispose()
+
+
+def test_publication_receipt_0053_refuses_data_loss_and_prior_head_receipts(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0053")
+    from sqlalchemy.orm import sessionmaker
+    from app.db.models import Organization, Project
+    from app.editor import v2_editor_store as store
+    from app.ir.hashing import canonical_json
+    engine, registry = _publication_receipt_migration_engine(tmp_path)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0053", purge=True)
+    Sessions = sessionmaker(engine, expire_on_commit=False)
+    with Sessions.begin() as session:
+        session.add(Organization(organization_id="publisher", name="Publisher")); session.flush()
+        session.add(Project(owner_id="publisher", project_id="p", name="Project"))
+    monkeypatch.setattr(store, "SessionLocal", Sessions)
+    monkeypatch.setattr(store, "REGISTRY", registry)
+    store.create_graph("p", "new.pub", "New", "", owner_id="publisher")
+    receipt = store.publish("p", "new.pub", base_revision=0, expected_current_version=None, owner_id="publisher")
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="refuses to discard publication receipts"):
+            command.downgrade(migrate.alembic_config(connection), "0052")
+        assert connection.scalar(sa.text("SELECT publication_receipt_json FROM ir_v2_graph_versions WHERE graph_identifier='new.pub'")) == canonical_json(receipt)
+        with pytest.raises(sa.exc.IntegrityError, match="immutable"):
+            connection.execute(sa.text("UPDATE ir_v2_graph_versions SET publication_receipt_json=NULL WHERE graph_identifier='new.pub'"))
+        command.stamp(migrate.alembic_config(connection), "0052", purge=True)
+    with pytest.raises(RuntimeError, match="preexisting receipt data"):
+        migrate.upgrade_to_head(engine)
+    engine.dispose()
+
+
+def test_publication_receipt_0053_accepts_only_exact_empty_expansion(tmp_path, monkeypatch):
+    monkeypatch.setattr(migrate, "head_revision", lambda: "0053")
+    engine, _ = _publication_receipt_migration_engine(tmp_path)
+    with engine.begin() as connection:
+        command.stamp(migrate.alembic_config(connection), "0052", purge=True)
+    assert migrate.upgrade_to_head(engine) == "0053"
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE ir_v2_graph_versions DROP COLUMN publication_receipt_json")
+        connection.exec_driver_sql("ALTER TABLE ir_v2_graph_versions ADD COLUMN publication_receipt_json INTEGER")
+        command.stamp(migrate.alembic_config(connection), "0052", purge=True)
+    with pytest.raises(RuntimeError, match="unexpected publication receipt column"):
+        migrate.upgrade_to_head(engine)
+    engine.dispose()

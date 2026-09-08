@@ -27,6 +27,8 @@ def _stores(tmp_path, monkeypatch):
     init_db(reset=True)
     engine = make_engine(research_db_path())
     ResearchBase.metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE IF EXISTS research_schema_version")
     init_research_db(engine)
     engine.dispose()
     monkeypatch.setenv(

@@ -22,41 +22,18 @@ first quietly becomes the second. So:
 from __future__ import annotations
 
 import zlib
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
-from app.backtest import dataset_store, repository, sweep
+from app.backtest import dataset_store, sweep
 from app.backtest.universe import liquid_universe
 from app.db.models import BacktestResult, BacktestRun
 from app.db.session import SessionLocal, init_db
 from app.providers.mock import MockProvider
-from app.strategy.registry import get_strategy
 
 INTERVALS = ["15minute", "30minute"]
-STRATEGIES = ["trend_impulse_v3", "expanding_z_v4"]
-
-
-def _admission_address(owner_id: str) -> str:
-    return "sha256:" + "d" * 64
-
-
-@pytest.fixture(autouse=True)
-def _admitted_sweeps(monkeypatch):
-    original = sweep.start_sweep
-    monkeypatch.setattr(
-        repository, "load_verified_admission",
-        lambda _session, *, admission_address, **_kwargs: SimpleNamespace(
-            admission_address=admission_address, strategy=get_strategy("trend_impulse_v3")),
-    )
-
-    def start(*args, **kwargs):
-        kwargs.setdefault("admission_address", _admission_address(kwargs["owner_id"]))
-        kwargs.pop("strategies", None)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(sweep, "start_sweep", start)
+STRATEGIES = ["ir.test.strategy.expanding_z_impulse"]
 
 
 class CountingMockProvider(MockProvider):
@@ -97,11 +74,11 @@ def _artifacts(run_id) -> dict:
         }
 
 
-def _cold_run(provider, **kwargs):
+def _cold_run(provider, admitted_backtest_receipt, **kwargs):
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=provider, strategies=STRATEGIES,
-        **kwargs)
+        **kwargs, **admitted_backtest_receipt())
     sweep._join()
     return run_id
 
@@ -109,10 +86,10 @@ def _cold_run(provider, **kwargs):
 # ── 1. a pinned rerun is free and exact ──────────────────────────────────────
 
 def test_pinned_rerun_makes_no_provider_call_and_reproduces_every_artifact(
-        store_root):
+        store_root, admitted_backtest_receipt):
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    cold_id = _cold_run(cold_provider)
+    cold_id = _cold_run(cold_provider, admitted_backtest_receipt)
     assert [r[:2] for r in cold_provider.candle_reads] == [
         ("NIFTY", "15minute"), ("NIFTY", "30minute")]
     cold = _artifacts(cold_id)
@@ -129,7 +106,7 @@ def test_pinned_rerun_makes_no_provider_call_and_reproduces_every_artifact(
     pinned_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider, strategies=STRATEGIES,
-        pinned_datasets=pins)
+        pinned_datasets=pins, **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []          # empty, not merely fewer
@@ -150,10 +127,10 @@ def _rows(run_id):
 
 # ── 2-5. a pin that cannot be honoured fails closed ──────────────────────────
 
-def test_unpinned_cell_fails_closed_and_the_run_continues(store_root):
+def test_unpinned_cell_fails_closed_and_the_run_continues(store_root, admitted_backtest_receipt):
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], INTERVALS)
     pins.pop(sweep.pin_key("NIFTY", "30minute"))
@@ -163,7 +140,8 @@ def test_unpinned_cell_fails_closed_and_the_run_continues(store_root):
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
-        strategies=["trend_impulse_v3"], pinned_datasets=pins)
+        strategies=STRATEGIES, pinned_datasets=pins,
+        **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []       # NO silent fall-back fetch
@@ -175,14 +153,16 @@ def test_unpinned_cell_fails_closed_and_the_run_continues(store_root):
         assert session.get(BacktestRun, run_id).status == "done"
 
 
-def test_pinned_dataset_missing_from_the_store_fails_closed(store_root):
+def test_pinned_dataset_missing_from_the_store_fails_closed(store_root,
+                                                            admitted_backtest_receipt):
     init_db(reset=True)
     provider = CountingMockProvider()
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=provider,
-        strategies=["trend_impulse_v3"],
-        pinned_datasets={sweep.pin_key("NIFTY", "15minute"): "a" * 64})
+        strategies=STRATEGIES,
+        pinned_datasets={sweep.pin_key("NIFTY", "15minute"): "a" * 64},
+        **admitted_backtest_receipt())
     sweep._join()
 
     assert provider.candle_reads == []
@@ -191,10 +171,11 @@ def test_pinned_dataset_missing_from_the_store_fails_closed(store_root):
     assert "pinned" in row.error and "missing" in row.error
 
 
-def test_pinned_dataset_whose_content_changed_is_refused_not_refetched(store_root):
+def test_pinned_dataset_whose_content_changed_is_refused_not_refetched(
+        store_root, admitted_backtest_receipt):
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], ["15minute"])
     address = pins[sweep.pin_key("NIFTY", "15minute")]
@@ -211,7 +192,8 @@ def test_pinned_dataset_whose_content_changed_is_refused_not_refetched(store_roo
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
-        strategies=["trend_impulse_v3"], pinned_datasets=pins)
+        strategies=STRATEGIES, pinned_datasets=pins,
+        **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []
@@ -219,7 +201,8 @@ def test_pinned_dataset_whose_content_changed_is_refused_not_refetched(store_roo
     assert "pinned" in row.error and "missing" in row.error
 
 
-def test_pinned_address_describing_another_series_is_refused(store_root):
+def test_pinned_address_describing_another_series_is_refused(store_root,
+                                                              admitted_backtest_receipt):
     """The manifest-mismatch case the address check alone CANNOT catch.
 
     A 30-minute dataset recomputes to its own address perfectly. Serving it to
@@ -228,7 +211,7 @@ def test_pinned_address_describing_another_series_is_refused(store_root):
     """
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], INTERVALS)
     swapped = {sweep.pin_key("NIFTY", "15minute"):
@@ -239,7 +222,8 @@ def test_pinned_address_describing_another_series_is_refused(store_root):
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
-        strategies=["trend_impulse_v3"], pinned_datasets=swapped)
+        strategies=STRATEGIES, pinned_datasets=swapped,
+        **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []
@@ -247,12 +231,13 @@ def test_pinned_address_describing_another_series_is_refused(store_root):
     assert "pinned" in row.error and "interval" in row.error
 
 
-def test_pinned_address_from_a_different_window_is_refused(store_root):
+def test_pinned_address_from_a_different_window_is_refused(store_root,
+                                                            admitted_backtest_receipt):
     """A pin is bound to the window it was fetched for. Honouring it under a
     different requested window would be a clone wearing a rerun's name."""
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], ["15minute"])
 
@@ -261,8 +246,8 @@ def test_pinned_address_from_a_different_window_is_refused(store_root):
     run_id = sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=["15minute"], capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider,
-        strategies=["trend_impulse_v3"], lookback_days=30,
-        pinned_datasets=pins)
+        strategies=STRATEGIES, lookback_days=30,
+        pinned_datasets=pins, **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []
@@ -270,7 +255,8 @@ def test_pinned_address_from_a_different_window_is_refused(store_root):
     assert "pinned" in row.error and "window" in row.error
 
 
-def test_a_malformed_pinned_address_is_rejected_before_the_run_exists(store_root):
+def test_a_malformed_pinned_address_is_rejected_before_the_run_exists(
+        store_root, admitted_backtest_receipt):
     init_db(reset=True)
     provider = CountingMockProvider()
     with SessionLocal() as session:
@@ -279,7 +265,8 @@ def test_a_malformed_pinned_address_is_rejected_before_the_run_exists(store_root
         sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute"], capital=50_000,
             instruments=["NIFTY"], provider=provider,
-            pinned_datasets={sweep.pin_key("NIFTY", "15minute"): "nope"})
+            pinned_datasets={sweep.pin_key("NIFTY", "15minute"): "nope"},
+            **admitted_backtest_receipt())
     assert not sweep.is_running()
     assert provider.candle_reads == []
     with SessionLocal() as session:
@@ -289,17 +276,17 @@ def test_a_malformed_pinned_address_is_rejected_before_the_run_exists(store_root
 # ── 6. absent the parameter, nothing changed ─────────────────────────────────
 
 def test_a_sweep_without_the_pin_parameter_reads_exactly_what_it_always_read(
-        store_root):
+        store_root, admitted_backtest_receipt):
     """Pinning is opt-in. A fully populated store must not shorten a refresh by
     one single read — that is the stale-history defect cache schema v8 fixed."""
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     assert len(dataset_store.get_store().stored_addresses()) == 2
 
     init_db(reset=True)
     warm_provider = CountingMockProvider()
-    _cold_run(warm_provider)
+    _cold_run(warm_provider, admitted_backtest_receipt)
 
     assert warm_provider.candle_reads == cold_provider.candle_reads
     assert warm_provider.candle_reads == [
@@ -317,7 +304,8 @@ def test_resolution_is_explicit_and_returns_nothing_for_an_empty_store(
     assert provider.candle_reads == []
 
 
-def test_the_happy_path_actually_reads_the_store(store_root, monkeypatch):
+def test_the_happy_path_actually_reads_the_store(store_root, monkeypatch,
+                                                 admitted_backtest_receipt):
     """Zero provider reads is necessary but not sufficient evidence.
 
     Test 1 proves a pinned rerun makes no provider call and reproduces every
@@ -332,7 +320,7 @@ def test_the_happy_path_actually_reads_the_store(store_root, monkeypatch):
     """
     init_db(reset=True)
     cold_provider = CountingMockProvider()
-    _cold_run(cold_provider)
+    _cold_run(cold_provider, admitted_backtest_receipt)
     pins = sweep.resolve_pinned_datasets(
         cold_provider, [_nifty(cold_provider)], INTERVALS)
     assert pins, "nothing was stored, so the rest of this test would be vacuous"
@@ -351,7 +339,7 @@ def test_the_happy_path_actually_reads_the_store(store_root, monkeypatch):
     sweep.start_sweep(owner_id="owner",
         scope="liquid", intervals=INTERVALS, capital=50_000,
         instruments=["NIFTY"], provider=pinned_provider, strategies=STRATEGIES,
-        pinned_datasets=pins)
+        pinned_datasets=pins, **admitted_backtest_receipt())
     sweep._join()
 
     assert pinned_provider.candle_reads == []

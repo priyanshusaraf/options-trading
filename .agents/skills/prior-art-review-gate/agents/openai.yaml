@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review prior art before committing to infrastructure"
+  short_description: "Require exact source, commit and licence evidence"
+  default_prompt: "Use $prior-art-review-gate for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

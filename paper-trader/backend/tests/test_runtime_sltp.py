@@ -10,6 +10,7 @@ from app.providers.mock import MockProvider
 from app.engine.broker import PaperBroker
 from app.core.instruments import get_instrument
 from app.core.runtime_config import set_override, clear_override, effective
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _broker():
@@ -25,7 +26,9 @@ def test_sltp_override_applies_to_new_entry():
     try:
         set_override("stop_loss_pct", "0.10", owner_id="owner")
         set_override("target_pct", "0.20", owner_id="owner")
-        pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot)
+        admission = persist_admitted_entry(b.s)
+        pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot,
+                              **admission)
         assert pos.stop_price == pytest.approx(q.ltp * 0.90)
         assert pos.target_price == pytest.approx(q.ltp * 1.20)
     finally:
@@ -80,7 +83,9 @@ def test_sltp_default_when_no_override():
     inst = get_instrument("NIFTY")
     chain = b.provider.get_option_chain(inst)
     q = chain.quotes[0]
-    pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot)
+    admission = persist_admitted_entry(b.s)
+    pos = b.open_position(inst, "LONG", q, "test", b.provider.now(), chain.spot,
+                          **admission)
     # default -30% / +60%
     assert pos.stop_price == pytest.approx(q.ltp * 0.70)
     assert pos.target_price == pytest.approx(q.ltp * 1.60)

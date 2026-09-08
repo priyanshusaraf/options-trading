@@ -6,6 +6,7 @@ the backstop retried (the 2026-07-08 LODHA class of failure, on the equity side)
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner_with_long_option():
@@ -15,7 +16,9 @@ def _runner_with_long_option():
     chain = r.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    pos = r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot)
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot,
+                                 **admission)
     return r, pos
 
 

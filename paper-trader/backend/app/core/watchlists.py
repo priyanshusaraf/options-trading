@@ -22,12 +22,18 @@ from app.db.models import Watchlist, WatchlistMembership
 
 
 def create_watchlist(session, name: str, strategy_key: str, *, owner_id: str, status: str = "active",
-                     interval: str | None = None, notes: str = "") -> Watchlist:
+                     interval: str | None = None, notes: str = "",
+                     broker_account_id: str | None = None,
+                     admission_address: str | None = None,
+                     instrument_keys: tuple[str, ...] = ()) -> Watchlist:
     # An active watchlist's strategy overrides the per-instrument assignment for every
     # member (`effective_strategy_map`, read straight into the engine's resolution), so
     # this is an engine assignment by another name and passes the same authority gate.
     from app.core.execution_binding import assert_may_execute
-    assert_may_execute(strategy_key, owner_id=owner_id)
+    assert_may_execute(strategy_key, owner_id=owner_id, session=session,
+                       broker_account_id=broker_account_id,
+                       admission_address=admission_address,
+                       instrument_keys=instrument_keys)
     w = Watchlist(owner_id=owner_id, name=name, strategy_key=strategy_key, status=status,
                   interval=interval, notes=notes)
     session.add(w)
@@ -144,6 +150,23 @@ def membership_map(session, *, owner_id: str) -> dict:
     return {m.instrument_key: m.watchlist_id
             for m in session.scalars(select(WatchlistMembership).where(
                 WatchlistMembership.owner_id == owner_id))}
+
+
+def active_member_keys(session, watchlist_id: int, *, owner_id: str) -> set[str]:
+    """Keys whose active-watchlist assignment would change with its strategy.
+
+    A membership alone is not an executable assignment: paused and archived watchlists
+    do not contribute to ``effective_strategy_map``.  Deployment uses this read before
+    changing a target strategy so it can require authority for every affected member.
+    """
+    return set(session.scalars(
+        select(WatchlistMembership.instrument_key)
+        .join(Watchlist, (WatchlistMembership.owner_id == Watchlist.owner_id) &
+              (WatchlistMembership.watchlist_id == Watchlist.id))
+        .where(WatchlistMembership.owner_id == owner_id,
+               Watchlist.id == watchlist_id,
+               Watchlist.status == "active")
+    ))
 
 
 def in_watchlist_keys(session, *, owner_id: str) -> set:

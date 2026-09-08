@@ -1,0 +1,25 @@
+{
+  "schema": "kleppmann-one-hop-triage/1",
+  "input_records": 2016,
+  "output_records": 2016,
+  "input_sha256": "e5214f7bc010415beb00cb8f4cf0ae1a3af07db12f5d828e6a9d8aff2dc44432",
+  "html_crawl_rerun": false,
+  "categories": {
+    "supporting_web_reference": 1445,
+    "paper_or_pdf": 224,
+    "official_book_material": 7,
+    "video": 127,
+    "course_material": 7,
+    "slide_deck": 134,
+    "code_or_research_artifact": 71,
+    "transcript": 1
+  },
+  "dispositions": {
+    "DEFER_BIBLIOGRAPHY_OR_CONTEXT": 1445,
+    "ADMIT_BOUNDED_ONE_HOP_CANDIDATE": 117,
+    "DEFER_OTHER_ONE_HOP_ARTIFACT": 454
+  },
+  "reviewed_queue_records": 3,
+  "supplemental_reviewed_artifacts": 5,
+  "state_warning": "Triage is not retrieval, reading, visual inspection, licence permission, claim admission or product authority."
+}

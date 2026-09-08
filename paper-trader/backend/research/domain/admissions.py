@@ -6,7 +6,6 @@ not complete Strategy Preflight or execution permission.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -14,11 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.ir.hashing import canonical_json, content_address
+from app.db.concurrency import caller_owned_savepoint
+from app.ir.hashing import canonical_json
 from app.ir.schema import is_content_address
+from app.ir.v2_graph_versions import PHASE4_SCHEMES
 from research.domain.models import (
     ExperimentRun,
     PromotionCandidate,
+    ResearchIrV2GraphVersion,
     ResearchStrategyAdmission,
 )
 
@@ -40,6 +42,8 @@ class AdmissionArtifact(Protocol):
     scheme: str
     contract_suite: str
     parity_suite: str
+    format_version: int | None
+    content_address: str | None
 
     def to_dict(self) -> dict: ...
 
@@ -55,49 +59,16 @@ class _CanonicalAdmission:
     scheme: str
     contract_suite: str
     parity_suite: str
+    format_version: int | None
+    content_address: str | None
 
 
 def _canonicalize(artifact: AdmissionArtifact) -> _CanonicalAdmission:
-    """Derive persisted identity from canonical receipt bytes, never hints."""
+    from app.ir.v2_graph_versions import canonical_admission_values
     try:
-        document = artifact.to_dict()
-    except Exception as exc:
-        raise AdmissionPersistenceError("admission artifact cannot produce receipt bytes") from exc
-    if not isinstance(document, Mapping):
-        raise AdmissionPersistenceError("admission artifact must produce a mapping")
-    try:
-        artifact_json = canonical_json(document)
-    except (TypeError, ValueError) as exc:
-        raise AdmissionPersistenceError("admission artifact is not canonical JSON") from exc
-    address = content_address(document)
-    if not is_content_address(address) or artifact.admission_address != address:
-        raise AdmissionPersistenceError("admission artifact address does not match canonical bytes")
-
-    fields = ("owner_id", "graph_identifier", "graph_version", "graph_address", "scheme",
-              "contract_suite", "parity_suite")
-    values: dict[str, object] = {}
-    for name in fields:
-        value = document.get(name)
-        if value != getattr(artifact, name, object()):
-            raise AdmissionPersistenceError(
-                f"admission artifact {name} does not match canonical bytes")
-        values[name] = value
-    if (not isinstance(values["owner_id"], str) or not values["owner_id"]
-            or not isinstance(values["graph_identifier"], str)
-            or not isinstance(values["graph_version"], int)
-            or isinstance(values["graph_version"], bool)
-            or values["graph_version"] < 1
-            or not is_content_address(values["graph_address"])
-            or any(not isinstance(values[name], str) or not values[name]
-                   for name in ("scheme", "contract_suite", "parity_suite"))):
-        raise AdmissionPersistenceError("admission artifact identity is invalid")
-    return _CanonicalAdmission(
-        owner_id=values["owner_id"], admission_address=address,
-        graph_identifier=values["graph_identifier"], graph_version=values["graph_version"],
-        graph_address=values["graph_address"], artifact_json=artifact_json,
-        scheme=values["scheme"], contract_suite=values["contract_suite"],
-        parity_suite=values["parity_suite"],
-    )
+        return _CanonicalAdmission(**canonical_admission_values(artifact))
+    except (ValueError, TypeError, KeyError) as exc:
+        raise AdmissionPersistenceError(str(exc)) from exc
 
 
 def load_admission(session: Session, *, owner_id: str,
@@ -115,6 +86,7 @@ def _same(row: ResearchStrategyAdmission, expected: _CanonicalAdmission) -> bool
     return all(getattr(row, name) == getattr(expected, name) for name in (
         "owner_id", "admission_address", "graph_identifier", "graph_version", "graph_address",
         "artifact_json", "scheme", "contract_suite", "parity_suite",
+        "format_version", "content_address",
     ))
 
 
@@ -127,30 +99,88 @@ def _require_same(row: ResearchStrategyAdmission | None,
     return row
 
 
+def _write_graph_facts(artifact, scheme):
+    if scheme not in PHASE4_SCHEMES:
+        return None
+    from app.strategy.admission import derive_v2_graph_facts
+    try:
+        return derive_v2_graph_facts(artifact)
+    except ValueError as exc:
+        raise AdmissionPersistenceError("Phase 4 writes require the constructor-authorized admission artifact") from exc
+
+
+def _existing_graph(session, facts, *, required=False):
+    if facts is None:
+        return None
+    with session.no_autoflush:
+        row = session.get(ResearchIrV2GraphVersion, (facts.owner_id, facts.graph_identifier, facts.graph_version))
+    if row is not None or required:
+        from app.ir.v2_graph_versions import require_row_matches
+        try:
+            require_row_matches(row, facts)
+        except (TypeError, ValueError) as exc:
+            raise AdmissionPersistenceError("conflicting bytes for immutable v2 graph version") from exc
+    return row
+
+
 def store_admission(session: Session, artifact: AdmissionArtifact) -> ResearchStrategyAdmission:
     """Insert one verified receipt; exact retries converge and conflicts refuse."""
     expected = _canonicalize(artifact)
-    existing = load_admission(session, owner_id=expected.owner_id,
-                              admission_address=expected.admission_address)
+    graph_facts = _write_graph_facts(artifact, expected.scheme)
+    graph_row = _existing_graph(session, graph_facts)
+    with session.no_autoflush:
+        existing = load_admission(session, owner_id=expected.owner_id, admission_address=expected.admission_address)
     if existing is not None:
+        if graph_facts is not None and graph_row is None:
+            raise AdmissionPersistenceError("Phase 4 receipt is missing its immutable v2 graph version")
         return _require_same(existing, expected)
+    return _insert_receipt(session, expected, graph_facts, graph_row)
 
+
+def _insert_receipt(session, expected, graph_facts, graph_row):
     candidate = ResearchStrategyAdmission(**expected.__dict__)
     try:
-        with session.begin_nested():
+        with caller_owned_savepoint(session, scope="research_strategy_admission"):
+            if graph_facts is not None and graph_row is None:
+                session.add(ResearchIrV2GraphVersion(**graph_facts.__dict__))
             session.add(candidate)
             session.flush()
         return candidate
     except IntegrityError:
-        return _require_same(load_admission(
-            session, owner_id=expected.owner_id, admission_address=expected.admission_address), expected)
+        _existing_graph(session, graph_facts, required=True)
+        return _require_same(load_admission(session, owner_id=expected.owner_id,
+                                  admission_address=expected.admission_address), expected)
 
 
 def require_admission(session: Session, artifact: AdmissionArtifact) -> ResearchStrategyAdmission:
     """Require exact canonical receipt bytes for one owner, never a key alone."""
     expected = _canonicalize(artifact)
-    return _require_same(load_admission(
+    receipt = _require_same(load_admission(
         session, owner_id=expected.owner_id, admission_address=expected.admission_address), expected)
+    if expected.scheme in PHASE4_SCHEMES:
+        from app.ir.v2_graph_versions import V2GraphFacts, require_row_matches
+        graph = session.get(ResearchIrV2GraphVersion, (
+            expected.owner_id, expected.graph_identifier, expected.graph_version,
+        ))
+        try:
+            require_row_matches(graph, V2GraphFacts(
+                owner_id=expected.owner_id,
+                graph_identifier=expected.graph_identifier,
+                graph_version=expected.graph_version,
+                artifact_json=canonical_json(
+                    artifact.base_v2_admission.to_dict()["document"]),
+                format_version=2,
+                content_address=expected.content_address,
+                graph_address=expected.graph_address,
+                registry_snapshot_address=artifact.phase4_data_binding[
+                    "registry_snapshot_address"
+                ],
+            ))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise AdmissionPersistenceError(
+                "Phase 4 receipt has no matching immutable v2 graph version"
+            ) from exc
+    return receipt
 
 
 def require_candidate_admission(session: Session, candidate: PromotionCandidate, *,

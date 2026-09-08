@@ -22,6 +22,7 @@ from app.editor import graph_artifacts as store
 from app.editor import layouts
 from app.ir.strategies.expanding_z import GRAPH
 from app.ir.hashing import canonical_json
+from tests.admitted_entry import persist_admitted_entry
 
 
 @pytest.fixture(autouse=True)
@@ -891,13 +892,57 @@ def test_strategy_configuration_repositories_keep_same_keys_private_to_each_owne
 def test_owner_scoped_runtime_config_and_deploy_bridge_ignore_other_tenants() -> None:
     """A foreign incumbent must not block this owner's deployment or settings refresh."""
     from app.core.deploy_bridge import DeployRequest, deploy
-    request = DeployRequest("default", "trend_impulse_v3", [("NIFTY", 1.0)])
+    from app.core import paper_authority
+    from app.core.deployments import create_deployment
+    from app.db.models import BrokerAccount
+    from unittest.mock import patch
     with SessionLocal() as session:
         foreign = watchlists.create_watchlist(
             session, "default", "expanding_z_v4", owner_id="owner.b",
         )
         watchlists.assign_instrument(session, "NIFTY", foreign.id, owner_id="owner.b")
+        session.add(BrokerAccount(
+            broker_account_id="account.a", owner_id="owner.a", broker="mock",
+            external_account_id="a", display_name="Owner A",
+        ))
+        session.flush()
+        admission = persist_admitted_entry(session, owner_id="owner.a")
+        seed = create_deployment(
+            session, "seed", owner_id="owner.a", broker_account_id="account.a",
+            status="active", strategy_key=admission["strategy_key"],
+            strategy_version=admission["strategy_version"],
+            graph_address=admission["graph_address"],
+            attribution_state=admission["attribution_state"],
+            admission_address=admission["admission_address"],
+        )
+        project_id = "test.admission." + __import__("hashlib").sha256(b"owner.a").hexdigest()[:24]
+        row = paper_authority.stage(
+            session, project_id=project_id,
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=seed.id, instrument_key="NIFTY", interval="30minute",
+            owner_id="owner.a", broker_account_id="account.a",
+        )
         session.commit()
+        decision = {
+            "project_id": project_id,
+            "graph_identifier": "test.strategy.expanding_z_impulse",
+            "graph_version": 1,
+            "content_address": admission["graph_address"],
+            "admission_address": admission["admission_address"],
+            "decision": "approved",
+        }
+        with SessionLocal() as authority_session:
+            with patch.object(paper_authority, "verified_decision", return_value=decision):
+                paper_authority.activate(
+                    authority_session, row.id, revision=row.revision,
+                    owner_id="owner.a", broker_account_id="account.a",
+                )
+            authority_session.commit()
+        request = DeployRequest(
+            "default", admission["strategy_key"], [("NIFTY", 1.0)],
+            admission_address=admission["admission_address"],
+            broker_account_id="account.a",
+        )
         result = deploy(session, request, owner_id="owner.a")
         session.commit()
         assert result.assigned == ["NIFTY"]
@@ -939,8 +984,10 @@ def test_owner_scoped_generated_resolution_and_runner_assignments_never_cross() 
 def test_two_runners_apply_their_own_same_instrument_watchlist_strategy() -> None:
     """The runner loads one owner map; another tenant's overlay is not a candidate."""
     from app.core.deployments import create_deployment
+    from app.core import paper_authority
     from app.db.models import BrokerAccount
     from app.engine.runner import EngineRunner
+    from unittest.mock import patch
     with SessionLocal() as session:
         session.add(BrokerAccount(
             broker_account_id="account.a", owner_id="owner.a", broker="mock",
@@ -951,26 +998,68 @@ def test_two_runners_apply_their_own_same_instrument_watchlist_strategy() -> Non
             external_account_id="b", display_name="Owner B",
         ))
         session.flush()
+        admission_a = persist_admitted_entry(session, owner_id="owner.a")
+        admission_b = persist_admitted_entry(session, owner_id="owner.b")
         deployment_a = create_deployment(
             session, "runner-a", owner_id="owner.a", broker_account_id="account.a",
-            status="active")
+            status="active", strategy_key=admission_a["strategy_key"],
+            strategy_version=admission_a["strategy_version"],
+            graph_address=admission_a["graph_address"],
+            attribution_state=admission_a["attribution_state"],
+            admission_address=admission_a["admission_address"])
         deployment_b = create_deployment(
             session, "runner-b", owner_id="owner.b", broker_account_id="account.b",
-            status="active")
+            status="active", strategy_key=admission_b["strategy_key"],
+            strategy_version=admission_b["strategy_version"],
+            graph_address=admission_b["graph_address"],
+            attribution_state=admission_b["attribution_state"],
+            admission_address=admission_b["admission_address"])
         first = watchlists.create_watchlist(session, "default", "trend_impulse_v3", owner_id="owner.a")
         second = watchlists.create_watchlist(session, "default", "expanding_z_v4", owner_id="owner.b")
         watchlists.assign_instrument(session, "NIFTY", first.id, owner_id="owner.a")
         watchlists.assign_instrument(session, "NIFTY", second.id, owner_id="owner.b")
         session.commit()
+    authority_rows = []
+    for owner_id, account_id, deployment, admission in (
+        ("owner.a", "account.a", deployment_a, admission_a),
+        ("owner.b", "account.b", deployment_b, admission_b),
+    ):
+        project_id = "test.admission." + __import__("hashlib").sha256(owner_id.encode()).hexdigest()[:24]
+        with SessionLocal() as session:
+            row = paper_authority.stage(
+                session, project_id=project_id,
+                graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+                deployment_id=deployment.id, instrument_key="NIFTY", interval="30minute",
+                owner_id=owner_id, broker_account_id=account_id,
+            )
+            session.commit()
+        with SessionLocal() as session:
+            decision = {
+                "project_id": project_id,
+                "graph_identifier": "test.strategy.expanding_z_impulse",
+                "graph_version": 1,
+                "content_address": admission["graph_address"],
+                "admission_address": admission["admission_address"],
+                "decision": "approved",
+            }
+            with patch.object(paper_authority, "verified_decision", return_value=decision):
+                paper_authority.activate(
+                    session, row.id, revision=row.revision,
+                    owner_id=owner_id, broker_account_id=account_id,
+                )
+            session.commit()
+            authority_rows.append(row.id)
     runner_a = EngineRunner(owner_id="owner.a", broker_account_id="account.a",
                             deployment_id=deployment_a.id)
     runner_b = EngineRunner(owner_id="owner.b", broker_account_id="account.b",
                             deployment_id=deployment_b.id)
+    runner_a.refresh_paper_authority()
+    runner_b.refresh_paper_authority()
     try:
         assert runner_a.strategy_keys["NIFTY"] == "trend_impulse_v3"
         assert runner_b.strategy_keys["NIFTY"] == "expanding_z_v4"
-        assert runner_a._strategy_for("NIFTY").key == "trend_impulse_v3"
-        assert runner_b._strategy_for("NIFTY").key == "expanding_z_v4"
+        assert runner_a._strategy_for("NIFTY").key == admission_a["strategy_key"]
+        assert runner_b._strategy_for("NIFTY").key == admission_b["strategy_key"]
         with SessionLocal() as session:
             first = watchlists.get_watchlist(session, "default", owner_id="owner.a")
             first.strategy_key = "expanding_z_v4"
@@ -992,14 +1081,24 @@ def test_deployment_keeps_watchlist_by_value_but_rejects_foreign_owner_value() -
         foreign = watchlists.create_watchlist(session, "foreign", "trend_impulse_v3", owner_id="owner.b")
         local = watchlists.create_watchlist(session, "local", "trend_impulse_v3", owner_id="owner.a")
         session.commit()
+        admission = persist_admitted_entry(session, owner_id="owner.a")
         for watchlist_id in (foreign.id, 999999):
             with pytest.raises(ValueError, match="no watchlist"):
                 deployments.create_deployment(
                     session, f"bad-{watchlist_id}", owner_id="owner.a", broker_account_id="account.a",
-                    watchlist_id=watchlist_id,
+                    watchlist_id=watchlist_id, strategy_key=admission["strategy_key"],
+                    strategy_version=admission["strategy_version"],
+                    graph_address=admission["graph_address"],
+                    attribution_state=admission["attribution_state"],
+                    admission_address=admission["admission_address"],
                 )
         row = deployments.create_deployment(
             session, "local", owner_id="owner.a", broker_account_id="account.a", watchlist_id=local.id,
+            strategy_key=admission["strategy_key"],
+            strategy_version=admission["strategy_version"],
+            graph_address=admission["graph_address"],
+            attribution_state=admission["attribution_state"],
+            admission_address=admission["admission_address"],
         )
         session.commit()
         assert row.watchlist_id == local.id

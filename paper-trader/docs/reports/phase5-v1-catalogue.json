@@ -1,0 +1,240 @@
+{
+  "schema": "phase5-v1-catalogue/1",
+  "status": "architecture_contract",
+  "date": "2026-08-24",
+  "production_v2_registry_entries_at_intake": 0,
+  "dispositions": ["V1_REQUIRED", "V1_CAPABILITY_GATED", "WAVE_2_DEFERRED"],
+  "groups": [
+    {
+      "family": "TYPE_2",
+      "subgroup": "moving_averages",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["SMA", "EMA", "RMA_WILDER", "WMA", "VWMA", "KAMA"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["DEMA", "TEMA", "HMA", "ZLEMA", "VIDYA", "T3"]
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "trend",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["ADX", "PLUS_DI", "MINUS_DI", "PARABOLIC_SAR", "SUPERTREND", "ICHIMOKU_COMPONENTS", "MA_SLOPE", "PRICE_MA_DISTANCE", "TREND_PERSISTENCE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["AROON_UP_DOWN_OSCILLATOR", "VORTEX_PLUS_MINUS"]
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "momentum",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["RSI", "STOCHASTIC", "STOCH_RSI", "ROC", "MOMENTUM", "CCI", "WILLIAMS_R", "MFI", "MACD", "PPO"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["TRIX", "TSI", "CMO", "ULTIMATE_OSCILLATOR", "FISHER_TRANSFORM"]
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "volatility",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["TRUE_RANGE", "ATR", "NATR", "ROLLING_STDDEV", "ROLLING_VARIANCE", "BOLLINGER_BANDS", "BOLLINGER_BANDWIDTH", "BOLLINGER_PERCENT_B", "KELTNER_CHANNELS", "DONCHIAN_CHANNELS", "REALIZED_VOLATILITY", "EWMA_VOLATILITY", "VOLATILITY_RANK", "VOLATILITY_PERCENTILE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "advanced_realized_volatility",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["PARKINSON", "GARMAN_KLASS", "ROGERS_SATCHELL", "YANG_ZHANG"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "volume_participation",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["VWAP", "ANCHORED_VWAP", "VWMA", "OBV", "ACCUMULATION_DISTRIBUTION", "CHAIKIN_MONEY_FLOW", "CHAIKIN_OSCILLATOR", "PRICE_VOLUME_TREND", "RELATIVE_VOLUME", "VOLUME_ZSCORE", "ROLLING_VOLUME_PERCENTILE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["FORCE_INDEX", "EASE_OF_MOVEMENT", "KLINGER_OSCILLATOR"]
+    },
+    {
+      "family": "TYPE_4",
+      "subgroup": "price_transforms",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["OPEN", "HIGH", "LOW", "CLOSE", "HL2", "HLC3", "OHLC4", "TYPICAL_PRICE", "WEIGHTED_CLOSE", "MIDPOINT"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "statistics",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["ROLLING_MEAN", "ROLLING_MEDIAN", "ROLLING_MIN", "ROLLING_MAX", "PERCENTILE", "PERCENTILE_RANK", "ZSCORE", "MAD", "COVARIANCE", "CORRELATION", "ROLLING_RANK"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["SKEW", "KURTOSIS", "AUTOCORRELATION", "VARIANCE_RATIO"]
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "regression_relative_value",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["LINEAR_REGRESSION_SLOPE", "LINEAR_REGRESSION_INTERCEPT", "R_SQUARED", "RESIDUAL", "BETA", "ALPHA", "ROLLING_REGRESSION", "ROLLING_HEDGE_RATIO", "SPREAD", "RATIO", "BETA_ADJUSTED_SPREAD"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "returns",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["POINT_CHANGE", "PERCENT_RETURN", "LOG_RETURN", "CUMULATIVE_RETURN", "ROLLING_RETURN"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "market_session_structure",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["SESSION_OPEN", "SESSION_HIGH", "SESSION_LOW", "PREVIOUS_SESSION_OHLC", "OPENING_RANGE", "GAP", "ROLLING_HIGH", "ROLLING_LOW", "DISTANCE_FROM_SESSION_HIGH_LOW", "BARS_SINCE_SESSION_OPEN", "TIME_TO_SESSION_CLOSE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_2",
+      "subgroup": "pattern_event_primitives",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["CROSS_ABOVE", "CROSS_BELOW", "RISING", "FALLING", "INSIDE_BAR", "OUTSIDE_BAR", "GAP_UP", "GAP_DOWN"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": ["SELECTED_CANDLE_PATTERNS_PENDING_EXACT_DEFINITION"]
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "cross_instrument_structure",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["SECONDARY_INSTRUMENT_INPUT", "PEER_BASKET", "RELATIVE_VALUE_STRUCTURE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "option_structure",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["EXPIRY_LIST", "NEAREST_EXPIRY", "NEXT_EXPIRY", "FAR_EXPIRY", "DTE_SELECTOR", "ATM", "ATM_PLUS_MINUS_N", "MONEYNESS_SELECTOR", "DELTA_TARGET_SELECTOR", "CALL_PUT_SELECTOR", "OPTION_CHAIN_SLICE", "STRADDLE_SELECTOR", "STRANGLE_SELECTOR"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "options_analytics",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["STRADDLE_PRICE", "PUT_CALL_PARITY_DEVIATION", "SYNTHETIC_FUTURE"],
+      "v1_capability_gated": ["IMPLIED_VOLATILITY", "DELTA", "GAMMA", "THETA", "VEGA", "RHO", "IV_RANK", "IV_PERCENTILE", "SKEW", "TERM_STRUCTURE", "CHAIN_OPEN_INTEREST", "PCR_OPEN_INTEREST", "PCR_VOLUME", "OPEN_INTEREST_CONCENTRATION", "CHANGE_IN_OPEN_INTEREST", "STRIKE_VOLUME_OI_RATIO"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "futures",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["FRONT_CONTRACT", "NEXT_CONTRACT", "FAR_CONTRACT", "DAYS_TO_EXPIRY", "BASIS", "ANNUALIZED_BASIS", "CALENDAR_SPREAD", "ROLL_SELECTOR", "CONTINUOUS_RESEARCH_SERIES", "TRADABLE_MAPPED_CONTRACT"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "order_book_ladder",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": [],
+      "v1_capability_gated": ["BEST_BID", "BEST_ASK", "SPREAD", "BID_QUANTITY", "ASK_QUANTITY", "DEPTH_LEVEL_N", "CUMULATIVE_N_LEVEL_DEPTH", "DEPTH_IMBALANCE", "WEIGHTED_DEPTH_IMBALANCE", "MICROPRICE", "BOOK_SLOPE", "LIQUIDITY_CONCENTRATION", "DEPTH_WEIGHTED_SPREAD", "PROVIDER_TOTAL_BUY_SELL_QUANTITY"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_3",
+      "subgroup": "trade_flow",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": [],
+      "v1_capability_gated": ["AGGRESSOR_BUY_SELL_FLOW", "VOLUME_DELTA", "TRADE_IMBALANCE", "CUMULATIVE_DELTA"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_1",
+      "subgroup": "entry_exit_order_intent",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["BUY", "SELL", "ENTER_LONG", "ENTER_SHORT", "CLOSE_POSITION", "REVERSE", "FLATTEN_DEPLOYMENT", "FLATTEN_ACCOUNT", "MARKET", "LIMIT", "STOP", "STOP_LIMIT", "MARKETABLE_LIMIT_POLICY"],
+      "v1_capability_gated": ["IOC_VALIDITY"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_1",
+      "subgroup": "position_sizing",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["FIXED_UNITS", "LOTS", "FIXED_CAPITAL", "PERCENT_EQUITY", "PERCENT_RISK", "STOP_DISTANCE_RISK", "VOLATILITY_SIZING", "MAX_CAPITAL_CAP", "MIN_MAX_LOT_CONSTRAINT"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_1",
+      "subgroup": "protection",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["FIXED_STOP_PERCENT", "POINT_STOP", "ATR_STOP", "TAKE_PROFIT_PERCENT", "RISK_REWARD_TARGET", "TRAILING_PERCENT", "TRAILING_POINTS", "ATR_TRAIL", "BREAKEVEN", "MULTIPLE_TARGETS", "PARTIAL_EXIT", "MAX_HOLDING_TIME", "SESSION_EXIT", "EXPIRY_EXIT"],
+      "v1_capability_gated": ["BROKER_RESIDENT_PROTECTION_REQUEST"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_1",
+      "subgroup": "pyramiding_scaling",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["ADD_POSITION", "SCALE_FIXED", "SCALE_PERCENT", "ADD_ONLY_WHEN_PROFITABLE", "MAX_ADDITIONS", "MAX_TOTAL_RISK", "AGGREGATE_STOP_HANDLING"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_1",
+      "subgroup": "position_portfolio_inputs",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["QUANTITY", "AVERAGE_PRICE", "ENTRY_PRICE", "MFE", "MAE", "UNREALIZED_PNL", "REALIZED_PNL", "BARS_IN_POSITION", "TIME_IN_POSITION", "ADDITIONS_COUNT", "ACCOUNT_EQUITY", "AVAILABLE_MARGIN", "DEPLOYMENT_PNL", "DAILY_PNL", "EXPOSURE", "DRAWDOWN"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_4",
+      "subgroup": "market_instrument_inputs",
+      "owner_capsule": "phase5-first-party-analytical-catalogue",
+      "v1_required": ["OHLCV", "LTP", "MID", "SESSION_OPEN_HIGH_LOW", "PREVIOUS_SESSION_FIELDS", "TIMEFRAME", "MARKET_CLOCK", "DTE", "EXPIRY_CALENDAR", "SESSION_CALENDAR", "INSTRUMENT_METADATA", "RESAMPLING"],
+      "v1_capability_gated": ["BID", "ASK", "SPREAD", "OPEN_INTEREST", "BOOK_DEPTH"],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_5",
+      "subgroup": "logic_arithmetic_reducers",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["AND", "OR", "NOT", "XOR", "GT", "GTE", "LT", "LTE", "EQ", "NEQ", "BETWEEN", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "LOG", "SQRT", "ABS", "CLAMP", "ROUND", "MIN", "MAX", "SUM", "AVERAGE", "COUNT", "ANY", "ALL"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_5",
+      "subgroup": "temporal_confirmation_state",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["LAG_N", "PREVIOUS_VALUE", "BARS_SINCE", "TIME_SINCE", "A_THEN_B", "A_WITHIN_N_BARS_OF_B", "N_CONSECUTIVE", "N_OF_LAST_M", "RISING_N", "FALLING_N", "DEBOUNCE", "COOLDOWN", "HYSTERESIS", "LATCH", "RESETTABLE_LATCH", "TOGGLE", "COUNTER", "STATE_MACHINE"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    },
+    {
+      "family": "TYPE_5",
+      "subgroup": "scheduling_validity",
+      "owner_capsule": "phase5-state-execution-derivatives-catalogue",
+      "v1_required": ["WEEKDAY_GATE", "SESSION_GATE", "DATE_RANGE", "TIME_RANGE", "DTE_GATE", "MINUTES_FROM_OPEN", "MINUTES_TO_CLOSE", "IS_VALID", "IS_MISSING", "IS_STALE", "IS_UNDEFINED", "IF_MISSING", "EXPLICIT_FALLBACK"],
+      "v1_capability_gated": [],
+      "wave_2_deferred": []
+    }
+  ],
+  "custom_node_levels": {
+    "LEVEL_1_FORK": "V1_REQUIRED",
+    "LEVEL_2_FORMULA": "V1_REQUIRED",
+    "LEVEL_3_SANDBOXED_PYTHON_CONTRACT": "V1_REQUIRED_RUNTIME_DISABLED_PENDING_SECURITY_OWNER_GATE",
+    "LEVEL_4_EXTERNAL_SIGNAL_CONTRACT": "V1_REQUIRED_RUNTIME_DISABLED_PENDING_SECURITY_OWNER_GATE"
+  },
+  "validity_states": ["VALID", "MISSING", "STALE", "INSUFFICIENT_HISTORY", "MATHEMATICALLY_UNDEFINED", "PROVIDER_UNAVAILABLE", "NOT_IN_SESSION", "NOT_LISTED"],
+  "wave_2_owner": "phase5-catalogue-wave-2-scope",
+  "wave_2_deadline": "Before phase5-review if any deferred entry is promoted into the V1 claim",
+  "nonclaims": [
+    "This inventory does not claim any production v2 component exists",
+    "Capability-gated entries refuse when accepted provider facts cannot establish support",
+    "Wave-2 entries are outside the Phase 5 V1 catalogue acceptance claim",
+    "Catalogue membership grants no deployment, broker, live, order, or money authority"
+  ]
+}

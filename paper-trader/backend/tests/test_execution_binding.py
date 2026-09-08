@@ -126,8 +126,8 @@ def test_paper_authority_resolves_generated_identity_in_the_binding_owner(monkey
         interval="15minute",
     )
 
-    described = binding._describe_paper_authority(1, "NIFTY", record, owner_id="owner.a")
-    assert described.owner_id == "owner.a"
+    with pytest.raises(binding.AuthorityNotGranted):
+        binding._describe_paper_authority(1, "NIFTY", record, owner_id="owner.a")
     with pytest.raises(StrategyNotFound):
         binding._describe_paper_authority(1, "NIFTY", record, owner_id="owner.b")
 

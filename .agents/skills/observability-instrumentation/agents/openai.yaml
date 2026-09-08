@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Instrument observable behavior"
+  short_description: "Trace failures with bounded, redacted telemetry"
+  default_prompt: "Use $observability-instrumentation for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

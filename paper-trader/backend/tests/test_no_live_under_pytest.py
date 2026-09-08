@@ -144,6 +144,8 @@ def test_make_broker_raises_if_it_ever_resolves_a_real_live_broker(monkeypatch):
     monkeypatch.setenv("PT_LIVE_ACK", "I_UNDERSTAND_REAL_MONEY")
     monkeypatch.setattr(bf, "get_settings", lambda: _live_settings())
     _stub_the_kite_plumbing(monkeypatch)
+    from app.db.session import init_db
+    init_db(reset=True)
 
     assert bf.live_execution_enabled() is True, "precondition: the gate is open"
 
@@ -155,6 +157,8 @@ def test_the_raise_names_the_offending_test(monkeypatch):
     """The message has to be actionable — which test leaked, not just that one did."""
     monkeypatch.setattr(bf, "get_settings", lambda: _live_settings())
     _stub_the_kite_plumbing(monkeypatch)
+    from app.db.session import init_db
+    init_db(reset=True)
 
     with pytest.raises(RuntimeError) as e:
         bf.make_broker(_kite_looking_provider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
@@ -198,10 +202,31 @@ def test_make_broker_really_does_construct_a_genuine_live_broker(monkeypatch):
     monkeypatch.setattr(bf, "get_settings", lambda: _live_settings())
     _stub_the_kite_plumbing(monkeypatch)
     monkeypatch.setattr(bf, "_refuse_live_broker_under_pytest", lambda b: None)
+    from app.db.session import init_db
+    init_db(reset=True)
 
-    broker = bf.make_broker(_kite_looking_provider(), broker_account_id="account.default", owner_id=LEGACY_OWNER_ID)
+    # A durable lease token is part of the genuine wiring now: supply one so
+    # this proof stays about CLASS IDENTITY, not about the lease refusal.
+    broker = bf.make_broker(_kite_looking_provider(), broker_account_id="account.default",
+                            owner_id=LEGACY_OWNER_ID,
+                            execution_lease_token="wiring-proof-lease")
     assert type(broker) is LiveBroker
     assert type(broker).__module__ == bf._LIVE_BROKER_MODULE
+
+
+def test_live_without_a_durable_lease_token_is_refused(monkeypatch):
+    """The lease authority is enforced AFTER the pytest tripwire: production
+    ordering must never let a missing token preempt (or justify skipping) the
+    safety guard."""
+    monkeypatch.setattr(bf, "get_settings", lambda: _live_settings())
+    _stub_the_kite_plumbing(monkeypatch)
+    monkeypatch.setattr(bf, "_refuse_live_broker_under_pytest", lambda b: None)
+    from app.db.session import init_db
+    init_db(reset=True)
+
+    with pytest.raises(RuntimeError, match="durable account lease token"):
+        bf.make_broker(_kite_looking_provider(), broker_account_id="account.default",
+                       owner_id=LEGACY_OWNER_ID)
 
 
 def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
@@ -219,7 +244,7 @@ def test_the_guard_is_keyed_on_pytest_current_test(monkeypatch):
 
 
 def test_the_guard_does_not_fire_on_the_paper_broker():
-    bf._refuse_live_broker_under_pytest(PaperBroker(MockProvider(), owner_id="owner", broker_account_id="account.default"))
+    bf._refuse_live_broker_under_pytest(PaperBroker.__new__(PaperBroker))
 
 
 def test_the_guard_tolerates_the_stubbed_live_broker_used_by_wiring_tests():

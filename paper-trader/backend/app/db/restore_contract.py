@@ -224,9 +224,31 @@ def _state_counts(connection, metadata: MetaData) -> dict[str, object]:
         ("account_execution_commands", "state"),
         ("backtest_runs", "status"),
         ("research_experiment_run", "status"),
+        ("monitoring_assignments", "lifecycle_state"),
+        ("monitoring_signal_reviews", "disposition"),
+        ("monitoring_alert_delivery_attempts", "outcome"),
+        ("platform_coupon_redemptions", "status"),
+        ("platform_billing_event_receipts", "event_state"),
+        ("platform_entitlement_events", "transition"),
+        ("platform_current_entitlements", "state"),
+        ("platform_complimentary_entitlement_grants", "action"),
+        ("platform_support_requests", "status"),
+        ("platform_operator_audit_events", "outcome"),
     ):
         if name in tables:
             result[name] = _group_counts(connection, tables[name], column)
+    if "ir_v2_editor_presentations" in tables:
+        table = tables["ir_v2_editor_presentations"]
+        result["ir_v2_editor_presentations"] = {
+            "rows": int(connection.scalar(select(sa.func.count()).select_from(table)) or 0),
+            "max_revision": int(connection.scalar(select(sa.func.max(table.c.revision))) or 0),
+        }
+    if "chart_context_annotations" in tables:
+        table = tables["chart_context_annotations"]
+        result["chart_context_annotations"] = {
+            "rows": int(connection.scalar(select(sa.func.count()).select_from(table)) or 0),
+            "max_revision": int(connection.scalar(select(sa.func.max(table.c.revision))) or 0),
+        }
     for name in sorted(tables):
         if any(part in name for part in ("outbox_event", "outbox_consumer_cursor",
                                          "outbox_consumer_receipt")):
@@ -242,6 +264,20 @@ def _content_summary(connection, metadata: MetaData) -> list[dict[str, object]]:
         ("project_review_snapshots", "content_address"),
         ("research_experiment_spec", "id"),
         ("backtest_computations", "payload_digest"),
+        ("monitoring_state_snapshots", "snapshot_address"),
+        ("monitoring_signal_events", "content_address"),
+        ("monitoring_signal_alerts", "alert_address"),
+        ("monitoring_alert_delivery_attempts", "attempt_address"),
+        ("monitoring_alert_attention_events", "attention_event_address"),
+        ("monitoring_alert_attention_state", "projection_address"),
+        ("monitoring_signal_reviews", "review_address"),
+        ("platform_plan_versions", "entitlement_set_address"),
+        ("platform_coupon_definitions", "policy_address"),
+        ("platform_billing_event_receipts", "raw_body_digest"),
+        ("platform_entitlement_events", "policy_address"),
+        ("platform_complimentary_entitlement_grants", "policy_address"),
+        ("platform_analytics_subjects", "pseudonym_digest"),
+        ("platform_operator_bindings", "bootstrap_evidence_address"),
     ):
         table = metadata.tables.get(table_name)
         if table is None or column_name not in table.c:
@@ -249,6 +285,25 @@ def _content_summary(connection, metadata: MetaData) -> list[dict[str, object]]:
         values = sorted(str(value) for value in connection.scalars(select(table.c[column_name])))
         evidence.append({
             "table": table_name, "count": len(values),
+            "set_digest": hashlib.sha256("\n".join(values).encode()).hexdigest(),
+        })
+    presentation = metadata.tables.get("ir_v2_editor_presentations")
+    if presentation is not None:
+        values = sorted(str(value) for value in connection.scalars(
+            select(presentation.c.presentation_json)))
+        evidence.append({
+            "table": "ir_v2_editor_presentations", "count": len(values),
+            "set_digest": hashlib.sha256("\n".join(values).encode()).hexdigest(),
+        })
+    annotations = metadata.tables.get("chart_context_annotations")
+    if annotations is not None:
+        values = sorted("\x1f".join(str(item) for item in row) for row in connection.execute(
+            select(annotations.c.owner_id, annotations.c.market_context_address,
+                   annotations.c.annotation_id, annotations.c.revision,
+                   annotations.c.geometry_address, annotations.c.geometry_json,
+                   annotations.c.applicability_address, annotations.c.applicability_json)))
+        evidence.append({
+            "table": "chart_context_annotations", "count": len(values),
             "set_digest": hashlib.sha256("\n".join(values).encode()).hexdigest(),
         })
     return evidence

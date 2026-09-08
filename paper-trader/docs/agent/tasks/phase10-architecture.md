@@ -15,6 +15,15 @@
   ],
   "required_docs": [
     {
+      "path": "paper-trader/docs/agent/DEPLOYABILITY.md",
+      "sections": [
+        "Current verdict",
+        "Open obligations",
+        "Phase 10 ownership",
+        "V1 release gate"
+      ]
+    },
+    {
       "path": "paper-trader/docs/superpowers/plans/2026-08-13-strategy-os-v1-master-sequence.md",
       "sections": [
         "Phase 10: Commercial administration and production customer operations",
@@ -107,6 +116,7 @@
   ],
   "dependency_gate": "phase9-review",
   "allowed_paths": [
+    "paper-trader/docs/agent/DEPLOYABILITY.md",
     "paper-trader/docs/superpowers/specs/phase10-strategy-os-design.md",
     "paper-trader/docs/superpowers/plans/phase10-strategy-os.md",
     "paper-trader/docs/reports/phase10-source-coverage.json",
@@ -134,7 +144,7 @@
     "owner": "gpt-5.6-sol",
     "owner_reasoning_effort": "medium",
     "service_tier": "default",
-    "implementation_owner": "gpt-5.6-terra",
+    "implementation_owner": "gpt-5.6-sol",
     "implementation_reasoning_effort": "medium",
     "phase_reviewer": "gpt-5.6-sol",
     "phase_reviewer_reasoning_effort": "high"
@@ -143,8 +153,8 @@
   "assignments": [
     {
       "id": "existing_capability_audit",
-      "agent": "terra-worker",
-      "model": "gpt-5.6-terra",
+      "agent": "default",
+      "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "mode": "read",
       "depends_on": [],
@@ -160,8 +170,8 @@
     },
     {
       "id": "source_coverage_audit",
-      "agent": "luna-worker",
-      "model": "gpt-5.6-luna",
+      "agent": "default",
+      "model": "gpt-5.6-sol",
       "reasoning_effort": "medium",
       "mode": "read",
       "depends_on": [],
@@ -180,6 +190,7 @@
     }
   ],
   "acceptance": [
+    "Every affected deployment-contract dimension has current evidence or an exact owning future capsule; no deployment debt is deferred vaguely.",
     "Accepted preceding contracts and existing implementation are audited before proposing changes.",
     "Every SOURCE_MAP.json phase10 entry has an explicit design, task, test, nonclaim, or deferral disposition.",
     "The design and plan preserve one canonical IR and existing ownership/authority boundaries.",

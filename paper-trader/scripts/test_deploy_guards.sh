@@ -10,8 +10,8 @@
 # message is a guard that sends the operator to the wrong incident.
 #
 # Only the guards that run BEFORE the test suite are exercised end-to-end
-# (Guards 0-2); the later ones would need a real venv run and a real host, so
-# their red paths are asserted structurally.
+# (Guards 0-2 and the V0 destination guard). Later guards are checked
+# structurally, and transfer flags run through a recording stub with no SSH.
 #
 #   bash scripts/test_deploy_guards.sh
 #
@@ -102,6 +102,9 @@ expect_red "G0 empty pattern" "EMPTY pattern" \
   "$(mutant g0-empty "s|^  --exclude '\.env'\$|  --exclude ''|")" --force-market-hours
 
 echo
+PT_VPS_HOST= PT_VPS_PATH= PT_SERVICE= PT_VPS_KEY= expect_red "V0 requires a named destination" "V0 requires explicit" \
+  "$SRC" --strategy-os-v0 --dry-run
+
 echo "=== Guard 1 — market hours ==="
 
 # The regression this pass is about: a `date` that yields an unparseable value
@@ -148,6 +151,19 @@ structural() {
     fail_n=$((fail_n + 1))
   fi
 }
+structural "V0 candidate source is repository-owned" 'FRONTEND_SOURCE="$REPO_ROOT/strategy-frontend"'
+structural "legacy frontend source remains explicit" 'FRONTEND_SOURCE="$REPO_ROOT/frontend"'
+structural "candidate build uses the selected package" 'cd "$FRONTEND_SOURCE" && npm run build'
+structural "candidate ships to the existing SPA target" '"$FRONTEND_SOURCE/dist/" "$VPS_HOST:$VPS_PATH/frontend/dist/"'
+structural "prune applies only to the main tree" 'TREE_RSYNC_FLAGS+=(--delete)'
+structural "main transfer uses tree-specific flags" 'rsync "${TREE_RSYNC_FLAGS[@]}" "${EXCLUDES[@]}"'
+structural "recovery retains mode and destination" 'same frontend mode and explicit destination'
+if grep -qF '      RSYNC_FLAGS+=(--delete)' "$SRC"; then
+  echo 'FAIL shared transfer flags include deletion'; fail_n=$((fail_n + 1))
+else
+  echo 'PASS shared asset transfer flags cannot inherit prune'; pass_n=$((pass_n + 1))
+fi
+structural "candidate requires Node 24" 'Node.js 24 is required'
 structural "G3 asserts a positive pass count"   'no '"'"'N passed'"'"' summary line'
 structural "G3 asserts a test-count floor"      'MIN_EXPECTED_TESTS'
 structural "G3 asserts LEDGER OK affirmatively" "grep -qF 'LEDGER OK'"
@@ -156,6 +172,54 @@ structural "prune rejects empty raw output"     'produced NO OUTPUT at all'
 structural "remote checks split ssh 255"        'transport'
 structural "health loop splits unreachable"     'ssh_failures'
 structural "health loop requires a commit field" 'carries NO'
+
+# Exercise the actual transfer block with a recording shell function. No rsync,
+# SSH, build, or remote command is executed by this check.
+if python3 - "$SRC" <<'PYTEST'
+import pathlib, subprocess, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+setup = r"""
+set -eu
+DRY_RUN=0
+BRANCH=fixture
+SHA=fixture
+REPO_ROOT=/fixture/source
+FRONTEND_SOURCE=/fixture/source/strategy-frontend
+VPS_HOST=fixture.invalid
+VPS_PATH=/fixture/target
+VPS_KEY=/fixture/key
+EXCLUDES=(--exclude frontend/dist)
+log() { :; }
+rsync() {
+  local deletion=0
+  for argument in "$@"; do
+    if [[ "$argument" == --delete ]]; then deletion=1; fi
+  done
+  printf '%s\n' "$deletion"
+}
+"""
+def transfer_flags(text):
+    lines = text.splitlines()
+    initial = [line for line in lines if line.startswith('RSYNC_FLAGS=(')
+               or line.startswith('TREE_RSYNC_FLAGS=(')]
+    delete = [line for line in lines if line.strip().endswith('RSYNC_FLAGS+=(--delete)')]
+    assert len(initial) == 2 and len(delete) == 1
+    start = text.index('log "syncing $BRANCH@$SHA -> $VPS_HOST:$VPS_PATH"')
+    end = text.index('\nif [[ $DRY_RUN -eq 1 ]]; then', start)
+    result = subprocess.run(['bash'], input=setup+'\n'.join(initial+delete)+'\n'+text[start:end],
+                            text=True, capture_output=True, check=True)
+    return result.stdout.splitlines()
+assert transfer_flags(source) == ['1', '0', '0']
+mutant = source.replace('TREE_RSYNC_FLAGS+=(--delete)', 'RSYNC_FLAGS+=(--delete)')
+assert transfer_flags(mutant) != ['1', '0', '0']
+PYTEST
+then
+  echo 'PASS confirmed prune deletes only in the main transfer; regression mutant rejected'
+  pass_n=$((pass_n + 1))
+else
+  echo 'FAIL prune leaked into an artifact transfer'
+  fail_n=$((fail_n + 1))
+fi
 
 echo
 printf 'passed %s, failed %s\n' "$pass_n" "$fail_n"

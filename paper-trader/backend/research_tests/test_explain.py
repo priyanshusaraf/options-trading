@@ -68,3 +68,19 @@ def test_report_renders_the_strategy_explanation_section():
     assert "How this strategy works" in md
     assert "EMA(70)" in md                 # the live params reach the rendered report
     assert "Thesis" in md
+
+
+def test_unknown_strategy_name_does_not_use_legacy_registry_fallback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(kernels, "get_strategy", lambda key: calls.append(key))
+    result = explain("v2.research.unregistered", {})
+    assert result.display_name == "v2.research.unregistered"
+    assert calls == []
+
+
+def test_explicit_display_name_is_preserved_without_registry_lookup(monkeypatch):
+    calls = []
+    monkeypatch.setattr(kernels, "get_strategy", lambda key: calls.append(key))
+    result = explain("v2.research.unregistered", {}, display_name="My saved strategy")
+    assert result.display_name == "My saved strategy"
+    assert calls == []

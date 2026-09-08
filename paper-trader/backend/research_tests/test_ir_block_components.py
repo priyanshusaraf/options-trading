@@ -286,7 +286,8 @@ def test_two_blocks_compose_into_one_graph(derived):
         "edges": [
             *({"source": {"instance": "io_in", "socket": f},
                "target": {"instance": n, "socket": f}}
-              for f in BAR_INPUTS for n in ("n_1", "n_2")),
+              for n, block in (("n_1", "price_above_ema"), ("n_2", "zscore_gt"))
+              for f in BLOCKS[block].inputs),
             {"source": {"instance": "n_1", "socket": "out"},
              "target": {"instance": "n_and", "socket": "a"}},
             {"source": {"instance": "n_2", "socket": "out"},

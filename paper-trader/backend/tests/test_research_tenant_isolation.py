@@ -7,6 +7,7 @@ import contextlib
 import pytest
 from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import MetaData
 
 from research.domain.base import ResearchBase, init_research_db, make_engine
 from research.domain import migrate as migrate_module
@@ -24,6 +25,44 @@ from research.domain.models import (
 )
 from research.orchestrator.run import spec_hash
 from research.evidence import encode_terminal_evidence
+from research_tests.test_ir_v2_research_migration import (
+    _REFUSAL_PATTERN,
+    _sqlite_logical_digest,
+)
+
+
+def _synthetic_current_metadata_era_refusal_fixture(
+        engine, *, version: str = "0001", one_column_marker: bool = False,
+        through_0002: bool = False):
+    """Construct a synthetic current-metadata subset with an old marker.
+
+    This fixture is not a historical catalog and grants no 0001/0002 support.
+    It exists only for lower-level module-unit checks and active-runner refusal.
+    """
+    with engine.begin() as connection:
+        tables = (migrate_module._tables_through_0002() if through_0002
+                  else migrate_module._root_tables())
+        metadata = MetaData()
+        for table in tables:
+            table.to_metadata(metadata)
+        metadata.create_all(connection)
+        # create_all already emits every declared index; installing them again
+        # raises "already exists". Only the TRIGGER contract needs explicit
+        # installation, from the single canonical source.
+        for name, sql in migrate_module._expected_triggers(tables=tables).items():
+            connection.exec_driver_sql(sql)
+        if one_column_marker:
+            connection.exec_driver_sql(
+                "CREATE TABLE research_schema_version "
+                "(version VARCHAR(16) NOT NULL PRIMARY KEY)")
+            connection.exec_driver_sql(
+                "INSERT INTO research_schema_version VALUES ('0001')")
+        else:
+            migrate_module._create_current_marker(connection)
+            connection.exec_driver_sql(
+                "INSERT INTO research_schema_version (version, schema_cookie) "
+                "VALUES (?, ?)", (version, 0))
+    return engine
 from app.core import research_read
 
 
@@ -51,11 +90,11 @@ def test_empty_initialization_stamps_research_owned_schema_version(tmp_path):
         engine.dispose()
 
 
-def test_c823_head_marker_is_upgraded_in_place_without_touching_payload(tmp_path):
-    """The committed one-column 0001 marker must remain a valid head database."""
+def test_c823_one_column_0001_marker_refuses_without_touching_payload(tmp_path):
+    """The retained one-column 0001 fixture is unsupported by the finite runner."""
     engine = make_engine(str(tmp_path / "c823-head.db"))
     try:
-        init_research_db(engine)
+        _synthetic_current_metadata_era_refusal_fixture(engine, one_column_marker=True)
         with engine.begin() as connection:
             connection.exec_driver_sql(
                 "INSERT INTO research_program (owner_id, name, thesis, status, created_at) "
@@ -70,11 +109,14 @@ def test_c823_head_marker_is_upgraded_in_place_without_touching_payload(tmp_path
             )
             connection.exec_driver_sql("INSERT INTO research_schema_version VALUES ('0001')")
             connection.exec_driver_sql("DROP TABLE marker_old")
-        init_research_db(engine)
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
         with engine.connect() as connection:
             assert tuple(row[1] for row in connection.exec_driver_sql(
                 "PRAGMA table_info(research_schema_version)"
-            )) == ("version", "schema_cookie")
+            )) == ("version",)
             assert connection.exec_driver_sql(
                 "SELECT owner_id, id, name, thesis, status, created_at FROM research_program"
             ).all() == before
@@ -99,8 +141,10 @@ def test_malformed_two_column_marker_is_rejected_before_cookie_fast_path(tmp_pat
                 "INSERT INTO research_schema_version (version, schema_cookie) VALUES ('0001', ?)",
                 (str(cookie),),
             )
-        with pytest.raises(ResearchMigrationError, match="marker contract drift"):
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
             init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
     finally:
         engine.dispose()
 
@@ -232,8 +276,8 @@ def test_composite_foreign_keys_reject_cross_owner_rows(tmp_path):
         engine.dispose()
 
 
-def test_completed_temp_table_recovers_before_versioned_head_noop(tmp_path):
-    """A process death after source drop resumes from the deterministic temp name."""
+def test_completed_temp_table_refuses_before_versioned_head_noop(tmp_path):
+    """The finite runner refuses an old-replay temp state before any repair."""
     engine = make_engine(str(tmp_path / "research.db"))
     try:
         init_research_db(engine)
@@ -241,8 +285,12 @@ def test_completed_temp_table_recovers_before_versioned_head_noop(tmp_path):
             connection.exec_driver_sql(
                 "ALTER TABLE research_program RENAME TO research_program__owner_tmp"
             )
-        init_research_db(engine)
-        assert "research_program" in inspect(engine).get_table_names()
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
+        assert "research_program" not in inspect(engine).get_table_names()
+        assert "research_program__owner_tmp" in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 
@@ -268,19 +316,19 @@ def _schema_contract(engine) -> dict:
     }
 
 
-def test_fresh_and_0002_upgraded_databases_converge_to_one_schema_contract(tmp_path):
-    """The current upgrade starts from its preceding 0002 contract, not an unmarked head."""
+def test_fresh_install_reaches_head_while_0002_refuses_without_write(tmp_path):
+    """Clean is supported; the retained exact 0002 fixture is refusal evidence."""
     fresh = make_engine(str(tmp_path / "fresh.db"))
     upgraded = make_engine(str(tmp_path / "upgraded.db"))
     try:
         init_research_db(fresh)
-        init_research_db(upgraded)
-        with upgraded.begin() as connection:
-            connection.exec_driver_sql(
-                "UPDATE research_schema_version SET version='0002', schema_cookie=0"
-            )
-        init_research_db(upgraded)
-        assert _schema_contract(fresh) == _schema_contract(upgraded)
+        _synthetic_current_metadata_era_refusal_fixture(
+            upgraded, version="0002", through_0002=True)
+        digest = _sqlite_logical_digest(upgraded)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(upgraded)
+        assert _sqlite_logical_digest(upgraded) == digest
+        assert _schema_contract(fresh) != _schema_contract(upgraded)
     finally:
         fresh.dispose()
         upgraded.dispose()
@@ -290,18 +338,20 @@ def test_fresh_and_0002_upgraded_databases_converge_to_one_schema_contract(tmp_p
     table.name for table in ResearchBase.metadata.sorted_tables
     if table.name != "research_operation"
 ])
-def test_every_rebuild_table_recovers_source_plus_stale_temp(tmp_path, table):
-    """The 0001/0003 generic recovery drops a stale temp when its source remains."""
+def test_every_old_replay_stale_temp_refuses_with_source_unchanged(tmp_path, table):
+    """Old generic-recovery temp names are unsupported finite-runner inputs."""
     engine = make_engine(str(tmp_path / f"{table}.db"))
     try:
         init_research_db(engine)
         with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "UPDATE research_schema_version SET version='0001', schema_cookie=0"
-            )
+            # Recovery precedes marker dispatch on EVERY init; no rewind needed
+            # (a rewound marker over a head schema is a hybrid, not history).
             connection.exec_driver_sql(f'CREATE TABLE "{table}__owner_tmp" (discarded INTEGER)')
-        init_research_db(engine)
-        assert f"{table}__owner_tmp" not in inspect(engine).get_table_names()
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
+        assert f"{table}__owner_tmp" in inspect(engine).get_table_names()
         assert table in inspect(engine).get_table_names()
     finally:
         engine.dispose()
@@ -311,29 +361,31 @@ def test_every_rebuild_table_recovers_source_plus_stale_temp(tmp_path, table):
     table.name for table in ResearchBase.metadata.sorted_tables
     if table.name != "research_operation"
 ])
-def test_every_rebuild_table_recovers_completed_temp_without_source(tmp_path, table):
-    """The 0001/0003 generic recovery promotes a complete owner-shaped target."""
+def test_every_old_replay_completed_temp_refuses_without_promotion(tmp_path, table):
+    """A source-absent temp remains byte-preserved and unpromoted."""
     engine = make_engine(str(tmp_path / f"completed-{table}.db"))
     try:
         init_research_db(engine)
         with engine.begin() as connection:
             connection.exec_driver_sql(f'ALTER TABLE "{table}" RENAME TO "{table}__owner_tmp"')
-        init_research_db(engine)
-        assert table in inspect(engine).get_table_names()
-        assert f"{table}__owner_tmp" not in inspect(engine).get_table_names()
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
+        assert table not in inspect(engine).get_table_names()
+        assert f"{table}__owner_tmp" in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 
 
-def test_pinned_0001_marker_upgrades_without_disabling_foreign_keys(tmp_path):
+def test_pinned_0001_marker_refuses_without_disabling_foreign_keys(tmp_path):
     engine = make_engine(str(tmp_path / "failure.db"))
     try:
-        init_research_db(engine)
-        with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "UPDATE research_schema_version SET version='0001', schema_cookie=0"
-            )
-        init_research_db(engine)
+        _synthetic_current_metadata_era_refusal_fixture(engine, version="0001")
+        digest = _sqlite_logical_digest(engine)
+        with pytest.raises(ResearchMigrationError, match=_REFUSAL_PATTERN):
+            init_research_db(engine)
+        assert _sqlite_logical_digest(engine) == digest
         with engine.connect() as connection:
             assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     finally:

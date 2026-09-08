@@ -1,0 +1,268 @@
+[
+  {
+    "finding_id": "KREF-001",
+    "source_ids": [
+      "k-b7e13681b8fa502e",
+      "k-c1bc45c21a78f191"
+    ],
+    "exact_source_locations": [
+      "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html#making-the-lock-safe-with-fencing",
+      "https://martin.kleppmann.com/2014/11/25/hermitage-testing-the-i-in-acid.html",
+      "https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED"
+    ],
+    "principle": "Verify stale-writer rejection at the authoritative sink under an explicit fault model.",
+    "strategy_os_invariant": "Owner-scoped deterministic durable job identity and claim ownership",
+    "repository_files": [
+      "paper-trader/backend/app/backtest/repository.py:338",
+      "paper-trader/backend/app/backtest/repository.py:540",
+      "paper-trader/backend/app/backtest/repository.py:718",
+      "paper-trader/backend/app/backtest/repository.py:819",
+      "paper-trader/backend/tests/test_backtest_job_claims.py:73"
+    ],
+    "observed_current_behavior": "Claim, append and completion predicates check the current token in the authoritative database.",
+    "classification": "NO CHANGE \u2014 ALREADY CORRECT",
+    "reproduction_or_hypothesis": "Two claimants contend, old claimant resumes after takeover; verify durable state and rejected stale mutation.",
+    "severity": "Critical if violated; no new current product defect confirmed",
+    "confidence": "Direct current-code inspection and local SQLite evidence only",
+    "current_release_impact": "No new V0 blocker established by this packet",
+    "recommended_disposition": "KEEP",
+    "change_set": [
+      "documentation and isolated evidence scripts only"
+    ],
+    "tests": [
+      "53 existing selected checks",
+      "independent real-repository SQLite probe",
+      "token predicate mutation and clean restoration; consult final report"
+    ],
+    "migration": "none",
+    "rollback": "remove only this slice additions; no product state changed",
+    "non_goals": [
+      "PostgreSQL failover proof",
+      "live execution",
+      "new lock/workflow infrastructure",
+      "full corpus completion"
+    ],
+    "future_owners": [
+      "strategy-os-v0-canonical-research-spine",
+      "strategy-os-v0-security-operations-deployability"
+    ],
+    "claim_ids": [
+      "KCL-001",
+      "KCL-002"
+    ]
+  },
+  {
+    "finding_id": "KREF-002",
+    "source_ids": [
+      "k-b7e13681b8fa502e",
+      "k-c1bc45c21a78f191"
+    ],
+    "exact_source_locations": [
+      "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html#making-the-lock-safe-with-fencing",
+      "https://martin.kleppmann.com/2014/11/25/hermitage-testing-the-i-in-acid.html",
+      "https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED"
+    ],
+    "principle": "Verify stale-writer rejection at the authoritative sink under an explicit fault model.",
+    "strategy_os_invariant": "Owner-scoped deterministic durable job identity and claim ownership",
+    "repository_files": [
+      "paper-trader/backend/app/backtest/repository.py:338",
+      "paper-trader/backend/app/backtest/repository.py:540",
+      "paper-trader/backend/app/backtest/repository.py:718",
+      "paper-trader/backend/app/backtest/repository.py:819",
+      "paper-trader/backend/tests/test_backtest_job_claims.py:73"
+    ],
+    "observed_current_behavior": "The reviewed named race test uses sequential sessions; independent synchronized probe adds local contention evidence.",
+    "classification": "MISSING TEST",
+    "reproduction_or_hypothesis": "Two claimants contend, old claimant resumes after takeover; verify durable state and rejected stale mutation.",
+    "severity": "Critical if violated; no new current product defect confirmed",
+    "confidence": "Direct current-code inspection and local SQLite evidence only",
+    "current_release_impact": "No new V0 blocker established by this packet",
+    "recommended_disposition": "EVIDENCE ADDED; durable suite adoption for next bounded review",
+    "change_set": [
+      "documentation and isolated evidence scripts only"
+    ],
+    "tests": [
+      "53 existing selected checks",
+      "independent real-repository SQLite probe",
+      "token predicate mutation and clean restoration; consult final report"
+    ],
+    "migration": "none",
+    "rollback": "remove only this slice additions; no product state changed",
+    "non_goals": [
+      "PostgreSQL failover proof",
+      "live execution",
+      "new lock/workflow infrastructure",
+      "full corpus completion"
+    ],
+    "future_owners": [
+      "strategy-os-v0-canonical-research-spine",
+      "strategy-os-v0-security-operations-deployability"
+    ],
+    "claim_ids": [
+      "KCL-001",
+      "KCL-002"
+    ]
+  },
+  {
+    "finding_id": "KREF-003",
+    "source_ids": [
+      "k-b7e13681b8fa502e",
+      "k-c1bc45c21a78f191"
+    ],
+    "exact_source_locations": [
+      "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html#making-the-lock-safe-with-fencing",
+      "https://martin.kleppmann.com/2014/11/25/hermitage-testing-the-i-in-acid.html",
+      "https://www.postgresql.org/docs/16/transaction-iso.html#XACT-READ-COMMITTED"
+    ],
+    "principle": "Verify stale-writer rejection at the authoritative sink under an explicit fault model.",
+    "strategy_os_invariant": "Owner-scoped deterministic durable job identity and claim ownership",
+    "repository_files": [
+      "paper-trader/backend/app/backtest/repository.py:338",
+      "paper-trader/backend/app/backtest/repository.py:540",
+      "paper-trader/backend/app/backtest/repository.py:718",
+      "paper-trader/backend/app/backtest/repository.py:819",
+      "paper-trader/backend/tests/test_backtest_job_claims.py:73"
+    ],
+    "observed_current_behavior": "This packet did not test PostgreSQL failover or external effect sinks. It does not claim those proofs are absent elsewhere.",
+    "classification": "VERIFICATION OPEN",
+    "reproduction_or_hypothesis": "Two claimants contend, old claimant resumes after takeover; verify durable state and rejected stale mutation.",
+    "severity": "Critical if violated; no new current product defect confirmed",
+    "confidence": "Direct current-code inspection and local SQLite evidence only",
+    "current_release_impact": "No new V0 blocker established by this packet",
+    "recommended_disposition": "RETAIN EXACT-ENGINE / RECOVERY OBLIGATION",
+    "change_set": [
+      "documentation and isolated evidence scripts only"
+    ],
+    "tests": [
+      "53 existing selected checks",
+      "independent real-repository SQLite probe",
+      "token predicate mutation and clean restoration; consult final report"
+    ],
+    "migration": "none",
+    "rollback": "remove only this slice additions; no product state changed",
+    "non_goals": [
+      "PostgreSQL failover proof",
+      "live execution",
+      "new lock/workflow infrastructure",
+      "full corpus completion"
+    ],
+    "future_owners": [
+      "strategy-os-v0-canonical-research-spine",
+      "strategy-os-v0-security-operations-deployability"
+    ],
+    "claim_ids": [
+      "KCL-001",
+      "KCL-002"
+    ]
+  },
+  {
+    "finding_id": "KREF-004",
+    "source_ids": ["CAMBRIDGE_DISTSYS_2022"],
+    "exact_source_locations": ["Cambridge notes pages 25 and 30-31"],
+    "principle": "Use a monotonic clock for single-process elapsed durations.",
+    "strategy_os_invariant": "Operational duration evidence remains non-negative and stable across wall-clock steps.",
+    "repository_files": ["paper-trader/backend/app/backtest/dataset_store.py:853-897", "paper-trader/backend/app/engine/runner.py:231-240"],
+    "observed_current_behavior": "Dataset read_seconds subtracts time-of-day timestamps; readiness correctly uses a monotonic clock.",
+    "classification": "OBSERVABILITY GAP",
+    "reproduction_or_hypothesis": "Step wall time backwards during a dataset read while monotonic time advances.",
+    "severity": "Routine operational evidence; no data/trading semantic impact found",
+    "confidence": "Direct source and current-code inspection",
+    "current_release_impact": "V0 hardening before latency/capacity evidence consumes the metric",
+    "recommended_disposition": "RECORD FOR RESEARCH-SPINE OWNER; NO IMPLEMENTATION HERE",
+    "change_set": ["future one-call timer substitution only"],
+    "tests": ["fake wall step and monotonic advance across every get exit"],
+    "migration": "none",
+    "rollback": "restore the elapsed timer call only",
+    "non_goals": ["business time changes", "market timestamp changes", "product edit in this capsule"],
+    "future_owners": ["strategy-os-v0-canonical-research-spine"],
+    "claim_ids": ["KCA-001"]
+  },
+  {
+    "finding_id": "KREF-005",
+    "source_ids": ["KLEPPMANN_OLEP_2019", "KLEPPMANN_STREAM_PROCESSING_2016"],
+    "exact_source_locations": ["OLEP pages 6-10 and 14-18", "Stream Processing pages 56-64, 82-87 and 152-164"],
+    "principle": "Commit source facts atomically and deliver rebuildable projections idempotently.",
+    "strategy_os_invariant": "A notification or projection never becomes authority.",
+    "repository_files": ["paper-trader/backend/app/events/outbox.py:1-5,370-423", "paper-trader/backend/tests/test_outbox_delivery.py:55-81"],
+    "observed_current_behavior": "The inspected outbox is transaction-bound, producer-idempotent and polling-authoritative with at-least-once replay.",
+    "classification": "NO CHANGE - ALREADY CORRECT BOUNDED CONTRACT",
+    "reproduction_or_hypothesis": "Lose a notification or crash after effect before acknowledgement.",
+    "severity": "Critical where authority could diverge; inspected boundary retains the guard",
+    "confidence": "Direct source/code/test inspection; no test rerun",
+    "current_release_impact": "Monitoring persistence must consume, not replace, this contract",
+    "recommended_disposition": "KEEP; REJECT NEW EVENT INFRASTRUCTURE",
+    "change_set": ["none in this capsule"],
+    "tests": ["future monitoring atomicity, polling, restart, duplicate and owner isolation"],
+    "migration": "future monitoring expand-contract only under its owner",
+    "rollback": "retain source facts and forward-repair produced rows",
+    "non_goals": ["Kafka", "universal event sourcing", "cross-store snapshot-isolation claim"],
+    "future_owners": ["strategy-os-v0-monitoring-persistence", "strategy-os-v0-security-operations-deployability"],
+    "claim_ids": ["KCA-002", "KCA-003"]
+  },
+  {
+    "finding_id": "KREF-006",
+    "source_ids": ["KLEPPMANN_LOCAL_FIRST_2019"],
+    "exact_source_locations": ["Local-First Software pages 4-5, 9, 14-15 and 22"],
+    "principle": "Executable conflicts require domain semantics, not silent convergence.",
+    "strategy_os_invariant": "Presentation state stays outside executable identity and stale executable edits refuse.",
+    "repository_files": ["paper-trader/backend/app/editor/graph_artifacts.py:405-440", "paper-trader/backend/tests/test_ir_edit.py:147-164"],
+    "observed_current_behavior": "Draft saves use base-revision compare-and-swap; published graphs are immutable; layout does not enter graph/cache identity.",
+    "classification": "NO CHANGE - ALREADY CORRECT V0 SEAM",
+    "reproduction_or_hypothesis": "Two editors save from one base or a generic merge changes executable semantics.",
+    "severity": "Important V0 edit integrity; critical before future collaborative publication",
+    "confidence": "Direct source/code/test inspection",
+    "current_release_impact": "Preserve current conflict refusal; future collaboration stays V2",
+    "recommended_disposition": "KEEP; REJECT V0 CRDT ADOPTION",
+    "change_set": ["none"],
+    "tests": ["stale two-session conflict", "immutable publication", "layout identity separation"],
+    "migration": "none for V0",
+    "rollback": "future collaboration must preserve every immutable graph/version and conflict receipt",
+    "non_goals": ["offline runtime", "multiplayer editor", "CRDT dependency"],
+    "future_owners": ["V0 graph/research owner", "V2 collaboration owner"],
+    "claim_ids": ["KCA-004"]
+  },
+  {
+    "finding_id": "KREF-007",
+    "source_ids": ["DDIA2_OFFICIAL_TOC_2026", "DDIA2_REFERENCES_1752CBD0"],
+    "exact_source_locations": ["Official DDIA 2e contents chapters 1-2, 5 and 7"],
+    "principle": "Define NFRs and reproduce a limiting failure before adopting workflow or sharding infrastructure.",
+    "strategy_os_invariant": "One owner and source of truth; measured scale; recoverable topology changes.",
+    "repository_files": ["paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_V0_V6_OWNER_DIRECTION_RECONCILIATION_2026-08-29.md:242-267"],
+    "observed_current_behavior": "Stage A is a planning envelope; no capacity or bottleneck claim authorizes new infrastructure.",
+    "classification": "V0 HARDENING / ADOPTION GATE",
+    "reproduction_or_hypothesis": "A premature dependency adds operational failure without solving a measured constraint.",
+    "severity": "Important deployability and delivery risk",
+    "confidence": "Official public section-title delta and exact companion artifact only; book text unavailable",
+    "current_release_impact": "Define workload/SLO/restore/quota evidence before the release gate",
+    "recommended_disposition": "MEASURE; REJECT WORKFLOW PLATFORM AND SHARDING NOW",
+    "change_set": ["documentation and workload evidence only"],
+    "tests": ["repeatable workload percentiles", "per-tenant saturation", "crash/restart recovery"],
+    "migration": "none now",
+    "rollback": "future adoption requires explicit data exit and return path",
+    "non_goals": ["Temporal", "DBOS", "Restate", "pre-emptive sharding", "microservices"],
+    "future_owners": ["strategy-os-v0-security-operations-deployability", "strategy-os-v0-canonical-research-spine", "strategy-os-v0-robustness-lab"],
+    "claim_ids": ["KCA-005", "KCA-006", "KCA-007"]
+  },
+  {
+    "finding_id": "KREF-008",
+    "source_ids": ["DDIA2_OFFICIAL_TOC_2026", "DDIA2_REFERENCES_1752CBD0"],
+    "exact_source_locations": ["Official DDIA 2e contents chapter 14"],
+    "principle": "Future recommendations need provenance, consent, policy versions and conflict disclosure.",
+    "strategy_os_invariant": "Source facts, platform inference, user hypothesis, proposals and authority remain distinct.",
+    "repository_files": ["paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_V0_V6_OWNER_DIRECTION_RECONCILIATION_2026-08-29.md"],
+    "observed_current_behavior": "Recommendations are future V2/V3 scope; V0 grants no implementation authority.",
+    "classification": "FUTURE GOVERNANCE SEAM",
+    "reproduction_or_hypothesis": "A ranking appears as fact, uses private data without consent or favors platform-owned content.",
+    "severity": "High before recommendation/marketplace reachability; not a current V0 defect",
+    "confidence": "Official public section-title delta only; no chapter-text or legal claim",
+    "current_release_impact": "Preserve lineage; no V0 feature",
+    "recommended_disposition": "V2/V3 DEMAND-LED AND OWNER-GATED",
+    "change_set": ["none"],
+    "tests": ["future policy provenance, consent, reproducibility and preference fixtures"],
+    "migration": "none in V0",
+    "rollback": "future recommendations must be disableable without deleting research evidence",
+    "non_goals": ["recommendation engine", "marketplace", "legal conclusion"],
+    "future_owners": ["V2 recommendation owner", "V3 marketplace governance", "legal/commercial/privacy owners"],
+    "claim_ids": ["KCA-008"]
+  }
+]

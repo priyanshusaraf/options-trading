@@ -1,0 +1,33 @@
+---
+{
+  "id": "phase5-research-execution",
+  "phase": "phase5",
+  "status": "failed_recheck_exhausted",
+  "kind": "research_runtime",
+  "goal": "Execute accepted first-party v2 strategies over verified datasets with vector research, incremental prefix/state semantics, canonical triggers and snapshots, and exact parity without weakening the sole lifecycle or authority loader.",
+  "goal_contract": {"create_before_work": true, "stopping_condition": "Complete only after vector and incremental paths consume the same accepted graph, contracts, dataset and reset schedule; every registered executable node passes parity/causality/warmup/invalidity; results bind complete provenance; cancellation and resource bounds work; and independent assurance passes."},
+  "risk_tags": ["critical", "research", "causality", "parity", "state"],
+  "required_docs": [{"path": "paper-trader/docs/superpowers/specs/phase5-strategy-os-design.md", "sections": ["Research execution and cache boundary", "Canonical ResourcePlan schema", "Verification and complete-universe gates"]}],
+  "dependency_gate": "phase5-custom-node-contracts",
+  "additional_dependencies": ["phase5-first-party-analytical-catalogue", "phase5-state-execution-derivatives-catalogue", "phase5-adv-006-runtime-assurance"],
+  "allowed_paths": ["paper-trader/backend/app/ir/incremental_runtime.py", "paper-trader/backend/app/ir/state_snapshots.py", "paper-trader/backend/research/evaluation/phase5_runtime.py", "paper-trader/backend/research_tests/test_phase5_research_execution.py", ".agent/runs/phase5-research-execution", "paper-trader/docs/agent/tasks/phase5-research-execution.md", "paper-trader/docs/agent/programme/PROGRAMME.json", "paper-trader/docs/agent/CURRENT.md", "paper-trader/docs/agent/DEPLOYABILITY.md"],
+  "nonclaims": ["No deployment, live streaming service, provider adapter, broker, order, or money authority.", "Prefix oracle is conformance evidence, not performance evidence.", "Physical capacity remains unproven until measured."],
+  "owner_gates": ["Stop before live-loop adoption, provider subscriptions, new execution semantics, state takeover, dependency/licence adoption, or deployment."],
+  "stop_conditions": ["Research imports broker/runner/db.session; future bars change prefixes; batch/stream state or reset ordering differs; unverified datasets/cache inputs are consumed; ResourcePlan bounds can be bypassed."],
+  "deployment_impact": {"classification": "architecture-changing", "required_evidence": "Research-only modules and local worker behavior; packaged service topology, locked dependencies, health, restart and capacity remain C9."},
+  "model_route": {"owner": "gpt-5.6-sol", "owner_reasoning_effort": "medium", "service_tier": "priority"},
+  "parallel_budget": 0,
+  "assignments": [],
+  "acceptance": ["One accepted graph/registry/implementation closure drives vector and incremental paths.", "Every executable registered node has exact vector/prefix/state parity, warmup, validity, causal-prefix and reset/restart evidence.", "Only verified Phase 4 datasets/manifests and provenance-complete evaluation policies are consumed.", "State snapshots bind exact identities and reset reasons; stale snapshots refuse.", "Triggers run only on declared relevant events and remain within ResourcePlan bounds.", "Results bind graph, node library, implementation, data, truth, policy, plan and run authority addresses."],
+  "test_plan": ["Complete registered executable universe through shared parity harness.", "Future-append causal-prefix tests and completed-bar ordering.", "Snapshot/restart/reset-set equivalence across vector/incremental execution.", "Missing/stale/undefined/provider-unavailable propagation and fallback.", "Resource/trigger/cancellation bounds and verified result provenance.", "Affected research subsystem and killed/restored parity/causality guards."],
+  "review": {"required": true, "assignment_id": "phase5_research_execution_reviewer", "agent": "critical-reviewer", "model": "gpt-5.6-sol", "reasoning_effort": "high", "base_sha": "HEAD", "package": ".agent/runs/phase5-research-execution/recheck-package.json", "review_paths": ["paper-trader/backend/app/ir/incremental_runtime.py", "paper-trader/backend/app/ir/state_snapshots.py", "paper-trader/backend/research/evaluation/phase5_runtime.py", "paper-trader/backend/research_tests/test_phase5_research_execution.py"], "exclude_paths": [], "output": ".agent/runs/phase5-research-execution/review/recheck-verdict.json", "verdicts": ["SPEC", "QUALITY"], "max_rechecks": 1},
+  "implementation": {"status": "correction_evidence_ready_for_sole_recheck", "report_sha256": "3f1c2ae0ad031607370d4ebab67df8064423052be97cdf89d4b2195dbd897bd2", "deployability_sha256": "d15519f98ce3067901a50ea912a67021a6f6e17001b7aa108ae3f75e96259e90", "evidence_sha256": "dbd40501d9c8be6cb58c3bfb059a7341a1662880681c2cbcad406cbd2a38925f", "focused_passed": 59, "subsystem_passed": 1477, "subsystem_skipped": 58, "mutations": 6, "registered_components": 309, "recursive_components": 18},
+  "first_review": {"spec": "FAIL", "quality": "FAIL", "overall": "FAIL", "package_sha256": "6883e0d223297daddcf625e2ea3b4400e4e0970116280713f4b35b58fedaab89", "verdict": ".agent/runs/phase5-research-execution/review/verdict.json", "verdict_sha256": "262aafccef955c7e7e5206082fed738aba128340fdb31fbbd9ff0eef1aaf480c", "findings": ["P5-REX-001", "P5-REX-002", "P5-REX-003", "P5-REX-004", "P5-REX-005", "P5-REX-006"], "rechecks_remaining": 1},
+  "correction": {"status": "failed_recheck_exhausted", "report": ".agent/runs/phase5-research-execution/phase5_research_execution_correction/report.md", "report_sha256": "3f1c2ae0ad031607370d4ebab67df8064423052be97cdf89d4b2195dbd897bd2", "closed_findings": ["P5-REX-001", "P5-REX-002", "P5-REX-003", "P5-REX-004", "P5-REX-005"], "open_findings": ["P5-REX-R001"], "mandatory_successor": "phase5-research-parity-assurance"},
+  "recheck": {"spec": "FAIL", "quality": "FAIL", "overall": "FAIL", "package": ".agent/runs/phase5-research-execution/recheck-package.json", "package_sha256": "dbc24fb17eadf84e06b08c2cb8009f50cd047a96cbaa731477991bca2737b14b", "verdict": ".agent/runs/phase5-research-execution/review/recheck-verdict.json", "verdict_sha256": "9ca356d29c439255a79cb57b885c6c4be26cfb210c8940ce226509d2258867ff", "open_findings": ["P5-REX-R001"], "closed_findings": ["P5-REX-001", "P5-REX-002", "P5-REX-003", "P5-REX-004", "P5-REX-005"], "rechecks_remaining": 0, "successor": "paper-trader/docs/agent/tasks/phase5-research-snapshot-authority-recovery.md"}
+}
+---
+
+# Phase 5 research execution
+
+This capsule enables research execution only through accepted lifecycle and authority seams. It cannot authorize live behavior.

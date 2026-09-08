@@ -69,6 +69,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import struct
 import threading
@@ -77,11 +78,487 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
+from zoneinfo import ZoneInfo
 
 from app.backtest.identity import (INSTRUMENT_IDENTITY_FIELDS,
                                    PROVIDER_IDENTITY_FIELDS,
                                    ordered_dataset_address, source_identity)
 from app.core.config import get_settings
+from app.market_data.numeric import NumericIngressError, market_float
+
+
+@dataclass(frozen=True)
+class LegacyDatasetManifest:
+    """Closed, immutable Phase 4 provenance for an answer-bearing dataset."""
+    owner_id: str
+    dataset_address: str
+    provider_dataset_version: str
+    instruments: tuple[str, ...]
+    fields: tuple[str, ...]
+    range_start: str
+    range_end: str
+    segment_digests: tuple[str, ...]
+    instrument_master_address: str
+    rulebook_snapshot_address: str
+    adjustment_policy_address: str
+    roll_policy_address: str
+    missing_data_policy_address: str
+    alignment_policy_address: str
+    resampling_policy_address: str
+    timezone: str
+    collection_algorithm_version: str
+    import_algorithm_version: str
+    gaps: tuple[str, ...] = ()
+    reconstructed_regions: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        scalar_facts = (self.owner_id, self.dataset_address, self.provider_dataset_version,
+                        self.range_start, self.range_end, self.timezone,
+                        self.collection_algorithm_version, self.import_algorithm_version,
+                        self.instrument_master_address, self.rulebook_snapshot_address,
+                        self.adjustment_policy_address, self.roll_policy_address,
+                        self.missing_data_policy_address, self.alignment_policy_address,
+                        self.resampling_policy_address)
+        if (any(not isinstance(value, str) or not value.strip() for value in scalar_facts)
+                or not self.instruments or not self.fields or not self.segment_digests):
+            raise ValueError("dataset manifest identity is incomplete")
+        ordered = (self.instruments, self.fields, self.segment_digests,
+                   self.gaps, self.reconstructed_regions)
+        if any(not isinstance(values, tuple)
+               or any(not isinstance(value, str) or not value.strip() for value in values)
+               for values in ordered):
+            raise ValueError("manifest collection facts are malformed")
+        try:
+            ZoneInfo(self.timezone)
+            start = dt.datetime.fromisoformat(self.range_start.replace("Z", "+00:00"))
+            end = dt.datetime.fromisoformat(self.range_end.replace("Z", "+00:00"))
+        except (TypeError, ValueError, KeyError):
+            raise ValueError("manifest range or timezone is invalid") from None
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("manifest range is not ordered aware time")
+        if any(tuple(sorted(values)) != values or len(set(values)) != len(values)
+               for values in ordered):
+            raise ValueError("manifest facts must be unique canonical order")
+        values = tuple(str(value) for value in self.__dict__.values())
+        if any("secret" in value.lower() or "token" in value.lower() for value in values):
+            raise ValueError("manifest must not contain secrets")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.dataset_address):
+            raise ValueError("dataset address is malformed")
+        addresses = (self.segment_digests + (self.instrument_master_address,
+                     self.rulebook_snapshot_address, self.adjustment_policy_address,
+                     self.roll_policy_address, self.missing_data_policy_address,
+                     self.alignment_policy_address, self.resampling_policy_address))
+        if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in addresses):
+            raise ValueError("manifest provenance address is malformed")
+
+    def address(self) -> str:
+        from app.backtest.identity import _canonical_json
+        payload = {"scheme": "dataset-manifest/phase4/1", **self.__dict__}
+        return "sha256:" + hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
+
+
+def _fact_address(schema: str, fact: Mapping[str, Any]) -> str:
+    from app.market_truth.identity import canonical_fact_address
+    return canonical_fact_address(schema, dict(fact))
+
+
+def _fact_bytes(schema: str, fact: Mapping[str, Any]) -> bytes:
+    from app.market_truth.identity import canonical_fact_bytes
+    # Dataset manifests/segments can bind 10,000 observations of each source role.
+    return canonical_fact_bytes(schema, dict(fact), maximum_bytes=2 * 1024 * 1024)
+
+
+def _content_address(value: object, label: str) -> str:
+    from app.ir.schema import is_content_address
+    if not isinstance(value, str) or not is_content_address(value):
+        raise ValueError(f"{label} must be a content address")
+    return value
+
+
+def _closed_sorted_addresses(values: object, label: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)) or len(values) > 10_000:
+        raise ValueError(f"{label} is not a bounded address list")
+    result = tuple(values)
+    if (not allow_empty and not result) or result != tuple(sorted(set(result))):
+        raise ValueError(f"{label} must be non-empty, unique, and sorted")
+    for value in result:
+        _content_address(value, label)
+    return result
+
+
+def _closed_sorted_strings(values: object, label: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)) or len(values) > 10_000:
+        raise ValueError(f"{label} is not a bounded string list")
+    result = tuple(values)
+    if (not allow_empty and not result) or result != tuple(sorted(set(result))):
+        raise ValueError(f"{label} must be non-empty, unique, and sorted")
+    if any(not isinstance(value, str) or not value or len(value) > 256 for value in result):
+        raise ValueError(f"{label} contains an invalid value")
+    return result
+
+
+def _utc_text(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a UTC timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a UTC timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    return parsed.astimezone(dt.timezone.utc).isoformat()
+
+
+@dataclass(frozen=True)
+class DatasetSegment:
+    """Closed ``dataset-segment/1`` fact; object bytes are verified separately."""
+
+    owner_id: str
+    object_address: str
+    byte_digest: str
+    byte_length: int
+    media_type: str
+    raw_schema_address: str
+    row_start: int
+    row_end: int
+    instrument_addresses: tuple[str, ...]
+    fields: tuple[str, ...]
+    event_start: str
+    event_end: str
+    availability_start: str
+    availability_end: str
+    provider_product_addresses: tuple[str, ...]
+    provider_contract_addresses: tuple[str, ...]
+    provider_observation_addresses: tuple[str, ...]
+    normalized_observation_addresses: tuple[str, ...]
+    normalization_transform_addresses: tuple[str, ...]
+    algorithm_addresses: tuple[str, ...]
+    correction_addresses: tuple[str, ...]
+    creation_evidence_address: str
+
+    SCHEMA = "dataset-segment/1"
+    MAX_BYTES = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner_id, str) or not self.owner_id or len(self.owner_id) > 64:
+            raise ValueError("segment owner is invalid")
+        for name in ("object_address", "byte_digest", "raw_schema_address", "creation_evidence_address"):
+            _content_address(getattr(self, name), name)
+        if (isinstance(self.byte_length, bool) or not isinstance(self.byte_length, int)
+                or not 0 < self.byte_length <= self.MAX_BYTES):
+            raise ValueError("segment byte length is outside the local boundary")
+        if (isinstance(self.row_start, bool) or isinstance(self.row_end, bool)
+                or not isinstance(self.row_start, int) or not isinstance(self.row_end, int)
+                or self.row_start < 0 or self.row_end <= self.row_start):
+            raise ValueError("segment row range is invalid")
+        if not isinstance(self.media_type, str) or not self.media_type or len(self.media_type) > 128:
+            raise ValueError("segment media type is invalid")
+        for name in ("instrument_addresses", "provider_product_addresses", "provider_contract_addresses",
+                     "provider_observation_addresses", "normalized_observation_addresses",
+                     "normalization_transform_addresses", "algorithm_addresses"):
+            object.__setattr__(self, name, _closed_sorted_addresses(getattr(self, name), name))
+        object.__setattr__(self, "correction_addresses", _closed_sorted_addresses(
+            self.correction_addresses, "correction_addresses", allow_empty=True))
+        object.__setattr__(self, "fields", _closed_sorted_strings(self.fields, "fields"))
+        for prefix in ("event", "availability"):
+            start = _utc_text(getattr(self, f"{prefix}_start"), f"{prefix}_start")
+            end = _utc_text(getattr(self, f"{prefix}_end"), f"{prefix}_end")
+            if start >= end:
+                raise ValueError(f"segment {prefix} range is inverted")
+            object.__setattr__(self, f"{prefix}_start", start)
+            object.__setattr__(self, f"{prefix}_end", end)
+
+    def fact(self) -> dict[str, Any]:
+        return {name: list(value) if isinstance(value, tuple) else value
+                for name, value in self.__dict__.items()}
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return _fact_bytes(self.SCHEMA, self.fact())
+
+    @property
+    def segment_address(self) -> str:
+        return _fact_address(self.SCHEMA, self.fact())
+
+    @classmethod
+    def from_bytes(cls, value: bytes) -> "DatasetSegment":
+        from app.ir.hashing import canonical_json
+        try:
+            document = json.loads(value.decode("utf-8"))
+            if (canonical_json(document).encode() != value or set(document) != {"schema", "fact"}
+                    or document["schema"] != cls.SCHEMA or not isinstance(document["fact"], dict)):
+                raise ValueError
+            fact = dict(document["fact"])
+            for name in ("instrument_addresses", "fields", "provider_product_addresses",
+                         "provider_contract_addresses", "provider_observation_addresses",
+                         "normalized_observation_addresses", "normalization_transform_addresses",
+                         "algorithm_addresses", "correction_addresses"):
+                fact[name] = tuple(fact[name])
+            result = cls(**fact)
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError("dataset segment bytes are malformed") from exc
+        if result.canonical_bytes != value:
+            raise ValueError("dataset segment bytes do not reconstruct exactly")
+        return result
+
+
+@dataclass(frozen=True, init=False)
+class DatasetManifest:
+    """Closed ``dataset-manifest/2`` fact, with read-only legacy construction.
+
+    The legacy constructor remains solely so historical Phase 4 tests and audit
+    rows can be decoded. ``canonical_bytes`` and authority persistence refuse it.
+    """
+
+    SCHEMA = "dataset-manifest/2"
+    MAX_SEGMENTS = 10_000
+
+    def __eq__(self, other):
+        if type(self) is not type(other):
+            return NotImplemented
+        if self._legacy is not None or other._legacy is not None:
+            return self._legacy == other._legacy
+        return self.canonical_bytes == other.canonical_bytes
+
+    def __hash__(self):
+        return hash(self._legacy if self._legacy is not None else self.canonical_bytes)
+
+    def __init__(self, **values: Any) -> None:
+        if "dataset_address" in values:
+            legacy = LegacyDatasetManifest(**values)
+            object.__setattr__(self, "_legacy", legacy)
+            return
+        required = {
+            "owner_id", "purpose", "mode", "segment_addresses", "aggregate_byte_digest",
+            "aggregate_byte_length", "instrument_addresses", "fields", "event_start", "event_end",
+            "availability_start", "availability_end", "gaps", "correction_addresses",
+            "provider_entity_addresses", "provider_product_addresses", "provider_contract_addresses",
+            "provider_observation_addresses", "normalized_observation_addresses",
+            "raw_schema_addresses", "normalization_transform_addresses", "truth_snapshot_addresses",
+            "creation_evidence_addresses",
+            "capability_profile_address", "alignment_policy_address",
+            "missing_data_policy_address", "adjustment_policy_address", "roll_policy_address",
+            "algorithm_addresses", "created_at", "recorded_at",
+        }
+        if set(values) != required:
+            raise ValueError("dataset manifest fields are not closed")
+        if (not isinstance(values["owner_id"], str) or not values["owner_id"]
+                or len(values["owner_id"]) > 64 or values["mode"] not in {"RESEARCH", "PAPER", "LIVE"}
+                or not isinstance(values["purpose"], str) or not values["purpose"]):
+            raise ValueError("dataset manifest owner, purpose, or mode is invalid")
+        if (isinstance(values["aggregate_byte_length"], bool)
+                or not isinstance(values["aggregate_byte_length"], int)
+                or values["aggregate_byte_length"] <= 0):
+            raise ValueError("dataset aggregate byte length is invalid")
+        address_lists = ("segment_addresses", "provider_entity_addresses", "provider_product_addresses",
+            "provider_contract_addresses", "provider_observation_addresses",
+            "normalized_observation_addresses", "raw_schema_addresses",
+            "normalization_transform_addresses", "truth_snapshot_addresses",
+            "creation_evidence_addresses", "algorithm_addresses")
+        for name in address_lists:
+            parsed = _closed_sorted_addresses(values[name], name)
+            if name == "segment_addresses" and len(parsed) > self.MAX_SEGMENTS:
+                raise ValueError("dataset segment bound exceeded")
+            object.__setattr__(self, name, parsed)
+        object.__setattr__(self, "correction_addresses", _closed_sorted_addresses(
+            values["correction_addresses"], "correction_addresses", allow_empty=True))
+        object.__setattr__(self, "instrument_addresses", _closed_sorted_addresses(
+            values["instrument_addresses"], "instrument_addresses"))
+        object.__setattr__(self, "fields", _closed_sorted_strings(values["fields"], "fields"))
+        if not isinstance(values["gaps"], (tuple, list)) or len(values["gaps"]) > 10_000:
+            raise ValueError("dataset gaps are not bounded")
+        gaps = tuple(values["gaps"])
+        if any(not isinstance(gap, dict) or set(gap) != {"instrument_address", "field", "start", "end", "reason"}
+               for gap in gaps):
+            raise ValueError("dataset gap is not closed")
+        normalized_gaps = tuple(sorted((dict(gap) for gap in gaps), key=lambda gap: json.dumps(gap, sort_keys=True)))
+        if normalized_gaps != gaps:
+            raise ValueError("dataset gaps must be canonically ordered")
+        object.__setattr__(self, "gaps", normalized_gaps)
+        for name in ("aggregate_byte_digest", "capability_profile_address",
+                     "alignment_policy_address", "missing_data_policy_address", "adjustment_policy_address",
+                     "roll_policy_address"):
+            object.__setattr__(self, name, _content_address(values[name], name))
+        for prefix in ("event", "availability"):
+            start = _utc_text(values[f"{prefix}_start"], f"{prefix}_start")
+            end = _utc_text(values[f"{prefix}_end"], f"{prefix}_end")
+            if start >= end:
+                raise ValueError(f"manifest {prefix} range is inverted")
+            object.__setattr__(self, f"{prefix}_start", start)
+            object.__setattr__(self, f"{prefix}_end", end)
+        for name in ("created_at", "recorded_at"):
+            object.__setattr__(self, name, _utc_text(values[name], name))
+        if self.recorded_at < self.created_at:
+            raise ValueError("manifest recorded time precedes creation")
+        for name in ("owner_id", "purpose", "mode", "aggregate_byte_length"):
+            object.__setattr__(self, name, values[name])
+        object.__setattr__(self, "_legacy", None)
+
+    def fact(self) -> dict[str, Any]:
+        if self._legacy is not None:
+            raise ValueError("legacy dataset manifest has no dataset-manifest/2 authority")
+        result: dict[str, Any] = {}
+        for name, value in self.__dict__.items():
+            if name == "_legacy":
+                continue
+            if isinstance(value, tuple):
+                result[name] = [dict(item) if isinstance(item, dict) else item for item in value]
+            else:
+                result[name] = value
+        return result
+
+    @property
+    def canonical_bytes(self) -> bytes:
+        return _fact_bytes(self.SCHEMA, self.fact())
+
+    @property
+    def manifest_address(self) -> str:
+        return _fact_address(self.SCHEMA, self.fact())
+
+    def address(self) -> str:
+        return self._legacy.address() if self._legacy is not None else self.manifest_address
+
+    @classmethod
+    def from_bytes(cls, value: bytes) -> "DatasetManifest":
+        from app.ir.hashing import canonical_json
+        try:
+            document = json.loads(value.decode("utf-8"))
+            if (canonical_json(document).encode() != value or set(document) != {"schema", "fact"}
+                    or document["schema"] != cls.SCHEMA or not isinstance(document["fact"], dict)):
+                raise ValueError
+            fact = dict(document["fact"])
+            for name in ("segment_addresses", "instrument_addresses", "fields", "gaps",
+                         "correction_addresses", "provider_entity_addresses", "provider_product_addresses",
+                         "provider_contract_addresses", "provider_observation_addresses",
+                         "normalized_observation_addresses", "raw_schema_addresses",
+                         "normalization_transform_addresses", "truth_snapshot_addresses", "algorithm_addresses"):
+                fact[name] = tuple(fact[name])
+            fact["creation_evidence_addresses"] = tuple(fact["creation_evidence_addresses"])
+            result = cls(**fact)
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError("dataset manifest bytes are malformed") from exc
+        if result.canonical_bytes != value:
+            raise ValueError("dataset manifest bytes do not reconstruct exactly")
+        return result
+
+
+def dataset_byte_digest(value: bytes) -> str:
+    """Return the byte identity used by segment and aggregate authority facts."""
+    if not isinstance(value, bytes) or not value:
+        raise ValueError("dataset object bytes must be non-empty bytes")
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def verify_dataset_segment(segment: DatasetSegment, object_bytes: bytes) -> None:
+    """Verify stored object bytes before any copied coverage is trusted."""
+    if len(object_bytes) != segment.byte_length:
+        raise ValueError("dataset segment byte length mismatch")
+    if dataset_byte_digest(object_bytes) != segment.byte_digest:
+        raise ValueError("dataset segment byte digest mismatch")
+
+
+def _covers(intervals: list[tuple[str, str]], start: str, end: str) -> bool:
+    """Whether half-open, UTC intervals cover the requested interval exactly."""
+    cursor = start
+    for left, right in sorted(intervals):
+        if right <= cursor:
+            continue
+        if left > cursor:
+            return False
+        cursor = max(cursor, right)
+        if cursor >= end:
+            return True
+    return False
+
+
+def verify_dataset_manifest(
+    manifest: DatasetManifest,
+    segments: Mapping[str, tuple[DatasetSegment, bytes]],
+) -> tuple[DatasetSegment, ...]:
+    """Reconstruct the complete ``dataset-manifest/2`` authority chain.
+
+    Callers receive segments in the manifest's canonical order only after raw
+    bytes, copied unions, aggregate identity, ownership, and coverage verify.
+    """
+    if manifest._legacy is not None:
+        raise ValueError("legacy dataset manifest is LEGACY_UNVERIFIED")
+    if set(segments) != set(manifest.segment_addresses):
+        raise ValueError("dataset manifest segment set is incomplete or contains extras")
+    ordered: list[DatasetSegment] = []
+    objects: list[bytes] = []
+    for address in manifest.segment_addresses:
+        try:
+            segment, object_bytes = segments[address]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("dataset segment chain is malformed") from exc
+        if segment.segment_address != address:
+            raise ValueError("dataset segment address does not reconstruct")
+        if segment.owner_id != manifest.owner_id:
+            raise ValueError("dataset segment owner mismatch")
+        verify_dataset_segment(segment, object_bytes)
+        ordered.append(segment)
+        objects.append(object_bytes)
+    combined = b"".join(objects)
+    if len(combined) != manifest.aggregate_byte_length:
+        raise ValueError("dataset aggregate byte length mismatch")
+    if dataset_byte_digest(combined) != manifest.aggregate_byte_digest:
+        raise ValueError("dataset aggregate byte digest mismatch")
+
+    def union(name: str) -> tuple[str, ...]:
+        return tuple(sorted({value for segment in ordered for value in getattr(segment, name)}))
+
+    copied_unions = {
+        "instrument_addresses": union("instrument_addresses"),
+        "fields": union("fields"),
+        "correction_addresses": union("correction_addresses"),
+        "provider_product_addresses": union("provider_product_addresses"),
+        "provider_contract_addresses": union("provider_contract_addresses"),
+        "provider_observation_addresses": union("provider_observation_addresses"),
+        "normalized_observation_addresses": union("normalized_observation_addresses"),
+        "raw_schema_addresses": tuple(sorted({segment.raw_schema_address for segment in ordered})),
+        "normalization_transform_addresses": union("normalization_transform_addresses"),
+        "creation_evidence_addresses": tuple(sorted({segment.creation_evidence_address for segment in ordered})),
+        "algorithm_addresses": union("algorithm_addresses"),
+    }
+    for name, expected in copied_unions.items():
+        if getattr(manifest, name) != expected:
+            raise ValueError(f"dataset manifest copied {name} does not reconstruct")
+    if min(segment.event_start for segment in ordered) < manifest.event_start:
+        raise ValueError("dataset segment event range escapes manifest")
+    if max(segment.event_end for segment in ordered) > manifest.event_end:
+        raise ValueError("dataset segment event range escapes manifest")
+    if min(segment.availability_start for segment in ordered) < manifest.availability_start:
+        raise ValueError("dataset segment availability range escapes manifest")
+    if max(segment.availability_end for segment in ordered) > manifest.availability_end:
+        raise ValueError("dataset segment availability range escapes manifest")
+
+    gap_intervals: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for gap in manifest.gaps:
+        instrument = _content_address(gap["instrument_address"], "gap instrument")
+        field = gap["field"]
+        left = _utc_text(gap["start"], "gap start")
+        right = _utc_text(gap["end"], "gap end")
+        if (instrument not in manifest.instrument_addresses or field not in manifest.fields
+                or not isinstance(gap["reason"], str) or not gap["reason"]
+                or left >= right or left < manifest.event_start or right > manifest.event_end):
+            raise ValueError("dataset gap is invalid or outside requested coverage")
+        gap_intervals.setdefault((instrument, field), []).append((left, right))
+    for instrument in manifest.instrument_addresses:
+        for field in manifest.fields:
+            event_intervals = [
+                (segment.event_start, segment.event_end) for segment in ordered
+                if instrument in segment.instrument_addresses and field in segment.fields
+            ] + gap_intervals.get((instrument, field), [])
+            if not _covers(event_intervals, manifest.event_start, manifest.event_end):
+                raise ValueError("dataset event coverage is incomplete")
+            availability_intervals = [
+                (segment.availability_start, segment.availability_end) for segment in ordered
+                if instrument in segment.instrument_addresses and field in segment.fields
+            ]
+            if not _covers(availability_intervals, manifest.availability_start,
+                           manifest.availability_end):
+                raise ValueError("dataset availability coverage is incomplete")
+    return tuple(ordered)
 
 BLOB_SUFFIX = ".ptds"
 MANIFEST_SUFFIX = ".json"
@@ -178,9 +655,18 @@ def encode_candles(candles) -> bytes:
         ts = getattr(candle, "ts", None)
         if not isinstance(ts, dt.datetime):
             raise DatasetStoreError(f"candle {index} has no datetime ts")
-        out += struct.pack(">q5d", _timestamp_us(ts), float(candle.open),
-                           float(candle.high), float(candle.low),
-                           float(candle.close), float(candle.volume))
+        try:
+            fields = (
+                market_float(candle.open, field=f"candle {index} open"),
+                market_float(candle.high, field=f"candle {index} high"),
+                market_float(candle.low, field=f"candle {index} low"),
+                market_float(candle.close, field=f"candle {index} close"),
+                market_float(candle.volume, field=f"candle {index} volume"))
+        except NumericIngressError as e:
+            # The storage boundary keeps its own vocabulary: a boolean that
+            # reached this far is a DatasetStoreError naming the candle.
+            raise DatasetStoreError(str(e)) from e
+        out += struct.pack(">q5d", _timestamp_us(ts), *fields)
     return zlib.compress(bytes(out), _COMPRESSION_LEVEL)
 
 

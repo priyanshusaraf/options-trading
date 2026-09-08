@@ -36,6 +36,14 @@ def _research_gate() -> None:
 router = APIRouter(dependencies=[Depends(_research_gate)])
 
 
+@router.get("/api/paper-portfolio")
+def get_paper_portfolio(principal: Principal = Depends(get_principal)):
+    from app.core.paper_portfolio import read_paper_portfolio
+
+    with SessionLocal() as session:
+        return read_paper_portfolio(session, owner_id=owner_id_for(principal))
+
+
 class ProposalIn(BaseModel):
     instrument_key: str
     score: float = 0.0

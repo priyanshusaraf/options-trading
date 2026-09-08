@@ -1,93 +1,44 @@
-# ARCHITECTURE
+# Strategy OS architecture map
 
-**The architecture is singular. The implementation is distributed.**
+Strategy OS uses one strategy language across editing, research and supported runtime evaluation. V0 is the research-and-alerts product; controlled public execution belongs to later releases. Existing trading-bot code is a separate operational concern, not evidence that V0 is safe to trade.
 
-This document is the shared frame every workstream works inside. It is deliberately short:
-it states the invariants that hold across all of them and nothing else. Detail belongs in
-the workstream documents.
+## Feature relationships
 
-- The constitution is [`rfcs/0001-component-ir.md`](rfcs/0001-component-ir.md). Where this
-  document and the RFC disagree, the RFC wins and this document is the defect.
-- Engine internals live in
-  [`engineering/reference/engine-internals.md`](engineering/reference/engine-internals.md).
-- Who builds what: [`engineering/WORKSTREAMS.md`](engineering/WORKSTREAMS.md).
+| Producer | Consumer | Contract that crosses the boundary |
+| --- | --- | --- |
+| Editor and component registry | Validator, resolver and research | Immutable strategy revision and resolved semantic versions; layout does not change executable identity. |
+| Data providers and canonical instrument store | Research and monitoring | Attributable datasets/observations, completed-bar timing, instrument identity, coverage and capability limits. |
+| Research operations | Comparison, evidence and review | Exact strategy/data/implementation/cost identity and separate selection/holdout evidence. |
+| Monitoring evaluation | Alerts Inbox and delivery | Immutable signal event; derived alert; separate delivery and mutable attention records. |
+| Approved research and execution binding | Sizing, admission and execution | Evidence is an admission prerequisite, not a live authority lease. Account, mode and exact revision remain explicit. |
+| Execution and inventory | Later portfolio/campaign products | Durable position ownership, reservations, fills and reconciliation. Future portfolio proposals cannot bypass current capital admission. |
+| Strategy packages | Later marketplace | Versioned content, provenance, rights and local preflight. Distribution grants no order authority. |
 
----
+## Shared invariants
 
-## 1. What the system is
+- One canonical IR, validator, resolver, executable hash and component registry. Editors are views; presentation state is separate.
+- Strategies, revisions, datasets, experiments, evidence, monitoring events, alerts, deployments, authority and money records have distinct identities and owners.
+- Use causal completed-bar inputs, canonical instruments and configured costs. A strategy may observe another instrument; missing or stale inputs need explicit reasons.
+- Separate data providers from execution brokers. Declared capability and public data availability do not establish commercial rights.
+- Keep tenant boundaries across API, persistence, jobs and caches. Preserve sufficient immutable evidence to reconstruct decisions.
+- Keep paper/live books separate and live authority closed by default. ARM gates entries; risk-reducing exits remain available. Research and local tests grant no execution authority.
+- Strategy intent does not encode broker implementation. Executors must not branch on component provenance. Packages do not transport live execution state.
 
-A single-user autonomous trading platform for Indian markets, being rebuilt as a **Strategy
-Operating System**: strategies are composed, versioned, searched and executed as artefacts in
-one language rather than as four kinds of hard-coded thing.
+## Read the relevant contract
 
-It trades real capital today. That fact constrains every decision below.
+| Concern | Sources |
+| --- | --- |
+| Product objects and five node families | [Product steer](program/owner-steers/00-STRATEGY-OS-PRODUCT-STEER.md), [object ADR](engineering/decisions/0001-product-object-contract.md) |
+| Language and numerical semantics | [Language steer](program/owner-steers/01-STRATEGY-LANGUAGE-NODE-SYSTEM.md), [IR RFC](rfcs/0001-component-ir.md) and accepted amendments |
+| Data identity and causality | [Market-truth steer](program/owner-steers/02-MARKET-TRUTH-DATA-CONTRACTS.md) |
+| Execution, ownership and recovery | [Execution steer](program/owner-steers/03-DEPLOYMENT-EXECUTION-TRUST.md), [ADRs](engineering/decisions/) |
+| Resource plans and provider capabilities | [Runtime steer](program/owner-steers/04-RUNTIME-ECONOMICS-PROVIDER-CAPABILITIES.md) |
+| Later-release continuity | [Architecture evolution](program/owner-directions/2026-08-29/03-ARCHITECTURE-EVOLUTION-AND-NO-DEAD-END-INVARIANTS.md), [future adoption triggers](architecture/FUTURE-RELEASE-BACKEND-SEAMS-AND-ADOPTION-TRIGGERS.md) |
 
-## 2. The five planes
+These sources retain detailed contracts; this map does not amend them. Resolve conflicts using the latest scoped owner decision and accepted technical amendments. Historical release labels do not repeal invariants.
 
-RFC 0001 §1.2. Every subsystem is one of these, and a normative clause may not name a concern
-from another.
+## Repository orientation
 
-| Plane | Concern | Relationship to the IR | Workstream |
-|---|---|---|---|
-| **Language** | the IR itself | *is* the IR | WS-01 |
-| **Runtime** | how a resolved graph executes | consumes | WS-01 (evaluator), WS-02 (live) |
-| **Research** | how graphs are generated and searched | produces and consumes | WS-03 |
-| **Editor** | how humans author graphs | produces | WS-04 |
-| **Marketplace** | how components are distributed | transports | WS-05 |
+The V0 interface lives in `paper-trader/strategy-frontend`; `paper-trader/frontend` retains the bot UI. Backend language, APIs, providers and execution live under `paper-trader/backend/app`; research is under `paper-trader/backend/research`. Check nearby code/tests for the actual integration before claiming a path is usable.
 
-WS-06 (Deployment), WS-07 (Infrastructure) and WS-08 (Cockpit UI) are not planes. They are the
-substrate the planes run on, and they carry no language concerns.
-
-## 3. Invariants that cross every workstream
-
-These are not style. Breaking one is an architectural defect regardless of which workstream
-does it.
-
-1. **The Component IR is the canonical representation of strategy intent.** Every other
-   representation produces it, consumes it, or is deterministically derived from it.
-2. **Deployment is the execution root.** Projects are editor-level organisational objects
-   only. Packages distribute reproducible research environments, never live execution state.
-3. **Strategies express intent; execution determines implementation.** Execution products,
-   brokers and venues belong to the execution architecture and never to the strategy language.
-4. **Execution is provenance-blind (C13).** No executor path may branch on where a component
-   came from. Enforced subtractively — there is nothing to branch on — and by a test that
-   greps for the concept.
-5. **One resolution (C12).** Research and live share a single `resolve()`. There is exactly one
-   construction of a resolved graph in the tree, and a test asserts it. Two hand-written
-   implementations of one idea is the `candles.py` defect this rule exists because of.
-6. **Presentation state lives beside the graph, never inside it (F13).** Dragging a node must
-   not change its content address.
-7. **Results bind to the versions that produced them (F14).** Every experiment and finding
-   carries the graph version, every resolved component version, node identities and a data
-   digest — derived from resolution, never supplied by a caller.
-8. **Linear instruments are first priority.** Future derivative engines must extend this
-   architecture rather than force a redesign.
-
-The accepted ownership, identity, lifecycle and persistence contract for the product objects is
-[ADR 0001](engineering/decisions/0001-product-object-contract.md). It extends these invariants; it
-does not replace the Component IR RFC.
-
-## 4. The live-money rule
-
-Any change affecting execution, order routing, sizing, exits or live trading behaviour **stops
-for explicit owner acknowledgement before deployment**, even when every test passes.
-
-Development, testing and commits continue normally. Deployment does not. This rule sits above
-every workstream's own acceptance criteria and cannot be discharged by them.
-
-## 5. Evidence
-
-Assertions are not evidence. Evidence is a reproducible command and its output.
-
-- Tick a checkbox only with verified evidence, in the same commit as the work.
-- **A green test can be vacuous.** Prove a guard can go red by suppressing the thing it guards
-  and checking that guard's *own* test fails. Counting green runs is not a substitute — five
-  shapes of vacuous test have been caught here that way.
-- **Never assert deployment state from prose.** `curl /api/health` and compare the commit.
-
-## 6. How this document changes
-
-Through RFC amendment (RFC 0001 §6), not through editing. A new capability either fits inside
-the existing architecture or arrives with an RFC that amends it. There is no third path, and
-the executive layer's job is to make a capability that quietly extends the architecture
-distinguishable from ordinary work.
+Use the [working plan](agent/WORKING-PLAN.md) for priorities, [status](agent/STATUS.md) for recorded evidence and the [V0–V6 roadmap](strategy-os-v1-v2-v3/V0-V1-V1.5-V2-V3-V4-V5-V6-SCOPE-DECISION-MATRIX.md) for release classification.

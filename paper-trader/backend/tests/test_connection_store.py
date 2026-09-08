@@ -14,6 +14,7 @@ here rather than trusted to the document.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
 import os
 
@@ -21,12 +22,15 @@ import pytest
 
 from app.core import credential_vault as vault
 from app.core.config import get_settings
+from app.core.instruments import get_instrument
 from app.db.models import BrokerAccount, LEGACY_OWNER_ID, BrokerConnection
 from app.db.session import SessionLocal, init_db
 from app.providers import capabilities as caps
 from app.providers.brokers import BrokerNotSupported
 from app.providers.connection_store import (
-    ConnectionNotFound, OwnedConnectionStore as _OwnedConnectionStore)
+    DATA_CAPABILITIES, DATA_SCOPE_PREFIX, ConnectionNotFound,
+    DataConnectionConflict, DataConnectionUnavailable, DataOperationUnavailable,
+    OwnedConnectionStore as _OwnedConnectionStore)
 
 KEY = base64.b64encode(b"k" * 32).decode()
 OTHER_KEY = base64.b64encode(b"z" * 32).decode()
@@ -146,6 +150,192 @@ def test_declared_capabilities_default_to_the_adapters(session):
     session.flush()
     assert set(json.loads(row.capabilities_json)) == {caps.HISTORICAL_DATA, caps.LIVE_QUOTES}
     assert caps.LIVE_EXECUTION not in row.to_dict()["capabilities"]
+
+
+def test_data_role_is_server_derived_and_never_loads_an_execution_adapter(session, monkeypatch):
+    import app.providers.connection_store as module
+    from app.providers.brokers import spec as real_spec
+
+    kite = real_spec("kite")
+
+    class DataOnlySpec:
+        def load_data(self):
+            return kite.load_data()
+
+        def load_venue(self):
+            raise AssertionError("execution venue became reachable")
+
+        def load_builder(self):
+            raise AssertionError("execution builder became reachable")
+
+    monkeypatch.setattr(module, "spec", lambda key: DataOnlySpec() if key == "kite" else real_spec(key))
+    row = _store(session, "alice").create_data_connection(label="research feed")
+    assert row.scope == f"{DATA_SCOPE_PREFIX}1"
+    assert frozenset(json.loads(row.capabilities_json)) == DATA_CAPABILITIES
+    assert not (DATA_CAPABILITIES & {
+        caps.LIVE_EXECUTION, caps.ACCOUNT_FUNDS, caps.ACCOUNT_POSITIONS,
+        caps.ACCOUNT_EQUITY, caps.ORDER_MARGIN, caps.STREAMING, caps.DEPTH,
+        caps.SIMULATED_CLOCK,
+    })
+
+
+def test_data_role_allows_one_active_row_and_never_reactivates_a_revoked_row(session):
+    store = _store(session, "alice")
+    first = store.create_data_connection()
+    with pytest.raises(DataConnectionConflict):
+        store.create_data_connection()
+    store.revoke(first.id)
+    second = store.create_data_connection()
+    assert second.id != first.id and second.scope == f"{DATA_SCOPE_PREFIX}2"
+    assert first.status == "revoked" and first.credential_ciphertext is None
+
+
+def test_data_role_refuses_a_stored_capability_disagreement(session):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    row.capabilities_json = json.dumps(sorted(DATA_CAPABILITIES | {caps.LIVE_EXECUTION}))
+    session.flush()
+    with pytest.raises(DataConnectionUnavailable):
+        store.require_data_connection(row.id)
+
+
+def test_data_role_refuses_the_unproven_legacy_four_capability_shape(session):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    row.capabilities_json = json.dumps(sorted(DATA_CAPABILITIES | {
+        caps.OPTION_CHAIN, caps.FUTURES_QUOTES,
+    }))
+    session.flush()
+    with pytest.raises(DataConnectionUnavailable, match="closed Zerodha data role"):
+        store.require_data_connection(row.id)
+
+
+def test_data_credential_source_rechecks_owner_revocation_and_vault_integrity(
+        session, vault_key):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    store.store_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"})
+    session.commit()
+    credential_source = store.data_oauth_source(row.id)
+    assert credential_source()["api_key"] == "key"
+
+    row.credential_ciphertext = "tampered"
+    session.commit()
+    with pytest.raises(DataConnectionUnavailable, match="data credential unavailable"):
+        credential_source()
+
+    store.store_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"})
+    session.commit()
+    row.owner_id = "bob"
+    session.commit()
+    with pytest.raises(DataConnectionUnavailable):
+        credential_source()
+
+
+def test_data_credential_source_rechecks_revocation_on_every_read(session, vault_key):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    store.store_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"})
+    session.commit()
+    credential_source = store.data_oauth_source(row.id)
+    assert credential_source()["api_key"] == "key"
+    store.revoke(row.id)
+    session.commit()
+    with pytest.raises(DataConnectionUnavailable):
+        credential_source()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner_id", "bob"), ("status", "disabled"), ("broker", "dhan"),
+])
+def test_data_late_read_atomically_revalidates_the_current_broker_account(
+        session, vault_key, field, value):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    store.store_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"})
+    session.commit()
+    credential_source = store.data_oauth_source(row.id)
+    assert credential_source()["api_key"] == "key"
+    account = session.get(BrokerAccount, row.broker_account_id)
+    setattr(account, field, value)
+    session.commit()
+    with pytest.raises(DataConnectionUnavailable):
+        credential_source()
+
+
+def test_data_only_facade_exposes_only_four_observations_and_keeps_provider_private(
+        session, vault_key, monkeypatch):
+    import builtins
+    from app.providers.kite import KiteProvider
+
+    calls = []
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    store.store_credential(row.id, {
+        "api_key": "owner-key", "api_secret": "owner-secret", "access_token": "data-token"})
+    session.commit()
+
+    original_import = builtins.__import__
+    def poison_execution_import(name, *args, **kwargs):
+        if name.startswith(("app.engine", "app.execution")):
+            raise AssertionError(f"execution import reached: {name}")
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", poison_execution_import)
+
+    def offline_request(_self, route, method, **_kwargs):
+        calls.append((route, method))
+        if route == "market.instruments":
+            return (
+                b"instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,"
+                b"strike,tick_size,lot_size,instrument_type,segment,exchange\n"
+                b"256265,1001,NIFTY 50,NIFTY 50,0,,0,0.05,1,EQ,INDICES,NSE\n"
+            )
+        if route == "market.quote.ltp":
+            return {"NSE:NIFTY 50": {"instrument_token": 256265, "last_price": 25000.0}}
+        raise AssertionError(f"unexpected strict DATA route {route}")
+
+    monkeypatch.setattr(
+        "app.providers.zerodha_data_runtime.ZerodhaDataKite._request", offline_request)
+    monkeypatch.setattr(
+        KiteProvider, "__init__",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("broad provider constructor reached")),
+    )
+    facade = store.data_connection(row.id)
+    public = {name for name in dir(facade) if not name.startswith("_")}
+    assert public == {"provider", "get_candles", "get_ltp", "get_option_chain", "get_futures_ltp"}
+    assert not hasattr(facade, "adapter") and not hasattr(facade, "capabilities")
+    for forbidden in ("account_funds", "account_positions", "account_equity", "order_margin",
+                      "place_order", "orders", "trades", "venue", "builder", "kite",
+                      "request", "session", "transport"):
+        assert not hasattr(facade, forbidden)
+    assert facade.get_ltp(get_instrument("NIFTY")) == 25000.0
+    with pytest.raises(DataOperationUnavailable) as option_refusal:
+        facade.get_option_chain(get_instrument("NIFTY"))
+    assert option_refusal.value.reason_code == "CURRENT_OPTION_CHAIN_UNPROVEN"
+    with pytest.raises(DataOperationUnavailable) as futures_refusal:
+        facade.get_futures_ltp(get_instrument("NIFTY"), dt.date(2026, 9, 24))
+    assert futures_refusal.value.reason_code == "CURRENT_FUTURES_LTP_UNPROVEN"
+    assert calls == [("market.instruments", "GET"), ("market.quote.ltp", "GET")]
+
+
+def test_data_connection_reconstructs_from_a_fresh_store_after_restart(session, vault_key):
+    first = _store(session, "alice")
+    row = first.create_data_connection(label="restart")
+    first.store_data_app_keys(row.id, {"api_key": "restart-key", "api_secret": "restart-secret"})
+    session.commit()
+    connection_id = row.id
+    session.close()
+
+    with SessionLocal() as restarted_session:
+        restarted = _OwnedConnectionStore(
+            restarted_session, owner_id="alice", broker_account_id="account.alice")
+        reconstructed = restarted.data_oauth_source(connection_id)
+        assert reconstructed() == {"api_key": "restart-key", "api_secret": "restart-secret"}
+        facade = restarted.data_connection(connection_id)
+        assert facade.provider == "kite"
+        assert {name for name in dir(facade) if not name.startswith("_")} == {
+            "provider", "get_candles", "get_ltp", "get_option_chain", "get_futures_ltp"}
 
 
 # ── the credential at rest ────────────────────────────────────────────────
@@ -580,3 +770,115 @@ def test_a_stored_connection_carries_a_real_tick_reader(session, vault_key, monk
     assert callable(conn.tick_source), (
         "a stored connection reached the order client with no tick reader; every protective "
         "stop would be rounded to the 0.05 grid")
+
+
+def _controlled_connection_clock(monkeypatch, instant, offset_minutes):
+    """Model a non-UTC host without changing the process or global datetime."""
+    from types import SimpleNamespace
+    from app.providers import connection_store
+    local_zone = dt.timezone(dt.timedelta(minutes=offset_minutes))
+    class Clock:
+        @classmethod
+        def now(cls, timezone=None):
+            return (instant.astimezone(local_zone).replace(tzinfo=None) if timezone is None
+                    else instant.astimezone(timezone))
+    monkeypatch.setattr(connection_store, "dt", SimpleNamespace(datetime=Clock, timezone=dt.timezone))
+
+
+# Reuse the existing fake-only owner/OAuth API fixture for the real callback path.
+from tests.test_v0_data_connection_onboarding import direct_client
+
+
+@pytest.mark.parametrize("offset_minutes", [330, -420, 0])
+def test_data_utc_clock_create_callback_and_capture_remain_ordered(direct_client, monkeypatch, offset_minutes):
+    from sqlalchemy import select
+    from app.providers import data_connection_service
+    from research.data.provider_capture import _connection_clock
+    from tests.test_v0_data_connection_onboarding import _setup_keys, _initiate, OWNER
+    client, _ = direct_client
+    instant = dt.datetime.now(dt.timezone.utc)
+    _controlled_connection_clock(monkeypatch, instant, offset_minutes)
+    callback_at = instant + dt.timedelta(seconds=1)
+    monkeypatch.setattr(data_connection_service, "_now", lambda: callback_at.replace(tzinfo=None))
+    _setup_keys(client)
+    state = _initiate(client)
+    response = client.get("/api/v1/data-connections/oauth/callback",
+        params={"state": state, "request_token": "synthetic-request-token"}, follow_redirects=False)
+    assert response.status_code == 303
+    with SessionLocal() as reopened:
+        row = reopened.scalar(select(BrokerConnection).where(BrokerConnection.owner_id == OWNER))
+        # This is the production publisher's guard, after the real OAuth writer.
+        _connection_clock(row, callback_at+dt.timedelta(seconds=1), callback_at+dt.timedelta(seconds=2))
+        assert row.created_at == instant.replace(tzinfo=None)
+        assert row.last_authenticated_at == row.updated_at == callback_at.replace(tzinfo=None)
+
+
+@pytest.mark.parametrize("offset_minutes", [330, -420, 0])
+def test_data_utc_clock_all_credential_lifecycle_writes(session, vault_key, monkeypatch, offset_minutes):
+    instant = dt.datetime(2026, 9, 7, 0, 0, 0, 123456, tzinfo=dt.timezone.utc)
+    _controlled_connection_clock(monkeypatch, instant, offset_minutes)
+    expected = instant.replace(tzinfo=None)
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    assert row.created_at == row.updated_at == expected
+    store.write_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"}, rotate=False)
+    assert row.updated_at == expected and row.last_authenticated_at is None
+    store.store_data_app_keys(row.id, {"api_key": "key", "api_secret": "secret"})
+    assert row.updated_at == expected
+    store.store_credential(row.id, {"api_key": "key", "api_secret": "secret", "access_token": "token"})
+    assert row.last_authenticated_at == row.updated_at == expected
+    assert store.invalidate_data_access_token(row.id, "token") is True
+    session.refresh(row)
+    assert row.last_authenticated_at is None and row.updated_at == expected
+    store.write_data_app_keys(row.id, {"api_key": "new-key", "api_secret": "new-secret"}, rotate=True)
+    assert row.updated_at == expected
+    store.revoke(row.id)
+    assert row.revoked_at == row.updated_at == expected
+
+
+def test_data_utc_clock_preserves_general_money_connection_timestamp_behavior(session, vault_key, monkeypatch):
+    instant = dt.datetime(2026, 9, 7, 0, 0, 0, 123456, tzinfo=dt.timezone.utc)
+    _controlled_connection_clock(monkeypatch, instant, 330)
+    local = instant.astimezone(dt.timezone(dt.timedelta(minutes=330))).replace(tzinfo=None)
+    store = _store(session, "alice")
+    row = store.create(broker="kite", scope="kite:money")
+    assert row.created_at == row.updated_at == local
+    store.store_credential(row.id, {"access_token": "synthetic-money-token"})
+    assert row.last_authenticated_at == row.updated_at == local
+    store.revoke(row.id)
+    assert row.revoked_at == row.updated_at == local
+
+
+@pytest.mark.parametrize("secrets", [{"api_key": "key"}, {"api_key": "", "api_secret": "secret"},
+    {"api_key": 7, "api_secret": "secret"}, {"api_key": "k"*4097, "api_secret": "secret"}])
+def test_data_utc_clock_key_validation_remains_closed(session, vault_key, secrets):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    before = row.updated_at
+    with pytest.raises(DataConnectionUnavailable, match="application keys are invalid"):
+        store.write_data_app_keys(row.id, secrets, rotate=False)
+    assert row.credential_ciphertext is None and row.updated_at == before
+
+
+@pytest.mark.parametrize("condition", ["empty_token", "stale_token", "missing_row", "no_credentials", "broken_ciphertext", "incomplete_keys"])
+def test_data_utc_clock_invalidated_token_guards_do_not_write(session, vault_key, condition):
+    store = _store(session, "alice")
+    row = store.create_data_connection()
+    bundle = {"api_key": "key", "api_secret": "secret", "access_token": "token"}
+    if condition == "incomplete_keys":
+        bundle = {"access_token": "token"}
+    store.store_credential(row.id, bundle)
+    if condition == "no_credentials":
+        row.credential_ciphertext = None
+    if condition == "broken_ciphertext":
+        row.credential_ciphertext = "invalid"
+    session.flush()
+    before = row.updated_at
+    connection_id = row.id + 100 if condition == "missing_row" else row.id
+    token = {"empty_token": "", "stale_token": "old-token"}.get(condition, "token")
+    if condition in {"broken_ciphertext", "incomplete_keys"}:
+        with pytest.raises(DataConnectionUnavailable, match="data credential unavailable"):
+            store.invalidate_data_access_token(connection_id, token)
+    else:
+        assert store.invalidate_data_access_token(connection_id, token) is False
+    assert row.updated_at == before

@@ -74,6 +74,17 @@ class KiteVenue:
     RESTING_STOP is needed, this decides that Kite spells one `SL-M`.
     """
 
+    #: What this venue can actually rest at the exchange. Kite serves both: GTT is the server
+    #: trigger, SL-M the resting order.
+    #:
+    #: Declared here because `DhanVenue` declared it and this one did not, which meant the
+    #: question "which protective shapes does this venue support?" could only be answered for
+    #: one venue — so a caller that needed to know had to branch on the broker's identity, which
+    #: is the exact thing the capability model exists to remove. A venue that cannot be ASKED
+    #: forces every caller to already know the answer.
+    PROTECTIVE_KINDS = frozenset({ProtectiveStopKind.SERVER_TRIGGER,
+                                  ProtectiveStopKind.RESTING_STOP})
+
     def __init__(self, client) -> None:
         self.client = client
 

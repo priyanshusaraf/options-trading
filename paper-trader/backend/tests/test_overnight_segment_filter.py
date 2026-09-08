@@ -10,13 +10,15 @@ segment-correct authority for MIS.
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner_with_mis():
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    admission = persist_admitted_entry(r.broker.s)
     pos = r.broker.open_equity_position(get_instrument("NIFTY"), "LONG", 100.0, 10,
-                                        "NSE_INTRADAY", "t", r.provider.now(), params={})
+                                        "NSE_INTRADAY", "t", r.provider.now(), params={}, **admission)
     return r, pos
 
 
@@ -38,7 +40,9 @@ def test_an_options_position_still_gets_its_decision():
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
     inst = get_instrument("NIFTY")
     chain = r.provider.get_option_chain(inst)
-    r.broker.open_position(inst, "LONG", chain.quotes[0], "t", r.provider.now(), chain.spot)
+    admission = persist_admitted_entry(r.broker.s)
+    r.broker.open_position(inst, "LONG", chain.quotes[0], "t", r.provider.now(),
+                           chain.spot, **admission)
 
     decisions = r.square_off_for_overnight(r.provider.now())
 

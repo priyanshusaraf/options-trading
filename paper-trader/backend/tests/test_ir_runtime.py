@@ -16,12 +16,14 @@ between the two files is a real disagreement rather than two fixtures drifting.
 from __future__ import annotations
 
 import copy
+import dataclasses
 
 import pandas as pd
 import pytest
 
 from app.ir.kernels import kernel_registry
 from app.ir.resolve import Library, resolve
+from app.ir.resolve import ResolvedEdge
 from app.ir.runtime import (
     Cache,
     EvaluationError,
@@ -99,6 +101,17 @@ def test_the_graphs_declared_output_is_produced(result):
     assert set(result.outputs) == {"signal"}
     assert result.outputs["signal"].dtype == bool
     assert len(result.outputs["signal"]) == 120
+
+
+def test_runtime_refuses_duplicate_target_collapse_in_a_forged_resolved_graph(graph):
+    forged = dataclasses.replace(graph, edges=(*graph.edges, ResolvedEdge(
+        source=graph.edges[0].source,
+        target=graph.edges[0].target,
+        declared_in=graph.edges[0].declared_in,
+    )))
+
+    with pytest.raises(EvaluationError, match="more than one source"):
+        evaluate(forged, bars(), IMPLEMENTATIONS)
 
 
 def test_the_two_instances_compute_different_things(result):

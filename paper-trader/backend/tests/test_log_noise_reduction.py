@@ -20,6 +20,18 @@ def test_polling_route_access_filter_suppresses_known_noisy_paths():
     assert f.filter(_record('"POST /api/execution/arm HTTP/1.1" 200 OK')) is True
 
 
+def test_oauth_callback_access_filter_never_logs_query_credentials():
+    from app.main import _PollingRouteFilter
+
+    f = _PollingRouteFilter()
+    assert f.filter(_record(
+        '"GET /api/v1/data-connections/oauth/callback?state=STATE-SENTINEL&'
+        'request_token=TOKEN-SENTINEL HTTP/1.1" 303 See Other')) is False
+    assert f.filter(_record(
+        '"GET /api/oauth/callback?state=STATE-SENTINEL&request_token=TOKEN-SENTINEL '
+        'HTTP/1.1" 400 Bad Request')) is False
+
+
 def test_error_ratelimited_emits_once_per_window(monkeypatch):
     calls = []
     monkeypatch.setattr(log, "emit", lambda *a, **k: calls.append((a, k)))

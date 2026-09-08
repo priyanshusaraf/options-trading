@@ -2,7 +2,7 @@
 {
   "id": "phase4-architecture",
   "phase": "phase4",
-  "status": "blocked",
+  "status": "accepted",
   "goal": "Architect Strategy OS phase4: Market truth, numeric validity, and data capability, producing bounded goal capsules and evidence gates without implementing product code.",
   "goal_contract": {
     "create_before_work": true,
@@ -14,6 +14,15 @@
     "phase4"
   ],
   "required_docs": [
+    {
+      "path": "paper-trader/docs/agent/DEPLOYABILITY.md",
+      "sections": [
+        "Current verdict",
+        "Open obligations",
+        "Phase 4 ownership",
+        "V1 release gate"
+      ]
+    },
     {
       "path": "paper-trader/docs/superpowers/plans/2026-08-13-strategy-os-v1-master-sequence.md",
       "sections": [
@@ -117,8 +126,10 @@
       ]
     }
   ],
-  "dependency_gate": "phase3-4-ir-v2-review",
+  "dependency_gate": "phase3-4-ir-v2-implementation-final-review",
+  "owner_unlock": "The owner explicitly authorized Phase 4 initiation in the active task on 2026-08-17. This unlock applies only to this architecture capsule.",
   "allowed_paths": [
+    "paper-trader/docs/agent/DEPLOYABILITY.md",
     "paper-trader/docs/superpowers/specs/phase4-strategy-os-design.md",
     "paper-trader/docs/superpowers/plans/phase4-strategy-os.md",
     "paper-trader/docs/reports/phase4-source-coverage.json",
@@ -137,7 +148,7 @@
     "Frontend paths may appear only when this phase's master-sequence scope requires them and the generated implementation capsule opens them explicitly."
   ],
   "stop_conditions": [
-    "The dependency gate phase3-4-ir-v2-review lacks dual passing SPEC and QUALITY verdicts.",
+    "The dependency gate phase3-4-ir-v2-implementation-final-review lacks dual passing SPEC and QUALITY verdicts.",
     "The design would duplicate an accepted IR, identity, authority, provider, deployment, or research abstraction.",
     "Any mapped owner-steer section remains uncovered or in unresolved conflict.",
     "A generated slice has overlapping write ownership, no observable acceptance criterion, or no proportional test command."
@@ -192,6 +203,7 @@
     }
   ],
   "acceptance": [
+    "Every affected deployment-contract dimension has current evidence or an exact owning future capsule; no deployment debt is deferred vaguely.",
     "Accepted preceding contracts and existing implementation are audited before proposing changes.",
     "Every SOURCE_MAP.json phase4 entry has an explicit design, task, test, nonclaim, or deferral disposition.",
     "The design and plan preserve one canonical IR and existing ownership/authority boundaries.",
@@ -229,4 +241,4 @@
 
 # Phase 4 architecture goal
 
-This capsule stays blocked until phase3-4-ir-v2-review is accepted. It creates future implementation goals; it does not implement them.
+This capsule is accepted because the design, plan, complete source coverage, exact serial implementation capsules, Sol-high review capsule, deployability allocation, and programme expansion have direct validation evidence under `.agent/runs/phase4-architecture/`. It creates future implementation goals; it does not implement or accept them.

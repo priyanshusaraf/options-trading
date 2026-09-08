@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from research.strategy.builder import blocks as B
+from app.ir.contributors import generated_blocks as B
 
 
 def _df(n=300, seed=0):

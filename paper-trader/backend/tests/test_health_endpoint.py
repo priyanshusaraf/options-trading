@@ -60,7 +60,7 @@ def test_a_healthy_mock_engine_reads_as_healthy(client):
     r = _runner(client)
     r._beat_now("risk")
     r._beat_now("signal")
-    body = client.get("/api/health").json()
+    body = client.get("/api/readiness").json()
     assert body["ready"] is True
     assert body["loops"]["risk"]["state"] in ("ok", "starting")
 
@@ -73,7 +73,7 @@ def test_a_stalled_risk_lane_returns_503(client, monkeypatch):
     r = _runner(client)
     r._beat_wall["risk"] = time.monotonic() - 10_000
     r._beat_wall["signal"] = time.monotonic()
-    resp = client.get("/api/health")
+    resp = client.get("/api/readiness")
     assert resp.status_code == 503
     body = resp.json()
     assert body["ok"] is False
@@ -86,7 +86,7 @@ def test_a_stopped_engine_returns_503(client):
     r._beat_now("risk")
     r.running = False
     try:
-        assert client.get("/api/health").status_code == 503
+        assert client.get("/api/readiness").status_code == 503
     finally:
         r.running = True
 
@@ -94,7 +94,7 @@ def test_a_stopped_engine_returns_503(client):
 def test_an_unreachable_db_returns_503(client, monkeypatch):
     import app.main as main_mod
     monkeypatch.setattr(main_mod, "_probe_db", lambda: (False, "OperationalError: no such table"))
-    resp = client.get("/api/health")
+    resp = client.get("/api/readiness")
     assert resp.status_code == 503
     assert "database" in resp.json()["failed_checks"]
 
@@ -125,7 +125,7 @@ def test_a_probe_that_raises_still_answers(client, monkeypatch):
         raise RuntimeError("probe bug")
 
     monkeypatch.setattr(main_mod, "_readiness_payload", _boom)
-    resp = client.get("/api/health")
+    resp = client.get("/api/readiness")
     assert resp.status_code == 503
     assert resp.json()["failed_checks"] == ["probe"]
     assert "commit" in resp.json()["build"]
@@ -137,7 +137,7 @@ def test_health_reports_armed_state_without_letting_it_affect_the_verdict(client
     r = _runner(client)
     r._beat_now("risk"); r._beat_now("signal")
     r.armed = False
-    resp = client.get("/api/health")
+    resp = client.get("/api/readiness")
     assert resp.status_code == 200
     assert resp.json()["engine"]["armed"] is False
 

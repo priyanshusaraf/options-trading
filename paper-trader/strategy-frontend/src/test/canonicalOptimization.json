@@ -1,0 +1,460 @@
+{
+  "candidates": [
+    {
+      "content_address": "sha256:820f0e1055a8f1caf270a86a8ba06843bb9067f6621a7010a849e5127853e358",
+      "coordinates": {
+        "axis_000": "2"
+      },
+      "graph_address": "sha256:400dea82586998389d988085a33f2ca8c6a7563a4c9f9a41746a4b1755429182",
+      "lineage": {
+        "content_address": "sha256:820f0e1055a8f1caf270a86a8ba06843bb9067f6621a7010a849e5127853e358",
+        "graph_address": "sha256:400dea82586998389d988085a33f2ca8c6a7563a4c9f9a41746a4b1755429182"
+      },
+      "parameters": [
+        {
+          "node_id": "rising",
+          "normalized_value": "2",
+          "parameter_id": "window",
+          "value": 2
+        }
+      ],
+      "state": "evaluated"
+    },
+    {
+      "content_address": "sha256:caa7adf2345e128e0c24764baffd47e833b89e544ce12027cae36acfcd0cb981",
+      "coordinates": {
+        "axis_000": "1"
+      },
+      "graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70",
+      "lineage": {
+        "content_address": "sha256:caa7adf2345e128e0c24764baffd47e833b89e544ce12027cae36acfcd0cb981",
+        "graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70"
+      },
+      "parameters": [
+        {
+          "node_id": "rising",
+          "normalized_value": "1",
+          "parameter_id": "window",
+          "value": 1
+        }
+      ],
+      "state": "evaluated"
+    },
+    {
+      "content_address": "sha256:3b6257783b7f4edd29f5ab704cd57073ef8d42a69cd489785a299f0c2f124667",
+      "coordinates": {
+        "axis_000": "3"
+      },
+      "graph_address": "sha256:c9d6050f8c0ffcee5bd9f4f6bfd2435fc94f1e3d6d462fc4c8697091e3173e5b",
+      "lineage": {
+        "content_address": "sha256:3b6257783b7f4edd29f5ab704cd57073ef8d42a69cd489785a299f0c2f124667",
+        "graph_address": "sha256:c9d6050f8c0ffcee5bd9f4f6bfd2435fc94f1e3d6d462fc4c8697091e3173e5b"
+      },
+      "parameters": [
+        {
+          "node_id": "rising",
+          "normalized_value": "3",
+          "parameter_id": "window",
+          "value": 3
+        }
+      ],
+      "state": "evaluated"
+    }
+  ],
+  "final_development_trials": [
+    {
+      "fold_index": -1,
+      "is_sharpe": 1.006411375169377,
+      "objective": 4.149540402646465,
+      "params": {
+        "axis_000": "2",
+        "candidate_graph_address": "sha256:400dea82586998389d988085a33f2ca8c6a7563a4c9f9a41746a4b1755429182"
+      },
+      "selected": false,
+      "trades": 17
+    },
+    {
+      "fold_index": -1,
+      "is_sharpe": 1.5150598414518284,
+      "objective": 6.246751755437434,
+      "params": {
+        "axis_000": "1",
+        "candidate_graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70"
+      },
+      "selected": true,
+      "trades": 17
+    },
+    {
+      "fold_index": -1,
+      "is_sharpe": 1.1010362093640964,
+      "objective": 4.53968858883785,
+      "params": {
+        "axis_000": "3",
+        "candidate_graph_address": "sha256:c9d6050f8c0ffcee5bd9f4f6bfd2435fc94f1e3d6d462fc4c8697091e3173e5b"
+      },
+      "selected": false,
+      "trades": 17
+    }
+  ],
+  "n_trials": 6,
+  "nested_trials": [
+    {
+      "fold_index": 0,
+      "is_sharpe": 1.499006473318777,
+      "objective": 3.6718009807599294,
+      "params": {
+        "axis_000": "2",
+        "candidate_graph_address": "sha256:400dea82586998389d988085a33f2ca8c6a7563a4c9f9a41746a4b1755429182"
+      },
+      "selected": false,
+      "trades": 6
+    },
+    {
+      "fold_index": 0,
+      "is_sharpe": 2.315096481715467,
+      "objective": 5.670805085515459,
+      "params": {
+        "axis_000": "1",
+        "candidate_graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70"
+      },
+      "selected": true,
+      "trades": 6
+    },
+    {
+      "fold_index": 0,
+      "is_sharpe": 1.617259541886442,
+      "objective": 3.961460659269061,
+      "params": {
+        "axis_000": "3",
+        "candidate_graph_address": "sha256:c9d6050f8c0ffcee5bd9f4f6bfd2435fc94f1e3d6d462fc4c8697091e3173e5b"
+      },
+      "selected": false,
+      "trades": 6
+    },
+    {
+      "fold_index": 1,
+      "is_sharpe": 1.1070736332587403,
+      "objective": 3.6717478568147603,
+      "params": {
+        "axis_000": "2",
+        "candidate_graph_address": "sha256:400dea82586998389d988085a33f2ca8c6a7563a4c9f9a41746a4b1755429182"
+      },
+      "selected": false,
+      "trades": 11
+    },
+    {
+      "fold_index": 1,
+      "is_sharpe": 1.942189018573425,
+      "objective": 6.441512246556646,
+      "params": {
+        "axis_000": "1",
+        "candidate_graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70"
+      },
+      "selected": true,
+      "trades": 11
+    },
+    {
+      "fold_index": 1,
+      "is_sharpe": 1.1912387518126564,
+      "objective": 3.9508919754938794,
+      "params": {
+        "axis_000": "3",
+        "candidate_graph_address": "sha256:c9d6050f8c0ffcee5bd9f4f6bfd2435fc94f1e3d6d462fc4c8697091e3173e5b"
+      },
+      "selected": false,
+      "trades": 11
+    }
+  ],
+  "partition": {
+    "development_bars": 168,
+    "development_end_ts": 1755801000,
+    "validation_bars": 72,
+    "validation_end_ts": 1764613800,
+    "validation_start_ts": 1756060200
+  },
+  "performance_matrix": [
+    [
+      11092.35912499998,
+      12630.84649999998,
+      8347.303749999977
+    ],
+    [
+      1353.7795999999985,
+      1353.7795999999985,
+      1353.7795999999985
+    ],
+    [
+      6514.665849999963,
+      7364.277599999961,
+      5744.633749999966
+    ],
+    [
+      892.943500000003,
+      892.943500000003,
+      892.943500000003
+    ],
+    [
+      4380.297274999995,
+      4906.797974999986,
+      3879.2121499999894
+    ],
+    [
+      614.5893999999897,
+      614.5893999999897,
+      614.5893999999897
+    ],
+    [
+      3296.389150000008,
+      3678.374825000009,
+      2891.2113750000008
+    ],
+    [
+      379.0591999999944,
+      379.0591999999944,
+      379.0591999999944
+    ]
+  ],
+  "recipe_address": "sha256:13eb0d0671e6c587cdd3158161ab4b2e5af05c0cf829b434a6e4300b4dcc5d88",
+  "schema": "canonical-development-search-evidence/1",
+  "selected": {
+    "canonical_document": {
+      "edges": [
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "benchmark-allow",
+          "source": {
+            "node_id": "benchmark_rising",
+            "port_id": "value",
+            "scope": "node"
+          },
+          "target": {
+            "node_id": "allow",
+            "port_id": "right",
+            "scope": "node"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "benchmark-rising",
+          "source": {
+            "port_id": "benchmark",
+            "scope": "graph_input"
+          },
+          "target": {
+            "node_id": "benchmark_rising",
+            "port_id": "frame",
+            "scope": "node"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "falling-exit",
+          "source": {
+            "node_id": "falling",
+            "port_id": "value",
+            "scope": "node"
+          },
+          "target": {
+            "port_id": "exit",
+            "scope": "graph_output"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "frame-falling",
+          "source": {
+            "port_id": "frame",
+            "scope": "graph_input"
+          },
+          "target": {
+            "node_id": "falling",
+            "port_id": "frame",
+            "scope": "node"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "frame-rising",
+          "source": {
+            "port_id": "frame",
+            "scope": "graph_input"
+          },
+          "target": {
+            "node_id": "rising",
+            "port_id": "frame",
+            "scope": "node"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "primary-allow",
+          "source": {
+            "node_id": "rising",
+            "port_id": "value",
+            "scope": "node"
+          },
+          "target": {
+            "node_id": "allow",
+            "port_id": "left",
+            "scope": "node"
+          }
+        },
+        {
+          "binding": {
+            "kind": "single"
+          },
+          "edge_id": "rising-entry",
+          "source": {
+            "node_id": "allow",
+            "port_id": "value",
+            "scope": "node"
+          },
+          "target": {
+            "port_id": "entry",
+            "scope": "graph_output"
+          }
+        }
+      ],
+      "format_version": 2,
+      "graph_inputs": [
+        {
+          "connections": {
+            "assembly": "single",
+            "cardinality": "single",
+            "max": 1,
+            "min": 1
+          },
+          "direction": "input",
+          "port_id": "benchmark",
+          "semantic_flow": "value",
+          "semantic_role": "market_frame",
+          "shape": "series",
+          "type_ref": {
+            "type_id": "analytical.market_frame",
+            "type_version": 2
+          }
+        },
+        {
+          "connections": {
+            "assembly": "single",
+            "cardinality": "single",
+            "max": 1,
+            "min": 1
+          },
+          "direction": "input",
+          "port_id": "frame",
+          "semantic_flow": "value",
+          "semantic_role": "market_frame",
+          "shape": "series",
+          "type_ref": {
+            "type_id": "analytical.market_frame",
+            "type_version": 2
+          }
+        }
+      ],
+      "graph_outputs": [
+        {
+          "direction": "output",
+          "port_id": "entry",
+          "semantic_flow": "value",
+          "semantic_role": "research_long_entry",
+          "shape": "series",
+          "type_ref": {
+            "type_id": "analytical.boolean",
+            "type_version": 2
+          }
+        },
+        {
+          "direction": "output",
+          "port_id": "exit",
+          "semantic_flow": "value",
+          "semantic_role": "research_long_exit",
+          "shape": "series",
+          "type_ref": {
+            "type_id": "analytical.boolean",
+            "type_version": 2
+          }
+        }
+      ],
+      "metadata": {
+        "description": null,
+        "metadata_version": 1,
+        "name": "V2 saved research",
+        "tags": []
+      },
+      "nodes": [
+        {
+          "component": {
+            "component_id": "strategy_math.and",
+            "component_version": 1
+          },
+          "node_id": "allow",
+          "parameters": {}
+        },
+        {
+          "component": {
+            "component_id": "analytical.rising",
+            "component_version": 2
+          },
+          "node_id": "benchmark_rising",
+          "parameters": {
+            "window": 2
+          }
+        },
+        {
+          "component": {
+            "component_id": "analytical.falling",
+            "component_version": 2
+          },
+          "node_id": "falling",
+          "parameters": {
+            "window": 2
+          }
+        },
+        {
+          "component": {
+            "component_id": "analytical.rising",
+            "component_version": 2
+          },
+          "node_id": "rising",
+          "parameters": {
+            "window": 1
+          }
+        }
+      ],
+      "strategy_id": "v2.saved.research",
+      "strategy_version": 1
+    },
+    "content_address": "sha256:caa7adf2345e128e0c24764baffd47e833b89e544ce12027cae36acfcd0cb981",
+    "coordinates": {
+      "axis_000": "1"
+    },
+    "graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70",
+    "lineage": {
+      "content_address": "sha256:caa7adf2345e128e0c24764baffd47e833b89e544ce12027cae36acfcd0cb981",
+      "graph_address": "sha256:a0b145e386ed3b2e48047815af7e27b56fe9843e253298a0296d95a518e1da70"
+    },
+    "parameters": [
+      {
+        "node_id": "rising",
+        "normalized_value": "1",
+        "parameter_id": "window",
+        "value": 1
+      }
+    ]
+  },
+  "state": "selected",
+  "var_sr": 0.1746925518598983
+}

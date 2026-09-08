@@ -8,13 +8,20 @@ keep all business predicates, tokens and fencing updates in their repositories.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 
 from sqlalchemy import (Integer, Text, case, cast, event, exists, func, literal,
                         select, text)
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 _SQLITE_IMMEDIATE_TRANSACTION = "db_immediate_transaction"
 _TRANSACTION_HAS_WRITES = "db_transaction_has_writes"
+_CALLER_OWNED_SAVEPOINT_ROOT = "caller_owned_savepoint_root"
+
+
+class TransactionBoundaryError(RuntimeError):
+    """Caller-owned transaction state cannot safely enter a seam boundary."""
 
 
 @event.listens_for(Session, "do_orm_execute")
@@ -37,6 +44,93 @@ def _clear_write_provenance(session, transaction) -> None:
     # A savepoint ending does not end the enclosing caller transaction.
     if transaction.parent is None:
         session.info.pop(_TRANSACTION_HAS_WRITES, None)
+        marker = session.info.get(_CALLER_OWNED_SAVEPOINT_ROOT)
+        if marker is not None and marker["root"] is transaction:
+            session.info.pop(_CALLER_OWNED_SAVEPOINT_ROOT, None)
+
+
+def _sqlite_in_transaction(connection) -> bool:
+    return bool(connection.connection.driver_connection.in_transaction)
+
+
+def _postgresql_in_transaction(connection) -> bool:
+    """Read psycopg's physical transaction state without changing ownership."""
+    raw = connection.connection.driver_connection
+    status = getattr(getattr(raw, "info", None), "transaction_status", None)
+    return getattr(status, "name", None) == "INTRANS"
+
+
+def _physical_outer_transaction(connection, dialect: str) -> bool:
+    if dialect == "sqlite":
+        return _sqlite_in_transaction(connection)
+    if dialect == "postgresql":
+        return _postgresql_in_transaction(connection)
+    raise RuntimeError(f"unsupported database dialect for caller savepoint: {dialect}")
+
+
+@contextmanager
+def caller_owned_savepoint(session: Session, *, scope: str):
+    """Create one SAVEPOINT inside a proven caller-owned physical transaction.
+
+    The helper may establish the physical root, but never finishes it.  Its
+    marker is tied to the live SQLAlchemy root and exact enlisted connection so
+    recursive calls cannot silently borrow a different transaction.
+    """
+    if not session.is_active:
+        raise TransactionBoundaryError(
+            "caller savepoint refused on a failed Session; caller rollback or disposal is required")
+    connection = session.connection()
+    root = session.get_transaction()
+    if root is None:  # Defensive: Session.connection() must enlist a root.
+        raise RuntimeError("caller savepoint could not enlist a caller transaction")
+    dialect = connection.dialect.name
+    marker = session.info.get(_CALLER_OWNED_SAVEPOINT_ROOT)
+    if (dialect == "sqlite" and session.in_nested_transaction() and (
+            marker is None or marker["root"] is not root)):
+        raise TransactionBoundaryError(
+            "caller savepoint refused inside an unproved external nested transaction")
+    # SQLAlchemy flushes pending ORM changes immediately before ``begin_nested``.
+    # Letting unrelated caller objects enter that pre-savepoint flush would make a
+    # seam-local IntegrityError handler observe a failure outside its boundary.
+    if marker is None and (session.new or session.dirty or session.deleted):
+        try:
+            session.flush()
+        except (SQLAlchemyError, ValueError) as exc:
+            raise TransactionBoundaryError(
+                "caller savepoint refused after a pre-savepoint caller flush failure") from exc
+    if marker is not None and (
+            marker["root"] is not root
+            or marker["connection"] is not connection
+            or marker["dialect"] != dialect):
+        session.info.pop(_CALLER_OWNED_SAVEPOINT_ROOT, None)
+        marker = None
+
+    if marker is None:
+        if dialect == "sqlite":
+            # SQLAlchemy may own only a logical root after no SQL or a SELECT.
+            # A literal BEGIN creates the required physical root before the
+            # SAVEPOINT and does not commit or roll back caller work.
+            if not _sqlite_in_transaction(connection):
+                connection.exec_driver_sql("BEGIN")
+        elif dialect == "postgresql":
+            # psycopg remains IDLE until a statement reaches the server.
+            if not _postgresql_in_transaction(connection):
+                connection.exec_driver_sql("SELECT 1")
+        else:
+            raise TransactionBoundaryError(
+                f"unsupported database dialect for caller savepoint: {dialect}")
+        if not _physical_outer_transaction(connection, dialect):
+            raise TransactionBoundaryError(
+                "caller savepoint refused without a physical outer transaction")
+        session.info[_CALLER_OWNED_SAVEPOINT_ROOT] = {
+            "root": root, "connection": connection, "dialect": dialect,
+            "scope": scope,
+        }
+    elif not _physical_outer_transaction(connection, dialect):
+        raise TransactionBoundaryError("caller savepoint root proof became stale")
+
+    with session.begin_nested():
+        yield
 
 
 def has_pending_writes(session) -> bool:

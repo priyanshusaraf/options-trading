@@ -192,17 +192,22 @@ BROKERS: tuple[BrokerSpec, ...] = (
         venue="app.engine.dhan_venue:DhanVenue",
         venue_builder="app.engine.dhan_venue:build_live_venue",
         authenticator="app.providers.broker_auth:dhan_authenticator",
-        notes="Data only IN THIS BUILD. Long-lived token, so no daily re-login — the first "
-              "broker whose connection lifecycle differs from Kite's, which is why Auth is on "
-              "the spec. Two credentials (access-token AND client-id). Its interval coverage is "
-              "genuinely NARROWER than this engine's vocabulary: no 3/10/30-minute; it refuses "
-              "them. "
-              "**`app/engine/dhan_venue.py` exists and is tested** (13 mutations reddened) but "
-              "`venue` stays None here on purpose: `make_broker` can build no Dhan order client "
-              "yet, so claiming a venue would make the registry disagree with the one place "
-              "that decides. It is registered in the same slice that makes it buildable. Note "
-              "that Dhan has NO GTT equivalent, so an options deployment cannot run on Dhan "
-              "execution — the venue refuses SERVER_TRIGGER rather than substituting.",
+        notes="Data AND execution. Long-lived token, so no daily re-login — the first broker "
+              "whose connection lifecycle differs from Kite's, which is why Auth is on the "
+              "spec. Two credentials (access-token AND client-id); the client id is a header on "
+              "every request and `dhanClientId` in every order body, so a token alone "
+              "authenticates nothing. "
+              "**Dhan has NO GTT equivalent.** `DhanVenue.PROTECTIVE_KINDS` is RESTING_STOP "
+              "only and every verb refuses SERVER_TRIGGER rather than substituting something "
+              "weaker, so an OPTIONS deployment cannot run on Dhan execution — options take a "
+              "server trigger, and a substituted resting order is not the same protection. "
+              "Its interval coverage is also genuinely NARROWER than this engine's vocabulary: "
+              "no 3/10/30-minute, and it refuses them rather than rounding. "
+              "This note previously read \"Data only IN THIS BUILD\" and \"`venue` stays None "
+              "here on purpose\" while both `venue` and `venue_builder` were set — prose "
+              "contradicting the row it annotates, in the one file whose purpose is that a row "
+              "here is a fact. Keep capability claims in the FIELDS, which are machine-checked; "
+              "prose may explain them and must not restate them.",
     ),
     BrokerSpec(
         key="fivepaisa", display_name="5paisa", status=Status.PLANNED,

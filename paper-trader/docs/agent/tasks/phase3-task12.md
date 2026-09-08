@@ -59,7 +59,7 @@
     "paper-trader/docs/operations/strategy-admission.md",
     "paper-trader/docs/reports/2026-08-13-phase3-causal-strategy-contract.md",
     "paper-trader/docs/reports/phase3-causal-gate.json",
-    "paper-trader/docs/ROADMAP.md",
+    "paper-trader/docs/strategy-os-v1-v2-v3/V0-V1-V1.5-V2-V3-V4-V5-V6-SCOPE-DECISION-MATRIX.md",
     "paper-trader/docs/CONTINUE.md",
     ".agent/runs/phase3-task12",
     ".agent/review-package.json"
@@ -150,7 +150,7 @@
       "write_paths": [
         "paper-trader/docs/operations/strategy-admission.md",
         "paper-trader/docs/reports/2026-08-13-phase3-causal-strategy-contract.md",
-        "paper-trader/docs/ROADMAP.md",
+        "paper-trader/docs/strategy-os-v1-v2-v3/V0-V1-V1.5-V2-V3-V4-V5-V6-SCOPE-DECISION-MATRIX.md",
         "paper-trader/docs/CONTINUE.md",
         ".agent/runs/phase3-task12/documentation_closure"
       ],

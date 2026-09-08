@@ -2,7 +2,7 @@
 {
   "id": "phase3-4-ir-v2-acceptance",
   "phase": "component-ir-v2-interphase",
-  "status": "blocked",
+  "status": "accepted",
   "goal": "Reconcile the preserved Component IR v2 plan and design with accepted Phase 3 and all six owner steers, then produce an implementable accepted or rejected interphase contract before Phase 4.",
   "goal_contract": {
     "create_before_work": true,
@@ -120,7 +120,21 @@
     "review_paths": [
       "paper-trader/docs/superpowers/specs/2026-08-13-strategy-os-ir-v2-port-contract-design.md",
       "paper-trader/docs/superpowers/plans/2026-08-13-strategy-os-ir-v2-port-contract.md",
-      "paper-trader/docs/reports/2026-08-14-strategy-os-ir-v2-acceptance.md"
+      "paper-trader/docs/reports/2026-08-14-strategy-os-ir-v2-acceptance.md",
+      "paper-trader/docs/agent/CURRENT.md",
+      "paper-trader/docs/agent/programme/PROGRAMME.json",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-acceptance.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-review.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-dispatch-compatibility.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-schema-topology.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-resolution-runtime.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-admission-persistence.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-api-contract.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-integration-gate.md",
+      "paper-trader/docs/agent/tasks/phase3-4-ir-v2-implementation-review.md",
+      "paper-trader/docs/agent/tasks/phase4-architecture.md",
+      "paper-trader/docs/agent/tasks/phase3-task12-correction-2.md",
+      "paper-trader/docs/agent/tasks/post-phase3-postgresql-harness.md"
     ],
     "exclude_paths": [],
     "output": ".agent/runs/phase3-4-ir-v2-review/verdict.json",
@@ -135,4 +149,4 @@
 
 # Component IR v2 interphase architecture goal
 
-This capsule remains blocked until its declared dependency has dual passing verdicts.
+The architecture owner completed this capsule without product implementation. Its evidence-backed package routes to the separate phase3-4-ir-v2-review goal; only that review's dual PASS can unlock the first implementation capsule.

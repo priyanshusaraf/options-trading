@@ -1,1 +1,1 @@
-"""Versioned, research-db-only schema migrations."""
+"""Versioned, research-db-only schema migrations; active finite head: 0012."""

@@ -11,12 +11,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import uuid
+from typing import Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 
 from app.api.paging import MAX_PAGE
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from app.core.config import get_settings
@@ -29,7 +30,7 @@ from app.providers.base import ProviderReadError
 from app.core.execution_binding import AuthorityNotGranted
 from app.strategy.registry import get_strategy
 from app.strategy.signals import to_payload
-from app.api.principal import Principal, get_principal, owner_id_for
+from app.api.principal import Principal, get_principal, owner_id_for, is_request_allowed
 from app.api.execution_access import (durable_execution_account,
                                       durable_execution_status,
                                       local_execution_cell)
@@ -39,6 +40,26 @@ from app.ws.manager import manager
 
 router = APIRouter()
 settings = get_settings()
+
+# These recovery routers mount through the existing root router so the shared
+# versioning/authentication inventory sees one API surface without a new app seam.
+from app.api import (  # noqa: E402
+    chart_context_routes,
+    editor_validation_routes,
+    research_dataset_routes,
+    research_visualization_routes,
+)
+
+# FastAPI 0.135 keeps ``include_router`` as a nested route group.  The repository's
+# mount-time V1 mirror intentionally enumerates concrete APIRoute values, so install
+# these already-constructed routes directly into the existing root inventory.
+for _recovery_router in (
+    chart_context_routes.router,
+    editor_validation_routes.router,
+    research_dataset_routes.router,
+    research_visualization_routes.router,
+):
+    router.routes.extend(_recovery_router.routes)
 
 
 def _runner(req_or_ws):
@@ -1023,7 +1044,9 @@ async def manual_open(body: ManualOpenBody, request: Request):
             inst, body.direction, chain, settings, r.provider.now(),
             strategy_key=execution.strategy_key,
             strategy_version=execution.strategy_version,
-            admission_address=execution.admission_address)
+            admission_address=execution.admission_address,
+            graph_address=execution.graph_address,
+            attribution_state=execution.attribution_state)
         if pos is None:
             return {"error": reason}
         if body.key in r.state:
@@ -1041,6 +1064,36 @@ def get_settings_route(request: Request, principal: Principal = Depends(get_prin
 class SettingBody(BaseModel):
     key: str
     value: str | float | int | bool
+
+
+AccountEntryLimitKey = Literal["max_daily_loss", "max_open_drawdown", "max_daily_profit"]
+
+
+class AccountEntryLimitBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    key: AccountEntryLimitKey
+    value: float = Field(strict=True, ge=0, le=100_000_000, allow_inf_nan=False)
+
+
+def _account_limit_owner(principal, action):
+    if not is_request_allowed(principal, action):
+        raise HTTPException(status_code=403, detail="account entry limits are unavailable for this workspace role")
+    return owner_id_for(principal)
+
+
+@router.get("/api/account-risk-settings")
+def get_account_entry_limits(principal: Principal = Depends(get_principal)):
+    from app.core import runtime_config
+    owner_id = _account_limit_owner(principal, "read:runtime-config")
+    return {"params": [row for row in runtime_config.schema(owner_id=owner_id)
+                       if row["key"] in get_args(AccountEntryLimitKey)]}
+
+
+@router.post("/api/account-risk-settings")
+def save_account_entry_limit(body: AccountEntryLimitBody, principal: Principal = Depends(get_principal)):
+    from app.core import runtime_config
+    owner_id = _account_limit_owner(principal, "write:runtime-config")
+    return runtime_config.set_override(body.key, body.value, owner_id=owner_id)
 
 
 @router.post("/api/settings")
@@ -1150,8 +1203,18 @@ def analytics_split(request: Request, segment: str | None = None):
 
 
 # ── websockets ──────────────────────────────────────────────────────────────
+async def _refuse_v0_websocket(ws: WebSocket) -> bool:
+    from app.core.release_profile import is_v0_profile
+    if not is_v0_profile(get_settings().release_profile):
+        return False
+    await ws.close(code=1008, reason="V0_CAPABILITY_UNAVAILABLE")
+    return True
+
+
 @router.websocket("/ws")
 async def ws_main(ws: WebSocket):
+    if await _refuse_v0_websocket(ws):
+        return
     from app.api.principal import authenticate_websocket, is_request_allowed
     principal = await authenticate_websocket(ws)
     # WS routes bypass HTTP middleware. Close before resolving the local runner,
@@ -1263,6 +1326,8 @@ def _instrument_payload(provider, key: str, book: str, *, owner_id: str,
 
 @router.websocket("/ws/instrument/{key}")
 async def ws_instrument(ws: WebSocket, key: str):
+    if await _refuse_v0_websocket(ws):
+        return
     from app.api.principal import authenticate_websocket, is_request_allowed
     principal = await authenticate_websocket(ws)
     if principal is None or not is_request_allowed(principal, "read:execution"):

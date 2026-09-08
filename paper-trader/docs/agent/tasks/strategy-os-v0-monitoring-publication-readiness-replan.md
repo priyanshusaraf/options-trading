@@ -1,0 +1,36 @@
+---
+{
+  "id": "strategy-os-v0-zerodha-data-static-scope",
+  "lineage_id": "strategy-os-v0-monitoring-publication-readiness-replan",
+  "phase": "v0",
+  "status": "accepted_external_gate",
+  "kind": "critical_read_only_publication_readiness_replan",
+  "goal": "Reconcile the newly accepted monitoring evaluator, persistence, read API, interaction commands/API, in-app delivery and desktop Alerts feature against the queued monitor worker, assignment activation, shared API/CSRF assembly and shared frontend assembly, identifying the first dependency-ready successor without bypassing provider rights/conformance or deployability gates.",
+  "goal_contract": {"create_before_work": true, "stopping_condition": "An exact capability/ownership/dependency matrix classifies each monitoring journey as accepted, locally implementable, externally blocked or shared-assembly blocked; one smallest successor capsule and all remaining owner gates are sealed with zero product writes."},
+  "risk_tags": ["critical", "architecture", "publication", "provider-gate", "shared-assembly", "deployability"],
+  "depends_on": ["strategy-os-v0-monitoring-in-app-delivery-foundation", "strategy-os-v0-desktop-alerts-inbox-feature-foundation", "strategy-os-v0-monitoring-interaction-api-unicode-correction"],
+  "dependency_gate": {"delivery_recheck_sha256": "46710defcc5b5f5c8532ab7c702df0d48bdf2cdaa446efcc3d877a408dda3778", "interaction_api_verdict_sha256": "f08856b62a084635dcf89752cc9980119f0e0ac36dfe57fe660dbd866f483702", "desktop_feature_verdict": ".agent/runs/strategy-os-v0-desktop-alerts-inbox-feature-foundation/review/verdict.json"},
+  "required_docs": [{"path": ".agent/runs/strategy-os-v0-post-0045-parallel-materialization-audit/monitoring-runtime-api/report.md", "sections": ["Implementation and source map", "Dependency DAG", "Exact user journeys", "Deployability, observability and resource gates", "Collision and serialization matrix", "Proposed successor capsules"]}, {"path": ".agent/runs/strategy-os-v0-post-0045-parallel-materialization-audit/monitoring-runtime-api/successor-capsules.json", "sections": ["current_blockers", "shared_serial_assemblies", "capsules"]}, {"path": "paper-trader/docs/agent/tasks/strategy-os-v0-capability-evidence-closure.md", "sections": ["Capability evidence closure"]}, {"path": "paper-trader/docs/agent/DEPLOYABILITY.md", "sections": ["Current verdict", "Open obligations", "V1 release gate"]}],
+  "allowed_paths": ["paper-trader/docs/agent/tasks/strategy-os-v0-monitoring-publication-readiness-replan.md", ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan"],
+  "new_paths": ["paper-trader/docs/agent/tasks/strategy-os-v0-monitoring-publication-readiness-replan.md", ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan"],
+  "protected_paths": ["paper-trader/backend", "paper-trader/frontend", "/Users/priyanshusaraf/dev/strategy-os-frontend", "paper-trader/scripts/deploy.sh", "paper-trader/docs/agent/CURRENT.md", "paper-trader/docs/agent/programme/PROGRAMME.json"],
+  "scope": ["Inventory exact accepted bytes/verdicts and map them to activation, completed-event evaluation, delivery, inbox, attention/review and pause/resume/withdraw journeys.", "Separate dedicated stable modules from shared principal/main/release/frontend paths and reserve one serial owner for each shared assembly.", "Keep provider capability, expiry/quota/reconnect/private conformance/data rights and actual monitor service readiness externally blocked unless named evidence exists.", "Decide whether a bounded assignment/API or integration-preparation slice can proceed locally while manifest/publication remains closed; otherwise name the exact external gate.", "Record deployability impact for service, configuration, health, observability, capacity, rollout/rollback and browser artifact without implementing them."],
+  "acceptance": ["Matrix cites every accepted monitoring foundation and no historical proposal as completed work.", "First successor has exact allowed/protected paths, dependencies, tests, risk tier, owner gates and nonclaims; no collision with active work.", "Provider/network, shared CSRF/action vocabulary, public route, frontend router/transport, worker/service, execution/money and deployment gates remain explicit.", "Architecture validation passes with zero product, test, schema, migration, external frontend or deploy writes."],
+  "test_plan": ["Read-only source/path/hash/status inspection, dependency/collision validation and architecture validator; no product test result is newly claimed."],
+  "risk_classification": {"tier": "Critical", "reason": "Publishing partial monitoring pieces without the provider worker, auth policy or truthful readiness could expose unusable or misleading signals."},
+  "parallel_budget": 0,
+  "assignments": [],
+  "model_route": {"owner": "gpt-5.6-sol", "owner_reasoning_effort": "medium", "fork_turns": "none", "service_tier": "priority"},
+  "owner_task": "/root",
+  "replan_result": {"verdict": "KEEP + HARDEN / LOCAL FOUNDATIONS ACCEPTED / PUBLICATION AND WORKER EXTERNALLY BLOCKED", "accepted_foundations": 8, "first_local_successor_after_gate": "strategy-os-v0-monitoring-worker-assignment-activation-replan", "external_gate": "strategy-os-v0-provider-private-conformance-rights-and-runtime-policy", "report": ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan/report.md", "decision": ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan/decision.json", "product_writes": 0, "release_deployable": false, "production_rehearsed": false, "deployed": false},
+  "review": {"required": false, "assignment_id": "v0_monitoring_publication_readiness_replan", "agent": "owner", "model": "gpt-5.6-sol", "reasoning_effort": "medium", "reason": "Read-only exact successor routing; any product successor receives its own risk review.", "base_sha": "de6faae3e97cf5537338bee2143350e53f70da1c", "package": ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan/decision.json", "review_paths": ["paper-trader/docs/agent/tasks/strategy-os-v0-monitoring-publication-readiness-replan.md", ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan"], "exclude_paths": ["paper-trader/backend", "paper-trader/frontend", "paper-trader/scripts/deploy.sh"], "output": ".agent/runs/strategy-os-v0-monitoring-publication-readiness-replan/decision.json", "verdicts": ["ARCHITECTURE"], "max_rechecks": 1},
+  "owner_gates": ["No product/shared assembly/provider/network/frontend/execution/money/deployment mutation; owner policy/vendor/legal gates remain external."],
+  "stop_conditions": ["A decision requires new provider/vendor/legal/commercial evidence or choosing live/public policy.", "Accepted source hashes/statuses conflict or active path ownership is not released."],
+  "deployment_impact": {"classification": "none; read-only replan", "release_deployable": false, "production_rehearsed": false, "deployed": false},
+  "nonclaims": ["No route publication, provider worker, frontend integration, execution, money, deployment, release readiness or V0 completion."]
+}
+---
+
+# Monitoring publication readiness replan
+
+Reconcile exact accepted foundations before opening any shared assembly or service.

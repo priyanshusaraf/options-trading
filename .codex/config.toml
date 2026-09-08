@@ -1,8 +1,7 @@
-model = "gpt-5.6-terra"
-model_reasoning_effort = "medium"
-plan_mode_reasoning_effort = "medium"
 service_tier = "default"
-model_auto_compact_token_limit = 96000
+# Compact the full context early, leaving room for tools and reasoning.
+model_context_window = 272000
+model_auto_compact_token_limit = 220000
 model_auto_compact_token_limit_scope = "total"
 project_doc_max_bytes = 12288
 tool_output_token_limit = 6000
@@ -18,7 +17,7 @@ in_app_browser = false
 memories = false
 multi_agent = true
 multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 5, expose_spawn_agent_model_overrides = true, wait_agent_enabled = true, non_code_mode_only = true }
-plugins = false
+plugins = true
 recommended_plugins = false
 
 [memories]
@@ -28,7 +27,7 @@ use_memories = false
 [agents]
 enabled = true
 max_concurrent_threads_per_session = 5
-default_subagent_model = "gpt-5.6-luna"
+default_subagent_model = "gpt-5.6-sol"
 default_subagent_reasoning_effort = "medium"
 interrupt_message = false
 

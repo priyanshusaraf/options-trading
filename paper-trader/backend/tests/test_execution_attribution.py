@@ -29,14 +29,17 @@ and only where it was wrong.
 from __future__ import annotations
 
 import pytest
+from unittest.mock import patch
 
+from app.core import paper_authority
 from app.core import execution_binding as binding
 from app.core.instruments import all_instruments
-from app.db.models import LEGACY_OWNER_ID, InstrumentState
+from app.db.models import LEGACY_DEPLOYMENT_ID, LEGACY_OWNER_ID, InstrumentState
 from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.providers.mock import MockProvider
 from app.strategy.registry import DEFAULT_STRATEGY_KEY
+from tests.admitted_entry import persist_admitted_entry
 
 STALE = "a_strategy_that_was_withdrawn"
 
@@ -106,6 +109,39 @@ def _intraday_runner(assigned: str | None) -> tuple[EngineRunner, list[str]]:
     return runner, keys
 
 
+def _admit(runner: EngineRunner, keys: list[str]) -> dict[str, str]:
+    """Make one immutable graph authoritative for these fixture instruments."""
+    admission = persist_admitted_entry(runner.broker.s, owner_id=runner.owner_id)
+    with runner._session() as session:
+        rows = [paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key=key, interval="30minute",
+            owner_id=runner.owner_id, broker_account_id=runner.broker_account_id)
+            for key in keys]
+        session.commit()
+    decision = {
+        "project_id": "test.admission.4c1029697ee358715d3a14a2",
+        "graph_identifier": "test.strategy.expanding_z_impulse", "graph_version": 1,
+        "content_address": admission["graph_address"],
+        "admission_address": admission["admission_address"], "decision": "approved",
+    }
+    with runner._session() as session:
+        with patch.object(paper_authority, "verified_decision", return_value=decision):
+            for row in rows:
+                paper_authority.activate(
+                    session, row.id, revision=row.revision, owner_id=runner.owner_id,
+                    broker_account_id=runner.broker_account_id)
+        session.commit()
+    assert runner.refresh_paper_authority() == len(keys)
+    return admission
+
+
+def _admitted_intraday_runner(assigned: str | None = None):
+    runner, keys = _intraday_runner(assigned)
+    return runner, keys, _admit(runner, keys)
+
+
 def _run_until_open(runner: EngineRunner, ticks: int = 300):
     """Tick until the intraday segment holds a position, and return it."""
     for _ in range(ticks):
@@ -118,64 +154,42 @@ def _run_until_open(runner: EngineRunner, ticks: int = 300):
     return None
 
 
-# ── the executed identity is what executed ──────────────────────────────────────
+# ── legacy requested facts remain distinct from admitted execution authority ───
 
-def test_a_stale_assignment_is_attributed_to_the_strategy_that_actually_traded():
-    """The defect, inverted.
+@pytest.mark.parametrize("assigned", [None, DEFAULT_STRATEGY_KEY, "expanding_z_v4", STALE])
+def test_a_legacy_assignment_is_preserved_but_cannot_open_new_exposure(assigned):
+    """A handwritten legacy assignment is requested state, never entry authority."""
+    runner, keys = _intraday_runner(assigned)
 
-    Before this slice the assertion below read `== STALE`, and it passed — that is how the
-    defect was demonstrated, and the pre-fix run is recorded in the L1 plan and the mutation
-    list rather than kept here as a permanent test of wrong behaviour.
+    assert _run_until_open(runner) is None
+    assert runner.broker.open_positions() == []
+    with SessionLocal() as session:
+        assert session.get(InstrumentState, (LEGACY_OWNER_ID, keys[0])).strategy_key == assigned
+    assert runner.strategy_keys.get(keys[0]) == assigned
 
-    The instrument is assigned a key the registry cannot resolve. The legacy fail-safe
-    substitutes the default and the book keeps trading, which is deliberate and unchanged.
-    What changes is that the position no longer claims the key that failed to resolve.
-    """
-    runner, _ = _intraday_runner(STALE)
+
+# ── admitted binding attribution ───────────────────────────────────────────────
+
+def test_an_admitted_binding_stamps_its_exact_identity_and_receipt():
+    """The position records the immutable IR binding that produced its signal."""
+    runner, _, admission = _admitted_intraday_runner(STALE)
     position = _run_until_open(runner)
 
     assert position is not None, "no intraday position opened — the test proves nothing"
-    assert position.strategy_key == DEFAULT_STRATEGY_KEY
-    assert position.strategy_key != STALE
+    executed = runner.executed_binding[position.instrument_key]
+    assert position.strategy_key == executed.strategy_key == admission["strategy_key"]
+    assert position.strategy_version == executed.strategy_version == admission["strategy_version"]
+    assert position.admission_address == executed.admission_address == admission["admission_address"]
 
 
-def test_the_requested_assignment_is_preserved_where_it_already_lived():
-    """Correcting the executed identity must not erase what was *asked for*. The two are
-    separate facts and already have separate homes; this slice adds no field and repurposes
-    none."""
-    runner, keys = _intraday_runner(STALE)
-    _run_until_open(runner)
-
-    with SessionLocal() as session:
-        assert session.get(InstrumentState, (LEGACY_OWNER_ID, keys[0])).strategy_key == STALE
-    assert runner.strategy_keys[keys[0]] == STALE
-
-
-@pytest.mark.parametrize("assigned,expected", [
-    (None, DEFAULT_STRATEGY_KEY),
-    (DEFAULT_STRATEGY_KEY, DEFAULT_STRATEGY_KEY),
-    ("expanding_z_v4", "expanding_z_v4"),
-    (STALE, DEFAULT_STRATEGY_KEY),
-])
-def test_every_assignment_the_engine_can_hold_attributes_what_it_ran(assigned, expected):
-    """The whole space of assignments, against the whole space of outcomes: unset, the
-    explicit default, another registered strategy, and a stale key resolving under the
-    preserved legacy fallback."""
-    runner, _ = _intraday_runner(assigned)
-    position = _run_until_open(runner)
-
-    assert position is not None
-    assert position.strategy_key == expected
-
-
-def test_the_trade_row_carries_the_same_executed_identity_as_the_position():
+def test_the_trade_row_carries_the_same_admitted_identity_as_the_position():
     """Attribution has to survive into the money record. `positions` is working state;
     `trades` is what an audit reads."""
     from sqlalchemy import select
 
     from app.db.models import Trade
 
-    runner, _ = _intraday_runner(STALE)
+    runner, _, admission = _admitted_intraday_runner(STALE)
     position = _run_until_open(runner)
     assert position is not None
 
@@ -190,13 +204,15 @@ def test_the_trade_row_carries_the_same_executed_identity_as_the_position():
         rows = list(session.scalars(
             select(Trade).where(Trade.segment == "equity_intraday")))
     assert rows, "no trade rows written — the round trip never closed"
-    assert {r.strategy_key for r in rows} == {DEFAULT_STRATEGY_KEY}
+    assert {r.strategy_key for r in rows} == {admission["strategy_key"]}
+    assert {r.strategy_version for r in rows} == {admission["strategy_version"]}
+    assert {r.admission_address for r in rows} == {admission["admission_address"]}
 
 
-def test_restarting_the_engine_preserves_the_corrected_attribution():
+def test_restarting_the_engine_preserves_admitted_attribution():
     """The identity is persisted at the fill, not recomputed on read — a later config
     change must not retroactively rewrite what a past trade claims to have run."""
-    runner, keys = _intraday_runner(STALE)
+    runner, keys, admission = _admitted_intraday_runner(STALE)
     position = _run_until_open(runner)
     assert position is not None
 
@@ -208,28 +224,9 @@ def test_restarting_the_engine_preserves_the_corrected_attribution():
     reborn = EngineRunner(owner_id="owner", broker_account_id="account.default")
     held = [p for p in reborn.broker.open_positions()
             if p.instrument_key == position.instrument_key]
-    assert held and held[0].strategy_key == DEFAULT_STRATEGY_KEY
-
-
-# ── nothing else moved ──────────────────────────────────────────────────────────
-
-def test_only_the_attribution_changed_the_economics_did_not():
-    """The claim that makes this an accounting slice rather than an execution one: a stale
-    assignment and an unset one select the same strategy, so they must produce the same
-    trade in every respect. Anything else here would mean the correction leaked into
-    selection, sizing or routing."""
-    stale_runner, _ = _intraday_runner(STALE)
-    stale = _run_until_open(stale_runner)
-
-    clean_runner, _ = _intraday_runner(None)
-    clean = _run_until_open(clean_runner)
-
-    assert stale is not None and clean is not None
-    for field in ("instrument_key", "direction", "qty", "entry_premium", "entry_cost",
-                  "entry_charges", "entry_spot", "segment", "option_type",
-                  "stop_price", "target_price", "entry_sl_pct", "entry_tp_pct"):
-        assert getattr(stale, field) == getattr(clean, field), field
-    assert stale.strategy_key == clean.strategy_key == DEFAULT_STRATEGY_KEY
+    assert held and held[0].strategy_key == admission["strategy_key"]
+    assert held[0].strategy_version == admission["strategy_version"]
+    assert held[0].admission_address == admission["admission_address"]
 
 
 def test_the_executed_identity_comes_from_the_binding_not_a_second_resolution(monkeypatch):
@@ -238,7 +235,7 @@ def test_the_executed_identity_comes_from_the_binding_not_a_second_resolution(mo
     captured when the signal was produced, not looked up again later, because the
     assignment can change between the two and the trade would then name logic that never
     ran."""
-    runner, keys = _intraday_runner("expanding_z_v4")
+    runner, keys, admission = _admitted_intraday_runner("expanding_z_v4")
 
     resolutions = []
     real = binding.bind
@@ -247,7 +244,9 @@ def test_the_executed_identity_comes_from_the_binding_not_a_second_resolution(mo
     position = _run_until_open(runner)
 
     assert position is not None
-    assert position.strategy_key == "expanding_z_v4"
+    assert position.strategy_key == admission["strategy_key"]
+    assert position.strategy_version == admission["strategy_version"]
+    assert position.admission_address == admission["admission_address"]
     # The binding is resolved on the signal path and carried; the entry path adds no
     # resolutions of its own beyond the instruments the scan already covered.
     assert set(resolutions) <= set(runner.enabled)
@@ -280,15 +279,16 @@ def test_a_refused_binding_produces_no_position_and_no_attribution(monkeypatch):
 def test_a_shadow_strategy_is_never_stamped_onto_a_money_record(monkeypatch):
     """The shadow lane evaluates a graph on the same frame as the authoritative strategy.
     Its key must never reach a position, whatever the observation said."""
-    runner, _ = _intraday_runner(None)
+    runner, _, admission = _admitted_intraday_runner("expanding_z_v4")
     monkeypatch.setitem(runner.params, "ir_shadow_enabled", True)
     for key in list(runner.enabled):
         runner.strategy_keys[key] = "expanding_z_v4"
 
     position = _run_until_open(runner)
     assert position is not None
-    assert not position.strategy_key.startswith("ir.")
-    assert position.strategy_key == "expanding_z_v4"
+    assert position.strategy_key == admission["strategy_key"]
+    assert position.strategy_version == admission["strategy_version"]
+    assert position.admission_address == admission["admission_address"]
     assert runner.shadow_metrics.snapshot()["bars_observed"] > 0
 
 
@@ -301,7 +301,7 @@ def test_the_executed_identity_is_the_one_that_produced_the_signal_not_the_lates
     produced the signal. Here the assignment is changed after the scan and before the
     entry, and the position must still name what actually ran.
     """
-    runner, keys = _intraday_runner("expanding_z_v4")
+    runner, keys, admission = _admitted_intraday_runner("expanding_z_v4")
 
     # The reassignment has to land *between* the scan and the entry. An earlier version of
     # this test flipped the assignment from inside `open_equity_position`, which reads
@@ -327,15 +327,14 @@ def test_the_executed_identity_is_the_one_that_produced_the_signal_not_the_lates
         runner.provider.advance()
 
     assert position is not None, "no position opened — the test proves nothing"
-    assert position.strategy_key == "expanding_z_v4", (
-        "the fill was attributed to the assignment current at fill time, not to the "
-        "strategy whose output produced the signal")
+    scanned = runner.executed_binding[position.instrument_key]
+    assert position.strategy_key == scanned.strategy_key == admission["strategy_key"]
+    assert position.strategy_version == scanned.strategy_version == admission["strategy_version"]
+    assert position.admission_address == scanned.admission_address == admission["admission_address"]
 
 
-def test_the_futures_entry_path_attributes_what_executed(monkeypatch, give_futures_price_feed):
-    """The futures path has its own write site, so the intraday proof does not cover it.
-    Modelled on `test_futures_entries`, with a stale assignment: it trades the default and
-    must say so."""
+def test_the_futures_entry_path_attributes_the_admitted_binding(monkeypatch, give_futures_price_feed):
+    """The futures write path carries the same exact admitted identity as intraday."""
     init_db(reset=True)
     runner = EngineRunner(owner_id="owner", broker_account_id="account.default")
     runner.armed = True
@@ -349,6 +348,7 @@ def test_the_futures_entry_path_attributes_what_executed(monkeypatch, give_futur
                      "index_futures_min_margin": 50_000.0,
                      "notify_enabled": False}
     runner.strategy_keys["NIFTY"] = STALE
+    admission = _admit(runner, ["NIFTY"])
     give_futures_price_feed(runner.provider,
                            lambda inst, expiry: 24_000.0)
     runner.publish_signal("NIFTY", runner._binding_for("NIFTY"),
@@ -359,5 +359,6 @@ def test_the_futures_entry_path_attributes_what_executed(monkeypatch, give_futur
 
     held = [p for p in runner.broker.open_positions() if p.segment == "index_futures"]
     assert held, "no futures position opened — the test proves nothing"
-    assert held[0].strategy_key == DEFAULT_STRATEGY_KEY
-    assert held[0].strategy_key != STALE
+    assert held[0].strategy_key == admission["strategy_key"]
+    assert held[0].strategy_version == admission["strategy_version"]
+    assert held[0].admission_address == admission["admission_address"]

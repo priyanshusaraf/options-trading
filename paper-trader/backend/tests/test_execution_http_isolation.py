@@ -11,6 +11,7 @@ from app.db.session import SessionLocal, init_db
 from app.engine.runner import EngineRunner
 from app.execution.leases import LeaseRepository
 from app.main import app
+from tests.admitted_entry import persist_admitted_entry
 
 
 OWNER_A = "org.execution.a"
@@ -44,8 +45,14 @@ def _client(monkeypatch, principal: Principal) -> tuple[TestClient, EngineRunner
                               external_account_id=account_id, display_name=account_id),
             ])
         session.flush()
+        receipt = persist_admitted_entry(session, owner_id=OWNER_A)
         deployment = deployments.create_deployment(session, "local", owner_id=OWNER_A,
-                                                   broker_account_id=ACCOUNT_A)
+                                                   broker_account_id=ACCOUNT_A,
+                                                   strategy_key=receipt["strategy_key"],
+                                                   strategy_version=receipt["strategy_version"],
+                                                   graph_address=receipt["graph_address"],
+                                                   attribution_state=receipt["attribution_state"],
+                                                   admission_address=receipt["admission_address"])
         session.commit()
     runner = EngineRunner(owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
                           deployment_id=deployment.id)

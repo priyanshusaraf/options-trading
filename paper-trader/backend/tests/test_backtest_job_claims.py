@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+import json
 import threading
 import time
 
@@ -19,32 +20,65 @@ from app.backtest import repository
 from app.backtest import sweep
 from app.db.models import BacktestResult, BacktestRun, Organization
 from app.db.session import SessionLocal, init_db
-from app.strategy.registry import resolve_strategy
+
+_RUN_ATTRIBUTION = {}
 
 
-def _run(owner_id: str, *, total: int = 2) -> int:
+def _run(owner_id: str, admitted_backtest_receipt, *, total: int = 2) -> int:
+    global _RUN_ATTRIBUTION
     with SessionLocal() as session:
+        identity = admitted_backtest_receipt(session, owner_id=owner_id)
+        admitted = repository.load_verified_admission(
+            session, owner_id=owner_id,
+            admission_address=identity["admission_address"])
+        _RUN_ATTRIBUTION = {
+            "strategy_key": admitted.strategy_key,
+            "strategy_version": admitted.strategy_version,
+            "graph_address": admitted.graph_address,
+            "attribution_state": admitted.attribution_state,
+        }
         run = repository.enqueue_run(
             session, owner_id=owner_id, scope="liquid", intervals="day",
-            capital=1.0, total=total)
+            capital=1.0, total=total, **identity)
         session.commit()
         return run.id
 
 
-def _value(key: str) -> dict:
-    return {"instrument_key": key, "name": key, "segment": "nse_delivery",
-            "strategy_key": "trend_impulse_v3", "interval": "day", "bars": 1,
-            "strategy_version": "strategy-version-v1", "params_hash": "strategy-version-and-params-v1", "error": ""}
+def _replay_descriptor(session, admitted_backtest_receipt, *, owner_id="owner"):
+    identity = admitted_backtest_receipt(session, owner_id=owner_id)
+    admitted = repository.load_verified_admission(
+        session, owner_id=owner_id,
+        admission_address=identity["admission_address"])
+    return identity, {
+        "scope": "liquid", "intervals": ["day"], "capital": 1.0,
+        "instruments": ["NIFTY"], "lookback_days": None,
+        "start_date": None, "end_date": None,
+        "strategies": [sweep._strategy_descriptor(admitted.strategy)],
+        "attribution": sweep._admission_attribution(admitted),
+        "admission_address": admitted.admission_address,
+        "pinned_datasets": {}, "workers": 1,
+    }
 
 
-def test_claim_race_allows_exactly_one_token_and_never_blocks_another_owner():
+def _value(key: str, *, run_id: int | None = None) -> dict:
+    value = {"instrument_key": key, "name": key, "segment": "nse_delivery",
+            **_RUN_ATTRIBUTION, "interval": "day", "bars": 1,
+            "params_hash": "strategy-version-and-params-v1", "error": ""}
+    if run_id is not None:
+        with SessionLocal() as session:
+            value["admission_address"] = session.get(BacktestRun, run_id).admission_address
+    return value
+
+
+def test_claim_race_allows_exactly_one_token_and_never_blocks_another_owner(
+        admitted_backtest_receipt):
     """Removing the conditional status/expiry predicate would make both win."""
     init_db(reset=True)
     with SessionLocal() as session:
         session.add_all([Organization(organization_id="a", name="A"),
                          Organization(organization_id="b", name="B")])
         session.commit()
-    a, b = _run("a"), _run("b")
+    a, b = _run("a", admitted_backtest_receipt), _run("b", admitted_backtest_receipt)
     now = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as first, SessionLocal() as second:
         a_claim = repository.claim_next_run(first, owner_id="a", claimed_by="worker-a",
@@ -61,12 +95,12 @@ def test_claim_race_allows_exactly_one_token_and_never_blocks_another_owner():
     assert repeat is None
 
 
-def test_replaced_or_cancelled_claim_cannot_append_or_finish_a_run():
+def test_replaced_or_cancelled_claim_cannot_append_or_finish_a_run(admitted_backtest_receipt):
     """Dropping owner, token, expiry or cancellation fences must fail this test."""
     init_db(reset=True)
     with SessionLocal() as session:
         session.add(Organization(organization_id="a", name="A")); session.commit()
-    run_id = _run("a")
+    run_id = _run("a", admitted_backtest_receipt)
     started = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as session:
         old = repository.claim_run(session, owner_id="a", run_id=run_id,
@@ -101,10 +135,10 @@ def test_replaced_or_cancelled_claim_cannot_append_or_finish_a_run():
         assert session.scalars(select(BacktestResult).where(BacktestResult.run_id == run_id)).all() == []
 
 
-def test_replacement_resumes_only_cells_not_already_durable():
+def test_replacement_resumes_only_cells_not_already_durable(admitted_backtest_receipt):
     """A new claimant must not duplicate a cell completed by the old claimant."""
     init_db(reset=True)
-    run_id = _run("owner", total=2)
+    run_id = _run("owner", admitted_backtest_receipt, total=2)
     started = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as session:
         first = repository.claim_run(session, owner_id="owner", run_id=run_id,
@@ -114,7 +148,7 @@ def test_replacement_resumes_only_cells_not_already_durable():
     with SessionLocal() as session:
         assert repository.append_claimed_result_batch(
             session, owner_id="owner", run_id=run_id, claim_token=first.claim_token,
-            values=[_value("NIFTY")], now=started + dt.timedelta(milliseconds=100),
+            values=[_value("NIFTY", run_id=run_id)], now=started + dt.timedelta(milliseconds=100),
             lease_seconds=1)
         session.commit()
     with SessionLocal() as session:
@@ -126,7 +160,7 @@ def test_replacement_resumes_only_cells_not_already_durable():
     with SessionLocal() as session:
         assert repository.append_claimed_result_batch(
             session, owner_id="owner", run_id=run_id, claim_token=second.claim_token,
-            values=[_value("NIFTY"), _value("BANKNIFTY")],
+            values=[_value("NIFTY", run_id=run_id), _value("BANKNIFTY", run_id=run_id)],
             now=started + dt.timedelta(seconds=3))
         session.commit()
     with SessionLocal() as session:
@@ -137,10 +171,11 @@ def test_replacement_resumes_only_cells_not_already_durable():
     assert run.done == run.total == 2
 
 
-def test_cancelling_pending_run_is_terminal_and_releases_admission_capacity():
+def test_cancelling_pending_run_is_terminal_and_releases_admission_capacity(
+        admitted_backtest_receipt):
     """A job with no claimant cannot wait forever for a worker to cancel it."""
     init_db(reset=True)
-    run_id = _run("owner")
+    run_id = _run("owner", admitted_backtest_receipt)
     with SessionLocal() as session:
         assert repository.request_cancel(session, owner_id="owner", run_id=run_id)
         session.commit()
@@ -151,10 +186,15 @@ def test_cancelling_pending_run_is_terminal_and_releases_admission_capacity():
     assert run.claim_token is None
 
 
-def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(monkeypatch):
+def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(
+        monkeypatch, admitted_backtest_receipt):
     """Lease liveness must not depend on reaching a persistence batch boundary."""
     init_db(reset=True)
-    run_id = _run("owner", total=2)
+    run_id = _run("owner", admitted_backtest_receipt, total=2)
+    with SessionLocal() as session:
+        run_address = session.get(BacktestRun, run_id).admission_address
+        admitted = repository.load_verified_admission(
+            session, owner_id="owner", admission_address=run_address)
     with SessionLocal() as session:
         claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
                                      claimed_by="worker", lease_seconds=1)
@@ -162,6 +202,10 @@ def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(monkeypa
     assert claim is not None
     settings = sweep.get_settings().model_copy(update={"backtest_claim_lease_seconds": 1})
     monkeypatch.setattr(sweep, "get_settings", lambda: settings)
+    def verified_worker_admission(*, owner_id, admission_address):
+        assert (owner_id, admission_address) == ("owner", run_address)
+        return admitted
+    monkeypatch.setattr(sweep, "_verify_worker_admission", verified_worker_admission)
     entered = threading.Event()
     calls = {"datasets": 0}
     def slow_dataset(*_args, **_kwargs):
@@ -173,7 +217,8 @@ def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(monkeypa
     thread = threading.Thread(target=sweep._run, args=(
         run_id, object(), [object(), object()], ["day"], 1.0,
         {"lookback_days": None, "start": None, "end": None, "label": "max"}, []),
-        kwargs={"owner_id": "owner", "claim_token": claim.claim_token})
+        kwargs={"owner_id": "owner", "claim_token": claim.claim_token,
+                "admission_address": run_address})
     thread.start()
     assert entered.wait(timeout=1)
     with SessionLocal() as session:
@@ -187,21 +232,15 @@ def test_slow_provider_is_heartbeated_then_cancellation_stops_next_cell(monkeypa
     assert run.status == "cancelled" and run.done == 0
 
 
-def test_restart_dispatch_claims_pending_descriptor_without_provider_object(monkeypatch):
+def test_restart_dispatch_claims_pending_descriptor_without_provider_object(
+        monkeypatch, admitted_backtest_receipt):
     """Recovery must launch durable request data, never a pickled provider/session."""
     init_db(reset=True)
-    descriptor = {
-        "scope": "liquid", "intervals": ["day"], "capital": 1.0,
-        "instruments": ["NIFTY"], "lookback_days": None,
-        "start_date": None, "end_date": None,
-        "strategies": [sweep._strategy_descriptor(
-            resolve_strategy("trend_impulse_v3", owner_id="owner"))],
-        "pinned_datasets": {}, "workers": 1,
-    }
     with SessionLocal() as session:
+        identity, descriptor = _replay_descriptor(session, admitted_backtest_receipt)
         run = repository.enqueue_run(session, owner_id="owner", scope="liquid",
                                      intervals="day", capital=1.0, total=1,
-                                     request_json=__import__("json").dumps(descriptor))
+                                     request_json=__import__("json").dumps(descriptor), **identity)
         session.commit()
     class _Thread:
         def __init__(self, *args, **kwargs): pass
@@ -213,6 +252,58 @@ def test_restart_dispatch_claims_pending_descriptor_without_provider_object(monk
     with SessionLocal() as session:
         claimed = repository.get_run(session, owner_id="owner", run_id=run.id)
     assert claimed.status == "running" and claimed.claim_token is not None
+
+
+def test_phase4_reclaim_refuses_before_claim_provider_cache_or_worker(monkeypatch):
+    """A pending v2 receipt must be refused before restart claims the job."""
+    from tests.test_backtest_admission import _persist_phase4_fixture
+
+    init_db(reset=True)
+    registry, wrapper = _persist_phase4_fixture()
+    descriptor = {
+        "scope": "liquid", "intervals": ["15minute"], "capital": 50_000.0,
+        "instruments": ["NIFTY"], "strategies": [{"key": "phase4", "version": 1}],
+        "admission_address": wrapper.admission_address,
+    }
+    with SessionLocal() as session:
+        run = BacktestRun(
+            owner_id="owner-a", scope="liquid", intervals="15minute",
+            capital=50_000.0, total=1, status="pending",
+            admission_address=wrapper.admission_address,
+            request_json=json.dumps(descriptor),
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    calls = {name: 0 for name in (
+        "loader", "claim", "provider", "cache", "worker")}
+
+    def forbidden(name):
+        def tripwire(*_args, **_kwargs):
+            calls[name] += 1
+            raise AssertionError(f"Phase 4 reclaim reached {name}")
+        return tripwire
+
+    # A contextless Phase 4 public restart refuses before a claim, provider,
+    # cache, or worker seam.  The dedicated context correction tests cover the
+    # real two-plane loader; this retained test protects the older seams.
+    monkeypatch.setattr(repository, "claim_next_run", forbidden("claim"))
+    monkeypatch.setattr("app.providers.factory.get_provider", forbidden("provider"))
+    monkeypatch.setattr(sweep, "_execution_address", forbidden("cache"))
+    monkeypatch.setattr(sweep, "_reusable_values", forbidden("cache"))
+    monkeypatch.setattr(sweep, "_public_reusable_values", forbidden("cache"))
+    monkeypatch.setattr(sweep, "_worker_task", forbidden("worker"))
+    monkeypatch.setattr(sweep, "_pinned_worker_task", forbidden("worker"))
+
+    assert sweep.dispatch_reclaimable(owner_id="owner-a", maximum=1) == []
+    assert calls == {"loader": 0, "claim": 0, "provider": 0,
+                     "cache": 0, "worker": 0}
+    with SessionLocal() as session:
+        persisted = session.get(BacktestRun, run_id)
+        assert persisted is not None and persisted.claim_token is None
+        assert session.scalars(select(BacktestResult).where(
+            BacktestResult.run_id == run_id)).all() == []
 
 
 def test_descriptor_strategy_identity_refuses_a_republished_key_without_terminalizing():
@@ -227,10 +318,10 @@ def test_descriptor_strategy_identity_refuses_a_republished_key_without_terminal
         raise AssertionError("a descriptor must pin executable strategy version")
 
 
-def test_unavailable_replay_artifact_releases_only_its_current_claim():
+def test_unavailable_replay_artifact_releases_only_its_current_claim(admitted_backtest_receipt):
     """An unavailable artifact is pending work, not a fabricated terminal failure."""
     init_db(reset=True)
-    run_id = _run("owner")
+    run_id = _run("owner", admitted_backtest_receipt)
     with SessionLocal() as session:
         claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
                                      claimed_by="dispatcher")
@@ -246,34 +337,31 @@ def test_unavailable_replay_artifact_releases_only_its_current_claim():
     assert run.status == "pending" and run.claim_token is None
 
 
-def test_cancel_during_pre_worker_resolution_terminalizes_and_cannot_dispatch(monkeypatch):
+def test_cancel_during_pre_worker_resolution_terminalizes_and_cannot_dispatch(
+        monkeypatch, admitted_backtest_receipt):
     """A cancellation between dispatch claim and launch must not strand a run."""
     init_db(reset=True)
-    descriptor = {
-        "scope": "liquid", "intervals": ["day"], "capital": 1.0,
-        "instruments": ["NIFTY"],
-        "strategies": [sweep._strategy_descriptor(
-            resolve_strategy("trend_impulse_v3", owner_id="owner"))],
-        "pinned_datasets": {}, "workers": 1,
-    }
     with SessionLocal() as session:
+        identity, descriptor = _replay_descriptor(session, admitted_backtest_receipt)
         run = repository.enqueue_run(session, owner_id="owner", scope="liquid",
                                      intervals="day", capital=1.0, total=1,
-                                     request_json=__import__("json").dumps(descriptor))
+                                     request_json=__import__("json").dumps(descriptor), **identity)
         session.commit()
 
-    real_resolve = sweep._resolve_descriptor_strategies
-    def cancel_while_resolving(**kwargs):
-        with SessionLocal() as session:
-            assert repository.request_cancel(session, owner_id="owner", run_id=run.id)
-            session.commit()
-        return real_resolve(**kwargs)
+    real_verify = repository.load_verified_admission
+    def cancel_while_resolving(verify_session, **kwargs):
+        with SessionLocal() as cancel_session:
+            assert repository.request_cancel(
+                cancel_session, owner_id="owner", run_id=run.id)
+            cancel_session.commit()
+        return real_verify(verify_session, **kwargs)
 
-    monkeypatch.setattr(sweep, "_resolve_descriptor_strategies", cancel_while_resolving)
+    monkeypatch.setattr(repository, "load_verified_admission", cancel_while_resolving)
     assert sweep.dispatch_reclaimable(owner_id="owner", maximum=1) == []
 
 
-def test_cancel_during_fresh_start_resolution_terminalizes_before_worker_launch(monkeypatch):
+def test_cancel_during_fresh_start_resolution_terminalizes_before_worker_launch(
+        monkeypatch, admitted_backtest_receipt):
     """A newly admitted run has the same cancellation safety as restart dispatch."""
     init_db(reset=True)
     entered, release = threading.Event(), threading.Event()
@@ -291,11 +379,25 @@ def test_cancel_during_fresh_start_resolution_terminalizes_before_worker_launch(
 
     monkeypatch.setattr(sweep, "liquid_universe", blocked_universe)
     monkeypatch.setattr(sweep.threading, "Thread", NeverStart)
+    identity = admitted_backtest_receipt()
+    with SessionLocal() as session:
+        admitted = repository.load_verified_admission(
+            session, owner_id="owner",
+            admission_address=identity["admission_address"])
+    def verified_initial(session, *, owner_id, admission_address):
+        assert (owner_id, admission_address) == (
+            "owner", identity["admission_address"])
+        return admitted
+    def verified_claim(*, owner_id, run_id, claim_token):
+        assert owner_id == "owner" and run_id > 0 and claim_token
+        return admitted
+    monkeypatch.setattr(repository, "load_verified_admission", verified_initial)
+    monkeypatch.setattr(sweep, "_verify_claimed_admission", verified_claim)
     outcome = {}
     def launch():
         outcome["run_id"] = sweep.start_sweep(
             owner_id="owner", provider=object(), intervals=["day"],
-            instruments=None, strategies=["trend_impulse_v3"])
+            instruments=None, strategies=["ir.test.strategy.expanding_z_impulse"], **identity)
     runner = real_thread(target=launch)
     runner.start()
     assert entered.wait(timeout=2)
@@ -314,7 +416,8 @@ def test_cancel_during_fresh_start_resolution_terminalizes_before_worker_launch(
     assert sweep.dispatch_reclaimable(owner_id="owner", maximum=1) == []
 
 
-def test_exact_total_must_pass_admission_again_after_universe_resolution(monkeypatch):
+def test_exact_total_must_pass_admission_again_after_universe_resolution(
+        monkeypatch, admitted_backtest_receipt):
     """A conservative reservation is not permission to exceed the real cell budget."""
     init_db(reset=True)
     settings = type("Settings", (), {
@@ -327,9 +430,10 @@ def test_exact_total_must_pass_admission_again_after_universe_resolution(monkeyp
     monkeypatch.setattr(sweep, "_conservative_cell_estimate", lambda **_kw: 1)
     class _Provider: pass
     monkeypatch.setattr(sweep, "liquid_universe", lambda _p: [object(), object()])
+    identity = admitted_backtest_receipt()
     try:
         sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=None,
-                          provider=_Provider())
+                          provider=_Provider(), **identity)
     except sweep.WorkloadAdmissionError as exc:
         assert exc.reason == "host_requested_cells"
     else:
@@ -339,18 +443,17 @@ def test_exact_total_must_pass_admission_again_after_universe_resolution(monkeyp
     assert run.status == "error" and run.total == 1
 
 
-def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch):
+def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch,
+                                                           admitted_backtest_receipt):
     """A startup dispatcher restricted to the legacy owner strands tenant work."""
     init_db(reset=True)
     with SessionLocal() as session:
         session.add(Organization(organization_id="tenant", name="Tenant")); session.flush()
+        identity, descriptor = _replay_descriptor(
+            session, admitted_backtest_receipt, owner_id="tenant")
         run = repository.enqueue_run(session, owner_id="tenant", scope="liquid",
                                      intervals="day", capital=1.0, total=1,
-                                     request_json=__import__("json").dumps({
-                                         "scope": "liquid", "intervals": ["day"], "capital": 1.0,
-                                         "instruments": ["NIFTY"], "strategies": [sweep._strategy_descriptor(
-                                             resolve_strategy("trend_impulse_v3", owner_id="tenant"))],
-                                         "pinned_datasets": {}, "workers": 1}))
+                                     request_json=__import__("json").dumps(descriptor), **identity)
         session.commit()
     class _Thread:
         def __init__(self, *args, **kwargs): pass
@@ -362,9 +465,9 @@ def test_global_restart_dispatch_reclaims_nonlegacy_owner(monkeypatch):
         assert repository.get_run(session, owner_id="tenant", run_id=run.id).status == "running"
 
 
-def test_measurement_snapshot_reports_state_without_product_user_limit():
+def test_measurement_snapshot_reports_state_without_product_user_limit(admitted_backtest_receipt):
     init_db(reset=True)
-    run_id = _run("owner", total=37)
+    run_id = _run("owner", admitted_backtest_receipt, total=37)
     with SessionLocal() as session:
         snapshot = sweep.measurement_snapshot(owner_id="owner", session=session)
     assert snapshot["queued_jobs"] == 1
@@ -383,10 +486,11 @@ def test_measurement_snapshot_records_bounded_scheduler_measurements(monkeypatch
     assert after["inflight_datasets"] == 0
 
 
-def test_worker_entry_and_persistence_refuse_an_unfenced_writer(monkeypatch):
+def test_worker_entry_and_persistence_refuse_an_unfenced_writer(monkeypatch,
+                                                                 admitted_backtest_receipt):
     """A direct helper call must never regain the pre-0025 write authority."""
     init_db(reset=True)
-    run_id = _run("owner")
+    run_id = _run("owner", admitted_backtest_receipt)
     with pytest.raises(TypeError, match="claim_token"):
         sweep._run(run_id, None, [], ["day"], 1.0, owner_id="owner")
     with pytest.raises(ValueError, match="claim token"):
@@ -399,14 +503,16 @@ def test_worker_entry_and_persistence_refuse_an_unfenced_writer(monkeypatch):
             repository.update_run(session, owner_id="owner", run_id=run_id)
 
 
-def test_measurements_are_owner_partitioned_and_snapshot_is_lock_safe(monkeypatch):
+def test_measurements_are_owner_partitioned_and_snapshot_is_lock_safe(
+        monkeypatch, admitted_backtest_receipt):
     """Two concurrent tenants must not overwrite each other's current gauges."""
     init_db(reset=True)
     with SessionLocal() as session:
         session.add_all([Organization(organization_id="a", name="A"),
                          Organization(organization_id="b", name="B")])
         session.commit()
-    a, b = _run("a", total=3), _run("b", total=7)
+    a, b = (_run("a", admitted_backtest_receipt, total=3),
+            _run("b", admitted_backtest_receipt, total=7))
     sweep._measure_set("inflight_datasets", 2, owner_id="a", run_id=a)
     sweep._measure_set("inflight_datasets", 5, owner_id="b", run_id=b)
     sweep._measure("batch_persists", owner_id="a", run_id=a)
@@ -419,19 +525,21 @@ def test_measurements_are_owner_partitioned_and_snapshot_is_lock_safe(monkeypatc
     assert b_snapshot["batch_persists"] >= 1
 
 
-def test_same_owner_concurrent_run_gauges_are_additive():
+def test_same_owner_concurrent_run_gauges_are_additive(admitted_backtest_receipt):
     """A later run must not overwrite a same-owner run's live gauge."""
     init_db(reset=True)
-    first, second = _run("owner"), _run("owner")
+    first, second = (_run("owner", admitted_backtest_receipt),
+                     _run("owner", admitted_backtest_receipt))
     sweep._measure_set("inflight_datasets", 2, owner_id="owner", run_id=first)
     sweep._measure_set("inflight_datasets", 5, owner_id="owner", run_id=second)
     assert sweep.measurement_snapshot(owner_id="owner")["inflight_datasets"] == 7
 
 
-def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):
+def test_batch_progress_and_heartbeat_roll_back_together_on_error(
+        monkeypatch, admitted_backtest_receipt):
     """Removing the one-transaction update would leave a durable partial batch."""
     init_db(reset=True)
-    run_id = _run("owner")
+    run_id = _run("owner", admitted_backtest_receipt)
     now = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as session:
         claim = repository.claim_run(session, owner_id="owner", run_id=run_id,
@@ -445,7 +553,7 @@ def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):
         try:
             repository.append_claimed_result_batch(
                 session, owner_id="owner", run_id=run_id, claim_token=claim.claim_token,
-                values=[_value("ONE")], now=now + dt.timedelta(seconds=1))
+                values=[_value("ONE", run_id=run_id)], now=now + dt.timedelta(seconds=1))
             session.commit()
         except RuntimeError:
             session.rollback()
@@ -456,10 +564,11 @@ def test_batch_progress_and_heartbeat_roll_back_together_on_error(monkeypatch):
         assert session.scalars(select(BacktestResult).where(BacktestResult.run_id == run_id)).all() == []
 
 
-def test_reconciliation_only_requeues_expired_claims():
+def test_reconciliation_only_requeues_expired_claims(admitted_backtest_receipt):
     """Replacing all running rows on restart would make the live lease disappear."""
     init_db(reset=True)
-    expired_id, live_id = _run("owner"), _run("owner")
+    expired_id, live_id = (_run("owner", admitted_backtest_receipt),
+                           _run("owner", admitted_backtest_receipt))
     now = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as session:
         repository.claim_run(session, owner_id="owner", run_id=expired_id,
@@ -468,8 +577,11 @@ def test_reconciliation_only_requeues_expired_claims():
                              claimed_by="live", now=now, lease_seconds=60)
         session.commit()
     with SessionLocal() as session:
-        assert repository.reconcile_expired_claims(
-            session, owner_id="owner", now=now + dt.timedelta(seconds=2)) == 1
+        frozen = repository.snapshot_claimable_runs(
+            session, owner_id="owner", now=now + dt.timedelta(seconds=2))
+        assert len(frozen) == 1
+        assert repository.reconcile_frozen_run(
+            session, frozen=frozen[0], now=now + dt.timedelta(seconds=2))[0]
         session.commit()
         expired = repository.get_run(session, owner_id="owner", run_id=expired_id)
         live = repository.get_run(session, owner_id="owner", run_id=live_id)
@@ -477,10 +589,12 @@ def test_reconciliation_only_requeues_expired_claims():
         assert live.status == "running" and live.claimed_by == "live"
 
 
-def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeypatch):
+def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(
+        monkeypatch, admitted_backtest_receipt):
     """Requeueing an expired cancellation strands an unclaimable queue row."""
     init_db(reset=True)
-    cancelled_id, retry_id = _run("owner", total=2), _run("owner")
+    cancelled_id, retry_id = (_run("owner", admitted_backtest_receipt, total=2),
+                              _run("owner", admitted_backtest_receipt))
     now = dt.datetime(2026, 8, 12, 10, tzinfo=dt.timezone.utc)
     with SessionLocal() as session:
         cancelled = repository.claim_run(
@@ -492,7 +606,7 @@ def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeyp
         assert cancelled is not None and retry is not None
         assert repository.append_claimed_result_batch(
             session, owner_id="owner", run_id=cancelled_id,
-            claim_token=cancelled.claim_token, values=[_value("NIFTY")],
+            claim_token=cancelled.claim_token, values=[_value("NIFTY", run_id=cancelled_id)],
             now=now + dt.timedelta(milliseconds=100), lease_seconds=1)
         assert repository.request_cancel(
             session, owner_id="owner", run_id=cancelled_id,
@@ -501,8 +615,11 @@ def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeyp
 
     recovered_at = now + dt.timedelta(seconds=2)
     with SessionLocal() as session:
-        assert repository.reconcile_expired_claims(
-            session, owner_id="owner", now=recovered_at) == 2
+        frozen = repository.snapshot_claimable_runs(
+            session, owner_id="owner", now=recovered_at)
+        assert len(frozen) == 2
+        assert all(repository.reconcile_frozen_run(
+            session, frozen=row, now=recovered_at)[0] for row in frozen)
         session.commit()
 
     with SessionLocal() as session:
@@ -532,28 +649,21 @@ def test_expired_cancelled_claim_terminalizes_without_consuming_capacity(monkeyp
             session, owner_id="owner", claimed_by="another", now=recovered_at) is None
 
 
-def test_repository_reconciler_requires_owner_scope_and_only_delegates_to_expiry_recovery(
-        monkeypatch):
-    """A live lease remains recoverable only through its explicit owner and expiry contract."""
-    parameters = inspect.signature(repository.reconcile_stale_runs).parameters
-    assert parameters["owner_id"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert parameters["owner_id"].default is inspect.Parameter.empty
-    calls = []
-    monkeypatch.setattr(repository, "reconcile_expired_claims",
-                        lambda session, *, owner_id: calls.append((session, owner_id)) or 3)
-    marker = object()
-    assert repository.reconcile_stale_runs(marker, owner_id="owner.a") == 3
-    assert calls == [(marker, "owner.a")]
+def test_owner_wide_bulk_reconcilers_are_retired():
+    """Only a caller-owned frozen-ID reconciliation path may mutate restart work."""
+    assert not hasattr(repository, "reconcile_expired_claims")
+    assert not hasattr(repository, "reconcile_stale_runs")
+    assert not hasattr(sweep, "reconcile_stale_runs")
 
 
-def test_admission_is_per_workload_not_a_process_global(monkeypatch):
+def test_admission_is_per_workload_not_a_process_global(monkeypatch,
+                                                         admitted_backtest_receipt):
     """The previous `_running` guard rejected this before either run had work."""
     init_db(reset=True)
     with SessionLocal() as session:
         session.add_all([Organization(organization_id="a", name="A"),
                          Organization(organization_id="b", name="B")])
         session.commit()
-    monkeypatch.setattr(sweep, "reconcile_stale_runs", lambda **_kw: 0)
     # The guard is intentionally set without a live worker. Durable admission,
     # not that unrelated process state, decides whether this new workload may run.
     monkeypatch.setattr(sweep, "_running", True)
@@ -562,11 +672,14 @@ def test_admission_is_per_workload_not_a_process_global(monkeypatch):
         def start(self): pass
         def join(self): pass
     monkeypatch.setattr(sweep.threading, "Thread", _Thread)
-    run_id = sweep.start_sweep(owner_id="a", intervals=["day"], instruments=["NIFTY"])
+    identity = admitted_backtest_receipt(owner_id="a")
+    run_id = sweep.start_sweep(owner_id="a", intervals=["day"], instruments=["NIFTY"],
+                               **identity)
     assert run_id > 0
 
 
-def test_zero_host_budget_rejects_before_provider_or_worker_creation(monkeypatch):
+def test_zero_host_budget_rejects_before_provider_or_worker_creation(
+        monkeypatch, admitted_backtest_receipt):
     """Deleting the host budget predicate would start work despite explicit overload."""
     init_db(reset=True)
     settings = type("Settings", (), {
@@ -580,8 +693,10 @@ def test_zero_host_budget_rejects_before_provider_or_worker_creation(monkeypatch
         def get_candles(self, *args, **kwargs):
             reads["count"] += 1
     monkeypatch.setattr(sweep, "get_provider", lambda: _Provider())
+    identity = admitted_backtest_receipt()
     try:
-        sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=["NIFTY"])
+        sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=["NIFTY"],
+                          **identity)
     except sweep.WorkloadAdmissionError as exc:
         assert exc.reason == "host_active_jobs"
     else:
@@ -589,7 +704,8 @@ def test_zero_host_budget_rejects_before_provider_or_worker_creation(monkeypatch
     assert reads["count"] == 0
 
 
-def test_concurrent_admission_reserves_exact_host_capacity_once(monkeypatch):
+def test_concurrent_admission_reserves_exact_host_capacity_once(monkeypatch,
+                                                                 admitted_backtest_receipt):
     """Removing SQLite's reservation transaction can admit two one-slot jobs."""
     import threading
     real_thread = threading.Thread
@@ -609,13 +725,14 @@ def test_concurrent_admission_reserves_exact_host_capacity_once(monkeypatch):
         def join(self): pass
         def is_alive(self): return False
     monkeypatch.setattr(sweep.threading, "Thread", _Thread)
+    identities = {owner: admitted_backtest_receipt(owner_id=owner) for owner in ("a", "b")}
     gate = threading.Barrier(2)
     outcomes = []
     def submit(owner):
         gate.wait()
         try:
             outcomes.append((owner, "ok", sweep.start_sweep(
-                owner_id=owner, intervals=["day"], instruments=["NIFTY"])))
+                owner_id=owner, intervals=["day"], instruments=["NIFTY"], **identities[owner])))
         except sweep.WorkloadAdmissionError as exc:
             outcomes.append((owner, "rejected", exc.reason))
     threads = [real_thread(target=submit, args=(owner,)) for owner in ("a", "b")]
@@ -625,7 +742,8 @@ def test_concurrent_admission_reserves_exact_host_capacity_once(monkeypatch):
         ["host_active_jobs"], ["host_worker_slots"])
 
 
-def test_launch_failure_releases_its_own_claimed_capacity(monkeypatch):
+def test_launch_failure_releases_its_own_claimed_capacity(monkeypatch,
+                                                          admitted_backtest_receipt):
     """A failure after enqueue must not leave an invisible forever-running lease."""
     init_db(reset=True)
     class _BrokenThread:
@@ -633,8 +751,10 @@ def test_launch_failure_releases_its_own_claimed_capacity(monkeypatch):
         def start(self): raise RuntimeError("thread start exploded")
         def is_alive(self): return False
     monkeypatch.setattr(sweep.threading, "Thread", _BrokenThread)
+    identity = admitted_backtest_receipt()
     try:
-        sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=["NIFTY"])
+        sweep.start_sweep(owner_id="owner", intervals=["day"], instruments=["NIFTY"],
+                          **identity)
     except RuntimeError as exc:
         assert "thread start exploded" in str(exc)
     with SessionLocal() as session:
@@ -642,7 +762,8 @@ def test_launch_failure_releases_its_own_claimed_capacity(monkeypatch):
         assert run.status == "error" and run.claim_token is not None
 
 
-def test_cancel_foreign_and_absent_runs_have_the_same_owner_local_response(monkeypatch):
+def test_cancel_foreign_and_absent_runs_have_the_same_owner_local_response(
+        monkeypatch, admitted_backtest_receipt):
     """A missing owner predicate would let a guessed id cancel another tenant's run."""
     from app.api.principal import Principal, get_principal
     from app.main import app
@@ -650,7 +771,7 @@ def test_cancel_foreign_and_absent_runs_have_the_same_owner_local_response(monke
     with SessionLocal() as session:
         session.add_all([Organization(organization_id="a", name="A"),
                          Organization(organization_id="b", name="B")]); session.commit()
-    foreign = _run("a")
+    foreign = _run("a", admitted_backtest_receipt)
     from app.api import backtest_routes
     monkeypatch.setattr(backtest_routes, "owner_id_for", lambda principal: principal.id)
     app.dependency_overrides[get_principal] = lambda: Principal(

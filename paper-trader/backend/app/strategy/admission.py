@@ -7,7 +7,8 @@ are complete enough to be presented to that evaluator.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+import datetime as dt
+from dataclasses import InitVar, dataclass
 from enum import Enum
 import math
 from types import MappingProxyType
@@ -23,9 +24,26 @@ from app.ir.implementation_identity import (
     implementation_address,
 )
 from app.ir.registry import DependencyBoundary, PlatformRegistry
-from app.ir.resolve import ResolvedGraph, ResolutionError, resolve
+from app.ir.formats.v2 import canonical_document, content_address_for, graph_address_for
+from app.ir.first_party.analytical_v2.contracts import ContractInputBindings
+from app.ir.resolve import (
+    ResolvedGraph, ResolvedV2Graph, ResolutionError, resolve, resolve_v2,
+)
+from app.ir.v2_graph_versions import (
+    PersistedPhase4Artifact,
+    PHASE4_SCHEME,
+    V2GraphFacts,
+    V2GraphVerificationError,
+)
 from app.ir.schema import is_content_address
 from app.ir.validate import validate
+from app.market_data.capability import (
+    CapabilityAssessment,
+    CapabilityRefusal,
+    _require_canonical_assessment,
+    verify_assessment_coverage,
+)
+from app.market_data.requirements import DataRequirementPlan, compile_data_requirement_plan
 from app.strategy.ir_adapter import (
     InvalidRiskModel,
     UnmappableGraph,
@@ -33,6 +51,48 @@ from app.strategy.ir_adapter import (
     validate_risk_model,
 )
 from app.strategy.registry.base import CANONICAL_COLUMNS, Strategy
+
+
+VERIFIED_GRAPH = "VERIFIED_GRAPH"
+NON_GRAPH = "NON_GRAPH"
+LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+ATTRIBUTION_STATES = (VERIFIED_GRAPH, NON_GRAPH, LEGACY_UNVERIFIED)
+GRAPH_ATTRIBUTION_UNVERIFIED = "GRAPH_ATTRIBUTION_UNVERIFIED"
+GRAPH_ATTRIBUTION_MISMATCH = "GRAPH_ATTRIBUTION_MISMATCH"
+
+
+class GraphAttributionRefused(ValueError):
+    """Stable pre-effect refusal for an incomplete or conflicting source tuple."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def require_attribution_tuple(*, strategy_key: str | None,
+                              strategy_version: str | None,
+                              graph_address: str | None,
+                              admission_address: str | None,
+                              attribution_state: str | None,
+                              allow_legacy: bool = False) -> None:
+    """Validate source/state coherence without inferring authority from value shape."""
+    if attribution_state not in ATTRIBUTION_STATES:
+        raise GraphAttributionRefused(GRAPH_ATTRIBUTION_UNVERIFIED)
+    graph_source = isinstance(strategy_key, str) and strategy_key.startswith("ir.")
+    if attribution_state == VERIFIED_GRAPH:
+        if (not graph_source or not isinstance(strategy_version, str)
+                or not strategy_version.isdecimal()
+                or strategy_version.startswith("0")
+                or not is_content_address(graph_address)
+                or not is_content_address(admission_address)):
+            raise GraphAttributionRefused(GRAPH_ATTRIBUTION_UNVERIFIED)
+        return
+    if attribution_state == NON_GRAPH:
+        if graph_source or graph_address is not None:
+            raise GraphAttributionRefused(GRAPH_ATTRIBUTION_MISMATCH)
+        return
+    if not allow_legacy or graph_address is not None:
+        raise GraphAttributionRefused(GRAPH_ATTRIBUTION_UNVERIFIED)
 
 
 class AdmissionRefusalCode(str, Enum):
@@ -278,6 +338,335 @@ class ParityEvidence:
 
 
 @dataclass(frozen=True)
+class V2AdmissionEvidence:
+    """Externally produced evidence identities required by an IR-v2 receipt.
+
+    The values are identities only.  This admission layer does not evaluate a
+    v2 graph, manufacture legacy evidence, or turn the receipt into execution
+    permission.
+    """
+    input_address: str
+    dataset_address: str
+    fee_address: str
+    slippage_address: str
+    risk_address: str
+    parity_address: str
+    causal_evidence_address: str
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            if not is_content_address(getattr(self, name)):
+                raise ValueError(f"{name} must be a canonical content address")
+
+    def to_dict(self) -> dict[str, str]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True)
+class V2AdmittedStrategyArtifact:
+    """Immutable receipt for one resolved Closed Component IR v2 document."""
+    owner_id: str
+    graph_identifier: str
+    graph_version: int
+    document: Mapping[str, Any]
+    registry_snapshot: Mapping[str, JSONValue]
+    resolved_topology: Mapping[str, JSONValue]
+    evidence: V2AdmissionEvidence
+    scheme: str = "strategy-admission/2"
+    contract_suite: str = "closed-component-ir/2"
+    parity_suite: str = "prefix-vector-parity/1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.owner_id, str) or not self.owner_id:
+            raise ValueError("owner_id must be non-empty")
+        if not isinstance(self.graph_identifier, str) or not self.graph_identifier:
+            raise ValueError("graph_identifier must be non-empty")
+        if isinstance(self.graph_version, bool) or not isinstance(self.graph_version, int) or self.graph_version < 1:
+            raise ValueError("graph_version must be >= 1")
+        object.__setattr__(self, "document", _mapping(self.document, label="v2_document"))
+        object.__setattr__(self, "registry_snapshot", _mapping(self.registry_snapshot, label="registry_snapshot"))
+        object.__setattr__(self, "resolved_topology", _mapping(self.resolved_topology, label="resolved_topology"))
+
+    @property
+    def content_address(self) -> str:
+        return content_address(_plain_json(self.document))
+
+    @property
+    def graph_address(self) -> str:
+        return content_address({"identity_scheme_version": 1, "graph": {
+            key: _plain_json(self.document)[key]
+            for key in ("format_version", "graph_inputs", "graph_outputs", "nodes", "edges")
+        }})
+
+    @property
+    def format_version(self) -> int:
+        return 2
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        return {
+            "content_address": self.content_address,
+            "contract_suite": self.contract_suite,
+            "document": _plain_json(self.document),
+            "evidence": self.evidence.to_dict(),
+            "format_version": 2,
+            "graph_address": self.graph_address,
+            "graph_identifier": self.graph_identifier,
+            "graph_version": self.graph_version,
+            "owner_id": self.owner_id,
+            "parity_suite": self.parity_suite,
+            "registry_snapshot": _plain_json(self.registry_snapshot),
+            "resolved_topology": _plain_json(self.resolved_topology),
+            "scheme": self.scheme,
+        }
+
+    @property
+    def admission_address(self) -> str:
+        return content_address(self.to_dict())
+
+
+def _v2_registry_snapshot(registry: PlatformRegistry, *, uses_phase4_declarations: bool = False) -> Mapping[str, JSONValue]:
+    if uses_phase4_declarations:
+        payload = _plain_json(registry.registry_snapshot_payload)
+        address = registry.registry_snapshot_address
+        if content_address(payload) != address:
+            raise AdmissionRefused(AdmissionRefusalCode.ARTEFACT_MISMATCH,
+                                   "opted-in registry snapshot is stale or forged")
+        return {"address": address, "snapshot": payload}
+    types = [_plain_json(value) for _, value in sorted(registry.v2_types.items())]
+    components = [_plain_json(value) for _, value in sorted(registry.v2_components.items())]
+    identities = [
+        {"component_id": key[0], "component_version": key[1], "implementation_address": address}
+        for key, address in sorted(registry.v2_implementation_identities.items())
+    ]
+    if registry.v2_components and not identities:
+        raise AdmissionRefused(
+            AdmissionRefusalCode.IR_INVALID,
+            "v2 registry has no executable implementation identity closure",
+        )
+    snapshot = {"components": components, "implementation_identities": identities, "types": types}
+    return {"address": content_address(snapshot), "snapshot": snapshot}
+
+
+def _v2_topology(resolved: ResolvedV2Graph) -> Mapping[str, JSONValue]:
+    return {
+        "bundles": [{"assembly": bundle.assembly, "default": _plain_json(bundle.default),
+                     "default_provenance": bundle.default_provenance,
+                     "members": [{"binding": _plain_json(member.binding), "edge_id": member.edge_id,
+                                  "provenance": _plain_json(member.provenance), "source": _plain_json(member.source),
+                                  "type_ref": _plain_json(member.type_ref)} for member in bundle.members],
+                     "target": _plain_json(bundle.target)}
+                    for _, bundle in sorted(resolved.bundles.items())],
+        "graph_inputs": _plain_json(resolved.graph_inputs),
+        "nodes": [{"component": {"component_id": node.component[0], "component_version": node.component[1]},
+                   "node_id": node.node_id, "parameter_provenance": _plain_json(node.parameter_provenance),
+                   "parameters": _plain_json(node.parameters)} for node in resolved.nodes],
+        "outputs": {name: {"binding": _plain_json(member.binding), "edge_id": member.edge_id,
+                            "provenance": _plain_json(member.provenance), "source": _plain_json(member.source),
+                            "type_ref": _plain_json(member.type_ref)} for name, member in resolved.outputs.items()},
+    }
+
+
+def _admit_v2_strategy_and_resolved(
+    *, owner_id: str, document: Mapping[str, Any], registry: PlatformRegistry,
+    evidence: V2AdmissionEvidence,
+) -> tuple[V2AdmittedStrategyArtifact, ResolvedV2Graph]:
+    """Build one V2 receipt and return its exact already-resolved graph."""
+    try:
+        canonical = canonical_document(document, registry)
+        content = content_address_for(canonical, registry)
+        graph = graph_address_for(canonical, registry)
+        resolved = resolve_v2(canonical, registry)
+        topology = _v2_topology(resolved)
+        # Preserve the legacy receipt for graphs which do not consume a Phase 4
+        # declaration, even when the registry also contains unrelated ones.
+        uses_phase4_declarations = any(node.declaration_address is not None for node in resolved.nodes)
+    except (ValueError, ResolutionError) as exc:
+        raise AdmissionRefused(AdmissionRefusalCode.IR_INVALID, "v2 document cannot be admitted") from exc
+    if content != content_address(canonical) or graph != content_address({"identity_scheme_version": 1, "graph": {
+            key: canonical[key] for key in ("format_version", "graph_inputs", "graph_outputs", "nodes", "edges")}}):
+        raise AdmissionRefused(AdmissionRefusalCode.ARTEFACT_MISMATCH, "v2 canonical identity mismatch")
+    artifact = V2AdmittedStrategyArtifact(
+        owner_id, canonical["strategy_id"], canonical["strategy_version"],
+        canonical,
+        _v2_registry_snapshot(
+            registry, uses_phase4_declarations=uses_phase4_declarations
+        ),
+        topology, evidence,
+    )
+    return artifact, resolved
+
+
+def admit_v2_strategy(*, owner_id: str, document: Mapping[str, Any], registry: PlatformRegistry,
+                      evidence: V2AdmissionEvidence) -> V2AdmittedStrategyArtifact:
+    """Create a v2 evidence receipt from only canonical document and resolver facts."""
+    artifact, _resolved = _admit_v2_strategy_and_resolved(
+        owner_id=owner_id, document=document, registry=registry, evidence=evidence
+    )
+    return artifact
+
+
+_PHASE4_CONSTRUCTION_TOKEN = object()
+
+_PHASE4_REGISTRY_SNAPSHOT_KEYS = frozenset({
+    "v1_components", "v1_bodies", "v1_implementations", "v2_types",
+    "v2_components", "v2_implementations", "data_requirement_declarations",
+})
+_PHASE4_CONTRACT_REGISTRY_SNAPSHOT_KEYS = frozenset({
+    *_PHASE4_REGISTRY_SNAPSHOT_KEYS, "node_contracts", "contract_bindings",
+})
+
+
+def is_closed_phase4_registry_snapshot(
+    snapshot: Any, *, expected_address: Any,
+) -> bool:
+    """Recognize only the two immutable Phase 4 registry snapshot shapes."""
+    if (
+        not isinstance(snapshot, Mapping)
+        or set(snapshot) != {"address", "snapshot"}
+        or not is_content_address(expected_address)
+        or snapshot.get("address") != expected_address
+    ):
+        return False
+    payload = snapshot.get("snapshot")
+    if not isinstance(payload, Mapping) or set(payload) not in {
+        _PHASE4_REGISTRY_SNAPSHOT_KEYS,
+        _PHASE4_CONTRACT_REGISTRY_SNAPSHOT_KEYS,
+    }:
+        return False
+    if not isinstance(payload["data_requirement_declarations"], list):
+        return False
+    if (
+        set(payload) == _PHASE4_CONTRACT_REGISTRY_SNAPSHOT_KEYS
+        and any(not isinstance(payload[key], list) for key in (
+            "node_contracts", "contract_bindings"
+        ))
+    ):
+        return False
+    return (
+        bool(payload["data_requirement_declarations"])
+        and content_address(_plain_json(payload)) == expected_address
+    )
+
+@dataclass(frozen=True)
+class Phase4V2AdmittedStrategyArtifact:
+    """An immutable data-capability binding around an untouched V2 receipt."""
+    base_v2_admission: V2AdmittedStrategyArtifact
+    phase4_data_binding: Mapping[str, JSONValue]
+    assessment: CapabilityAssessment
+    _construction_token: InitVar[object | None] = None
+    scheme: str = "strategy-admission/phase4-data/1"
+    contract_suite: str = "closed-component-ir/2"
+    parity_suite: str = "prefix-vector-parity/1"
+
+    def __post_init__(self, _construction_token: object | None) -> None:
+        if _construction_token is not _PHASE4_CONSTRUCTION_TOKEN:
+            raise ValueError("Phase 4 wrappers may only be constructed by the admission seam")
+        base = self.base_v2_admission
+        if content_address(base.to_dict()) != base.admission_address:
+            raise ValueError("base V2 receipt address is stale")
+        binding = _mapping(self.phase4_data_binding, label="phase4_data_binding")
+        expected = {"owner_id", "mode", "authored_ir_address", "registry_snapshot_address", "resolved_graph_address", "implementation_closure_address", "declaration_addresses", "plan_address", "capability_assessment_address", "dataset_manifest_address", "market_truth_snapshot_address", "evaluation_policy_address"}
+        if set(binding) != expected or binding["owner_id"] != base.owner_id or binding["authored_ir_address"] != base.content_address or binding["mode"] not in {"RESEARCH", "PAPER", "LIVE"}:
+            raise ValueError("Phase 4 binding is malformed or does not match base receipt")
+        addresses = expected - {"owner_id", "mode", "declaration_addresses"}
+        if any(not is_content_address(binding[key]) for key in addresses):
+            raise ValueError("Phase 4 binding has invalid addresses")
+        declarations = binding["declaration_addresses"]
+        if not isinstance(declarations, tuple) or tuple(sorted(declarations)) != declarations or len(set(declarations)) != len(declarations) or any(not is_content_address(value) for value in declarations):
+            raise ValueError("Phase 4 declaration addresses are malformed")
+        snapshot = base.registry_snapshot
+        if snapshot.get("address") != binding["registry_snapshot_address"] or content_address(_plain_json(snapshot.get("snapshot"))) != binding["registry_snapshot_address"]:
+            raise ValueError("base receipt does not embed the full bound registry snapshot")
+        assessment = self.assessment
+        if not isinstance(assessment, CapabilityAssessment):
+            raise ValueError("Phase 4 assessment has an invalid type")
+        _require_canonical_assessment(assessment)
+        if (assessment.owner_id != binding["owner_id"] or assessment.mode != binding["mode"] or assessment.plan_address != binding["plan_address"] or assessment.registry_snapshot_address != binding["registry_snapshot_address"] or assessment.authority_address != binding["capability_assessment_address"] or assessment.dataset_manifest_address != binding["dataset_manifest_address"] or assessment.market_truth_snapshot_address != binding["market_truth_snapshot_address"] or assessment.evaluation_policy_address != binding["evaluation_policy_address"] or any(row["result"] != "SATISFIED" for row in assessment.requirement_results)):
+            raise ValueError("Phase 4 binding does not match validated assessment")
+        object.__setattr__(self, "phase4_data_binding", binding)
+
+    @property
+    def owner_id(self) -> str: return self.base_v2_admission.owner_id
+    @property
+    def graph_identifier(self) -> str: return self.base_v2_admission.graph_identifier
+    @property
+    def graph_version(self) -> int: return self.base_v2_admission.graph_version
+    @property
+    def graph_address(self) -> str: return self.base_v2_admission.graph_address
+    @property
+    def content_address(self) -> str: return self.base_v2_admission.content_address
+    @property
+    def format_version(self) -> int: return 2
+    @property
+    def admission_address(self) -> str: return content_address(self.to_dict())
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        from app.market_data.capability import capability_assessment_authority_envelope
+
+        return {"scheme": self.scheme, "contract_suite": self.contract_suite, "parity_suite": self.parity_suite, "format_version": 2, "owner_id": self.owner_id, "graph_identifier": self.graph_identifier, "graph_version": self.graph_version, "graph_address": self.graph_address, "content_address": self.content_address, "base_v2_admission": self.base_v2_admission.to_dict(), "base_v2_admission_address": self.base_v2_admission.admission_address, "phase4_data_binding": _plain_json(self.phase4_data_binding), "capability_assessment": _plain_json(capability_assessment_authority_envelope(self.assessment))}
+
+
+def admit_phase4_v2_strategy(*, owner_id: str, mode: str, document: Mapping[str, Any], registry: PlatformRegistry,
+                             evidence: V2AdmissionEvidence, plan: DataRequirementPlan,
+                             input_bindings: ContractInputBindings | None = None,
+                             assessment_address: str, dataset_manifest_address: str,
+                             market_truth_snapshot_address: str, evaluation_policy_address: str,
+                             research_session, execution_session,
+                             at_time: dt.datetime) -> Phase4V2AdmittedStrategyArtifact:
+    """Construct the sole Phase 4 wrapper after fresh two-plane reconstruction."""
+    if not registry.data_requirement_declarations:
+        raise AdmissionRefused(AdmissionRefusalCode.ARTEFACT_MISMATCH, "Phase 4 admission requires an opted-in registry")
+    try:
+        base, resolved = _admit_v2_strategy_and_resolved(
+            owner_id=owner_id, document=document, registry=registry,
+            evidence=evidence,
+        )
+        canonical_plan = compile_data_requirement_plan(
+            resolved, registry=registry, input_bindings=input_bindings
+        )
+        from app.market_data.authority import load_capability_assessment
+        from research.domain.strategy_admissions import load_verified_dataset_authority
+        dataset = load_verified_dataset_authority(
+            research_session, owner_id=owner_id,
+            manifest_address=dataset_manifest_address, execution_session=execution_session,
+            at_time=at_time)
+        assessment = load_capability_assessment(
+            execution_session, assessment_address, plan=canonical_plan, at_time=at_time)
+        _require_canonical_assessment(assessment)
+        manifest = dataset.manifest
+        from app.market_data.authority import load_capability_profile
+        from app.market_truth.authority import load_market_truth_snapshot
+        from app.market_truth.identity import load_provider_identity
+        load_capability_profile(
+            execution_session, manifest.capability_profile_address, at_time=at_time)
+        for truth_address in manifest.truth_snapshot_addresses:
+            load_market_truth_snapshot(execution_session, truth_address)
+        for contract_address in manifest.provider_contract_addresses:
+            entity, product, contract = load_provider_identity(
+                execution_session, contract_address)
+            if (entity.address not in manifest.provider_entity_addresses
+                    or product.address not in manifest.provider_product_addresses
+                    or contract.owner_id != owner_id or contract.mode != mode):
+                raise CapabilityRefusal("dataset provider chain does not match admission")
+        if (plan != canonical_plan or assessment.authority_address != assessment_address
+                or manifest.owner_id != owner_id or manifest.mode != mode
+                or manifest.manifest_address != dataset_manifest_address
+                or assessment.owner_id != owner_id or assessment.mode != mode
+                or assessment.plan_address != plan.plan_address
+                or assessment.registry_snapshot_address != plan.registry_snapshot_address
+                or assessment.dataset_manifest_address != dataset_manifest_address
+                or assessment.market_truth_snapshot_address != market_truth_snapshot_address
+                or assessment.evaluation_policy_address != evaluation_policy_address
+                or any(row["result"] != "SATISFIED" for row in assessment.requirement_results)):
+            raise CapabilityRefusal("Phase 4 facts disagree or capability is unavailable")
+        verify_assessment_coverage(assessment, canonical_plan)
+        binding = {"owner_id": owner_id, "mode": mode, "authored_ir_address": plan.authored_ir_address, "registry_snapshot_address": plan.registry_snapshot_address, "resolved_graph_address": plan.resolved_graph_address, "implementation_closure_address": plan.implementation_closure_address, "declaration_addresses": list(plan.declaration_addresses), "plan_address": plan.plan_address, "capability_assessment_address": assessment.authority_address, "dataset_manifest_address": dataset_manifest_address, "market_truth_snapshot_address": market_truth_snapshot_address, "evaluation_policy_address": evaluation_policy_address}
+        return Phase4V2AdmittedStrategyArtifact(base, binding, assessment, _PHASE4_CONSTRUCTION_TOKEN)
+    except (CapabilityRefusal, ValueError) as exc:
+        raise AdmissionRefused(AdmissionRefusalCode.ARTEFACT_MISMATCH, "Phase 4 capability binding refused") from exc
+
+
+@dataclass(frozen=True)
 class AdmittedStrategyArtifact:
     owner_id: str
     source: str
@@ -354,6 +743,36 @@ class AdmittedStrategyArtifact:
     @property
     def admission_address(self) -> str:
         return content_address(self.to_dict())
+
+
+def matches_execution_identity(
+    artifact: AdmittedStrategyArtifact,
+    *,
+    strategy_key: str | None,
+    strategy_version: str | None,
+    graph_address: str | None = None,
+    attribution_state: str | None = None,
+) -> bool:
+    """Match the identity a money row records to one exact admitted artefact.
+
+    Native IR authority records the graph namespace and immutable graph address.
+    Handwritten adapters retain their separately admitted source key and version while
+    executing the equivalent IR runtime.
+    """
+    if artifact.source == "ir_graph":
+        return (
+            strategy_key == f"ir.{artifact.graph_identifier}"
+            and strategy_version == str(artifact.graph_version)
+            and graph_address == artifact.graph_address
+            and attribution_state == VERIFIED_GRAPH
+        )
+    source = artifact.source_evidence
+    return (
+        strategy_key == source.strategy_key
+        and strategy_version == source.strategy_version
+        and graph_address is None
+        and attribution_state == NON_GRAPH
+    )
 
 
 def artifact_from_dict(document: Mapping[str, Any]) -> AdmittedStrategyArtifact:
@@ -699,7 +1118,7 @@ def _inspect_ir(*, owner_id: str, source_input: IRGraphAdmissionInput,
             _plain_json(source_input.risk_model), f"ir.{resolved.identifier}")
     except InvalidRiskModel as exc:
         raise AdmissionRefused(AdmissionRefusalCode.ARTEFACT_MISMATCH, str(exc)) from exc
-    provenance = derive_input_provenance(resolved)
+    input_provenance = derive_input_provenance(resolved)
     components = [ResolvedComponentIdentity(
         item.node_path, item.definition[0], item.definition[1],
         item.body_ref, item.params) for item in resolved.components]
@@ -712,7 +1131,7 @@ def _inspect_ir(*, owner_id: str, source_input: IRGraphAdmissionInput,
         graph_address=content_address(graph_data),
         resolved_components=tuple(sorted(
             components, key=lambda item: item.node_path)),
-        input_provenance=provenance,
+        input_provenance=input_provenance,
         bound_parameters=parameters,
         kernels=tuple(identity for _, identity in sorted(kernels)),
         canonical_mapping=mapping,
@@ -1070,6 +1489,373 @@ __all__ = [
     "InputProvenance", "ParityEvidence", "ResolvedComponentIdentity",
     "SourceEvidence", "StructuralAdmission", "StructuralDecision",
     "admit_strategy", "admitted_artifact", "artifact_from_dict", "canonical_decisions",
-    "derive_input_provenance", "inspect_strategy", "runtime_for_admitted",
+    "derive_input_provenance", "inspect_strategy", "matches_execution_identity",
+    "runtime_for_admitted",
     "verify_admission",
+]
+
+
+# ── Phase-4 v2 reconstruction (moved from app/ir per layering: strategy→ir only) ──
+
+from app.ir.v2_graph_versions import (  # noqa: E402 — seam-adjacent helpers
+    _SATISFIED_REASON,
+    _freeze as _v2_freeze,
+    _plain as _v2_plain,
+)
+from app.ir.hashing import canonical_json as _v2_canonical_json  # noqa: E402
+
+_plain, _freeze, canonical_json = _v2_plain, _v2_freeze, _v2_canonical_json
+
+def derive_v2_graph_facts(artifact) -> "V2GraphFacts":
+    """Derive the sole graph record from a constructor-authorized wrapper."""
+    from app.ir.v2_graph_versions import (
+        V2GraphVerificationError,
+        _freeze as _v2_freeze,
+        _plain as _v2_plain,
+        _verify_graph_facts,
+    )
+    _plain, _freeze = _v2_plain, _v2_freeze
+    from app.ir.hashing import canonical_json as _canonical_json
+    canonical_json = _canonical_json
+
+    from app.ir.v2_graph_versions import PHASE4_BOUND_SCHEME
+    expected_type = {PHASE4_SCHEME: Phase4V2AdmittedStrategyArtifact,
+                     PHASE4_BOUND_SCHEME: Phase4BoundV2AdmittedStrategyArtifact}.get(getattr(artifact, "scheme", None))
+    if type(artifact) is not expected_type:
+        raise V2GraphVerificationError(
+            "v2 graph writes require the constructor-authorized Phase 4 artifact"
+        )
+    base = artifact.base_v2_admission
+    document = _plain(base.document)
+    artifact_json = canonical_json(document)
+    facts = V2GraphFacts(
+        owner_id=artifact.owner_id,
+        graph_identifier=artifact.graph_identifier,
+        graph_version=artifact.graph_version,
+        artifact_json=artifact_json,
+        format_version=2,
+        content_address=artifact.content_address,
+        graph_address=artifact.graph_address,
+        registry_snapshot_address=artifact.phase4_data_binding[
+            "registry_snapshot_address"
+        ],
+    )
+    _verify_graph_facts(facts, document=document)
+    return facts
+
+
+def _require_assessment(document: Any, *, binding: Mapping[str, Any], plan: Any) -> Mapping[str, Any]:
+    from app.market_data.capability import (
+        CapabilityRefusal,
+        require_capability_assessment_authority_envelope,
+    )
+
+    try:
+        envelope, address = require_capability_assessment_authority_envelope(document)
+    except CapabilityRefusal as exc:
+        raise V2GraphVerificationError(
+            "persisted capability assessment authority is invalid"
+        ) from exc
+    assessment = envelope["fact"]
+    if (
+        assessment["owner_id"] != binding["owner_id"]
+        or assessment["mode"] != binding["mode"]
+        or address != binding["capability_assessment_address"]
+    ):
+        raise V2GraphVerificationError("persisted capability assessment identity is stale")
+    repeated = {
+        "plan_address": "plan_address",
+        "registry_snapshot_address": "registry_snapshot_address",
+        "dataset_manifest_address": "dataset_manifest_address",
+        "market_truth_snapshot_address": "market_truth_snapshot_address",
+        "evaluation_policy_address": "evaluation_policy_address",
+    }
+    if any(assessment[left] != binding[right] for left, right in repeated.items()):
+        raise V2GraphVerificationError("persisted capability assessment binding is stale")
+    rows = assessment["requirement_results"]
+    if not isinstance(rows, list):
+        raise V2GraphVerificationError("persisted assessment results are malformed")
+    selectors: list[str] = []
+    for row in rows:
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != {"selector", "result", "reason"}
+            or not is_content_address(row.get("selector"))
+            or row.get("result") != "SATISFIED"
+            or row.get("reason") != _SATISFIED_REASON
+        ):
+            raise V2GraphVerificationError("persisted assessment result is not satisfied")
+        selectors.append(row["selector"])
+    if selectors != sorted(selectors) or len(selectors) != len(set(selectors)):
+        raise V2GraphVerificationError("persisted assessment selectors are not canonical")
+    expected_selectors = sorted(content_address({
+        "authored_node_id": record["authored_node_id"],
+        "lowered_path": list(record["lowered_path"]),
+        "leaf_component": {
+            "component_id": record["leaf_component"][0],
+            "component_version": record["leaf_component"][1],
+        },
+        "requirement": _plain(record["requirement"]),
+    }) for record in plan.requirements)
+    if selectors != expected_selectors:
+        raise V2GraphVerificationError(
+            "persisted assessment coverage does not match the compiled plan"
+        )
+    return _freeze(envelope)
+
+
+def _reconcile_phase4_base(*, owner_id: str, document: Mapping[str, Any],
+                           registry: PlatformRegistry):
+    """Re-run admission over a persisted base receipt's exact bytes."""
+    evidence = V2AdmissionEvidence(**document["evidence"])
+    return _admit_v2_strategy_and_resolved(
+        owner_id=owner_id,
+        document=document["document"],
+        registry=registry,
+        evidence=evidence,
+    )
+
+
+def reconstruct_phase4_artifact(
+    document: Mapping[str, Any], *, owner_id: str, registry: Any,
+    input_bindings: ContractInputBindings | None = None,
+) -> PersistedPhase4Artifact:
+    """Verify a Phase 4 receipt after restart without minting write authority."""
+    if not isinstance(document, Mapping) or document.get("scheme") != PHASE4_SCHEME:
+        raise V2GraphVerificationError("not a Phase 4 v2 receipt")
+    receipt = _plain(document)
+    required = {
+        "scheme", "contract_suite", "parity_suite", "format_version", "owner_id",
+        "graph_identifier", "graph_version", "graph_address", "content_address",
+        "base_v2_admission", "base_v2_admission_address", "phase4_data_binding",
+        "capability_assessment",
+    }
+    if set(receipt) != required:
+        raise V2GraphVerificationError("Phase 4 v2 receipt is not closed")
+    if (
+        receipt["scheme"] != PHASE4_SCHEME
+        or receipt["contract_suite"] != "closed-component-ir/2"
+        or receipt["parity_suite"] != "prefix-vector-parity/1"
+        or receipt["format_version"] != 2
+    ):
+        raise V2GraphVerificationError("Phase 4 v2 receipt contract is stale")
+    base_document = receipt["base_v2_admission"]
+    binding = receipt["phase4_data_binding"]
+    if not isinstance(base_document, Mapping) or not isinstance(binding, Mapping):
+        raise V2GraphVerificationError("Phase 4 base receipt or binding is malformed")
+    try:
+        base, resolved = _reconcile_phase4_base(
+            owner_id=owner_id, document=base_document, registry=registry
+        )
+    except (AdmissionRefused, KeyError, TypeError, ValueError) as exc:
+        raise V2GraphVerificationError("persisted Phase 4 base receipt is invalid") from exc
+    if (
+        base.to_dict() != base_document
+        or base.admission_address != receipt["base_v2_admission_address"]
+        or any(receipt.get(name) != getattr(base, name) for name in (
+            "owner_id", "graph_identifier", "graph_version", "graph_address",
+            "content_address", "format_version",
+        ))
+    ):
+        raise V2GraphVerificationError("persisted Phase 4 base receipt is stale")
+    try:
+        plan = compile_data_requirement_plan(
+            resolved, registry=registry, input_bindings=input_bindings
+        )
+    except (TypeError, ValueError) as exc:
+        raise V2GraphVerificationError("persisted Phase 4 graph no longer resolves") from exc
+    if (
+        resolved.topology_document is None
+        or binding.get("resolved_graph_address") != resolved.resolved_graph_address
+    ):
+        raise V2GraphVerificationError(
+            "persisted Phase 4 resolved topology identity is stale")
+    expected_binding = {
+        "owner_id": owner_id,
+        "mode": binding.get("mode"),
+        "authored_ir_address": plan.authored_ir_address,
+        "registry_snapshot_address": plan.registry_snapshot_address,
+        "resolved_graph_address": plan.resolved_graph_address,
+        "implementation_closure_address": plan.implementation_closure_address,
+        "declaration_addresses": list(plan.declaration_addresses),
+        "plan_address": plan.plan_address,
+        "capability_assessment_address": binding.get("capability_assessment_address"),
+        "dataset_manifest_address": binding.get("dataset_manifest_address"),
+        "market_truth_snapshot_address": binding.get("market_truth_snapshot_address"),
+        "evaluation_policy_address": binding.get("evaluation_policy_address"),
+    }
+    if binding != expected_binding:
+        raise V2GraphVerificationError("persisted Phase 4 data binding is stale")
+    assessment = _require_assessment(
+        receipt["capability_assessment"], binding=binding, plan=plan
+    )
+    return PersistedPhase4Artifact(_freeze(receipt), base, assessment, plan)
+
+
+@dataclass(frozen=True, init=False)
+class Phase4BoundV2AdmittedStrategyArtifact(PersistedPhase4Artifact):
+    """Constructor-authorized research receipt for separately verified sources."""
+
+    def __init__(self, *_args, **_kwargs):
+        raise V2GraphVerificationError("bound Phase 4 receipts use the admission seam")
+
+
+def _bound_plan_binding(plan, projection, assessment, evaluation_policy_address):
+    return {"owner_id": projection.manifest.owner_id, "mode": "RESEARCH",
+        "authored_ir_address": plan.authored_ir_address, "registry_snapshot_address": plan.registry_snapshot_address,
+        "resolved_graph_address": plan.resolved_graph_address, "implementation_closure_address": plan.implementation_closure_address,
+        "declaration_addresses": list(plan.declaration_addresses), "plan_address": plan.plan_address,
+        "capability_assessment_address": assessment.authority_address,
+        "dataset_manifest_address": projection.manifest.manifest_address,
+        "dataset_set_address": projection.dataset_selection_address, "primary_input": projection.primary_input,
+        "input_binding_context_address": projection.input_bindings.context_address,
+        "truth_snapshot_addresses": sorted({address for source in projection.input_sources.values()
+                                            for address in source.manifest.truth_snapshot_addresses}),
+        "evaluation_policy_address": evaluation_policy_address}
+
+
+def reload_phase4_bound_projection(*, projection, owner_id, document, research_session,
+                                  execution_session, at_time):
+    """Reconstruct every owner-local source; supplied projection facts are hints only."""
+    from types import SimpleNamespace
+    from research.data.canonical_dataset import load_canonical_datasets, project_verified_research_input_set
+    from app.ir.v2_graph_versions import _plain, _bound_check
+    selection = _bound_projection_selection(projection, owner_id, document, at_time)
+    inputs = selection["inputs"]
+    addresses = sorted({row["dataset_manifest_address"] for row in inputs.values()})
+    loaded = load_canonical_datasets(research_session, execution_session=execution_session, owner_id=owner_id,
+        selections=[SimpleNamespace(manifest_address=address, as_of=at_time) for address in addresses])
+    by_address = {dataset._verified_authority.manifest.manifest_address: dataset for _, dataset in loaded}
+    rebuilt = project_verified_research_input_set(
+        {name: by_address[row["dataset_manifest_address"]] for name, row in inputs.items()},
+        owner_id=owner_id, primary_input=selection["primary_input"],
+        graph_input_fields={name: tuple(entry["binding"]["fields"])
+                            for name, entry in projection.input_bindings.document["inputs"].items()})
+    _bound_check(_plain(rebuilt.dataset_selection_document) == selection
+        and rebuilt.input_digest == projection.input_digest
+        and rebuilt.input_bindings == projection.input_bindings, "bound dataset projection differs")
+    return rebuilt
+
+
+def _bound_projection_selection(projection, owner_id, document, at_time):
+    from app.ir.v2_graph_versions import _plain, _bound_check
+    selection = _plain(projection.dataset_selection_document)
+    _bound_check(selection["owner_id"] == owner_id
+        and dt.datetime.fromisoformat(selection["as_of"]) == at_time, "bound source owner or cutoff differs")
+    _bound_check(set(selection["inputs"]) == {port["port_id"] for port in document["graph_inputs"]}, "bound graph inputs differ")
+    return selection
+
+
+def _bound_capability_sources(projection, execution_session, at_time):
+    from app.market_data.authority import load_capability_profile, load_provider_conformance
+    from app.market_truth.identity import load_provider_identity
+    from app.market_data.capability import CapabilitySourceBinding
+    sources = []
+    for name, source in sorted(projection.input_sources.items()):
+        manifest = source.manifest
+        profile = load_capability_profile(execution_session, manifest.capability_profile_address, at_time=at_time)
+        conformance = load_provider_conformance(execution_session, profile.conformance_evidence_address)
+        _, _, contract = load_provider_identity(execution_session, profile.provider_contract_address)
+        source_name = projection.dataset_selection_document["inputs"][name]["source_input_id"]
+        sources.append(CapabilitySourceBinding(name, source_name, source.input_bindings,
+                                               manifest, profile, conformance, contract))
+    return tuple(sources)
+
+
+def _recompute_bound_assessment(*, projection, resolved, registry, plan, evaluation_policy_address,
+                                execution_session, at_time):
+    from app.market_data.capability import assess_bound_capability
+    return assess_bound_capability(plan=plan, resolved_graph=resolved, registry=registry,
+        input_bindings=projection.input_bindings, sources=_bound_capability_sources(projection, execution_session, at_time),
+        owner_id=projection.manifest.owner_id, mode="RESEARCH", dataset_set_address=projection.dataset_selection_address,
+        evaluation_policy_address=evaluation_policy_address, at_time=int(at_time.timestamp()))
+
+
+def admit_phase4_bound_v2_strategy(*, owner_id, document, registry, evidence, plan, projection,
+        evaluation_policy_address, research_session, execution_session, at_time):
+    """Issue a research-only /2 receipt after fresh source-bound reconstruction."""
+    from app.ir.v2_graph_versions import PHASE4_BOUND_SCHEME, _bound_check, _freeze
+    from app.market_data.capability import bound_capability_assessment_envelope
+    projection = reload_phase4_bound_projection(projection=projection, owner_id=owner_id, document=document,
+        research_session=research_session, execution_session=execution_session, at_time=at_time)
+    base, resolved = _admit_v2_strategy_and_resolved(owner_id=owner_id, document=document, registry=registry, evidence=evidence)
+    canonical_plan = compile_data_requirement_plan(resolved, registry=registry, input_bindings=projection.input_bindings)
+    _bound_check(plan == canonical_plan and evidence.dataset_address == projection.dataset_selection_address
+        and evidence.input_address == projection.input_digest, "bound preparation evidence differs")
+    assessment = _recompute_bound_assessment(projection=projection, resolved=resolved, registry=registry, plan=plan,
+        evaluation_policy_address=evaluation_policy_address, execution_session=execution_session, at_time=at_time)
+    document = {key: getattr(base, key) for key in ("contract_suite", "parity_suite", "format_version", "owner_id",
+                                                   "graph_identifier", "graph_version", "graph_address", "content_address")}
+    document.update({"scheme": PHASE4_BOUND_SCHEME, "base_v2_admission": base.to_dict(),
+        "base_v2_admission_address": base.admission_address,
+        "phase4_data_binding": _bound_plan_binding(plan, projection, assessment, evaluation_policy_address),
+        "capability_assessment": bound_capability_assessment_envelope(assessment),
+        "dataset_selection": _plain_json(projection.dataset_selection_document)})
+    checked = reconstruct_phase4_bound_artifact(document, owner_id=owner_id, registry=registry,
+                                                input_bindings=projection.input_bindings)
+    artifact = object.__new__(Phase4BoundV2AdmittedStrategyArtifact)
+    for key, value in vars(checked).items():
+        object.__setattr__(artifact, key, _freeze(value) if isinstance(value, Mapping) else value)
+    return artifact
+
+
+def reconstruct_phase4_bound_artifact(document, *, owner_id, registry, input_bindings):
+    """Check /2 immutable evidence without granting new write authority."""
+    from app.ir.v2_graph_versions import require_bound_phase4_receipt, _bound_check, _freeze
+    from app.market_data.capability import _requirement_selector
+    receipt = require_bound_phase4_receipt(document)
+    base, resolved = _reconcile_phase4_base(owner_id=owner_id, document=receipt["base_v2_admission"], registry=registry)
+    _bound_check(base.to_dict() == receipt["base_v2_admission"], "bound base reconstruction differs")
+    plan = compile_data_requirement_plan(resolved, registry=registry, input_bindings=input_bindings)
+    binding = receipt["phase4_data_binding"]
+    expected = {"owner_id": owner_id, "authored_ir_address": plan.authored_ir_address,
+        "registry_snapshot_address": plan.registry_snapshot_address, "resolved_graph_address": plan.resolved_graph_address,
+        "implementation_closure_address": plan.implementation_closure_address,
+        "declaration_addresses": list(plan.declaration_addresses), "plan_address": plan.plan_address,
+        "input_binding_context_address": input_bindings.context_address}
+    _bound_check(all(binding[key] == value for key, value in expected.items()), "bound plan reconstruction differs")
+    assessment = receipt["capability_assessment"]["fact"]
+    _bound_check([row["selector"] for row in assessment["requirement_results"]]
+        == sorted(_requirement_selector(row) for row in plan.requirements), "bound requirement coverage differs")
+    _require_bound_receipt_bindings(receipt, input_bindings, base)
+    _require_bound_requirement_sources(assessment, plan, input_bindings)
+    return PersistedPhase4Artifact(_freeze(receipt), base, _freeze(receipt["capability_assessment"]), plan)
+
+
+def _require_bound_receipt_bindings(receipt, input_bindings, base):
+    from app.ir.v2_graph_versions import _bound_check
+    from app.ir.first_party.analytical_v2.contracts import validate_input_bindings
+    validate_input_bindings(input_bindings)
+    context = content_address({"schema": "verified-observation-input-set-context/1",
+        "dataset_selection_address": receipt["phase4_data_binding"]["dataset_set_address"]})
+    _bound_check(input_bindings.document["dataset_context_address"] == context, "bound selection context differs")
+    sources = receipt["capability_assessment"]["fact"]["sources"]
+    inputs = input_bindings.document["inputs"]
+    _bound_check(input_bindings.document["owner_id"] == base.owner_id
+        and set(inputs) == {source["graph_input_id"] for source in sources}, "bound input ownership differs")
+    for source in sources:
+        entry = inputs[source["graph_input_id"]]
+        _bound_check(entry["binding_address"] == source["projected_binding_address"]
+            and entry["binding"]["canonical_instrument_address"] == source["canonical_instrument_address"],
+            "bound projected source differs")
+    _bound_check(base.evidence.dataset_address == receipt["phase4_data_binding"]["dataset_set_address"],
+        "bound evidence dataset differs")
+
+
+def _require_bound_requirement_sources(assessment, plan, input_bindings):
+    from app.ir.v2_graph_versions import _bound_check
+    from app.market_data.capability import _requirement_selector
+    assigned = {row["selector"]: row["graph_input_id"] for row in assessment["requirement_sources"]}
+    for record in plan.requirements:
+        requirement = record["requirement"]
+        entry = input_bindings.document["inputs"][assigned[_requirement_selector(record)]]["binding"]
+        _bound_check(requirement["instrument"] == entry["instrument"] and requirement["field"] in entry["fields"],
+            "bound requirement source differs")
+
+
+__all__ = [
+    "Phase4BoundV2AdmittedStrategyArtifact", "admit_phase4_bound_v2_strategy", "reconstruct_phase4_bound_artifact",
+    "PHASE4_SCHEME", "V2_RUNTIME_UNAVAILABLE", "PersistedPhase4Artifact",
+    "V2GraphFacts", "V2GraphVerificationError", "derive_v2_graph_facts",
+    "reconstruct_phase4_artifact",
 ]

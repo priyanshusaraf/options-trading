@@ -9,6 +9,35 @@ function Stat({ label, v, cls = '', title }: { label: string; v: string; cls?: s
     <div className={`text-sm font-semibold tabular-nums ${cls}`}>{v}</div></div>
 }
 
+export function V0TopBar({ tab, setTab, tabs }: {
+  tab: string
+  setTab: (tab: string) => void
+  tabs: readonly (readonly [string, string])[]
+}) {
+  return (
+    <header className="border-b border-edge bg-panel sticky top-0 z-40">
+      <div className="flex items-center justify-between gap-4 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-zinc-100">⟁ Strategy OS</span>
+          <span className="badge bg-sky-500/15 text-sky-300 border border-sky-500/30">
+            V0 Research
+          </span>
+        </div>
+        <span className="text-xs text-muted">Evidence-first workspace</span>
+      </div>
+      <nav className="flex gap-1 px-3 pb-2" aria-label="V0 research navigation">
+        {tabs.map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`px-3 py-1.5 rounded text-xs transition-colors ${tab === id
+              ? 'bg-panel2 text-zinc-100 border border-edge' : 'text-muted hover:text-zinc-300'}`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+    </header>
+  )
+}
+
 // The bot's internal ledger vs the broker's own number. These must agree, because the
 // equity curve, every %-return and every drawdown figure are computed off the internal
 // ledger. Production ran ~₹27,000 adrift for three weeks and the UI said nothing, so this

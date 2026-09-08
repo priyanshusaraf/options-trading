@@ -13,12 +13,46 @@ import dataclasses
 import hashlib
 from typing import Protocol
 
+from app.market_data.numeric import market_float
+
+
+_MARKET_FIELDS = ("open", "high", "low", "close", "volume")
+
+
+def _identity_rows(candles) -> tuple[tuple[object, dict[str, object]], ...]:
+    """Validate OHLCV and return the exact current identity representations.
+
+    Every supplied market field crosses the one numeric ingress once.  Only a
+    zero uses the normalized return value, so signed and differently typed zero
+    share the current identity while every nonzero accepted representation keeps
+    its historical string form.  The source candles themselves remain untouched.
+    """
+    rows = []
+    for index, candle in enumerate(candles):
+        identity = {}
+        for field in _MARKET_FIELDS:
+            if field == "volume" and not hasattr(candle, field):
+                # Historical research fixtures predate volume. Absence remains
+                # the existing "no volume information" case; any supplied raw
+                # volume still crosses the same authoritative numeric rule.
+                continue
+            raw = getattr(candle, field, None)
+            normalized = market_float(
+                raw, field=f"research candle {index} {field}")
+            identity[field] = 0.0 if normalized == 0.0 else raw
+        rows.append((candle, identity))
+    return tuple(rows)
+
 
 def content_hash(candles) -> str:
     """Stable 128-bit content address over the candle series (ts,o,h,l,c)."""
+    rows = _identity_rows(candles)
     h = hashlib.sha256()
-    for c in candles:
-        h.update(f"{int(c.ts.timestamp())}|{c.open}|{c.high}|{c.low}|{c.close}|".encode())
+    for candle, identity in rows:
+        h.update(
+            f"{int(candle.ts.timestamp())}|{identity['open']}|{identity['high']}|"
+            f"{identity['low']}|{identity['close']}|".encode()
+        )
     return h.hexdigest()[:32]
 
 

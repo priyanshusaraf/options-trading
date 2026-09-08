@@ -7,8 +7,11 @@ from fastapi.testclient import TestClient
 
 from app.api import routes
 from app.db.session import init_db, SessionLocal
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
 from app.engine.runner import EngineRunner
 from app.main import app
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _client():
@@ -18,6 +21,26 @@ def _client():
     # a clean book keeps manual-open deterministic (ticking can auto-open NIFTY).
     app.state.runner = r
     r.arm(True)  # SEC-3: manual-open now requires ARM; this file exercises manual-open directly
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    from unittest.mock import patch
+    with r._session() as session, patch.object(
+            paper_authority, "verified_decision",
+            return_value={"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                          "graph_identifier": "test.strategy.expanding_z_impulse",
+                          "graph_version": 1, "content_address": admission["graph_address"],
+                          "admission_address": admission["admission_address"],
+                          "decision": "approved"}):
+        paper_authority.activate(session, row.id, revision=row.revision,
+                                 owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     return TestClient(app), r
 
 
@@ -116,15 +139,18 @@ def test_signals_market_closed_is_distinct_from_broken_feed():
         r.provider.is_tradable_now = orig
 
 
-def test_session_redirects_to_frontend_after_login(monkeypatch):
-    """After Kite OAuth captures the token at the BACKEND, the browser must be bounced
-    to the FRONTEND (PT_FRONTEND_URL), not left on the bare backend origin."""
-    from app.core.config import get_settings
-    c, r = _client()
-    monkeypatch.setattr(r.provider, "complete_session", lambda rt: None, raising=False)
+def test_retired_global_oauth_endpoints_stay_gone():
+    """Process-global OAuth login/callback were retired in favour of
+    connection-bound flows (/api/connections/{id}/oauth/initiate +
+    state-bound /api/oauth/callback). These paths must answer 410 with the
+    pointer — they must never silently resurrect as working redirects."""
+    c, _r = _client()
     res = c.get("/api/session?request_token=abc", follow_redirects=False)
-    assert res.status_code in (302, 307)
-    assert res.headers["location"] == get_settings().frontend_url
+    assert res.status_code == 410
+    assert "oauth/callback" in res.json()["detail"]
+    res = c.get("/api/login", follow_redirects=False)
+    assert res.status_code == 410
+
 
 
 def _seed_trade(s, *, exit_dt, net, mode):
@@ -172,6 +198,17 @@ def test_calendar_reads_same_day_snapshots_only_from_the_runners_broker_account(
     from app.db.models import DailyAccountSnapshot
 
     c, runner = _client()
+    # The durable-account contract: cockpit surfaces resolve only ACTIVE
+    # owner-owned broker_accounts rows, so both accounts must exist durably
+    # before the runner may point at the second one.
+    from app.db.models import BrokerAccount
+    with SessionLocal() as session:
+        for acct in ("account.default", "account.second"):
+            if session.get(BrokerAccount, acct) is None:
+                session.add(BrokerAccount(broker_account_id=acct, owner_id="owner",
+                                          broker="mock", external_account_id=acct,
+                                          display_name=acct, status="active"))
+        session.commit()
     runner.broker_account_id = "account.second"
     runner.broker.broker_account_id = "account.second"
     today = runner.provider.now().date()
@@ -211,6 +248,7 @@ def test_manual_open_then_close_and_positions():
     assert op.get("opened") is True, op
     pos = c.get("/api/positions").json()
     assert any(p["instrument_key"] == "NIFTY" for p in pos["positions"])
+    assert r.broker.position_for("NIFTY").entry_intent_id is not None
     cl = c.post("/api/positions/NIFTY/close").json()
     assert cl.get("closed") is True, cl
     assert r.broker.position_for("NIFTY") is None
@@ -224,6 +262,20 @@ def test_manual_mutation_routes_run_on_event_loop():
     assert asyncio.iscoroutinefunction(routes.close_position)
     assert asyncio.iscoroutinefunction(routes.manual_open)
     assert asyncio.iscoroutinefunction(routes.positions)
+
+
+def test_research_workstation_routes_share_the_existing_versioned_inventory():
+    from app.api.versioning import build_versioned_router
+
+    paths = {getattr(route, "path", "") for route in routes.router.routes}
+    expected = {
+        "/api/ir/projects/{project_id}/graphs/{identifier}/edits/validate",
+        "/api/ir/projects/{project_id}/research-datasets",
+        "/api/ir/projects/{project_id}/experiments/{run_id}/visualization",
+    }
+    assert expected <= paths
+    versioned = {getattr(route, "path", "") for route in build_versioned_router(routes.router).routes}
+    assert {path.replace("/api/", "/api/v1/", 1) for path in expected} <= versioned
 
 
 def test_double_close_is_idempotent_on_ledger():

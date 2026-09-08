@@ -124,6 +124,21 @@ class ExecutionVenue(Protocol):
         ...
 
     # ── protective stops ───────────────────────────────────────────────
+    #: Which protective shapes this venue can actually rest at the exchange.
+    #:
+    #: On the protocol so a caller can ASK rather than know. `DhanVenue` declared it and
+    #: `KiteVenue` did not, which meant the question was answerable for one venue only and any
+    #: caller needing it had to branch on the broker's name — the exact branch the capability
+    #: model exists to remove (`.claude/rules/providers-brokers.md`: what must not appear under
+    #: `app/engine/` is a branch on a provider's identity).
+    #:
+    #: It is load-bearing, not descriptive. Dhan has no GTT equivalent, so this set is
+    #: RESTING_STOP only there, and an options deployment — which needs a SERVER_TRIGGER —
+    #: cannot run on Dhan execution. The venues refuse rather than substituting a weaker shape,
+    #: because a caller that believes it holds exchange-side protection and does not is worse
+    #: off than one that was told no.
+    PROTECTIVE_KINDS: frozenset
+
     def place_protective_stop(self, kind: ProtectiveStopKind, *, tradingsymbol: str,
                               exchange: str, qty: int, trigger_price: float,
                               side: str = "SELL", last_price: float = 0.0,

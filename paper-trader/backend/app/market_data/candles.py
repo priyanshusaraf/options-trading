@@ -46,6 +46,9 @@ from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
+from app.market_data.observations import AlignmentPolicy, align_required_series
+from app.market_data.numeric import NumericIngressError, market_float
+
 # The frame contract `strat.signals` consumes. Order matters: the PRICE columns
 # are asserted against the pre-existing converters so live and backtest cannot
 # drift.
@@ -57,6 +60,39 @@ import pandas as pd
 # can see that kind of deadness. Nothing downstream enumerates columns positionally
 # — every consumer names the fields it wants — so the addition moves no signal.
 FRAME_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
+
+
+@dataclass(frozen=True)
+class _ObservationCandle:
+    ts: object
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+def observations_to_frame(series, *, at, policy: AlignmentPolicy) -> pd.DataFrame:
+    """Adapt explicitly aligned completed observation fields through this converter."""
+    aligned = align_required_series(series, at=at, policy=policy)
+    if aligned is None or set(aligned) != {"OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"}:
+        return pd.DataFrame(columns=FRAME_COLUMNS)
+    if any(name != row.field for name, row in aligned.items()):
+        return pd.DataFrame(columns=FRAME_COLUMNS)
+    coherence = {(row.instrument, row.timeframe_seconds, row.event_time,
+                  row.source_address, row.market_truth_address, row.completed_at)
+                 for row in aligned.values()}
+    if len(coherence) != 1:
+        return pd.DataFrame(columns=FRAME_COLUMNS)
+    event_time = next(iter(aligned.values())).event_time
+    try:
+        values = tuple(
+            market_float(aligned[name].value, field=f"observation {name.lower()}")
+            for name in ("OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"))
+    except NumericIngressError:
+        return pd.DataFrame(columns=FRAME_COLUMNS)
+    row = _ObservationCandle(event_time, *values)
+    return frame_from([row])
 
 _PRICE_FIELDS = ("open", "high", "low", "close")
 
@@ -117,10 +153,8 @@ def _price_values(c) -> tuple[dict | None, str | None]:
         if v is None:
             return None, "not_finite"
         try:
-            v = float(v)
-        except (TypeError, ValueError):
-            return None, "not_finite"
-        if not math.isfinite(v):
+            v = market_float(v, field=f"candle {f}")
+        except NumericIngressError:
             return None, "not_finite"
         if v <= 0:
             return None, "non_positive"   # a price of zero or less is not a price
@@ -169,6 +203,12 @@ def validate_candles(candles) -> tuple[list, CandleReport]:
     kept, reasons, dropped, repaired = [], {}, 0, 0
     for c in candles:
         vals, reason = _price_values(c)
+        raw_volume = getattr(c, "volume", None)
+        if reason is None and raw_volume is not None:
+            try:
+                market_float(raw_volume, field="candle volume")
+            except NumericIngressError:
+                reason = "not_finite"
         if reason:
             reasons[reason] = reasons.get(reason, 0) + 1
             dropped += 1
@@ -224,10 +264,18 @@ def frame_from(candles) -> pd.DataFrame:
     if not candles:
         return pd.DataFrame(columns=FRAME_COLUMNS)
     # `getattr` default rather than `c.volume`: hand-written regression fixtures
-    # and the replay provider's JSON predate the field, and a missing volume must
-    # degrade to "no volume information" — which reads as no surge — rather than
-    # taking the whole frame down with an AttributeError.
-    return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close,
-                          "volume": float(getattr(c, "volume", 0.0) or 0.0)}
-                         for c in candles])
+    # and the replay provider's JSON predate the field. Preserve that absence as
+    # NaN so it cannot share research identity with a genuine zero-volume bar.
+    rows = []
+    for index, c in enumerate(candles):
+        raw_volume = getattr(c, "volume", None)
+        rows.append({
+            "date": c.ts,
+            "open": market_float(c.open, field=f"candle {index} open"),
+            "high": market_float(c.high, field=f"candle {index} high"),
+            "low": market_float(c.low, field=f"candle {index} low"),
+            "close": market_float(c.close, field=f"candle {index} close"),
+            "volume": (math.nan if raw_volume is None else
+                       market_float(raw_volume, field=f"candle {index} volume")),
+        })
+    return pd.DataFrame(rows, columns=FRAME_COLUMNS)

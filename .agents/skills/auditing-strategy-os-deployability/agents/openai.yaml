@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Strategy OS Deployability"
+  short_description: "Gate deployability with current evidence"
+  default_prompt: "Use $auditing-strategy-os-deployability to audit this Strategy OS change for deployment readiness."

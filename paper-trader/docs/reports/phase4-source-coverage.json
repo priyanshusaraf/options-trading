@@ -1,0 +1,956 @@
+{
+  "schema_version": 1,
+  "phase": "phase4",
+  "generated_for": "phase4-architecture",
+  "source_map": "paper-trader/docs/agent/programme/SOURCE_MAP.json#phase_views.phase4",
+  "expected_entries": 69,
+  "covered_entries": 69,
+  "coverage": [
+    {
+      "source_id": "product_architecture",
+      "heading": "Strategy OS — Product Architecture Steer",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Architecture and integration checks preserve one IR, resolver, hash, registry, lineage, and authority model.",
+      "nonclaim_or_deferral": "Later-phase runtime, frontend, provider, deployment, and live claims remain blocked."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Purpose",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Architecture and integration checks preserve one IR, resolver, hash, registry, lineage, and authority model.",
+      "nonclaim_or_deferral": "Later-phase runtime, frontend, provider, deployment, and live claims remain blocked."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Type 3 — Market Structure, Derivatives & Cross-Instrument",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Type 4 — Price, Instrument & Market Data",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "2. Hidden platform layers",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Architecture and integration checks preserve one IR, resolver, hash, registry, lineage, and authority model.",
+      "nonclaim_or_deferral": "Later-phase runtime, frontend, provider, deployment, and live claims remain blocked."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "A. Instrument Resolver",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "B. Point-in-Time Market Rulebook",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "C. Data Contract Engine",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-requirement-registry-correction",
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Immutable declaration closure, compound binding, plan identity, compatibility, unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "D. Causality Engine",
+      "disposition": "design",
+      "design_anchor": "§6 Data observations, alignment, and causality; §8 Dataset provenance and cache identity",
+      "task_ids": [
+        "phase4-dataset-causality"
+      ],
+      "test_obligation": "Prefix parity, completed-bar, freshness/skew, silent-fill, correction, adjustment, and cache-separation tests.",
+      "nonclaim_or_deferral": "No incomplete provenance or forming/future observation can produce an accepted answer."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "E. Provider Capability Matrix",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-requirement-registry-correction",
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Registry-bound requirement and plan identity plus unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "F. Subscription & Resource Planner",
+      "disposition": "deferral",
+      "design_anchor": "§12 Deferred homes and nonclaims",
+      "task_ids": [
+        "phase7-architecture"
+      ],
+      "test_obligation": "Phase 7 must supply resource and subscription planning evidence before runtime acceptance.",
+      "nonclaim_or_deferral": "Phase 4 does not claim capacity, subscription feasibility, or degradation behavior."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "G. Numeric Validity System",
+      "disposition": "design",
+      "design_anchor": "§4 Closed numeric validity contract",
+      "task_ids": [
+        "phase4-numeric-validity-contract"
+      ],
+      "test_obligation": "Focused scalar, series, boolean, fallback, non-finite, and entry-gate tests.",
+      "nonclaim_or_deferral": "No invalid state is coerced to false, zero, or a valid executable value."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "H. Deployment Binding System",
+      "disposition": "nonclaim",
+      "design_anchor": "§12 Deferred homes and nonclaims",
+      "task_ids": [
+        "phase6-architecture"
+      ],
+      "test_obligation": "Phase 6 owns binding and activation-preflight evidence.",
+      "nonclaim_or_deferral": "Phase 4 grants no deployment, activation, or live authority."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "5. Dynamic derivative identity",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Critical invariant",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Architecture and integration checks preserve one IR, resolver, hash, registry, lineage, and authority model.",
+      "nonclaim_or_deferral": "Later-phase runtime, frontend, provider, deployment, and live claims remain blocked."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "6. Options lifecycle model",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "9. V1 acceptance scenarios",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Scenario A — reusable equity strategy",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Scenario B — Indian options/order-flow strategy",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "Scenario C — cross-market strategy",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "product_architecture",
+      "heading": "10. Non-negotiable product rules",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Architecture and integration checks preserve one IR, resolver, hash, registry, lineage, and authority model.",
+      "nonclaim_or_deferral": "Later-phase runtime, frontend, provider, deployment, and live claims remain blocked."
+    },
+    {
+      "source_id": "strategy_language",
+      "heading": "7. Numerical validity",
+      "disposition": "design",
+      "design_anchor": "§4 Closed numeric validity contract",
+      "task_ids": [
+        "phase4-numeric-validity-contract"
+      ],
+      "test_obligation": "Focused scalar, series, boolean, fallback, non-finite, and entry-gate tests.",
+      "nonclaim_or_deferral": "No invalid state is coerced to false, zero, or a valid executable value."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Market Truth & Data Contracts Steer",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §10 Acceptance scenarios and refusals",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "All Phase 4 scenarios reject backward projection and silent substitution.",
+      "nonclaim_or_deferral": "Ground-truth claims require observed point-in-time evidence."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Goal",
+      "disposition": "design",
+      "design_anchor": "§1 Decision and boundary; §10 Acceptance scenarios and refusals",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "All Phase 4 scenarios reject backward projection and silent substitution.",
+      "nonclaim_or_deferral": "Ground-truth claims require observed point-in-time evidence."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "1. Point-in-time market rulebook",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "2. Historical derivative truth",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "3. Strike-grid evolution",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "4. Contract identity",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "5. Futures and continuous series",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "6. Option-window policies",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "7. Data sufficiency",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-requirement-registry-correction",
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Registry-bound requirement and plan identity plus unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "8. Live versus historical capability",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "9. Missing-data semantics",
+      "disposition": "design",
+      "design_anchor": "§4 Closed numeric validity contract",
+      "task_ids": [
+        "phase4-numeric-validity-contract"
+      ],
+      "test_obligation": "Focused scalar, series, boolean, fallback, non-finite, and entry-gate tests.",
+      "nonclaim_or_deferral": "No invalid state is coerced to false, zero, or a valid executable value."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "10. Cross-instrument alignment",
+      "disposition": "design",
+      "design_anchor": "§6 Data observations, alignment, and causality; §8 Dataset provenance and cache identity",
+      "task_ids": [
+        "phase4-dataset-causality"
+      ],
+      "test_obligation": "Prefix parity, completed-bar, freshness/skew, silent-fill, correction, adjustment, and cache-separation tests.",
+      "nonclaim_or_deferral": "No incomplete provenance or forming/future observation can produce an accepted answer."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "11. Cross-timeframe causality",
+      "disposition": "design",
+      "design_anchor": "§6 Data observations, alignment, and causality; §8 Dataset provenance and cache identity",
+      "task_ids": [
+        "phase4-dataset-causality"
+      ],
+      "test_obligation": "Prefix parity, completed-bar, freshness/skew, silent-fill, correction, adjustment, and cache-separation tests.",
+      "nonclaim_or_deferral": "No incomplete provenance or forming/future observation can produce an accepted answer."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "12. Corporate actions",
+      "disposition": "design",
+      "design_anchor": "§5 Canonical instrument and market-truth model",
+      "task_ids": [
+        "phase4-market-truth-domain"
+      ],
+      "test_obligation": "Temporal overlap, token reuse, reconstructed truth, invented contract, selector mutation, roll, and adjustment refusals.",
+      "nonclaim_or_deferral": "No provider symbol or present-day dump becomes canonical or historical truth."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "13. Dataset provenance",
+      "disposition": "design",
+      "design_anchor": "§6 Data observations, alignment, and causality; §8 Dataset provenance and cache identity",
+      "task_ids": [
+        "phase4-dataset-causality"
+      ],
+      "test_obligation": "Prefix parity, completed-bar, freshness/skew, silent-fill, correction, adjustment, and cache-separation tests.",
+      "nonclaim_or_deferral": "No incomplete provenance or forming/future observation can produce an accepted answer."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "14. Provider capability changes",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Level 0 — transparent",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Level 1 — operational",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Level 2 — material capability change",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "market_truth",
+      "heading": "Level 3 — semantic break",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "Runtime Economics & Provider Capability Steer",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "Goal",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "6. Cache identity",
+      "disposition": "design",
+      "design_anchor": "§6 Data observations, alignment, and causality; §8 Dataset provenance and cache identity",
+      "task_ids": [
+        "phase4-dataset-causality"
+      ],
+      "test_obligation": "Prefix parity, completed-bar, freshness/skew, silent-fill, correction, adjustment, and cache-separation tests.",
+      "nonclaim_or_deferral": "No incomplete provenance or forming/future observation can produce an accepted answer."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "11. Provider capability matrix",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "Data",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "Execution",
+      "disposition": "nonclaim",
+      "design_anchor": "§12 Deferred homes and nonclaims",
+      "task_ids": [
+        "phase9-architecture"
+      ],
+      "test_obligation": "Phase 9 owns execution-provider conformance evidence.",
+      "nonclaim_or_deferral": "Data capability cannot imply execution capability."
+    },
+    {
+      "source_id": "runtime_economics",
+      "heading": "Historical market support",
+      "disposition": "design",
+      "design_anchor": "§7 Data requirement and provider capability contracts",
+      "task_ids": [
+        "phase4-data-contract-capability"
+      ],
+      "test_obligation": "Unknown, range, resolution, freshness, mode, entitlement, and semantic-break refusals.",
+      "nonclaim_or_deferral": "A capability profile neither selects a provider nor grants execution or live authority."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "V1 Implementation Priorities & Verification Policy",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Goal",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "1. Risk-weighted verification",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Critical",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Important",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Routine",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Trivial",
+      "disposition": "nonclaim",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-review"
+      ],
+      "test_obligation": "Review rejects scope expansion or acceptance based on low-risk presentation checks.",
+      "nonclaim_or_deferral": "Frontend styling and unrelated local edges neither authorize work nor prove Phase 4."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "2. Test rule",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "3. Test cadence",
+      "disposition": "task",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Each implementation capsule runs focused tests; integration runs affected suites; review is independent and serial.",
+      "nonclaim_or_deferral": "A defect returns to its exclusive owning capsule; the gate does not patch product code."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "5. V1 product priorities",
+      "disposition": "design",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Risk-weighted integration and review evidence protects the named failure hypothesis.",
+      "nonclaim_or_deferral": "Test count or local success alone is not phase or release acceptance."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Must have",
+      "disposition": "design",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Risk-weighted integration and review evidence protects the named failure hypothesis.",
+      "nonclaim_or_deferral": "Test count or local success alone is not phase or release acceptance."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Can be deferred",
+      "disposition": "deferral",
+      "design_anchor": "§12 Deferred homes and nonclaims",
+      "task_ids": [
+        "v1-release-review"
+      ],
+      "test_obligation": "Named later phase or release review must retain each exclusion.",
+      "nonclaim_or_deferral": "Marketplace, AI research agents, broad brokers, confidential compute, obscure indicators, and deep integrations are outside Phase 4."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "6. Implementation sequencing",
+      "disposition": "task",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Each implementation capsule runs focused tests; integration runs affected suites; review is independent and serial.",
+      "nonclaim_or_deferral": "A defect returns to its exclusive owning capsule; the gate does not patch product code."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "7. Canonical acceptance scenarios",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "A. Reusable equity",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "B. Weekly-options/order-flow",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "C. Cross-market",
+      "disposition": "test",
+      "design_anchor": "§10 Acceptance scenarios and refusals; §11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Integration runs the applicable canonical scenario and realistic negative cases; critical guards require killed-mutation evidence.",
+      "nonclaim_or_deferral": "Scenario evidence is bounded local behavior, not exhaustive provider, capacity, deployment, or live proof."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "8. Guard against scope drift",
+      "disposition": "nonclaim",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-review"
+      ],
+      "test_obligation": "Review rejects scope expansion or acceptance based on low-risk presentation checks.",
+      "nonclaim_or_deferral": "Frontend styling and unrelated local edges neither authorize work nor prove Phase 4."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Core-abstraction issue",
+      "disposition": "design",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Risk-weighted integration and review evidence protects the named failure hypothesis.",
+      "nonclaim_or_deferral": "Test count or local success alone is not phase or release acceptance."
+    },
+    {
+      "source_id": "verification_policy",
+      "heading": "Local implementation edge case",
+      "disposition": "task",
+      "design_anchor": "§11 Deployment contract",
+      "task_ids": [
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "Each implementation capsule runs focused tests; integration runs affected suites; review is independent and serial.",
+      "nonclaim_or_deferral": "A defect returns to its exclusive owning capsule; the gate does not patch product code."
+    }
+  ],
+  "required_context": [
+    {
+      "source_id": "master_sequence",
+      "heading": "Global constraints",
+      "disposition": "nonclaim",
+      "design_anchor": "§1 Decision and boundary; §3 One accepted executable architecture",
+      "task_ids": [
+        "phase4-review"
+      ],
+      "test_obligation": "Review verifies all cross-phase invariants remain intact.",
+      "nonclaim_or_deferral": "Phase 4 does not accept later runtime, frontend, provider, deployment, or release claims."
+    },
+    {
+      "source_id": "master_sequence",
+      "heading": "Phase 4: Market truth, numeric validity, and data capability",
+      "disposition": "design",
+      "design_anchor": "§§4–10",
+      "task_ids": [
+        "phase4-numeric-validity-contract",
+        "phase4-market-truth-domain",
+        "phase4-market-truth-persistence",
+        "phase4-data-contract-capability",
+        "phase4-dataset-causality",
+        "phase4-integration-gate"
+      ],
+      "test_obligation": "The serial capsule chain proves every named contract and refusal.",
+      "nonclaim_or_deferral": "Architecture acceptance does not accept implementation."
+    },
+    {
+      "source_id": "master_sequence",
+      "heading": "Programme closure",
+      "disposition": "nonclaim",
+      "design_anchor": "§12 Deferred homes and nonclaims",
+      "task_ids": [
+        "v1-release-review"
+      ],
+      "test_obligation": "V1 release review owns production-shaped closure evidence.",
+      "nonclaim_or_deferral": "No Phase 4 artifact proves V1 closure or production readiness."
+    }
+  ],
+  "authority_correction": {
+    "verdict": "KEEP + HARDEN",
+    "status": "architecture_frozen_implementation_open",
+    "reclaim_authority_context": {
+      "architecture_task": "phase4-reclaim-authority-context-architecture-correction",
+      "implementation_task": "phase4-reclaim-authority-context-correction",
+      "typed_context": "Current immutable PlatformRegistry plus the existing lifespan-owned synchronous research SQLAlchemy sessionmaker; no Session, plan, cutoff, admission, owner, dataset, assessment, mode, or callback.",
+      "lifecycle": "One aware UTC cutoff per dispatch; at most one lazy synchronous research Session reused by both actual loader calls and closed on every success, refusal, and exception; disabled research creates none.",
+      "plan_authority": "The exact persisted receipt plus the explicit current registry yields one internally reconstructed immutable canonical plan consumed by the sole require_phase4_current verifier; caller plans and second verifiers are forbidden.",
+      "transaction_contract": "SQLite acquires admission-scoped BEGIN IMMEDIATE before enumeration; PostgreSQL locks exact deterministic candidates FOR UPDATE. Reconcile and claim conditionally mutate only explicit classified legacy ids with owner/state/admission/cancellation/token/expiry predicates; broad owner updates and fresh selectors are forbidden.",
+      "mixed_rule": "Any v2 candidate receives actual-loader preflight and causes owner-level head-of-line refusal with zero mutation for all v1/v2 rows; pure-v1 direct and startup behavior remains byte/row equivalent.",
+      "race_evidence": ["insert after enumeration", "state transition", "owner transition", "admission transition", "cancellation transition", "claim token transition", "expiry transition", "broad-update mutation killed", "lock-removal mutation killed", "predicate-removal mutations killed"],
+      "terminal": "A complete current v2 chain reaches exact V2_RUNTIME_UNAVAILABLE before claim/reconcile/provider/cache/worker/result/broker/order/money effects.",
+      "nonclaim": "This schema-free correction does not enable v2 claim or reclaim, Phase 5 runtime, deployment, production, live, or money behavior."
+    },
+    "authority_transaction_boundary": {
+      "architecture_task": "phase4-authority-transaction-architecture-correction",
+      "implementation_task": "phase4-authority-transaction-correction",
+      "api": "app.db.concurrency.caller_owned_savepoint(session, *, scope)",
+      "ownership": "The caller alone owns the outer commit or rollback. The helper enlists the same connection, proves or materializes the physical outer transaction, owns only the nested savepoint, and never commits, rolls back, closes, invalidates, retries, or replaces caller resources.",
+      "dialects": {
+        "sqlite": "Before SAVEPOINT, issue explicit BEGIN when the same sqlite driver connection is not in a transaction and verify in_transaction. Refuse an already nested Session without a proof bound before its first savepoint.",
+        "postgresql": "Before SAVEPOINT, materialize an idle driver transaction with a harmless statement and verify INTRANS; RELEASE remains inside the caller-owned outer transaction."
+      },
+      "proof_lifecycle": "Bind root SessionTransaction identity, connection identity, and dialect in Session.info; clear only when the root ends; do not clear on inner savepoint end; recheck live driver state on every entry.",
+      "seams": [
+        {"path": "backend/app/core/strategy_admissions.py", "symbol": "put", "classification": "critical_authority_impacted", "fact": "execution graph version plus admission receipt"},
+        {"path": "backend/research/domain/admissions.py", "symbol": "store_admission", "classification": "critical_authority_impacted", "fact": "research graph version plus admission receipt"},
+        {"path": "backend/research/domain/strategy_admissions.py", "symbol": "persist_verified_dataset_authority", "classification": "critical_authority_impacted", "fact": "typed segments, manifest, and dependency links"},
+        {"path": "backend/app/backtest/repository.py", "symbol": "append_claimed_result_batch", "classification": "critical_fenced_result_impacted", "fact": "lease heartbeat, result batch, and progress"},
+        {"path": "backend/app/backtest/repository.py", "symbol": "complete_claim", "classification": "critical_terminal_outbox_impacted", "fact": "terminal run state plus execution outbox event"},
+        {"path": "backend/app/backtest/public_computation.py", "symbol": "put_immutable", "classification": "non_authoritative_persistence_impacted", "fact": "provenance-neutral immutable public cache artifact"},
+        {"path": "backend/app/ledger/service.py", "symbol": "write_snapshot", "classification": "critical_snapshot_outbox_impacted", "fact": "ledger snapshot version plus outbox event; transaction hardening only"}
+      ],
+      "wrapper_disposition": "app.events.outbox.OutboxRepository.writer declares transaction ownership but Session.begin alone is not physical SQLite proof. Ledger write_snapshot must enter the shared boundary directly; other outbox writers have ordinary DML before commit and no current nested-first-write seam.",
+      "required_cases": ["no prior SQL", "clean SELECT", "prior caller write", "explicit caller transaction", "externally owned root", "proved recursive nesting", "unproved external SQLite nesting refusal", "unrelated pending write", "nested flush failure", "DBAPI commit refusal then caller rollback", "rollback failure", "exact retry", "conflicting collision", "successful commit", "fresh-process reconstruction"],
+      "mutation_count_minimum": 11,
+      "mutation_rule": "One adoption guard for each of seven seams plus physical-root establishment, proof-marker cleanup, unproved-external-nesting refusal, and no helper commit/rollback/close; restore all owned bytes exactly.",
+      "transitive_revalidation": ["execution and research graph persistence", "dataset assessment authority atomicity", "backtest job claim batching and terminal outbox", "public backtest computation", "ledger snapshot/outbox", "portable outbox contract", "Phase 4 authority integration", "ADV-002", "ADV-003", "fresh ADV-001..ADV-027 matrix", "official review package", "phase4-final-review-4"],
+      "deployment_classification": "schema-free-phase4-authority-transaction-hardening",
+      "nonclaim": "No schema, migration, dependency, configuration, service, provider, frontend, deployment, production, runtime-enablement, live, money-authority, or ledger-business-rule change follows."
+    },
+    "research_receipt_authority": {
+      "architecture_task": "phase4-research-receipt-authority-architecture-correction",
+      "implementation_task": "phase4-research-receipt-authority-correction",
+      "review_task": "phase4-final-review-5",
+      "trigger": "Immutable phase4-final-review-4 SPEC/QUALITY FAIL proved that the actual loader could reach V2_RUNTIME_UNAVAILABLE without ResearchStrategyAdmission or ResearchIrV2GraphVersion, while integration verified them only after loader return.",
+      "decision": "KEEP + HARDEN; schema-free; no separate integration capsule because implementation owns the bounded integration rerun and package rebuild after byte freeze.",
+      "sole_chain": ["load_verified_admission", "reconstruct_phase4_artifact", "require_phase4_current", "research.domain.admissions.require_admission", "dataset and assessment authority", "V2_RUNTIME_UNAVAILABLE"],
+      "forbidden": ["second verifier", "second hash", "generic authority dispatcher", "caller manual preverification", "post-return diagnostic as enforcement", "runtime enablement"],
+      "production_consumers": ["backtest enqueue admission", "retry and reclaim classification", "pinned-worker read", "cache and job read", "deployment", "runner", "broker"],
+      "required_cases": ["missing research receipt", "missing research graph", "tampered receipt", "tampered graph", "tampered copied columns", "wrong owner", "cross-plane substitution", "fresh-process reconstruction", "complete-current terminal refusal"],
+      "dialects": ["SQLite compatibility", "disposable PostgreSQL 16"],
+      "mutation_rule": "Kill and byte-restore research-verifier invocation, verifier order, terminal order, and consumer no-side-effect guards.",
+      "transitive_invalidation": ["complete-loader authority claim", "two-plane integration lifecycle", "deployment/runner/broker/enqueue/retry/reclaim/pinned/cache/job containment", "affected adversarial rows", "official review package", "review readiness"],
+      "deployment_classification": "schema-free-phase4-research-receipt-authority-hardening",
+      "nonclaim": "No schema, migration, dependency, configuration, service, provider, frontend, deployment, production, runtime enablement, live, money, Phase 4 closure, or review-readiness claim follows."
+    },
+    "research_json_shape_repair": {
+      "task_id": "phase4-research-json-shape-parity-correction",
+      "research_head": "0010",
+      "immutable_predecessor": "0009",
+      "use_sites": {"object": 3, "array": 5},
+      "evidence_scope": "SQLite compatibility and isolated PostgreSQL 16 exact-shape, forward-upgrade, restart, preservation, typed-manifest lifecycle, drift-refusal, and mutation evidence only",
+      "nonclaim": "Does not accept Phase 4, complete integration/review, prove release deployability or production rehearsal, or grant runtime, provider, frontend, deployment, live, or money authority."
+    },
+    "stale_claims": [
+      "CUR-C1 dataset manifest, bytes, coverage, assessment, admission, result, and cache authority",
+      "CUR-C2 canonical physical instrument and exact economic underlier identity",
+      "CUR-C3 distinct provider and normalized observation identity and provenance",
+      "CUR-C4 typed truth, conformance, capability profile, and assessment reconstruction",
+      "CUR-H2 identity-complete resolved topology",
+      "all dependent admission, scenario, migration, process-reload, cross-plane, cache/result, integration, and review PASS claims"
+    ],
+    "serial_revalidation": [
+      {
+        "order": 1,
+        "task_id": "phase4-resolved-topology-identity-correction",
+        "owns": ["CUR-H2", "resolved topology address", "fresh-process stale receipt refusal"]
+      },
+      {
+        "order": 2,
+        "task_id": "phase4-canonical-market-identity-correction",
+        "owns": ["CUR-C2", "CUR-C3", "CUR-H1", "execution migration 0038", "instrument/provider/raw-normalized provenance"]
+      },
+      {
+        "order": 3,
+        "task_id": "phase4-typed-market-authority-correction",
+        "owns": ["CUR-C4", "typed truth/conformance/profile/assessment loaders", "copied-column reconciliation"]
+      },
+      {
+        "order": 4,
+        "task_id": "phase4-dataset-assessment-authority-correction",
+        "owns": ["CUR-C1", "nine role-specific dataset dependency authorities", "execution migration 0039", "amended research migration 0009", "bytes/coverage/admission/result/cache authority", "mandatory typed dependency reconstruction"]
+      },
+      {
+        "order": 5,
+        "task_id": "phase4-authority-integration-gate",
+        "owns": ["two-plane process-death lifecycle", "SQLite/PostgreSQL parity", "scenarios", "transitive evidence disposition"]
+      }
+    ],
+    "adversarial_matrix": {
+      "design_anchor": "§13.3 Adversarial owner matrix",
+      "row_count": 27,
+      "row_ids": ["ADV-001", "ADV-002", "ADV-003", "ADV-004", "ADV-005", "ADV-006", "ADV-007", "ADV-008", "ADV-009", "ADV-010", "ADV-011", "ADV-012", "ADV-013", "ADV-014", "ADV-015", "ADV-016", "ADV-017", "ADV-018", "ADV-019", "ADV-020", "ADV-021", "ADV-022", "ADV-023", "ADV-024", "ADV-025", "ADV-026", "ADV-027"],
+      "resolved_topology_rows": ["ADV-001", "ADV-017", "ADV-018", "ADV-019", "ADV-020", "ADV-024", "ADV-025"],
+      "canonical_market_rows": ["ADV-001", "ADV-002", "ADV-003", "ADV-009", "ADV-010", "ADV-011", "ADV-012", "ADV-013", "ADV-014", "ADV-015", "ADV-016", "ADV-017", "ADV-018", "ADV-020", "ADV-021", "ADV-022", "ADV-023", "ADV-025", "ADV-026", "ADV-027"],
+      "typed_market_rows": ["ADV-001", "ADV-009", "ADV-010", "ADV-016", "ADV-018", "ADV-020", "ADV-022", "ADV-023", "ADV-024", "ADV-025", "ADV-026", "ADV-027"],
+      "dataset_assessment_rows": ["ADV-001", "ADV-002", "ADV-003", "ADV-004", "ADV-005", "ADV-006", "ADV-007", "ADV-008", "ADV-009", "ADV-010", "ADV-011", "ADV-012", "ADV-013", "ADV-014", "ADV-015", "ADV-016", "ADV-018", "ADV-019", "ADV-020", "ADV-021", "ADV-022", "ADV-023", "ADV-024", "ADV-025", "ADV-026", "ADV-027"],
+      "integration_rows": ["ADV-001", "ADV-002", "ADV-003", "ADV-004", "ADV-005", "ADV-006", "ADV-007", "ADV-008", "ADV-009", "ADV-010", "ADV-011", "ADV-012", "ADV-013", "ADV-014", "ADV-015", "ADV-016", "ADV-017", "ADV-018", "ADV-019", "ADV-020", "ADV-021", "ADV-022", "ADV-023", "ADV-024", "ADV-025", "ADV-026", "ADV-027"],
+      "future_phase_rows": [],
+      "evidence_rule": "One row-addressed real-path observation per ID; no grouped PASS substitutes for missing row evidence.",
+      "adv_006_phase4_contract": "At the real public v2 reclaim-dispatch seam, explicit current authority context verifies the complete current chain and reaches exact V2_RUNTIME_UNAVAILABLE before claim, reclaim, provider, cache, worker, claim-token, result, broker, order, or money side effects; stale or missing authority refuses earlier. FULL proves containment only.",
+      "adv_006_nonclaim": "Phase 4 ADV-006 does not prove successful v2 claim, ownership loss, reclaim, worker execution, result finalization, or P5-ADV-006-RUNTIME.",
+      "downstream_runtime_contract": {
+        "id": "P5-ADV-006-RUNTIME",
+        "owner_route": "Phase 5 architecture generates one exclusive post-schema runtime capsule",
+        "dependency": "accepted phase5-graph-paper-attribution-schema",
+        "before_use": ["v2 claim", "v2 reclaim", "worker", "result", "cache", "broker", "order", "money"],
+        "direct_evidence": ["SQLite", "disposable PostgreSQL 16", "process death and restart", "public-seam reclaim", "stale claimant fenced", "current claimant finalizes exactly once"]
+      }
+    },
+    "contained_highs": [
+      {
+        "finding": "CUR-H3",
+        "owner_task": "phase5-graph-paper-attribution-schema",
+        "deadline": "schema acceptance before P5-ADV-006-RUNTIME; runtime contract closure before any named v2 consumer is reachable",
+        "schema_enables_runtime": false,
+        "required_runtime_contract": "P5-ADV-006-RUNTIME",
+        "blocked_use": ["graph-to-paper execution", "claim/reclaim", "graph-address cache authority", "deployment binding", "money records"]
+      },
+      {
+        "finding": "CUR-H4",
+        "owner_task": "phase6-generated-strategy-version-lineage",
+        "deadline": "before first Phase 6 activation or deployment-binding capsule",
+        "blocked_use": ["generated replay", "promotion", "current-slot replacement as evidence", "paper/live assignment", "activation", "deployment", "release evidence"]
+      }
+    ]
+  },
+  "validation": {
+    "missing_entries": [],
+    "duplicate_entries": [],
+    "unresolved_conflicts": []
+  }
+}

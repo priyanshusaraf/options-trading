@@ -61,7 +61,11 @@ def gates_passed(gates: dict) -> bool:
 
 
 def validate(candles, inst, strategy, params, *, n_folds: int = 4,
-             capital: float = 50_000.0, **gate_kw) -> ValidationOutcome:
-    wf = walk_forward(candles, inst, strategy, params, n_folds=n_folds, capital=capital)
+             capital: float = 50_000.0, evaluation_start=None,
+             evaluation_bars: int | None = None, **gate_kw) -> ValidationOutcome:
+    wf = walk_forward(
+        candles, inst, strategy, params, n_folds=n_folds, capital=capital,
+        evaluation_start=evaluation_start, evaluation_bars=evaluation_bars,
+    )
     gates = validation_gates(wf, **gate_kw)
     return ValidationOutcome(all(g["passed"] for g in gates.values()), gates, wf)

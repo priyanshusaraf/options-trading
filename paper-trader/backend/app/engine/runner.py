@@ -67,9 +67,9 @@ from app.market_data.quality import FeedQuality
 from app.core.market_hours import ist_epoch
 from app.core.mis_blocklist import is_mis_blocked
 from app.engine.risk_controls import (
-    before_entry_window, daily_loss_halt, daily_profit_lock, expiry_too_close,
+    before_entry_window, account_halt_reason, daily_profit_lock, expiry_too_close,
     gap_halt_active, in_reentry_cooldown, intraday_blocked_for_expiry_day,
-    outside_trading_session, over_per_trade_cap, round_trip_cap_reached,
+    outside_trading_session, over_per_trade_cap,
     signal_already_evaluated, signal_too_old, slots_available)
 from app.notify.notifier import Notifier
 from app.options.picker import pick_option
@@ -153,6 +153,11 @@ class EngineRunner:
         # engine that has not started operating should believe.
         self.paper_authority: dict = {}
         self.paper_authority_problems: list[str] = []
+        # The admitted runtime is expensive to reconstruct because it verifies durable
+        # receipt and graph evidence.  Paper authority refresh is the explicit boundary
+        # that re-verifies that evidence; scans use only the resulting immutable runtime.
+        # New exposure still performs a fresh durable verification at the fill boundary.
+        self._paper_admitted_runtimes: dict[tuple[str | None, str | None, str, str], object] = {}
         self.state: dict[str, dict] = {}      # latest per-instrument engine snapshot
         self.last_pick: dict[str, dict] = {}  # latest picker output (Options-Calc view)
         self.enabled: set[str] = self._load_enabled()
@@ -400,12 +405,42 @@ class EngineRunner:
         except AdmissionRequired as exc:
             raise execution_binding.AuthorityNotGranted(
                 binding.strategy_key, exc.code) from exc
-        source = admitted.artifact.source_evidence
-        if (source.strategy_key != binding.strategy_key
-                or source.strategy_version != binding.strategy_version):
+        from app.strategy.admission import matches_execution_identity
+        if not matches_execution_identity(
+                admitted.artifact, strategy_key=binding.strategy_key,
+                strategy_version=binding.strategy_version,
+                graph_address=binding.graph_address,
+                attribution_state=binding.attribution_state):
             raise execution_binding.AuthorityNotGranted(
-                binding.strategy_key, "ARTEFACT_MISMATCH")
+                binding.strategy_key, "GRAPH_ATTRIBUTION_MISMATCH")
         return admitted.strategy
+
+    @staticmethod
+    def _admission_runtime_key(binding) -> tuple:
+        """Identity of a refresh-verified runtime, scoped to its paper authority."""
+        return (binding.owner_id, binding.admission_address,
+                binding.strategy_key, binding.strategy_version,
+                binding.graph_address, binding.attribution_state)
+
+    def _scan_entry_strategy(self, binding):
+        """Return the runtime verified at the explicit paper-authority refresh boundary.
+
+        Reconstructing a durable receipt on every scan is not another safety check: the
+        final entry boundary below still does that with a fresh database read.  It is a
+        per-instrument, per-tick cost that turns a normal paper scan into thousands of
+        graph/receipt reconstructions.  A missing refresh cache fails closed rather than
+        falling back to an unbounded scan-time reconstruction.
+        """
+        from app.core.execution_binding import ORIGIN_PAPER_AUTHORITY
+
+        if binding.origin != ORIGIN_PAPER_AUTHORITY:
+            return self._require_entry_receipt(binding)
+        runtime = self._paper_admitted_runtimes.get(
+            self._admission_runtime_key(binding))
+        if runtime is None:
+            raise execution_binding.AuthorityNotGranted(
+                binding.strategy_key, "ADMISSION_REQUIRED")
+        return runtime
 
     def _admitted_entry_signal(self, binding, frame) -> str:
         """Return only an entry decision produced by the admitted IR runtime.
@@ -414,7 +449,7 @@ class EngineRunner:
         management. It is never the source of a new-exposure signal once admission is
         required: adapters are parity evidence, not execution authority.
         """
-        strategy = self._require_entry_receipt(binding)
+        strategy = self._scan_entry_strategy(binding)
         latest = self._generic_latest(strategy.signals(frame))
         signal = latest.get("signal", "NONE") if latest else "NONE"
         return signal if signal in ("LONG_ENTRY", "SHORT_ENTRY") else "NONE"
@@ -464,8 +499,24 @@ class EngineRunner:
             log.error(f"could not load paper-authority deployments: {e}",
                       event="PAPER_AUTHORITY_LOAD_FAIL")
             return 0
+        refreshed_authority = {}
+        refreshed_runtimes = {}
+        for record in bindings:
+            try:
+                execution = execution_binding.bind(
+                    deployment_id=self.deployment_id, instrument_key=record.instrument_key,
+                    deployment_pin=self._deployment_pin, assigned_key=self.strategy_keys.get(
+                        record.instrument_key), paper_authority=record, owner_id=self.owner_id)
+                runtime = self._require_entry_receipt(execution)
+            except execution_binding.AuthorityNotGranted as exc:
+                problems.append(
+                    f"{record.instrument_key}: admission receipt refused ({exc})")
+                continue
+            refreshed_authority[record.instrument_key] = record
+            refreshed_runtimes[self._admission_runtime_key(execution)] = runtime
         previous = self.paper_authority
-        self.paper_authority = {b.instrument_key: b for b in bindings}
+        self.paper_authority = refreshed_authority
+        self._paper_admitted_runtimes = refreshed_runtimes
         self._withdraw_superseded_signals(previous, self.paper_authority)
         self.paper_authority_problems = problems
         for problem in problems:
@@ -522,7 +573,9 @@ class EngineRunner:
             if executed is not None and not (
                     executed.origin == ORIGIN_PAPER_AUTHORITY
                     and executed.strategy_key == binding.strategy_key
-                    and executed.strategy_version == binding.content_address):
+                    and executed.strategy_version == str(binding.graph_version)
+                    and executed.graph_address == binding.content_address
+                    and executed.attribution_state == "VERIFIED_GRAPH"):
                 continue      # authored by something else; not this withdrawal's business
             # Both, unconditionally. An `or` here short-circuits: popping the state
             # returns a truthy value and the binding is left behind, still available to
@@ -1837,7 +1890,9 @@ class EngineRunner:
                     self.params, plan=plan,
                     strategy_key=executed.strategy_key,
                     strategy_version=executed.strategy_version,
-                    admission_address=executed.admission_address)
+                    admission_address=executed.admission_address,
+                    graph_address=executed.graph_address,
+                    attribution_state=executed.attribution_state)
                 if pos is None:
                     continue  # live order not filled — nothing recorded (already alerted)
                 # H2 — seed the ratchet for a risk_model strategy so this position is
@@ -1924,7 +1979,9 @@ class EngineRunner:
                         strategy_key=executed.strategy_key,
                         strategy_version=executed.strategy_version,
                         margin=pickk.margin, sl_pct=sl_pct, tp_pct=tp_pct, plan=plan,
-                        admission_address=executed.admission_address)
+                        admission_address=executed.admission_address,
+                        graph_address=executed.graph_address,
+                        attribution_state=executed.attribution_state)
                     if pos is None:
                         continue
                     if self.params.get("notify_enabled", True):
@@ -2074,7 +2131,9 @@ class EngineRunner:
                 params=self.params,
                 strategy_key=executed.strategy_key,
                 strategy_version=executed.strategy_version,
-                admission_address=executed.admission_address)
+                admission_address=executed.admission_address,
+                graph_address=executed.graph_address,
+                attribution_state=executed.attribution_state)
             if pos is None:
                 continue
             slots -= 1
@@ -2314,11 +2373,11 @@ class EngineRunner:
 
     def _open_unrealized(self) -> float:
         """Mark-to-market P&L across all currently open positions (can be negative).
-        Direction-aware for intraday-equity SHORTs (which profit as price falls)."""
+        Direction-aware for equity/futures SHORTs; bearish long puts retain premium P&L."""
         total = 0.0
         for p in self.broker.open_positions():
             last = p.last_premium or p.entry_premium
-            if p.segment == "equity_intraday" and p.direction == "SHORT":
+            if p.segment in {"equity_intraday", "index_futures"} and p.direction == "SHORT":
                 total += (p.entry_premium - last) * p.qty
             else:
                 total += (last - p.entry_premium) * p.qty
@@ -2395,6 +2454,8 @@ class EngineRunner:
             # via BUY; the options close always SELLs) — same fix as reconcile.
             if pos.segment == "equity_intraday":
                 tr = self.broker.close_equity_position(pos, prem, reason, now)
+            elif pos.segment == "index_futures":
+                tr = self.broker.close_futures_position(pos, prem, reason, now)
             else:
                 tr = self.broker.close_position(pos, prem, reason, now, pos.last_spot)
             if tr is None:
@@ -2408,79 +2469,61 @@ class EngineRunner:
         return closed
 
     def _entries_halted(self, now) -> bool:
-        """Halt NEW entries for the day once a circuit breaker trips (open positions
-        are still managed throughout). Three breakers, any trips:
-          • max_daily_loss          — today's REALIZED net loss.
-          • max_open_drawdown       — today's REALIZED + UNREALIZED (open MTM) loss.
-          • max_round_trips_per_day — count of completed round trips today (#10).
-        Alerts at most once per day; the open-drawdown breaker un-trips on recovery."""
-        max_loss = self.params.get("max_daily_loss", 0.0)
-        max_dd = self.params.get("max_open_drawdown", 0.0)
-        max_rt = self.params.get("max_round_trips_per_day", 0)
-        today = now.date()
-        if ((not max_loss or max_loss <= 0) and (not max_dd or max_dd <= 0)
-                and (not max_rt or max_rt <= 0)):
-            return self._pl_halted_date == today
-        realized = self._today_net_realized(today)
-        unreal = self._open_unrealized() if (max_dd and max_dd > 0) else 0.0
-        halted, why = daily_loss_halt(realized, unreal, max_loss, max_dd)
-        rts = self._today_round_trips(today) if (max_rt and max_rt > 0) else 0
-        if not halted and round_trip_cap_reached(rts, max_rt):
-            halted, why = True, "round_trips"
-        if halted and self._halt_notified_date != today:
-            self._halt_notified_date = today
-            if why == "round_trips":
-                log.warn(f"ROUND-TRIP CAP — {rts} completed round trips today >= cap "
-                         f"{max_rt}; no new entries today")
-            elif why == "open_drawdown":
-                combined = realized + unreal
-                log.warn(f"DAILY DRAWDOWN HALT — today realized ₹{realized:,.0f} + open "
-                         f"₹{unreal:,.0f} = ₹{combined:,.0f} <= -₹{max_dd:,.0f}; no new entries today")
-                if self.params.get("notify_enabled", True):
-                    self.notifier.daily_halt(combined, max_dd)
-            else:
-                log.warn(f"DAILY LOSS HALT — today realized net ₹{realized:,.0f} <= "
-                         f"-₹{max_loss:,.0f}; no new entries today")
-                if self.params.get("notify_enabled", True):
-                    self.notifier.daily_halt(realized, max_loss)
-        # E1 profit-lock give-back — independent of the loss/drawdown breakers above
-        # (never fires the daily-loss alert, and vice-versa); own state, own reason.
-        if self._pl_halted_date == today:
-            return True
-        return halted
+        """Account guards stop new entries; existing exit management stays available."""
+        status = self.halt_status(now)
+        if not status["halted"] or status["reason"] == "profit_lock":
+            return status["halted"]
+        notice = ("_profit_halt_notified_date" if status["reason"] == "realized_profit"
+                  else "_halt_notified_date")
+        if getattr(self, notice, None) != now.date():
+            setattr(self, notice, now.date())
+            self._notify_entry_halt(status)
+        return status["halted"]
+
+    def _notify_entry_halt(self, status) -> None:
+        """Explain the guard once without treating a profit target as a loss."""
+        reason = status["reason"]
+        if reason == "round_trips":
+            log.warn(f"ROUND-TRIP CAP — {status['round_trips']} completed round trips "
+                     f"today >= cap {status['max_round_trips']}; no new entries today")
+            return
+        if reason == "realized_profit":
+            log.warn(f"DAILY PROFIT TARGET — realized net ₹{status['realized']:,.0f} "
+                     f">= ₹{status['max_daily_profit']:,.0f}; new entries halted, "
+                     "open positions remain managed", event="DAILY_PROFIT_HALT")
+            return
+        amount = status["realized"]
+        limit = status["max_daily_loss"]
+        if reason == "open_drawdown":
+            amount += status["open_unrealized"]
+            limit = status["max_open_drawdown"]
+        log.warn(f"DAILY {reason.upper()} HALT — ₹{amount:,.0f} <= -₹{limit:,.0f}; "
+                 "new entries halted, open positions remain managed")
+        if self.params.get("notify_enabled", True):
+            self.notifier.daily_halt(amount, limit)
 
     def halt_status(self, now) -> dict:
-        """Pure, side-effect-free read of the daily-loss / open-drawdown circuit
-        breaker for the snapshot/UI. Mirrors _entries_halted's computation but does
-        NOT log, notify, or mutate _halt_notified_date — safe to call on every WS
-        push. _entries_halted stays the one place that fires the once-per-day alert.
+        """Side-effect-free account/book entry guard status used by runner and UI.
 
-        Returns: {halted, reason ('', 'realized', 'open_drawdown', 'round_trips',
-        'profit_lock'), realized, open_unrealized, max_daily_loss, max_open_drawdown,
-        round_trips, max_round_trips, profit_lock_halted}."""
-        today = now.date()
-        pl_halted = self._pl_halted_date == today
-        max_loss = self.params.get("max_daily_loss", 0.0) or 0.0
-        max_dd = self.params.get("max_open_drawdown", 0.0) or 0.0
-        max_rt = self.params.get("max_round_trips_per_day", 0) or 0
-        if max_loss <= 0 and max_dd <= 0 and max_rt <= 0:
-            return {"halted": pl_halted, "reason": "profit_lock" if pl_halted else "",
-                    "realized": 0.0, "open_unrealized": 0.0, "max_daily_loss": max_loss,
-                    "max_open_drawdown": max_dd, "round_trips": 0,
-                    "max_round_trips": max_rt, "profit_lock_halted": pl_halted}
-        realized = self._today_net_realized(today)
-        unreal = self._open_unrealized() if max_dd > 0 else 0.0
-        halted, reason = daily_loss_halt(realized, unreal, max_loss, max_dd)
-        rts = self._today_round_trips(today) if max_rt > 0 else 0
-        if not halted and round_trip_cap_reached(rts, max_rt):
-            halted, reason = True, "round_trips"
-        if not halted and pl_halted:
-            halted, reason = True, "profit_lock"
+        Fixed profit target uses session realized net P&L only. Profit giveback
+        retains its separate flatten-and-halt state. Disabled guards avoid reads.
+        """
+        limits = {key: self.params.get(key, 0) or 0 for key in (
+            "max_daily_loss", "max_open_drawdown", "max_daily_profit",
+            "max_round_trips_per_day")}
+        enabled = any(value > 0 for value in limits.values())
+        realized = self._today_net_realized(now.date()) if enabled else 0.0
+        unreal = self._open_unrealized() if limits["max_open_drawdown"] > 0 else 0.0
+        rts = self._today_round_trips(now.date()) if limits["max_round_trips_per_day"] > 0 else 0
+        pl_halted = self._pl_halted_date == now.date()
+        reason = account_halt_reason(realized, unreal, rts, pl_halted, limits)
         return {
-            "halted": halted, "reason": reason,
+            "halted": bool(reason), "reason": reason,
             "realized": round(realized, 2), "open_unrealized": round(unreal, 2),
-            "max_daily_loss": max_loss, "max_open_drawdown": max_dd,
-            "round_trips": rts, "max_round_trips": max_rt,
+            "max_daily_loss": limits["max_daily_loss"],
+            "max_open_drawdown": limits["max_open_drawdown"],
+            "max_daily_profit": limits["max_daily_profit"],
+            "round_trips": rts, "max_round_trips": limits["max_round_trips_per_day"],
             "profit_lock_halted": pl_halted,
         }
 

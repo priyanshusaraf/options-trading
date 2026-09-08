@@ -4,6 +4,7 @@ gate NEW entries — existing positions are still managed."""
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 from app.engine.execution_policy import OrderPlan
 
 
@@ -62,7 +63,9 @@ def test_daily_loss_halt_blocks_new_entries():
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
     now = r.provider.now()
-    pos = r.broker.open_position(inst, "LONG", q, "t", now, chain.spot, r.params)
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(inst, "LONG", q, "t", now, chain.spot, r.params,
+                                  **admission)
     r.broker.close_position(pos, q.ltp * 0.5, "STOP_LOSS", now, chain.spot)  # realize a loss
     assert r.broker.position_for("NIFTY") is None
     _long_signal(r)

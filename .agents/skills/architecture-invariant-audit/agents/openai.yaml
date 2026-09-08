@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit architecture invariants"
+  short_description: "Trace canonical identity, evidence and authority"
+  default_prompt: "Use $architecture-invariant-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

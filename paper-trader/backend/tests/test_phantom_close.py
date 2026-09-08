@@ -12,11 +12,34 @@ from fastapi.testclient import TestClient
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
 from app.main import app
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _client():
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    from unittest.mock import patch
+    with r._session() as session, patch.object(
+            paper_authority, "verified_decision",
+            return_value={"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                          "graph_identifier": "test.strategy.expanding_z_impulse",
+                          "graph_version": 1, "content_address": admission["graph_address"],
+                          "admission_address": admission["admission_address"],
+                          "decision": "approved"}):
+        paper_authority.activate(session, row.id, revision=row.revision,
+                                 owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     app.state.runner = r
     r.arm(True)
     return TestClient(app), r

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Inspect analytics before data leaves the product"
+  short_description: "Inspect analytics payloads for sensitive data leaks"
+  default_prompt: "Use $analytics-privacy-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

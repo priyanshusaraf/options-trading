@@ -9,8 +9,10 @@ on without someone deciding to.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.core.config import Settings
-from app.engine.charges import compute_charges
+from app.engine.charges import ChargeScheduleRefusal, compute_charges
 
 
 def _defaults() -> Settings:
@@ -72,6 +74,8 @@ def test_an_unknown_segment_does_not_silently_cost_zero():
     """A typo'd segment name must not read as a free trade."""
     known = compute_charges("NFO_FUT", "BUY", 24_000.0, 50)["total"]
     assert known > 0
+    with pytest.raises(ChargeScheduleRefusal, match="unknown segment"):
+        compute_charges("TYPO_FUT", "BUY", 24_000.0, 50)
 
 
 def test_the_margin_target_can_actually_buy_one_lot():

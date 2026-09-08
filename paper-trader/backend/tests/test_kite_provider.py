@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from app.core.instruments import Instrument
 from app.providers.kite import KiteProvider
+from app.providers.base import ProviderReadError
 
 
 def _provider(rows):
@@ -145,3 +148,34 @@ def test_tick_size_does_not_poison_the_cache_on_a_transient_dump_failure():
     assert p.tick_size("LT", "NSE") == 0.05        # first call: uncached fallback
     assert p.tick_size("LT", "NSE") == 0.10        # second call: real tick, not stale 0.05
     assert calls["n"] == 2                          # NOT short-circuited by a poisoned cache
+
+
+@pytest.mark.parametrize("interval,seconds", [
+    ("minute", 60), ("3minute", 180), ("5minute", 300), ("10minute", 600),
+    ("15minute", 900), ("30minute", 1800), ("60minute", 3600), ("day", 86400),
+])
+@pytest.mark.parametrize("offset,expected", [(-1, 0), (0, 1), (1, 1), (172800, 1)])
+def test_kite_history_keeps_final_bar_only_after_completion(interval, seconds, offset, expected):
+    from app.core.instruments import get_instrument
+    start = dt.datetime(2026, 9, 4, tzinfo=dt.timezone(dt.timedelta(hours=5, minutes=30)))
+    row = {"date": start, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10}
+    provider = _provider([])
+    provider._underlying_token = lambda _inst: 123
+    provider._historical = lambda *_args: [row]
+    provider.now = lambda: (start + dt.timedelta(seconds=seconds + offset)).replace(tzinfo=None)
+    bars = provider.get_candles(get_instrument("NIFTY"), interval, 5)
+    assert len(bars) == expected
+    if bars:
+        assert bars[0].ts == start.replace(tzinfo=None)
+        assert (bars[0].open, bars[0].high, bars[0].low, bars[0].close, bars[0].volume) == (100, 102, 99, 101, 10)
+
+
+def test_kite_completion_uses_each_timestamp_not_row_position():
+    from app.providers.kite import completed_candles
+    now = dt.datetime(2026, 9, 4, 10, 30)
+    rows = [{"date": stamp, "open": 100, "high": 102, "low": 99, "close": 101}
+            for stamp in (now, now - dt.timedelta(minutes=15), now + dt.timedelta(minutes=15))]
+    assert [bar.ts for bar in completed_candles(rows, "15minute", now)] == [now - dt.timedelta(minutes=15)]
+    assert completed_candles([], "15minute", now) == []
+    with pytest.raises(ProviderReadError, match="unsupported"):
+        completed_candles(rows, "week", now)

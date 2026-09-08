@@ -24,6 +24,7 @@ from app.db.session import init_db
 from app.engine.broker import PaperBroker
 from app.engine.runner import EngineRunner
 from app.providers.mock import MockProvider
+from tests.admitted_entry import persist_admitted_entry
 
 EXPIRY = dt.date(2026, 8, 27)
 NOW = dt.datetime(2026, 8, 3, 11, 0)
@@ -58,9 +59,10 @@ def runner():
 
 
 def _open(r, direction="LONG", price=24_000.0):
+    admission = persist_admitted_entry(r.broker.s)
     return r.broker.open_futures_position(
         get_instrument("NIFTY"), direction, price, 50, "NFO_FUT", "TEST",
-        dt.datetime(2026, 8, 3, 10, 0), EXPIRY, margin=25_000.0)
+        dt.datetime(2026, 8, 3, 10, 0), EXPIRY, margin=25_000.0, **admission)
 
 
 def test_it_marks_on_the_futures_price_not_spot(runner, monkeypatch):
@@ -165,9 +167,11 @@ def test_expiry_day_gets_no_carve_out(runner, monkeypatch):
     not allowed to make, and there is no rollover code anywhere in engine/ — an
     invariant to preserve, not a gap to fill."""
     from app.core import market_hours
+    admission = persist_admitted_entry(runner.broker.s)
     pos = runner.broker.open_futures_position(
         get_instrument("NIFTY"), "LONG", 24_000.0, 50, "NFO_FUT", "TEST",
-        dt.datetime(2026, 8, 27, 10, 0), dt.date(2026, 8, 27), margin=25_000.0)
+        dt.datetime(2026, 8, 27, 10, 0), dt.date(2026, 8, 27), margin=25_000.0,
+        **admission)
     monkeypatch.setattr(market_hours, "minutes_to_close", lambda seg, now: 2)
     runner.square_off_intraday(dt.datetime(2026, 8, 27, 15, 28))
     assert runner.broker.open_positions() == [], "held a contract into settlement"

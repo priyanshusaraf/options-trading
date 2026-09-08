@@ -1,0 +1,160 @@
+{
+  "schema": "professional-reference-refresh/1",
+  "date": "2026-08-29",
+  "capsule": "kleppmann-numeric-and-market-truth-audit",
+  "owner_task": "01a04e7e-0dc6-74e0-92af-bc64725d9877",
+  "repository_head": "de6faae3e97cf5537338bee2143350e53f70da1c",
+  "trigger": "owner-started bounded numeric and market-truth professional-reference audit",
+  "corpus_lineage": {
+    "first_party_records_before": 373,
+    "first_party_records_after": 373,
+    "html_crawl_rerun": false,
+    "one_hop_records_triaged": 2016,
+    "one_hop_triage_rerun": false,
+    "competing_registry_created": false,
+    "ddia_second_edition_book_text_read": false
+  },
+  "required_input_correction": {
+    "capsule_sha256": "e14a718eada9044f42ea88ac6429babe105be84dec9c01d1592cdf78a0622c93",
+    "architecture_receipt": ".agent/runs/kleppmann-numeric-and-market-truth-audit/root-correction/required-sections-architecture.log",
+    "architecture_receipt_sha256": "8f6e199328a5c4dff08d5581e8611541138f0c62b17bc2df0a5304b327a6690f",
+    "architecture_checked_files": 407,
+    "architecture_failures": 0
+  },
+  "sources": {
+    "public_external_selected": 9,
+    "direct_repository_evidence_groups": 1,
+    "new_source_ids": [
+      "FREQTRADE_LOOKAHEAD_2023_6",
+      "ISO_4217_2015_PUBLIC",
+      "NASA_MCO_PHASE2_2000",
+      "PANDAS_MERGE_ASOF_3_0_5",
+      "PYTHON_DECIMAL_3_13_15",
+      "RFC8785_JCS_2020",
+      "STRATEGY_OS_NUMERIC_MARKET_TRUTH_PROBES_20260829",
+      "UNICODE_LDML_NUMBERS_48_2",
+      "ZERODHA_CHARGES_20260829",
+      "ZERODHA_KITE_INSTRUMENTS_V3_20260829"
+    ],
+    "access_limits": [
+      "ISO 4217 official public overview was inspected through the public index; direct shell retrieval returned HTTP 403 and was not bypassed.",
+      "DDIA second-edition book text remained unavailable and was not read.",
+      "No private provider data, credential, account, contract note or paid source was accessed."
+    ]
+  },
+  "source_receipts": {
+    "RFC8785_JCS_2020": "63d52294eb0e3f0014174288186d388b4ddbf2c67d1ce8af1d9726eb0c3ab240",
+    "PYTHON_DECIMAL_3_13_15": "af64c18f9b57328647ac6890c829f423d6fca4a70be5cf39d2f2ba253c618c61",
+    "PANDAS_MERGE_ASOF_3_0_5": "1e80cb2752a42018c674989c3813eadafce1cc97b0e6ca1358898ccc80369e13",
+    "FREQTRADE_LOOKAHEAD_2023_6": "e2b946cbf71f3dbd615033890f14409a9ad8ab3ff7febae71e6001c44b2d5d6e",
+    "FREQTRADE_GPL_3_0": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2",
+    "ZERODHA_KITE_INSTRUMENTS_V3_20260829": "63c947c4c6c1f32fe64c2bca1e127efa10d864b74bbcad86b4298d3a3282a453",
+    "ZERODHA_CHARGES_20260829": "a93bf79732b9b6d4f6df756f14d05bb4a94d08a5951a20439d874aafb",
+    "UNICODE_LDML_NUMBERS_48_2": "43aed410d67e349c0550b0d5fb36a36636e60ee7324efa57f068d8c668d2860a",
+    "ISO_4217_2015_PUBLIC_ACCESS_RECEIPT": "dd11db406ba29c9af00e1a02accacebcf7c5a2654b4162ef12e709fec8e5688a",
+    "NASA_MCO_PHASE2_2000_REMOTE_PDF": "a533a8acd3637446d238dd55c8509ec30a9ecf29e552527820192087569d154d"
+  },
+  "direct_probes": {
+    "market_truth_snapshot_identity": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-market-truth-snapshot-identity.log",
+      "sha256": "df560088fae591af3c0d9bb39764f87bdeb5552e6ef8aada517a0510983d85f9",
+      "result": "distinct recorded_at values collapsed to identical bytes/address; round trip replaced recorded_at with knowledge_cutoff"
+    },
+    "negative_zero_identity": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-negative-zero-identity.log",
+      "sha256": "01d06c22ba91a1063d3f885bdb1cb0a0d22bbff339bf1bc050ed4eb7e5a91261",
+      "result": "negative zero accepted by numeric ingress and validity; positive and negative zero addresses differed"
+    },
+    "availability_order": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-availability-order.log",
+      "sha256": "bb489d947ba607156dfadb323667d43420ad8cdb492ffb54d42b93976f151009",
+      "result": "availability-before-completion object accepted; current aligner still blocked early use"
+    },
+    "charge_boundaries": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-charge-boundaries.log",
+      "sha256": "65ef0c5ed517b5761d8959f82b7723ca0bae68e20e44172b07c3f2e377bdebf1",
+      "result": "stale NFO option/future tax rates and unknown-segment NFO fallback reproduced"
+    },
+    "unit_type_erasure": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-unit-type-erasure.log",
+      "sha256": "795e9d9d0517d257366c1cf203d96c985f3de8c7163306a0e87ec066ecbc6a13",
+      "result": "decimal return, input units and squared units exposed the same analytical.float64 port type"
+    },
+    "full_address_roundtrip": {
+      "path": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/probe-full-address-roundtrip.log",
+      "sha256": "056d1cc6d279364ec02d30770bbecc545f259fb56e184d98ec1717bc06c3e77a",
+      "result": "46-character instrument key decoded to the complete 32-byte digest"
+    }
+  },
+  "claims_added": [
+    "NMT-001",
+    "NMT-002",
+    "NMT-003",
+    "NMT-004",
+    "NMT-005",
+    "NMT-006",
+    "NMT-007"
+  ],
+  "findings": {
+    "confirmed_current_bug": ["NMT-001", "NMT-004"],
+    "missing_or_latent_invariant": ["NMT-002", "NMT-003", "NMT-005"],
+    "already_correct_or_keep": ["NMT-006", "NMT-007"],
+    "current_wrong_result_unverifiable": ["NMT-005"],
+    "future_seam": ["NMT-005", "NMT-007"]
+  },
+  "exact_owners": {
+    "strategy-os-v0-canonical-research-spine": ["NMT-001", "NMT-003", "NMT-004", "NMT-006"],
+    "strategy-os-v0-zerodha-data-static-scope": ["NMT-001", "NMT-002", "NMT-006"],
+    "strategy-os-v0-frontend-integration-closure": ["NMT-007"],
+    "phase6-language-resource-contracts": ["NMT-005"],
+    "phase6-temporal-resource-catalogue": ["NMT-006"],
+    "phase8-provider-price-coherence": ["NMT-004"],
+    "phase11-browser-realtime-contract": ["NMT-007"]
+  },
+  "rejected_adoptions": [
+    "universal Decimal rewrite",
+    "second canonical serializer",
+    "new units dependency in V0",
+    "provider token as canonical identity",
+    "implicit forward fill or same-bar execution",
+    "multi-currency V0",
+    "new streaming or workflow platform"
+  ],
+  "implementation": false,
+  "deployment": false,
+  "migration": "none in this read-only capsule; findings carry separate additive migration and rollback obligations",
+  "publication": false,
+  "provider_or_network_authority": false,
+  "live_order_or_money_authority": false,
+  "validation": {
+    "status": "pass",
+    "source_registry_valid": true,
+    "source_registry_records": 57,
+    "source_registry_sha256": "855891b11d4ba9d67130b4d7da01af6c2272b64a02cad844e4ad2512befa8ee6",
+    "claim_registry_valid": true,
+    "claim_registry_records": 29,
+    "claim_registry_sha256": "c9a1670f7084111056574cbfedc98d3280f3f39eb77e8ec20c41e8a655a8b038",
+    "source_and_claim_ids_unique": true,
+    "new_two_source_chains_valid": true,
+    "markdown_links_valid": true,
+    "architecture_valid": true,
+    "architecture_checked_files": 407,
+    "architecture_failures": 0,
+    "validation_log": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/validation.log",
+    "validation_log_sha256": "b68009e946bc1ebed2fb44f0ea3f67bdf165569fb125cd73e71c89c426ec556a",
+    "architecture_log": ".agent/runs/kleppmann-numeric-and-market-truth-audit/owner/architecture-v2.log",
+    "architecture_log_sha256": "8f6e199328a5c4dff08d5581e8611541138f0c62b17bc2df0a5304b327a6690f",
+    "protected_bytes_attributed": true,
+    "protected_attribution": ".agent/runs/kleppmann-numeric-and-market-truth-audit/protected-attribution.json",
+    "protected_attribution_sha256": "0c932cff4125b5b635e66ed7efb829049418d468d09a66b0f99d75e5aa3e7a5b",
+    "closure_protected_manifest_entries": 1212,
+    "closure_protected_manifest_sha256": "d3eeb45892fdac73e3852c8117d36487b42874c74fd86f946827cd7acf7313bd",
+    "audit_product_writes": 0,
+    "audit_frontend_writes": 0,
+    "audit_programme_writes": 0,
+    "concurrent_protected_changes": 11,
+    "global_protected_byte_equality_claimed": false,
+    "global_protected_byte_equality_nonclaim_reason": "Protected backend and external frontend files changed concurrently under active disjoint product lanes. This audit wrote none of them."
+  },
+  "full_mandate_complete": false
+}

@@ -32,6 +32,7 @@ import pytest
 
 from app.core import paper_authority as pa
 from app.core.execution_book import LIVE, PAPER
+from app.core.instruments import get_instrument
 from app.db.models import (
     LEGACY_DEPLOYMENT_ID,
     GraphArtifact,
@@ -63,17 +64,10 @@ def _graph_document(version: int = 1) -> dict:
 
 
 def _admission_address(version: int) -> str:
-    from app.ir.library import REGISTRY
-    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+    from tests.admitted_entry import admitted_artifact
 
-    decision = admit_strategy(
-        owner_id="owner",
-        source_input=IRGraphAdmissionInput(
-            graph=_graph_document(version), parameters={}, risk_model=None),
-        registry=REGISTRY,
-    )
-    assert decision.artifact is not None
-    return decision.artifact.admission_address
+    return admitted_artifact(
+        graph=_graph_document(version), owner_id="owner").admission_address
 
 
 @pytest.fixture(autouse=True)
@@ -115,30 +109,13 @@ def a_clean_registry():
 
 
 def _deploy(session, *, version: int = 1, activate: bool = True) -> IrPaperDeployment:
-    from app.core import strategy_admissions
-    from app.ir.library import REGISTRY
-    from app.strategy.admission import IRGraphAdmissionInput, admit_strategy
+    from tests.admitted_entry import persist_admitted_graph
 
-    if session.get(Project, PROJECT) is None:
-        session.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
-    if session.get(GraphArtifact, ("owner", GRAPH)) is None:
-        session.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                  display_name="mirror", draft_json="{}",
-                                  draft_revision=0))
-    session.flush()
     document = _graph_document(version)
-    decision = admit_strategy(
-        owner_id="owner",
-        source_input=IRGraphAdmissionInput(graph=document, parameters={}, risk_model=None),
-        registry=REGISTRY,
+    persist_admitted_graph(
+        session, graph=document, owner_id="owner", project_id=PROJECT,
+        display_name="paper authority runtime mirror",
     )
-    assert decision.artifact is not None
-    strategy_admissions.put(session, decision.artifact)
-    session.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=version,
-                             artifact_json=canonical_json(document),
-                             content_address=content_address(document),
-                             admission_address=decision.artifact.admission_address))
-    session.flush()
     row = pa.stage(session, project_id=PROJECT, graph_identifier=GRAPH,
                    graph_version=version, deployment_id=LEGACY_DEPLOYMENT_ID,
                    instrument_key=INSTRUMENT, interval=INTERVAL)
@@ -173,7 +150,7 @@ def _staged_without_local_receipt(session) -> IrPaperDeployment:
 def test_paper_activation_refuses_a_missing_local_causal_receipt(evidence_bridge):
     """Hypothesis: a graph address alone can grant paper authority."""
     with SessionLocal() as session:
-        row = _deploy(session, activate=False)
+        row = _staged_without_local_receipt(session)
         evidence_bridge["admission_address"] = row.admission_address
         with pytest.raises(pa.NotAdmissible, match="RECEIPT_STALE"):
             pa.activate(session, row.id, revision=row.revision)
@@ -214,13 +191,112 @@ def test_paper_resume_receipt_bypass_mutant_is_killed(monkeypatch, evidence_brid
                 pa.resume(session, row.id, revision=row.revision)
 
 
-def test_paper_refuses_evidence_without_an_admission_address(evidence_bridge):
+def test_paper_refuses_evidence_without_an_admission_address(monkeypatch):
     """Hypothesis: a paper approval can omit the exact causal receipt."""
     with SessionLocal() as session:
         row = _deploy(session, activate=False)
-        evidence_bridge["admission_address"] = ""
+        monkeypatch.setattr(pa, "verified_decision", lambda **asked: {
+            "run_id": 7, "candidate_id": 3, "project_id": PROJECT,
+            "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
+            "content_address": content_address(_graph_document(asked["graph_version"])),
+            "admission_address": "", "decision": "approved",
+        })
         with pytest.raises(pa.EvidenceUnverified, match="admission"):
             pa.activate(session, row.id, revision=row.revision)
+
+
+def test_active_paper_binding_reaches_the_final_entry_receipt_check():
+    """Activation must retain its exact receipt through the frozen binding.
+
+    A paper binding is reconstructed after activation, then consumed at the final
+    pre-entry boundary.  Losing the address between those two steps quarantines an
+    otherwise admitted graph and makes the paper path unable to create an intent.
+    """
+    with SessionLocal() as session:
+        row = _deploy(session)
+        expected_address = row.admission_address
+
+    runner = _runner()
+    try:
+        binding = runner._binding_for(INSTRUMENT)
+        assert binding.admission_address == expected_address
+        admitted = runner._require_entry_receipt(binding)
+        assert admitted.key == binding.strategy_key
+        assert admitted.version == binding.graph_address
+        assert admitted.graph_version_label == binding.strategy_version
+
+        instrument = get_instrument(INSTRUMENT)
+        chain = runner.provider.get_option_chain(instrument)
+        assert chain is not None
+        quote = min(chain.quotes, key=lambda item: item.ltp)
+        position = runner.broker.open_position(
+            instrument, "LONG", quote, "admitted paper trace",
+            runner.provider.now(), chain.spot,
+            strategy_key=binding.strategy_key,
+            strategy_version=binding.strategy_version,
+            admission_address=binding.admission_address,
+            graph_address=binding.graph_address,
+            attribution_state=binding.attribution_state,
+        )
+        assert position.admission_address == expected_address
+        with SessionLocal() as session:
+            stored = session.get(Position, position.id)
+            assert stored is not None
+            assert stored.admission_address == expected_address
+    finally:
+        runner.broker.close()
+
+
+def test_scan_evaluation_reuses_the_runtime_verified_at_authority_refresh(monkeypatch):
+    """The scan consumes the refresh cache, not a durable receipt reconstruction per tick."""
+    with SessionLocal() as session:
+        _deploy(session)
+    runner = _runner()
+    try:
+        binding = runner._binding_for(INSTRUMENT)
+        from app.backtest import repository
+
+        attempted_reads = []
+
+        def unexpected_durable_reconstruction(*args, **kwargs):
+            attempted_reads.append((args, kwargs))
+            raise AssertionError("scan rebuilt a durable admission receipt")
+
+        monkeypatch.setattr(repository, "load_verified_admission",
+                            unexpected_durable_reconstruction)
+        for _ in range(3):
+            assert runner._scan_entry_strategy(binding).key == binding.strategy_key
+
+        assert attempted_reads == []
+    finally:
+        runner.broker.close()
+
+
+def test_pre_fill_reverification_refuses_receipt_invalidated_after_scan(monkeypatch):
+    """A cached scan runtime cannot author an entry after its durable receipt goes stale."""
+    with SessionLocal() as session:
+        _deploy(session)
+    runner = _runner()
+    try:
+        binding = runner._binding_for(INSTRUMENT)
+        from app.backtest import repository
+        from app.backtest.repository import AdmissionRequired
+        from app.core.execution_binding import AuthorityNotGranted
+
+        # Scan-side runtime selection succeeds while the refresh-verified receipt is valid.
+        assert runner._scan_entry_strategy(binding).key == binding.strategy_key
+        calls = []
+
+        def stale_after_scan(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise AdmissionRequired("RECEIPT_STALE")
+
+        monkeypatch.setattr(repository, "load_verified_admission", stale_after_scan)
+        with pytest.raises(AuthorityNotGranted):
+            runner._require_entry_receipt(binding)
+        assert len(calls) == 1
+    finally:
+        runner.broker.close()
 
 
 def _runner() -> EngineRunner:
@@ -229,7 +305,7 @@ def _runner() -> EngineRunner:
     return r
 
 
-def _open_paper_position(session, *, strategy_version: str, key: str = IR_KEY) -> int:
+def _open_paper_position(session, *, graph_address: str, key: str = IR_KEY) -> int:
     """A position exactly as a paper fill leaves it. Constructed rather than traded, so no
     test here depends on the mock feed admitting an entry on a particular bar."""
     row = Position(owner_id='owner', broker_account_id='account.default',
@@ -240,7 +316,10 @@ def _open_paper_position(session, *, strategy_version: str, key: str = IR_KEY) -
         entry_time=dt.datetime(2026, 1, 1, 10, 0), stop_price=99.0, target_price=101.0,
         high_water_premium=100.0, last_premium=100.0, mfe=0.0, mae=0.0,
         mode=PAPER, deployment_id=LEGACY_DEPLOYMENT_ID,
-        strategy_key=key, strategy_version=strategy_version)
+        strategy_key=key, strategy_version="1", graph_address=graph_address,
+        admission_address=session.query(IrPaperDeployment).filter_by(
+            graph_content_address=graph_address).one().admission_address,
+        attribution_state="VERIFIED_GRAPH")
     session.add(row)
     session.commit()
     return row.id
@@ -326,14 +405,15 @@ class TestRestartAndReload:
         with SessionLocal() as s:
             row = _deploy(s)
             approved = row.graph_content_address
-            _open_paper_position(s, strategy_version=approved)
+            _open_paper_position(s, graph_address=approved)
         r = _runner()
         try:
             with SessionLocal() as s:
                 pos = s.query(Position).filter_by(instrument_key=INSTRUMENT).one()
                 assert pos.strategy_key == IR_KEY
-                assert pos.strategy_version == approved
-                assert pos.strategy_version == r.paper_authority[INSTRUMENT].content_address
+                assert pos.strategy_version == "1"
+                assert pos.graph_address == approved
+                assert pos.graph_address == r.paper_authority[INSTRUMENT].content_address
         finally:
             r.broker.close()
 
@@ -514,7 +594,7 @@ class TestExitOwnershipSurvivesWithdrawal:
         with SessionLocal() as s:
             row = _deploy(s)
             approved = row.graph_content_address
-            _open_paper_position(s, strategy_version=approved)
+            _open_paper_position(s, graph_address=approved)
         r = _runner()
         try:
             with SessionLocal() as s:
@@ -535,7 +615,7 @@ class TestExitOwnershipSurvivesWithdrawal:
         with SessionLocal() as s:
             row = _deploy(s)
             approved = row.graph_content_address
-            _open_paper_position(s, strategy_version=approved)
+            _open_paper_position(s, graph_address=approved)
         r = _runner()
         try:
             with SessionLocal() as s:
@@ -555,7 +635,7 @@ class TestExitOwnershipSurvivesWithdrawal:
         and the position it already opened must still be exitable."""
         with SessionLocal() as s:
             row = _deploy(s)
-            _open_paper_position(s, strategy_version=row.graph_content_address)
+            _open_paper_position(s, graph_address=row.graph_content_address)
         with SessionLocal() as s:
             s.query(IrPaperDeployment).update(
                 {"graph_content_address": "sha256:" + "0" * 64})
@@ -571,7 +651,7 @@ class TestExitOwnershipSurvivesWithdrawal:
     def test_square_off_reaches_a_graph_opened_position(self):
         with SessionLocal() as s:
             row = _deploy(s)
-            _open_paper_position(s, strategy_version=row.graph_content_address)
+            _open_paper_position(s, graph_address=row.graph_content_address)
         r = _runner()
         try:
             closed = r._square_off_all("TEST_SQUAREOFF", r.provider.now())
@@ -614,7 +694,7 @@ class TestKillSwitchInteraction:
     def test_disarmed_still_marks_and_exits(self):
         with SessionLocal() as s:
             row = _deploy(s)
-            _open_paper_position(s, strategy_version=row.graph_content_address)
+            _open_paper_position(s, graph_address=row.graph_content_address)
         r = _runner()
         try:
             r.armed = False
@@ -713,7 +793,7 @@ class TestNoLiveSeamIsReached:
 
         with SessionLocal() as s:
             row = _deploy(s)
-            _open_paper_position(s, strategy_version=row.graph_content_address)
+            _open_paper_position(s, graph_address=row.graph_content_address)
         r = _runner()
         try:
             r.armed = True
@@ -742,7 +822,7 @@ class TestNoLiveSeamIsReached:
 
         with SessionLocal() as s:
             row = _deploy(s)
-            _open_paper_position(s, strategy_version=row.graph_content_address)
+            _open_paper_position(s, graph_address=row.graph_content_address)
         with SessionLocal() as s:
             assert [p.instrument_key for p in foreign_book_positions(
                 s, LIVE, **LEGACY_SCOPE)] == [INSTRUMENT]
@@ -754,26 +834,21 @@ class TestNoLiveSeamIsReached:
 class TestShadowAndPaperAuthorityRemainSeparate:
     def test_a_shadow_deployment_confers_no_paper_authority(self, monkeypatch):
         from app.core import shadow_deployments as sd
+        from tests.admitted_entry import persist_admitted_graph
 
         # The shadow service reads the research plane through its own door; state the
         # verdict there too, rather than reaching across the isolation boundary.
-        monkeypatch.setattr(sd, "verified_decision", lambda **asked: {
-            "run_id": 7, "candidate_id": 3, "project_id": PROJECT,
-            "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
-            "content_address": "sha256:" + "e" * 64, "decision": "approved"})
-
         with SessionLocal() as s:
-            if s.get(Project, PROJECT) is None:
-                s.add(Project(project_id=PROJECT, owner_id="owner", name="paper"))
-            if s.get(GraphArtifact, ("owner", GRAPH)) is None:
-                s.add(GraphArtifact(owner_id="owner", identifier=GRAPH, project_id=PROJECT,
-                                    display_name="m", draft_json="{}", draft_revision=0))
-            s.flush()
             document = _graph_document(1)
-            if s.get(GraphVersion, ("owner", GRAPH, 1)) is None:
-                s.add(GraphVersion(owner_id="owner", graph_identifier=GRAPH, version=1,
-                                   artifact_json=canonical_json(document),
-                                   content_address=content_address(document)))
+            artifact = persist_admitted_graph(
+                s, graph=document, owner_id="owner", project_id=PROJECT,
+                display_name="shadow-only runtime mirror",
+            )
+            monkeypatch.setattr(sd, "verified_decision", lambda **asked: {
+                "run_id": 7, "candidate_id": 3, "project_id": PROJECT,
+                "graph_identifier": GRAPH, "graph_version": asked["graph_version"],
+                "content_address": artifact.graph_address,
+                "admission_address": artifact.admission_address, "decision": "approved"})
             s.commit()
             row = sd.stage(s, project_id=PROJECT, graph_identifier=GRAPH,
                            graph_version=1, deployment_id=LEGACY_DEPLOYMENT_ID,

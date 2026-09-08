@@ -14,6 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
+from enum import Enum
 
 from app.core.instruments import Instrument
 
@@ -38,6 +39,36 @@ class ProviderReadError(RuntimeError):
     An empty list still means "no bars", and that must stay a normal answer — turning a thin
     symbol into an outage would be the same conflation pointing the other way.
     """
+
+
+class ProviderFactError(ValueError):
+    """A static provider payload cannot form one coherent canonical fact.
+
+    This is separate from :class:`ProviderReadError`: offline mapping never opens
+    transport, while a live read can fail before any payload exists.
+    """
+
+
+class ProviderUnavailableReason(str, Enum):
+    """Closed reasons why an expected provider fact was not supplied."""
+
+    MISSING_QUOTE_KEY = "MISSING_QUOTE_KEY"
+    FIELD_ABSENT = "FIELD_ABSENT"
+
+
+@dataclass(frozen=True)
+class ProviderUnavailable:
+    """Explicit absence. Numeric zero must never be represented by this value."""
+
+    provider_token: str
+    field: str
+    reason: ProviderUnavailableReason
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.provider_token, str) or not self.provider_token
+                or not isinstance(self.field, str) or not self.field
+                or not isinstance(self.reason, ProviderUnavailableReason)):
+            raise ProviderFactError("provider unavailability is incomplete")
 
 
 @dataclass

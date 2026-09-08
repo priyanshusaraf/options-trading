@@ -330,6 +330,58 @@ def test_c3_the_graphs_own_interface_is_reported_not_dropped(resolved):
     assert resolved.outputs == {"signal": ("n_cmp", "out")}
 
 
+def test_c3_resolution_refuses_duplicate_targets_when_validation_is_bypassed():
+    """Resolution cannot let document order select one of two v1 producers."""
+    spec = copy.deepcopy(DUAL_ATR)
+    spec["edges"].append({
+        "source": {"instance": "n_slow", "socket": "atr"},
+        "target": {"instance": "n_cmp", "socket": "a"},
+    })
+
+    with pytest.raises(ResolutionError, match="more than one incoming edge"):
+        resolve(spec, library())
+
+
+@pytest.mark.parametrize("mutation", ["undeclared_input", "duplicate_output"])
+def test_c3_graph_boundaries_are_declared_and_outputs_are_unique(mutation):
+    """Boundary socket spelling and single-output cardinality survive validator bypass."""
+    spec = copy.deepcopy(ATR_BODY)
+    if mutation == "undeclared_input":
+        spec["edges"][0]["source"]["socket"] = "ghost"
+    else:
+        spec["edges"].append({
+            "source": {"instance": "n_tr", "socket": "out"},
+            "target": {"instance": "io_out", "socket": "atr"},
+        })
+
+    with pytest.raises(ResolutionError, match="declared|more than one producer"):
+        resolve(spec, library())
+
+
+def test_c3_graph_component_public_interface_must_equal_its_body_at_resolution():
+    component = copy.deepcopy(ATR)
+    component["interface"] = component["interface"][:-1]
+
+    with pytest.raises(ResolutionError, match="public interface differs"):
+        resolve(component, library())
+
+
+def test_c3_resolution_rejects_leaf_socket_direction_when_validation_is_bypassed():
+    spec = copy.deepcopy(ATR_BODY)
+    spec["edges"][3]["source"]["socket"] = "high"
+
+    with pytest.raises(ResolutionError, match="declared output"):
+        resolve(spec, library())
+
+
+def test_c3_resolution_rejects_declared_output_without_a_producer():
+    spec = copy.deepcopy(ATR_BODY)
+    spec["edges"].pop()
+
+    with pytest.raises(ResolutionError, match="exactly one producer"):
+        resolve(spec, library())
+
+
 def test_c3_an_override_that_binds_to_nothing_is_refused():
     spec = copy.deepcopy(DUAL_ATR)
     spec["nodes"][1]["overrides"]["lenght"] = 7   # a typo, not a parameter
@@ -546,6 +598,25 @@ def test_c10_a_cycle_is_refused_because_composition_is_undefined_on_one():
     assert exc.value.clause == "C10"
 
 
+def test_c10_graph_body_cycle_precedes_component_interface_drift():
+    body = copy.deepcopy(ATR_BODY)
+    body["edges"].append({
+        "source": {"instance": "n_smooth", "socket": "out"},
+        "target": {"instance": "n_tr", "socket": "high"},
+    })
+    component = copy.deepcopy(ATR)
+    component["interface"] = component["interface"][:-1]
+    component["body"]["ref"] = content_address(body)
+    lib = library(
+        components={(component["identifier"], component["version"]): component},
+        bodies={component["body"]["ref"]: body},
+    )
+
+    with pytest.raises(ResolutionError) as exc:
+        resolve(component, lib)
+    assert exc.value.clause == "C10"
+
+
 # ── C11 — lookahead is prevented structurally ─────────────────────────────
 
 def test_c11_a_negative_warmup_is_unrepresentable():
@@ -562,7 +633,7 @@ def test_c11_there_is_no_forward_offset_to_declare():
     no field that could name a future bar. If one is added, this goes red."""
     from app.ir import kernels
     assert set(kernels.KernelSpec.__dataclass_fields__) == {
-        "warmup", "purity", "cache_identity", "cache_key"}
+        "warmup", "purity", "cache_identity", "cache_key", "causal"}
 
 
 # ── C12 — research and live share one resolution ──────────────────────────

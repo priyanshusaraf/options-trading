@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review secure transactional delivery"
+  short_description: "Review sender trust, token safety and delivery"
+  default_prompt: "Use $transactional-email-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

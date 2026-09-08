@@ -30,6 +30,7 @@ versa), that test fails.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 
@@ -40,6 +41,11 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, Engine, Integer, UniqueConstraint, inspect
 from sqlalchemy import text as _sa_text
 
+from app.db.schema_semantics import (
+    check_sql_matches,
+    validate_paper_entry_lifecycle_manifest as _validate_paper_entry_lifecycle_manifest,
+)
+
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ALEMBIC_INI = os.path.join(_BACKEND_DIR, "alembic.ini")
 MIGRATIONS_DIR = os.path.join(_BACKEND_DIR, "migrations")
@@ -47,6 +53,8 @@ BASELINE_REVISION = "0001"
 BASELINE_SCHEMA_SQL = os.path.join(MIGRATIONS_DIR, "baseline_schema.ddl")
 POSTGRESQL_IMMUTABLE_TABLES = (
     "execution_order_events", "graph_versions", "project_review_snapshots", "strategy_admissions",
+    "workspace_research_settings_revisions", "strategy_research_settings_revisions",
+    "owner_provider_instrument_selections", "watchlist_monitoring_revisions",
 )
 
 # The tables that existed at revision 0001 — the documented inventory of the
@@ -62,6 +70,18 @@ BASELINE_TABLES = frozenset({
     "strategy_lifecycle", "trades", "universe_instruments", "watchlist_membership",
     "watchlists",
 })
+
+
+def validate_paper_entry_lifecycle_manifest(
+    connection, *,
+    compatible_heads: frozenset[str] = frozenset({
+        "0045", "0046", "0047", "0048", "0049", "0050",
+        "0051", "0052", "0053", "0054", "0055", "0056",
+    }),
+) -> None:
+    """Bind the unchanged Paper manifest to every accepted additive head."""
+    _validate_paper_entry_lifecycle_manifest(
+        connection, compatible_heads=compatible_heads)
 
 
 def alembic_config(connection=None) -> Config:
@@ -106,11 +126,128 @@ def _has_tables(engine: Engine) -> bool:
     return bool(names)
 
 
-def upgrade_to_head(engine: Engine) -> str | None:
-    """Run every pending revision. Returns the revision now stamped."""
-    with engine.begin() as conn:
-        command.upgrade(alembic_config(conn), "head")
+def _upgrade_research_settings(engine: Engine) -> str | None:
+    return _upgrade_locked_addition(engine, "0052", "0051")
+
+
+def _upgrade_locked_addition(engine, target, source):
+    with engine.begin() as connection:
+        if _is_postgresql(engine):
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
+            connection.exec_driver_sql(f"SELECT pg_advisory_xact_lock({4200000 + int(target)})")
+        else:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        heads = tuple(MigrationContext.configure(connection).get_current_heads())
+        if heads == (target,):
+            return target
+        if heads != (source,):
+            raise RuntimeError(f"{target} managed upgrade requires exact accepted {source} source")
+        validate_paper_entry_lifecycle_manifest(connection, compatible_heads=frozenset({source}))
+        command.upgrade(alembic_config(connection), target)
     return schema_version(engine)
+
+
+def _upgrade_response_aliases(engine):
+    if _is_postgresql(engine):
+        return _upgrade_locked_addition(engine, "0055", "0054")
+    with engine.connect() as connection:
+        raw = connection.connection.driver_connection
+        enabled = bool(raw.execute("PRAGMA foreign_keys").fetchone()[0])
+        try:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            with connection.begin():
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                heads = tuple(MigrationContext.configure(connection).get_current_heads())
+                if heads == ("0055",):
+                    return "0055"
+                _require_managed_predecessor(heads, "0055", "0054")
+                validate_paper_entry_lifecycle_manifest(connection, compatible_heads=frozenset({"0054"}))
+                command.upgrade(alembic_config(connection), "0055")
+        finally:
+            connection.rollback()
+            raw.execute(f"PRAGMA foreign_keys={'ON' if enabled else 'OFF'}")
+    return schema_version(engine)
+
+
+def _upgrade_watchlist_monitoring(engine):
+    # 0055 must retain its own SQLite FK suspension and commit boundary.
+    if schema_version(engine) == "0054":
+        _upgrade_response_aliases(engine)
+    return _upgrade_locked_addition(engine, "0056", "0055")
+
+
+_MANAGED_PREDECESSORS = {
+    "0046": "0045", "0047": "0046", "0048": "0047",
+    "0049": "0048", "0050": "0049", "0051": "0050",
+}
+
+
+def _require_managed_predecessor(heads, target, source):
+    if heads != (source,):
+        raise RuntimeError(
+            f"{target} managed upgrade requires one exact accepted {source} source; "
+            f"found heads={list(heads)}")
+
+
+def _validate_paper_head(engine, head):
+    with engine.connect() as connection:
+        validate_paper_entry_lifecycle_manifest(connection, compatible_heads=frozenset({head}))
+
+
+def _coupon_head_ready(engine, target):
+    if target == "0049":
+        _validate_coupon_dynamic_validity_readiness(engine, _current_model_tables())
+
+
+def _managed_head_is_current(engine, target, source):
+    with engine.connect() as connection:
+        heads = tuple(MigrationContext.configure(connection).get_current_heads())
+    if heads == (target,):
+        if target == "0046":
+            _validate_paper_head(engine, target)
+        _coupon_head_ready(engine, target)
+        return True
+    _require_managed_predecessor(heads, target, source)
+    _validate_paper_head(engine, source)
+    return False
+
+
+def _upgrade_postgresql_successor(engine, target, source):
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"SELECT pg_advisory_xact_lock({4200000 + int(target)})")
+        heads = tuple(connection.execute(_sa_text(
+            "SELECT version_num FROM alembic_version ORDER BY version_num"
+        )).scalars())
+        if heads == (target,):
+            raise RuntimeError(
+                f"{target} concurrent migration owner found head already advanced to {target}")
+        _require_managed_predecessor(heads, target, source)
+        validate_paper_entry_lifecycle_manifest(connection, compatible_heads=frozenset({source}))
+        command.upgrade(alembic_config(connection), "head")
+    _coupon_head_ready(engine, target)
+    return schema_version(engine)
+
+
+def upgrade_to_head(engine: Engine) -> str | None:
+    """Dispatch the existing finite managed transitions through Alembic."""
+    target = head_revision()
+    managed = {"0052": _upgrade_research_settings, "0055": _upgrade_response_aliases,
+               "0056": _upgrade_watchlist_monitoring}
+    if target in managed:
+        return managed[target](engine)
+    additions = {"0053": "0052", "0054": "0053"}
+    if target in additions:
+        return _upgrade_locked_addition(engine, target, additions[target])
+    source = _MANAGED_PREDECESSORS.get(target)
+    if source is not None and _managed_head_is_current(engine, target, source):
+        return target
+    if target in {"0049", "0050", "0051"} and _is_postgresql(engine):
+        return _upgrade_postgresql_successor(engine, target, source)
+    with engine.begin() as connection:
+        command.upgrade(alembic_config(connection), "head")
+    current = schema_version(engine)
+    _coupon_head_ready(engine, target)
+    return current
 
 
 def stamp(engine: Engine, revision: str) -> None:
@@ -199,6 +336,10 @@ def _types_are_compatible(expected, actual) -> bool:
         "datetime": "timestamp",
         "timestampwithouttimezone": "timestamp",
         "float": "doubleprecision",
+        # LargeBinary compiles to BLOB on SQLite and BYTEA on PostgreSQL; the
+        # reflected-PG side reports the compiled string, so the affinity pair
+        # is declared here rather than failing every binary column.
+        "blob": "bytea",
     }
     expected_name = aliases.get("".join(str(expected).lower().split()),
                                 "".join(str(expected).lower().split()))
@@ -275,8 +416,302 @@ def _validate_postgresql_immutable_triggers(engine: Engine) -> None:
         _validate_strategy_admission_immutable_trigger(connection)
 
 
+_COUPON_READINESS_TABLES = (
+    "platform_coupon_definitions",
+    "platform_coupon_redemptions",
+    "platform_entitlement_events",
+)
+_COUPON_SQLITE_TRIGGERS = {
+    "platform_coupon_definitions_privacy_insert": "platform_coupon_definitions",
+    "platform_coupon_definitions_privacy_update": "platform_coupon_definitions",
+    "platform_coupon_redemptions_capacity": "platform_coupon_redemptions",
+    "platform_coupon_redemptions_privacy_insert": "platform_coupon_redemptions",
+    "platform_coupon_redemptions_privacy_update": "platform_coupon_redemptions",
+    "platform_entitlement_events_source_exact": "platform_entitlement_events",
+    "platform_entitlement_events_privacy_insert": "platform_entitlement_events",
+    "platform_entitlement_events_privacy_update": "platform_entitlement_events",
+}
+_COUPON_POSTGRESQL_TRIGGERS = {
+    "platform_coupon_definitions_privacy_guard": (
+        "platform_coupon_definitions", 23,
+        "platform_coupon_definitions_privacy_guard_fn"),
+    "platform_coupon_redemptions_capacity": (
+        "platform_coupon_redemptions", 7,
+        "platform_coupon_redemptions_capacity_fn"),
+    "platform_coupon_redemptions_privacy_guard": (
+        "platform_coupon_redemptions", 23,
+        "platform_coupon_redemptions_privacy_guard_fn"),
+    "platform_entitlement_events_source_exact": (
+        "platform_entitlement_events", 7,
+        "platform_entitlement_events_source_exact_fn"),
+    "platform_entitlement_events_privacy_guard": (
+        "platform_entitlement_events", 23,
+        "platform_entitlement_events_privacy_guard_fn"),
+}
+
+
+def _compact_semantic_sql(value: object) -> str:
+    source = str(value)
+    compact: list[str] = []
+    pending_space = False
+    index = 0
+
+    def append_token(token: str) -> None:
+        nonlocal pending_space
+        if pending_space and compact:
+            compact.append(" ")
+        compact.append(token)
+        pending_space = False
+
+    while index < len(source):
+        character = source[index]
+        if character.isspace():
+            pending_space = True
+            index += 1
+            continue
+
+        if character in {"'", '"'}:
+            quote = character
+            escaped_by_backslash = (
+                quote == "'" and index > 0 and source[index - 1] in {"e", "E"}
+                and (index < 2 or not (
+                    source[index - 2].isalnum() or source[index - 2] in {"_", "$"}
+                ))
+            )
+            end = index + 1
+            while end < len(source):
+                if escaped_by_backslash and source[end] == "\\":
+                    end = min(end + 2, len(source))
+                    continue
+                if source[end] == quote:
+                    if end + 1 < len(source) and source[end + 1] == quote:
+                        end += 2
+                        continue
+                    end += 1
+                    break
+                end += 1
+            append_token(source[index:end])
+            index = end
+            continue
+
+        if character == "$":
+            delimiter_match = re.match(
+                r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", source[index:])
+            if delimiter_match is not None:
+                delimiter = delimiter_match.group(0)
+                body_start = index + len(delimiter)
+                body_end = source.find(delimiter, body_start)
+                end = len(source) if body_end < 0 else body_end + len(delimiter)
+                append_token(source[index:end])
+                index = end
+                continue
+
+        append_token(character.lower())
+        index += 1
+
+    return "".join(compact)
+
+
+def _expected_coupon_ddl(expected_tables, dialect: str) -> tuple[str, ...]:
+    statements: list[str] = []
+    for table_name in _COUPON_READINESS_TABLES:
+        table = expected_tables[table_name]
+        for ddl in table.dispatch.after_create:
+            if getattr(getattr(ddl, "_ddl_if", None), "dialect", None) == dialect:
+                statements.append(str(ddl.statement))
+    return tuple(statements)
+
+
+def _ddl_object_name(statement: str) -> str | None:
+    match = re.match(
+        r"\s*CREATE(?:\s+OR\s+REPLACE)?\s+(?:TRIGGER|FUNCTION)\s+([A-Za-z0-9_]+)",
+        statement, flags=re.IGNORECASE)
+    return None if match is None else match.group(1).lower()
+
+
+def _expected_postgresql_functions(expected_tables) -> dict[str, str]:
+    functions: dict[str, str] = {}
+    for statement in _expected_coupon_ddl(expected_tables, "postgresql"):
+        name = _ddl_object_name(statement)
+        if name is None or re.match(
+                r"\s*CREATE\s+OR\s+REPLACE\s+FUNCTION\b",
+                statement, flags=re.IGNORECASE) is None:
+            continue
+        body = re.search(r"\bAS\s+\$\$(.*)\$\$\s+LANGUAGE\b", statement,
+                         flags=re.IGNORECASE | re.DOTALL)
+        if body is None:
+            raise RuntimeError(f"coupon readiness cannot parse expected function {name}")
+        functions[name] = _compact_semantic_sql(body.group(1))
+    return functions
+
+
+def _validate_coupon_trigger_contract(connection, expected_tables) -> None:
+    dialect = connection.dialect.name
+    if dialect == "sqlite":
+        expected = sorted(
+            (name, _COUPON_SQLITE_TRIGGERS[name],
+             _compact_semantic_sql(statement))
+            for statement in _expected_coupon_ddl(expected_tables, "sqlite")
+            if (name := _ddl_object_name(statement)) in _COUPON_SQLITE_TRIGGERS
+        )
+        actual = sorted(
+            (str(name), str(relation), _compact_semantic_sql(sql))
+            for name, relation, sql in connection.exec_driver_sql(
+                "SELECT name,tbl_name,sql FROM sqlite_master "
+                "WHERE type='trigger' AND name IN "
+                f"({','.join('?' for _ in _COUPON_SQLITE_TRIGGERS)})",
+                tuple(_COUPON_SQLITE_TRIGGERS),
+            )
+        )
+        if len(expected) != len(_COUPON_SQLITE_TRIGGERS) or actual != expected:
+            raise RuntimeError(
+                "coupon readiness SQLite trigger contract is invalid: "
+                f"expected_rows={len(expected)} actual_rows={len(actual)}")
+        return
+    if dialect != "postgresql":
+        raise RuntimeError("coupon readiness requires SQLite or PostgreSQL")
+    expected_functions = _expected_postgresql_functions(expected_tables)
+    rows = connection.execute(_sa_text("""
+        SELECT trigger.tgname, relation.relname, trigger.tgenabled,
+               trigger.tgisinternal, trigger.tgtype,
+               trigger.tgqual IS NULL AS has_no_when,
+               relation_namespace.nspname AS relation_schema,
+               function_namespace.nspname AS function_schema,
+               procedure.proname, procedure.prosrc,
+               language.lanname, procedure.prosecdef
+        FROM pg_trigger AS trigger
+        JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+        JOIN pg_namespace AS relation_namespace ON relation_namespace.oid = relation.relnamespace
+        JOIN pg_proc AS procedure ON procedure.oid = trigger.tgfoid
+        JOIN pg_namespace AS function_namespace ON function_namespace.oid = procedure.pronamespace
+        JOIN pg_language AS language ON language.oid = procedure.prolang
+        WHERE trigger.tgname = ANY(:names)
+    """), {"names": list(_COUPON_POSTGRESQL_TRIGGERS)}).mappings().all()
+    expected_schema = connection.execute(_sa_text(
+        "SELECT current_schema()"
+    )).scalar_one()
+    expected = sorted(
+        (
+            name, relation, expected_schema, "O", False, trigger_type, True,
+            function, expected_schema, expected_functions.get(function),
+            "plpgsql", False,
+        )
+        for name, (relation, trigger_type, function)
+        in _COUPON_POSTGRESQL_TRIGGERS.items()
+    )
+    actual = sorted(
+        (
+            str(row["tgname"]), str(row["relname"]),
+            str(row["relation_schema"]), str(row["tgenabled"]),
+            bool(row["tgisinternal"]), int(row["tgtype"]),
+            bool(row["has_no_when"]), str(row["proname"]),
+            str(row["function_schema"]),
+            _compact_semantic_sql(row["prosrc"]), str(row["lanname"]),
+            bool(row["prosecdef"]),
+        )
+        for row in rows
+    )
+    if actual != expected:
+        raise RuntimeError(
+            "coupon readiness PostgreSQL trigger contract is invalid: "
+            f"expected_rows={len(expected)} actual_rows={len(actual)}")
+
+
+def _validate_coupon_persisted_envelopes(connection, expected_tables) -> None:
+    definition = expected_tables["platform_coupon_definitions"]
+    redemption = expected_tables["platform_coupon_redemptions"]
+    definitions = {
+        row["coupon_id"]: row
+        for row in connection.execute(definition.select()).mappings()
+    }
+    for row in definitions.values():
+        fixed = (
+            row["entitlement_effect_timing"] == "FIXED_ABSOLUTE"
+            and row["entitlement_valid_from"] is not None
+            and row["entitlement_duration_seconds"] is None
+            and (row["entitlement_valid_until"] is None
+                 or row["entitlement_valid_until"] > row["entitlement_valid_from"])
+        )
+        dynamic = (
+            row["entitlement_effect_timing"] == "DYNAMIC_DURATION"
+            and row["entitlement_valid_from"] is None
+            and row["entitlement_valid_until"] is None
+            and row["entitlement_duration_seconds"] == 1_296_000
+            and row["trial_policy_address"] is not None
+            and row["discount_policy_address"] is None
+            and row["entitlement_transition"] == "GRANT"
+        )
+        if not (fixed or dynamic):
+            raise RuntimeError("coupon readiness found malformed definition envelope")
+    for row in connection.execute(redemption.select()).mappings():
+        source = definitions.get(row["coupon_id"])
+        if source is None:
+            raise RuntimeError("coupon readiness found orphan redemption")
+        if source["entitlement_effect_timing"] == "DYNAMIC_DURATION":
+            expected_from = row["redeemed_at"]
+            expected_until = row["redeemed_at"] + dt.timedelta(seconds=1_296_000)
+        else:
+            expected_from = source["entitlement_valid_from"]
+            expected_until = source["entitlement_valid_until"]
+        if (row["policy_address"] != source["policy_address"]
+                or row["entitlement_code"] != source["entitlement_code"]
+                or row["entitlement_transition"] != source["entitlement_transition"]
+                or row["entitlement_valid_from"] != expected_from
+                or row["entitlement_valid_until"] != expected_until):
+            raise RuntimeError("coupon readiness found malformed redemption envelope")
+
+
+def _validate_coupon_dynamic_validity_readiness(engine: Engine, expected_tables) -> None:
+    if expected_tables is None:
+        expected_tables = _current_model_tables()
+    subset = {name: expected_tables[name] for name in _COUPON_READINESS_TABLES}
+    _validate_current_schema(engine, subset)
+    table = expected_tables["platform_coupon_definitions"]
+    constraint = next(
+        item for item in table.constraints
+        if isinstance(item, CheckConstraint)
+        and item.name == "ck_platform_coupon_entitlement_shape")
+    with engine.connect() as connection:
+        actual_checks = {
+            item["name"]: item["sqltext"]
+            for item in inspect(connection).get_check_constraints(table.name)
+            if item.get("name") is not None
+        }
+        actual = actual_checks.get(constraint.name)
+        expected = _compiled_sql(constraint.sqltext, connection.dialect)
+        if connection.dialect.name == "postgresql":
+            validated = connection.execute(_sa_text("""
+                SELECT c.convalidated
+                FROM pg_constraint AS c
+                JOIN pg_class AS relation ON relation.oid = c.conrelid
+                JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                WHERE namespace.nspname = current_schema()
+                  AND relation.relname = :table
+                  AND c.conname = :constraint
+            """), {"table": table.name, "constraint": constraint.name}).scalar_one_or_none()
+            if validated is not True:
+                raise RuntimeError("coupon readiness entitlement shape CHECK is not validated")
+        alternatives = [expected]
+        if (connection.dialect.name == "postgresql"
+                and expected.startswith("(") and expected.endswith(")")
+                and ")) OR (" in expected):
+            alternatives.append(expected[1:-1].replace(") OR (", " OR ", 1))
+        if actual is None or not any(check_sql_matches(
+                table, constraint.name, connection.dialect.name,
+                alternative, actual, context="coupon")
+                for alternative in alternatives):
+            raise RuntimeError("coupon readiness entitlement shape CHECK is invalid")
+        _validate_coupon_trigger_contract(connection, expected_tables)
+        _validate_coupon_persisted_envelopes(connection, expected_tables)
+
+
+def _current_model_tables():
+    from app.db.models import Base
+    return Base.metadata.tables
+
+
 def _validate_current_schema(engine: Engine, expected_tables) -> None:
-    """Reject a partial current-schema PostgreSQL database before it handles work."""
+    """Reject a partial current relational schema before it handles work."""
     if expected_tables is None:
         return
     inspector = inspect(engine)
@@ -343,6 +778,8 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
         table_defects = {}
         if expected_columns - actual_columns:
             table_defects["missing_columns"] = sorted(expected_columns - actual_columns)
+        if actual_columns - expected_columns:
+            table_defects["unexpected_columns"] = sorted(actual_columns - expected_columns)
         column_defects = {}
         for column in table.columns:
             reflected = reflected_columns.get(column.name)
@@ -392,66 +829,75 @@ def _validate_current_schema(engine: Engine, expected_tables) -> None:
             defects[table_name] = table_defects
     if missing_tables or defects:
         raise RuntimeError(
-            "PostgreSQL schema is not the current execution relational model: "
+            "Database schema is not the current execution relational model: "
             f"missing_tables={sorted(missing_tables)} defects={defects}"
         )
 
 
-def init_schema(engine: Engine, *, create_all, legacy_migrate, expected_tables=None) -> str | None:
-    """Bring `engine`'s database to head from any of the three states above.
+def _validate_postgresql_startup(engine, expected_tables, *, coupon):
+    _validate_current_schema(engine, expected_tables)
+    _validate_postgresql_immutable_triggers(engine)
+    if coupon:
+        _validate_coupon_dynamic_validity_readiness(engine, expected_tables)
 
-    `create_all` and `legacy_migrate` are injected rather than imported so this
-    module has no dependency on `session.py` (which imports it) — the import
-    direction stays one-way.
-    """
+
+def _init_managed_postgresql(engine, current, expected_tables):
+    # Preserve only the historical transitions already accepted by this runner.
+    if (current, head_revision()) in {("0048", "0049"), ("0049", "0050"), ("0051", "0052"), ("0052", "0053"), ("0053", "0054"), ("0054", "0055"), ("0054", "0056"), ("0055", "0056")}:
+        upgraded = upgrade_to_head(engine)
+        _validate_postgresql_startup(engine, expected_tables, coupon=True)
+        return upgraded
+    if current != head_revision():
+        raise RuntimeError(
+            "PostgreSQL schema is not at head; historical SQLite migrations "
+            "are not replayed against PostgreSQL")
+    _validate_postgresql_startup(engine, expected_tables, coupon=current == "0049")
+    return current
+
+
+def _init_postgresql(engine, current, create_all, expected_tables):
+    if current is not None:
+        return _init_managed_postgresql(engine, current, expected_tables)
+    if _has_tables(engine):
+        raise RuntimeError(
+            "Refusing populated unmanaged PostgreSQL database: use the verified "
+            "SQLite-to-PostgreSQL cutover path instead of adopting or replaying it")
+    create_all()
+    _validate_postgresql_startup(engine, expected_tables, coupon=True)
+    stamp(engine, head_revision())
+    return schema_version(engine)
+
+
+def _init_managed_sqlite(engine, current, expected_tables):
+    # Same-head startup stays read-only and never opens an Alembic write transaction.
+    result = current if current == head_revision() else upgrade_to_head(engine)
+    if result == "0049":
+        _validate_coupon_dynamic_validity_readiness(engine, expected_tables)
+    return result
+
+
+def _adopt_unmanaged_sqlite(engine, legacy_migrate):
+    # Frozen baseline adoption is distinct from a managed stale-head upgrade.
+    legacy_migrate()
+    _create_baseline_tables(engine)
+    stamp(engine, BASELINE_REVISION)
+    target = "0054" if head_revision() in {"0055", "0056"} else "head"
+    with engine.begin() as connection:
+        command.upgrade(alembic_config(connection), target)
+    return upgrade_to_head(engine) if target == "0054" else schema_version(engine)
+
+
+def init_schema(engine: Engine, *, create_all, legacy_migrate, expected_tables=None) -> str | None:
+    """Initialize the existing database according to its dialect and managed state."""
     current = schema_version(engine)
     if _is_postgresql(engine):
-        # Historical revisions use SQLite table rebuilds and PRAGMAs. PostgreSQL
-        # starts from the current ORM model and is adopted only while empty.
-        if current is not None:
-            if current != head_revision():
-                raise RuntimeError(
-                    "PostgreSQL schema is not at head; historical SQLite migrations "
-                    "are not replayed against PostgreSQL"
-                )
-            _validate_current_schema(engine, expected_tables)
-            _validate_postgresql_immutable_triggers(engine)
-            return current
-        if _has_tables(engine):
-            raise RuntimeError(
-                "Refusing populated unmanaged PostgreSQL database: use the verified "
-                "SQLite-to-PostgreSQL cutover path instead of adopting or replaying it"
-            )
-        create_all()
-        _validate_current_schema(engine, expected_tables)
-        _validate_postgresql_immutable_triggers(engine)
-        stamp(engine, head_revision())
-        return schema_version(engine)
-
-    if current is not None:                     # state 3 — already managed
-        if current == head_revision():
-            # Nothing to do. Returning early is not just a speed optimisation: it
-            # is the difference between boot taking a WRITE lock on the database
-            # and not touching it at all. `command.upgrade` opens a transaction
-            # even when there are no pending revisions, and `init_db` runs on every
-            # process start — so the no-op path was contending for the lock with
-            # anything else already holding a session. In-suite that surfaced as
-            # `database is locked` errors in unrelated tests; on the box it would
-            # be a restart competing with the engine's own long-lived session.
-            return current
-        return upgrade_to_head(engine)
-
+        return _init_postgresql(engine, current, create_all, expected_tables)
+    if current is not None:
+        return _init_managed_sqlite(engine, current, expected_tables)
     if _has_tables(engine):
-        # State 2 — a pre-Alembic database with real rows in it. Bring it to the
-        # BASELINE (frozen ALTERs + any baseline table it never had), adopt it at
-        # 0001, then let the revisions carry it forward from there.
-        legacy_migrate()
-        _create_baseline_tables(engine)
-        stamp(engine, BASELINE_REVISION)
-        return upgrade_to_head(engine)
-
-    # State 1 — empty. The models already describe head; build and adopt.
+        return _adopt_unmanaged_sqlite(engine, legacy_migrate)
     create_all()
+    _validate_coupon_dynamic_validity_readiness(engine, expected_tables)
     stamp(engine, head_revision())
     return schema_version(engine)
 

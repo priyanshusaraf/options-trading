@@ -97,13 +97,15 @@ def test_postgres_two_session_claim_takeover_and_control_are_exactly_once(postgr
     assert independent.fence_epoch == 1
 
 
-def test_postgres_backtest_state_and_typed_event_commit_or_rollback_together(postgres_leases):
+def test_postgres_backtest_state_and_typed_event_commit_or_rollback_together(
+        postgres_leases, admitted_backtest_receipt):
     """The real producer uses the same PostgreSQL transaction as its durable run."""
     _repo, sessions = postgres_leases
     with sessions() as session:
+        receipt = admitted_backtest_receipt(session, owner_id="tenant")
         rolled_back = backtest_repository.enqueue_run(
             session, owner_id="tenant", scope="liquid", intervals="day",
-            capital=10_000, total=1,
+            capital=10_000, total=1, **receipt,
         )
         rolled_back_id = rolled_back.id
         session.rollback()
@@ -112,10 +114,12 @@ def test_postgres_backtest_state_and_typed_event_commit_or_rollback_together(pos
         assert session.scalar(sa.select(sa.func.count()).select_from(
             execution_outbox().models.Event)) == 0
 
+    with sessions() as session:
+        receipt = admitted_backtest_receipt(session, owner_id="tenant")
     with sessions.begin() as session:
         committed = backtest_repository.enqueue_run(
             session, owner_id="tenant", scope="liquid", intervals="day",
-            capital=10_000, total=1,
+            capital=10_000, total=1, **receipt,
         )
         committed_id = committed.id
     with sessions() as session:

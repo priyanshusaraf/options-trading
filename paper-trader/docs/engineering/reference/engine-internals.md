@@ -170,7 +170,7 @@ omitted) `watchlists`, `watchlist_membership`, `strategy_lifecycle`, `generated_
 **The `order_journal` table is built and in production use** (58 rows, 50 with real broker order
 IDs) — docs describing it as a deferred design are stale.
 
-Database growth is an open problem — see [`ROADMAP.md`](../../ROADMAP.md), Workstream F.
+Database growth is an open problem — see [`ROADMAP.md`](../../strategy-os-v1-v2-v3/V0-V1-V1.5-V2-V3-V4-V5-V6-SCOPE-DECISION-MATRIX.md), Workstream F.
 
 ## API + frontend
 

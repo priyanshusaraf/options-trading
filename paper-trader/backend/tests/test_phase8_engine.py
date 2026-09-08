@@ -4,6 +4,7 @@ from app.db.session import init_db, SessionLocal
 from app.engine.runner import EngineRunner
 from app.core.instruments import get_instrument
 from app.core import runtime_config
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner_with_long():
@@ -14,7 +15,9 @@ def _runner_with_long():
     # near-ATM call -> stable, modest cost regardless of the shared mock cursor
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), chain.spot)
+    admission = persist_admitted_entry(r.broker.s)
+    pos = r.broker.open_position(nifty, "LONG", q, "t", r.provider.now(), chain.spot,
+                                 **admission)
     return r, nifty, chain, q, pos
 
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Turn feedback into testable product problems"
+  short_description: "Separate evidenced user pain from feature requests"
+  default_prompt: "Use $customer-feedback-synthesis for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

@@ -12,9 +12,11 @@ Five contracts, one test each:
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 import os
 import zlib
 
+import numpy as np
 import pytest
 from sqlalchemy import select
 
@@ -99,6 +101,30 @@ def test_stored_dataset_is_served_without_a_provider_call(store):
     assert loaded.address == address
 
 
+def test_legacy_float_coercible_values_keep_golden_bytes_and_address():
+    candle = dataset_store.StoredCandle(
+        dt.datetime(2026, 8, 21, 9, 15), Decimal("100.25"), "101.5",
+        np.float64(99.75), 100, np.int64(12500))
+    canonical = dataset_store.StoredCandle(
+        dt.datetime(2026, 8, 21, 9, 15), 100.25, 101.5, 99.75, 100.0, 12500.0)
+
+    encoded = dataset_store.encode_candles([candle])
+    assert encoded == dataset_store.encode_candles([canonical])
+    assert zlib.decompress(encoded).hex() == (
+        "50544453310000000000000000010006598675f8e7004059100000000000"
+        "40596000000000004058f00000000000405900000000000040c86a0000000000")
+
+    kwargs = dict(
+        provider="kite", instrument="NIFTY", interval="15minute",
+        requested_window={"lookback_days": 30, "start": None, "end": None},
+        effective_window={"first_ts": 1, "last_ts": 2, "bars": 1,
+                          "clamped": False})
+    assert ordered_dataset_address([candle], **kwargs) == (
+        "ed30e1bd96aaa8533cbb42e43cfb2983ac96a4e4ecb5465b9c126a733eb16b20")
+    assert ordered_dataset_address([candle], **kwargs) == ordered_dataset_address(
+        [canonical], **kwargs)
+
+
 def test_request_index_maps_the_request_to_its_latest_address(store):
     provider = CountingMockProvider()
     instrument = _nifty(provider)
@@ -136,7 +162,8 @@ def test_unreadable_blob_is_refused(store):
 
 # ── 3. a normal refresh still costs its reads ────────────────────────────────
 
-def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatch):
+def test_populated_store_does_not_make_a_refresh_sweep_free(
+        tmp_path, monkeypatch, admitted_backtest_receipt):
     """The single most important test in this task.
 
     A store that silently served a refresh would reintroduce the stale-history
@@ -149,7 +176,7 @@ def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatc
         cold = CountingMockProvider()
         rid = sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute", "30minute"], capital=50_000,
-            instruments=["NIFTY"], provider=cold)
+            instruments=["NIFTY"], provider=cold, **admitted_backtest_receipt())
         sweep._join()
         cold_reads = list(cold.candle_reads)
         assert len(cold_reads) == 2
@@ -161,7 +188,7 @@ def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatc
         warm = CountingMockProvider()
         rid2 = sweep.start_sweep(owner_id="owner",
             scope="liquid", intervals=["15minute", "30minute"], capital=50_000,
-            instruments=["NIFTY"], provider=warm)
+            instruments=["NIFTY"], provider=warm, **admitted_backtest_receipt())
         sweep._join()
 
         assert [r[:2] for r in warm.candle_reads] == [r[:2] for r in cold_reads]
@@ -173,7 +200,8 @@ def test_populated_store_does_not_make_a_refresh_sweep_free(tmp_path, monkeypatc
         dataset_store.reset_default_store()
 
 
-def test_store_failure_never_breaks_a_sweep(tmp_path, monkeypatch):
+def test_store_failure_never_breaks_a_sweep(tmp_path, monkeypatch,
+                                             admitted_backtest_receipt):
     monkeypatch.setattr(dataset_store, "store_root", lambda: tmp_path / "datasets")
     dataset_store.reset_default_store()
 
@@ -186,7 +214,7 @@ def test_store_failure_never_breaks_a_sweep(tmp_path, monkeypatch):
         provider = CountingMockProvider()
         rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"],
                                 capital=50_000, instruments=["NIFTY"],
-                                provider=provider)
+                                provider=provider, **admitted_backtest_receipt())
         sweep._join()
         with SessionLocal() as session:
             rows = list(session.scalars(select(BacktestResult).where(
@@ -199,7 +227,7 @@ def test_store_failure_never_breaks_a_sweep(tmp_path, monkeypatch):
 
 
 def test_unaddressable_dataset_degrades_instead_of_killing_the_sweep(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, admitted_backtest_receipt):
     """The degradation path this task was told to mirror. `LogBus` has `warn`,
     not `warning`, so the existing handler raised AttributeError and took the
     whole sweep down instead of disabling reuse for one cell."""
@@ -215,7 +243,7 @@ def test_unaddressable_dataset_degrades_instead_of_killing_the_sweep(
         provider = CountingMockProvider()
         rid = sweep.start_sweep(owner_id="owner", scope="liquid", intervals=["15minute"],
                                 capital=50_000, instruments=["NIFTY"],
-                                provider=provider)
+                                provider=provider, **admitted_backtest_receipt())
         sweep._join()
         with SessionLocal() as session:
             rows = list(session.scalars(select(BacktestResult).where(

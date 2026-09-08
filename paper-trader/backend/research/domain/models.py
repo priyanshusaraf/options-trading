@@ -26,15 +26,21 @@ from sqlalchemy import (
     Float,
     ForeignKeyConstraint,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     event,
+    insert,
+    select,
+    text,
 )
 from sqlalchemy import Index
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.dml import Insert
 from sqlalchemy.schema import Table
 
 from research.domain.base import ResearchBase
@@ -79,7 +85,9 @@ def _compile_nullable_content_address_postgresql(element, _compiler, **_kw):
             f"({_compile_content_address_postgresql(element, _compiler, **_kw)})")
 
 
-class _JsonIsValid(ColumnElement):
+class _JsonObject(ColumnElement):
+    """Portable strict top-level JSON object validation."""
+
     type = Boolean()
     inherit_cache = True
 
@@ -87,14 +95,130 @@ class _JsonIsValid(ColumnElement):
         self.column_name = column_name
 
 
-@compiles(_JsonIsValid, "sqlite")
-def _compile_json_is_valid_sqlite(element, _compiler, **_kw):
-    return f"json_valid({element.column_name})"
+@compiles(_JsonObject, "sqlite")
+def _compile_json_object_sqlite(element, _compiler, **_kw):
+    name = element.column_name
+    return (f"json_valid({name}) AND CASE WHEN json_valid({name}) "
+            f"THEN json_type({name}) = 'object' ELSE 0 END")
 
 
-@compiles(_JsonIsValid, "postgresql")
-def _compile_json_is_valid_postgresql(_element, _compiler, **_kw):
-    return "jsonb_typeof(artifact_json::jsonb) = 'object'"
+@compiles(_JsonObject, "postgresql")
+def _compile_json_object_postgresql(element, _compiler, **_kw):
+    return f"jsonb_typeof({element.column_name}::jsonb) = 'object'"
+
+
+class _JsonArray(ColumnElement):
+    """Portable strict top-level JSON array validation."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_JsonArray, "sqlite")
+def _compile_json_array_sqlite(element, _compiler, **_kw):
+    name = element.column_name
+    return (f"json_valid({name}) AND CASE WHEN json_valid({name}) "
+            f"THEN json_type({name}) = 'array' ELSE 0 END")
+
+
+@compiles(_JsonArray, "postgresql")
+def _compile_json_array_postgresql(element, _compiler, **_kw):
+    return f"jsonb_typeof({element.column_name}::jsonb) = 'array'"
+
+
+class _SecretFreeJson(ColumnElement):
+    """Reject credential-bearing keys from persisted dataset provenance."""
+
+    type = Boolean()
+    inherit_cache = True
+
+    def __init__(self, column_name: str):
+        self.column_name = column_name
+
+
+@compiles(_SecretFreeJson, "sqlite")
+def _compile_secret_free_json_sqlite(element, _compiler, **_kw):
+    return " AND ".join(
+        f"instr(lower({element.column_name}), '{term}') = 0"
+        for term in ("token", "secret", "password", "api_key", "credential", "authorization")
+    )
+
+
+@compiles(_SecretFreeJson, "postgresql")
+def _compile_secret_free_json_postgresql(element, _compiler, **_kw):
+    return f"NOT phase4_json_has_secret_key({element.column_name}::jsonb)"
+
+
+_SECRET_KEY_PARTS = ("token", "secret", "password", "api_key", "credential", "authorization")
+
+
+def _canonical_secret_free_document(value: str, *, label: str) -> dict:
+    """Decode persisted JSON once so escaped credential keys cannot evade policy."""
+    from app.ir.hashing import canonical_json
+
+    try:
+        document = json.loads(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be valid canonical JSON") from exc
+    if not isinstance(document, dict) or canonical_json(document) != value:
+        raise ValueError(f"{label} must be canonical JSON object bytes")
+
+    def visit(node: object) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if any(part in key.lower() for part in _SECRET_KEY_PARTS):
+                    raise ValueError(f"{label} must not contain credential-bearing keys")
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(document)
+    return document
+
+
+def _manifest_document_matches_columns(document: dict, values: dict) -> None:
+    required = ("owner_id", "provider", "dataset_version", "market_truth_digest", "capability_digest")
+    if document.get("schema_version") != 1:
+        raise ValueError("dataset manifest_json schema_version must be 1")
+    for name in required:
+        if document.get(name) != values[name]:
+            raise ValueError(f"dataset manifest_json {name} does not match column")
+
+
+def _dataset_manifest_core_identity_guard(values: dict) -> None:
+    """Apply the manifest identity contract to controlled SQLAlchemy Core writes."""
+    from app.ir.hashing import content_address
+
+    document = _canonical_secret_free_document(values["manifest_json"], label="dataset manifest_json")
+    _manifest_document_matches_columns(document, values)
+    if content_address(document) != values["digest"]:
+        raise ValueError("dataset manifest digest does not match manifest_json")
+
+
+def _insert_rows_with_inline_values(clauseelement, multiparams, params) -> list[dict]:
+    normalize = lambda values: {
+        getattr(column, "key", column): getattr(value, "value", value)
+        for column, value in values.items()
+    }
+    multi_values = [
+        normalize(row)
+        for group in (getattr(clauseelement, "_multi_values", None) or ())
+        for row in group
+    ]
+    inline = {
+        getattr(column, "key", column): getattr(value, "value", value)
+        for column, value in (getattr(clauseelement, "_values", None) or {}).items()
+    }
+    supplied = multiparams or ([params] if params else [])
+    if multi_values:
+        return multi_values
+    if supplied:
+        return [{**inline, **dict(row)} for row in supplied]
+    return [inline] if inline else []
 
 
 class _JsonTextMatchesColumn(ColumnElement):
@@ -197,6 +321,7 @@ class ResearchOperation(ResearchBase):
     operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     trigger: Mapped[str] = mapped_column(String(24), nullable=False)
     plan_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    preparation_evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     stage: Mapped[str] = mapped_column(String(24), nullable=False, default="startup")
     error_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -356,6 +481,62 @@ class ExperimentSpec(ResearchBase):
 _make_immutable(ExperimentSpec.__table__)
 
 
+class ResearchIrV2GraphVersion(ResearchBase):
+    """Research-plane immutable evidence for one canonical Component IR v2 graph."""
+
+    __tablename__ = "research_ir_v2_graph_versions"
+    __table_args__ = (
+        CheckConstraint("graph_version >= 1",
+                        name="ck_research_ir_v2_graph_versions_version"),
+        CheckConstraint("format_version = 2",
+                        name="ck_research_ir_v2_graph_versions_format"),
+        CheckConstraint(_JsonObject("artifact_json"),
+                        name="ck_research_ir_v2_graph_versions_valid_json"),
+        CheckConstraint(_JsonTextMatchesColumn(
+            "artifact_json", "strategy_id", "graph_identifier"),
+            name="ck_research_ir_v2_graph_versions_identifier_matches_json"),
+        CheckConstraint(_JsonNumberEquals(
+            "artifact_json", "strategy_version", "graph_version"),
+            name="ck_research_ir_v2_graph_versions_version_matches_json"),
+        CheckConstraint(_ContentAddress("content_address"),
+                        name="ck_research_ir_v2_graph_versions_content_address"),
+        CheckConstraint(_ContentAddress("graph_address"),
+                        name="ck_research_ir_v2_graph_versions_graph_address"),
+        CheckConstraint(_ContentAddress("registry_snapshot_address"),
+                        name="ck_research_ir_v2_graph_versions_registry_address"),
+        Index("ix_research_ir_v2_graph_versions_content_address", "content_address"),
+        Index("ix_research_ir_v2_graph_versions_graph_address", "graph_address"),
+    )
+
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    graph_identifier: Mapped[str] = mapped_column(String(128), primary_key=True)
+    graph_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    artifact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    format_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2, server_default=text("2"))
+    content_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    graph_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    registry_snapshot_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, nullable=False, default=dt.datetime.now)
+
+
+@event.listens_for(ResearchIrV2GraphVersion, "before_insert")
+def _research_ir_v2_graph_before_insert(_mapper, _connection, target) -> None:
+    from app.ir.v2_graph_versions import facts_from_row
+
+    facts_from_row(target)
+
+
+@event.listens_for(ResearchIrV2GraphVersion, "before_update")
+@event.listens_for(ResearchIrV2GraphVersion, "before_delete")
+def _research_ir_v2_graph_mutation_refused(_mapper, _connection, _target) -> None:
+    raise ValueError("research IR v2 graph versions are immutable")
+
+
+_make_immutable(ResearchIrV2GraphVersion.__table__, sqlstate="55000")
+
+
 class ResearchStrategyAdmission(ResearchBase):
     """One immutable owner-scoped Phase 3 causal-admission receipt.
 
@@ -372,7 +553,7 @@ class ResearchStrategyAdmission(ResearchBase):
                         name="ck_research_strategy_admission_graph_address_format"),
         CheckConstraint("graph_version >= 1",
                         name="ck_research_strategy_admission_graph_version"),
-        CheckConstraint(_JsonIsValid("artifact_json"),
+        CheckConstraint(_JsonObject("artifact_json"),
                         name="ck_research_strategy_admission_valid_json"),
         CheckConstraint(_JsonTextMatchesColumn("artifact_json", "owner_id", "owner_id"),
                         name="ck_research_strategy_admission_owner_matches_json"),
@@ -404,6 +585,10 @@ class ResearchStrategyAdmission(ResearchBase):
     parity_suite: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime, nullable=False, default=dt.datetime.now)
+    # NULL preserves historical v1 receipts without claiming v2 semantics.
+    # Keep additive columns last for exact fresh/migrated SQLite parity.
+    format_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_address: Mapped[str | None] = mapped_column(String(71), nullable=True)
 
 
 def _research_admission_identity_matches_json(target: ResearchStrategyAdmission) -> None:
@@ -422,6 +607,11 @@ def _research_admission_identity_matches_json(target: ResearchStrategyAdmission)
                  "contract_suite", "parity_suite"):
         if document.get(name) != getattr(target, name):
             raise ValueError(f"research admission {name} does not match artifact_json")
+    if document.get("format_version") == 2:
+        if target.format_version != 2 or document.get("content_address") != target.content_address:
+            raise ValueError("research v2 semantic identity does not match artifact_json")
+    elif target.format_version is not None or target.content_address is not None:
+        raise ValueError("legacy research admission semantic identity must remain null")
 
 
 @event.listens_for(ResearchStrategyAdmission, "before_insert")
@@ -604,6 +794,268 @@ class ShadowSession(ResearchBase):
         ForeignKeyConstraint(("owner_id", "candidate_id"), ("research_promotion_candidate.owner_id", "research_promotion_candidate.id")),
         Index("ix_research_shadow_session_owner_candidate", "owner_id", "candidate_id"),
     )
+
+
+class DatasetManifest(ResearchBase):
+    """Immutable owner-scoped provenance; cross-plane facts are digest references."""
+    __tablename__ = "research_dataset_manifests"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    digest: Mapped[str] = mapped_column(String(71), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    market_truth_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    capability_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    manifest_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, default=dt.datetime.now)
+    __table_args__ = (
+        CheckConstraint(_ContentAddress("digest"), name="ck_research_dataset_manifest_digest"),
+        CheckConstraint(_ContentAddress("market_truth_digest"), name="ck_research_dataset_manifest_truth_digest"),
+        CheckConstraint(_ContentAddress("capability_digest"), name="ck_research_dataset_manifest_capability_digest"),
+        CheckConstraint(_JsonObject("manifest_json"), name="ck_research_dataset_manifest_json"),
+        CheckConstraint(_SecretFreeJson("manifest_json"), name="ck_research_dataset_manifest_no_secret"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "owner_id", "owner_id"), name="ck_research_dataset_manifest_owner_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "provider", "provider"), name="ck_research_dataset_manifest_provider_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "dataset_version", "dataset_version"), name="ck_research_dataset_manifest_version_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "market_truth_digest", "market_truth_digest"), name="ck_research_dataset_manifest_truth_matches_json"),
+        CheckConstraint(_JsonTextMatchesColumn("manifest_json", "capability_digest", "capability_digest"), name="ck_research_dataset_manifest_capability_matches_json"),
+        CheckConstraint(_JsonNumberEquals("manifest_json", "schema_version", "1"), name="ck_research_dataset_manifest_schema_version"),
+        Index("ix_research_dataset_manifest_owner_created", "owner_id", "created_at"),
+    )
+
+
+_make_immutable(DatasetManifest.__table__)
+
+
+class ResearchDatasetSegmentV2(ResearchBase):
+    """Immutable typed segment fact plus the exact locally verified bytes."""
+
+    __tablename__ = "research_dataset_segments_v2"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    segment_address: Mapped[str] = mapped_column(String(71), primary_key=True)
+    canonical_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    object_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    object_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    byte_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    byte_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_start: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_end: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability_start: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability_end: Mapped[str] = mapped_column(String(40), nullable=False)
+    authority_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="VERIFIED_V2", server_default=text("'VERIFIED_V2'"))
+    __table_args__ = (
+        CheckConstraint(_ContentAddress("segment_address"), name="ck_research_dataset_segment_v2_address"),
+        CheckConstraint(_ContentAddress("object_address"), name="ck_research_dataset_segment_v2_object"),
+        CheckConstraint(_ContentAddress("byte_digest"), name="ck_research_dataset_segment_v2_digest"),
+        CheckConstraint("byte_length > 0", name="ck_research_dataset_segment_v2_length"),
+        CheckConstraint("authority_state = 'VERIFIED_V2'", name="ck_research_dataset_segment_v2_state"),
+    )
+
+
+class ResearchDatasetManifestV2(ResearchBase):
+    """Sole typed research dataset authority; legacy rows remain audit-only."""
+
+    __tablename__ = "research_dataset_manifests_v2"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    manifest_address: Mapped[str] = mapped_column(String(71), primary_key=True)
+    canonical_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    aggregate_byte_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    aggregate_byte_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_addresses_json: Mapped[str] = mapped_column(Text, nullable=False)
+    instrument_addresses_json: Mapped[str] = mapped_column(Text, nullable=False)
+    fields_json: Mapped[str] = mapped_column(Text, nullable=False)
+    gaps_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dependency_addresses_json: Mapped[str] = mapped_column(Text, nullable=False)
+    event_start: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_end: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability_start: Mapped[str] = mapped_column(String(40), nullable=False)
+    availability_end: Mapped[str] = mapped_column(String(40), nullable=False)
+    authority_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="VERIFIED_V2", server_default=text("'VERIFIED_V2'"))
+    __table_args__ = (
+        CheckConstraint(_ContentAddress("manifest_address"), name="ck_research_dataset_manifest_v2_address"),
+        CheckConstraint(_ContentAddress("aggregate_byte_digest"), name="ck_research_dataset_manifest_v2_digest"),
+        CheckConstraint("aggregate_byte_length > 0", name="ck_research_dataset_manifest_v2_length"),
+        CheckConstraint(_JsonArray("segment_addresses_json"), name="ck_research_dataset_manifest_v2_segments_json"),
+        CheckConstraint(_JsonArray("instrument_addresses_json"), name="ck_research_dataset_manifest_v2_instruments_json"),
+        CheckConstraint(_JsonArray("fields_json"), name="ck_research_dataset_manifest_v2_fields_json"),
+        CheckConstraint(_JsonArray("gaps_json"), name="ck_research_dataset_manifest_v2_gaps_json"),
+        CheckConstraint(_JsonArray("dependency_addresses_json"), name="ck_research_dataset_manifest_v2_dependencies_json"),
+        CheckConstraint("authority_state = 'VERIFIED_V2'", name="ck_research_dataset_manifest_v2_state"),
+    )
+
+
+class ResearchDatasetManifestSegmentV2(ResearchBase):
+    """Ordered owner-scoped link; prevents a manifest from naming an alien segment."""
+
+    __tablename__ = "research_dataset_manifest_segments_v2"
+    owner_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    manifest_address: Mapped[str] = mapped_column(String(71), primary_key=True)
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
+    segment_address: Mapped[str] = mapped_column(String(71), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ("owner_id", "manifest_address"),
+            ("research_dataset_manifests_v2.owner_id", "research_dataset_manifests_v2.manifest_address"),
+        ),
+        ForeignKeyConstraint(
+            ("owner_id", "segment_address"),
+            ("research_dataset_segments_v2.owner_id", "research_dataset_segments_v2.segment_address"),
+        ),
+        UniqueConstraint("owner_id", "manifest_address", "segment_address",
+                         name="uq_research_dataset_manifest_segment_v2_address"),
+        CheckConstraint("ordinal >= 0", name="ck_research_dataset_manifest_segment_v2_ordinal"),
+    )
+
+
+def _verify_typed_dataset_segment_row(target: ResearchDatasetSegmentV2) -> None:
+    from app.backtest.dataset_store import DatasetSegment, verify_dataset_segment
+
+    segment = DatasetSegment.from_bytes(bytes(target.canonical_bytes))
+    if (segment.owner_id != target.owner_id or segment.segment_address != target.segment_address
+            or segment.object_address != target.object_address
+            or segment.byte_digest != target.byte_digest or segment.byte_length != target.byte_length
+            or segment.event_start != target.event_start or segment.event_end != target.event_end
+            or segment.availability_start != target.availability_start
+            or segment.availability_end != target.availability_end
+            or target.authority_state != "VERIFIED_V2"):
+        raise ValueError("typed dataset segment copied columns do not reconstruct")
+    verify_dataset_segment(segment, bytes(target.object_bytes))
+
+
+def _verify_typed_dataset_manifest_row(target: ResearchDatasetManifestV2) -> None:
+    from app.backtest.dataset_store import DatasetManifest
+    from app.ir.hashing import canonical_json
+
+    manifest = DatasetManifest.from_bytes(bytes(target.canonical_bytes))
+    dependencies = sorted({
+        *manifest.correction_addresses, *manifest.provider_entity_addresses,
+        *manifest.provider_product_addresses, *manifest.provider_contract_addresses,
+        *manifest.provider_observation_addresses, *manifest.normalized_observation_addresses,
+        *manifest.raw_schema_addresses, *manifest.normalization_transform_addresses,
+        *manifest.creation_evidence_addresses,
+        *manifest.truth_snapshot_addresses, manifest.capability_profile_address,
+        manifest.alignment_policy_address,
+        manifest.missing_data_policy_address, manifest.adjustment_policy_address,
+        manifest.roll_policy_address, *manifest.algorithm_addresses,
+    })
+    copied = {
+        "segment_addresses_json": list(manifest.segment_addresses),
+        "instrument_addresses_json": list(manifest.instrument_addresses),
+        "fields_json": list(manifest.fields),
+        "gaps_json": list(manifest.gaps),
+        "dependency_addresses_json": dependencies,
+    }
+    if (manifest.owner_id != target.owner_id or manifest.manifest_address != target.manifest_address
+            or manifest.aggregate_byte_digest != target.aggregate_byte_digest
+            or manifest.aggregate_byte_length != target.aggregate_byte_length
+            or manifest.event_start != target.event_start or manifest.event_end != target.event_end
+            or manifest.availability_start != target.availability_start
+            or manifest.availability_end != target.availability_end
+            or target.authority_state != "VERIFIED_V2"
+            or any(canonical_json(value) != getattr(target, name)
+                   for name, value in copied.items())):
+        raise ValueError("typed dataset manifest copied columns do not reconstruct")
+
+
+for _typed_dataset_model, _verifier in (
+    (ResearchDatasetSegmentV2, _verify_typed_dataset_segment_row),
+    (ResearchDatasetManifestV2, _verify_typed_dataset_manifest_row),
+):
+    event.listen(_typed_dataset_model, "before_insert",
+                 lambda _mapper, _connection, target, verifier=_verifier: verifier(target))
+    event.listen(_typed_dataset_model, "before_update",
+                 lambda _mapper, _connection, _target: (_ for _ in ()).throw(
+                     ValueError("typed dataset authority is immutable")))
+    event.listen(_typed_dataset_model, "before_delete",
+                 lambda _mapper, _connection, _target: (_ for _ in ()).throw(
+                     ValueError("typed dataset authority is immutable")))
+
+
+for _typed_dataset_table in (
+    ResearchDatasetSegmentV2.__table__, ResearchDatasetManifestV2.__table__,
+    ResearchDatasetManifestSegmentV2.__table__,
+):
+    _make_immutable(_typed_dataset_table, sqlstate="55000")
+
+
+@event.listens_for(Engine, "before_execute", retval=True)
+def _dataset_manifest_core_guard(connection, clauseelement, multiparams, params, execution_options):
+    """Guard controlled SQLAlchemy Core INSERT values, including inline ``.values``.
+
+    Raw driver SQL is deliberately outside this application persistence boundary.
+    """
+    if not isinstance(clauseelement, Insert) or clauseelement.table.name != DatasetManifest.__tablename__:
+        return clauseelement, multiparams, params
+    for row in _insert_rows_with_inline_values(clauseelement, multiparams, params):
+        _dataset_manifest_core_identity_guard(row)
+    return clauseelement, multiparams, params
+
+
+@event.listens_for(DatasetManifest, "before_insert")
+def _dataset_manifest_identity_matches_json(_mapper, _connection, target) -> None:
+    _dataset_manifest_core_identity_guard(target.__dict__)
+
+
+def persist_dataset_manifest(execution_connection, research_connection, *, owner_id: str, values: dict) -> None:
+    """Persist only for the server-authorized owner after both facts resolve."""
+    from app.db.models import MarketDataCapabilityProfile, MarketTruthSnapshotRecord
+    from app.ir.hashing import content_address
+
+    record = dict(values)
+    if record.get("owner_id") != owner_id:
+        raise ValueError("dataset manifest owner does not match authoritative owner")
+    document = _canonical_secret_free_document(record["manifest_json"], label="dataset manifest_json")
+    _manifest_document_matches_columns(document, record)
+    if content_address(document) != record["digest"]:
+        raise ValueError("dataset manifest digest does not match manifest_json")
+    truth = execution_connection.execute(select(MarketTruthSnapshotRecord.digest).where(
+        MarketTruthSnapshotRecord.digest == record["market_truth_digest"]
+    )).scalar_one_or_none()
+    if truth is None:
+        raise ValueError("dataset manifest market-truth digest is not persisted")
+    capability = execution_connection.execute(select(MarketDataCapabilityProfile.provider).where(
+        MarketDataCapabilityProfile.owner_id == record["owner_id"],
+        MarketDataCapabilityProfile.digest == record["capability_digest"],
+    )).scalar_one_or_none()
+    if capability != record["provider"]:
+        raise ValueError("dataset manifest capability digest is not owned by its owner")
+    research_connection.execute(insert(DatasetManifest), record)
+
+
+_PHASE4_SECRET_FUNCTION = """
+CREATE OR REPLACE FUNCTION phase4_json_has_secret_key(payload jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+    WITH RECURSIVE nodes(value) AS (
+        SELECT payload
+        UNION ALL
+        SELECT child.value FROM nodes CROSS JOIN LATERAL (
+            SELECT value FROM jsonb_each(CASE WHEN jsonb_typeof(nodes.value) = 'object' THEN nodes.value ELSE '{}'::jsonb END)
+            UNION ALL
+            SELECT value FROM jsonb_array_elements(CASE WHEN jsonb_typeof(nodes.value) = 'array' THEN nodes.value ELSE '[]'::jsonb END)
+        ) AS child
+    )
+    SELECT EXISTS (
+        SELECT 1 FROM nodes CROSS JOIN LATERAL jsonb_object_keys(CASE WHEN jsonb_typeof(nodes.value) = 'object' THEN nodes.value ELSE '{}'::jsonb END) AS key
+        WHERE (
+            lower(key) LIKE '%%token%%' OR lower(key) LIKE '%%secret%%' OR
+            lower(key) LIKE '%%password%%' OR lower(key) LIKE '%%api_key%%' OR
+            lower(key) LIKE '%%credential%%' OR lower(key) LIKE '%%authorization%%'
+        )
+    )
+$$
+"""
+
+event.listen(DatasetManifest.__table__, "before_create", DDL(_PHASE4_SECRET_FUNCTION).execute_if(dialect="postgresql"))
+event.listen(DatasetManifest.__table__, "after_create", DDL("""
+    CREATE TRIGGER research_dataset_manifests_refuse_secret_key
+    BEFORE INSERT ON research_dataset_manifests
+    WHEN EXISTS (SELECT 1 FROM json_tree(NEW.manifest_json) WHERE key IS NOT NULL AND (
+        lower(key) LIKE '%%token%%' OR lower(key) LIKE '%%secret%%' OR lower(key) LIKE '%%password%%' OR
+        lower(key) LIKE '%%api_key%%' OR lower(key) LIKE '%%credential%%' OR lower(key) LIKE '%%authorization%%'
+    ))
+    BEGIN SELECT RAISE(ABORT, 'research_dataset_manifests contains credential-bearing key'); END
+""").execute_if(dialect="sqlite"))
 
 
 from app.events.outbox import define_outbox_models as _define_outbox_models

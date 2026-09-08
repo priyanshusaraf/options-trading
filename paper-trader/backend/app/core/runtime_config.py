@@ -35,7 +35,7 @@ OVERRIDABLE = (
     "entry_order_mode",
     "exec_market_max_spread_pct", "exec_limit_max_spread_pct",
     "exec_max_slippage_pct", "exec_min_top_qty_lots", "max_daily_loss",
-    "max_open_drawdown", "max_round_trips_per_day",
+    "max_open_drawdown", "max_daily_profit", "max_round_trips_per_day",
     "daily_profit_lock_pct", "daily_profit_giveback_frac",
     "bot_capital_cap", "capital_reserve", "gtt_stop_enabled",
     # intraday-equity segment (MIS) — also the channel by which these reach the
@@ -112,6 +112,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "exec_limit_max_spread_pct": (0.0, 0.90),
     "exec_max_slippage_pct": (0.0, 0.50),
     "exec_min_top_qty_lots": (0.0, 10000.0),
+    "max_daily_profit": (0.0, 100000000.0),  # realized net profit entry halt; 0 disables
     "max_daily_loss": (0.0, 100000000.0),   # 0 disables the halt
     "max_open_drawdown": (0.0, 100000000.0),  # 0 disables the realized+unrealized halt
     "daily_profit_lock_pct": (0.0, 1.0),        # 0 disables the give-back halt

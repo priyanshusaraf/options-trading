@@ -18,6 +18,7 @@ import pytest
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 @pytest.fixture
@@ -37,9 +38,10 @@ def runner():
 
 
 def _open_one(r):
+    admission = persist_admitted_entry(r.broker.s)
     return r.broker.open_equity_position(
         get_instrument("NIFTY"), "LONG", 50.0, 100, "NSE_INTRADAY", "TEST",
-        dt.datetime(2026, 8, 3, 10, 0), r.params, margin=5_000.0)
+        dt.datetime(2026, 8, 3, 10, 0), r.params, margin=5_000.0, **admission)
 
 
 def test_kill_disarms_and_flattens(runner):

@@ -11,6 +11,9 @@ import datetime as dt
 from app.engine.risk_controls import (
     slots_available, in_reentry_cooldown, over_per_trade_cap)
 from app.engine.exit_monitor import evaluate_exit
+from app.core import paper_authority
+from app.db.models import LEGACY_DEPLOYMENT_ID
+from tests.admitted_entry import persist_admitted_entry
 
 
 def test_slots_available():
@@ -58,8 +61,32 @@ def _client():
     from app.main import app
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    # Preserve the phase-entry market-data warm-up while no graph is authoritative.
+    # This test opens manually; it needs a current option chain, not 160 executions of
+    # the admitted graph.  Install the exact authority immediately before the route
+    # under test so manual_open still receives its durable binding and receipt.
     for _ in range(160):
         r.tick(); r.provider.advance()
+    admission = persist_admitted_entry(r.broker.s)
+    with r._session() as session:
+        row = paper_authority.stage(
+            session, project_id="test.admission.4c1029697ee358715d3a14a2",
+            graph_identifier="test.strategy.expanding_z_impulse", graph_version=1,
+            deployment_id=LEGACY_DEPLOYMENT_ID, instrument_key="NIFTY", interval="30minute",
+            owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    from unittest.mock import patch
+    with r._session() as session, patch.object(
+            paper_authority, "verified_decision",
+            return_value={"project_id": "test.admission.4c1029697ee358715d3a14a2",
+                          "graph_identifier": "test.strategy.expanding_z_impulse",
+                          "graph_version": 1, "content_address": admission["graph_address"],
+                          "admission_address": admission["admission_address"],
+                          "decision": "approved"}):
+        paper_authority.activate(session, row.id, revision=row.revision,
+                                 owner_id=r.owner_id, broker_account_id=r.broker_account_id)
+        session.commit()
+    r.refresh_paper_authority()
     app.state.runner = r
     r.arm(True)  # SEC-3: manual-open now requires ARM; ticks above ran disarmed on purpose
     return TestClient(app), r

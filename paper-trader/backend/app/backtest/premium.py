@@ -64,7 +64,10 @@ from app.backtest.engine import trim_warmup
 from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.core.market_hours import ist_epoch
-from app.engine.charges import compute_charges
+from app.engine.charges import (
+    CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    compute_charges_exact,
+)
 from app.engine.exit_monitor import trailing_stop
 from app.options.pricing import bs_price
 from app.strategy.registry import get_strategy
@@ -178,8 +181,15 @@ def _close_premium(pos: dict, exit_price: float, exit_time: int, exit_idx: int,
     # ALWAYS long-premium (buy CE on a LONG signal, buy PE on a SHORT signal) —
     # unlike the spot backtest, direction never flips the P&L sign here.
     gross = (exit_price - entry_price) * qty
-    charges = (compute_charges(seg, "BUY", entry_price, qty)["total"]
-              + compute_charges(seg, "SELL", exit_price, qty)["total"])
+    entry_charge = compute_charges_exact(
+        seg, "BUY", entry_price, qty,
+        schedule_id=CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    )
+    exit_charge = compute_charges_exact(
+        seg, "SELL", exit_price, qty,
+        schedule_id=CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    )
+    charges = (entry_charge["total_minor"] + exit_charge["total_minor"]) / 100
     return BTTrade(
         direction=pos["direction"], entry_time=pos["entry_time"], entry_price=entry_price,
         exit_time=exit_time, exit_price=exit_price, qty=qty,

@@ -12,6 +12,7 @@ from app.api.routes import close_position
 from app.core.instruments import get_instrument
 from app.db.session import init_db
 from app.engine.runner import EngineRunner
+from tests.admitted_entry import persist_admitted_entry
 
 
 def _runner():
@@ -24,7 +25,9 @@ def _open_nifty(r):
     chain = r.provider.get_option_chain(inst)
     q = min((x for x in chain.quotes if x.option_type == "CE"),
             key=lambda x: abs(x.strike - chain.spot))
-    r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot, r.params)
+    admission = persist_admitted_entry(r.broker.s)
+    return r.broker.open_position(inst, "LONG", q, "t", r.provider.now(), chain.spot,
+                                  r.params, **admission)
 
 
 def _fake_request(r):

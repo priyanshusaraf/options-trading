@@ -15,6 +15,39 @@ from __future__ import annotations
 # ── F1 — envelope ─────────────────────────────────────────────────────────
 
 SUPPORTED_FORMAT_VERSION = 1
+V2_FORMAT_VERSION = 2
+
+# Component IR v2 has deliberately separate closed vocabularies.  They do not
+# widen the v1 grammar above: v1 artefacts must remain byte-for-byte readable.
+V2_DOCUMENT_KEYS = frozenset({
+    "format_version", "strategy_id", "strategy_version", "metadata",
+    "graph_inputs", "graph_outputs", "nodes", "edges",
+})
+V2_METADATA_KEYS = frozenset({"metadata_version", "name", "description", "tags"})
+V2_PORT_KEYS = frozenset({
+    "port_id", "direction", "semantic_flow", "semantic_role", "type_ref", "shape",
+})
+V2_INPUT_PORT_KEYS = V2_PORT_KEYS | frozenset({"connections", "default"})
+V2_TYPE_REF_KEYS = frozenset({"type_id", "type_version"})
+V2_CONNECTION_KEYS = frozenset({"cardinality", "min", "max", "assembly"})
+V2_NODE_KEYS = frozenset({"node_id", "component", "parameters"})
+V2_COMPONENT_REF_KEYS = frozenset({"component_id", "component_version"})
+V2_EDGE_KEYS = frozenset({"edge_id", "source", "target", "binding"})
+V2_ENDPOINT_KEYS = frozenset({"scope", "node_id", "port_id"})
+V2_BINDING_KEYS = frozenset({"kind", "position", "key"})
+V2_SHAPES = frozenset({"scalar", "series", "event_stream"})
+V2_FLOWS = frozenset({"value", "condition", "event", "control"})
+V2_SCOPES = frozenset({"node", "graph_input", "graph_output"})
+V2_CARDINALITIES = frozenset({"single", "optional", "bounded_many", "variadic"})
+V2_ASSEMBLIES = frozenset({"single", "ordered", "keyed", "unordered"})
+V2_COMPONENT_DOMAIN_FAMILIES = frozenset({
+    "market_data", "transform", "indicator", "signal", "condition", "temporal",
+    "state", "portfolio", "risk", "intent_description", "utility",
+})
+V2_COMPONENT_STRUCTURAL_ROLES = frozenset({
+    "source", "transform", "decision", "stateful", "selector", "aggregator",
+    "boundary", "sinkless_terminal",
+})
 
 ARTEFACT_KINDS = ("component", "graph")
 

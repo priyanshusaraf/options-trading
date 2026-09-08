@@ -1,0 +1,806 @@
+{
+  "archive_sha256": "6b3e374088c2884b00ac9aeb9957e677a7dcb94d06addaa79240819b3aa45d14",
+  "format": 1,
+  "sources": {
+    "paper-trader/backend/research_tests/test_indicator_accuracy_session_data_fresh_oracle.py": {
+      "original_bytes": 7050,
+      "original_sha256": "bb56fdaa1b2d52ce474c79197a2a97c99da9df7de84c4856d7fcb6516ad4c61d",
+      "readable_sha256": "9092a26a1740b32cccc5066122ff1122a77ed21005813b14cc49ed8ac4385054"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/01-strategy-os-defect-pattern-register.md": {
+      "original_bytes": 7052,
+      "original_sha256": "a7b54ce8e5bc964c389b25d5de9547a1d85b9c43358eb32346996af19db67121",
+      "readable_sha256": "6493407d32da723841d3554194994f3d7e67b1dea665e992eac6878aa6f780d5"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/02-dp-003--mocked-seam-presented-as-lifecycle-evidence.md": {
+      "original_bytes": 9531,
+      "original_sha256": "4ddca59455317b74f02fe506a9ef09c1957301ded5f013279c73b5be20c1fe01",
+      "readable_sha256": "14bb0f57a141119af50573a072f2669222788aa09d9f0bf3a31f135211d5cf8e"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/03-dp-007--one-json-helper-encoded-different-shapes-by-database-dialect.md": {
+      "original_bytes": 7986,
+      "original_sha256": "373e1c674fd84525bf30f358dd54f8c4ff762995477ffa8315dcabe897da9f07",
+      "readable_sha256": "5f6eebecd784d7e2c1e9a9fe9282a3f9a35b2631760dfc6ffc9d267e6094b283"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/04-dp-009--logical-orm-transaction-mistaken-for-a-physical-outer-transact.md": {
+      "original_bytes": 14114,
+      "original_sha256": "ef0e7d15c116b6a9464ef0e1d8bba5896759152d7ece96f9bd243b0d5717e40e",
+      "readable_sha256": "d3d97603957e10445129a550f41533854cb96e7e11a60ca735060de385d7891e"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/05-dp-011--host-language-numeric-subtypes-cross-a-typed-market-boundary.md": {
+      "original_bytes": 10267,
+      "original_sha256": "048b5b7d67c556040e32658acfc31978548d7c47cdb84e418627b98bdda42338",
+      "readable_sha256": "8aea4799f78f0f34fc3e1f9bc81f62cc3841458b86e190b53e5dd37070caee66"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/06-dp-013--prose-fixture-roles-mistaken-for-structural-topology-authority.md": {
+      "original_bytes": 12335,
+      "original_sha256": "5507aad33c8037ee939ab05cc14e8401e440fbcb882eefecfa434388ad8e9dc0",
+      "readable_sha256": "15058754978a7eb58c2e82da86d91537853c3b3694a9642f932c6ad872d143c2"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/07-dp-015--single-parent-traversal-and-traversal-order-mistaken-for-compl.md": {
+      "original_bytes": 15873,
+      "original_sha256": "1379bcfe4154eebc203c758e47c28dbbed15c8b1e4a5fe38831d6a5d65f04a1f",
+      "readable_sha256": "e20b39a583ccf58759b7c064209c63d4499db2b539366ee8f1d18bc5e1a65b7f"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/08-dp-017--producer-selected-executable-subset-mistaken-for-complete-depe.md": {
+      "original_bytes": 9314,
+      "original_sha256": "4e1d6d26e04f052cb899c1864a505c7f0a212a0b2f19d1f3cf413290841c2953",
+      "readable_sha256": "06f50069ab9a58befc7f435a5a9aa16983ee7ce4397c25956fe6e3f1077c9093"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/09-dp-019--closed-receipt-shape-mistaken-for-honest-constructible-lifecyc.md": {
+      "original_bytes": 5963,
+      "original_sha256": "a45da11837b44972e160ff93ebbd1454e714a444c878b5939da1701908b4dcb1",
+      "readable_sha256": "0216a2c5aa783435c1cbb2e21717df22158daaa5f8d4e88f8ec64bd2285294bb"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/10-dp-020--mutable-advancing-fixture-mistaken-for-a-stage-bound-control-s.md": {
+      "original_bytes": 11448,
+      "original_sha256": "20b96e58a28ecb9366aac2e2aa564b63f01f24a42a025ba71a48eb261997ac69",
+      "readable_sha256": "23f189ac54da3d7b3d753101fa84f80b1bc434331fcc6619857ed7a015b21e67"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/11-dp-022--expected-diagnostics-without-executable-causal-witnesses.md": {
+      "original_bytes": 11247,
+      "original_sha256": "77001d6a8f469a84189495798352a3c84246526ef2f13c08af41e5d8fb7c4bae",
+      "readable_sha256": "e27c53a565c4dd935a83358d55eae1a31246b69705f9848575c780a3a1299841"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/12-dp-024--identity-and-transform-tokens-collapsed-into-one-string-namesp.md": {
+      "original_bytes": 7171,
+      "original_sha256": "ccdc9722d7bb255d92b59cd8b669228f571d79264b284658e8cb4c4f0f6885cc",
+      "readable_sha256": "cfce475a266a8522ac9222085150f20d26b06252d8800e207ce079c1e9caf8a5"
+    },
+    "paper-trader/docs/agent/defect_patterns-sections/13-dp-026--capital-safety-proved-against-sampled-identities-and-isolated-.md": {
+      "original_bytes": 9475,
+      "original_sha256": "aaa9049eca5e525731aeb00957ef5d7395ca0c1ad5a021b1c23fb00561d56583",
+      "readable_sha256": "60a724137b6a8c591f7d92c428c6147a6536d361e5cafb503ee8eadb895f52c7"
+    },
+    "paper-trader/docs/agent/tasks/phase1-4-foundation-postgresql16-semantic-trigger-fixture-contract-evidence-harness-replacement-recovery-5.md": {
+      "original_bytes": 42085,
+      "original_sha256": "edc050aa2f3c2382e9c00741e98ae971671f956027a13aad60f11bebb2a46eaa",
+      "readable_sha256": "8c8f26e37401dc6434f10f5b9224278358b62507ed21a0d33fe4cd98f1305c9d"
+    },
+    "paper-trader/docs/agent/tasks/phase1-4-foundation-postgresql16-semantic-trigger-fixture-contract-evidence-harness-replacement-recovery-7.md": {
+      "original_bytes": 46660,
+      "original_sha256": "9e41f30981c3ec29a4eec8857a90292c6b6d6f41c6b555988b50348f55be6c98",
+      "readable_sha256": "6be8f4fe2000a1d4c1f3c941037629b2cddba0edb8905c232da767954a605216"
+    },
+    "paper-trader/docs/agent/tasks/post-phase5-indicator-accuracy-correction-replan.md": {
+      "original_bytes": 5729,
+      "original_sha256": "3449f629c9e22de5e19c975e9dc15e3b43f6c1a2753d7e65cc14af3baa2c8e1a",
+      "readable_sha256": "a52607172bf7c96805ab5ada83783b87f16054afd5e21df05d50a63fe65485c9"
+    },
+    "paper-trader/docs/archive/product-planning/CEO-PRIOR-ART-GATE.proposed.md": {
+      "original_bytes": 3300,
+      "original_sha256": "e4f67d1117132cdbd6e7e95e74b9c4e085406ba9708b63f18c8bf59a911e8c2f",
+      "readable_sha256": "df2f109e95cccad4f87a60866521fcb22043b8b73c54cd5ddbf35e6fed785978"
+    },
+    "paper-trader/docs/archive/reports/2026-08-13-phase3-causal-strategy-contract.md": {
+      "original_bytes": 3295,
+      "original_sha256": "68f0f077c8b57340723e65f7db49e38de506712c75f0764d1f1b4f2e34a7273e",
+      "readable_sha256": "af3159269e8838e35bcda07e089ba59268f73bad4143fbbc7ea0c4793c9a06c2"
+    },
+    "paper-trader/docs/archive/reports/2026-08-14-strategy-os-ir-v2-acceptance.md": {
+      "original_bytes": 24357,
+      "original_sha256": "5d29c66d00ca28c2b8b0298f241873831951ac07b30f9f3517c72bd7dcf3b48d",
+      "readable_sha256": "282de35ecd33fee82e4811953d4daac6bdebde6df3aa47d7168555d2d6d8a76f"
+    },
+    "paper-trader/docs/archive/reports/2026-08-14-strategy-os-ir-v2-implementation.md": {
+      "original_bytes": 7904,
+      "original_sha256": "12983c79d09b30278987314e1caab807a882f7e2a183922a3692344881ad3069",
+      "readable_sha256": "76de3b2bc607cb853ff5f246f4af9886dae0eb72d740deabfc1e34555a03f014"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/00-EXECUTIVE-DECISION.md": {
+      "original_bytes": 6175,
+      "original_sha256": "7f225358091323da14a412ab47406836e123189fd33b9dd3a6f49beed72a08e5",
+      "readable_sha256": "d1e0efe9412bbb00cfc99459ea13fa4cef352187e4995b7024fce14eb86daf20"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/01-REPOSITORY-ROADMAP-AND-PHASE-TRUTH.md": {
+      "original_bytes": 9147,
+      "original_sha256": "9d8cf2236f187800965d066eecaba34305cb2807cfd3a7f0c071d614bfb82bab",
+      "readable_sha256": "5231ade69ccc04fa2746f6c2b3973cd28850563a0cb2b094b84fdfdc39dd3fbb"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/02-CAPABILITY-EVIDENCE-MATRIX.md": {
+      "original_bytes": 16631,
+      "original_sha256": "074695997c18f6985082f2fe131d38440a567cc8db99ca84de000780a8468144",
+      "readable_sha256": "aff34e23f10657310882837f2dd3e739cab7651315f7121a7767b5c6ae179e55"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/03-V0-SCOPE-AND-GOLDEN-PATH.md": {
+      "original_bytes": 10644,
+      "original_sha256": "f79b5df769eaa166aa861b17c5cda689a3942c3856ada4c2315e8835c60e19eb",
+      "readable_sha256": "a019c23de6804d90e1cc91c8e89648343790488f8af2d933e242d0d4fff78498"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/04-V0-GAPS-BLOCKERS-AND-CRITICAL-PATH.md": {
+      "original_bytes": 7292,
+      "original_sha256": "442033df47c9dcd4dcc65e9011c39829aa07dfbc50e6bf98aee4ab134dad252a",
+      "readable_sha256": "a5baa3e45aed000c52955a4611a3225a7adf685d48cd498769591e95e718db55"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/05-ARCHITECTURE-AND-RELEASE-PROFILE.md": {
+      "original_bytes": 5812,
+      "original_sha256": "58671d6e7b2b8fb344ae899285b92987c4cf6c2225b504c21544e46c3c2b1a4f",
+      "readable_sha256": "4e37ebe9fc01f62311dfcb10ba11c2a61a9462b30897147bb40980d997a048eb"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/06-TEST-SECURITY-DATA-AND-DEPLOYMENT-GATES.md": {
+      "original_bytes": 10443,
+      "original_sha256": "388ce7b8d4aa6de25b7596ba7295d51a4e1c7d7345e0a51986b9019d166e41ad",
+      "readable_sha256": "421d1b1a2c2e70db069316db82f6d233488d9be8ad0944d1f86a5db79b1f4ffa"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/07-PRIVATE-BETA-ANALYTICS-AND-VALIDATION.md": {
+      "original_bytes": 5420,
+      "original_sha256": "940392a3cea214ada168f295d88f739eeaa3b256b42e2d403991475271f24241",
+      "readable_sha256": "48d8d47cf5fecae879d93e8253b7d4f555dc3068b067e7927c0f6c56e3303928"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/08-DECISION-REGISTER-AND-OPEN-QUESTIONS.md": {
+      "original_bytes": 4682,
+      "original_sha256": "5b8c25e856569d1ba8e1e5d8756214b5691b3037c10018efbabb1404b25795b4",
+      "readable_sha256": "92eca6ceb8810b3449baa374ca31e65dc5a760d5444cb325a78bd3bb882826de"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/09-REVISED-V0-V1-V1.5-V2-V3-ROADMAP.md": {
+      "original_bytes": 8846,
+      "original_sha256": "8a9f5bc6c04e858fb49965d3a339c465442552c15109fcdce00ebd947c2d80f5",
+      "readable_sha256": "60d5d78be83f9470700cdf8ff77be93e69331bf4e33880be458a639a552e3cb0"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/OWNER-WALKTHROUGH.md": {
+      "original_bytes": 23749,
+      "original_sha256": "b258ac404f8495f32994ee1b7cc253e035141d1e7ced42b76a1a9327c5148d3d",
+      "readable_sha256": "135f5364305234d84fe705a97b02a27670c7b7738e6f662312df6663a7651838"
+    },
+    "paper-trader/docs/archive/strategy-os-v0-release-audit-2026-08-27/README.md": {
+      "original_bytes": 3512,
+      "original_sha256": "ec758672f17306d293000abd876ec8ae3dbd7cfc4a65ee1e07dd0224348e853e",
+      "readable_sha256": "575524c23ae4a77c98060cb43d03bd504313a241f86b893df2ff11104d185c10"
+    },
+    "paper-trader/docs/archive/superpowers/plans/2026-08-13-strategy-os-ir-v2-port-contract.md": {
+      "original_bytes": 36118,
+      "original_sha256": "949655a2d61a5c22b399b9789e2a7218cd249c66578d394e1ebd53184365c90d",
+      "readable_sha256": "fbc2b01d914800467d8ed84b0eb89f74bfc8fb08cab4ea7fe206f1d563cbac63"
+    },
+    "paper-trader/docs/archive/superpowers/plans/phase5-capital-admission.md": {
+      "original_bytes": 9014,
+      "original_sha256": "860f6ec069a1ff4774f199adde705f761dc66aa5219aada28ec59ee0db719f03",
+      "readable_sha256": "7a8f745048e40eb6b49770e4379b36f0d93756d62c83e43d6f859868a02ef017"
+    },
+    "paper-trader/docs/archive/superpowers/plans/phase5-strategy-os.md": {
+      "original_bytes": 6080,
+      "original_sha256": "ec826a5310c0d6002801b3f6ffc56710d33bfb97b1b5f52bf194f3522713bba1",
+      "readable_sha256": "35bde94de1f6202e9939646002ad9671948c0389979a01fce9429d95c05cd7f0"
+    },
+    "paper-trader/docs/archive/superpowers/specs/2026-08-13-strategy-os-ir-v2-port-contract-design.md": {
+      "original_bytes": 46067,
+      "original_sha256": "45800c85181e38302ec46b66cea6d52a8afd1b2341cea0a91c25aa3aca9cf900",
+      "readable_sha256": "bf69591eab72e228d42ab6d86dd245e43e2855cf639c7d92d368891aade267b8"
+    },
+    "paper-trader/docs/archive/superpowers/specs/phase5-capital-admission-design.md": {
+      "original_bytes": 16449,
+      "original_sha256": "fb580f955b6d772597c06dd051d923224c6e05e41797c31670517f3e916a5f67",
+      "readable_sha256": "69f2a40a6dc9e4cc7d83113c178e9726bff79425352a8e7a4d87356ac1183dc1"
+    },
+    "paper-trader/docs/archive/superpowers/specs/phase5-strategy-os-design.md": {
+      "original_bytes": 22040,
+      "original_sha256": "600781eacf2d3059d92561ff9337e517ca00033452c3df4a0a79236ab2f77d08",
+      "readable_sha256": "314836c8eef48c99b8ebfad87e096292f3d52121671854b2450cf7deef3a3224"
+    },
+    "paper-trader/docs/audit/ground-truth-2026-07-28-sections/01-ground-truth-audit--2026-07-28.md": {
+      "original_bytes": 7394,
+      "original_sha256": "da4eb9d6db07f71763804b8663d1183b8e55938f77d43b44114f8bcb1151bfa7",
+      "readable_sha256": "903f52b253175747ccbe6db23ef9f12f57a96a4c4527dde9296d100edf8c3d7e"
+    },
+    "paper-trader/docs/audit/ground-truth-2026-07-28-sections/02-2-starting-capital--equity-anchoring.md": {
+      "original_bytes": 7537,
+      "original_sha256": "be3db73a09dd593c5f9dac9d7c6f341fd008a9b7c42cf804a12c883f506cbfd0",
+      "readable_sha256": "a49e5acd9c1b4e2bea57b115b8fabf4dfa9c2a0580f3056d5d592b4ffed9152a"
+    },
+    "paper-trader/docs/audit/ground-truth-2026-07-28-sections/03-4-test-counts.md": {
+      "original_bytes": 6094,
+      "original_sha256": "cce738c06b0bcd606591aca616fd6891a13cb4f24fda70ebfa03a1307620824f",
+      "readable_sha256": "fd8b2cfca2d3d1db44c9d77bc37499c5c50d5320b42fe2c151bdccc827b3fc2e"
+    },
+    "paper-trader/docs/audit/ground-truth-2026-07-28-sections/04-6-deploy-reality.md": {
+      "original_bytes": 8927,
+      "original_sha256": "b9ce57c664740bd6b0affc4579cb15d2824705e0ce959456a033ed1848704ae4",
+      "readable_sha256": "95a4bb6dc3837633067d91a4bd469d6ad7ae98232a19441a5d104a687e307947"
+    },
+    "paper-trader/docs/engineering-references/STRATEGY_OS_PROFESSIONAL_ENGINEERING_REFERENCE_PROGRAM_2026-08-28.md": {
+      "original_bytes": 7196,
+      "original_sha256": "9a17c99d75ce659cfa639ebf00a841401c1df0e0a1cd25b999069cd330763eb6",
+      "readable_sha256": "e76a14e0559cde403edc74eafeed63f41b29017d73c184d4abff366a63a1a5c4"
+    },
+    "paper-trader/docs/engineering/decisions/0011-l1-ir-runtime-adoption-sections/01-adr-0011-staged-adoption-of-the-component-ir-runtime-in-the-live-path.md": {
+      "original_bytes": 6556,
+      "original_sha256": "aa2cd52480afc365741dfe942475d3519d489d371a7e04140e615c3807d24563",
+      "readable_sha256": "65410c9142ce08e306b1f50e2336ca380c748346f57a440906f90618a6b50a56"
+    },
+    "paper-trader/docs/engineering/decisions/0011-l1-ir-runtime-adoption-sections/02-4-what-the-current-parity-evidence-is-actually-worth.md": {
+      "original_bytes": 10520,
+      "original_sha256": "28d26d2f54fd6f948d9a491d28eb37cd94c5c1981dc19db8b6b63a7ec5d8d7b1",
+      "readable_sha256": "cdfb9c571eec95a1e780cead7e73d63d05ef9bc61cd7ef3dcab0d1aab49d9bbd"
+    },
+    "paper-trader/docs/engineering/decisions/0012-execution-state-ownership-sections/01-adr-0012-execution-state-ownership-across-graphs-evidence-candidates-a.md": {
+      "original_bytes": 10472,
+      "original_sha256": "a0aa48b0b89949235918a75bd74dc9966c4073667d24bbdf6f6a217e9a2b437e",
+      "readable_sha256": "221863e0dc3ca484963a7992e11a4fe78ff0b6bf2fd81c7886eb66b3923587ef"
+    },
+    "paper-trader/docs/engineering/decisions/0012-execution-state-ownership-sections/02-24-the-registry-of-mechanisms.md": {
+      "original_bytes": 5403,
+      "original_sha256": "6e674e6f4d0e3bc2dab69ce906c4189162e9a93f53cf05390e5b93073399d9f8",
+      "readable_sha256": "2c409b5f325e18111952c2a562631d104918d8b185e3720ddff69e5ca92f33a2"
+    },
+    "paper-trader/docs/engineering/decisions/0012-execution-state-ownership-sections/03-4-what-this-adr-does-not-change.md": {
+      "original_bytes": 5616,
+      "original_sha256": "d83829c7bc729800b2cf3184b8b63b13621331916e71652299d43d1a7fbd2a1e",
+      "readable_sha256": "784730c9a110bda8ef79d11e397092f21126652a7f3f2c7d7ddb4eb267d19131"
+    },
+    "paper-trader/docs/engineering/decisions/0012-execution-state-ownership-sections/04-5-owner-gates.md": {
+      "original_bytes": 6022,
+      "original_sha256": "50e4106a1c9a4c5133456fb077b716a3e557342fcba0022edd415e595f6ddd63",
+      "readable_sha256": "dbad406bb926249915fa3390cd6e221e426c2ba272b8fbf50b925b8e7b6f9fd2"
+    },
+    "paper-trader/docs/engineering/decisions/0013-research-approval-is-admission-not-a-lease-sections/01-adr-0013--research-approval-is-an-admission-prerequisite-not-an-author.md": {
+      "original_bytes": 5878,
+      "original_sha256": "07138a3e4b6ed6e68909b146894b7cb93ad8a7a941786ff87527fc651f70b1d3",
+      "readable_sha256": "481c12fadbddb2f4b51fd3af9c3165b94a8d52a29b04f08350760e1f0271323d"
+    },
+    "paper-trader/docs/engineering/decisions/0013-research-approval-is-admission-not-a-lease-sections/02-2-the-decision.md": {
+      "original_bytes": 5784,
+      "original_sha256": "f028f97cf6368b9c93e27a3296c8af18b835aa133be79f8f2b53979713a23271",
+      "readable_sha256": "0ba96a7fcd1ca4134e85aca4e2c94af3f830f1c8fbc2eebaf4d76e4348368423"
+    },
+    "paper-trader/docs/engineering/decisions/0013-research-approval-is-admission-not-a-lease-sections/03-5-consequences.md": {
+      "original_bytes": 6724,
+      "original_sha256": "a16e95be41d22a6f275f669483142304e54fe953b72203a612684b5842a68b4c",
+      "readable_sha256": "701a03aaec1ba3c2836c988d2f368f8ebf4682600d9da46e704aa35ae8d9d9b3"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/01-architecture-extension-review--2026-08-07.md": {
+      "original_bytes": 8097,
+      "original_sha256": "d216719f49d02bcbba9e8baf18286ccdd8917a67839bf2f64f5a212cd55445c7",
+      "readable_sha256": "23d994bc175b8ffe2bfd9e08956eaa3025b4b4c17647d3d2a51c56bdbe92dcbe"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/02-b-capability-compatibility-matrix.md": {
+      "original_bytes": 5119,
+      "original_sha256": "d9bcba2531d3573be3ac0f8bf28f9f15b82d506ab31b2aaf998346625ed70310",
+      "readable_sha256": "bc1d48aafef87a69b7538bf1e4499dfa00340d5dea5ab2966d786cd73e996d84"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/03-c-extension-drill-results.md": {
+      "original_bytes": 11149,
+      "original_sha256": "b2c8278845b2554775e86e9353e16139da9d162159dbbdfddd8a881f0ace0a47",
+      "readable_sha256": "ecac6846c07d6487f5e6b9bd5df96b3703c15f4d7d57ab24d30412b556491e67"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/04-drill-5--a-stateful-predicate-condition-has-remained-true-for-10-obser.md": {
+      "original_bytes": 10656,
+      "original_sha256": "1e918544ef7d38d6fa08e97379d12bba9bdec3d340f133c88fc452525479192a",
+      "readable_sha256": "16cfeb521af026acda72a950278b93ecc8408827368d2c76e0e0f30f3eec317b"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/05-g-4--runtimeevaluate-is-domain-blind.md": {
+      "original_bytes": 8527,
+      "original_sha256": "4dca189c3e2dfecdf5cf33d91048f37db965789f66c1a7dab222db0fd5912362",
+      "readable_sha256": "ade85b5b2bf72daca1483166ed83e5f8249da9bc5c087fea8eb0e2d9d816a616"
+    },
+    "paper-trader/docs/engineering/reference/architecture-extension-review-2026-08-07-sections/06-f-scaling-assessment--roughly-100-serious-users.md": {
+      "original_bytes": 5969,
+      "original_sha256": "942a02a42eeb95393997b36a0e25764bf6b26d15804ddf306fee574f1f677e2d",
+      "readable_sha256": "0591f477d0947b472c400606325ac345c5c8ca335e2ae94df10a3b56a6abf8bb"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/01-backend-hardening-phase--2026-08-08.md": {
+      "original_bytes": 7461,
+      "original_sha256": "5633b7a1bb4a301378c8931824705c12eb3a6171d42c41246da85e4c13fbe9a4",
+      "readable_sha256": "35a3f716dfbcfcda74c782a713dc174740e44604275610de0852561c12f6ca1e"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/02-4-performance--measured.md": {
+      "original_bytes": 6475,
+      "original_sha256": "1bfe074f730b669dc24d4f9ae23b11d4bd2f7882d5a88e0b400b33c702414947",
+      "readable_sha256": "36e6ef4affc8bc72f40a6aa71ace0c8a41880c5e2a8ceb7269ba4b7c1a095cc9"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/03-6a-provider-architecture--2026-08-09.md": {
+      "original_bytes": 6310,
+      "original_sha256": "41ce018fb98082ae758f9afdb2c80ab0e4ff0dd2796f3e874368940f19da29fd",
+      "readable_sha256": "15cf406a787733b1a529426938d52ebe923fcc8f9e4abddfa79f6d85fe190398"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/04-7-what-is-next.md": {
+      "original_bytes": 10576,
+      "original_sha256": "0fc3e2149f0f8ca4d3071e23770ea41e96dce06f8cd8d408a342276afeb9ebcb",
+      "readable_sha256": "9175d1fa1570ae9e31dfddaca5cc903910722eb2800e96ffb95ddfcf30263948"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/05-10-sweep-cost-per-stage-and-the-premium-pricing-bottleneck-2026-08-09.md": {
+      "original_bytes": 8104,
+      "original_sha256": "20012c7d9aa4e32d340a4baef9ed5a20fdc479af0ee49b5ba9d766fdff6b806e",
+      "readable_sha256": "2673afe02c7fcb671a205404f60dd7254ebf3af2aba419f1095b85428cb6ba4c"
+    },
+    "paper-trader/docs/engineering/reference/backend-hardening-2026-08-08-sections/06-12-sweep-persistence-and-fan-out-measured-2026-08-10.md": {
+      "original_bytes": 5674,
+      "original_sha256": "bffd68d26669a87069dbd217940e728e252d9d6bc5cc74acd057510fd4b2d7f2",
+      "readable_sha256": "962beec9fdbf85d265096d6d2b499b5fd58b2641f0fd9a67d62bfcef12a06441"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/01-strategy-os-supervisor-review-architecture-baseline-and-living-checkpo.md": {
+      "original_bytes": 7555,
+      "original_sha256": "3a1d3bf4408c266c18e3612913a22488a7386e5438149b3b317d4fb35cd20660",
+      "readable_sha256": "0757d30def30618d38a1183f68acef18a7b952b6019b68aff9a49429c5dea024"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/02-1-executive-verdict.md": {
+      "original_bytes": 8761,
+      "original_sha256": "c54222a8110fbc2f7a10e3bac92bc2bab06b48faf45b5e089b3641a250e24b49",
+      "readable_sha256": "b2eedc4ac422fb858d7cc15e31e03545a7a31f1e692cdbebfe80c68a406d4abd"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/03-5-findings-that-block-the-next-phase.md": {
+      "original_bytes": 10619,
+      "original_sha256": "54bf93e5fcfb5b9980de9f51f7bb42108761d2bbb15d610f260db9ce8a8fb71a",
+      "readable_sha256": "152a4a67305dc50b24b9c21e3833f70583581b488dc1d6481c2d94740e3ee2d0"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/04-6-product-and-execution-capability-truth.md": {
+      "original_bytes": 6760,
+      "original_sha256": "9ee412e105f2a5477fe49a9ee93f04b6c4560070ed140e3d46d908c871db34b8",
+      "readable_sha256": "ad0bf079cf1b715eb3fa81474aacd9d5f54749e07798beebbd5d86a12c3a23f1"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/05-10-security-and-tenancy-threat-model.md": {
+      "original_bytes": 8301,
+      "original_sha256": "30bf0479f1573bb9f674195a73f51314592d2dcdef097cff79e99773c273295d",
+      "readable_sha256": "38f159013828db96b0d7ec1f16102b41243adf4048515963b4e3b6c2735bfb94"
+    },
+    "paper-trader/docs/engineering/reference/codex-supervisor-review-2026-08-09-sections/06-13-verification-gates-for-the-next-milestones.md": {
+      "original_bytes": 6378,
+      "original_sha256": "e7aa7405df97a9d8fe216910ce8178aa54bdde02bca510722017d74673deb3f2",
+      "readable_sha256": "9b99d28935f8097e32851c8431bf2b8a74a562fe6db68f63f91b579834060ca6"
+    },
+    "paper-trader/docs/operations-sections/01-operations.md": {
+      "original_bytes": 9407,
+      "original_sha256": "8a972efce9c66491ebea3839797d2da4d1cdb1f0f11bc1fef830d2a17e5020f7",
+      "readable_sha256": "ad93e791fb2524dd6e881abfdef54b5ec9459edc3aaaadbebcf6f77324f1b3cc"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/00-README-FIRST.md": {
+      "original_bytes": 4755,
+      "original_sha256": "e15de9d8e48e12e742df7471177b066c0d9a8dc1fb6ee611a066ff0867c916bd",
+      "readable_sha256": "471872d5dc9b696e6dac089f5fc604e1820b89955137ce0cdadbf0b77dfa7db2"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/01-UPDATED-OWNER-VISION-V0-TO-V6.md": {
+      "original_bytes": 37126,
+      "original_sha256": "d972263765893cf770ab2460f30d18056227b02a69bc89629c82ac4e93bd21c5",
+      "readable_sha256": "2756272dcbd7d5512a8e12493d44dafff6d987442358beecc09cf29373d0e3a1"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/02-V0-COMMERCIAL-RESEARCH-AND-ALERTS-RELEASE-DIRECTIVE.md": {
+      "original_bytes": 19257,
+      "original_sha256": "12c38c98022697335c0fcd463fa5e1f13d6cb42fb7c648cc3a4e85f57e6d4437",
+      "readable_sha256": "d9852bc1ca4e5383690bf59168c4c254373606c796a34f1681e7d0953e4bff55"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/03-ARCHITECTURE-EVOLUTION-AND-NO-DEAD-END-INVARIANTS.md": {
+      "original_bytes": 16991,
+      "original_sha256": "c93347cae7b1b2d2bd8fc1ddd7e1dbc46f9e5bb00f6fe106ccf964e4a131b7a8",
+      "readable_sha256": "66935e24a5f4cfce91e6991e66cc4fa53b83f4d1110f43c670e70b379a9dd28b"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/04-SCALE-AND-SYSTEMS-DESIGN-50-TO-10000-USERS-BRIEF.md": {
+      "original_bytes": 18607,
+      "original_sha256": "19082d8eb94ab9ede7295bf7698afc584bf33feae2f0c0a447caa0a232fff3ba",
+      "readable_sha256": "8116473e035a0709d053f7ddee64aaa55017f96cbd96e6abc8ce6ed4531f3ffd"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/05-PROFESSIONAL-ENGINEERING-CORPUS-REVIEW-V4.md": {
+      "original_bytes": 18116,
+      "original_sha256": "95b006de56aa599af1ae6c8880e8a1cc2d7cc584c111296ff13346b47b2e9a26",
+      "readable_sha256": "8a09832ac2f926256d73c01f99adf9e41ffb1b82bb5f77e7cfabef1faeb8edcb"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/06-V1-ARCHITECTURE-CONTINUITY-LANE.md": {
+      "original_bytes": 9277,
+      "original_sha256": "21cde85ad85726eca2d281bcb523cc604867cab798c1d52ea9c1a2bef209d474",
+      "readable_sha256": "b00bb553bd88f476671877c8677d2234d42986fa0c45d4b9f0b71305973ed883"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/07-RAZORPAY-GOOGLE-AUTH-AND-ADMIN-WORKSTREAM.md": {
+      "original_bytes": 14701,
+      "original_sha256": "dcbfbdbf9db6bd302189c389ca1e24a935022a785199c14f68b8249a98a49cf0",
+      "readable_sha256": "691e599b72d9f20b06ff3c8a4170f77a75270cd562b85f71aedb66e9a4e1dfa5"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/08-MATURITY-GATED-PRODUCT-SEQUENCE.md": {
+      "original_bytes": 10391,
+      "original_sha256": "2803365a01ed250d8c313fc55bb7d9dbeca91dbc29dfa05d7becaaa1182c70a2",
+      "readable_sha256": "e3576ac90d460a0d4d005f00e1e3830d20605944323b34328f0fb9f9e6f7e5f4"
+    },
+    "paper-trader/docs/program/owner-directions/2026-08-29/REPOSITORY-INTEGRATION.md": {
+      "original_bytes": 3260,
+      "original_sha256": "fc3338a07f213ae4aaf602d250dad6956bcc0bcb0a5f50ce655a805e6c452da3",
+      "readable_sha256": "ddfe916c3488137f0d7b1727cf315e817036e8fad564ade0e8476106ae8d5aad"
+    },
+    "paper-trader/docs/research/architecture-sections/01-autonomous-quantitative-research-layer--architecture.md": {
+      "original_bytes": 7123,
+      "original_sha256": "d441560b6a77aa66329cd1e8a64434fa759ff869852880ba32c0bb86de3a0215",
+      "readable_sha256": "6de2f418267298ce4a9cfe93d55e1768a92f4dbedb0c9b826eb93786f484fc6c"
+    },
+    "paper-trader/docs/research/architecture-sections/02-3-domain-model-finalized.md": {
+      "original_bytes": 8559,
+      "original_sha256": "47726b12bece1966e7344b7f48e41719a64bc78124793a98a0f4cbbe30080cab",
+      "readable_sha256": "d23d681d5b2a126fd871ab2537440cdf8ddb22680994d18a451492e294210238"
+    },
+    "paper-trader/docs/research/architecture-sections/03-6-module--package-boundaries.md": {
+      "original_bytes": 6319,
+      "original_sha256": "400f889b5cc35a6c06c607e20d68fc8ec7f0861391dce56ca98a6b34b7949834",
+      "readable_sha256": "42d955453337d8f57065d37602eae7e7c1736db84ad6cf5ef428c7e8753596f1"
+    },
+    "paper-trader/docs/research/kleppmann/corpus-manifest.csv": {
+      "original_bytes": 700354,
+      "original_sha256": "c2ccdb686ecb4013444dc710f09259cf62594b4b535c6adb21946dd8d66449ed",
+      "readable_sha256": "df73a7343f6f5ba463772f8c2e854d1bf712e2451b6b808a57d0eb426f3789e0"
+    },
+    "paper-trader/docs/research/kleppmann/source-notes/2026-08-29-numeric-and-market-truth-audit-sections/01-numeric-and-market-truth-audit.md": {
+      "original_bytes": 7592,
+      "original_sha256": "31f1b6f8a09d0f692d5a8fcda2fc2264bcd804b0fd3ded333474d4caaf8faa38",
+      "readable_sha256": "9452e8a3cdcc7f14f492ff53bb2276a049697f7914b0abb54a9bb83e0edaebd9"
+    },
+    "paper-trader/docs/research/kleppmann/source-notes/2026-08-29-numeric-and-market-truth-audit-sections/02-nmt-003-negative-zero-creates-a-second-market-number-identity.md": {
+      "original_bytes": 7971,
+      "original_sha256": "2d9a3aa3e370a8da07e126e2d00df205794bbe780e9939a233c2afb9727cef3e",
+      "readable_sha256": "b20f9ee9c328a2bcc0ff366ef9fdf0ac440112495731062e1371872cdabca46a"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/01-strategy-os--kleppmann--professional-engineering-review-prompt-v2.md": {
+      "original_bytes": 9283,
+      "original_sha256": "5f99db2be247a1770c8eb392e432236f597caffcdcaba98d1d416a81569ade2c",
+      "readable_sha256": "c5941bf2f3fe59f3caa4696517db8ee4d3af104cad2168c9dde73fe6c0898b5e"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/02-3-build-a-machine-readable-corpus-manifest.md": {
+      "original_bytes": 6159,
+      "original_sha256": "2114c58db249c24d2d680641e58998b41da67c37c8e9311f6f5ac78644085250",
+      "readable_sha256": "473fc0cea2fc9d38de44ee08214c2c5de7b40e291b9716aa44a78ad8bd119a96"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/03-6-mandatory-strategy-os-audit-domains.md": {
+      "original_bytes": 11255,
+      "original_sha256": "d04c1bde88106857ccb9acd5c6f3257eb819669d54f3d5cd1f9265a449db711f",
+      "readable_sha256": "f6ffcdf0d5675fa0ef3c26bc749f75072a460332e5dd25f629ee250e1d0ec5ec"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/04-616-backup-restore-correlated-failure-and-disaster-recovery.md": {
+      "original_bytes": 6112,
+      "original_sha256": "1376ad508e9deb7e37cf39867906e3644e0b204f654edfbe4475e6107a1f4e59",
+      "readable_sha256": "675efabc6a23be7040fce512073ebad67b70f978e9465436a446511c12e83f03"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/05-9-test-and-fault-injection-programme.md": {
+      "original_bytes": 7736,
+      "original_sha256": "02453e4819f76812c96a8b7857a57c577bd0e39c0950e8cfea18b93a9ae46832",
+      "readable_sha256": "7e8fabf6b82a9ddb496b4a843c40a7fe5db25696eb811f80ea52590fa9947df0"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/06-14-definition-of-done.md": {
+      "original_bytes": 11760,
+      "original_sha256": "d6db1bc9e8e65a80528cf2f25a6382d30b4b934cb1a514cb3e115d9c236266a8",
+      "readable_sha256": "c1c12123fb8363e1a5a9b8642a4d68e7c55406eec0011cdc8c6eee7814e76fb6"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/07-167-credential-device-session-and-key-lifecycle.md": {
+      "original_bytes": 5780,
+      "original_sha256": "880ed32f32ee84ec825544327876c5909558c81d83c6a103642ab06a6aecba4d",
+      "readable_sha256": "3b7e4a7991bb75b901531f2d601c25ee20e4391b0b0ee5502a02afb8b418de08"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/08-17-professional-engineering-source-registry.md": {
+      "original_bytes": 8534,
+      "original_sha256": "967ddcac959337b80dfd58f04487ec839b665a56453f02456536ec3f61adc002",
+      "readable_sha256": "4dc74a44c22ae9d66ca004efe83e8e917cad1651048e622edcb9c61bed872899"
+    },
+    "paper-trader/docs/research/kleppmann/strategy_os_kleppmann_and_professional_engineering_review_prompt_v2_2026-08-28-sections/09-18-phase-aware-source-requirements.md": {
+      "original_bytes": 6348,
+      "original_sha256": "6661bbb2fb8cea0a869b3ae59cd0e9f70fb79a210e7c5ad156a16572c76c813a",
+      "readable_sha256": "dc9c4d8b4a980210e700dfccc34416c25b713e015c2bbbfb145006b5c422bfc5"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/00-prior-research-quality-audit-sections/01-prior-kleppmann-and-professional-engineering-research-quality-audit.md": {
+      "original_bytes": 6170,
+      "original_sha256": "a2c59f9fc05567b5182b3de4a0363399e53ef8b3e8069227ed23e963dd084301",
+      "readable_sha256": "e5b9d0f20e6fe4a71be4168996299939f9c97428ef75913cb4754e940c8d1514"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/00-prior-research-quality-audit-sections/02-metadata-and-reproducibility-audit.md": {
+      "original_bytes": 10455,
+      "original_sha256": "212b212e4c2c2efb81ae72a0a50cdfd57fd23ad462657cdf5b0d52e1b6a4f252",
+      "readable_sha256": "bf0136a7d93ce648870563d6591468933944b969ce7de06d7a9c573c4c8ba857"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/01-KLEPPMANN-CORPUS-MANIFEST.csv": {
+      "original_bytes": 647603,
+      "original_sha256": "b980dd56c27858605e5ba3dd1d1fa4ea639b32bb4e61b18295c022f7097c6dd9",
+      "readable_sha256": "62008c6aa1424cd72b1c44b38cbfdff9319c2a4e346221577f40bf39fcb5cc3a"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/02-kleppmann-pass-a-data-time-truth-sections/01-kleppmann-pass-a-data-time-identity-transactions-and-derived-state.md": {
+      "original_bytes": 7218,
+      "original_sha256": "f7a894b3101fc4ba79a8d97d0e838a14000e99039215f5a351c2a41e84418300",
+      "readable_sha256": "def6fc7b81c7fde289474e733cadc5f734fc2bb4358e4551044f0dc3e62dcec6"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/02-kleppmann-pass-a-data-time-truth-sections/02-current-authority-and-identity-reconstruction.md": {
+      "original_bytes": 12369,
+      "original_sha256": "e523031f72bf01c597601260dec2a61391ac7b96fab237d4e52553562df83435",
+      "readable_sha256": "65e24ce9083da3cb3ddb288b31d1f077256fc71c4f88c101fa8881c48dabccf2"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/03-TEMPORAL-AND-IDENTITY-MODEL-AUDIT.md": {
+      "original_bytes": 9411,
+      "original_sha256": "38d6f35d93299833857e1941f180db06744b99c98ec7411a068e9361413886aa",
+      "readable_sha256": "73df104838fed947de3b09fa2a48cfe098221e9896399c65a06d0b90e467160b"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/04-SOURCE-OF-TRUTH-AND-DERIVED-STATE-MAP.md": {
+      "original_bytes": 7194,
+      "original_sha256": "c296b1b0b48aabc275411bea75d480af84a366aeef036ead4899a17154f4ec76",
+      "readable_sha256": "5162e71f42dcb8f55261bc683c1271b9e5460d6983a05d4323a1dd9b51e0c81d"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/07-RECOVERY-AND-REBUILDABILITY-MATRIX.md": {
+      "original_bytes": 6951,
+      "original_sha256": "2106e8ae8012ded205f5a1b6c6635b853baf6aa4d5bc0892ffa636894320fde6",
+      "readable_sha256": "f82e8d0a61f0be3408846c01f2c9c017b8fd0ea11d3b5ebb59a9dc21b92e46bc"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/08-repository-backend-atlas-sections/01-strategy-os-repository-backend-atlas.md": {
+      "original_bytes": 7221,
+      "original_sha256": "dc11febbaddb57c313d3dec7d741ddddbdb9b6cad26fd95c46386ae8837d27e4",
+      "readable_sha256": "70e7ce4d5c230c6e71331f00e569887e605f875bf2ff115cdf3257b93ab662d1"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/08-repository-backend-atlas-sections/02-provider-ingestion-and-normalization.md": {
+      "original_bytes": 9343,
+      "original_sha256": "b2da68b25255c09409b09ff7dfbaad0ffda78987519b809be28b07a9b0fe3bce",
+      "readable_sha256": "800aa96001b86223ea2bd9a7ce86a876e088039e7f5931e8f9737b0ffb2f757f"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/09-SOURCE-TO-CODE-DECISION-MATRIX.md": {
+      "original_bytes": 7392,
+      "original_sha256": "ac23e6c7a9e254643a9ee0a27751440282b5472f86e42d0359292688b6d7d929",
+      "readable_sha256": "3c030997ef3d0c211a7b634b19358f8b2b118b31cfa98a00be2b16a20071d420"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/10-adversarial-failure-hypotheses-sections/01-adversarial-failure-hypotheses.md": {
+      "original_bytes": 11981,
+      "original_sha256": "48c30fa7a421f5b81197b521089337ad1a041ab1bc9bab520e684a9f7b99b315",
+      "readable_sha256": "4872e4f8f5b97f1e5afd7baee2103d73f399b852adf5eab46eb876fe46a59377"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/13-broader-source-catalog-sections/01-broader-source-catalog.md": {
+      "original_bytes": 7447,
+      "original_sha256": "73613b4c7980e8033fda85c4da13d78378f4921ec89918f6ffc0edf7cc97409e",
+      "readable_sha256": "9eae72ae02f0be9687610f2af668c85bbfee28902187131394fa2febec1fa4db"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/13-broader-source-catalog-sections/02-c-money-orders-ledgers-and-reconciliation.md": {
+      "original_bytes": 6505,
+      "original_sha256": "65eaabe40e296f184adab8b0bad83d08c97ca173e86866629be43316cc8f70a2",
+      "readable_sha256": "5b2afd3ab3fd0a8fad0b370e3765c901c98834d1cf6aeb994899b308099120a5"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/13-broader-source-catalog-sections/03-e-security-tenancy-privacy-and-supply-chain.md": {
+      "original_bytes": 6558,
+      "original_sha256": "773541ed8c611f835c1e9729130f5bf62ea5ea8b24d2e27ac53f6f7001499510",
+      "readable_sha256": "1dfa029b1718a6b533557ae020aed69cdd84cc1f8c464dc4e054a655d64c5be8"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/14-ACADEMIC-PDF-AND-COURSE-NOTES-PACKET.md": {
+      "original_bytes": 5910,
+      "original_sha256": "05bc76e501777dd3d1d0f7a1eba5f5d323afecd46a744e7f01425b6d6427b86b",
+      "readable_sha256": "cab631bf625cdbb74b37a683265e24a6c88f718bcf072ad18b358f793c5a6e7f"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/15-SENIOR-ENGINEER-AND-COMPANY-PRACTICES-PACKET.md": {
+      "original_bytes": 5295,
+      "original_sha256": "078e4ff471509115ea931639feef02ff22495f20038f54c6e41cd3f77c84e84b",
+      "readable_sha256": "01d8c124c9faa9835d042936779b8b8ca7f6c57cd7b14646d451bc44cdcbfcc8"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/16-QUANT-RESEARCH-VALIDITY-PACKET.md": {
+      "original_bytes": 5043,
+      "original_sha256": "bb495307db975cbb64838b8c9afc33d640ab96b1840409eb9710b9c4041f1bbd",
+      "readable_sha256": "da90b76415303e29e56941837630675303b8720708505a3ae369b1a182f8b4e2"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/17-SECURITY-RELIABILITY-AND-SUPPLY-CHAIN-PACKET.md": {
+      "original_bytes": 4178,
+      "original_sha256": "8bb6a6c251e015007c7e63b9a50364cea35b1d99d192754551139fc38d135320",
+      "readable_sha256": "eb96b2e714cc1591e62f240e880f1af45013b3a36c12c75ee78d19def507bf70"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/18-SOURCE-CONFLICTS-AND-REJECTED-CARGO-CULT.md": {
+      "original_bytes": 5905,
+      "original_sha256": "f41ab62e14867de6d13161ad302a9292041996b6320e4b2e24b307639fd05f32",
+      "readable_sha256": "387a46bfa799eb23c15e7b171513e11fabbb5de83c0ff73cfe4d06b45769b19f"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/19-SOURCE-TO-CODE-MATRIX.md": {
+      "original_bytes": 10416,
+      "original_sha256": "04c8848b4b26b275a727710e034fce6cdde50add2e8fad02cd06320a098f986e",
+      "readable_sha256": "cb4acfb1a3aede466762b333445893700a09a96a97306e66804210a7ab64ade4"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/20-CONSOLIDATED-SOURCE-TO-DECISION-MATRIX.md": {
+      "original_bytes": 5524,
+      "original_sha256": "3fe1791d5aae7e6e25b36e9c71bfbb38e4708cb78cff418a20ce5eb3641d79a7",
+      "readable_sha256": "861e52dfed0ae380077a9f8cb5f742d76048e97ddc60a0e760ac44254215333e"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/21-CONFIRMED-BACKEND-RISK-REGISTER.md": {
+      "original_bytes": 4223,
+      "original_sha256": "c3907dcbf0362e824db2b552761b3eaa676a1a981c81a6e0d0770e75c757f04d",
+      "readable_sha256": "0e687e6f5243449e489d2865af0d78bc64ece3d501b5dd172817658b321802c1"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/22-IMPLEMENTATION-CANDIDATE-GATE.md": {
+      "original_bytes": 6302,
+      "original_sha256": "1e0655ccf76f6eae5f26406684277b734161c62a91f2d41accfaf1e89500b008",
+      "readable_sha256": "f8d0ec8ebff75f77dcb5a4c7c55ad8bee6cbbf3442724965dd4dd501826dc272"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/24-CHANGES-DELIBERATELY-NOT-MADE.md": {
+      "original_bytes": 4524,
+      "original_sha256": "fae44df47f04c65e4cd1a2105a98abc9f89a5619e7e76353c149100be94318e9",
+      "readable_sha256": "3c898b59188fe3a5ad7a1e14c6013c3016d4d0b0346b4154b4c931c0f5e9763c"
+    },
+    "paper-trader/docs/research/professional-engineering-v5/25-RESIDUAL-RISK-AND-OPEN-QUESTIONS.md": {
+      "original_bytes": 5072,
+      "original_sha256": "5eac5f39e2818f41999dd8545e2513004ada235b7b71d66a213123ec9ea0cfe7",
+      "readable_sha256": "4fbf812ba14a0e15719b3e82745f601cb5ed121747133924cd9425073aece7a9"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/01-rfc-0001--the-component-ir.md": {
+      "original_bytes": 6030,
+      "original_sha256": "c9880f88668a47d296078d6121c975d81c8e3c2ad2da3da34e6608b7aa71898a",
+      "readable_sha256": "1342591737fc501cd63945de9af8f007e882e26944aad34b6dfba2f58c4278ed"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/02-1-scope-principle-and-planes.md": {
+      "original_bytes": 9617,
+      "original_sha256": "5b807c636f91d82bc46f027586e8eeb6773ff58ba7b36a552d975f59ed6b3d7f",
+      "readable_sha256": "dfc91e680c1349e0e3c77c5039d1585cbfc793188c9b1ee908fff172d44ee03a"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/03-continuation-3.md": {
+      "original_bytes": 5784,
+      "original_sha256": "939a91d79b5330e5ac60e94088777604a5411f08ac04ae1887c91d30d1fc824d",
+      "readable_sha256": "e98e2cb11747030d4741fd4401a10d0050530aa1914026ac3b3a10794fcd8fd6"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/04-4-contract-clauses-normative--free-to-add.md": {
+      "original_bytes": 6473,
+      "original_sha256": "b02f1d0d9aa4bbd8aca59ee830d4077e445d6c5ba23a2cd4a2184af492af70e3",
+      "readable_sha256": "7fb9ee86abade3ca153ccbccd19695dcef7f7edda37cb0b65ff202dce2c204d3"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/05-5-non-goals.md": {
+      "original_bytes": 11230,
+      "original_sha256": "4cfe876d42266652d1798253486839e8dcaa241b4ad7b2faace7c28be875d9c5",
+      "readable_sha256": "267f24bfa264069b7204e26b8fa916026019347c1a23eaea513e574e8aafa0e1"
+    },
+    "paper-trader/docs/rfcs/0001-component-ir-sections/06-a4-a-nested-subgraph.md": {
+      "original_bytes": 5132,
+      "original_sha256": "831f2dcfb8ee80fb77bdb8f418c2e76b39a0474b19154f7d38963e5f9a8dd42f",
+      "readable_sha256": "2655b23a39d84a010f87845a8b141216d9a2bb765671acd2a3b2d595050adac7"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_GRAND_PRODUCT_VISION_2026-08-11.md": {
+      "original_bytes": 38034,
+      "original_sha256": "32ea36c1410b55f703d63caf11841c8a116534df0d02cc277906272f33c288c0",
+      "readable_sha256": "6796b912ee4a390e61223d987f1921e7ad27b898eec8c0eeead3901f9f17024c"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_HYBRID_PRODUCT_DIRECTION_AND_V1_PROGRAMME_REBASE_2026-08-24.md": {
+      "original_bytes": 42003,
+      "original_sha256": "26d2c9b37aa67ae52217a55db5940c0605831125b90dc2c2671e230ae8227b41",
+      "readable_sha256": "34e6038e90fc132bc30dafc20aa6b41f919844d95f499d42de3bc77a4587f551"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/STRATEGY_OS_V1_PRODUCT_SCOPE_AND_SEQUENCE_2026-08-11.md": {
+      "original_bytes": 46372,
+      "original_sha256": "5ea8a7c68ac8e734e0e5898c0c28d8ae1f945326b616b0941505293764a0baec",
+      "readable_sha256": "62ebd3f4ccc5c9f2a06bff21a7c01fd4e11463dff4fb51d0f59fbd2d4a67dad8"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/adr/0003-DURABLE-PORTFOLIO-ADMISSION-AND-RESERVATION.md": {
+      "original_bytes": 1585,
+      "original_sha256": "ac3963ea459ce33391e8eb7ef2b682b0ea534d599515251ae3c64ccefa92c6a5",
+      "readable_sha256": "90aef251d743b27dcee9ef269fb0791c4608e310794e7bf7c625531f0b9f29e5"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/adr/0004-KEEP-DOMAIN-JOBS-BEFORE-WORKFLOW-DEPENDENCY.md": {
+      "original_bytes": 1351,
+      "original_sha256": "2aaff38a937db29275cd7e862f15d91273be07c3679611287191c6b061cc033e",
+      "readable_sha256": "76ceebaabc2f1b2bed1d1fe72d2b01c4b10cf4bf59a4f80fcfcba420d270f380"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/adr/README.md": {
+      "original_bytes": 2621,
+      "original_sha256": "7dc337e97ddefe81792a9653fe674357b78e9a871e925a345f9553d36c98d267",
+      "readable_sha256": "20a9e59fa2320989c7b5e80ff21c464be14778463d3b1a9c33a90ecbe9da1f83"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/CAPITAL-CONTENTION-AND-RESERVATION-SPEC.md": {
+      "original_bytes": 9573,
+      "original_sha256": "039ee3bc2a64d08181b10163fc1a1476a4cda2940961a11c2ac721b8466a4c60",
+      "readable_sha256": "c2f35979da1c0781b6732c78b9234d18f5f987a4aaea104e95ef27ba25f1f3a6"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/DATABASE-AUTHORITY-MATRIX.md": {
+      "original_bytes": 11611,
+      "original_sha256": "3d44d539408e49912bb90a748ee37ace58e8c283060f77a1cf83df7b2d1652ad",
+      "readable_sha256": "b5938bd1accd2e6f3b7809ce70dc2e975d3773de11bbdc1268409d3887fb8cea"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/OBSERVABILITY-AND-SLO-PLAN.md": {
+      "original_bytes": 6982,
+      "original_sha256": "4e04dc55d82272344d711241c151a9f3cc5cccb0d7fe7232583229ce6acd3dc1",
+      "readable_sha256": "9d86519d9c438518998c2bb41d8987deab77bb16ba8b30636b133ba9bd1fbe68"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/REALTIME-STATE-MACHINES.md": {
+      "original_bytes": 6461,
+      "original_sha256": "6fda5b1b8c0883de81eab04b0f9692a824e0176a17e075491ea3cd3405c72109",
+      "readable_sha256": "b3c0ae4cee00a9f4d5f221e7eee070f536c84478be6d84d2a883c3eb43514319"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/RECONSTRUCTION-RECEIPT-SPEC.md": {
+      "original_bytes": 8121,
+      "original_sha256": "2738fc89dabfe79532c8a2eac837af5e63935672309bff1369cb2e36413c55bb",
+      "readable_sha256": "fab6d4b50026ac749fa96cd621ad04a4edcb1b71fd3e20bf7a95217c5c2e3371"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/architecture/failure-scenario-catalogue-sections/01-failure-scenario-catalogue.md": {
+      "original_bytes": 12115,
+      "original_sha256": "e543e0eb4f12510fce6d144eac3b27f407f84a43ca691d79a7ba87448b38972d",
+      "readable_sha256": "1071be31597186a182d32037cd339a8eda5554add38f1e0cb6df294abebec6cf"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/canonical-benchmarks-and-adversarial-tests-sections/01-strategy-os-canonical-benchmarks-and-adversarial-tests.md": {
+      "original_bytes": 7077,
+      "original_sha256": "7145090693f3dd6b41a6a9d2707447b9d2b6b3da8f5b730384557f35e2b0bbaf",
+      "readable_sha256": "34b435b177539b1477ba68add4517348d6db8e957ca4a880b964703b292d3f72"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/canonical-benchmarks-and-adversarial-tests-sections/02-benchmark-d--pre-open-bias-and-opening-option-repricing-recorder.md": {
+      "original_bytes": 6431,
+      "original_sha256": "d29b48a1813f6c8f1e9befe7fa6f25d8cdb2eecf10417af59a6793a6b4e1d5b5",
+      "readable_sha256": "f9a0f644b8fe1043626f065c25201cbcd5605a93137e37bd66c9ac4e76bc9fbe"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/AUTHORIZATION.md": {
+      "original_bytes": 5833,
+      "original_sha256": "76b8e79583c86a1a8001f4ebf2280337144b5b2514906e9700378db4380793f7",
+      "readable_sha256": "18288de7b1e7f8deade22245155ee4f9731d449321373e6ad5dd7e840e731b49"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/BROKER-AND-REALTIME.md": {
+      "original_bytes": 6623,
+      "original_sha256": "3efdeb18b7475d91da24874dbd965881f89eb6f776591bb12941f0b4a1d89deb",
+      "readable_sha256": "c6f733dbdf1c6b9597f9d14a94b0c35af09dca7f5f08bef9f3dfd6af917eefd2"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/DATA-OPTIMISATION-EVIDENCE.md": {
+      "original_bytes": 6312,
+      "original_sha256": "62e5c8b976739d92131c521295dbb65ae1c742ff5833cd2496c3409f22010c36",
+      "readable_sha256": "2333756c7a3f0b5d606f0a2c5f60df51c60705a6cefc6ef990c41bed8fadcebe"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/TRADING-SEMANTICS.md": {
+      "original_bytes": 6655,
+      "original_sha256": "08f640f316c33a522d11e48c6c842affff84613958a38c64cfe606c1b58f5d10",
+      "readable_sha256": "225e8b73e9a1f726bdf85022018abc52b9e76336707a6d689612d2b3867280bc"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/VISUAL-AND-INTERACTION.md": {
+      "original_bytes": 6219,
+      "original_sha256": "77ad52312051de011ec87eb0d4c7a87a6c3ce06e430f94ff6bedf4dc45c8ee11",
+      "readable_sha256": "aca3825ea0adf7034e0bbe402848adeb26cf860838e078e90e217e5b8614ee9d"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/comparison-packets/WORKFLOW-DURABLE-EXECUTION.md": {
+      "original_bytes": 6371,
+      "original_sha256": "8afa3c0c8d5a91346e6a0d73096482b164d6735c4361ffe1d7b4bfc593646691",
+      "readable_sha256": "0b619cc7a46be2ea313757399fc3d40ffec407ca6cd18c29e4b366f96d8e7ba1"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/discovery/NEW-REPOSITORY-BACKLOG.md": {
+      "original_bytes": 8427,
+      "original_sha256": "857b95d63082ecfb5b4a022f5b6c3c944c3392e6f25db9701fba14f0e12426a1",
+      "readable_sha256": "0537c0411be85907861348fd9de11490f68edee7043f27d503aa1491fecd58b7"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/discovery/TOOL-ASSET-SCORECARD.md": {
+      "original_bytes": 5886,
+      "original_sha256": "71557384ea885ebe00d2b004de3bf31095b498aacd7e9211a00188dc09702aef",
+      "readable_sha256": "1bf7ac2a2de08262d79087816f6dc833d8c194f01deb97b5ccbf167a240f0d1c"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/market/CATCH-UP-AND-MOAT-ANALYSIS.md": {
+      "original_bytes": 4970,
+      "original_sha256": "10d8569918484dac2a1e3890b15012f2903abb9e41f3e0f13351aca1deb5ee05",
+      "readable_sha256": "87ab40e84106971862cb8809fa51ec3fa67fb0b9e22da0b3a78434a47befaf99"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/market/COMPETITOR-MAP.md": {
+      "original_bytes": 10676,
+      "original_sha256": "bf399e06ecc71d63499b359454ff222553229c0e112d1f2b89c297e628962791",
+      "readable_sha256": "b7faecbc4a0e8e08db758ea59ad46d1511b0dcb7801d1bdf6d43f90f39266707"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/market/CUSTOMER-JOBS-AND-SEGMENTS.md": {
+      "original_bytes": 5957,
+      "original_sha256": "b3e0a35105960877dfbbed5c7f5a3c2c3f6748a7f5339ab7545996a79ed9d194",
+      "readable_sha256": "74ac2fec66476f1a51b901dc31921173c8f2ab9f3c66dc2674874cdf7e3a023f"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/repo-reviews/BACKTRADER-AND-FREQTRADE-TARGETED-REVIEW.md": {
+      "original_bytes": 4418,
+      "original_sha256": "18689100fac0617d6292dd03150614d26a305476160c79aebc0889b4853b024a",
+      "readable_sha256": "daf335f061f01525aff920e10ce3d75ce016ed99d874b396a3da71e7bec63e10"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/strategy_os_v0_v6_owner_direction_reconciliation_2026-08-29-sections/01-strategy-os-v0v6-owner-direction-reconciliation.md": {
+      "original_bytes": 10045,
+      "original_sha256": "79ad895dc20ca025d389619f115ed712d652537a27803787d006e9eb43ee7812",
+      "readable_sha256": "df48107383d1d5b3a833c4394e27a8a1188bcd10af9092094bed6d487bc5c338"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/strategy_os_v0_v6_owner_direction_reconciliation_2026-08-29-sections/02-current-v0-programme-reconciliation.md": {
+      "original_bytes": 7679,
+      "original_sha256": "60419ccd3b69a9d92ca2f6bd2bd9271095070c7172b18b53c9fc27d6513046c7",
+      "readable_sha256": "ac15303114123a1dd3f544b74be422299604bfac41207ccbb9db4d7806f36b9a"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/strategyos-v1-v1.1-v1.5-v2-v3-product-architecture-memo-2026-08-24.md": {
+      "original_bytes": 67243,
+      "original_sha256": "087d87df2658398f89ef6b3b5a4551bac28efa2855a2d7e1e2693d63047657d8",
+      "readable_sha256": "e48c8af6f1a32232a19f3e4c7a87ac14ea4f9aa61495cf6a5f43af988c63dce0"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/test-plans/V1-V2-ADVERSARIAL-BACKLOG.md": {
+      "original_bytes": 11176,
+      "original_sha256": "b3a405e101d9543b4c0ce98d38121f43b46663e3418cf694a0b2d2b51b560f8e",
+      "readable_sha256": "2e0ae885013918ca3f7181d3114e5f72c5631377a6fe3fdb2e1ca412194086dc"
+    },
+    "paper-trader/docs/strategy-os-v1-v2-v3/ux/INTERACTION-AUDIT.md": {
+      "original_bytes": 6822,
+      "original_sha256": "0eae24366500c5b6ca0941796a432ec969ea5aee5a26120931b989e1a9842cf9",
+      "readable_sha256": "c7e96d34f0c4da25c67cf64e53feb720ac93fb14c9e2aaa4f21af150fca7c245"
+    }
+  }
+}

@@ -15,6 +15,7 @@ that rewrites the tree it is running from is a hazard, not evidence.
 """
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import subprocess
 import sys
@@ -35,6 +36,16 @@ LIVE_BROKER = BACKEND / "app" / "engine" / "live_broker.py"
 BROKER = BACKEND / "app" / "engine" / "broker.py"
 ANALYTICS = BACKEND / "app" / "engine" / "analytics.py"
 SESSION = BACKEND / "app" / "db" / "session.py"
+MODELS = BACKEND / "app" / "db" / "models.py"
+BACKTEST_IDENTITY = BACKEND / "app" / "backtest" / "identity.py"
+BACKTEST_REPOSITORY = BACKEND / "app" / "backtest" / "repository.py"
+BACKTEST_SWEEP = BACKEND / "app" / "backtest" / "sweep.py"
+DEPLOYMENT_WRITER = BACKEND / "app" / "core" / "deployments.py"
+DEPLOY_BRIDGE = BACKEND / "app" / "core" / "deploy_bridge.py"
+LIFECYCLE = BACKEND / "app" / "engine" / "execution_lifecycle.py"
+COCKPIT = BACKEND / "app" / "engine" / "cockpit.py"
+ROUTES = BACKEND / "app" / "api" / "routes.py"
+ADMISSION_SOURCE = BACKEND / "app" / "strategy" / "admission.py"
 
 ISOLATION = "tests/test_ir_shadow_isolation.py"
 ADMISSION = "tests/test_ir_shadow_admission.py"
@@ -52,6 +63,7 @@ PAPER_GATE_TESTS = "tests/test_paper_authority_gate.py"
 PAPER_TESTS = "tests/test_paper_authority.py"
 PAPER_ENGINE_TESTS = "tests/test_paper_authority_engine.py"
 PROTOCOL_TESTS = "tests/test_broker_protocol.py"
+P5_TESTS = "tests/test_phase5_graph_paper_attribution_schema.py"
 
 
 #: (name, file, find, replace, the test that must go red)
@@ -522,17 +534,174 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
         "::test_an_instrument_assignment_of_the_same_graph_is_still_refused",
     ),
     (
-        "exact content-address verification is bypassed at the gate",
+        "P5.1 graph address verification is bypassed at the gate",
         BINDING,
-        "    if not binding.strategy_version or binding.strategy_version != strategy.version:",
+        "    if (binding.strategy_version != strategy.graph_version_label\n"
+        "            or binding.graph_address != strategy.version):",
         "    if False:",
         f"{PAPER_GATE_TESTS}::TestExactVersionAtTheMomentOfUse"
         "::test_an_edited_graph_does_not_inherit_authority",
     ),
     (
+        "P5.1 full graph addresses collapse to the old 64-character guard",
+        MODELS,
+        '        "AND NEW.graph_address IS NOT NULL AND length(NEW.graph_address) = 71 "',
+        '        "AND NEW.graph_address IS NOT NULL AND length(NEW.graph_address) = 64 "',
+        f"{P5_TESTS}::test_0040_fresh_model_has_exact_columns_constraints_guards_and_refuses_downgrade",
+    ),
+    (
+        "P5.1 backtest result identity omits the graph address",
+        BACKTEST_IDENTITY,
+        '            "graph_address": graph_address,',
+        '            "graph_address": None,',
+        f"{P5_TESTS}::test_result_identity_distinguishes_same_label_different_graph_addresses",
+    ),
+    (
+        "P5.1 execution binding carrier omits the graph address",
+        BINDING,
+        "        graph_address=record.content_address, attribution_state=VERIFIED_GRAPH,",
+        "        graph_address=None, attribution_state=VERIFIED_GRAPH,",
+        f"{ATTRIBUTION}::test_an_admitted_binding_stamps_its_exact_identity_and_receipt",
+    ),
+    (
+        "P5.1 deployment writer omits the graph address",
+        DEPLOYMENT_WRITER,
+        "        graph_address=graph_address, attribution_state=attribution_state,",
+        "        graph_address=None, attribution_state=attribution_state,",
+        "tests/test_deployments.py"
+        "::test_ir_deployments_resolve_exact_owner_receipts_without_global_contamination",
+    ),
+    (
+        "P5.1 deployment bridge carrier omits the graph address",
+        DEPLOY_BRIDGE,
+        "            graph_address=admitted.strategy.version,",
+        "            graph_address=None,",
+        "tests/test_deploy_bridge.py::test_deploy_creates_watchlist_assigns_and_archives_running",
+    ),
+    (
+        "P5.1 options runner carrier omits the graph address",
+        RUNNER,
+        "                    graph_address=executed.graph_address,\n"
+        "                    attribution_state=executed.attribution_state)",
+        "                    graph_address=None,\n"
+        "                    attribution_state=executed.attribution_state)",
+        f"{PAPER_ENGINE_TESTS}::TestAttributionOnARealPaperFill"
+        "::test_the_position_records_the_exact_graph_that_produced_it",
+    ),
+    (
+        "P5.1 equity runner carrier omits the graph address",
+        RUNNER,
+        "                        graph_address=executed.graph_address,\n"
+        "                        attribution_state=executed.attribution_state)",
+        "                        graph_address=None,\n"
+        "                        attribution_state=executed.attribution_state)",
+        f"{ATTRIBUTION}::test_an_admitted_binding_stamps_its_exact_identity_and_receipt",
+    ),
+    (
+        "P5.1 futures runner carrier omits the graph address",
+        RUNNER,
+        "                graph_address=executed.graph_address,\n"
+        "                attribution_state=executed.attribution_state)",
+        "                graph_address=None,\n"
+        "                attribution_state=executed.attribution_state)",
+        f"{ATTRIBUTION}::test_the_futures_entry_path_attributes_the_admitted_binding",
+    ),
+    (
+        "P5.1 execution-intent writer omits the graph address",
+        LIFECYCLE,
+        "                graph_address=request.graph_address,\n"
+        "                attribution_state=request.attribution_state,",
+        "                graph_address=None,\n"
+        "                attribution_state=request.attribution_state,",
+        "tests/test_execution_lifecycle_recovery.py"
+        "::test_journal_stop_failure_rolls_back_and_same_session_remains_usable",
+    ),
+    (
+        "P5.1 position writer omits the graph address",
+        BROKER,
+        "            graph_address=graph_address, attribution_state=attribution_state,\n"
+        "            mode=self.MODE,",
+        "            graph_address=None, attribution_state=attribution_state,\n"
+        "            mode=self.MODE,",
+        f"{PAPER_ENGINE_TESTS}::TestAttributionOnARealPaperFill"
+        "::test_the_position_records_the_exact_graph_that_produced_it",
+    ),
+    (
+        "P5.1 trade writer omits the graph address",
+        BROKER,
+        '            segment="equity_intraday", strategy_key=pos.strategy_key,\n'
+        "            strategy_version=pos.strategy_version, admission_address=pos.admission_address,\n"
+        "            graph_address=pos.graph_address, attribution_state=pos.attribution_state,",
+        '            segment="equity_intraday", strategy_key=pos.strategy_key,\n'
+        "            strategy_version=pos.strategy_version, admission_address=pos.admission_address,\n"
+        "            graph_address=None, attribution_state=pos.attribution_state,",
+        f"{ATTRIBUTION}::test_the_trade_row_carries_the_same_admitted_identity_as_the_position",
+    ),
+    (
+        "P5.1 live-intent carrier omits the graph address",
+        LIVE_BROKER,
+        "                graph_address=graph_address,\n"
+        "                attribution_state=attribution_state,\n"
+        "                context=durable_context,",
+        "                graph_address=None,\n"
+        "                attribution_state=attribution_state,\n"
+        "                context=durable_context,",
+        "tests/test_execution_lifecycle_recovery.py::test_live_entry_uses_legacy_connection_scope",
+    ),
+    (
+        "P5.1 manual API carrier omits the graph address",
+        ROUTES,
+        "            graph_address=execution.graph_address,\n"
+        "            attribution_state=execution.attribution_state)",
+        "            graph_address=None,\n"
+        "            attribution_state=execution.attribution_state)",
+        "tests/test_routes_manual.py::test_manual_open_then_close_and_positions",
+    ),
+    (
+        "P5.1 cockpit serializer omits the graph address",
+        COCKPIT,
+        '            "graph_address": binding.graph_address,',
+        '            "graph_address": None,',
+        "tests/test_execution_cockpit.py::TestTheCockpitCanAnswer"
+        "::test_what_exact_strategy_is_authorised_and_why",
+    ),
+    (
+        "P5.1 backtest admission carrier omits the graph address",
+        BACKTEST_SWEEP,
+        '        "graph_address": admitted.graph_address,',
+        '        "graph_address": None,',
+        "tests/test_backtest_parallel.py::test_parallel_output_is_bit_identical_to_serial",
+    ),
+    (
+        "P5.1 native result source-state matching is removed",
+        BACKTEST_REPOSITORY,
+        "            if any(not matches_execution_identity(\n",
+        "            if False and any(not matches_execution_identity(\n",
+        "tests/test_backtest_admission.py"
+        "::test_native_graph_claim_refuses_a_forged_non_graph_result_without_progress",
+    ),
+    (
+        "P5.1 legacy graph entry acceptance is restored",
+        ADMISSION_SOURCE,
+        "    if not allow_legacy or graph_address is not None:\n"
+        "        raise GraphAttributionRefused(GRAPH_ATTRIBUTION_UNVERIFIED)",
+        "    if graph_address is not None:\n"
+        "        raise GraphAttributionRefused(GRAPH_ATTRIBUTION_UNVERIFIED)",
+        f"{P5_TESTS}::test_source_state_tuple_refuses_missing_mismatched_and_legacy_graph_entries",
+    ),
+    (
+        "P5.1 terminal V2 runtime refusal is removed",
+        BACKTEST_REPOSITORY,
+        "            raise _admission_refusal(V2_RUNTIME_UNAVAILABLE)",
+        '            raise _admission_refusal("V2_RUNTIME_ENABLED_MUTANT")',
+        "tests/test_phase4_authority_integration.py"
+        "::test_real_two_plane_process_death_reconstruction_and_terminal_refusal",
+    ),
+    (
         "a newer graph version inherits authority at bind time",
         BINDING,
-        "    if not record.content_address or strategy.version != record.content_address:",
+        "    if (not record.content_address or strategy.version != record.content_address\n"
+        "            or getattr(strategy, \"graph_version_label\", None) != str(record.graph_version)):",
         "    if False:",
         f"{PAPER_ENGINE_TESTS}::TestExactVersion"
         "::test_a_binding_whose_adapter_no_longer_matches_refuses_rather_than_substituting",
@@ -620,7 +789,9 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str]] = [
 #: Where a mutation's original text is parked while it is applied. `finally` covers an
 #: exception; it does NOT cover SIGKILL, and one killed run did leave a mutated constant in
 #: the tree. The sidecar makes recovery automatic instead of a thing to remember.
-BACKUP = BACKEND / ".ir_shadow_mutation_backup"
+BACKUP = (BACKEND.parent.parent / ".agent/runs/phase5-graph-paper-attribution-schema/"
+          "implementation/.ir_shadow_mutation_backup")
+BACKUP.parent.mkdir(parents=True, exist_ok=True)
 
 
 import fcntl as _fcntl
@@ -629,7 +800,7 @@ import fcntl as _fcntl
 # the first has a mutant applied, and its restore writes that mutant back permanently. On
 # 2026-08-10 that silently removed credential destruction from `OwnedConnectionStore.revoke`,
 # and the only reason it surfaced was a stale-anchor SKIP in the next run.
-_LOCK_FD = open(pathlib.Path(__file__).resolve().parent / ".mutation-sweep.lock", "w")
+_LOCK_FD = open(BACKUP.with_suffix(".lock"), "w")
 try:
     _fcntl.flock(_LOCK_FD, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
 except BlockingIOError:
@@ -662,8 +833,11 @@ def main() -> int:
     failures: list[str] = []
     print(f"{'guard':<62} {'clean':<8} {'mutated':<8} verdict")
     print("-" * 96)
-    for name, path, find, replace, test in MUTATIONS:
+    selected = ([mutation for mutation in MUTATIONS if mutation[0].startswith("P5.1")]
+                if "--p5-attribution" in sys.argv else MUTATIONS)
+    for name, path, find, replace, test in selected:
         original = path.read_text()
+        before_hash = hashlib.sha256(original.encode()).hexdigest()
         if find not in original:
             print(f"{name:<62} {'-':<8} {'-':<8} ANCHOR NOT FOUND in {path.name}")
             failures.append(name)
@@ -676,10 +850,14 @@ def main() -> int:
         finally:
             path.write_text(original)
             BACKUP.unlink(missing_ok=True)
+        after_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         caught = clean and not mutated
         print(f"{name:<62} {'PASS' if clean else 'FAIL':<8} "
               f"{'PASS' if mutated else 'FAIL':<8} "
               f"{'guard works' if caught else 'VACUOUS — guard did not catch it'}")
+        print(f"  {path.relative_to(BACKEND)} before={before_hash} after={after_hash}")
+        if after_hash != before_hash:
+            failures.append(name + " (restoration hash mismatch)")
         if not caught:
             failures.append(name)
 
@@ -687,7 +865,7 @@ def main() -> int:
     if failures:
         print(f"{len(failures)} guard(s) did not redden: " + "; ".join(failures))
         return 1
-    print(f"all {len(MUTATIONS)} guards reddened on their own defect and were restored")
+    print(f"all {len(selected)} guards reddened on their own defect and were restored")
     return 0
 
 

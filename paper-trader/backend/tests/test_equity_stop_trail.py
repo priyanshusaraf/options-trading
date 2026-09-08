@@ -11,9 +11,11 @@ from app.engine.runner import EngineRunner
 def _runner_with_long_equity():
     init_db(reset=True)
     r = EngineRunner(owner_id="owner", broker_account_id="account.default")
+    from tests.admitted_entry import persist_admitted_entry
+    admission = persist_admitted_entry(r.broker.s)
     inst = get_instrument("NIFTY")
     pos = r.broker.open_equity_position(inst, "LONG", 100.0, 500, "NSE_INTRADAY",
-                                        "t", r.provider.now(), params={})
+                                        "t", r.provider.now(), params={}, **admission)
     # pin the worked-example geometry: ₹10k margin, band SL 99 / TP 102.
     pos.entry_premium, pos.qty = 100.0, 500
     pos.entry_charges, pos.entry_cost = 0.0, 10000.0

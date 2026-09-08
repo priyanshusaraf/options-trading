@@ -38,6 +38,7 @@ import datetime as dt
 
 from app.core.instruments import Instrument
 from app.core.logging import log
+from app.market_data.numeric import NumericIngressError, market_float
 from app.providers import capabilities as caps
 from app.providers import upstox_instruments as master
 from app.providers.base import Candle, MarketDataProvider, ProviderReadError
@@ -204,8 +205,14 @@ def _to_candle(row) -> Candle:
         raise ProviderReadError(f"upstox: malformed candle row {row!r}")
     try:
         ts = dt.datetime.fromisoformat(str(row[0]))
-        o, h, low, c, vol = (float(row[1]), float(row[2]), float(row[3]),
-                             float(row[4]), float(row[5]))
+        o, h, low, c, vol = (
+            market_float(row[1], field="upstox candle open"),
+            market_float(row[2], field="upstox candle high"),
+            market_float(row[3], field="upstox candle low"),
+            market_float(row[4], field="upstox candle close"),
+            market_float(row[5], field="upstox candle volume"))
+    except NumericIngressError as e:
+        raise ProviderReadError(f"upstox {e}") from e
     except ProviderReadError:
         raise
     except Exception as e:                            # noqa: BLE001
@@ -223,9 +230,8 @@ def _merge(historical: list, intraday: list, *, now: dt.datetime, seconds: int) 
         being the fresher observation of the same interval;
       * ordering is not guaranteed either way, so we sort rather than reverse-if-needed;
       * the forming bar is decided by the clock and the interval (`ts + interval > now`), not by
-        position. "Drop the last element" is Kite's shortcut, correct only because Kite's
-        ordering happens to be stable — here it would delete a real completed bar, or keep a
-        forming one that repaints every live signal computed on it.
+        position. Dropping the last element would delete a completed bar after the market
+        closes, or keep a forming bar elsewhere in an unordered response.
     """
     by_ts: dict[dt.datetime, Candle] = {}
     for row in historical:

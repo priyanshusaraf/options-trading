@@ -13,10 +13,13 @@ import json
 import logging
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import HTTPException, Request, WebSocket
+from starlette._utils import get_route_path
+from app.api.versioning import unversioned_path
 from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -45,10 +48,12 @@ READ_ACTIONS = frozenset({
     "read:project", "read:graph", "read:layout", "read:review",
     "read:research", "read:backtest", "read:watchlist", "read:archive",
     "read:runtime-config", "read:portfolio", "read:execution",
+    "read:account-commerce",
 })
 MEMBER_ACTIONS = frozenset({
     "write:project", "write:graph", "publish:graph", "write:layout",
     "write:review", "start:research", "compare:research", "write:backtest",
+    "write:account-commerce",
 })
 ADMIN_ACTIONS = frozenset({
     "archive:project", "write:runtime-config", "write:watchlist",
@@ -68,92 +73,10 @@ ROLE_ACTIONS = {
 
 
 def action_for_request(method: str, path: str) -> str | None:
-    """Return the one closed capability for a tenant-facing HTTP endpoint.
+    """Return the existing closed capability for a tenant-facing HTTP route."""
+    from app.api.request_actions import classify_request
 
-    This deliberately classifies only the USER/research product surface.  The
-    money and credential planes keep their explicit Task 5C policy calls; an
-    unclassified path is never promoted into this vocabulary by accident.
-    """
-    method = method.upper()
-    if path == "/api/brokers":
-        return "read:brokers" if method == "GET" else None
-    if path == "/api/connections":
-        return "read:connections" if method == "GET" else (
-            "create:connection" if method == "POST" else None)
-    if path.startswith("/api/connections/"):
-        if path.endswith("/credential"):
-            return "write:credential" if method == "POST" else None
-        if path.endswith("/oauth/initiate"):
-            return "write:credential" if method == "POST" else None
-        if path.endswith("/login"):
-            return "read:connection" if method == "GET" else None
-        return "read:connection" if method == "GET" else (
-            "revoke:connection" if method == "DELETE" else None)
-    execution_exact = {
-        "/api/status", "/api/calendar", "/api/login", "/api/session", "/api/instruments",
-        "/api/trades", "/api/signals",
-        "/api/account-pnl", "/api/dashboard", "/api/positions", "/api/provider-health",
-        "/api/execution/state", "/api/execution/arm", "/api/execution/kill",
-        "/api/execution/events",
-        "/api/execution/cockpit", "/api/execution/cockpit/deployments",
-        "/api/ir-shadow/deployments", "/api/ir-paper/deployments",
-    }
-    if (path in execution_exact or path.startswith(("/api/ledger/", "/api/positions/", "/api/instruments/",
-                                                    "/api/ir-shadow/deployments/",
-                                                    "/api/ir-paper/deployments/"))):
-        return ("read:execution" if method == "GET" and path not in {"/api/login", "/api/session"}
-                else "authoritative:execution")
-    if path.startswith("/api/backtest"):
-        return "read:backtest" if method == "GET" else "write:backtest"
-    if path == "/api/settings":
-        return "read:runtime-config" if method == "GET" else "write:runtime-config"
-    if path == "/api/settings/reset":
-        return "write:runtime-config"
-    if path.startswith("/api/research/operations"):
-        return "read:research"
-    if path.startswith("/api/ir/graphs/") and "/layout" in path:
-        return "read:layout" if method == "GET" else "write:layout"
-    if path.startswith("/api/portfolio"):
-        if path not in {
-            "/api/portfolio/promotions", "/api/portfolio/deploy",
-            "/api/portfolio/watchlists", "/api/portfolio/archive",
-        } and not path.startswith("/api/portfolio/promotions/") and not path.startswith("/api/portfolio/watchlists/") and not path.startswith("/api/portfolio/archive/"):
-            # Legacy runner endpoints are not organization-scoped repositories.
-            # Task 5C must replace them before durable user principals can use
-            # them; leave their action unclassified so the HTTP boundary denies.
-            return None
-        if method == "GET":
-            return "read:portfolio"
-        if "/watchlists/" in path:
-            return "write:watchlist"
-        if "/archive/" in path:
-            return "archive:strategy"
-        return "write:watchlist"
-    if not path.startswith("/api/ir/projects/") and path != "/api/ir/projects":
-        return None
-    if "/review" in path:
-        if method == "GET":
-            return "read:review"
-        return "write:review"
-    if "/candidates/" in path and path.endswith("/decisions"):
-        return "decision:research"
-    if "/experiments" in path or "/findings" in path or "/version-comparisons" in path:
-        if method == "GET":
-            return "read:research"
-        if "compar" in path:
-            return "compare:research"
-        return "start:research"
-    if "/layouts" in path or "/presentation-edits" in path:
-        return "read:layout" if method == "GET" else "write:layout"
-    if "/graphs" in path:
-        if method == "GET":
-            return "read:graph"
-        if path.endswith("/versions"):
-            return "publish:graph"
-        return "write:graph"
-    if path.endswith("/status"):
-        return "archive:project"
-    return "read:project" if method == "GET" else "write:project"
+    return classify_request(method, path)
 
 
 class _WebSocketPayloadRedactionFilter(logging.Filter):
@@ -285,7 +208,7 @@ class IssuedBearerCredential:
     """One-time issuance result; only this in-memory return carries the bearer value."""
 
     session_id: str
-    token: str
+    token: str = field(repr=False)
     expires_at: dt.datetime
 
 
@@ -306,8 +229,7 @@ def _active_membership(session: Session, *, user_id: str, organization_id: str) 
 
 
 def issue_user_session(session: Session, *, user_id: str, organization_id: str,
-                       expires_at: dt.datetime,
-                       session_id: str | None = None) -> IssuedBearerCredential:
+                       expires_at: dt.datetime) -> IssuedBearerCredential:
     """Create a session for an existing active membership.
 
     Tokens generated here contain 32 random bytes (256 random bits) before URL
@@ -322,7 +244,7 @@ def issue_user_session(session: Session, *, user_id: str, organization_id: str,
     if digest is None:
         raise ValueError("bearer credential is malformed")
     expiry = _db_time(expires_at)
-    handle = session_id or secrets.token_urlsafe(18)
+    handle = str(uuid4())
     session.add(UserSession(session_id=handle, token_digest=digest, user_id=user_id,
                             organization_id=organization_id, issued_at=_now(),
                             expires_at=expiry))
@@ -355,7 +277,7 @@ def bootstrap_legacy_session(session: Session, legacy_token: str | None) -> User
                 or existing.organization_id != LEGACY_OWNER_ID):
             raise RuntimeError("legacy token digest is already bound to a foreign user session")
         return existing
-    row = UserSession(session_id=secrets.token_urlsafe(18), token_digest=digest,
+    row = UserSession(session_id=str(uuid4()), token_digest=digest,
                       user_id=LEGACY_USER_ID, organization_id=LEGACY_OWNER_ID,
                       issued_at=_now(), expires_at=dt.datetime(9999, 12, 31))
     session.add(row)
@@ -430,7 +352,35 @@ def _principal_for_active_session(session: Session, user_session: UserSession) -
 
 
 def resolve_http_principal(request: Request) -> Principal | None:
-    return resolve_principal(extract_token(request.headers))
+    if get_settings().browser_auth_enabled:
+        from app.accounts import browser_auth
+        if not browser_auth.validate_configuration(get_settings()):
+            return None
+        if _state_bound_data_callback(request):
+            return None
+        token = browser_auth.cookie_token(request)
+        if token is not None:
+            browser_auth.check_origin(request, mutation=request.method not in {'GET', 'HEAD', 'OPTIONS'})
+            if request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+                browser_auth.check_csrf(request, token)
+            return browser_auth.browser_principal(token)
+    return _resolve_header_principal(request)
+
+
+def _state_bound_data_callback(request: Request) -> bool:
+    # This callback derives authority only from its one-use stored OAuth state.
+    return (request.method == "GET" and unversioned_path(get_route_path(request.scope))
+            == "/api/data-connections/oauth/callback")
+
+
+def _resolve_header_principal(request: Request) -> Principal | None:
+    principal = resolve_principal(extract_token(request.headers))
+    if get_settings().browser_auth_enabled and principal is not None and principal.session_id:
+        from app.db.models import BrowserSession
+        with SessionLocal() as session:
+            if session.get(BrowserSession, principal.session_id) is not None:
+                return None  # Browser credentials never gain header-only/CSRF-free authority.
+    return principal
 
 
 def resolve_ws_principal(ws: WebSocket) -> Principal | None:

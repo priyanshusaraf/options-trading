@@ -16,6 +16,7 @@ from app.backtest.engine import (
     backtest_charge_segment,
     compute_signals,
     run_trades,
+    replay_exit_kwargs,
     simulate,
 )
 from app.backtest.metrics import (
@@ -30,6 +31,7 @@ from app.strategy.registry import all_strategies, get_strategy, strategy_keys
 __all__ = [
     "simulate",
     "compute_signals",  # signals over the full series (once)
+    "replay_exit_kwargs",
     "run_trades",       # replay trades over a fold's sub-window (walk-forward seam)
     "backtest_charge_segment",
     "BTMetrics",

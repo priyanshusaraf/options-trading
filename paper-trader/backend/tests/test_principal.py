@@ -22,6 +22,7 @@ from app.api.principal import (
     OWNER,
     Forbidden,
     Principal,
+    action_for_request,
     get_principal,
     is_allowed,
     require,
@@ -293,3 +294,17 @@ def test_the_real_money_plane_models_are_actually_subject_to_the_check(principal
         row.owner_id = "someone-else"
         assert is_allowed(principal, "read:project", row) is False, (
             f"{model.__name__} carries an owner_id that the policy does not enforce")
+
+
+@pytest.mark.parametrize(("method", "path", "action"), [
+    ("GET", "/api/data-connections/status", "read:connections"),
+    ("POST", "/api/data-connections", "create:connection"),
+    ("DELETE", "/api/data-connections", "revoke:connection"),
+    ("POST", "/api/data-connections/app-keys", "write:credential"),
+    ("POST", "/api/data-connections/app-keys/rotate", "write:credential"),
+    ("POST", "/api/data-connections/oauth/initiate", "write:credential"),
+    ("GET", "/api/data-connections/oauth/callback", None),
+])
+def test_direct_data_connection_paths_reuse_closed_actions(method, path, action):
+    assert action_for_request(method, path) == action
+    assert action_for_request("PATCH", path) is None

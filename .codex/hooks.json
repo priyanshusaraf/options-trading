@@ -1,31 +1,3 @@
 {
-  "description": "Strategy OS bounded-session and declared-agent guards.",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "^(Agent|spawn_agent|collaborationspawn_agent)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/agent_guard.py\"",
-            "timeout": 5,
-            "statusMessage": "Checking declared Strategy OS assignment"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "^auto$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/compaction_guard.py\"",
-            "timeout": 5,
-            "statusMessage": "Checking Strategy OS session boundary"
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }

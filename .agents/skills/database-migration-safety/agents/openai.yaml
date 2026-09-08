@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Prove migration safety"
+  short_description: "Prove upgrade, compatibility and recovery paths"
+  default_prompt: "Use $database-migration-safety for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

@@ -8,7 +8,8 @@ longEntry/shortEntry flags; exits fire on its own longExit/shortExit flags plus 
 when the strategy DECLARES a risk_model — the Pine-parity ratchet overlay (initial
 ATR stop -> Chandelier trail -> MFE-capture floor, close-confirmed; see
 app/backtest/ratchet.py). Every decision confirmed on bar i fills at bar i+1's
-OPEN (Pine process_orders_on_close=false parity); the option-premium stop/target
+OPEN (Pine process_orders_on_close=false parity). Explicit percentage bands use
+the actual underlying entry fill and completed closes after the entry bar; the option-premium stop/target
 of the LIVE engine is not modelled here (it doesn't map to the underlying).
 
 POSITION SIZING (fixed ONE lot — the owner's chosen model):
@@ -39,6 +40,8 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -46,14 +49,20 @@ from app.backtest.metrics import BTMetrics, BTTrade, compute_metrics
 from app.backtest.ratchet import RatchetState, wilder_atr
 from app.core.config import get_settings
 from app.core.market_hours import ist_epoch
-from app.engine.charges import compute_charges
+from app.engine.charges import (
+    CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    ChargeScheduleRefusal,
+    compute_charges_exact,
+)
 from app.market_data.candles import candles_to_df
-from app.engine.decision_kernel import ExitPolicy, decide_exit
+from app.engine.decision_kernel import ExitPolicy, protective_band_document
+from app.strategy import replay_decisions
 from app.strategy.registry import get_strategy
 
 # The backtest's exit policy, stated once and reported with every result.
 #
-# The protective stop/target is NOT modelled. For the options path there is no
+# The DEFAULT protective stop/target is NOT modelled. Explicit percentage bands
+# opt into a directional close-confirmed policy below. For the options path there is no
 # historical premium series to evaluate it against (Kite does not sell one and the
 # synthetic path is an estimate); for the spot path the live band is applied to the
 # TRADED instrument, which for equity_intraday is the same series — so this policy
@@ -76,7 +85,13 @@ _CASH_SEGMENTS = {"NSE", "BSE", "NSE_EQ", "BSE_EQ"}
 
 
 def backtest_charge_segment(inst) -> str:
-    return _BACKTEST_SEGMENT.get(inst.segment, "NSE_EQ")
+    try:
+        return _BACKTEST_SEGMENT[inst.segment]
+    except (KeyError, TypeError):
+        raise ChargeScheduleRefusal(
+            "CHARGE_SEGMENT_UNKNOWN",
+            f"unknown backtest charge segment {getattr(inst, 'segment', None)!r}",
+        ) from None
 
 
 def backtest_qty(inst, price: float, capital: float) -> int:
@@ -149,19 +164,45 @@ def estimate_option_cost(inst, candles, r: float = 0.065) -> float:
     return round(premium * lot, 2)
 
 
+def replay_exit_kwargs(strategy):
+    """Carry only the adapter's frozen economic exit policy into every replay."""
+    document = getattr(strategy, "protective_band_document", None)
+    values = {} if document is None else {name: document[name] for name in ("stop_loss_pct", "take_profit_pct")}
+    slippage = getattr(strategy, "replay_slippage_pct", None)
+    if slippage is not None:
+        values["slippage_pct"] = slippage
+    return values
+
+
+def _simulate_exit_kwargs(strat, stop_loss_pct, take_profit_pct, slippage_pct=None):
+    exits = replay_exit_kwargs(strat)
+    if stop_loss_pct is not None:
+        exits["stop_loss_pct"] = stop_loss_pct
+    if take_profit_pct is not None:
+        exits["take_profit_pct"] = take_profit_pct
+    protective_band_document(exits.get("stop_loss_pct", 0.0), exits.get("take_profit_pct", 0.0))
+    if slippage_pct is not None:
+        exits["slippage_pct"] = slippage_pct
+    return exits
+
+
 def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
              strategy=None, params: dict | None = None,
              ema_length: int = 50, z_length: int = 50, entry_z: float = 1.0,
              slope_lookback: int = 5,
              slippage_pct: float | None = None,
-             signals: pd.DataFrame | None = None) -> tuple[list[BTTrade], BTMetrics]:
+             signals: pd.DataFrame | None = None,
+             stop_loss_pct: float | None = None,
+             take_profit_pct: float | None = None) -> tuple[list[BTTrade], BTMetrics]:
     """Run a strategy over `candles` and return (trades, metrics).
 
     `strategy` is a registry Strategy (None → the default trend_impulse_v3); `params`
     overrides its inputs (None → the strategy's own defaults, or the legacy v3 kwargs
     when no strategy is given). Entries/exits come purely from the strategy's
-    canonical flag columns; the engine owns no premium stop/target here."""
+    canonical flag columns. Explicit percentage bands manage the underlying, using
+    the same close-confirmed next-open replay; they do not model option premiums."""
     strat = strategy if strategy is not None else get_strategy(None)
+    exits = _simulate_exit_kwargs(strat, stop_loss_pct, take_profit_pct, slippage_pct)
     if params is None:
         params = (dict(strat.default_params) if strategy is not None
                   else {"ema_length": ema_length, "z_length": z_length,
@@ -196,7 +237,8 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
         m.option_cost = option_cost
         return [], m
 
-    trades = run_trades(sig, inst, seg, capital, rm, slippage_pct=slippage_pct)
+    trades = run_trades(sig, inst, seg, capital, rm,
+                        replay_policy=getattr(strat, "replay_policy", None), **exits)
     m = compute_metrics(trades, capital)
     m.bh_return_pct = bh_return_pct
     m.bh_curve = bh_curve
@@ -225,7 +267,13 @@ def compute_signals(candles, strat, params, *,
     rm = getattr(strat, "risk_model", None)
     if rm:
         # computed on the FULL frame so warmup trimming can't shift ATR values
-        sig["_ratchet_atr"] = wilder_atr(sig, int(rm["atr_length"]))
+        sig["_ratchet_atr"] = wilder_atr(
+            sig, int(rm["atr_length"]),
+            seed_policy=getattr(strat, "risk_atr_seed_policy", "first_observation"),
+        )
+        if getattr(strat, "risk_atr_seed_policy", "first_observation") == "sma":
+            from app.backtest.ratchet import require_risk_atr
+            require_risk_atr(sig)
     # trim warmup rows where the strategy's indicators are still NaN. The columns
     # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
     # known indicator columns this strategy actually emitted — keeps v3 identical.
@@ -294,115 +342,118 @@ def slipped(price: float, side: str, half_spread: float) -> float:
     return price * (1.0 + half_spread) if side == "BUY" else price * (1.0 - half_spread)
 
 
-def _entry_fill_index(signal_index: int) -> int:
-    """The earliest fill for a decision confirmed on completed bar ``signal_index``."""
-    return signal_index + 1
+PINE_REVERSAL_FIXED_UNIT_POLICY = "pine-reversal-fixed-unit/1"
+
+
+@dataclass(frozen=True)
+class _ReplayContext:
+    inst: Any
+    seg: str
+    capital: float
+    rm: Any
+    event_risk: bool
+    half: float
+    fixed_unit: bool
+    protective_band: Any = None
+
+
+@dataclass
+class _ReplayState:
+    pos: Any = None
+    pending: Any = None
+    ratchet: Any = None
+
+
+def _replay_position(context, fill):
+    if not context.fixed_unit:
+        return _position(context.inst, fill, context.capital)
+    lots = 1 if context.inst.segment in _CASH_SEGMENTS else 1 // max(1, int(context.inst.lot_size))
+    return 1, fill, lots
+
+
+def _entry_ratchet(direction, fill, row, rm):
+    entry_atr = row.get("_ratchet_atr")
+    if rm and entry_atr is not None and math.isfinite(entry_atr) and entry_atr > 0:
+        return RatchetState(direction, fill, float(entry_atr), rm)
+    return None
+
+
+def _open_replay_position(state, context, row, index, direction):
+    product = "equity_intraday" if context.inst.segment in _CASH_SEGMENTS else "futures"
+    fill = slipped(float(row["open"]), "BUY" if direction == "LONG" else "SELL", context.half)
+    qty, notional, lots = _replay_position(context, fill)
+    if context.event_risk and _event_blocked_bar(context.inst, row, product):
+        qty = 0
+    if qty <= 0:
+        return
+    state.pos = {"direction": direction, "entry_price": fill,
+                 "entry_time": ist_epoch(row["date"]), "entry_idx": index,
+                 "qty": qty, "notional": notional, "lots": lots, "mae_pct": 0.0}
+    state.ratchet = _entry_ratchet(direction, fill, row, context.rm)
+
+
+def _fill_replay_pending(state, context, row, index, trades):
+    kind, argument, _ = state.pending
+    state.pending = None
+    if kind in {"EXIT", "REVERSE"} and state.pos is not None:
+        side = "SELL" if state.pos["direction"] == "LONG" else "BUY"
+        fill = slipped(float(row["open"]), side, context.half)
+        reason = "STRATEGY_REVERSAL" if kind == "REVERSE" else argument
+        trades.append(_close(state.pos, fill, ist_epoch(row["date"]), index, context.seg, reason))
+        state.pos = None
+        state.ratchet = None
+    if kind in {"ENTER", "REVERSE"} and state.pos is None:
+        _open_replay_position(state, context, row, index, argument)
+
+
+def _replay_decision(state, context, row, index):
+    direction = replay_decisions.entry_direction(row, context.fixed_unit)
+    if state.pos is not None:
+        _update_mae(state.pos, row)
+    return replay_decisions.next_decision(state.pos, state.ratchet, row, index, direction,
+        allow_reversal=context.fixed_unit, protective_band=context.protective_band,
+        unprotected_exit_policy=BACKTEST_EXIT_POLICY)
 
 
 def run_trades(sig, inst, seg: str, capital: float, rm,
-               event_risk: bool = True,
-               slippage_pct: float | None = None) -> list[BTTrade]:
-    """Replay the fill-next-bar-open trade state machine over a 0-indexed signal
-    (sub)frame and return the closed trades. This is the seam walk-forward slices
-    per fold; pure over its inputs. `sig` must carry the canonical flag columns
-    (+ `_ratchet_atr` when `rm` is set). Extracted verbatim from `simulate`."""
-    trades: list[BTTrade] = []
-    # Half the round-trip cost, applied adversely to EVERY fill. Resolved here so
-    # the whole replay uses one budget; `slippage_pct=0.0` reproduces the
-    # pre-2026-08-01 zero-cost fills exactly, which is the escape hatch that keeps
-    # every stored backtest number falsifiable.
+               event_risk: bool = True, slippage_pct: float | None = None,
+               replay_policy: str | None = None,
+               stop_loss_pct: float | None = None,
+               take_profit_pct: float | None = None) -> list[BTTrade]:
+    """Replay one shared next-open state machine.
+
+    None preserves one-lot/cash-budget legacy behavior. The explicit Pine replay
+    policy uses one unit and permits opposite confirmed entries to replace a held
+    position at the next open, including signals on its original fill bar. This
+    models only these declared rules, not complete Pine order-emulator parity.
+    Optional percentage bands use the slipped entry fill and completed closes after
+    the entry bar. Intrabar touches are ignored; confirmed exits fill at the next
+    actual open with adverse slippage, including gaps beyond the band. A terminal
+    trigger has no next-open fill and remains OPEN_AT_END. Protective exits precede
+    reversals; disabled bands preserve the original Pine reversal behavior.
+    """
+    if replay_policy not in {None, PINE_REVERSAL_FIXED_UNIT_POLICY}:
+        raise ValueError("BACKTEST_REPLAY_POLICY_UNSUPPORTED")
     if slippage_pct is None:
         slippage_pct = float(get_settings().backtest_slippage_pct)
-    half = float(slippage_pct) / 2.0
-    # The backtester trades the UNDERLYING, so the product for rule-matching is the
-    # instrument itself, never "options" — the options-only rules (NIFTY Tuesday,
-    # bullion-into-expiry) correctly do not apply to a spot backtest.
-    product = "equity_intraday" if seg in ("NSE", "BSE") else "futures"
-    pos = None      # dict: direction, entry_price, entry_time, entry_idx, qty, …, mae
-    pending = None  # (kind, argument, fill index) — fills at the named next-bar open
-    ratchet = None  # RatchetState for the open position, iff strat declares risk_model
-
+    context = _ReplayContext(inst, seg, capital, rm, event_risk,
+                             float(slippage_pct) / 2.0,
+                             replay_policy == PINE_REVERSAL_FIXED_UNIT_POLICY,
+                             protective_band_document(stop_loss_pct, take_profit_pct))
+    state = _ReplayState()
+    trades: list[BTTrade] = []
     rows = sig.to_dict("records")
-    for i, r in enumerate(rows):
-        t = ist_epoch(r["date"])   # IST wall-clock -> true instant (no +5:30 shift)
-        open_px = float(r["open"])
-        close = float(r["close"])
-
-        # 1) execute the PREVIOUS bar's confirmed decision at THIS bar's open
-        #    (Pine parity: process_orders_on_close=false — no same-bar fills).
-        if pending is not None and pending[2] == i:
-            kind, arg, _fill_index = pending
-            pending = None
-            if kind == "ENTER" and pos is None:
-                # A LONG opens with a BUY, a SHORT opens with a SELL.
-                fill_px = slipped(open_px, "BUY" if arg == "LONG" else "SELL", half)
-                qty, notional, lots = _position(inst, fill_px, capital)
-                # Same blackout table as live: a fill that would land inside a scheduled
-                # event is not taken here either. Exits are never gated (below).
-                if event_risk and _event_blocked_bar(inst, r, product):
-                    qty = 0
-                if qty > 0:
-                    pos = {"direction": arg, "entry_price": fill_px,
-                           "entry_time": t, "entry_idx": i, "qty": qty,
-                           "notional": notional, "lots": lots,
-                           "mae_pct": 0.0}
-                    ratchet = None
-                    if rm:
-                        entry_atr = r.get("_ratchet_atr")
-                        if entry_atr is not None and math.isfinite(entry_atr) \
-                                and entry_atr > 0:
-                            # risk units freeze at the FILL bar (pine:212)
-                            ratchet = RatchetState(arg, fill_px,
-                                                   float(entry_atr), rm)
-            elif kind == "EXIT" and pos is not None:
-                # Closing a LONG is a SELL; covering a SHORT is a BUY.
-                exit_px = slipped(open_px,
-                                  "SELL" if pos["direction"] == "LONG" else "BUY", half)
-                trades.append(_close(pos, exit_px, t, i, seg, arg))
-                pos = None
-                ratchet = None
-
-        if pos is not None:
-            # MAE includes the fill bar (the position lives through it) …
-            _update_mae(pos, r)
-            # … but exit DECISIONS start the bar AFTER the fill (Pine canManage:
-            # no same-bar management, pine:233-234).
-            if i > pos["entry_idx"]:
-                d = pos["direction"]
-                ratchet_hit = False
-                if ratchet is not None:
-                    ratchet.update(float(r["high"]), float(r["low"]), close,
-                                   float(r["_ratchet_atr"]))
-                    ratchet_hit = ratchet.stop_hit(close)
-                # Phase G: the SAME kernel the live engine decides with. The
-                # protective band is not evaluated here, and that is now a declared
-                # policy (BACKTEST_EXIT_POLICY) rather than an absent branch — see
-                # its note. Everything else — ratchet before strategy flag,
-                # direction-aware flag selection — is decided by shared code, so
-                # live and backtest can no longer drift apart on it silently.
-                decision = decide_exit(
-                    direction=d, price=close,
-                    stop=None, target=None,   # no protective band — see policy
-                    long_exit=bool(r["longExit"]), short_exit=bool(r["shortExit"]),
-                    ratchet_exit=ratchet_hit,
-                    policy=BACKTEST_EXIT_POLICY)
-                if decision.should_exit:
-                    pending = ("EXIT", decision.reason, i + 1)
-        elif r["longEntry"] or r["shortEntry"]:
-            pending = (
-                "ENTER", "LONG" if r["longEntry"] else "SHORT",
-                _entry_fill_index(i),
-            )
-
-    # close any still-open position at the LAST AVAILABLE CANDLE (end of data,
-    # not end of day) — includes a decision confirmed on the final bar, which
-    # has no next open to fill at.
-    if pos is not None:
+    for index, row in enumerate(rows):
+        if state.pending is not None and state.pending[2] == index:
+            _fill_replay_pending(state, context, row, index, trades)
+        state.pending = _replay_decision(state, context, row, index)
+    # An unfillable terminal decision never invents a next open. Mark the held
+    # position at the final close under the existing OPEN_AT_END convention.
+    if state.pos is not None:
         last = rows[-1]
-        end_px = slipped(float(last["close"]),
-                         "SELL" if pos["direction"] == "LONG" else "BUY", half)
-        trades.append(_close(pos, end_px,
-                             ist_epoch(last["date"]),
+        side = "SELL" if state.pos["direction"] == "LONG" else "BUY"
+        fill = slipped(float(last["close"]), side, context.half)
+        trades.append(_close(state.pos, fill, ist_epoch(last["date"]),
                              len(rows) - 1, seg, "OPEN_AT_END"))
     return trades
 
@@ -430,8 +481,15 @@ def _close(pos, exit_price, exit_time, exit_idx, seg, reason) -> BTTrade:
     entry_price = pos["entry_price"]
     gross = (exit_price - entry_price) * qty if d == "LONG" else (entry_price - exit_price) * qty
     entry_side, exit_side = ("BUY", "SELL") if d == "LONG" else ("SELL", "BUY")
-    charges = (compute_charges(seg, entry_side, entry_price, qty)["total"]
-               + compute_charges(seg, exit_side, exit_price, qty)["total"])
+    entry_charge = compute_charges_exact(
+        seg, entry_side, entry_price, qty,
+        schedule_id=CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    )
+    exit_charge = compute_charges_exact(
+        seg, exit_side, exit_price, qty,
+        schedule_id=CORRECTED_RESEARCH_CHARGE_SCHEDULE,
+    )
+    charges = (entry_charge["total_minor"] + exit_charge["total_minor"]) / 100
     return BTTrade(
         direction=d, entry_time=pos["entry_time"], entry_price=entry_price,
         exit_time=exit_time, exit_price=exit_price, qty=qty,

@@ -28,6 +28,7 @@ from app.ledger import db as ledger_db
 from app.ledger import routes as ledger_routes
 from app.ledger import service as ledger_service
 from app.ws.manager import WSManager
+from tests.admitted_entry import persist_admitted_entry
 
 
 OWNER_A = "org.gate.a"
@@ -74,6 +75,7 @@ def _seed_two_tenants() -> None:
             session.add(BrokerAccount(
                 broker_account_id=account_id, owner_id=owner_id, broker="mock",
                 external_account_id="same external account", display_name="same account",
+                status="active",
             ))
 
 
@@ -120,14 +122,22 @@ def test_direct_repositories_require_scope_and_keep_matching_project_names_priva
 def test_account_bound_execution_and_private_cache_reject_foreign_probes() -> None:
     """Removing either owner/account SQL predicate leaks money state or cache evidence."""
     _seed_two_tenants()
-    with SessionLocal.begin() as session:
+    with SessionLocal() as session:
+        receipt_a = persist_admitted_entry(session, owner_id=OWNER_A)
+        receipt_b = persist_admitted_entry(session, owner_id=OWNER_B)
         deployment_a = deployments.create_deployment(
             session, "same deployment", owner_id=OWNER_A, broker_account_id=ACCOUNT_A,
-            status=deployments.ACTIVE,
+            strategy_key=receipt_a["strategy_key"], strategy_version=receipt_a["strategy_version"],
+            graph_address=receipt_a["graph_address"],
+            attribution_state=receipt_a["attribution_state"],
+            admission_address=receipt_a["admission_address"], status=deployments.ACTIVE,
         )
         deployment_b = deployments.create_deployment(
             session, "same deployment", owner_id=OWNER_B, broker_account_id=ACCOUNT_B,
-            status=deployments.ACTIVE,
+            strategy_key=receipt_b["strategy_key"], strategy_version=receipt_b["strategy_version"],
+            graph_address=receipt_b["graph_address"],
+            attribution_state=receipt_b["attribution_state"],
+            admission_address=receipt_b["admission_address"], status=deployments.ACTIVE,
         )
         run_a = BacktestRun(owner_id=OWNER_A, scope="liquid", intervals="day", capital=1, total=1)
         session.add(run_a)

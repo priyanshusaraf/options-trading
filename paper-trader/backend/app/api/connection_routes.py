@@ -31,13 +31,14 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import secrets
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import exists, select, update
+from sqlalchemy import delete, exists, select, update
 
 from app.api.principal import (
     Principal,
@@ -47,13 +48,24 @@ from app.api.principal import (
     require,
 )
 from app.core.credential_vault import CredentialVaultUnavailable, seal
+from app.core.config import get_settings
+from app.core.release_profile import is_v0_profile
 from app.providers.broker_auth import BrokerAuthError, NoInteractiveLogin
 from app.db.models import (BrokerAccount, BrokerConnection, OAuthCallbackState,
                            Membership, Organization, User, UserSession)
 from app.db.session import SessionLocal
 from app.providers import brokers as registry
 from app.providers import capabilities as caps
-from app.providers.connection_store import ConnectionNotFound, OwnedConnectionStore
+from app.providers.connection_store import (
+    DATA_CAPABILITIES,
+    DATA_ROLE,
+    DATA_SCOPE_PREFIX,
+    ConnectionNotFound,
+    DataConnectionConflict,
+    DataConnectionUnavailable,
+    OwnedConnectionStore,
+    validate_data_connection_row,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -66,11 +78,11 @@ class _ClosedModel(BaseModel):
 
 
 class ConnectionCreate(_ClosedModel):
-    broker: str = Field(min_length=1, max_length=32)
-    broker_account_id: str = Field(min_length=1, max_length=64)
+    broker: str | None = Field(default=None, min_length=1, max_length=32)
+    broker_account_id: str | None = Field(default=None, min_length=1, max_length=64)
     #: Bounded to the column width. The value is written into every `ExecutionIntent` this
     #: connection authors, so a truncated one would silently break restart attribution.
-    scope: str = Field(min_length=1, max_length=64)
+    scope: str | None = Field(default=None, min_length=1, max_length=64)
     label: str = Field(default="", max_length=80)
     #: Omitted means "whatever the adapter declares". Supplying a narrower set is legitimate —
     #: a data-only Kite connection — but a wider one is refused by `caps.validate`. Bounded
@@ -179,6 +191,50 @@ def _authorized(store: OwnedConnectionStore, principal: Principal,
     return row
 
 
+def _data_contract(principal: Principal) -> bool:
+    """Durable product users get the closed V0 role; compatibility owners stay exact."""
+    return principal.kind == "user"
+
+
+def _data_projection(row: BrokerConnection, *, active: bool = True) -> dict:
+    """The only representation of a durable user's provider connection."""
+    validate_data_connection_row(row, active=active)
+    return {
+        "connection_handle": str(row.id),
+        "provider": "kite",
+        "role": DATA_ROLE,
+        "label": row.label,
+        "capabilities": sorted(DATA_CAPABILITIES),
+        "connection_status": ("REVOKED" if row.status == "revoked" else
+                              ("PRESENT_UNVERIFIED" if row.credential_ciphertext
+                               else "CREDENTIAL_REQUIRED")),
+        "credential_present": bool(row.credential_ciphertext),
+        "auth_method": "DAILY_OAUTH",
+        "last_credential_replaced_at": (
+            row.updated_at.isoformat() if row.credential_ciphertext and row.updated_at else None),
+        "credential_expiry": "UNVERIFIED",
+        "rate_quota": "UNVERIFIED",
+    }
+
+
+def _response(row: BrokerConnection, principal: Principal, *, active: bool = True) -> dict:
+    return (_data_projection(row, active=active)
+            if row.scope.startswith(DATA_SCOPE_PREFIX) else row.to_dict())
+
+
+def _data_store_for_owner(session, principal: Principal) -> OwnedConnectionStore:
+    """Select the one active Zerodha account without accepting an account identifier."""
+    owner_id = owner_id_for(principal)
+    accounts = session.scalars(select(BrokerAccount.broker_account_id).where(
+        BrokerAccount.owner_id == owner_id,
+        BrokerAccount.broker == "kite",
+        BrokerAccount.status == "active",
+    ).order_by(BrokerAccount.broker_account_id).limit(2).with_for_update()).all()
+    if len(accounts) != 1:
+        raise DataConnectionUnavailable("exactly one owner-local Zerodha account is required")
+    return OwnedConnectionStore(session, owner_id=owner_id, broker_account_id=accounts[0])
+
+
 @router.get("/brokers")
 def list_brokers(principal: Principal = Depends(get_principal)) -> dict:
     """The registry, as the operator sees it.
@@ -216,10 +272,17 @@ def list_connections(
     require(principal, "read:connections")
     with SessionLocal() as s:
         q = select(BrokerConnection).where(BrokerConnection.owner_id == owner_id_for(principal))
+        if _data_contract(principal):
+            q = q.where(BrokerConnection.broker == "kite",
+                        BrokerConnection.scope.like(f"{DATA_SCOPE_PREFIX}%"))
         if not include_revoked:
             q = q.where(BrokerConnection.status == "active")
         rows = s.scalars(q.order_by(BrokerConnection.id).limit(200)).all()
-        return {"connections": [r.to_dict() for r in rows]}
+        try:
+            return {"connections": [_response(r, principal, active=not include_revoked)
+                                     for r in rows]}
+        except (DataConnectionUnavailable, ValueError, TypeError) as e:
+            raise HTTPException(status_code=409, detail="data connection unavailable") from e
 
 
 @router.get("/connections/{connection_id}")
@@ -229,9 +292,14 @@ def get_connection(connection_id: int,
     with SessionLocal() as s:
         try:
             store = _store_for_connection(s, principal, connection_id)
-            return _authorized(store, principal, "read:connection", connection_id).to_dict()
+            row = _authorized(store, principal, "read:connection", connection_id)
+            if row.scope.startswith(DATA_SCOPE_PREFIX):
+                store.require_data_connection(connection_id)
+            return _response(row, principal)
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except DataConnectionUnavailable as e:
+            raise HTTPException(status_code=404, detail="connection unavailable") from e
 
 
 @router.post("/connections", status_code=status.HTTP_201_CREATED)
@@ -255,6 +323,31 @@ def create_connection(body: ConnectionCreate,
     # instead would leave the caller's record disagreeing with what they asked for, and
     # `configured_execution_connection` strips its env var but matches the stored value
     # unstripped, so the padded row would be invisible to the engine at start.
+    if (_data_contract(principal)
+            and not ({"broker", "broker_account_id", "scope", "capabilities"}
+                     & body.model_fields_set)):
+        with SessionLocal() as s:
+            try:
+                row = _data_store_for_owner(s, principal).create_data_connection(label=body.label)
+                s.commit()
+                return _data_projection(row)
+            except DataConnectionConflict as e:
+                s.rollback()
+                raise HTTPException(status_code=409, detail=str(e)) from e
+            except DataConnectionUnavailable as e:
+                s.rollback()
+                raise HTTPException(status_code=409, detail=str(e)) from e
+            except IntegrityError as e:
+                s.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="one active Zerodha data connection is already present") from e
+    if _data_contract(principal) and is_v0_profile(get_settings().release_profile):
+        raise HTTPException(
+            status_code=422,
+            detail="the V0 server derives the closed Zerodha data role")
+    if body.broker is None or body.broker_account_id is None or body.scope is None:
+        raise HTTPException(status_code=422, detail="broker, broker_account_id and scope are required")
     if body.scope != body.scope.strip():
         raise HTTPException(
             status_code=422,
@@ -277,6 +370,8 @@ def create_connection(body: ConnectionCreate,
         except registry.BrokerNotSupported as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except caps.UnknownCapability as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except DataConnectionUnavailable as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except IntegrityError as e:
             s.rollback()
@@ -318,14 +413,24 @@ def store_credential(connection_id: int, body: CredentialWrite,
     with SessionLocal() as s:
         try:
             store = _store_for_connection(s, principal, connection_id)
-            _authorized(store, principal, "write:credential", connection_id)
-            row = store.store_credential(connection_id, dict(body.secrets))
+            existing = _authorized(store, principal, "write:credential", connection_id)
+            if existing.scope.startswith(DATA_SCOPE_PREFIX):
+                store.require_data_connection(connection_id)
+                if set(body.secrets) != {"api_key", "api_secret"}:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="data-role setup accepts only OAuth application keys")
+            row = (store.store_data_app_keys(connection_id, dict(body.secrets))
+                   if existing.scope.startswith(DATA_SCOPE_PREFIX)
+                   else store.store_credential(connection_id, dict(body.secrets)))
             s.commit()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except DataConnectionUnavailable as e:
+            raise HTTPException(status_code=404, detail="connection unavailable") from e
         except CredentialVaultUnavailable as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
-        return row.to_dict()
+        return _response(row, principal)
 
 
 @router.delete("/connections/{connection_id}")
@@ -341,12 +446,16 @@ def revoke_connection(connection_id: int,
     with SessionLocal() as s:
         try:
             store = _store_for_connection(s, principal, connection_id)
-            _authorized(store, principal, "revoke:connection", connection_id)
+            row = _authorized(store, principal, "revoke:connection", connection_id)
+            if row.scope.startswith(DATA_SCOPE_PREFIX):
+                store.require_data_connection(connection_id)
             row = store.revoke(connection_id)
             s.commit()
         except ConnectionNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        return row.to_dict()
+        except DataConnectionUnavailable as e:
+            raise HTTPException(status_code=404, detail="connection unavailable") from e
+        return _response(row, principal, active=False)
 
 
 # ── acquiring a credential ────────────────────────────────────────────────
@@ -389,6 +498,8 @@ def connection_login_url(connection_id: int,
         try:
             store = _store_for_connection(s, principal, connection_id)
             row = _authorized(store, principal, "read:connection", connection_id)
+            if row.scope.startswith(DATA_SCOPE_PREFIX):
+                raise DataConnectionUnavailable("use the state-bound OAuth initiation route")
             auth = _authenticator(row.broker)
             secrets = store.live_connection(connection_id).secrets_source()
             return {"connection_id": row.id, "broker": row.broker,
@@ -401,6 +512,8 @@ def connection_login_url(connection_id: int,
             raise HTTPException(status_code=400, detail=str(e)) from e
         except BrokerAuthError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        except DataConnectionUnavailable as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 def _start_oauth(connection_id: int, principal: Principal) -> dict:
@@ -419,17 +532,44 @@ def _start_oauth(connection_id: int, principal: Principal) -> dict:
                 raise ConnectionNotFound("no active authenticated connection")
             store = _store_for_connection(s, principal, connection_id)
             row = _authorized(store, principal, "write:credential", connection_id)
+            # Serialize initiation on the connection. The second concurrent starter
+            # revokes the first state instead of leaving two browser capabilities live.
+            s.scalar(select(BrokerConnection.id).where(
+                BrokerConnection.id == row.id,
+                BrokerConnection.owner_id == owner_id_for(principal),
+            ).with_for_update())
             auth = _authenticator(row.broker)
-            credential_bundle = store.live_connection(connection_id).secrets_source()
+            credential_bundle = (store.read_data_oauth_bundle(connection_id)
+                                 if row.scope.startswith(DATA_SCOPE_PREFIX)
+                                 else store.live_connection(connection_id).secrets_source())
             login_url = auth.login_url(credential_bundle)
             raw_state = secrets.token_urlsafe(32)
             state_digest = _digest_state(raw_state)
             assert state_digest is not None
+            initiated_at = _now()
+            binding = (
+                OAuthCallbackState.connection_id == row.id,
+                OAuthCallbackState.session_id == principal.session_id,
+                OAuthCallbackState.user_id == principal.user_id,
+                OAuthCallbackState.organization_id == principal.organization_id,
+            )
+            s.execute(delete(OAuthCallbackState).where(
+                *binding,
+                (OAuthCallbackState.consumed_at.is_not(None)
+                 | OAuthCallbackState.revoked_at.is_not(None)
+                 | (OAuthCallbackState.expires_at <= initiated_at)),
+            ))
+            s.execute(update(OAuthCallbackState).where(
+                *binding,
+                OAuthCallbackState.consumed_at.is_(None),
+                OAuthCallbackState.revoked_at.is_(None),
+                OAuthCallbackState.expires_at > initiated_at,
+            ).values(revoked_at=initiated_at))
             s.add(OAuthCallbackState(
                 state_digest=state_digest, connection_id=row.id,
                 session_id=principal.session_id, user_id=principal.user_id,
-                organization_id=principal.organization_id, created_at=_now(),
-                expires_at=_now() + _OAUTH_STATE_TTL))
+                organization_id=principal.organization_id, created_at=initiated_at,
+                expires_at=initiated_at + _OAUTH_STATE_TTL))
             s.commit()
             return {"connection_id": row.id,
                     "login_url": _with_state(login_url, raw_state)}
@@ -441,6 +581,8 @@ def _start_oauth(connection_id: int, principal: Principal) -> dict:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except CredentialVaultUnavailable as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
+        except DataConnectionUnavailable as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/connections/{connection_id}/oauth/initiate")
@@ -462,7 +604,8 @@ def _consume_callback_state(session, *, digest: str, now: dt.datetime) -> bool:
 
 def _store_callback_credential(
         session, *, connection_id: int, owner_id: str, broker_account_id: str,
-        user_id: str, session_id: str, secrets: dict, now: dt.datetime
+        user_id: str, session_id: str, secrets: dict, now: dt.datetime,
+        data_only: bool = False,
 ) -> BrokerConnection | None:
     """Store only while the callback identity and connection are still active.
 
@@ -494,14 +637,21 @@ def _store_callback_credential(
         BrokerAccount.owner_id == owner_id,
         BrokerAccount.status == "active",
     ))
-    changed = session.execute(update(BrokerConnection).where(
+    predicates = [
         BrokerConnection.id == connection_id,
         BrokerConnection.owner_id == owner_id,
         BrokerConnection.broker_account_id == broker_account_id,
         BrokerConnection.status == "active",
         identity_is_active,
         account_is_active,
-    ).values(
+    ]
+    if data_only:
+        predicates.extend([
+            BrokerConnection.broker == "kite",
+            BrokerConnection.scope.like(f"{DATA_SCOPE_PREFIX}%"),
+            BrokerConnection.capabilities_json == json.dumps(sorted(DATA_CAPABILITIES)),
+        ])
+    changed = session.execute(update(BrokerConnection).where(*predicates).values(
         credential_ciphertext=ciphertext,
         credential_key_id=key_id,
         last_authenticated_at=now,
@@ -519,7 +669,8 @@ def _store_callback_credential(
         aggregate_type="broker_connection", aggregate_id=str(connection_id),
         event_type="execution.connection.changed", projection="connections",
         producer_key=f"connection:{connection_id}:oauth:{mutation_id}",
-        facts={"state": "ready", "ready": True},
+        facts=({"state": "present_unverified", "ready": False}
+               if data_only else {"state": "ready", "ready": True}),
     )
     return session.get(BrokerConnection, connection_id)
 
@@ -572,11 +723,16 @@ def oauth_callback(state: str | None = None, request_token: str | None = None) -
             BrokerConnection.id == connection_id))
         store = OwnedConnectionStore(
             s, owner_id=owner_id, broker_account_id=broker_account_id)
+        data_only = False
         try:
             row = store.get(connection_id)
             broker = row.broker
-            secrets_source = store.live_connection(row.id).secrets_source
-        except (ConnectionNotFound, CredentialVaultUnavailable):
+            if row.scope.startswith(DATA_SCOPE_PREFIX):
+                data_only = True
+                secrets_source = store.data_oauth_source(row.id)
+            else:
+                secrets_source = store.live_connection(row.id).secrets_source
+        except (ConnectionNotFound, CredentialVaultUnavailable, DataConnectionUnavailable):
             s.commit()  # retain the consumed state after a failed lookup
             raise HTTPException(status_code=400, detail="invalid login callback")
         # Commit the spent capability before external broker I/O. A slow exchange
@@ -585,19 +741,21 @@ def oauth_callback(state: str | None = None, request_token: str | None = None) -
         s.commit()
     try:
         bundle = _authenticator(broker).exchange(secrets_source(), request_token)
-    except (NoInteractiveLogin, BrokerAuthError, CredentialVaultUnavailable):
+    except (NoInteractiveLogin, BrokerAuthError, CredentialVaultUnavailable,
+            DataConnectionUnavailable):
         raise HTTPException(status_code=400, detail="invalid login callback")
     with SessionLocal() as s:
         try:
             saved = _store_callback_credential(
                 s, connection_id=connection_id, owner_id=owner_id,
                 broker_account_id=broker_account_id, user_id=callback.user_id,
-                session_id=callback.session_id, secrets=bundle, now=_now())
+                session_id=callback.session_id, secrets=bundle, now=_now(),
+                data_only=data_only)
             if saved is None:
                 raise ConnectionNotFound("OAuth callback identity is no longer active")
-            result = saved.to_dict()
+            result = _data_projection(saved) if data_only else saved.to_dict()
             s.commit()
             return result
-        except (ConnectionNotFound, CredentialVaultUnavailable):
+        except (ConnectionNotFound, CredentialVaultUnavailable, DataConnectionUnavailable):
             s.rollback()
             raise HTTPException(status_code=400, detail="invalid login callback")

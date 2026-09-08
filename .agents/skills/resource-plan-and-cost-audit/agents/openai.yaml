@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Audit resource plans and operating cost"
+  short_description: "Check capacity, quotas and measured unit costs"
+  default_prompt: "Use $resource-plan-and-cost-audit for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

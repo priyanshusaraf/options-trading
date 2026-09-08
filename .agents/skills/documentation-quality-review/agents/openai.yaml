@@ -1,0 +1,4 @@
+interface:
+  display_name: "Strategy OS: Review documentation by following the journey"
+  short_description: "Verify docs against actual product journeys"
+  default_prompt: "Use $documentation-quality-review for the relevant Strategy OS task, preserving the active capsule and owner gates. Report evidence, gaps and limitations."

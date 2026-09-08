@@ -1,31 +1,42 @@
-# Strategy OS task router
+# Find the guidance for the task
 
-`CURRENT.md`, `PROGRAMME.json`, and one active capsule are the resume interface. No init command, old transcript, `CONTINUE.md`, or permanent controller is required.
+Start with the latest user direction and applicable local `AGENTS.md`. Consult [WORKING-PLAN.md](WORKING-PLAN.md) for product scope and priorities. A direct bounded assignment or an explicitly resumed capsule defines the work. Do not load every historical plan.
 
-## Start
+## Instruction and evidence map
 
-1. Read `CURRENT.md` and `PROGRAMME.json`.
-2. Confirm the active stage is the first unfinished dependency.
-3. Read only its capsule and exact `required_docs` sections.
-4. Create the capsule's durable goal before product work.
-5. Audit the relevant dirty tree and protected hashes.
-
-## Routes
-
-| Task | Route |
+| Source | Use it for |
 | --- | --- |
-| Scheduled dispatcher | Luna medium, one action, no product edits |
-| Phase architecture | Fresh Sol medium goal |
-| Implementation or correction | Fresh Terra medium goal |
-| Spawned mechanical work | `luna-worker` on Luna medium |
-| Phase/release gate | Fresh Sol high goal, product code read-only |
+| Root and local `AGENTS.md` | Shared rules and subsystem-specific hazards. |
+| `WORKING-PLAN.md` | Current user journey, priorities, ownership and completion criteria. |
+| `STATUS.md` | Recorded integration evidence, open defects and the current handoff. |
+| `docs/README.md` | Short roadmap and architecture entry points. |
+| `.agents/skills/*/references/` | Historical domain references; these directories are not installed skills without a `SKILL.md` entry point. |
+| Installed personal/plugin skills | Specialist capabilities. Preserve them; do not run every tool automatically. |
+| `CURRENT.md`, `programme/PROGRAMME.json`, `tasks/` | Recorded phase/capsule history and evidence links. Acceptance labels need current verification. |
+| `docs/program/owner-steers/` and accepted reconciliations | Product meaning and invariants where the latest user direction is silent. |
+| `docs/engineering-references/` | Source-backed failure hypotheses and checked guidance. No automatic technology adoption. |
+| `.agent/runs/` | Full commands and reproductions. Keep the findings themselves in the integrated audit. |
 
-Children use `fork_turns: none` and exact declared assignment IDs. Use zero to five only for disjoint ownership. No permanent Sol, live reviewer, reviewer swarm, future-phase worker, Fast mode, xhigh, ultra, or max.
+## Choose available skills by the affected work
 
-## State transitions
+Use installed skills listed in the current session when their instructions apply.
+For UI work, use the available `frontend-design` and `ui-ux-pro-max` skills.
+For changes to skills themselves, use the available `skill-creator` guidance.
+Preserve the user's model and reasoning choices.
 
-The deterministic dispatcher emits one of `dispatch`, `monitor`, `pause`, or `complete`. One active goal owns the programme. Rejection creates correction state. Component IR v2 must pass after Phase 3 and before Phase 4. Every phase ends in separate Sol-high `SPEC` and `QUALITY` verdicts; both must pass.
+The old names under `.agents/skills` identify retained reference material, not
+callable skills: their entry points have been retired. Consult a specific
+reference when relevant; do not reconstruct an automatic startup procedure.
 
-Full logs stay under ignored `.agent/runs/`. Controller leases stay under ignored `.agent/programme/`. Tracked state and capsules are the durable memory.
+## Bounded reading
 
-Stop for owner direction at the gates named in the active capsule. Automation never grants live, deployment, VPS, credential, production-data, destructive, licence-sensitive, legal/regulatory/commercial, or undeclared frontend authority.
+Read the affected section, not every linked file. Large maintained references now
+have section indexes. Historical plans, task capsules and programme records are
+excluded from ordinary `rg` searches by root `.ignore`; inspect an explicit past
+decision with `rg --no-ignore <pattern> <history-path>`. Original owner documents
+remain intact; retrieve only the relevant heading or field. Do not reconstruct a
+startup chain through archive indexes.
+
+## Parallel work
+
+Follow root `AGENTS.md` for delegation and model selection. Custom role files override spawn model/effort, so use the default agent with explicit settings when a fixed role conflicts with the user's choice. The root owns integration and heavy checks. Direct assignments are sufficient; explicitly resumed capsules retain their declared contract. Use distinct task names for new assignments rather than reusing historical capsule assignment IDs.
