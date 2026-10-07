@@ -76,8 +76,12 @@ def backtest_qty(inst, price: float, capital: float) -> int:
 
 
 def _candles_to_df(candles) -> pd.DataFrame:
+    # volume rides along for volume-aware strategies (VWAP …); price-only
+    # strategies ignore the extra column.
     return pd.DataFrame([{"date": c.ts, "open": c.open, "high": c.high,
-                          "low": c.low, "close": c.close} for c in candles])
+                          "low": c.low, "close": c.close,
+                          "volume": float(getattr(c, "volume", 0.0) or 0.0)}
+                         for c in candles])
 
 
 def _position(inst, price: float, capital: float) -> tuple[int, float, int]:
@@ -132,13 +136,20 @@ def estimate_option_cost(inst, candles, r: float = 0.065) -> float:
 def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
              strategy=None, params: dict | None = None,
              ema_length: int = 50, z_length: int = 50, entry_z: float = 1.0,
-             slope_lookback: int = 5) -> tuple[list[BTTrade], BTMetrics]:
+             slope_lookback: int = 5,
+             slippage_pct: float = 0.0) -> tuple[list[BTTrade], BTMetrics]:
     """Run a strategy over `candles` and return (trades, metrics).
 
     `strategy` is a registry Strategy (None → the default trend_impulse_v3); `params`
     overrides its inputs (None → the strategy's own defaults, or the legacy v3 kwargs
     when no strategy is given). Entries/exits come purely from the strategy's
-    canonical flag columns; the engine owns no premium stop/target here."""
+    canonical flag columns; the engine owns no premium stop/target here.
+
+    Opt-in extras (all default off, so existing strategies are unchanged):
+      * strategy.pyramiding = {"max_adds": n} — `longAdd`/`shortAdd` add one lot.
+      * strategy.session_flat = True — square off at the last bar of each day.
+      * slippage_pct — every fill is moved against the trade by this fraction
+        (buy fills higher, sell fills lower), on top of the charge stack."""
     strat = strategy if strategy is not None else get_strategy(None)
     if params is None:
         params = (dict(strat.default_params) if strategy is not None
@@ -172,7 +183,8 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     # trim warmup rows where the strategy's indicators are still NaN. The columns
     # differ per strategy (v3: slope; v4: atr/absZ), so drop on whichever of the
     # known indicator columns this strategy actually emitted — keeps v3 identical.
-    warm_cols = [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns]
+    warm_cols = list(getattr(strat, "warmup_columns", None) or
+                     [c for c in ("ema", "z", "slope", "atr", "absZ") if c in sig.columns])
     sig = sig.dropna(subset=warm_cols).reset_index(drop=True)
     if sig.empty:
         m = BTMetrics()
@@ -186,7 +198,16 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
     pending = None  # ("ENTER", "LONG"|"SHORT") | ("EXIT", reason) — fills next bar OPEN
     ratchet = None  # RatchetState for the open position, iff strat declares risk_model
 
+    pyr = getattr(strat, "pyramiding", None) or {}
+    max_adds = int(pyr.get("max_adds", 0))
+    session_flat = bool(getattr(strat, "session_flat", False))
+    slip = max(0.0, float(slippage_pct or 0.0))
+
+    def _fill(px: float, side: str) -> float:
+        return px * (1.0 + slip) if side == "BUY" else px * (1.0 - slip)
+
     rows = sig.to_dict("records")
+    n_rows = len(rows)
     for i, r in enumerate(rows):
         t = ist_epoch(r["date"])   # IST wall-clock -> true instant (no +5:30 shift)
         open_px = float(r["open"])
@@ -198,12 +219,13 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
             kind, arg = pending
             pending = None
             if kind == "ENTER" and pos is None:
-                qty, notional, lots = _position(inst, open_px, capital)
+                px = _fill(open_px, "BUY" if arg == "LONG" else "SELL")
+                qty, notional, lots = _position(inst, px, capital)
                 if qty > 0:
-                    pos = {"direction": arg, "entry_price": open_px,
+                    pos = {"direction": arg, "entry_price": px,
                            "entry_time": t, "entry_idx": i, "qty": qty,
                            "notional": notional, "lots": lots,
-                           "mae_pct": 0.0}
+                           "mae_pct": 0.0, "legs": [(px, qty)]}
                     ratchet = None
                     if rm:
                         entry_atr = r.get("_ratchet_atr")
@@ -212,10 +234,34 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
                             # risk units freeze at the FILL bar (pine:212)
                             ratchet = RatchetState(arg, open_px,
                                                    float(entry_atr), rm)
+            elif kind == "ADD" and pos is not None and pos["direction"] == arg:
+                px = _fill(open_px, "BUY" if arg == "LONG" else "SELL")
+                add_qty, add_notional, _ = _position(inst, px, capital)
+                if add_qty > 0:
+                    pos["legs"].append((px, add_qty))
+                    pos["qty"] += add_qty
+                    pos["notional"] += add_notional
+                    pos["lots"] += 1
+                    pos["entry_price"] = pos["notional"] / pos["qty"]
             elif kind == "EXIT" and pos is not None:
-                trades.append(_close(pos, open_px, t, i, seg, arg))
+                px = _fill(open_px, "SELL" if pos["direction"] == "LONG" else "BUY")
+                trades.append(_close(pos, px, t, i, seg, arg))
                 pos = None
                 ratchet = None
+
+        # session square-off: the last bar of a trading day (next bar is another
+        # date, or there is no next bar) — exit at its CLOSE, no new entries.
+        last_of_day = session_flat and (
+            i + 1 >= n_rows or rows[i + 1]["date"].date() != r["date"].date())
+        if last_of_day and i + 1 < n_rows:
+            if pos is not None:
+                _update_mae(pos, r)
+                px = _fill(close, "SELL" if pos["direction"] == "LONG" else "BUY")
+                trades.append(_close(pos, px, t, i, seg, "SESSION_FLAT"))
+                pos = None
+                ratchet = None
+            pending = None
+            continue
 
         if pos is not None:
             # MAE includes the fill bar (the position lives through it) …
@@ -233,6 +279,10 @@ def simulate(candles, inst, interval: str, *, capital: float = 50_000.0,
                         (d == "LONG" and bool(r["longExit"])) or
                         (d == "SHORT" and bool(r["shortExit"]))):
                     pending = ("EXIT", "STRATEGY_EXIT")
+                if pending is None and max_adds and pos["lots"] - 1 < max_adds and (
+                        (d == "LONG" and bool(r.get("longAdd", False))) or
+                        (d == "SHORT" and bool(r.get("shortAdd", False)))):
+                    pending = ("ADD", d)
         elif r["longEntry"] or r["shortEntry"]:
             pending = ("ENTER", "LONG" if r["longEntry"] else "SHORT")
 
@@ -275,8 +325,12 @@ def _close(pos, exit_price, exit_time, exit_idx, seg, reason) -> BTTrade:
     entry_price = pos["entry_price"]
     gross = (exit_price - entry_price) * qty if d == "LONG" else (entry_price - exit_price) * qty
     entry_side, exit_side = ("BUY", "SELL") if d == "LONG" else ("SELL", "BUY")
-    charges = (compute_charges(seg, entry_side, entry_price, qty)["total"]
-               + compute_charges(seg, exit_side, exit_price, qty)["total"])
+    # each pyramid leg is its own entry order (own brokerage); the exit is one
+    # order per leg too (a broker books each lot's square-off separately).
+    legs = pos.get("legs") or [(entry_price, qty)]
+    charges = sum(compute_charges(seg, entry_side, px, q)["total"]
+                  + compute_charges(seg, exit_side, exit_price, q)["total"]
+                  for px, q in legs)
     return BTTrade(
         direction=d, entry_time=pos["entry_time"], entry_price=entry_price,
         exit_time=exit_time, exit_price=exit_price, qty=qty,

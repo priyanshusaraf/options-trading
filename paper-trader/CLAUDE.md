@@ -120,6 +120,15 @@ key falls back to the default so a stale per-instrument assignment can never cra
 backtest. The default strategy keeps the exact v3 chart payload; others go through the generic
 `_generic_latest` path reading canonical flag columns.
 
+Commodity research strategies (Oct 2026; MCX-proxy validated, see
+`docs/strategies/2026-10-commodity-strategy-research.md`): `spike_fade`, `shock_reversal`,
+`vwap_band_reversion` (passed IS + OOS after charges on NG/crude), plus `vwap_slope_divergence`,
+`adaptive_supertrend`, `vol_squeeze_breakout`, `session_gap_carry` (documented, not deployable).
+Shared helpers: `strategy/ta.py` (VWAPs, RSI divergence, DST-aware MCX session clock);
+`strategy/regime.py` (technical regime labels). Backtest-only opt-ins on a Strategy:
+`pyramiding`, `session_flat`, `warmup_columns`; `simulate(..., slippage_pct=)`. The research
+harness + data builders live in `research/commodity/` (data is gitignored).
+
 ### Two trading segments
 - **options** (default) — buy CE on long / PE on short, 1 lot, −35%/+60% premium stop/target with
   a ratcheting trailing stop. Picker (`options/picker.py`) keeps OI ≥ 500 and spread ≤ 3%, then

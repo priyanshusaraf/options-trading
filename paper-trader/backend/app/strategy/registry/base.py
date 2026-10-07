@@ -35,6 +35,18 @@ class Strategy:
     # atr_length, initial_risk_atr, trail_start_r, trail_atr,
     # use_mfe_capture_floor, capture_start_r, capture_pct.
     risk_model: dict[str, Any] | None = None
+    # Optional BACKTEST-only declarations (the live engine ignores them):
+    #   pyramiding   — {"max_adds": n}: while a position is open, a same-direction
+    #                  `longAdd` / `shortAdd` flag adds ONE more lot (fills next open),
+    #                  up to n adds. All legs exit together.
+    #   session_flat — True: the position is force-closed at the CLOSE of the last
+    #                  bar of each trading day (MIS-style square-off), and an entry
+    #                  confirmed on that last bar is ignored (it would fill tomorrow).
+    #   warmup_columns — indicator columns whose NaN rows are trimmed as warmup
+    #                  (default: whichever of ema/z/slope/atr/absZ are present).
+    pyramiding: dict[str, Any] | None = None
+    session_flat: bool = False
+    warmup_columns: tuple[str, ...] | None = None
 
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError
