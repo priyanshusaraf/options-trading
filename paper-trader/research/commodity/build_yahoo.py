@@ -18,6 +18,8 @@ sys.path.insert(0, HERE)
 from build_dataset import DATA_ROOT, fx_rate, roll_adjust  # noqa: E402
 
 OUT = _os.path.join(DATA_ROOT, "yahoo_mcx")
+# USD quote -> MCX quote unit (same factors as build_dataset.SPECS)
+UNIT_FACTOR = {"SILVERMIC": 1.06 * 32.1507, "GOLDPETAL": 1.06 / 31.1035}
 
 
 def load(sym: str) -> pd.DataFrame:
@@ -36,6 +38,14 @@ def nymex_expiries(sym: str, start: pd.Timestamp, end: pd.Timestamp) -> list[pd.
     bd = pd.offsets.BDay()
     out = []
     for m in pd.period_range(start, end, freq="M"):
+        if sym.startswith(("SI", "GC")):
+            # COMEX metals: Yahoo moves to the next ACTIVE month around first notice
+            # (last business day of the month before delivery). Silver actives:
+            # Mar/May/Jul/Sep/Dec; gold: Feb/Apr/Jun/Aug/Oct/Dec.
+            actives = (3, 5, 7, 9, 12) if sym.startswith("SI") else (2, 4, 6, 8, 10, 12)
+            if (m + 1).month in actives:
+                out.append((m + 1).to_timestamp() - bd)
+            continue
         if sym.startswith("NG"):
             first_of_delivery = (m + 1).to_timestamp()
             out.append(first_of_delivery - 3 * bd)
@@ -52,7 +62,8 @@ def calendar_rolls(df: pd.DataFrame, sym: str, min_gap: float = 0.005) -> list:
     g = df["open"] / df["close"].shift(1) - 1.0
     rolls = []
     for e in nymex_expiries(sym, df.index.min(), df.index.max()):
-        w = g[(g.index >= e - pd.offsets.BDay()) & (g.index < e + 3 * pd.offsets.BDay())].dropna()
+        lo = 4 if sym.startswith(("SI", "GC")) else 1     # metals switch a few days early
+        w = g[(g.index >= e - lo * pd.offsets.BDay()) & (g.index < e + 3 * pd.offsets.BDay())].dropna()
         if len(w) and abs(w).max() >= min_gap:
             t = w.abs().idxmax()
             rolls.append((t, float(w.loc[t])))
@@ -80,7 +91,7 @@ def build(sym: str, name: str) -> None:
     print(sym, "calendar rolls:", [(str(t)[:16], round(g * 100, 2)) for t, g in rolls])
     rolls = []
     df.index = df.index + pd.Timedelta(hours=5, minutes=30)
-    rate = fx_rate(df.index)
+    rate = fx_rate(df.index) * UNIT_FACTOR.get(name, 1.0)
     for c in ("open", "high", "low", "close"):
         df[c] = df[c].to_numpy() * rate
     mins = df.index.hour * 60 + df.index.minute

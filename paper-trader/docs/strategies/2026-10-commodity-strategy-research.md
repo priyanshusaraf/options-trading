@@ -9,9 +9,12 @@ or crude.
 **Short answer:** see [§6 Verdict](#6-verdict). Most textbook intraday ideas (VWAP-slope
 trend, SuperTrend, squeeze breakout, session-VWAP fades) do **not** survive the MCX
 mini-contract cost stack out-of-sample. What did survive was found by measuring
-components first: **multi-session shock reversal** (crude, NG up-spikes), **swing
-reversion to a 10-day VWAP after a climax push** (NG), and the **MCX overnight-gap
-structure in gold**.
+components first: **multi-session fades of energy shocks** (`spike_fade` on NG and crude,
+`shock_reversal` on crude) and **swing reversion to a 10-day VWAP after a climax push**
+(`vwap_band_reversion`, NG). They hold on real NYMEX bars, on broad parameter
+plateaus, and on the bot's options path once each strategy carries its own option-exit
+policy (§6b–§6c). Gold has only a weak calendar effect (`gold_month_turn`); silver has
+none (§6d).
 
 ---
 
@@ -342,7 +345,7 @@ its result gives OOS +₹86k, Sharpe 0.69 — post-hoc, so not the headline.)
 OOS once each strategy carries its own option-exit policy (the global −35%/+60% exits
 destroyed them): spike_fade NG OOS +₹13k, spike_fade crude +₹34k, shock_reversal crude
 +₹11k, each with ≈ ₹2–4k premium per lot and a worst OOS drawdown of ₹5.5–6.9k.
-`vwap_band_reversion` is a futures strategy (marginal on options).
+`vwap_band_reversion` works on ~30-day options (OOS +₹10.7k) — it declares that tenor.
 
 **Gold: a weak pass.** `gold_month_turn` (§4.7) is profitable after charges, slippage
 and futures carry on GOLDPETAL, GOLDGUINEA and GOLDM in both periods and every year
@@ -350,6 +353,9 @@ and futures carry on GOLDPETAL, GOLDGUINEA and GOLDM in both periods and every y
 random timing (≈ break-even on GOLDPETAL). Low conviction; prefer the cheaper-per-gram
 contracts. The gold MCX overnight drift is real but too small for GOLDPETAL's costs (and
 partly offset by futures carry).
+
+**Silver: no strategy** (§6d) — the fades lose on silver too; the trend tools' gains are the
+2026 blow-off alone.
 
 **Honest caveats.**
 * Small samples: 10–15 trades/year per strategy; OOS P(total > 0) by bootstrap is
@@ -463,20 +469,44 @@ Results with the shipped policies (options path):
 | **spike_fade × NG 15m** | +₹110k (PF 3.1) | **+₹13.1k (PF 1.45)** | +₹5.7k | ₹6.9k | ~₹4.2k |
 | **spike_fade × crude 15m** | +₹12.2k (PF 1.45) | **+₹33.9k (PF 3.05)** | +₹31.7k | ₹5.5k | ~₹2.2k |
 | **shock_reversal × crude 15m** | +₹16.4k (PF 1.96) | **+₹11.1k (PF 2.11)** | +₹8.8k | ₹5.8k | ~₹2.3k |
-| vwap_band_reversion × NG 30m | +₹43.4k (PF 1.79) | +₹4.4k (PF 1.15) | +₹0.4k | ₹12.6k | ~₹3.9k |
+| vwap_band_reversion × NG 30m, ~14-day options | +₹43.4k (PF 1.79) | +₹4.4k (PF 1.15) | +₹0.4k | ₹12.6k | ~₹3.9k |
+| **vwap_band_reversion × NG 30m, ~30-day options** (`option_tenor_days = 30`) | +₹53.2k (PF 2.24) | **+₹10.7k (PF 1.43)** | +₹4.8k | ₹9.7k | ~₹5.7k |
 | gold_month_turn × GOLDM 60m | +₹29.7k (PF 1.34) | +₹34.0k (PF 1.21) | +₹6.2k | ₹112.7k | ~₹12.5k |
 
 Reading it: the **shock family on options** is the best fit for a ₹50k account — ~₹2–4k
 of premium per lot, worst OOS drawdown ₹5.5–6.9k (vs ₹17–41k for one futures lot), and
-it survives a 6% spread. `vwap_band_reversion` is marginal on options (its multi-week
-holds want ~30-day options; the picker does not choose by tenor) — it is a futures
-strategy. `gold_month_turn` stays low-conviction (large OOS drawdown, weak pre-2019).
+it survives a 6% spread. `vwap_band_reversion` holds for days to weeks, so it needs a
+longer-dated option: a strategy can now declare `option_tenor_days` (live: the provider
+picks the earliest expiry at least that far out; premium backtest: the default option
+life). At ~30 days (the in-sample best of 14/21/30) it is usable on options too (OOS
++₹10.7k, PF 1.43; 2019, 2023 and 2026 slightly negative). `gold_month_turn` stays low-conviction (large OOS drawdown, weak pre-2019).
 
 Not modelled: MCX option liquidity (check the bid-ask on NATGASMINI/CRUDEOILM options in
 the Options Calc view before relying on the 2–6% spread assumption), whether MCX lists
 options on each mini contract (the live picker uses whatever the Kite instrument dump
 holds — verify), and the bot's overnight-holding rules (positions > 10% of capital need a
 reinforcement to carry; ~₹2–4k of premium on ₹50k is within the 10% auto-hold limit).
+
+## 6d. Silver (added 2026-10-08)
+
+The Dukascopy silver download stayed rate-limited, so silver was tested on **Yahoo COMEX
+SI=F hourly bars** (2024-05 → 2026-10; contract rolls found from the COMEX active-month
+calendar and ratio-adjusted; ₹/kg = $/oz × USDINR × 32.15 × 1.06). No strategy was ever
+tuned on silver, so all of this is out-of-sample (`research/commodity/silver_check.py`).
+Buy-and-hold 1 kg: +₹112.6k (+132%), max drawdown ₹192k.
+
+| Strategy (defaults, 60m) | futures | options (4% spread) |
+|---|---|---|
+| spike_fade | −₹15.6k (PF 0.65) | −₹9.6k |
+| shock_reversal | −₹17.5k (PF 0.15) | −₹11.1k |
+| vwap_band_reversion | −₹81.7k (PF 0.39) | −₹36.3k |
+| gold_month_turn | +₹5.1k (PF 1.08) | −₹24.0k |
+| trend_impulse_v3 / vol_squeeze_breakout / adaptive_supertrend / vwap_slope_divergence | +₹55k … +₹176k, but lose in 2024 and 2025 — nearly all from the 2026 blow-off and crash | all lose |
+
+**Verdict: no silver strategy.** The fade family fails on silver as it does on gold —
+precious-metal spikes do not revert like energy spikes. The trend tools' silver profit is
+one extreme year (2026), not an edge, and they lose on the options path. More history (the
+Dukascopy 2019–2026 set) would be needed before trusting any silver result.
 
 ## 7. Full evaluation matrix
 
@@ -582,6 +612,6 @@ cd paper-trader/research/commodity
 COMMODITY_DATA=<root whose mcx/ -> yahoo_mcx/> ../../backend/.venv/bin/python crosscheck_yahoo.py
 ```
 Component studies: `features.py`, `session.py`, `hours.py`, `gold_usd_gap.py`,
-`gold_night.py`, `overnight2.py`, `ng_shock.py`. Silver was not evaluated: the
-Dukascopy download was rate-limited and did not complete in this session.
+`gold_night.py`, `overnight2.py`, `ng_shock.py`. Silver: `silver_check.py` on the Yahoo SI=F set (§6d); the Dukascopy silver download was
+rate-limited and did not complete in this session.
 

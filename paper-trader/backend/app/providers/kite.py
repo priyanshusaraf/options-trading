@@ -29,7 +29,8 @@ from app.core import market_hours
 from app.core.config import get_settings
 from app.core.instruments import Instrument
 from app.core.logging import WarnGate, log
-from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
+from app.providers.base import (Candle, MarketDataProvider, OptionChain, OptionQuote,
+                                pick_expiry)
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "access_token.json")
 
@@ -336,7 +337,7 @@ class KiteProvider(MarketDataProvider):
 
         return out
 
-    def get_option_chain(self, inst: Instrument) -> OptionChain | None:
+    def get_option_chain(self, inst: Instrument, min_dte: int | None = None) -> OptionChain | None:
         today = dt.date.today()
         names = set(self._name_candidates(inst))
         opts = [r for r in self._instruments(inst.segment)
@@ -346,7 +347,8 @@ class KiteProvider(MarketDataProvider):
         if not opts:
             log.warn("no live option chain", instrument=inst.key)
             return None
-        expiry = min(_as_date(r["expiry"]) for r in opts)
+        expiries = sorted({_as_date(r["expiry"]) for r in opts})
+        expiry = pick_expiry(expiries, today, min_dte)
         opts = [r for r in opts if _as_date(r["expiry"]) == expiry]
 
         spot = self.get_ltp(inst)

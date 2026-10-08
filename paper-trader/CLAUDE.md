@@ -131,7 +131,9 @@ Shared helpers: `strategy/ta.py` (VWAPs, RSI divergence, DST-aware MCX session c
 `min_history_days` (the runner fetches `history_days_for(strategy, interval, history_days)`) and
 `option_exits` (per-strategy premium stop / target / trail applied at live entry via
 `option_entry_params` + `trail_allowed`, and by default in `backtest/premium.py`; strategies
-without it keep the global Settings).
+without it keep the global Settings), and `option_tenor_days` (the provider's
+`get_option_chain(inst, min_dte=…)` picks the earliest expiry at least that far out — `pick_expiry`
+in `providers/base.py`; the runner only passes it when a strategy declares it).
 Live guards matter for strategy timing: signals > `max_signal_age_minutes` old are dropped and
 nothing opens outside the session or before `entry_window_start` — a strategy that decides on a
 session's last candle can never enter live (see `shock_reversal.decide_at`). The research

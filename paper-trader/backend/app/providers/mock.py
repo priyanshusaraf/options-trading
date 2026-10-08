@@ -28,7 +28,8 @@ import numpy as np
 from app.core.config import get_settings
 from app.core.instruments import Instrument, all_instruments
 from app.options.pricing import bs_price
-from app.providers.base import Candle, MarketDataProvider, OptionChain, OptionQuote
+from app.providers.base import (Candle, MarketDataProvider, OptionChain, OptionQuote,
+                                pick_expiry)
 
 _MONTH = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
           "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
@@ -126,10 +127,11 @@ class MockProvider(MarketDataProvider):
     def _symbol(self, inst: Instrument, expiry: date, strike: float, otype: str) -> str:
         return f"{inst.option_name}{expiry:%y}{_MONTH[expiry.month]}{int(strike)}{otype}"
 
-    def get_option_chain(self, inst: Instrument) -> OptionChain | None:
+    def get_option_chain(self, inst: Instrument, min_dte: int | None = None) -> OptionChain | None:
         now = self.now()
         spot = self._spot(inst)
-        expiry = self._active_expiry(now)
+        expiry = (self._active_expiry(now) if not min_dte
+                  else pick_expiry(self._expiries, now.date(), min_dte))
         T = self._T(expiry, now)
         step = inst.strike_step
         atm = round(spot / step) * step

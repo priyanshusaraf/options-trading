@@ -96,6 +96,21 @@ class OptionChain:
     quotes: list[OptionQuote]
 
 
+def pick_expiry(expiries, today, min_dte: int | None = None):
+    """Expiry selection shared by providers: the nearest expiry on/after today, or —
+    with `min_dte` — the earliest one at least `min_dte` calendar days away, falling
+    back to the farthest listed expiry when none is that far."""
+    future = sorted(e for e in expiries if e >= today)
+    if not future:
+        return max(expiries)
+    if not min_dte:
+        return future[0]
+    for e in future:
+        if (e - today).days >= int(min_dte):
+            return e
+    return future[-1]
+
+
 class MarketDataProvider(ABC):
     name: str = "base"
 
@@ -190,8 +205,11 @@ class MarketDataProvider(ABC):
         return out
 
     @abstractmethod
-    def get_option_chain(self, inst: Instrument) -> OptionChain | None:
-        """Nearest tradable expiry chain, or None if none is available."""
+    def get_option_chain(self, inst: Instrument, min_dte: int | None = None) -> OptionChain | None:
+        """Nearest tradable expiry chain, or None if none is available. With
+        `min_dte`, the earliest expiry at least that many calendar days away (the
+        farthest listed one if none is that far) — for strategies that hold for
+        weeks and want a longer-dated option."""
 
     @abstractmethod
     def option_ltp(

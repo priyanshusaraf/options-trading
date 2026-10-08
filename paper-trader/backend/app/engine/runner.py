@@ -842,7 +842,10 @@ class EngineRunner:
             if halted:
                 log.warn(f"DAILY LOSS HALT — not taking {key}", instrument=key, event="HALT_SKIP")
                 continue
-            chain = prov.get_option_chain(inst)
+            # a multi-week strategy may ask for a longer-dated option
+            tenor = getattr(get_strategy(self.strategy_keys.get(key)), "option_tenor_days", None)
+            chain = (prov.get_option_chain(inst, min_dte=int(tenor)) if tenor
+                     else prov.get_option_chain(inst))
             if not chain:
                 log.warn("signal fired but no option chain — skipped", instrument=key)
                 continue

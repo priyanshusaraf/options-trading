@@ -216,6 +216,8 @@ def simulate_premium(candles, inst, interval: str, *, strategy=None,
         p["target_pct"] = float("inf") if oe["target_pct"] is None else float(oe["target_pct"])
     if oe.get("trail_enabled") is False:
         p["trail_enabled"] = False
+    if getattr(strat, "option_tenor_days", None):
+        p["entry_dte_days"] = int(strat.option_tenor_days)
     p.update({k: v for k, v in params.items() if k in DEFAULT_PREMIUM_PARAMS and v is not None})
     strat_kwargs = {k: v for k, v in params.items() if k in strat.default_params}
 

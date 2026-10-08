@@ -59,6 +59,9 @@ class Strategy:
     # None = use the global Settings (−35%/+60%/trail). Multi-session strategies
     # need this: the global stop cuts their trades on noise before they work.
     option_exits: dict[str, Any] | None = None
+    # LIVE + premium-backtest option tenor: buy the earliest expiry at least this
+    # many calendar days out (None = the nearest expiry, the platform default).
+    option_tenor_days: int | None = None
 
     def compute(self, df: pd.DataFrame, **params: Any) -> pd.DataFrame:
         raise NotImplementedError
