@@ -74,6 +74,11 @@ Independent verification (lead researcher, research/commodity/verify_gold_month_
   * MCX gold contracts expire around the month turn — trade the contract that
     stays live through the hold (it carries the premium accounted for above).
 
+REAL-MCX CHECK (lead researcher, research/commodity/real_mcx_gold.py): on real MCX
+GOLDPETAL prints 2025-12 -> 2026-10 (9 month-turns) it LOST (-Rs508 per 1 g lot,
+PF 0.66; GOLDM options -Rs75k), the January-2026 crash month dominating.
+=> NOT DEPLOYABLE. Kept for re-testing on a longer real-MCX history.
+
 Limitations: one trade a month, so samples are small (58 IS / 34 OOS months);
 the profit per 1 g lot is a few rupees per trade (GOLDGUINEA / GOLDM carry the
 same edge at lower cost per gram); built on a Dukascopy XAUUSD x USDINR proxy, not

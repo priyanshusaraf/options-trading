@@ -13,7 +13,8 @@ the whole sweep pipeline is exercisable without Kite.
 """
 from __future__ import annotations
 
-from app.core.instruments import Instrument, all_instruments
+from app.core.instruments import (MCX_UNITS_PER_LOT, SEED_INSTRUMENTS, Instrument,
+                                  all_instruments, mcx_lot_size)
 from app.core.logging import log
 
 # Index option `name` -> NSE/BSE spot tradingsymbol (indices don't trade as the
@@ -73,7 +74,13 @@ def _mcx_commodities(provider) -> list[Instrument]:
     out: list[Instrument] = []
     for name in names:
         opt_rows = [r for r in rows if r.get("name") == name and r.get("instrument_type") in ("CE", "PE")]
-        lot = max((int(r.get("lot_size") or 0) for r in opt_rows), default=0) or 1
+        reported = max((int(r.get("lot_size") or 0) for r in opt_rows), default=0)
+        # Kite reports lot_size=1 for MCX; P&L needs the contract multiplier
+        seed = SEED_INSTRUMENTS.get(name)
+        lot = mcx_lot_size(name, reported, seed.lot_size if seed else None)
+        if name not in MCX_UNITS_PER_LOT and reported <= 1 and seed is None:
+            log.warn(f"MCX contract multiplier unknown for {name} — backtest P&L uses "
+                     f"lot_size=1 (add it to core/instruments.MCX_UNITS_PER_LOT)")
         strikes = sorted({float(r["strike"]) for r in opt_rows if r.get("strike")})
         out.append(Instrument(
             key=name, name=name, segment="MCX", spot_exchange="MCX",

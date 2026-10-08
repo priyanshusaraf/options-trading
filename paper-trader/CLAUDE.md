@@ -122,8 +122,8 @@ backtest. The default strategy keeps the exact v3 chart payload; others go throu
 
 Commodity research strategies (Oct 2026; MCX-proxy validated, see
 `docs/strategies/2026-10-commodity-strategy-research.md`): `spike_fade`, `shock_reversal`,
-`vwap_band_reversion` (passed IS + OOS after charges on NG/crude), `gold_month_turn` (weak pass on
-gold — low conviction), plus `vwap_slope_divergence`,
+`vwap_band_reversion` (passed IS + OOS after charges on NG/crude, and positive on real MCX prints),
+plus `gold_month_turn` (failed its real-MCX check — not deployable), `vwap_slope_divergence`,
 `adaptive_supertrend`, `vol_squeeze_breakout`, `session_gap_carry` (documented, not deployable).
 Shared helpers: `strategy/ta.py` (VWAPs, RSI divergence, DST-aware MCX session clock);
 `strategy/regime.py` (technical regime labels). Backtest-only opt-ins on a Strategy:
@@ -138,6 +138,9 @@ Live guards matter for strategy timing: signals > `max_signal_age_minutes` old a
 nothing opens outside the session or before `entry_window_start` — a strategy that decides on a
 session's last candle can never enter live (see `shock_reversal.decide_at`). The research
 harness + data builders live in `research/commodity/` (data is gitignored).
+
+MCX lot sizes: Kite's MCX instrument dump says `lot_size=1` for every contract — never use it for
+P&L; `core/instruments.MCX_UNITS_PER_LOT` / `mcx_lot_size()` hold the contract multipliers.
 
 ### Two trading segments
 - **options** (default) — buy CE on long / PE on short, 1 lot, −35%/+60% premium stop/target with

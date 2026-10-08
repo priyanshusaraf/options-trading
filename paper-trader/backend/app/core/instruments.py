@@ -79,16 +79,43 @@ SEED_INSTRUMENTS: dict[str, Instrument] = {
 # ── registry (SEED base, overlaid with DB rows) ──────────────────────────────
 _registry: dict[str, Instrument] = dict(SEED_INSTRUMENTS)
 
+# MCX contract multiplier = commodity QUOTE units per lot (the platform's lot_size
+# convention: P&L = price move × lot_size). Kite's MCX instrument dump reports
+# lot_size=1 for every MCX contract, so it can't be used for P&L. Only contracts
+# whose specification is certain are listed; others fall back (with a warning).
+MCX_UNITS_PER_LOT: dict[str, int] = {
+    "CRUDEOIL": 100, "CRUDEOILM": 10,              # barrels, quoted ₹/bbl
+    "NATURALGAS": 1250, "NATGASMINI": 250,         # mmBtu, quoted ₹/mmBtu
+    "GOLD": 100, "GOLDM": 10,                      # 1 kg / 100 g, quoted ₹/10 g
+    "GOLDTEN": 1, "GOLDGUINEA": 1, "GOLDPETAL": 1,  # quoted per contract unit
+    "SILVER": 30, "SILVERM": 5, "SILVERMIC": 1,    # kg, quoted ₹/kg
+    "COPPER": 2500, "ZINC": 5000, "LEAD": 5000, "ALUMINIUM": 5000,   # kg, ₹/kg
+}
+
+
+def mcx_lot_size(name: str, reported: int | None = None, fallback: int | None = None) -> int:
+    """Units per lot for an MCX contract: the known multiplier, else a reported
+    lot size > 1, else `fallback`, else 1."""
+    if name in MCX_UNITS_PER_LOT:
+        return MCX_UNITS_PER_LOT[name]
+    if reported and int(reported) > 1:
+        return int(reported)
+    return int(fallback or 1)
+
 
 def seed_instruments() -> list[Instrument]:
     return list(SEED_INSTRUMENTS.values())
 
 
 def _row_to_instrument(row) -> Instrument:
+    lot = row.lot_size
+    if row.segment == "MCX" and (lot or 0) <= 1:
+        # repair rows stored from Kite's MCX dump (lot_size=1) before the fix
+        lot = mcx_lot_size(row.option_name or row.key, lot)
     return Instrument(
         key=row.key, name=row.name, segment=row.segment,
         spot_exchange=row.spot_exchange, spot_symbol=row.spot_symbol,
-        option_name=row.option_name or row.key, lot_size=row.lot_size,
+        option_name=row.option_name or row.key, lot_size=lot,
         strike_step=row.strike_step, priority=row.priority,
         mock_spot=row.mock_spot, mock_vol=row.mock_vol,
         has_options=row.has_options, on_home=row.on_home, source=row.source)

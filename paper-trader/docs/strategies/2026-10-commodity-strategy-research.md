@@ -13,8 +13,9 @@ components first: **multi-session fades of energy shocks** (`spike_fade` on NG a
 `shock_reversal` on crude) and **swing reversion to a 10-day VWAP after a climax push**
 (`vwap_band_reversion`, NG). They hold on real NYMEX bars, on broad parameter
 plateaus, and on the bot's options path once each strategy carries its own option-exit
-policy (§6b–§6c). Gold has only a weak calendar effect (`gold_month_turn`); silver has
-none (§6d).
+policy (§6b–§6c) — and on **real MCX prints** (§6e): every strategy that passed made
+money there, every one that failed lost. Gold's calendar effect (`gold_month_turn`) did
+not survive the real-MCX check; silver has no strategy (§6d).
 
 ---
 
@@ -262,7 +263,7 @@ Keep it as a research lead: the drift is real; the open question is a cheaper wa
 hold it (e.g. carry only on nights where the drift historically concentrates).
 
 
-### 4.7 `gold_month_turn` — own gold across the turn of the month only  ⚠️ weak pass (gold)
+### 4.7 `gold_month_turn` — own gold across the turn of the month only  ❌ not deployable (failed real-MCX check, §6e)
 
 *Regime:* any — a calendar/flow effect. Found by a dedicated gold research pass (≈ 206
 configs; components first). Long GOLDPETAL from one bar before the close of the
@@ -291,9 +292,9 @@ agree, 2× slippage still positive, bootstrap P(>0) 0.93–0.98.
 +16.6 bps per month-turn (t 1.3) vs +9.0 bps for random windows → excess **+7.5 bps**,
 against +41 bps (2019–23) and +20 bps (2024–26). The effect is much weaker outside the
 period it was found in (selection bias + a smaller true effect): on GOLDPETAL's ~15 bps
-round trip the 2005–2018 version would have been about break-even. **Verdict: a
-low-conviction calendar overlay; prefer GOLDGUINEA/GOLDM (lower cost per gram);
-paper-trade before trusting it.** Note: the gold proxy is spot — futures carry has been
+round trip the 2005–2018 version would have been about break-even. **Verdict: was a
+low-conviction calendar overlay; it then lost on real MCX GOLDPETAL prints (§6e) →
+not deployable.** Note: the gold proxy is spot — futures carry has been
 subtracted above; trade the MCX contract that stays live through the month turn.
 
 ## 5. Regime → strategy map
@@ -347,11 +348,10 @@ destroyed them): spike_fade NG OOS +₹13k, spike_fade crude +₹34k, shock_reve
 +₹11k, each with ≈ ₹2–4k premium per lot and a worst OOS drawdown of ₹5.5–6.9k.
 `vwap_band_reversion` works on ~30-day options (OOS +₹10.7k) — it declares that tenor.
 
-**Gold: a weak pass.** `gold_month_turn` (§4.7) is profitable after charges, slippage
-and futures carry on GOLDPETAL, GOLDGUINEA and GOLDM in both periods and every year
-2019–2026 — but on unseen 2005–2018 data its edge was only ~7.5 bps a month above
-random timing (≈ break-even on GOLDPETAL). Low conviction; prefer the cheaper-per-gram
-contracts. The gold MCX overnight drift is real but too small for GOLDPETAL's costs (and
+**Gold: no deployable strategy.** `gold_month_turn` (§4.7) passed the proxy test
+(2019–2026, after charges, slippage and futures carry) but its edge was only ~7.5 bps a
+month above random timing on unseen 2005–2018 data, and it LOST on real MCX GOLDPETAL
+prints Dec-2025 → Oct-2026 (§6e). Not deployable. The gold MCX overnight drift is real but too small for GOLDPETAL's costs (and
 partly offset by futures carry).
 
 **Silver: no strategy** (§6d) — the fades lose on silver too; the trend tools' gains are the
@@ -508,6 +508,57 @@ precious-metal spikes do not revert like energy spikes. The trend tools' silver 
 one extreme year (2026), not an edge, and they lose on the options path. More history (the
 Dukascopy 2019–2026 set) would be needed before trusting any silver result.
 
+## 6e. Validation on REAL MCX data (added 2026-10-08)
+
+Two public, login-free sources made a real-MCX check possible from this environment:
+
+**1. Kite's MCX instrument list** (`https://api.kite.trade/instruments/MCX`, the list the
+live option picker reads) — which contracts actually have options:
+
+| Contract | Options listed | Strike step | Option expiry vs futures |
+|---|---|---|---|
+| NATGASMINI | yes (524 contracts) | ₹5 | monthly, ~4 days before the futures |
+| CRUDEOILM | yes (1,100) | ₹50 | monthly, ~4 days before the futures |
+| GOLDM | yes (706) | ₹500 per 10 g | monthly |
+| GOLDPETAL, GOLDGUINEA, SILVERMIC | **no** | — | futures only |
+
+The list reports `lot_size = 1` for every MCX contract. **This exposed a platform bug:**
+the Backtests universe (`backtest/universe._mcx_commodities`) and the "add instrument"
+catalog took that 1 as the lot, so every Kite-backed MCX backtest — and any MCX
+instrument added from the UI — would have computed P&L for one unit instead of one lot
+(250× too small for NATGASMINI, 10× for CRUDEOILM/GOLDM). Fixed with a contract
+multiplier table (`core/instruments.MCX_UNITS_PER_LOT`, `mcx_lot_size`); stored MCX rows
+with lot 1 are repaired on load. (The live option picker already patched this itself.)
+
+**2. Real MCX futures prints** — Moneycontrol's public chart API serves 15-minute bars per
+MCX contract (`research/commodity/fetch_mcx_moneycontrol.py`: contracts found from the
+MCX expiry rules, bars re-stamped from END to START time, session-filtered, stitched
+front-month with the roll measured as the contract spread on the last common bar). Only
+recent contracts are served, so the windows are short: NATGASMINI 2025-12-18 → 2026-10-08,
+CRUDEOILM 2026-03-04 → 2026-10-08, GOLDPETAL 2025-12-01 → 2026-10-08. No volume field.
+
+Results on real MCX prints (defaults, 1 lot, full charges + slippage; options = synthetic
+premium at a 4% spread; `real_mcx_check.py`, `real_mcx_gold.py`):
+
+| Strategy | Real MCX futures | Real MCX options |
+|---|---|---|
+| **spike_fade × NATGASMINI** | **+₹13.3k** (5 trades) | **+₹6.9k** |
+| **spike_fade × CRUDEOILM** | **+₹13.3k** (6 trades, PF 4.8) | **+₹7.0k** |
+| **shock_reversal × CRUDEOILM** | **+₹3.2k** (1 trade) | **+₹1.0k** |
+| **vwap_band_reversion × NATGASMINI** | **+₹32.1k** (9 trades, PF 5.2) | **+₹4.2k** |
+| vwap_slope_divergence × NG | −₹27.6k | −₹20.1k |
+| adaptive_supertrend × NG | −₹57.1k | −₹20.0k |
+| vol_squeeze_breakout × NG | −₹23.5k | −₹7.7k |
+| trend_impulse_v3 × NG / crude | −₹30.2k / −₹5.9k | −₹69.7k / −₹51.1k |
+| gold_month_turn × GOLDPETAL | −₹0.5k (9 trades, PF 0.66) | GOLDM: −₹75.0k |
+
+**Every strategy that passed the proxy research made money on real MCX prints, and every
+one that failed lost** — the verdicts carry over to the real exchange. The samples are
+tiny (1–9 trades per cell over 7–10 months), so this confirms direction, not the size of
+the edge. `gold_month_turn` failed its real-data window (Jan-2026 crash month) and is
+downgraded to not deployable. Real MCX gold traded ~9% above the proxy level (MCX premium
+over landed gold larger than the 6% assumed) — a scaling difference, not a sign change.
+
 ## 7. Full evaluation matrix
 
 `research/commodity/final_eval.py` → `results/final_eval.json` (default params incl. the
@@ -598,7 +649,10 @@ trades / max DD ₹ | OOS at 2× slippage | bootstrap P(OOS > 0).
 | trend_impulse_v3 | GOLDPETAL | 30m | -3.7k (0.745) | +0.3k (1.015) / 506 / 2.8k | -2.7k | 0.531 |
 | trend_impulse_v3 | GOLDPETAL | 60m | -2.0k (0.799) | -1.4k (0.923) / 272 / 4.0k | -3.1k | 0.351 |
 
-## 7b. Validating on real MCX data (your next step, needs Kite)
+## 7b. Longer real-MCX validation (your next step, needs Kite)
+
+§6e already ran the strategies on ~7–10 months of real MCX prints from a public source.
+Kite gives a longer, cleaner history (with volume) — use it to grow the sample:
 
 1. **Backtests view → strategies:** select `spike_fade`, `shock_reversal`,
    `vwap_band_reversion` (and `gold_month_turn` for GOLDM/GOLDGUINEA) on NATGASMINI,
